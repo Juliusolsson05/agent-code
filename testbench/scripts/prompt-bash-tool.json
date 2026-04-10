@@ -1,0 +1,9 @@
+{
+  "_comment": "Tool-call fixture: lets CC start in /tmp (which has bypassPermissions mode by default), auto-accepts trust, asks CC to list files using bash. Goal: capture a real tool_use + tool_result pair in the JSONL plus the screen states CC renders during a tool call. We'll use this to design parsers for tool_use rendering, the in-flight tool indicator, and (later) the approval prompt UI.",
+  "autoAcceptTrust": true,
+  "steps": [
+    { "type": "wait", "ms": 8000 },
+    { "type": "send", "data": "use the bash tool to list the files in this directory and tell me how many there are\r" },
+    { "type": "wait", "ms": 30000 }
+  ]
+}
