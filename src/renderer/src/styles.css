@@ -1,0 +1,384 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: #0b0b0b;
+  color: #e8e8e8;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'SF Pro Display',
+    system-ui,
+    sans-serif;
+}
+
+button {
+  font-family: inherit;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+}
+
+/* ---------- Header ---------- */
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #141414;
+  border-bottom: 1px solid #1f1f1f;
+  -webkit-app-region: drag;
+  user-select: none;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.title {
+  font-weight: 600;
+  padding-left: 60px;
+  letter-spacing: 0.2px;
+}
+
+.header-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  -webkit-app-region: no-drag;
+}
+
+.toggle-btn {
+  background: transparent;
+  border: 1px solid #2a2a2a;
+  color: #b8b8b8;
+  font-size: 11px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: border-color 120ms, color 120ms;
+}
+
+.toggle-btn:hover {
+  border-color: #444;
+  color: #e8e8e8;
+}
+
+.entries {
+  color: #b8b8b8;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-family: 'SF Mono', Menlo, Monaco, monospace;
+}
+
+.status {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.status.ok {
+  color: #6fcf97;
+}
+
+.status.dead {
+  color: #888;
+}
+
+/* ---------- Feed ---------- */
+
+.feed-wrap {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.feed {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 24px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.feed-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.feed-empty-text {
+  color: #555;
+  font-size: 13px;
+  font-style: italic;
+}
+
+.entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.role-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: #6b6b6b;
+}
+
+.role-label-user {
+  color: #4a9eff;
+}
+
+.role-label-assistant {
+  color: #c69bff;
+}
+
+.entry-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ---------- Blocks ---------- */
+
+.block {
+  font-size: 13.5px;
+  line-height: 1.6;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #131313;
+  border: 1px solid #1f1f1f;
+}
+
+.block-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e8e8e8;
+}
+
+.entry-user .block-text {
+  background: #0e1620;
+  border-color: #1a2c3f;
+}
+
+.entry-assistant .block-text {
+  background: #14101a;
+  border-color: #29213a;
+}
+
+.block-thinking {
+  background: #0f0f12;
+  border-color: #1a1a20;
+  color: #888;
+}
+
+.block-thinking summary {
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #666;
+  user-select: none;
+}
+
+.block-thinking[open] summary {
+  margin-bottom: 8px;
+}
+
+.block-tool-use {
+  background: #0e1410;
+  border-color: #1c2a1f;
+}
+
+.block-tool-result {
+  background: #0d1015;
+  border-color: #1a1f28;
+}
+
+.block-tool-result.is-error {
+  background: #1a0e0e;
+  border-color: #3a1c1c;
+}
+
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.tool-icon {
+  color: #888;
+  font-size: 13px;
+}
+
+.tool-name {
+  color: #c8c8c8;
+  font-family: 'SF Mono', Menlo, Monaco, monospace;
+}
+
+.block details summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  user-select: none;
+}
+
+.block-pre {
+  margin-top: 8px;
+  background: #08080a;
+  border: 1px solid #1a1a1a;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-family: 'SF Mono', Menlo, Monaco, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #b8b8b8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 480px;
+  overflow: auto;
+}
+
+.block-unknown {
+  background: #14140e;
+  border-color: #2a2a1c;
+  color: #888;
+}
+
+/* ---------- Streaming card (transient, replaced by structured entry) ---------- */
+
+.entry-streaming {
+  opacity: 0.95;
+}
+
+.streaming-dot {
+  display: inline-block;
+  margin-left: 8px;
+  color: #c69bff;
+  animation: pulse 1.2s ease-in-out infinite;
+  font-size: 9px;
+  vertical-align: middle;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+
+.block-streaming {
+  background: #14101a;
+  border: 1px solid #29213a;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-family:
+    'SF Mono',
+    'JetBrains Mono',
+    Menlo,
+    Monaco,
+    monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #d8d8d8;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+.system-row {
+  font-size: 11px;
+  color: #555;
+  font-family: 'SF Mono', Menlo, Monaco, monospace;
+  padding: 2px 0;
+  letter-spacing: 0.2px;
+}
+
+/* ---------- Live preview pane ---------- */
+
+.preview-wrap {
+  flex-shrink: 0;
+  border-top: 1px solid #1f1f1f;
+  background: #0e0e0e;
+  padding: 8px 16px 12px;
+  max-height: 220px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.preview-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #555;
+  margin-bottom: 6px;
+}
+
+.preview-screen {
+  flex: 1;
+  overflow: auto;
+  font-family:
+    'SF Mono',
+    'JetBrains Mono',
+    Menlo,
+    Monaco,
+    'Courier New',
+    monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #888;
+  white-space: pre;
+  tab-size: 4;
+}
+
+/* ---------- Composer ---------- */
+
+.composer {
+  border-top: 1px solid #1f1f1f;
+  padding: 12px 16px;
+  background: #141414;
+  flex-shrink: 0;
+}
+
+.prompt {
+  width: 100%;
+  background: #0b0b0b;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  color: #e8e8e8;
+  font-family:
+    'SF Mono',
+    'JetBrains Mono',
+    Menlo,
+    Monaco,
+    monospace;
+  font-size: 13px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color 120ms ease;
+}
+
+.prompt:focus {
+  border-color: #4a4a4a;
+}
+
+.prompt::placeholder {
+  color: #555;
+}
