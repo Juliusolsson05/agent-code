@@ -1,4 +1,8 @@
 import { useEffect, useRef } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
+
 import { extractAssistantInProgress } from '../../../core/parsers/streamingScreen'
 import {
   isConversationEntry,
@@ -139,9 +143,30 @@ function Block({ block }: { block: ContentBlock }) {
   }
 }
 
+// remarkPlugins/rehypePlugins are stable references — defining them at
+// module scope avoids React re-rendering ReactMarkdown's internal cache on
+// every parent render. (react-markdown v10 specifically warns about this.)
+const REMARK_PLUGINS = [remarkGfm]
+const REHYPE_PLUGINS = [rehypeHighlight]
+
 function TextBubble({ text }: { text: string }) {
   if (!text) return null
-  return <div className="block block-text">{text}</div>
+  // ReactMarkdown handles paragraphs, headings, lists, inline code, fenced
+  // code blocks, tables, blockquotes, etc. rehype-highlight runs highlight.js
+  // over fenced blocks at parse time so syntax colors come from a CSS theme
+  // (imported once in main.tsx) — no client-side language detection cost.
+  // GFM gives us tables / strikethrough / autolinks which assistants
+  // commonly emit.
+  return (
+    <div className="block block-text">
+      <ReactMarkdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
 }
 
 function ToolUseCard({ block }: { block: ToolUseBlock }) {
