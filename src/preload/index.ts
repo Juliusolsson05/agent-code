@@ -86,9 +86,11 @@ const api = {
   defaultCwd: (): Promise<string> =>
     ipcRenderer.invoke('workspace:defaultCwd'),
 
-  // --- Native dialogs ---
-  pickDirectory: (): Promise<string | null> =>
-    ipcRenderer.invoke('dialog:pickDirectory'),
+  // --- Path expansion (used by the new-tab path modal) ---
+  expandCwd: (
+    raw: string,
+  ): Promise<{ ok: true; path: string } | { ok: false; error: string }> =>
+    ipcRenderer.invoke('fs:expandCwd', raw),
 }
 
 contextBridge.exposeInMainWorld('api', api)

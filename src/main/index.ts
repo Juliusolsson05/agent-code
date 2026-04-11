@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
-import { join, dirname } from 'path'
+import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { readFile, writeFile, mkdir } from 'fs/promises'
+import { readFile, stat, writeFile, mkdir } from 'fs/promises'
 import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
@@ -113,19 +113,49 @@ function registerIpc(): void {
     },
   )
 
-  // --- CWD picker (native folder dialog) ---
-  // Returns an absolute path, or null if the user cancelled.
-  // Used by "new tab" flow where the user needs to pick a directory
-  // for the new session.
-  ipcMain.handle('dialog:pickDirectory', async () => {
-    if (!mainWindow) return null
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory', 'createDirectory'],
-      title: 'Choose a working directory',
-    })
-    if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths[0]
-  })
+  // --- Path expansion + validation ---
+  // Replaces the native folder picker. Renderer shows a text input
+  // modal where the user types a path; we expand `~`, resolve to an
+  // absolute path, and check that it exists and is a directory. If any
+  // of that fails the renderer keeps the modal open and shows the
+  // error inline.
+  //
+  // Why not the native dialog: user explicitly wanted a path writer,
+  // not a clicky picker. Keyboard-first is faster for power users and
+  // matches the rest of cc-shell's terminal-native vibe.
+  ipcMain.handle(
+    'fs:expandCwd',
+    async (
+      _evt,
+      raw: string,
+    ): Promise<{ ok: true; path: string } | { ok: false; error: string }> => {
+      const trimmed = raw.trim()
+      if (!trimmed) return { ok: false, error: 'path is empty' }
+      // Tilde expansion. We ONLY expand bare `~` and `~/…` — not `~user`,
+      // because that requires passwd lookup and nobody uses it.
+      let expanded: string
+      if (trimmed === '~') {
+        expanded = homedir()
+      } else if (trimmed.startsWith('~/')) {
+        expanded = join(homedir(), trimmed.slice(2))
+      } else {
+        expanded = trimmed
+      }
+      const abs = resolve(expanded)
+      try {
+        const s = await stat(abs)
+        if (!s.isDirectory()) {
+          return { ok: false, error: 'not a directory' }
+        }
+        return { ok: true, path: abs }
+      } catch (err) {
+        const e = err as NodeJS.ErrnoException
+        if (e.code === 'ENOENT') return { ok: false, error: 'does not exist' }
+        if (e.code === 'EACCES') return { ok: false, error: 'permission denied' }
+        return { ok: false, error: e.message ?? 'stat failed' }
+      }
+    },
+  )
 
   // --- Workspace state persistence ---
   // The renderer is the source of truth for the tile tree. We just

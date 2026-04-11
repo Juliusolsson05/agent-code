@@ -24,15 +24,37 @@ applyTheme(loadSettings())
 
 export default function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings())
+  const [pathPickerOpen, setPathPickerOpen] = useState(false)
+  const [pathPickerDefault, setPathPickerDefault] = useState('')
   const workspace = useWorkspace()
 
-  // New tab flow: open the native folder picker, then spawn.
-  // If the user cancels, no tab is created.
-  const onNewTabRequest = useCallback(async () => {
-    const cwd = await window.api.pickDirectory()
-    if (!cwd) return
-    await workspace.newTab(cwd)
-  }, [workspace])
+  // Pre-fill the path input with a sensible default when the modal
+  // opens: the cwd of the most recently-used session, or main's
+  // default cwd if no sessions exist yet. Cached so opening the modal
+  // doesn't hit IPC every time.
+  useEffect(() => {
+    if (!pathPickerOpen) return
+    const mostRecent = Object.values(workspace.state.sessions).pop()
+    if (mostRecent?.cwd) {
+      setPathPickerDefault(mostRecent.cwd)
+      return
+    }
+    void window.api.defaultCwd().then(setPathPickerDefault)
+  }, [pathPickerOpen, workspace.state.sessions])
+
+  // New tab flow: show the path modal. On accept it calls workspace.newTab
+  // with the expanded absolute path and closes the modal.
+  const onNewTabRequest = useCallback(() => {
+    setPathPickerOpen(true)
+  }, [])
+
+  const onPathPickerAccept = useCallback(
+    async (cwd: string) => {
+      await workspace.newTab(cwd)
+      setPathPickerOpen(false)
+    },
+    [workspace],
+  )
 
   useKeybinds(workspace, onNewTabRequest)
 
@@ -71,6 +93,13 @@ export default function App() {
           <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
         ) : null}
       </main>
+
+      <PathPickerModal
+        open={pathPickerOpen}
+        defaultValue={pathPickerDefault}
+        onCancel={() => setPathPickerOpen(false)}
+        onAccept={onPathPickerAccept}
+      />
     </div>
   )
 }
