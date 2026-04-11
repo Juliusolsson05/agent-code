@@ -1,39 +1,94 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+// Preload bridge — multi-session API.
+//
+// Every IPC channel is sessionId-scoped because the main process can
+// now run N ClaudeSessions in parallel and needs to route messages to
+// the right one. The renderer subscribes ONCE per event type and
+// dispatches by sessionId in the callback — this avoids N×N listener
+// storms as tabs and splits grow.
+//
+// Legacy note: the pre-tiling API had channels like `pty:screen`,
+// `pty:input`, `pty:exit`. Those are all gone. The tile tree uses
+// `session:*` channels that carry `{ sessionId, ... }` payloads.
+
 export type JsonlEntry = Record<string, unknown>
-export type JsonlEntryEvent = { entry: JsonlEntry; file: string }
 export type ScreenSnapshot = { plain: string; markdown: string }
 
-const api = {
-  onScreen: (cb: (snap: ScreenSnapshot) => void) => {
-    const listener = (_evt: unknown, snap: ScreenSnapshot) => cb(snap)
-    ipcRenderer.on('pty:screen', listener)
-    return () => ipcRenderer.removeListener('pty:screen', listener)
-  },
-  onExit: (cb: (code: number) => void) => {
-    const listener = (_evt: unknown, code: number) => cb(code)
-    ipcRenderer.on('pty:exit', listener)
-    return () => ipcRenderer.removeListener('pty:exit', listener)
-  },
-  sendInput: (data: string) => ipcRenderer.invoke('pty:input', data),
-  resize: (cols: number, rows: number) => ipcRenderer.invoke('pty:resize', cols, rows),
+export type SessionStartedEvent = { sessionId: string; projectDir: string }
+export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot
+export type SessionJsonlEntryEvent = {
+  sessionId: string
+  entry: JsonlEntry
+  file: string
+}
+export type SessionJsonlErrorEvent = { sessionId: string; message: string }
+export type SessionExitEvent = {
+  sessionId: string
+  exitCode: number
+  signal?: number
+}
 
-  // JSONL transcript channel — see src/main/jsonlTailer.ts
-  onJsonlEntry: (cb: (event: JsonlEntryEvent) => void) => {
-    const listener = (_evt: unknown, payload: JsonlEntryEvent) => cb(payload)
-    ipcRenderer.on('jsonl:entry', listener)
-    return () => ipcRenderer.removeListener('jsonl:entry', listener)
-  },
-  onJsonlProjectDir: (cb: (dir: string) => void) => {
-    const listener = (_evt: unknown, dir: string) => cb(dir)
-    ipcRenderer.on('jsonl:project-dir', listener)
-    return () => ipcRenderer.removeListener('jsonl:project-dir', listener)
-  },
-  onJsonlError: (cb: (msg: string) => void) => {
-    const listener = (_evt: unknown, msg: string) => cb(msg)
-    ipcRenderer.on('jsonl:error', listener)
-    return () => ipcRenderer.removeListener('jsonl:error', listener)
-  },
+type Unsub = () => void
+
+/**
+ * Helper to register an IPC listener and return an unsubscriber that
+ * detaches it. Keeps the api surface below tidy.
+ */
+function subscribe<T>(channel: string, cb: (payload: T) => void): Unsub {
+  const listener = (_evt: unknown, payload: T) => cb(payload)
+  ipcRenderer.on(channel, listener)
+  return () => ipcRenderer.removeListener(channel, listener)
+}
+
+const api = {
+  // --- Session lifecycle ---
+  spawnSession: (options: {
+    cwd: string
+    cols?: number
+    rows?: number
+  }): Promise<string> => ipcRenderer.invoke('session:spawn', options),
+
+  killSession: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('session:kill', sessionId),
+
+  // --- Per-session I/O ---
+  sendInput: (sessionId: string, data: string): Promise<void> =>
+    ipcRenderer.invoke('session:input', sessionId, data),
+
+  resize: (sessionId: string, cols: number, rows: number): Promise<void> =>
+    ipcRenderer.invoke('session:resize', sessionId, cols, rows),
+
+  // --- Session events (subscribe once; dispatch by sessionId in the callback) ---
+  onSessionStarted: (cb: (e: SessionStartedEvent) => void): Unsub =>
+    subscribe('session:started', cb),
+
+  onSessionScreen: (cb: (e: SessionScreenEvent) => void): Unsub =>
+    subscribe('session:screen', cb),
+
+  onSessionJsonlEntry: (cb: (e: SessionJsonlEntryEvent) => void): Unsub =>
+    subscribe('session:jsonl-entry', cb),
+
+  onSessionJsonlError: (cb: (e: SessionJsonlErrorEvent) => void): Unsub =>
+    subscribe('session:jsonl-error', cb),
+
+  onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
+    subscribe('session:exit', cb),
+
+  // --- Workspace persistence ---
+  // Main just does the disk I/O. The renderer decides the JSON shape.
+  loadWorkspace: (): Promise<string | null> =>
+    ipcRenderer.invoke('workspace:load'),
+
+  saveWorkspace: (json: string): Promise<void> =>
+    ipcRenderer.invoke('workspace:save', json),
+
+  defaultCwd: (): Promise<string> =>
+    ipcRenderer.invoke('workspace:defaultCwd'),
+
+  // --- Native dialogs ---
+  pickDirectory: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:pickDirectory'),
 }
 
 contextBridge.exposeInMainWorld('api', api)
