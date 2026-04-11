@@ -13,7 +13,7 @@ import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 
 import { diffLines, type DiffLine } from '../../../core/parsers/lineDiff'
-import { extractAssistantInProgress } from '../../../core/parsers/streamingScreen'
+import { extractAssistantInProgress } from '../../../core/parsers/claude/streamingScreen'
 import {
   isConversationEntry,
   type ContentBlock,

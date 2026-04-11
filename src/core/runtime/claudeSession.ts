@@ -9,7 +9,7 @@ import { join } from 'path'
 import {
   detectSlashPicker,
   type SlashPickerState,
-} from '../parsers/slashCommandPicker.js'
+} from '../parsers/claude/slashCommandPicker.js'
 import { getProjectDirForCwd } from './projectDir.js'
 import {
   tailNewSessionFile,

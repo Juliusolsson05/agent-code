@@ -31,7 +31,7 @@ import { getProjectDirForCwd } from '../src/core/runtime/projectDir.js'
 import {
   detectTrustDialog,
   TRUST_DIALOG_ACCEPT_KEYS,
-} from '../src/core/parsers/trustDialog.js'
+} from '../src/core/parsers/claude/trustDialog.js'
 
 // ---- Scripted-mode types --------------------------------------------------
 //

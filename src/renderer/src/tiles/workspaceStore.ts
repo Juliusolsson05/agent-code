@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Entry } from '../../../core/types/transcript'
-import { extractAssistantInProgress } from '../../../core/parsers/streamingScreen'
+import { extractAssistantInProgress } from '../../../core/parsers/claude/streamingScreen'
 import {
   RATIO_DEFAULT,
   type SessionId,

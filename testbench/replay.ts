@@ -28,9 +28,9 @@ const { Terminal } = xtermHeadless
 import {
   extractAssistantInProgress,
   extractStreamingText,
-} from '../src/core/parsers/streamingScreen.js'
-import { detectSlashPicker } from '../src/core/parsers/slashCommandPicker.js'
-import { detectTrustDialog } from '../src/core/parsers/trustDialog.js'
+} from '../src/core/parsers/claude/streamingScreen.js'
+import { detectSlashPicker } from '../src/core/parsers/claude/slashCommandPicker.js'
+import { detectTrustDialog } from '../src/core/parsers/claude/trustDialog.js'
 import { terminalToMarkdown } from '../src/core/runtime/claudeSession.js'
 
 type RawEvent = { ts: number; data: string }

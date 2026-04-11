@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { extractAssistantInProgress } from '../../../core/parsers/streamingScreen'
+import { extractAssistantInProgress } from '../../../core/parsers/claude/streamingScreen'
 import { isConversationEntry } from '../../../core/types/transcript'
 import { Feed } from '../feed/Feed'
 import { TrustDialogModal } from '../feed/TrustDialogModal'
