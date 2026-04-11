@@ -53,10 +53,30 @@ export function TileLeaf({
   onFocusRequest,
   workspace,
 }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   // Per-leaf input state — lives with the instance so the typed value
   // persists across unrelated re-renders of the parent.
   const [input, setInputText] = useState('')
+
+  // Auto-grow the composer textarea to fit its content. We keep a single
+  // line by default, but as the user types (or pastes) a long prompt the
+  // box extends downward so every character is visible without scrolling
+  // inside the input itself. The reflow is driven off `input` so paste,
+  // programmatic setInputText, and typed keystrokes all converge on the
+  // same measurement pass.
+  //
+  // Why manual measurement instead of CSS `field-sizing: content`?
+  //   - Safari/older Chromium don't support it yet and Electron ships a
+  //     pinned Chromium we don't want to track.
+  //   - Setting height to 'auto' first forces layout to forget the
+  //     previous height, so scrollHeight reflects ONLY the current
+  //     content — without the reset we'd ratchet taller and never shrink.
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [input])
   // True while we're forwarding keystrokes to the PTY for a slash
   // command. Controls key routing in onKeyDown and render of the
   // picker dropdown (we still render the dropdown from runtime.picker,
@@ -78,7 +98,7 @@ export function TileLeaf({
     setInputText('')
   }
 
-  const onKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const onKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Global keybinds bubble up to the document-level listener in
     // useKeybinds; if a modifier-combo handler called preventDefault
     // already, skip processing here to avoid routing pane-management
@@ -159,6 +179,16 @@ export function TileLeaf({
     }
 
     // ---- Normal mode ----
+    //
+    // Shift+Enter: insert a literal newline in the composer (normal
+    // textarea behavior). We DON'T preventDefault so the browser handles
+    // the insertion, and we don't forward anything to the PTY — the
+    // newline only becomes visible to CC when the user commits with a
+    // bare Enter below. This gives multi-line prompt editing without
+    // touching the PTY until the user actually wants to send.
+    if (e.key === 'Enter' && e.shiftKey) {
+      return
+    }
     if (e.key === 'Enter') {
       e.preventDefault()
       // Capture streaming baseline from the very freshest screen text
@@ -168,7 +198,24 @@ export function TileLeaf({
       const screen = workspace.latestScreenRef.current[sessionId] ?? ''
       const baseline = extractAssistantInProgress(screen)
       workspace.setStreamingBaseline(sessionId, baseline)
-      await send(input + '\r')
+
+      // Multi-line prompts (user hit Shift+Enter one or more times
+      // before committing): wrap the body in bracketed paste so CC's
+      // TUI treats the embedded \n characters as *literal newlines in
+      // the input buffer* instead of as submission events. Without the
+      // envelope, the first \n commits and the rest of the prompt is
+      // silently dropped or sent as a second message. The trailing \r
+      // sits OUTSIDE the paste block — that's what tells CC "now
+      // actually submit what I just pasted."
+      //
+      // For single-line prompts we keep the old path (no paste
+      // envelope) so nothing changes for the 99% case and we don't
+      // risk confusing CC's paste handler with zero-newline payloads.
+      if (input.includes('\n')) {
+        await send(`\x1b[200~${input}\x1b[201~\r`)
+      } else {
+        await send(input + '\r')
+      }
       setInputText('')
       return
     }
@@ -255,12 +302,19 @@ export function TileLeaf({
             shifting layout. */}
         <SlashCommandPicker state={runtime.picker} />
 
+        {/* The composer is a <textarea> (not <input>) so the box can
+            grow vertically to fit a multi-line prompt. See the
+            useEffect above that drives the height off scrollHeight.
+            The chevron is aligned to the top of the box instead of
+            vertically-centered because a 10-line prompt looks odd
+            with a chevron floating in the middle of nowhere. */}
         <div className="relative">
-          <div className="absolute left-2 top-1/2 -translate-y-1/2 text-accent text-[12px] pointer-events-none select-none">
+          <div className="absolute left-2 top-[10px] text-accent text-[12px] pointer-events-none select-none">
             ❯
           </div>
-          <input
+          <textarea
             ref={inputRef}
+            rows={1}
             className={`
               w-full bg-canvas border
               ${focused ? 'border-accent' : 'border-border'}
@@ -268,6 +322,8 @@ export function TileLeaf({
               pl-6 pr-2 py-2 outline-none
               placeholder:text-muted
               transition-colors duration-150
+              resize-none overflow-hidden leading-[1.4]
+              font-code
             `}
             value={input}
             onChange={e => {
@@ -283,7 +339,11 @@ export function TileLeaf({
             onKeyDown={onKeyDown}
             onFocus={onFocusRequest}
             placeholder={
-              slashMode ? undefined : focused ? 'type and press enter…' : ''
+              slashMode
+                ? undefined
+                : focused
+                  ? 'type and press enter… (shift+enter for newline)'
+                  : ''
             }
             spellCheck={false}
             autoComplete="off"

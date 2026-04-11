@@ -1,9 +1,10 @@
-import { memo, useEffect, useRef } from 'react'
+import { createContext, memo, useContext, useEffect, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 
+import { diffLines, type DiffLine } from '../../../core/parsers/lineDiff'
 import { extractAssistantInProgress } from '../../../core/parsers/streamingScreen'
 import {
   isConversationEntry,
@@ -87,6 +88,47 @@ const REHYPE_PLUGINS: import('react-markdown').Options['rehypePlugins'] = [
   [rehypeHighlight, { detect: true }],
 ]
 
+// -----------------------------------------------------------------------------
+// Tool-use index: a map from tool_use_id → ToolUseBlock, built once per
+// render pass over the entire feed. Used by ToolResultRow to look up
+// "what tool produced this result" so it can pick a richer renderer for
+// known tools (Read → syntax-highlighted code; Bash → plain pre; …).
+//
+// Why a side channel instead of pairing at the ConversationRow level:
+//   tool_use blocks live in an ASSISTANT entry and tool_result blocks
+//   live in the NEXT USER entry. ConversationRow only sees one entry at
+//   a time, so it can't pair them structurally without reaching across
+//   entries. We build the index at Feed level (where we DO have every
+//   entry) and hand it to result rows via context so the memoed row
+//   components don't need a new prop.
+//
+// Memo behavior: the map reference changes whenever `entries` changes,
+// which invalidates useContext consumers. That's fine — rows that care
+// about the map already re-render when entries grow, and rows that
+// don't call useContext are unaffected. We do NOT include the map in
+// row memo keys; equality on the map itself would be expensive and the
+// interesting work (markdown parsing) is cached inside TextProse by
+// text string, so repeat renders are cheap.
+// -----------------------------------------------------------------------------
+
+const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new Map())
+
+function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
+  const map = new Map<string, ToolUseBlock>()
+  for (const e of entries) {
+    if (!isConversationEntry(e)) continue
+    const content = e.message.content
+    if (!Array.isArray(content)) continue
+    for (const b of content) {
+      if (b.type === 'tool_use') {
+        const tu = b as ToolUseBlock
+        map.set(tu.id, tu)
+      }
+    }
+  }
+  return map
+}
+
 type Props = {
   entries: Entry[]
   /** Plain-text screen snapshot. Used for baseline comparison. */
@@ -161,6 +203,13 @@ function FeedImpl({
     ? entries
     : entries.filter(e => isConversationEntry(e))
 
+  // Index EVERY tool_use block (not just the visible set) so tool_result
+  // lookups still resolve even when showSystemEvents is off and some
+  // synthetic entries have been filtered out. The index is cheap to
+  // build (single pass) and the resulting Map is handed to result rows
+  // via context.
+  const toolUseIndex = useMemo(() => buildToolUseIndex(entries), [entries])
+
   if (visible.length === 0 && !streamingScreen) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -172,19 +221,21 @@ function FeedImpl({
   }
 
   return (
-    <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
-      {visible.map((e, i) => (
-        <EntryRow key={(e as Entry).uuid ?? `i${i}`} entry={e} />
-      ))}
-      {streamingScreen != null && (
-        <StreamingRow
-          screen={streamingScreen}
-          screenMarkdown={streamingScreenMarkdown ?? streamingScreen}
-          baseline={streamingBaseline ?? null}
-        />
-      )}
-      <div ref={endRef} />
-    </div>
+    <ToolUseIndexContext.Provider value={toolUseIndex}>
+      <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
+        {visible.map((e, i) => (
+          <EntryRow key={(e as Entry).uuid ?? `i${i}`} entry={e} />
+        ))}
+        {streamingScreen != null && (
+          <StreamingRow
+            screen={streamingScreen}
+            screenMarkdown={streamingScreenMarkdown ?? streamingScreen}
+            baseline={streamingBaseline ?? null}
+          />
+        )}
+        <div ref={endRef} />
+      </div>
+    </ToolUseIndexContext.Provider>
   )
 }
 
@@ -207,9 +258,21 @@ const ConversationRow = memo(function ConversationRow({
   const content = entry.message.content
 
   // Simple string content — render as a single marker + text line.
+  // For role==='user' this IS a real user prompt (no tool_result can
+  // appear here because tool_results are always block-form), so this
+  // is the one place a top-level UserBand is correct.
   if (typeof content === 'string') {
+    if (role === 'user') {
+      return (
+        <UserBand>
+          <MarkerRow marker="❯">
+            <TextProse text={content} />
+          </MarkerRow>
+        </UserBand>
+      )
+    }
     return (
-      <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
+      <MarkerRow marker="⏺">
         <TextProse text={content} />
       </MarkerRow>
     )
@@ -218,8 +281,17 @@ const ConversationRow = memo(function ConversationRow({
   if (!Array.isArray(content)) return null
 
   // Multi-block content — render each block with its own layout.
-  // Role only matters for the FIRST text block (to decide ❯ vs ⏺);
-  // tool_use and tool_result blocks carry their own semantics.
+  //
+  // CRITICAL: we do NOT wrap this whole row in a UserBand even when
+  // role === 'user'. That's because tool_result blocks ride inside
+  // user-role messages (Anthropic API shape: the user turn that follows
+  // an assistant tool_use holds the tool_result), and painting the
+  // user-prompt highlight behind tool output looks identical to saying
+  // "this file read was a user prompt." Confusing and wrong.
+  //
+  // The band lives at the *block* level instead: Block() wraps text
+  // blocks in a UserBand when role === 'user', and leaves every other
+  // block type (tool_use, tool_result, thinking) visually untouched.
   return (
     <div className="flex flex-col gap-2">
       {content.map((block, i) => (
@@ -228,6 +300,29 @@ const ConversationRow = memo(function ConversationRow({
     </div>
   )
 })
+
+/**
+ * UserBand — a horizontal highlight band that sits behind a *user
+ * prompt* so real user turns are easy to spot when scanning a long
+ * feed. Only ever wraps text content that originated as a user prompt.
+ * Never wraps tool_result output (even though tool_result blocks live
+ * under role='user' on the wire) — see the comment in ConversationRow.
+ *
+ * Why negative horizontal margin + matching padding:
+ *   Feed rows sit inside a `px-8` centered column. If we just slapped
+ *   bg-user-bg on the row, the highlight would be narrower than the
+ *   column's gutters and look like a tight card. Pulling the band out
+ *   to -mx-8 and compensating with px-8 makes the fill edge-to-edge
+ *   within the column while keeping the text at its original x.
+ *   gap-4 on the parent handles vertical separation between bands.
+ */
+function UserBand({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-user-bg -mx-8 px-8 py-3">
+      {children}
+    </div>
+  )
+}
 
 /* ---------- Marker layout primitives ---------- */
 
@@ -276,12 +371,19 @@ const Block = memo(function Block({
   role: 'user' | 'assistant'
 }) {
   switch (block.type) {
-    case 'text':
-      return (
+    case 'text': {
+      // Only text blocks under a user role represent an actual user
+      // prompt. A sibling tool_result block in the same message is
+      // NOT a user prompt (it's tool output), and must not get the
+      // highlight — that's why the band lives here and not around
+      // the whole ConversationRow.
+      const row = (
         <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
           <TextProse text={(block as { text: string }).text} />
         </MarkerRow>
       )
+      return role === 'user' ? <UserBand>{row}</UserBand> : row
+    }
     case 'thinking':
       // Thinking is usually noise — dim + collapsed behind a disclosure,
       // with the ⏺ marker so it sits in the assistant column rhythm.
@@ -295,8 +397,23 @@ const Block = memo(function Block({
           </details>
         </MarkerRow>
       )
-    case 'tool_use':
-      return <ToolUseRow block={block as ToolUseBlock} />
+    case 'tool_use': {
+      // Dispatch by tool name so Edit / MultiEdit / Write / Read each
+      // get their own visually rich renderer. Anything unknown falls
+      // through to the generic one-line ToolUseRow so new tools never
+      // render as nothing.
+      const tu = block as ToolUseBlock
+      switch (tu.name) {
+        case 'Edit':
+          return <EditRow block={tu} />
+        case 'MultiEdit':
+          return <MultiEditRow block={tu} />
+        case 'Write':
+          return <WriteRow block={tu} />
+        default:
+          return <ToolUseRow block={tu} />
+      }
+    }
     case 'tool_result':
       return <ToolResultRow block={block as ToolResultBlock} />
     default:
@@ -385,13 +502,304 @@ const ToolUseRow = memo(function ToolUseRow({ block }: { block: ToolUseBlock }) 
   )
 })
 
+/* ---------- Rich tool renderers: Edit / MultiEdit / Write ---------- */
+//
+// The generic ToolUseRow above just shows "⏺ Name  ⎿  headline" and
+// relies on the following tool_result for any actual content. For file
+// edits, that loses all the information — the diff and the new content
+// never make it onto the screen. These dedicated renderers render the
+// tool_use block's `input` directly instead, producing:
+//
+//   ⏺ Edit  <filename>
+//     <unified line diff with red/green bg per line>
+//
+//   ⏺ MultiEdit  <filename>  <N changes>
+//     <one diff block per edit in the edits[] array>
+//
+//   ⏺ Write  <filename>
+//     <full file content, syntax-highlighted, green-tinted>
+//
+// The subsequent tool_result for successful Edits ("The file … has been
+// updated successfully") is redundant next to the rendered diff, so
+// ToolResultRow suppresses it when the originating tool is one of
+// these file-write tools and the result isn't an error. Errors still
+// fall through as a normal result row so mistakes remain visible.
+
+/** Pull a file path and old/new strings out of a shape we don't fully
+ *  trust — the transcript typing is `unknown`. Missing fields become
+ *  empty strings so the diff still renders (as "everything added"
+ *  or "everything removed") without crashing. */
+function editInput(
+  block: ToolUseBlock,
+): { filePath: string; oldString: string; newString: string } {
+  const input = (block.input ?? {}) as Record<string, unknown>
+  return {
+    filePath: typeof input.file_path === 'string' ? input.file_path : '',
+    oldString: typeof input.old_string === 'string' ? input.old_string : '',
+    newString: typeof input.new_string === 'string' ? input.new_string : '',
+  }
+}
+
+/** Short filename extracted from an absolute path. Used in the
+ *  compact header so long paths don't blow the column width. The full
+ *  path is available as a `title` attribute on hover for disambiguation. */
+function basenameOf(path: string): string {
+  if (!path) return ''
+  const parts = path.split('/').filter(Boolean)
+  return parts[parts.length - 1] ?? path
+}
+
+/** Header row for file-tool blocks: "⏺ Edit  <filename>" with the
+ *  tool name in accent and the filename in muted ink. Shared between
+ *  EditRow / MultiEditRow / WriteRow so they render consistently. */
+function FileToolHeader({
+  name,
+  filePath,
+  extra,
+}: {
+  name: string
+  filePath: string
+  extra?: string
+}) {
+  const short = basenameOf(filePath)
+  return (
+    <div className="text-[13px] leading-[1.65]" title={filePath || undefined}>
+      <span className="text-accent font-semibold">{name}</span>
+      {short && (
+        <span className="text-ink-dim ml-2 font-code text-[12px]">{short}</span>
+      )}
+      {extra && <span className="text-muted ml-2 text-[11px]">{extra}</span>}
+    </div>
+  )
+}
+
+/**
+ * Render a precomputed DiffLine[] as a flat code-slab with per-line
+ * red/green tinting. Each line becomes its own <div> so the bg color
+ * extends edge-to-edge of the slab rather than hugging the text.
+ *
+ * Why not one big <pre> with spans: a <pre> uses default block layout
+ * on its text nodes, meaning per-line bgs only cover the characters.
+ * Flex column of divs gives each line its own box that fills the
+ * slab's width — same visual as GitHub's split-line diff rendering.
+ *
+ * Per-line syntax highlighting is intentionally NOT done in v1. The
+ * diff bg colors carry the story ("what changed"), and adding
+ * highlight.js per line would either lose cross-line state (wrong
+ * colors for multi-line strings) or require running it over the
+ * whole block and then splitting the highlighted HTML at newlines
+ * while chasing unclosed tags. We can revisit once the structural
+ * win lands.
+ */
+function DiffSlab({ lines }: { lines: DiffLine[] }) {
+  if (lines.length === 0) {
+    return (
+      <div className="bg-code-bg text-muted text-[11px] font-code px-3 py-2">
+        (no changes)
+      </div>
+    )
+  }
+  return (
+    <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
+      {lines.map((l, i) => {
+        // The gutter prefix (`+`/`-`/` `) sits inside the same div as
+        // the text so it stays glued to its line when the user scrolls
+        // horizontally. A pre-wrap whitespace rule keeps indentation
+        // fidelity without forcing horizontal scroll on long lines.
+        const bg =
+          l.kind === '+'
+            ? 'bg-diff-add-bg'
+            : l.kind === '-'
+              ? 'bg-diff-remove-bg'
+              : ''
+        // Gutter color carries the +/− signal at full saturation;
+        // the body text uses the code-slab ink token (light in
+        // every mode because the slab itself is always dark, unlike
+        // the mode-sensitive outer ink). Context rows dim the body
+        // slightly so changed lines pop against unchanged ones.
+        const fg =
+          l.kind === '+'
+            ? 'text-diff-add-fg'
+            : l.kind === '-'
+              ? 'text-diff-remove-fg'
+              : 'text-code-ink-dim'
+        const bodyTone = l.kind === 'ctx' ? 'text-code-ink-dim' : 'text-code-ink'
+        return (
+          <div
+            key={i}
+            className={`${bg} flex items-start px-3 whitespace-pre`}
+          >
+            <span
+              className={`${fg} select-none w-4 flex-shrink-0 tabular-nums`}
+              aria-hidden="true"
+            >
+              {l.kind === 'ctx' ? ' ' : l.kind}
+            </span>
+            <span className={`${bodyTone} flex-1 min-w-0 break-all`}>
+              {/* An empty diff line is still a real line; render a
+                  zero-width space so the flex box keeps its height
+                  and the +/− gutter lines up visually. */}
+              {l.text === '' ? '\u200b' : l.text}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// Memoed by block reference — tool_use objects are immutable once
+// they land in the JSONL, so identity equality is exact.
+const EditRow = memo(function EditRow({ block }: { block: ToolUseBlock }) {
+  const { filePath, oldString, newString } = editInput(block)
+  // diffLines on two identical empty strings returns []; the slab
+  // handles that with a "(no changes)" placeholder. For real edits
+  // we feed the raw old/new pair.
+  const lines = useMemo(
+    () => diffLines(oldString, newString),
+    [oldString, newString],
+  )
+  return (
+    <MarkerRow marker="⏺">
+      <div className="flex flex-col gap-1">
+        <FileToolHeader name="Edit" filePath={filePath} />
+        <DiffSlab lines={lines} />
+      </div>
+    </MarkerRow>
+  )
+})
+
+// MultiEdit: the input carries `edits: [{old_string, new_string}]`.
+// We render one diff slab per entry with a thin header separator so
+// the reader can see where one change ends and the next begins.
+const MultiEditRow = memo(function MultiEditRow({
+  block,
+}: {
+  block: ToolUseBlock
+}) {
+  const input = (block.input ?? {}) as Record<string, unknown>
+  const filePath =
+    typeof input.file_path === 'string' ? input.file_path : ''
+  const edits = Array.isArray(input.edits)
+    ? (input.edits as Array<Record<string, unknown>>)
+    : []
+  const normalized = edits.map(e => ({
+    oldString: typeof e.old_string === 'string' ? e.old_string : '',
+    newString: typeof e.new_string === 'string' ? e.new_string : '',
+  }))
+  return (
+    <MarkerRow marker="⏺">
+      <div className="flex flex-col gap-1">
+        <FileToolHeader
+          name="MultiEdit"
+          filePath={filePath}
+          extra={`${normalized.length} change${normalized.length === 1 ? '' : 's'}`}
+        />
+        <div className="flex flex-col gap-2">
+          {normalized.map((e, i) => (
+            <MultiEditChunk key={i} index={i} total={normalized.length} edit={e} />
+          ))}
+        </div>
+      </div>
+    </MarkerRow>
+  )
+})
+
+// Split out so the useMemo runs per-chunk, not on the full list.
+// Memoization key is (oldString, newString) because edits[] is a
+// fresh array literal from JSON parsing and won't hit reference
+// stability on its own.
+const MultiEditChunk = memo(function MultiEditChunk({
+  index,
+  total,
+  edit,
+}: {
+  index: number
+  total: number
+  edit: { oldString: string; newString: string }
+}) {
+  const lines = useMemo(
+    () => diffLines(edit.oldString, edit.newString),
+    [edit.oldString, edit.newString],
+  )
+  return (
+    <div>
+      {total > 1 && (
+        <div className="text-muted text-[10px] uppercase tracking-wider mb-0.5 select-none">
+          change {index + 1} / {total}
+        </div>
+      )}
+      <DiffSlab lines={lines} />
+    </div>
+  )
+})
+
+// Write: a brand-new file's full content. Renders as a single
+// green-tinted slab (everything is "added"). We deliberately DON'T
+// feed the content through diffLines against the empty string — the
+// naive approach would produce N `+` lines, which is correct but
+// hits the O(m×n) LCS table with m=0 and n=len, wasting time. A
+// straight walk over content.split('\n') is instant.
+const WriteRow = memo(function WriteRow({ block }: { block: ToolUseBlock }) {
+  const input = (block.input ?? {}) as Record<string, unknown>
+  const filePath = typeof input.file_path === 'string' ? input.file_path : ''
+  const content = typeof input.content === 'string' ? input.content : ''
+  const lines = useMemo<DiffLine[]>(
+    () =>
+      content === ''
+        ? []
+        : content.split('\n').map(text => ({ kind: '+' as const, text })),
+    [content],
+  )
+  // If Write produced a trailing '\n' the split yields a phantom
+  // empty line at the end; drop it so the slab doesn't show an
+  // empty green row.
+  if (lines.length > 0 && lines[lines.length - 1].text === '') lines.pop()
+  return (
+    <MarkerRow marker="⏺">
+      <div className="flex flex-col gap-1">
+        <FileToolHeader
+          name="Write"
+          filePath={filePath}
+          extra={`${lines.length} line${lines.length === 1 ? '' : 's'}`}
+        />
+        <DiffSlab lines={lines} />
+      </div>
+    </MarkerRow>
+  )
+})
+
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
 
+/**
+ * Look at the tool_use this result came from (via the feed-level
+ * index in context) and decide how to render the result:
+ *
+ *   Read → strip the "N→" line-number prefix CC's Read tool emits,
+ *          and render the contents as a preformatted code slab. We
+ *          deliberately skip markdown parsing here because source
+ *          code frequently contains triple-backticks and unbalanced
+ *          emphasis that would wreck the markdown AST. For full
+ *          syntax highlighting later we can feed the stripped text
+ *          through highlight.js directly.
+ *
+ *   Edit / MultiEdit / Write → the diff/content already rendered on
+ *          the preceding tool_use row tells the story. The terse
+ *          "has been updated successfully" message is pure noise
+ *          next to it; suppress for non-errors.
+ *
+ *   everything else (Bash, Glob, Grep, …) → keep the existing
+ *          plain-pre rendering. The content IS the interesting part
+ *          for those tools.
+ */
 const ToolResultRow = memo(function ToolResultRow({
   block,
 }: {
   block: ToolResultBlock
 }) {
+  const toolUseIndex = useContext(ToolUseIndexContext)
+  const sourceTool = toolUseIndex.get(block.tool_use_id)?.name
+
   const text =
     typeof block.content === 'string'
       ? block.content
@@ -403,6 +811,37 @@ const ToolResultRow = memo(function ToolResultRow({
 
   const isError = block.is_error === true
   const trimmed = text.replace(/\s+$/, '')
+
+  // File-write tools: rendered diff/content lives on the preceding
+  // tool_use row. Suppress the success result entirely. Errors still
+  // render as a normal result row so failures are never hidden.
+  if (
+    !isError &&
+    (sourceTool === 'Edit' ||
+      sourceTool === 'MultiEdit' ||
+      sourceTool === 'Write')
+  ) {
+    return null
+  }
+
+  // Read tool result: strip the line-number prefix and render as a
+  // code slab. CC's Read emits lines like "42\tactual code here",
+  // which would mix poorly with the rest of the text layout.
+  if (sourceTool === 'Read' && !isError) {
+    const stripped = stripLineNumberPrefix(trimmed)
+    return (
+      <MarkerRow marker="⎿" tone="muted">
+        {/* text-code-ink, not text-ink: the slab is always dark so
+            the prose ink would be invisible in light mode. Same
+            reason as DiffSlab. */}
+        <pre
+          className="bg-code-bg font-code text-[12px] leading-[1.55] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink"
+        >
+          {stripped}
+        </pre>
+      </MarkerRow>
+    )
+  }
 
   return (
     <MarkerRow marker="⎿" tone={isError ? 'muted' : 'muted'}>
@@ -418,6 +857,24 @@ const ToolResultRow = memo(function ToolResultRow({
     </MarkerRow>
   )
 })
+
+/**
+ * CC's Read tool emits one line per source line, prefixed with the
+ * 1-based line number and a tab:
+ *
+ *   1\timport foo
+ *   2\tconst bar = 1
+ *
+ * Strip the "<digits>\t" prefix from every line so the user sees the
+ * raw source. If a line doesn't match the pattern we keep it verbatim
+ * — defensive against future format tweaks.
+ */
+function stripLineNumberPrefix(text: string): string {
+  return text
+    .split('\n')
+    .map(line => line.replace(/^\s*\d+\t/, ''))
+    .join('\n')
+}
 
 /* ---------- System row (hidden by default; shown when toggled on) ---------- */
 

@@ -27,10 +27,21 @@ import type { Workspace } from './workspaceStore'
 //   alt-w           close focused pane (same as cmd-w but alt-keyed)
 //   alt-=           grow focused split (direction-agnostic, nearest split)
 //   alt--           shrink focused split (direction-agnostic, nearest split)
-//   alt-shift-Arrow directional resize — grow focused pane toward that
+//   fn-alt-Arrow    directional resize — grow focused pane toward that
 //                   direction. tmux-style semantics: finds the nearest
 //                   split in the matching axis containing the focused
 //                   pane on the correct side and adjusts its ratio.
+//
+//                   Why fn-alt and not alt-shift: on macOS, Option+Shift
+//                   +Arrow is the system shortcut for word-by-word text
+//                   selection, which is load-bearing for every text
+//                   field in the app (including our composer). Fn+Arrow
+//                   is the OS-level translation to Home/End/PageUp/
+//                   PageDown, so "fn+option+arrow" arrives in JS as
+//                   altKey=true with e.key === 'Home' / 'End' /
+//                   'PageUp' / 'PageDown'. That combo has no conflicting
+//                   system meaning, and we never have to touch the
+//                   actual Fn modifier (which isn't exposed to JS).
 
 type NewTabRequester = () => Promise<void> | void
 type ResumeRequester = (defaultCwd: string) => Promise<void> | void
@@ -110,40 +121,51 @@ export function useKeybinds(
       if (alt && !cmd) {
         const code = e.code
 
-        // --- Directional resize: alt+shift+arrow ---
+        // --- Directional resize: fn+alt+arrow ---
         //
-        // Must come BEFORE plain alt+arrow navigation — the shift flag
-        // is what distinguishes "move focus in that direction" from
-        // "resize divider in that direction", and without this ordering
-        // an unshifted-first check would also match when shift is held.
+        // On macOS, holding Fn while pressing an arrow is translated by
+        // the OS to Home/End/PageUp/PageDown BEFORE the event reaches
+        // the app — so what the user types as "fn+option+←" arrives
+        // here as altKey=true, e.key==='Home'. We never see the Fn
+        // modifier directly (it isn't exposed to the browser), and we
+        // don't need to: the translated key is unambiguous.
         //
-        // Semantics: the arrow moves the divider of the nearest
-        // matching split. Whether the focused pane grows or shrinks is
-        // determined by which side of that divider it's sitting on —
-        // same arrow produces opposite-feeling effects for focused
-        // panes on opposite sides, and that's correct because the
-        // divider is physically moving in the arrow direction.
+        // Must come BEFORE plain alt+arrow navigation so the two
+        // handlers don't collide (they're disjoint by key name, but
+        // keeping the directional block first matches how the old
+        // shift-gated version was ordered and makes the precedence
+        // obvious).
+        //
+        // Why not alt+shift+arrow like before: Option+Shift+Arrow is
+        // the macOS system shortcut for word-by-word text selection.
+        // Stealing it broke selection inside the composer and any
+        // other text field. Fn+Option+Arrow has no system meaning so
+        // we can claim it cleanly.
+        //
+        // Semantics unchanged: the arrow moves the divider of the
+        // nearest matching split. Whether the focused pane grows or
+        // shrinks is determined by which side of the divider it's on.
         //
         // 0.02 delta per press gives about 45 keystrokes across the
         // clamp range, which is fine-grained enough to land on exact
-        // 50/50 or 25/75 ratios without overshooting. Hold the
-        // key for coarse moves.
-        if (shift && k === 'ArrowLeft') {
+        // 50/50 or 25/75 ratios without overshooting. Hold the key
+        // for coarse moves.
+        if (k === 'Home') {
           e.preventDefault()
           workspace.resizeFocusedDirectional('left', 0.02)
           return
         }
-        if (shift && k === 'ArrowRight') {
+        if (k === 'End') {
           e.preventDefault()
           workspace.resizeFocusedDirectional('right', 0.02)
           return
         }
-        if (shift && k === 'ArrowUp') {
+        if (k === 'PageUp') {
           e.preventDefault()
           workspace.resizeFocusedDirectional('up', 0.02)
           return
         }
-        if (shift && k === 'ArrowDown') {
+        if (k === 'PageDown') {
           e.preventDefault()
           workspace.resizeFocusedDirectional('down', 0.02)
           return

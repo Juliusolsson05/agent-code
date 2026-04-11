@@ -45,6 +45,39 @@
   --color-code-border: var(--theme-code-border);
   --color-danger: var(--theme-danger);
 
+  /* Ink colors for text that sits ON the code slab. The slab stays
+     dark in BOTH modes (see --theme-code-bg) so prose ink tokens,
+     which track the mode, go invisible in light mode — dark ink on
+     dark slab. These code-slab-specific inks are fixed light values
+     so text inside <pre>, diff slabs, and anything that renders on
+     --theme-code-bg stays legible regardless of the outer mode. */
+  --color-code-ink: var(--theme-code-ink);
+  --color-code-ink-dim: var(--theme-code-ink-dim);
+
+  /* User-prompt highlight surface. Orthogonal to surface/surface-hi
+     because those are tuned for "panels on canvas" (tab bar, composer
+     strip), not for "this single row inside the feed is a user turn."
+     We want a deliberate step-away from canvas that catches the eye
+     when scrolling — dark gray on the light canvas, lighter gray on
+     the dark canvas — without matching any existing chrome color. */
+  --color-user-bg: var(--theme-user-bg);
+
+  /* Diff surfaces for Edit / MultiEdit rendering.
+     - add: a soft green-tinted band behind `+` lines
+     - remove: a soft red-tinted band behind `-` lines
+     - gutter fg: the `+`/`-` prefix glyph color, deliberately more
+       saturated than the bg so it reads as a label even when the
+       line content is long.
+     Tuned per-mode in the theme blocks below. The bands sit INSIDE
+     the code-bg slab (not on top of canvas), so the contrast budget
+     is against #050507 / #12120f — which is why dark mode leans
+     darker-green and light mode leans brighter-green than a naive
+     palette would suggest. */
+  --color-diff-add-bg: var(--theme-diff-add-bg);
+  --color-diff-remove-bg: var(--theme-diff-remove-bg);
+  --color-diff-add-fg: var(--theme-diff-add-fg);
+  --color-diff-remove-fg: var(--theme-diff-remove-fg);
+
   --font-code: var(--theme-font-code);
 
   /* Kill the default radius scale — we want sharp everywhere, so
@@ -82,6 +115,29 @@
   --theme-code-border: #16161a;
   --theme-danger: #ff6b6b;
 
+  /* Light text for things rendered on the dark code slab. In dark
+     mode these happen to match the normal ink tokens, but we keep
+     them as distinct tokens so the light-mode override block below
+     doesn't have to re-derive them. */
+  --theme-code-ink: #e8e8e6;
+  --theme-code-ink-dim: #a8a8a4;
+
+  /* Dark mode: a "light gray" step UP from the near-black canvas.
+     Calibrated to be obvious when scanning a scrollback but quiet
+     enough that it doesn't feel like a chat bubble. Slightly warmer
+     than surface-hi so it reads as its own layer, not elevated chrome. */
+  --theme-user-bg: #1f1f23;
+
+  /* Dark-mode diff colors. These sit on top of --theme-code-bg
+     (#050507), so even though they look dim in isolation the
+     contrast against the slab is legible. Went with muted desaturated
+     tints rather than full GitHub red/green — the rest of the app
+     uses a single accent color and a loud diff would fight that. */
+  --theme-diff-add-bg: #0d2416;
+  --theme-diff-remove-bg: #2a1015;
+  --theme-diff-add-fg: #4ade80;
+  --theme-diff-remove-fg: #f87171;
+
   --theme-font-code: 'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace;
 }
 
@@ -106,6 +162,28 @@
   --theme-code-bg: #12120f;
   --theme-code-border: #262622;
   --theme-danger: #b03a3a;
+
+  /* Because the slab is dark in light mode too, the text on it must
+     stay light — NOT follow the outer mode's ink. Keep these the
+     same values as dark mode. */
+  --theme-code-ink: #e8e8e6;
+  --theme-code-ink-dim: #a8a8a4;
+
+  /* Light mode: a "dark gray" step DOWN from the warm off-white canvas.
+     Warm gray on warm cream — cool neutrals look foreign on this palette.
+     Darker than surface/surface-hi so user turns pop instead of blending
+     into chrome that shares those tokens. */
+  --theme-user-bg: #d8d4c6;
+
+  /* Light-mode diff colors. Code blocks in light mode still use the
+     DARK code-bg (#12120f) — see the note on --theme-code-bg above —
+     so these tints live on a dark slab, not on the warm cream canvas.
+     That's why the bg values are the same dark-mode ones below rather
+     than a typical light-mode pastel: the surface under them IS dark. */
+  --theme-diff-add-bg: #0d2416;
+  --theme-diff-remove-bg: #2a1015;
+  --theme-diff-add-fg: #4ade80;
+  --theme-diff-remove-fg: #f87171;
 }
 
 /* ---------- High contrast override ---------- */
@@ -134,6 +212,23 @@
   --theme-code-bg: #000000;
   --theme-code-border: #3a3a3a;
   --theme-danger: #ff5c5c;
+
+  /* High-contrast slab: pure white over pure black. */
+  --theme-code-ink: #ffffff;
+  --theme-code-ink-dim: #d8d8d8;
+
+  /* High-contrast mode: canvas is pure #000, so the user-prompt surface
+     needs a clearly-visible step up without compromising contrast
+     against #fff ink. #1a1a1a is the minimum step that's unambiguously
+     "not black" on OLED without graying out the text. */
+  --theme-user-bg: #1a1a1a;
+
+  /* High-contrast diff colors: darker bases (we live on a #000 slab)
+     with brighter fg indicators so the +/- gutters are unmissable. */
+  --theme-diff-add-bg: #082015;
+  --theme-diff-remove-bg: #25080e;
+  --theme-diff-add-fg: #5eea8a;
+  --theme-diff-remove-fg: #ff8a8a;
 }
 
 /* ---------- Globals ---------- */
