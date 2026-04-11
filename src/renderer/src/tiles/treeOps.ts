@@ -190,6 +190,134 @@ function buildPath(
 }
 
 /**
+ * Build a path from root to leaf as an array of side choices
+ * (`'a' | 'b'` per level). Unlike buildPath, this doesn't carry the
+ * node references — it's a purely structural description that survives
+ * immutable tree rebuilds. Returned via the `out` param for consistency
+ * with buildPath's mutate-in-place style.
+ */
+function buildSidePath(
+  node: TileNode,
+  target: SessionId,
+  out: Array<'a' | 'b'>,
+): boolean {
+  if (node.type === 'leaf') return node.sessionId === target
+  out.push('a')
+  if (buildSidePath(node.a, target, out)) return true
+  out.pop()
+  out.push('b')
+  if (buildSidePath(node.b, target, out)) return true
+  out.pop()
+  return false
+}
+
+/**
+ * Walk a tree following a side path (produced by buildSidePath) for
+ * `depth` steps and return the node at that position. Used by
+ * resizeInDirection to look up the split we want to adjust without
+ * re-walking from root each time.
+ */
+function nodeAtPath(
+  root: TileNode,
+  sides: Array<'a' | 'b'>,
+  depth: number,
+): TileNode {
+  let n: TileNode = root
+  for (let i = 0; i < depth; i++) {
+    if (n.type !== 'split') return n
+    n = sides[i] === 'a' ? n.a : n.b
+  }
+  return n
+}
+
+/**
+ * Return a new tree with the split at `sides[0..pathLen-1]` having its
+ * ratio replaced. Pure — builds a new spine down to the target split,
+ * leaves unrelated subtrees shared with the input.
+ */
+function replaceRatioAtPath(
+  node: TileNode,
+  sides: Array<'a' | 'b'>,
+  pathLen: number,
+  newRatio: number,
+): TileNode {
+  if (pathLen === 0) {
+    // We've arrived at the target split — update its ratio.
+    if (node.type !== 'split') return node
+    return { ...node, ratio: newRatio }
+  }
+  if (node.type !== 'split') return node
+  const side = sides[sides.length - pathLen]
+  if (side === 'a') {
+    return {
+      ...node,
+      a: replaceRatioAtPath(node.a, sides, pathLen - 1, newRatio),
+    }
+  }
+  return {
+    ...node,
+    b: replaceRatioAtPath(node.b, sides, pathLen - 1, newRatio),
+  }
+}
+
+/**
+ * Direction-aware resize: the divider of the innermost matching split
+ * moves in the arrow direction. The focused pane grows or shrinks as a
+ * consequence of which side of the divider it's on.
+ *
+ * Why this "divider moves" model beats the "grow focused toward" model
+ * I tried first:
+ *   - The arrow direction is a physical compass, not a relationship
+ *     to the focused pane. Pressing ← always moves boundaries left.
+ *   - The user's intuition is: "the left arrow should visibly move
+ *     things left." If focused is on the left side of a vertical
+ *     split, ← shrinks me (my right edge moves left). If focused is on
+ *     the right side, ← grows me (my left edge moves left). Same
+ *     arrow, opposite-feeling effect, but a consistent underlying
+ *     rule that matches every physical UI the user has ever touched.
+ *   - No need to check which side the focused pane is on — the arrow
+ *     alone determines the sign. The split-selection step just picks
+ *     "the innermost split in this axis that contains me."
+ *
+ * Sign table (ratio is the fraction given to side `a` = left/top):
+ *   ← : ratio -= delta  (vertical split's divider moves left)
+ *   → : ratio += delta  (vertical split's divider moves right)
+ *   ↑ : ratio -= delta  (horizontal split's divider moves up)
+ *   ↓ : ratio += delta  (horizontal split's divider moves down)
+ *
+ * If no split in the matching axis is found walking up from the
+ * focused leaf, the move is a no-op — there's nothing to resize.
+ */
+export function resizeInDirection(
+  root: TileNode,
+  focusedSessionId: SessionId,
+  direction: 'left' | 'right' | 'up' | 'down',
+  delta: number,
+): TileNode {
+  const sides: Array<'a' | 'b'> = []
+  if (!buildSidePath(root, focusedSessionId, sides)) return root
+
+  const wantAxis: SplitDirection =
+    direction === 'left' || direction === 'right' ? 'vertical' : 'horizontal'
+  // Sign is determined by the arrow alone — ratio is the `a` (left/top)
+  // fraction, so moving the divider left or up means LESS `a`.
+  const sign = direction === 'right' || direction === 'down' ? +1 : -1
+
+  // Walk from the innermost (deepest) split outward, returning the
+  // first one whose direction matches the arrow axis. That's the
+  // split the user's focused pane is closest to on that axis.
+  for (let depth = sides.length; depth >= 1; depth--) {
+    const parent = nodeAtPath(root, sides, depth - 1)
+    if (parent.type !== 'split') continue
+    if (parent.direction !== wantAxis) continue
+    const newRatio = clampRatio(parent.ratio + sign * delta)
+    return replaceRatioAtPath(root, sides, depth - 1, newRatio)
+  }
+
+  return root
+}
+
+/**
  * Return the sessionId of the first leaf found by a depth-first walk
  * into side `a`. Used by `findNeighbor` to pick a concrete landing pane
  * after deciding which subtree we're jumping into.

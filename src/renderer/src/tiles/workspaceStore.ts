@@ -17,6 +17,7 @@ import {
   closeLeaf,
   collectLeaves,
   findNeighbor,
+  resizeInDirection,
   splitLeaf,
 } from './treeOps'
 
@@ -430,6 +431,26 @@ export function useWorkspace() {
     }))
   }, [])
 
+  // ---- Action: directional resize (⌥⇧← → ↑ ↓) ----
+  //
+  // Grows the focused pane toward the given direction by `delta`. See
+  // resizeInDirection in treeOps.ts for the full tmux-style semantics.
+  const resizeFocusedDirectional = useCallback(
+    (direction: 'left' | 'right' | 'up' | 'down', delta: number) => {
+      setState(prev => ({
+        ...prev,
+        tabs: prev.tabs.map(t => {
+          if (t.id !== prev.activeTabId) return t
+          return {
+            ...t,
+            root: resizeInDirection(t.root, t.focusedSessionId, direction, delta),
+          }
+        }),
+      }))
+    },
+    [],
+  )
+
   // ---- Action: set the ratio of a specific split (for drag resize) ----
   // Walks the tree and finds the split whose `a` side contains fromId
   // and whose `b` side contains toId, then sets its ratio directly.
@@ -613,6 +634,7 @@ export function useWorkspace() {
     nextTab,
     prevTab,
     resizeFocused,
+    resizeFocusedDirectional,
     setSplitRatio,
     setStreamingBaseline,
   }

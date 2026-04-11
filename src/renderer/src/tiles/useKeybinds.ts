@@ -20,8 +20,12 @@ import type { Workspace } from './workspaceStore'
 //   alt-h/j/k/l     navigate panes (vim: left/down/up/right)
 //   alt-ArrowLeft/Right/Up/Down  same, for non-vim users
 //   alt-w           close focused pane (same as cmd-w but alt-keyed)
-//   alt-=           grow focused split
-//   alt--           shrink focused split
+//   alt-=           grow focused split (direction-agnostic, nearest split)
+//   alt--           shrink focused split (direction-agnostic, nearest split)
+//   alt-shift-Arrow directional resize — grow focused pane toward that
+//                   direction. tmux-style semantics: finds the nearest
+//                   split in the matching axis containing the focused
+//                   pane on the correct side and adjusts its ratio.
 
 type NewTabRequester = () => Promise<void> | void
 
@@ -82,6 +86,46 @@ export function useKeybinds(
       // and the key values ARE what we want.
       if (alt && !cmd) {
         const code = e.code
+
+        // --- Directional resize: alt+shift+arrow ---
+        //
+        // Must come BEFORE plain alt+arrow navigation — the shift flag
+        // is what distinguishes "move focus in that direction" from
+        // "resize divider in that direction", and without this ordering
+        // an unshifted-first check would also match when shift is held.
+        //
+        // Semantics: the arrow moves the divider of the nearest
+        // matching split. Whether the focused pane grows or shrinks is
+        // determined by which side of that divider it's sitting on —
+        // same arrow produces opposite-feeling effects for focused
+        // panes on opposite sides, and that's correct because the
+        // divider is physically moving in the arrow direction.
+        //
+        // 0.02 delta per press gives about 45 keystrokes across the
+        // clamp range, which is fine-grained enough to land on exact
+        // 50/50 or 25/75 ratios without overshooting. Hold the
+        // key for coarse moves.
+        if (shift && k === 'ArrowLeft') {
+          e.preventDefault()
+          workspace.resizeFocusedDirectional('left', 0.02)
+          return
+        }
+        if (shift && k === 'ArrowRight') {
+          e.preventDefault()
+          workspace.resizeFocusedDirectional('right', 0.02)
+          return
+        }
+        if (shift && k === 'ArrowUp') {
+          e.preventDefault()
+          workspace.resizeFocusedDirectional('up', 0.02)
+          return
+        }
+        if (shift && k === 'ArrowDown') {
+          e.preventDefault()
+          workspace.resizeFocusedDirectional('down', 0.02)
+          return
+        }
+
         if (code === 'KeyD' && !shift) {
           e.preventDefault()
           void workspace.splitFocused('vertical')
