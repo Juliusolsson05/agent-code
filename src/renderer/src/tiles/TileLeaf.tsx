@@ -282,8 +282,11 @@ export function TileLeaf({
         </span>
       </div>
 
-      {/* Feed */}
-      <div className="flex-1 overflow-auto min-h-0">
+      {/* Feed — overflow-auto lives inside Feed itself so it can
+          own its own scroll listener for the sticky-bottom logic
+          (see Feed.tsx FeedImpl). This wrapper just provides the
+          flex cell sizing; the scroller is a child. */}
+      <div className="flex-1 min-h-0">
         <Feed
           entries={runtime.entries}
           streamingScreen={runtime.awaitingAssistant ? runtime.screen : null}

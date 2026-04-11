@@ -249,34 +249,40 @@ export function useWorkspace() {
       }
 
       // ---------------------------------------------------------------
-      // queue-operation entries are special: they're not conversation
-      // content, they're CC's internal message-queue bookkeeping. See
-      // claude-code-src/coordinator/messageQueueManager.ts and the
-      // QueuedMessage type in this file for full background.
+      // queue-operation entries are CC's internal message-queue
+      // bookkeeping. See claude-code-src/utils/messageQueueManager.ts
+      // for the emit sites. The operation field takes one of THREE
+      // values, which I learned the hard way after the first pass of
+      // this handler only knew about two:
       //
-      // We DON'T push them into `entries` — they'd render as noise in
-      // the feed (and SystemRow doesn't know how to style them anyway).
-      // We DO mirror them into `queuedMessages` so the UI can show a
-      // live "pending" strip above the composer, and we keep
-      // `awaitingAssistant` true while the queue is non-empty (so the
-      // streaming card stays visible during the N-seconds-to-minutes
-      // window between dequeue and the actual user/assistant entries
-      // materializing in the transcript).
+      //   'enqueue'  — append to the queue. Carries `content: string`.
+      //   'dequeue'  — pop for processing. No content field.
+      //   'remove'   — explicit removal by reference (via the remove()
+      //                function in messageQueueManager). No content.
+      //                Used for cancellations and bulk drains.
       //
-      // Enqueue shape: { type: 'queue-operation', operation: 'enqueue',
-      //                  content: string, timestamp: string }
-      // Dequeue shape: { type: 'queue-operation', operation: 'dequeue',
-      //                  timestamp: string }
+      // Previously we only handled enqueue + dequeue. Any `remove` op
+      // was silently dropped, so the queued list grew unbounded — on
+      // session resume we'd replay every historical enqueue, never
+      // balance them against the matching removes, and the pending-
+      // queue strip would show phantom backlog from hours ago. The
+      // user noticed this when they resumed a session and saw seven
+      // of their own past prompts rendered as "queued".
       //
-      // We dedupe enqueue entries by (timestamp + content) so a
-      // tail-from-beginning on session resume doesn't double-add
-      // historical queue operations. In the normal live-append case
-      // the timestamp is monotonically unique and the dedupe is a no-op.
+      // Both 'dequeue' and 'remove' just mean "the queue got smaller";
+      // we don't care WHICH slot shrank since the rendering only
+      // shows a FIFO preview. So we collapse them into a single
+      // "shrink from head" op. This gives us a correct net queue
+      // depth after full JSONL replay, which is what we show.
+      //
+      // We DON'T push these entries into `entries` — they'd render as
+      // noise in the feed — and we DO keep `awaitingAssistant` true
+      // whenever the queue is non-empty.
       // ---------------------------------------------------------------
       const entryType = (entry as { type?: string }).type
       if (entryType === 'queue-operation') {
         const op = entry as {
-          operation?: 'enqueue' | 'dequeue'
+          operation?: 'enqueue' | 'dequeue' | 'remove'
           content?: string
           timestamp?: string
         }
@@ -285,9 +291,11 @@ export function useWorkspace() {
           let nextQueue = current.queuedMessages
           if (op.operation === 'enqueue' && typeof op.content === 'string') {
             const ts = op.timestamp ?? String(Date.now())
-            // Skip duplicates on resume: the tailer reads from offset 0
-            // on construction, so every historical queue-op would
-            // otherwise be replayed and rebuild a phantom backlog.
+            // Dedup by (timestamp + content) so a re-tail of the same
+            // JSONL doesn't double-add. In the normal live case
+            // timestamps are monotonically unique so this is a no-op;
+            // in the re-subscribe case (reload, hot-reload during dev)
+            // it's what keeps the backlog from duplicating.
             const already = current.queuedMessages.some(
               q => q.timestamp === ts && q.content === op.content,
             )
@@ -297,10 +305,19 @@ export function useWorkspace() {
                 { content: op.content, timestamp: ts },
               ]
             }
-          } else if (op.operation === 'dequeue') {
-            // FIFO: drop the head. If the queue is already empty that's
-            // fine — dequeue-on-empty happens during resume replay
-            // when the enqueue was earlier dedupe-skipped.
+          } else if (
+            op.operation === 'dequeue' ||
+            op.operation === 'remove'
+          ) {
+            // Collapse both shrink ops into "drop head". This is
+            // FIFO-correct for dequeue (which always pops highest
+            // priority → on a simple one-priority queue that's the
+            // head) and approximately-correct for remove (which can
+            // target an arbitrary slot but we don't have the identity
+            // info to do better). The visible list might show a
+            // slightly-wrong preview for a frame or two when CC
+            // cancels a mid-queue item, but the total depth stays
+            // right, which is what the rendering actually needs.
             nextQueue = current.queuedMessages.slice(1)
           }
           return {
@@ -308,9 +325,9 @@ export function useWorkspace() {
             [sessionId]: {
               ...current,
               queuedMessages: nextQueue,
-              // Any queue activity means CC has pending work in flight;
-              // force the streaming flag on so the UI doesn't look
-              // idle while the queue drains.
+              // Force the streaming flag on whenever the queue has
+              // items so the streaming card doesn't disappear between
+              // turns while CC is draining queued work.
               awaitingAssistant:
                 nextQueue.length > 0 ? true : current.awaitingAssistant,
             },

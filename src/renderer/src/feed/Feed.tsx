@@ -191,10 +191,75 @@ function FeedImpl({
   streamingBaseline,
   showSystemEvents,
 }: Props) {
+  // Scroll container owned by Feed itself — not by TileLeaf — so the
+  // sticky-bottom logic below can own its own scroll listener without
+  // reaching up the tree. TileLeaf's wrapper is just a flex cell and
+  // no longer sets overflow-auto; see TileLeaf.tsx for the pair.
+  //
+  // Why this is load-bearing: during active streaming, `streamingScreen`
+  // updates at ~60Hz. A naive useEffect([streamingScreen]) that calls
+  // scrollIntoView({block:'end'}) every time would yank the viewport
+  // to the bottom on every frame, making it impossible for the user
+  // to scroll up and read earlier content. Even when NOT streaming,
+  // the same effect fires whenever the streaming-ish prop flickers —
+  // which can happen unexpectedly if some other piece of state (e.g.
+  // the queue handler forcing awaitingAssistant=true from a phantom
+  // backlog) keeps the prop live. Worth repeating the user's
+  // diagnosis: "scrolling doesn't even work, it snaps me back to the
+  // bottom super glitchly." That's exactly the behavior the old
+  // effect produced.
+  //
+  // The fix is two-part:
+  //   1. Track "is the user near the bottom right now" in a ref
+  //      that's updated by a scroll listener. "Near" = within 48px
+  //      of the bottom; the pad absorbs sub-pixel rounding and the
+  //      natural momentum overshoot when new rows land.
+  //   2. Only auto-scroll when the ref is true. If the user has
+  //      scrolled up, stickyBottom becomes false, and subsequent
+  //      updates stop forcing the viewport down. When the user
+  //      scrolls back to the bottom, the ref flips true again and
+  //      auto-scroll resumes.
+  //
+  // Using a ref (not state) for stickyBottom is deliberate: we don't
+  // want a React re-render on every scroll tick, only a read in the
+  // auto-scroll effect. Scroll events fire on EVERY pixel, so this
+  // matters.
+  const scrollerRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  const stickyBottomRef = useRef(true)
 
+  // One scroll listener for the container. Installed once on mount,
+  // teared down on unmount. Updates stickyBottomRef imperatively.
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
+    const el = scrollerRef.current
+    if (!el) return
+    const onScroll = () => {
+      // distanceFromBottom = scrollHeight - (scrollTop + clientHeight).
+      // When the user is at the very bottom this is 0. When they've
+      // scrolled up by 200px it's 200. Pad of 48 absorbs sub-pixel
+      // rounding errors and a little bounce when a new row lands.
+      const gap = el.scrollHeight - (el.scrollTop + el.clientHeight)
+      stickyBottomRef.current = gap < 48
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    // Run once so the initial state reflects the current position
+    // rather than defaulting to true forever.
+    onScroll()
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // Auto-scroll on content changes, but ONLY when sticky. The effect
+  // runs on every change that would grow the feed (a new entry) or
+  // move the streaming tail (a new streamingScreen snapshot). If the
+  // user is scrolled up, we skip — they're reading earlier content
+  // and we don't want to yank them back.
+  useEffect(() => {
+    if (!stickyBottomRef.current) return
+    // scrollTop = scrollHeight pins to bottom without the smooth-scroll
+    // overshoot scrollIntoView sometimes produces. Direct, instant,
+    // no animation frames.
+    const el = scrollerRef.current
+    if (el) el.scrollTop = el.scrollHeight
   }, [entries.length, streamingScreen])
 
   // Visible entries = all entries if system events are shown, otherwise
@@ -222,18 +287,23 @@ function FeedImpl({
 
   return (
     <ToolUseIndexContext.Provider value={toolUseIndex}>
-      <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
-        {visible.map((e, i) => (
-          <EntryRow key={(e as Entry).uuid ?? `i${i}`} entry={e} />
-        ))}
-        {streamingScreen != null && (
-          <StreamingRow
-            screen={streamingScreen}
-            screenMarkdown={streamingScreenMarkdown ?? streamingScreen}
-            baseline={streamingBaseline ?? null}
-          />
-        )}
-        <div ref={endRef} />
+      <div
+        ref={scrollerRef}
+        className="h-full overflow-auto"
+      >
+        <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
+          {visible.map((e, i) => (
+            <EntryRow key={(e as Entry).uuid ?? `i${i}`} entry={e} />
+          ))}
+          {streamingScreen != null && (
+            <StreamingRow
+              screen={streamingScreen}
+              screenMarkdown={streamingScreenMarkdown ?? streamingScreen}
+              baseline={streamingBaseline ?? null}
+            />
+          )}
+          <div ref={endRef} />
+        </div>
       </div>
     </ToolUseIndexContext.Provider>
   )
