@@ -10,6 +10,11 @@ import type { Workspace } from './workspaceStore'
 //
 // Keybind scheme (user-approved in brainstorming, section 4):
 //   cmd-t           new tab (prompts for cwd)
+//   cmd-shift-r     resume: open the path modal with the focused tab's
+//                   cwd pre-filled, so the resume list for that cwd is
+//                   visible instantly. Same modal as cmd-t — one path
+//                   to both flows — just with a different default
+//                   value and intent.
 //   cmd-w           close focused pane (collapses tree; closes tab if last)
 //   cmd-shift-w     close active tab outright
 //   cmd-1..9        activate Nth tab
@@ -28,10 +33,12 @@ import type { Workspace } from './workspaceStore'
 //                   pane on the correct side and adjusts its ratio.
 
 type NewTabRequester = () => Promise<void> | void
+type ResumeRequester = (defaultCwd: string) => Promise<void> | void
 
 export function useKeybinds(
   workspace: Workspace,
   onNewTabRequest: NewTabRequester,
+  onResumeRequest: ResumeRequester,
 ): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -45,6 +52,22 @@ export function useKeybinds(
         if (k === 't' && !shift) {
           e.preventDefault()
           void onNewTabRequest()
+          return
+        }
+        // Resume: ⌘⇧R opens the path modal pre-filled with the
+        // focused tab's cwd. Same modal as ⌘T but biased toward
+        // picking an existing session in the same directory the user
+        // is already in — which is the common "continue where I left
+        // off" flow.
+        if (k.toLowerCase() === 'r' && shift) {
+          e.preventDefault()
+          const tab = workspace.activeTab
+          if (tab) {
+            const cwd = workspace.state.sessions[tab.focusedSessionId]?.cwd
+            void onResumeRequest(cwd ?? '')
+          } else {
+            void onResumeRequest('')
+          }
           return
         }
         if (k.toLowerCase() === 'w' && shift) {

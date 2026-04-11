@@ -49,6 +49,23 @@ export default function App() {
     setPathPickerOpen(true)
   }, [])
 
+  // Resume flow: same modal as new tab, but the default value is the
+  // currently-focused tab's cwd so the resume list for that cwd is
+  // visible immediately. This is the "continue where I was" shortcut.
+  const onResumeRequest = useCallback(
+    (defaultCwd: string) => {
+      if (defaultCwd) {
+        // Pre-fill with the current tab's cwd, bypassing the useEffect
+        // that normally fills from "most recent session" — this is a
+        // direct-to-resume flow and the default MUST reflect where
+        // the user is standing.
+        setPathPickerDefault(defaultCwd)
+      }
+      setPathPickerOpen(true)
+    },
+    [],
+  )
+
   const onPathPickerAccept = useCallback(
     async (cwd: string) => {
       await workspace.newTab(cwd)
@@ -68,7 +85,7 @@ export default function App() {
     [workspace],
   )
 
-  useKeybinds(workspace, onNewTabRequest)
+  useKeybinds(workspace, onNewTabRequest, onResumeRequest)
 
   const { state, activeTab } = workspace
 

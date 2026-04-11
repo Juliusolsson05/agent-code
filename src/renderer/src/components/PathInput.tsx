@@ -75,6 +75,12 @@ export function PathInput({
   const inputRef = useRef<HTMLInputElement>(null)
   const [entries, setEntries] = useState<DirEntry[]>([])
   const [highlighted, setHighlighted] = useState(0)
+  // When true the dropdown is hidden even if we have suggestions —
+  // user explicitly dismissed it with Escape or by clicking outside.
+  // Gets reset whenever the user types something new or focuses back
+  // into the input, so the dropdown comes right back without any
+  // special gesture.
+  const [dismissed, setDismissed] = useState(false)
   // The request version lets us ignore stale async responses that come
   // back after a newer request has already fired — without this, fast
   // typing would flicker the dropdown with old results.
@@ -143,6 +149,11 @@ export function PathInput({
     [dir, onChange],
   )
 
+  // The dropdown is visible when we have suggestions AND the user
+  // hasn't dismissed it. `dropdownOpen` is the single source of truth
+  // every key / render path checks.
+  const dropdownOpen = suggestions.length > 0 && !dismissed
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Stop propagation so global keybinds (⌘T, ⌘W, ⌥D, …) don't fire
     // while the user is typing / completing.
@@ -150,22 +161,32 @@ export function PathInput({
 
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      if (suggestions.length === 0) return
+      if (!dropdownOpen) {
+        // Re-open with the first item highlighted — lets the user
+        // press ↓ to "peek" at suggestions after dismissing once.
+        if (suggestions.length > 0) {
+          setDismissed(false)
+          setHighlighted(0)
+        }
+        return
+      }
       setHighlighted(i => (i + 1) % suggestions.length)
       return
     }
     if (e.key === 'ArrowUp') {
       e.preventDefault()
-      if (suggestions.length === 0) return
+      if (!dropdownOpen) return
       setHighlighted(i => (i - 1 + suggestions.length) % suggestions.length)
       return
     }
     if (e.key === 'Tab') {
       e.preventDefault()
       if (suggestions.length === 0) return
-      // Single match: apply it. Multiple matches: apply the highlighted
-      // one (or the first, which is the default highlight). This is
-      // the bash tab-completion "pick current" behavior.
+      // Tab always operates on suggestions, even when the dropdown is
+      // hidden — users expect tab-complete to work regardless of
+      // dropdown visibility. Applying also re-opens the dropdown so
+      // they can see the next level of completion.
+      setDismissed(false)
       applySuggestion(suggestions[highlighted] ?? suggestions[0])
       return
     }
@@ -176,6 +197,13 @@ export function PathInput({
     }
     if (e.key === 'Escape') {
       e.preventDefault()
+      if (dropdownOpen) {
+        // First Escape: dismiss the dropdown but stay in the modal.
+        // User can press Escape again to actually cancel the modal,
+        // or keep typing / interacting with whatever was behind.
+        setDismissed(true)
+        return
+      }
       onCancel()
       return
     }
@@ -188,7 +216,29 @@ export function PathInput({
         className={inputClassName}
         style={inputStyle}
         value={value}
-        onChange={e => onChange(e.target.value)}
+        onChange={e => {
+          // Typing re-opens the dropdown — if the user dismissed
+          // before and then started typing again, they clearly want
+          // to see suggestions for the new prefix.
+          if (dismissed) setDismissed(false)
+          onChange(e.target.value)
+        }}
+        onFocus={() => {
+          // Refocusing the input after a click-outside should bring
+          // the dropdown back. If the user wants it gone they press
+          // Escape.
+          if (dismissed) setDismissed(false)
+        }}
+        onBlur={() => {
+          // When focus leaves the input (the user clicked somewhere
+          // else in the modal — a resume row, the cancel button, the
+          // new session button), hide the dropdown so it doesn't
+          // overlap whatever they're about to interact with. Clicking
+          // the dropdown items themselves does NOT trigger blur
+          // because the item handler calls e.preventDefault() on
+          // mousedown.
+          setDismissed(true)
+        }}
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         spellCheck={false}
@@ -196,7 +246,7 @@ export function PathInput({
         disabled={disabled}
         autoFocus={autoFocus}
       />
-      {suggestions.length > 0 && (
+      {dropdownOpen && (
         <div
           className={`
             absolute left-0 right-0 top-full mt-1 z-50
