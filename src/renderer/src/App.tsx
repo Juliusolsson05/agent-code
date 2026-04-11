@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { Feed } from './feed/Feed'
 import { TrustDialogModal } from './feed/TrustDialogModal'
+import { ThemePicker } from './feed/ThemePicker'
 import type { Entry } from '../../core/types/transcript'
 import { extractAssistantInProgress } from '../../core/parsers/streamingScreen'
+import { applyTheme, loadThemeFromStorage, type ThemeId } from './themes'
+
+// Apply the persisted theme BEFORE the first render so the initial paint
+// uses the right tokens. If we did this in useEffect the user would see
+// a flash of the default theme before their saved one snapped in — the
+// classic FOUC. applyTheme is a pure DOM mutation, not React state, so
+// we can call it directly at module evaluation time.
+applyTheme(loadThemeFromStorage())
 
 export default function App() {
   const [entries, setEntries] = useState<Entry[]>([])
@@ -12,30 +21,16 @@ export default function App() {
   const [entryCount, setEntryCount] = useState(0)
   const [projectDir, setProjectDir] = useState<string | null>(null)
   const [showTerminal, setShowTerminal] = useState(true)
-  // True between "user pressed Enter" and "an assistant entry lands in JSONL".
-  // While true, we render a streaming card in the feed sourced from the screen
-  // buffer. JSONL doesn't stream — only complete turns are written — so this
-  // is the only way to show in-flight tokens.
   const [awaitingAssistant, setAwaitingAssistant] = useState(false)
-  // Snapshot of extractAssistantInProgress(screen) captured at the MOMENT
-  // the user submits. Why: on turn N+1, the screen still contains turn N's
-  // `⏺` marker before CC has started producing turn N+1's response. The
-  // parser (correctly) returns turn N's text until the new marker appears.
-  // Without this baseline, the streaming card would briefly flash the
-  // previous turn's response before the new tokens arrive. We compare
-  // live parser output against this frozen baseline and only render when
-  // they differ — otherwise we show a "thinking…" placeholder.
   const [streamingBaseline, setStreamingBaseline] = useState<string | null>(null)
+  const [theme, setTheme] = useState<ThemeId>(loadThemeFromStorage())
   const seenUuids = useRef<Set<string>>(new Set())
   const inputRef = useRef<HTMLInputElement>(null)
   const screenRef = useRef<HTMLPreElement>(null)
-  // Keep a ref to the latest screen so the Enter handler (which is not
-  // inside a useEffect) can read it synchronously without re-creating the
-  // handler on every screen update (60Hz → way too much re-rendering).
   const latestScreenRef = useRef<string>('')
 
-  // Mirror `screen` into a ref so the synchronous submit handler can read
-  // the freshest value without being recreated on every update.
+  // Mirror `screen` into a ref so the Enter handler can read the freshest
+  // value synchronously without being recreated 60 times per second.
   useEffect(() => {
     latestScreenRef.current = screen
   }, [screen])
@@ -51,8 +46,6 @@ export default function App() {
       }
       setEntries(prev => [...prev, entry as Entry])
       setEntryCount(c => c + 1)
-      // The moment any assistant entry shows up, the streaming preview is
-      // stale — the structured version is now in the feed.
       if ((entry as { type?: string }).type === 'assistant') {
         setAwaitingAssistant(false)
       }
@@ -71,7 +64,6 @@ export default function App() {
     }
   }, [])
 
-  // Auto-scroll the live preview to the bottom on each update.
   useEffect(() => {
     const el = screenRef.current
     if (el) el.scrollTop = el.scrollHeight
@@ -84,12 +76,6 @@ export default function App() {
   const onKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault()
-      // Capture the baseline BEFORE we submit so StreamingCard knows what
-      // "previous turn's content" looked like. If the parser keeps
-      // returning this exact text after submit, the card shows a
-      // thinking placeholder instead of repeating turn N's text.
-      // Read from the ref (not the `screen` state) because React's
-      // closure over `screen` in this callback may be one render behind.
       const baseline = extractAssistantInProgress(latestScreenRef.current)
       setStreamingBaseline(baseline)
       await sendKey(input + '\r')
@@ -131,28 +117,59 @@ export default function App() {
   }
 
   return (
-    <div className="app">
-      <header className="bar">
-        <div className="title">cc-shell</div>
-        <div className="header-meta">
+    <div className="h-screen flex flex-col bg-canvas text-ink font-body min-h-0">
+      {/* ---------- Header ---------- */}
+      <header
+        className="
+          flex items-center justify-between
+          px-4 py-2.5
+          bg-surface border-b border-border
+          select-none flex-shrink-0
+          [-webkit-app-region:drag]
+        "
+      >
+        <div className="flex items-baseline gap-3 pl-[68px]">
+          <span className="font-display text-[15px] font-semibold tracking-tight text-ink leading-none">
+            cc-shell
+          </span>
+          <span className="text-[10px] uppercase tracking-[0.2em] text-muted font-code">
+            {theme}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2.5 [-webkit-app-region:no-drag]">
+          <ThemePicker current={theme} onChange={setTheme} />
+
           <button
             type="button"
-            className="toggle-btn"
             onClick={() => setShowTerminal(s => !s)}
             title="show / hide live terminal preview"
+            className="
+              flex items-center gap-1.5 px-2.5 py-1
+              text-[11px] text-ink-dim
+              rounded-md border border-border
+              hover:border-border-hi hover:text-ink
+              transition-colors duration-150
+            "
           >
-            {showTerminal ? '▼' : '▶'} terminal
+            <span className="font-code font-medium">
+              {showTerminal ? '▼' : '▶'} terminal
+            </span>
           </button>
-          <span className="entries" title={projectDir ?? 'no project dir yet'}>
+
+          <span
+            className="font-code text-[11px] text-muted tabular-nums px-2 py-1"
+            title={projectDir ?? 'no project dir yet'}
+          >
             jsonl: {entryCount}
           </span>
-          <span className={`status ${exited === null ? 'ok' : 'dead'}`}>
-            {exited === null ? '● running' : `○ exited (${exited})`}
-          </span>
+
+          <StatusDot exited={exited} />
         </div>
       </header>
 
-      <main className="feed-wrap">
+      {/* ---------- Feed ---------- */}
+      <main className="flex-1 overflow-auto min-h-0">
         <Feed
           entries={entries}
           streamingScreen={awaitingAssistant ? screen : null}
@@ -160,37 +177,86 @@ export default function App() {
         />
       </main>
 
+      {/* ---------- Live terminal preview (togglable debug pane) ---------- */}
       {showTerminal && (
-        <section className="preview-wrap">
-          <div className="preview-label">live preview · raw terminal</div>
-          <pre ref={screenRef} className="preview-screen">
+        <section
+          className="
+            flex-shrink-0
+            border-t border-border
+            bg-surface
+            px-4 pt-2 pb-3
+            max-h-[220px] overflow-hidden
+            flex flex-col
+          "
+        >
+          <div className="text-[9px] uppercase tracking-[0.15em] text-muted mb-1.5 font-code">
+            live preview · raw terminal
+          </div>
+          <pre
+            ref={screenRef}
+            className="
+              flex-1 overflow-auto
+              font-code text-[11px] leading-[1.45]
+              text-ink-dim whitespace-pre
+              opacity-75
+            "
+          >
             {screen || ' '}
           </pre>
         </section>
       )}
 
-      <footer className="composer">
-        <input
-          ref={inputRef}
-          className="prompt"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Type and press Enter…  (Esc · Ctrl-C · Ctrl-D · ↑ ↓ · Tab)"
-          autoFocus
-          spellCheck={false}
-          autoComplete="off"
-        />
+      {/* ---------- Composer ---------- */}
+      <footer className="flex-shrink-0 border-t border-border bg-surface px-4 py-3">
+        <div className="relative">
+          <div className="absolute left-3 top-1/2 -translate-y-1/2 font-code text-accent text-[13px] pointer-events-none">
+            ❯
+          </div>
+          <input
+            ref={inputRef}
+            className="
+              w-full
+              bg-canvas border border-border rounded-lg
+              text-ink font-code text-[13px]
+              pl-8 pr-3 py-2.5
+              outline-none
+              placeholder:text-muted
+              focus:border-border-hi
+              transition-colors duration-150
+            "
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Type and press Enter…  (Esc · Ctrl-C · Ctrl-D · ↑ ↓ · Tab)"
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+          />
+        </div>
       </footer>
 
-      {/*
-        Trust dialog overlay: renders nothing unless detectTrustDialog
-        recognizes CC's "Accessing workspace" prompt on the screen buffer.
-        Owns its own detection — the App doesn't need a visibility flag.
-        Accept / Cancel synthesize the same keystrokes CC already listens
-        for (Enter / Esc) so there's no new protocol to maintain.
-      */}
+      {/* ---------- Trust dialog overlay ---------- */}
       <TrustDialogModal screen={screen} onSend={sendKey} />
     </div>
+  )
+}
+
+function StatusDot({ exited }: { exited: number | null }) {
+  const running = exited === null
+  return (
+    <span
+      className={`
+        flex items-center gap-1.5 text-[11px] tabular-nums font-code px-2 py-1
+        ${running ? 'text-accent' : 'text-muted'}
+      `}
+    >
+      <span
+        className={`
+          inline-block w-1.5 h-1.5 rounded-full
+          ${running ? 'bg-accent streaming-dot' : 'bg-muted'}
+        `}
+      />
+      {running ? 'running' : `exited (${exited})`}
+    </span>
   )
 }

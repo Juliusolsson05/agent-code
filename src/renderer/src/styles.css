@@ -1,676 +1,506 @@
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+/*
+ * cc-shell theme engine
+ *
+ * Architecture:
+ *   1. @import "tailwindcss" — Tailwind v4 pulls its own preflight + utilities.
+ *   2. @theme inline — bind Tailwind semantic color/font classes to CSS
+ *      custom properties. Writing `bg-canvas` in JSX resolves to whatever
+ *      `--theme-canvas` is set to at that point in the DOM.
+ *   3. :root has the default (Noir) theme.
+ *   4. `[data-theme="paper"]`, etc. override the custom properties — changing
+ *      the attribute on <html> instantly re-themes everything, zero JS.
+ *
+ * Why tokens instead of hardcoded Tailwind colors:
+ *   The whole point is that adding a new theme = 12 lines of CSS, not a
+ *   codebase-wide find/replace. Every component references tokens by name
+ *   (`text-ink`, `bg-surface`, `border-border`, `font-display`, …) and
+ *   automatically picks up the active theme.
+ *
+ * Fonts:
+ *   Each theme uses a different font stack as part of its identity.
+ *   They're all loaded up front via @import so theme switching is instant
+ *   (no FOIT on switch). Google Fonts is the CDN — one request per family.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Mono:wght@400;700&family=Playfair+Display:wght@400;600;700;800&display=swap');
+
+@import "tailwindcss";
+
+/* ---------- Token → Tailwind binding ---------- */
+/*
+ * `@theme inline` tells Tailwind v4 to generate utility classes that read
+ * these variables at runtime rather than baking the value in at build time.
+ * That's the only way theme switching works: if these values were baked
+ * in, changing data-theme would do nothing because the classes would still
+ * reference the default.
+ */
+@theme inline {
+  /* Surfaces & ink */
+  --color-canvas: var(--theme-canvas);
+  --color-surface: var(--theme-surface);
+  --color-surface-hi: var(--theme-surface-hi);
+  --color-ink: var(--theme-ink);
+  --color-ink-dim: var(--theme-ink-dim);
+  --color-muted: var(--theme-muted);
+  --color-border: var(--theme-border);
+  --color-border-hi: var(--theme-border-hi);
+
+  /* Accents */
+  --color-accent: var(--theme-accent);
+  --color-accent-fg: var(--theme-accent-fg);
+  --color-accent-soft: var(--theme-accent-soft);
+  --color-role-user: var(--theme-role-user);
+  --color-role-assistant: var(--theme-role-assistant);
+
+  /* Tool call card backgrounds */
+  --color-tool-bg: var(--theme-tool-bg);
+  --color-tool-border: var(--theme-tool-border);
+  --color-result-bg: var(--theme-result-bg);
+  --color-result-border: var(--theme-result-border);
+  --color-danger: var(--theme-danger);
+
+  /* Code blocks: always a dark inset surface so highlight.js github-dark
+     colors stay legible under every theme (including Paper, where the
+     surface is cream). Treating code as a tactile object on the page. */
+  --color-code-bg: var(--theme-code-bg);
+  --color-code-border: var(--theme-code-border);
+
+  /* Fonts */
+  --font-display: var(--theme-font-display);
+  --font-body: var(--theme-font-body);
+  --font-code: var(--theme-font-code);
 }
+
+/* ---------- Theme: Noir (default) ---------- */
+/*
+ * Editorial dark. Carbon blacks with a whisper of warmth, a cream-white
+ * ink, and a single electric-lime accent that carries every interactive
+ * signal (streaming dot, focus rings, user role). Fraunces for display
+ * because its opsz axis gives us real weight at header sizes without a
+ * second font family. Monospace body (JetBrains Mono) because this is
+ * a dev tool and the typographic rhythm of code should feel native, not
+ * pasted into an article layout.
+ */
+:root,
+[data-theme="noir"] {
+  --theme-canvas: #09090b;
+  --theme-surface: #121215;
+  --theme-surface-hi: #18181c;
+  --theme-ink: #ebe5d9;
+  --theme-ink-dim: #b8b3a4;
+  --theme-muted: #6a6862;
+  --theme-border: #1f1f24;
+  --theme-border-hi: #2a2a30;
+
+  --theme-accent: #c8ff5a;
+  --theme-accent-fg: #0a0a0a;
+  --theme-accent-soft: rgba(200, 255, 90, 0.12);
+  --theme-role-user: #7fc7ff;
+  --theme-role-assistant: #c8ff5a;
+
+  --theme-tool-bg: #0e1410;
+  --theme-tool-border: #1d2a21;
+  --theme-result-bg: #0d1118;
+  --theme-result-border: #1a2030;
+  --theme-danger: #ff6b6b;
+
+  --theme-code-bg: #070709;
+  --theme-code-border: #1c1c22;
+
+  --theme-font-display: 'Fraunces', 'Times New Roman', serif;
+  --theme-font-body: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --theme-font-code: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+
+/* ---------- Theme: Paper ---------- */
+/*
+ * Warm bookish light. Cream canvas with a slight warmth (not pure white,
+ * which feels clinical), rich charcoal ink, oxblood accent. Instrument
+ * Serif for display — it's an elegant transitional with real character at
+ * display sizes and evaporates at body sizes, so we pair it with DM Sans
+ * for everything that isn't a header. Code is IBM Plex Mono because it
+ * has the best lowercase of any free mono. The whole theme reads like a
+ * page from a well-designed notebook.
+ */
+[data-theme="paper"] {
+  --theme-canvas: #f4eedb;
+  --theme-surface: #eae3c9;
+  --theme-surface-hi: #e0d8ba;
+  --theme-ink: #1c1612;
+  --theme-ink-dim: #4a4038;
+  --theme-muted: #78685c;
+  --theme-border: #d6cbae;
+  --theme-border-hi: #c0b594;
+
+  --theme-accent: #8b2635;
+  --theme-accent-fg: #f4eedb;
+  --theme-accent-soft: rgba(139, 38, 53, 0.12);
+  --theme-role-user: #1e4a6b;
+  --theme-role-assistant: #8b2635;
+
+  --theme-tool-bg: #ebe2c3;
+  --theme-tool-border: #c7bc97;
+  --theme-result-bg: #ebe3c8;
+  --theme-result-border: #cbc099;
+  --theme-danger: #8b2635;
+
+  /* Paper's code blocks: warm dark plate, like letterpress ink on
+     tinted stock. Contrasts the cream page so code feels inset. */
+  --theme-code-bg: #241a14;
+  --theme-code-border: #3a2a1c;
+
+  --theme-font-display: 'Instrument Serif', 'Times New Roman', serif;
+  --theme-font-body: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+  --theme-font-code: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+}
+
+/* ---------- Theme: Phosphor ---------- */
+/*
+ * Vintage CRT terminal. Everything in Space Mono so the whole UI feels
+ * like one typewriter. Deep green-black canvas, phosphor green ink,
+ * bright phosphor accent. A subtle scanline overlay on the canvas
+ * (added in body::before below) completes the CRT illusion without
+ * being obnoxious.
+ */
+[data-theme="phosphor"] {
+  --theme-canvas: #050a05;
+  --theme-surface: #0a120a;
+  --theme-surface-hi: #0f1a0f;
+  --theme-ink: #8ae88a;
+  --theme-ink-dim: #5ba85b;
+  --theme-muted: #3a6a3a;
+  --theme-border: #1a2a1a;
+  --theme-border-hi: #2a4a2a;
+
+  --theme-accent: #c8ff5a;
+  --theme-accent-fg: #050a05;
+  --theme-accent-soft: rgba(138, 232, 138, 0.12);
+  --theme-role-user: #a8ffa8;
+  --theme-role-assistant: #c8ff5a;
+
+  --theme-tool-bg: #0b150b;
+  --theme-tool-border: #1f3a1f;
+  --theme-result-bg: #0a140a;
+  --theme-result-border: #1a2c1a;
+  --theme-danger: #ff9a3c;
+
+  --theme-code-bg: #040904;
+  --theme-code-border: #142414;
+
+  --theme-font-display: 'Space Mono', ui-monospace, monospace;
+  --theme-font-body: 'Space Mono', ui-monospace, monospace;
+  --theme-font-code: 'Space Mono', ui-monospace, monospace;
+}
+
+/* ---------- Theme: Ember ---------- */
+/*
+ * Warm drama. Deep brown-black with a hot ember-red accent, cream ink.
+ * Playfair Display for display — it's dramatic, has huge x-height contrast,
+ * and pairs loudly with a clean mono. This is the "reading by firelight"
+ * theme: high contrast where it matters, warm everywhere else.
+ */
+[data-theme="ember"] {
+  --theme-canvas: #130c0a;
+  --theme-surface: #1c120e;
+  --theme-surface-hi: #241a12;
+  --theme-ink: #f0e6d8;
+  --theme-ink-dim: #c4b498;
+  --theme-muted: #87725a;
+  --theme-border: #2a1c12;
+  --theme-border-hi: #3a2a1a;
+
+  --theme-accent: #ff5c35;
+  --theme-accent-fg: #130c0a;
+  --theme-accent-soft: rgba(255, 92, 53, 0.14);
+  --theme-role-user: #ffb87a;
+  --theme-role-assistant: #ff5c35;
+
+  --theme-tool-bg: #1a120c;
+  --theme-tool-border: #342012;
+  --theme-result-bg: #16100c;
+  --theme-result-border: #2e1c10;
+  --theme-danger: #ff5c35;
+
+  --theme-code-bg: #0e0805;
+  --theme-code-border: #271810;
+
+  --theme-font-display: 'Playfair Display', 'Times New Roman', serif;
+  --theme-font-body: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --theme-font-code: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+}
+
+/* ---------- Globals ---------- */
 
 html,
 body,
 #root {
   height: 100%;
-  background: #0b0b0b;
-  color: #e8e8e8;
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    'SF Pro Display',
-    system-ui,
-    sans-serif;
+  background: var(--theme-canvas);
+  color: var(--theme-ink);
+  font-family: var(--theme-font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-button {
-  font-family: inherit;
-}
-
-.app {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  min-height: 0;
-}
-
-/* ---------- Header ---------- */
-
-.bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 16px;
-  background: #141414;
-  border-bottom: 1px solid #1f1f1f;
-  -webkit-app-region: drag;
-  user-select: none;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-
-.title {
-  font-weight: 600;
-  padding-left: 60px;
-  letter-spacing: 0.2px;
-}
-
-.header-meta {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  -webkit-app-region: no-drag;
-}
-
-.toggle-btn {
-  background: transparent;
-  border: 1px solid #2a2a2a;
-  color: #b8b8b8;
-  font-size: 11px;
-  padding: 4px 8px;
-  border-radius: 5px;
-  cursor: pointer;
-  transition: border-color 120ms, color 120ms;
-}
-
-.toggle-btn:hover {
-  border-color: #444;
-  color: #e8e8e8;
-}
-
-.entries {
-  color: #b8b8b8;
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-  font-family: 'SF Mono', Menlo, Monaco, monospace;
-}
-
-.status {
-  font-variant-numeric: tabular-nums;
-  font-size: 11px;
-}
-
-.status.ok {
-  color: #6fcf97;
-}
-
-.status.dead {
-  color: #888;
-}
-
-/* ---------- Feed ---------- */
-
-.feed-wrap {
-  flex: 1;
-  overflow: auto;
-  min-height: 0;
-}
-
-.feed {
-  max-width: 820px;
-  margin: 0 auto;
-  padding: 24px 28px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.feed-empty {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.feed-empty-text {
-  color: #555;
-  font-size: 13px;
-  font-style: italic;
-}
-
-.entry {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.role-label {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  color: #6b6b6b;
-}
-
-.role-label-user {
-  color: #4a9eff;
-}
-
-.role-label-assistant {
-  color: #c69bff;
-}
-
-.entry-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-/* ---------- Blocks ---------- */
-
-.block {
-  font-size: 13.5px;
-  line-height: 1.6;
-  border-radius: 8px;
-  padding: 10px 14px;
-  background: #131313;
-  border: 1px solid #1f1f1f;
-}
-
-.block-text {
-  color: #e8e8e8;
-}
-
-/* ---- Markdown rendering inside .block-text ---- */
 /*
- * Why these styles exist:
- * react-markdown renders semantic HTML (h1..h6, p, ul, ol, code, pre, etc.)
- * but the browser defaults are tuned for white pages with black text and
- * blue links. We override them to fit cc-shell's dark theme. The
- * highlight.js theme handles fenced code colors separately — we only
- * style the structural elements here.
+ * CRT scanline overlay. Only active when data-theme="phosphor" because
+ * other themes don't want it. Fixed position + pointer-events: none so
+ * it sits above content without blocking clicks. Low opacity keeps it
+ * suggestive instead of aggressive — the goal is vintage nostalgia,
+ * not a migraine.
  */
+html[data-theme="phosphor"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.06) 3px,
+    rgba(0, 0, 0, 0) 4px
+  );
+}
 
-.block-text > *:first-child { margin-top: 0; }
-.block-text > *:last-child { margin-bottom: 0; }
+/*
+ * A very subtle grain for the Paper theme — sells the paper metaphor
+ * without being noticeable. SVG feTurbulence via data URL keeps it to
+ * a single CSS declaration with no assets.
+ */
+html[data-theme="paper"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 999;
+  background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.35'/></svg>");
+  opacity: 0.08;
+  mix-blend-mode: multiply;
+}
 
-.block-text p {
+/* ---------- Markdown prose inside .prose-theme ---------- */
+/*
+ * Scoped styles for react-markdown output. We can't use @tailwindcss/
+ * typography because its colors are baked in — we'd have to rewrite
+ * them per theme anyway. Instead, this block styles every element
+ * react-markdown emits and references theme tokens, so it just works
+ * under any theme.
+ *
+ * All selectors are scoped under `.prose-theme` so they don't leak to
+ * other markup (especially react-markdown's class-free elements).
+ */
+.prose-theme > *:first-child { margin-top: 0; }
+.prose-theme > *:last-child { margin-bottom: 0; }
+
+.prose-theme p {
   margin: 0 0 10px;
-  line-height: 1.6;
-  word-break: break-word;
+  line-height: 1.65;
+  color: var(--theme-ink);
 }
 
-.block-text h1,
-.block-text h2,
-.block-text h3,
-.block-text h4,
-.block-text h5,
-.block-text h6 {
-  margin: 16px 0 8px;
+.prose-theme h1,
+.prose-theme h2,
+.prose-theme h3,
+.prose-theme h4,
+.prose-theme h5,
+.prose-theme h6 {
+  margin: 18px 0 8px;
+  font-family: var(--theme-font-display);
   font-weight: 600;
-  line-height: 1.3;
-  color: #f0f0f0;
+  line-height: 1.2;
+  color: var(--theme-ink);
+  letter-spacing: -0.01em;
 }
 
-.block-text h1 { font-size: 19px; }
-.block-text h2 { font-size: 17px; }
-.block-text h3 { font-size: 15px; }
-.block-text h4,
-.block-text h5,
-.block-text h6 { font-size: 14px; }
+.prose-theme h1 { font-size: 22px; }
+.prose-theme h2 { font-size: 19px; }
+.prose-theme h3 { font-size: 17px; }
+.prose-theme h4,
+.prose-theme h5,
+.prose-theme h6 { font-size: 15px; }
 
-.block-text ul,
-.block-text ol {
+.prose-theme ul,
+.prose-theme ol {
   margin: 0 0 10px;
   padding-left: 22px;
 }
 
-.block-text li {
-  margin: 2px 0;
-  line-height: 1.55;
+.prose-theme li {
+  margin: 3px 0;
+  line-height: 1.6;
 }
 
-.block-text li > p { margin: 0; }
+.prose-theme li > p { margin: 0; }
 
-.block-text a {
-  color: #6db3ff;
+.prose-theme a {
+  color: var(--theme-accent);
   text-decoration: underline;
-  text-decoration-color: rgba(109, 179, 255, 0.4);
+  text-decoration-color: color-mix(in srgb, var(--theme-accent) 40%, transparent);
   text-underline-offset: 2px;
+  transition: text-decoration-color 120ms ease;
+}
+.prose-theme a:hover {
+  text-decoration-color: var(--theme-accent);
 }
 
-.block-text a:hover {
-  text-decoration-color: #6db3ff;
-}
-
-.block-text blockquote {
+.prose-theme blockquote {
   margin: 0 0 10px;
-  padding: 6px 14px;
-  border-left: 3px solid #2a3a4d;
-  color: #b8b8b8;
-  background: rgba(74, 158, 255, 0.04);
+  padding: 8px 16px;
+  border-left: 3px solid var(--theme-accent);
+  color: var(--theme-ink-dim);
+  background: var(--theme-accent-soft);
+  border-radius: 0 6px 6px 0;
 }
 
-.block-text strong {
-  color: #f5f5f5;
-  font-weight: 600;
+.prose-theme strong {
+  color: var(--theme-ink);
+  font-weight: 700;
 }
 
-.block-text em {
-  color: #d8d8d8;
+.prose-theme em {
+  color: var(--theme-ink);
   font-style: italic;
 }
 
-/* Inline code: small dim chip */
-.block-text code:not(pre code) {
-  font-family: 'SF Mono', 'JetBrains Mono', Menlo, Monaco, monospace;
-  font-size: 12px;
-  background: #08080a;
-  border: 1px solid #1f1f1f;
+/* Inline code: chip-styled with theme accent */
+.prose-theme code:not(pre code) {
+  font-family: var(--theme-font-code);
+  font-size: 0.875em;
+  background: var(--theme-surface-hi);
+  border: 1px solid var(--theme-border);
   border-radius: 4px;
-  padding: 1.5px 5px;
-  color: #e8b8a0;
+  padding: 1.5px 6px;
+  color: var(--theme-accent);
 }
 
-/* Fenced code blocks: highlight.js applies color via .hljs classes,
-   we just provide the surrounding container. */
-.block-text pre {
-  margin: 10px 0;
-  background: #08080a;
-  border: 1px solid #1f1f1f;
-  border-radius: 6px;
-  padding: 12px 14px;
+/* Fenced code blocks: always a dark inset plate so highlight.js github-dark
+   stays legible even in Paper's cream theme. Reads as a material inset
+   into the page, not a CSS afterthought. */
+.prose-theme pre {
+  margin: 12px 0;
+  background: var(--theme-code-bg);
+  border: 1px solid var(--theme-code-border);
+  border-radius: 8px;
+  padding: 14px 16px;
   overflow-x: auto;
   font-size: 12.5px;
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
-.block-text pre code {
+.prose-theme pre code {
   background: transparent !important;
   border: none;
   padding: 0;
-  font-family: 'SF Mono', 'JetBrains Mono', Menlo, Monaco, monospace;
+  font-family: var(--theme-font-code);
   color: #e8e8e8;
 }
 
-.block-text table {
+.prose-theme table {
   border-collapse: collapse;
-  margin: 10px 0;
+  margin: 12px 0;
   font-size: 12.5px;
   width: 100%;
+  border: 1px solid var(--theme-border);
+  border-radius: 6px;
+  overflow: hidden;
 }
 
-.block-text th,
-.block-text td {
-  border: 1px solid #2a2a2a;
-  padding: 6px 10px;
+.prose-theme th,
+.prose-theme td {
+  border: 1px solid var(--theme-border);
+  padding: 7px 11px;
   text-align: left;
 }
 
-.block-text th {
-  background: #14140e;
+.prose-theme th {
+  background: var(--theme-surface-hi);
   font-weight: 600;
-  color: #f0f0f0;
+  color: var(--theme-ink);
 }
 
-.block-text hr {
+.prose-theme hr {
   border: none;
-  border-top: 1px solid #2a2a2a;
-  margin: 16px 0;
+  border-top: 1px solid var(--theme-border);
+  margin: 18px 0;
 }
 
-/* GFM task lists */
-.block-text input[type='checkbox'] {
-  margin-right: 6px;
-  vertical-align: middle;
+/* ---------- Streaming dot pulse ---------- */
+@keyframes cc-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.9); }
+  50%      { opacity: 1;    transform: scale(1.1); }
 }
 
-/* ---------- Trust dialog modal ---------- */
-/*
- * Shown as an overlay when detectTrustDialog(screen) returns visible=true.
- * Backdrop dims the whole app; the modal itself is centered. All
- * interaction funnels through the two buttons — no other UI is usable
- * while the modal is open (because clicks go through to the backdrop,
- * which does nothing). We don't bother trapping focus strictly because
- * the two buttons are the only focusable elements in the overlay and
- * autoFocus on "accept" handles the common path.
- */
-
-.trust-modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(5, 5, 8, 0.72);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  animation: trust-fade-in 140ms ease-out;
+.streaming-dot {
+  animation: cc-pulse 1.3s ease-in-out infinite;
 }
 
-@keyframes trust-fade-in {
+/* ---------- Modal animations ---------- */
+@keyframes cc-fade {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
 
-.trust-modal {
-  background: #141418;
-  border: 1px solid #2a2a32;
-  border-radius: 12px;
-  padding: 24px 28px 20px;
-  max-width: 460px;
-  width: calc(100vw - 64px);
-  box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.6),
-    0 2px 8px rgba(0, 0, 0, 0.4);
-  animation: trust-pop 180ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
+@keyframes cc-pop {
+  from { transform: translateY(12px) scale(0.95); opacity: 0; }
+  to   { transform: translateY(0) scale(1);       opacity: 1; }
 }
 
-@keyframes trust-pop {
-  from { transform: translateY(10px) scale(0.96); opacity: 0; }
-  to   { transform: translateY(0) scale(1); opacity: 1; }
+.modal-fade { animation: cc-fade 150ms ease-out; }
+.modal-pop  { animation: cc-pop 200ms cubic-bezier(0.2, 0.9, 0.3, 1.15); }
+
+/* ---------- Feed entry staggered reveal ---------- */
+/*
+ * Each new entry fades + slides in. Not applied to pre-existing history
+ * (so loading a long session doesn't become a cascade) — only entries
+ * whose `data-fresh` attribute is set.
+ */
+@keyframes cc-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
-.trust-modal-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
+[data-fresh="1"] {
+  animation: cc-rise 260ms cubic-bezier(0.18, 0.9, 0.32, 1) both;
 }
 
-.trust-modal-icon {
-  font-size: 22px;
-  color: #f5c14a;
+/* ---------- Custom scrollbars per theme ---------- */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
 
-.trust-modal-title {
-  font-size: 17px;
-  font-weight: 600;
-  color: #f0f0f0;
-  letter-spacing: 0.1px;
-}
-
-.trust-modal-body {
-  color: #c8c8c8;
-  font-size: 13.5px;
-  line-height: 1.55;
-}
-
-.trust-modal-body p {
-  margin: 0 0 12px;
-}
-
-.trust-modal-path {
-  font-family: 'SF Mono', 'JetBrains Mono', Menlo, Monaco, monospace;
-  font-size: 12.5px;
-  background: #08080a;
-  border: 1px solid #1f1f1f;
-  border-radius: 6px;
-  padding: 10px 12px;
-  color: #e8b8a0;
-  margin: 0 0 12px;
-  overflow-x: auto;
-  white-space: nowrap;
-}
-
-.trust-modal-warning {
-  color: #b0b0b0;
-  font-size: 12.5px;
-}
-
-.trust-modal-warning strong {
-  color: #e8e8e8;
-}
-
-.trust-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 22px;
-}
-
-.btn {
-  padding: 8px 16px;
-  border-radius: 7px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition:
-    background 120ms,
-    border-color 120ms,
-    transform 60ms;
-  font-family: inherit;
-}
-
-.btn:active {
-  transform: translateY(1px);
-}
-
-.btn-secondary {
+*::-webkit-scrollbar-track {
   background: transparent;
-  border-color: #2a2a32;
-  color: #b8b8b8;
 }
 
-.btn-secondary:hover {
-  border-color: #444;
-  color: #e8e8e8;
-}
-
-.btn-primary {
-  background: #4a9eff;
-  border-color: #4a9eff;
-  color: #fff;
-}
-
-.btn-primary:hover {
-  background: #5fa9ff;
-  border-color: #5fa9ff;
-}
-
-.btn-primary:focus-visible {
-  outline: 2px solid #7fbcff;
-  outline-offset: 2px;
-}
-
-.entry-user .block-text {
-  background: #0e1620;
-  border-color: #1a2c3f;
-}
-
-.entry-assistant .block-text {
-  background: #14101a;
-  border-color: #29213a;
-}
-
-.block-thinking {
-  background: #0f0f12;
-  border-color: #1a1a20;
-  color: #888;
-}
-
-.block-thinking summary {
-  cursor: pointer;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: #666;
-  user-select: none;
-}
-
-.block-thinking[open] summary {
-  margin-bottom: 8px;
-}
-
-.block-tool-use {
-  background: #0e1410;
-  border-color: #1c2a1f;
-}
-
-.block-tool-result {
-  background: #0d1015;
-  border-color: #1a1f28;
-}
-
-.block-tool-result.is-error {
-  background: #1a0e0e;
-  border-color: #3a1c1c;
-}
-
-.tool-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-
-.tool-icon {
-  color: #888;
-  font-size: 13px;
-}
-
-.tool-name {
-  color: #c8c8c8;
-  font-family: 'SF Mono', Menlo, Monaco, monospace;
-}
-
-.block details summary {
-  cursor: pointer;
-  font-size: 11px;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  user-select: none;
-}
-
-.block-pre {
-  margin-top: 8px;
-  background: #08080a;
-  border: 1px solid #1a1a1a;
+*::-webkit-scrollbar-thumb {
+  background: var(--theme-border-hi);
   border-radius: 6px;
-  padding: 10px 12px;
-  font-family: 'SF Mono', Menlo, Monaco, monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  color: #b8b8b8;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 480px;
-  overflow: auto;
+  border: 2px solid var(--theme-canvas);
 }
 
-.block-unknown {
-  background: #14140e;
-  border-color: #2a2a1c;
-  color: #888;
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-muted);
 }
 
-/* ---------- Streaming card (transient, replaced by structured entry) ---------- */
-
-.entry-streaming {
-  opacity: 0.95;
+/* ---------- Focus ring using theme accent ---------- */
+:focus-visible {
+  outline: 2px solid var(--theme-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
-.streaming-dot {
-  display: inline-block;
-  margin-left: 8px;
-  color: #c69bff;
-  animation: pulse 1.2s ease-in-out infinite;
-  font-size: 9px;
-  vertical-align: middle;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.3; }
-  50%      { opacity: 1; }
-}
-
-.block-streaming {
-  background: #14101a;
-  border: 1px solid #29213a;
-  border-radius: 8px;
-  padding: 12px 14px;
-  font-family:
-    'SF Mono',
-    'JetBrains Mono',
-    Menlo,
-    Monaco,
-    monospace;
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: #d8d8d8;
-  white-space: pre;
-  overflow-x: auto;
-  max-height: 480px;
-  overflow-y: auto;
-}
-
-.system-row {
-  font-size: 11px;
-  color: #555;
-  font-family: 'SF Mono', Menlo, Monaco, monospace;
-  padding: 2px 0;
-  letter-spacing: 0.2px;
-}
-
-/* ---------- Live preview pane ---------- */
-
-.preview-wrap {
-  flex-shrink: 0;
-  border-top: 1px solid #1f1f1f;
-  background: #0e0e0e;
-  padding: 8px 16px 12px;
-  max-height: 220px;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.preview-label {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #555;
-  margin-bottom: 6px;
-}
-
-.preview-screen {
-  flex: 1;
-  overflow: auto;
-  font-family:
-    'SF Mono',
-    'JetBrains Mono',
-    Menlo,
-    Monaco,
-    'Courier New',
-    monospace;
-  font-size: 11px;
-  line-height: 1.45;
-  color: #888;
-  white-space: pre;
-  tab-size: 4;
-}
-
-/* ---------- Composer ---------- */
-
-.composer {
-  border-top: 1px solid #1f1f1f;
-  padding: 12px 16px;
-  background: #141414;
-  flex-shrink: 0;
-}
-
-.prompt {
-  width: 100%;
-  background: #0b0b0b;
-  border: 1px solid #2a2a2a;
-  border-radius: 8px;
-  color: #e8e8e8;
-  font-family:
-    'SF Mono',
-    'JetBrains Mono',
-    Menlo,
-    Monaco,
-    monospace;
-  font-size: 13px;
-  padding: 10px 12px;
-  outline: none;
-  transition: border-color 120ms ease;
-}
-
-.prompt:focus {
-  border-color: #4a4a4a;
-}
-
-.prompt::placeholder {
-  color: #555;
+/* ---------- Highlight.js theme overrides so code colors follow the theme ---------- */
+/*
+ * highlight.js github-dark ships fixed colors. We override just the
+ * background so it blends with the theme surface — the syntax colors
+ * are left alone because they still read fine on any dark surface and
+ * the Paper theme's code blocks are dark-on-dark by design (code as a
+ * tactile object, like an inset).
+ */
+.prose-theme .hljs {
+  background: transparent !important;
+  color: var(--theme-ink);
 }
