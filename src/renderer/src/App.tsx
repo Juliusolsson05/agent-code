@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Feed } from './feed/Feed'
 import type { Entry } from '../../core/types/transcript'
+import { extractAssistantInProgress } from '../../core/parsers/streamingScreen'
 
 export default function App() {
   const [entries, setEntries] = useState<Entry[]>([])
@@ -15,9 +16,28 @@ export default function App() {
   // buffer. JSONL doesn't stream — only complete turns are written — so this
   // is the only way to show in-flight tokens.
   const [awaitingAssistant, setAwaitingAssistant] = useState(false)
+  // Snapshot of extractAssistantInProgress(screen) captured at the MOMENT
+  // the user submits. Why: on turn N+1, the screen still contains turn N's
+  // `⏺` marker before CC has started producing turn N+1's response. The
+  // parser (correctly) returns turn N's text until the new marker appears.
+  // Without this baseline, the streaming card would briefly flash the
+  // previous turn's response before the new tokens arrive. We compare
+  // live parser output against this frozen baseline and only render when
+  // they differ — otherwise we show a "thinking…" placeholder.
+  const [streamingBaseline, setStreamingBaseline] = useState<string | null>(null)
   const seenUuids = useRef<Set<string>>(new Set())
   const inputRef = useRef<HTMLInputElement>(null)
   const screenRef = useRef<HTMLPreElement>(null)
+  // Keep a ref to the latest screen so the Enter handler (which is not
+  // inside a useEffect) can read it synchronously without re-creating the
+  // handler on every screen update (60Hz → way too much re-rendering).
+  const latestScreenRef = useRef<string>('')
+
+  // Mirror `screen` into a ref so the synchronous submit handler can read
+  // the freshest value without being recreated on every update.
+  useEffect(() => {
+    latestScreenRef.current = screen
+  }, [screen])
 
   useEffect(() => {
     const offScreen = window.api.onScreen(setScreen)
@@ -63,6 +83,14 @@ export default function App() {
   const onKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault()
+      // Capture the baseline BEFORE we submit so StreamingCard knows what
+      // "previous turn's content" looked like. If the parser keeps
+      // returning this exact text after submit, the card shows a
+      // thinking placeholder instead of repeating turn N's text.
+      // Read from the ref (not the `screen` state) because React's
+      // closure over `screen` in this callback may be one render behind.
+      const baseline = extractAssistantInProgress(latestScreenRef.current)
+      setStreamingBaseline(baseline)
       await sendKey(input + '\r')
       setInput('')
       setAwaitingAssistant(true)
@@ -124,7 +152,11 @@ export default function App() {
       </header>
 
       <main className="feed-wrap">
-        <Feed entries={entries} streamingScreen={awaitingAssistant ? screen : null} />
+        <Feed
+          entries={entries}
+          streamingScreen={awaitingAssistant ? screen : null}
+          streamingBaseline={streamingBaseline}
+        />
       </main>
 
       {showTerminal && (

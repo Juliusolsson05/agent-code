@@ -22,9 +22,17 @@ type Props = {
    * arrives in `entries`.
    */
   streamingScreen?: string | null
+  /**
+   * The output of extractAssistantInProgress from the moment the user
+   * submitted the current prompt. Used by StreamingCard to distinguish
+   * "still looking at turn N's content" from "turn N+1 has started".
+   * Null on the very first turn (no baseline to compare against).
+   * See the comment on `streamingBaseline` in App.tsx for why.
+   */
+  streamingBaseline?: string | null
 }
 
-export function Feed({ entries, streamingScreen }: Props) {
+export function Feed({ entries, streamingScreen, streamingBaseline }: Props) {
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -46,13 +54,21 @@ export function Feed({ entries, streamingScreen }: Props) {
       {entries.map((e, i) => (
         <EntryRow key={(e as Entry).uuid ?? `i${i}`} entry={e} />
       ))}
-      {streamingScreen != null && <StreamingCard screen={streamingScreen} />}
+      {streamingScreen != null && (
+        <StreamingCard screen={streamingScreen} baseline={streamingBaseline ?? null} />
+      )}
       <div ref={endRef} />
     </div>
   )
 }
 
-function StreamingCard({ screen }: { screen: string }) {
+function StreamingCard({
+  screen,
+  baseline,
+}: {
+  screen: string
+  baseline: string | null
+}) {
   // Use extractAssistantInProgress (not extractStreamingText) so the
   // streaming card shows ONLY the most recent assistant text — not the
   // welcome banner, the user's prompt, the conversation history, or the
@@ -60,13 +76,25 @@ function StreamingCard({ screen }: { screen: string }) {
   // structured entry (when the JSONL turn lands) much less jarring
   // because both renderings show the same content.
   const text = extractAssistantInProgress(screen)
+
+  // Multi-turn fix: for every turn AFTER the first, the screen still
+  // contains the previous turn's `⏺` marker right after the user hits
+  // Enter. extractAssistantInProgress (correctly) returns the LAST
+  // marker's content — which is the PREVIOUS turn's text, not the new
+  // one. We use `baseline` (captured at submit time) to tell them apart:
+  // if the parser's output matches the baseline we're still staring at
+  // the stale turn, so render a thinking placeholder. Once CC starts
+  // producing new tokens, the parser output diverges and we show it.
+  const isStale = baseline != null && text === baseline
+  const display = !text || isStale ? 'thinking…' : text
+
   return (
     <article className="entry entry-assistant entry-streaming">
       <div className="role-label role-label-assistant">
         Claude <span className="streaming-dot">●</span>
       </div>
       <div className="entry-body">
-        <pre className="block block-streaming">{text || 'thinking…'}</pre>
+        <pre className="block block-streaming">{display}</pre>
       </div>
     </article>
   )
