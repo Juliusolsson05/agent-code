@@ -290,42 +290,63 @@ function FeedImpl({
   // scrollTop=0 before we restore. Using useEffect here would flash
   // the top of the feed for one frame before the restore landed.
   //
-  // If we were sticky-bottom when we last unmounted, restoration
-  // means "scroll to bottom after layout" (which the auto-scroll
-  // effect below handles via stickyBottomRef.current=true). Otherwise
-  // we pin scrollTop to the exact saved value — the content height
-  // on remount matches the height at save time since the content
-  // didn't change while we were unmounted.
+  // Three cases:
+  //   1. No saved entry → this is the first time we've mounted for
+  //      this session (or the map was just cleared). Default to
+  //      "stuck at bottom" — for a freshly-opened feed the user
+  //      wants to see the most recent content, just like opening a
+  //      terminal or a chat window.
+  //   2. Saved stickyBottom: true → the user was at the bottom when
+  //      they left. Content may have grown while we were unmounted
+  //      (new entries appended to runtime.entries even though Feed
+  //      wasn't rendering), so we pin to the NEW scrollHeight, not
+  //      the old scrollTop.
+  //   3. Saved stickyBottom: false → restore the exact saved
+  //      scrollTop. Content height on remount matches save time
+  //      (because unmount freezes new entries from growing the
+  //      unmounted scroller) so this is pixel-accurate.
   //
   // The sessionId dep is load-bearing: if the user resumes a
-  // different session in the same pane slot (not the current flow
-  // but possible if we ever allow in-place session swap), we need
-  // to re-restore from the new key. Today it's effectively a
-  // mount-only effect.
+  // different session in the same pane slot, we need to re-restore
+  // from the new key. Today it's effectively a mount-only effect.
   useLayoutEffect(() => {
     const el = scrollerRef.current
     if (!el) return
     const saved = scrollPositions.get(sessionId)
-    if (!saved) return
-    if (saved.stickyBottom) {
+    if (!saved || saved.stickyBottom) {
+      // Case 1 or 2: pin to bottom. We do this synchronously in
+      // useLayoutEffect so the browser commits the scrollTop change
+      // in the SAME paint as the initial content render. Without
+      // that, the first paint shows scrollTop=0 (top) and the next
+      // tick scrolls down — visibly a "starts at top, jumps to
+      // bottom" flash on every tab switch, which is the exact bug
+      // the user flagged.
       el.scrollTop = el.scrollHeight
+      stickyBottomRef.current = true
     } else {
+      // Case 3: restore exact position.
       el.scrollTop = saved.scrollTop
+      stickyBottomRef.current = false
     }
   }, [sessionId])
 
-  // One scroll listener for the container. Installed once on mount,
-  // teared down on unmount. Updates stickyBottomRef imperatively AND
-  // persists the position into the module-level map so a later
-  // unmount/remount can restore it.
+  // One scroll listener for the container. Updates stickyBottomRef
+  // imperatively AND persists the position into the module-level
+  // map so a later unmount/remount can restore it.
+  //
+  // CRITICAL: we DO NOT call onScroll() synchronously on mount.
+  // That was the original bug — at mount time the scroller has
+  // scrollTop=0 and scrollHeight=full-content, so gap > 48 and the
+  // handler would stamp stickyBottom=false INTO THE REF AND THE
+  // PERSISTED MAP before the layout effect above had a chance to
+  // scroll to the bottom. Then the auto-scroll effect below would
+  // see stickyBottom=false and skip, leaving the viewport stuck at
+  // the top. The layout effect sets stickyBottomRef explicitly, so
+  // the scroll listener only needs to react to actual user scrolls.
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
     const onScroll = () => {
-      // distanceFromBottom = scrollHeight - (scrollTop + clientHeight).
-      // When the user is at the very bottom this is 0. When they've
-      // scrolled up by 200px it's 200. Pad of 48 absorbs sub-pixel
-      // rounding errors and a little bounce when a new row lands.
       const gap = el.scrollHeight - (el.scrollTop + el.clientHeight)
       stickyBottomRef.current = gap < 48
       scrollPositions.set(sessionId, {
@@ -334,9 +355,6 @@ function FeedImpl({
       })
     }
     el.addEventListener('scroll', onScroll, { passive: true })
-    // Run once so the initial state reflects the current position
-    // rather than defaulting to true forever.
-    onScroll()
     return () => el.removeEventListener('scroll', onScroll)
   }, [sessionId])
 
