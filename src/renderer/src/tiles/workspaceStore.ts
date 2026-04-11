@@ -161,7 +161,16 @@ type PersistedWorkspace = {
   sessions: Record<SessionId, SessionMeta>
 }
 
-const STORAGE_VERSION = 1
+// Workspace storage version.
+//
+// v1 → initial schema.
+// v2 → SessionMeta.ccSessionId added (cross-reload CC resume).
+//
+// We accept older versions on load too (see the load effect below):
+// missing fields get the default-undefined treatment, so a v1 blob
+// just rehydrates without the resume path wired up. Only a wholly
+// different schema would force a drop.
+const STORAGE_VERSION = 2
 
 // ---------------------------------------------------------------------------
 // The store hook
@@ -351,6 +360,50 @@ export function useWorkspace() {
           }
         })
         return
+      }
+
+      // Capture CC's own session UUID from the first entry that
+      // carries one, and persist it into SessionMeta.ccSessionId so
+      // the next app launch can pass --resume <uuid> to spawnSession
+      // and get the same conversation back. Without this, every
+      // reload is a fresh blank session — the tile tree survives
+      // but the Claude context dies.
+      //
+      // Every JSONL entry CC writes includes its own `sessionId`
+      // field (see src/core/types/transcript.ts and the CC source
+      // at claude-code-src/utils/sessionStorage.ts). We take the
+      // FIRST one we see per cc-shell session and never overwrite,
+      // because (a) it's stable for the lifetime of the CC process
+      // and (b) updating it on every entry would produce a
+      // persistence storm.
+      //
+      // The check is a second setState call on `state` (not a
+      // merge into the `setRuntimes` call below) because sessions
+      // live in the persisted workspace state, not the live
+      // runtime. The debounced save effect (useEffect on [state])
+      // picks it up automatically and flushes to workspace.json.
+      const ccId = (entry as { sessionId?: string }).sessionId
+      if (typeof ccId === 'string' && ccId.length > 0) {
+        setState(prev => {
+          const meta = prev.sessions[sessionId]
+          if (!meta) return prev
+          if (meta.ccSessionId === ccId) return prev
+          // Guard: once captured, never overwrite. A resumed session
+          // that receives fresh entries tagged with the same
+          // ccSessionId is a no-op (first branch catches it); a
+          // resumed session that somehow receives entries with a
+          // DIFFERENT sessionId would indicate a bug upstream, and
+          // we'd rather keep the original value than track the
+          // mutation.
+          if (meta.ccSessionId) return prev
+          return {
+            ...prev,
+            sessions: {
+              ...prev.sessions,
+              [sessionId]: { ...meta, ccSessionId: ccId },
+            },
+          }
+        })
       }
 
       setRuntimes(prev => {
@@ -755,7 +808,19 @@ export function useWorkspace() {
           version: number
           workspace: PersistedWorkspace
         }
-        if (parsed.version !== STORAGE_VERSION) throw new Error('version mismatch')
+        // Version gate: accept anything between 1 and the current
+        // version. A v1 blob has no ccSessionId on its SessionMetas,
+        // so the rehydrate path just spawns fresh (same as before
+        // this feature existed) — no crash, no silent data loss.
+        // Rejecting unknown-future versions is still important so a
+        // v3 blob from a newer build doesn't get misinterpreted.
+        if (
+          typeof parsed.version !== 'number' ||
+          parsed.version < 1 ||
+          parsed.version > STORAGE_VERSION
+        ) {
+          throw new Error(`unknown workspace version ${parsed.version}`)
+        }
         await rehydrate(parsed.workspace)
       } catch (err) {
         // eslint-disable-next-line no-console
@@ -770,6 +835,28 @@ export function useWorkspace() {
    * Remap a persisted tree by replacing every sessionId with a freshly
    * spawned one (spawn happens as we walk). Returns the remapped tree
    * plus the old→new id mapping.
+   *
+   * Resume semantics: if the persisted SessionMeta carries a
+   * `ccSessionId`, we pass it to the spawn call as `resumeSessionId`
+   * so claude boots with `--resume <uuid>` and the full conversation
+   * history — tool calls, transcript, queue state, the lot — comes
+   * back. The cc-shell SessionId we mint here is a fresh routing
+   * key; CC's own session UUID is the thing we care about preserving.
+   *
+   * The ccSessionId is ALSO threaded into freshSessions[newId] so
+   * the runtime meta after rehydrate matches pre-reload state and
+   * the next save cycle writes it straight back. Without this, the
+   * first save after a resume would drop ccSessionId and the NEXT
+   * reload would lose context again.
+   *
+   * Failure modes:
+   *   - File missing / corrupted → CC will exit with a non-zero code
+   *     shortly after spawn. Surfaces via the exit event as "exited"
+   *     in the pane status strip. Not retried automatically — the
+   *     user can close the pane and open a fresh one.
+   *   - File locked by another process (rare) → same as above.
+   *   - Spawn itself throws (IPC failure) → caught below and logged;
+   *     the pane is simply missing from the rehydrated tree.
    */
   const rehydrate = useCallback(async (persisted: PersistedWorkspace) => {
     const idMap = new Map<SessionId, SessionId>()
@@ -778,8 +865,13 @@ export function useWorkspace() {
     // Spawn sessions in the order they appear in persisted.sessions.
     for (const [oldId, meta] of Object.entries(persisted.sessions)) {
       try {
-        const newId = await window.api.spawnSession({ cwd: meta.cwd })
+        const newId = await window.api.spawnSession({
+          cwd: meta.cwd,
+          resumeSessionId: meta.ccSessionId,
+        })
         idMap.set(oldId, newId)
+        // Carry ccSessionId forward so the next save cycle doesn't
+        // drop it — see block comment above for why this matters.
         freshSessions[newId] = meta
       } catch (err) {
         // eslint-disable-next-line no-console

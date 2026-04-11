@@ -50,6 +50,26 @@ export type SessionMeta = {
   cwd: string
   /** Optional user-provided or derived label shown in tab titles. */
   title?: string
+  /**
+   * CC's own session UUID (distinct from cc-shell's SessionId which is
+   * a per-launch routing key). Captured from the `sessionId` field on
+   * the first JSONL entry that lands for this session, and persisted
+   * to disk so we can pass `--resume <uuid>` on the next launch and
+   * rehydrate the conversation history, tool calls, and everything
+   * else CC tracks in its transcript file.
+   *
+   * Without this, a workspace reload / hot-reload / app crash lands
+   * the user in a new blank session every time — the tile tree comes
+   * back but every pane's conversation is gone, which was causing
+   * real frustration during development. See the load path in
+   * workspaceStore.rehydrate() and the jsonl-entry handler that
+   * captures it.
+   *
+   * Optional because: (a) brand-new sessions haven't received their
+   * first JSONL entry yet, (b) pre-v2 workspace.json blobs from
+   * before this feature was added don't carry the field.
+   */
+  ccSessionId?: string
 }
 
 export type WorkspaceState = {
