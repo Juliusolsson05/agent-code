@@ -98,19 +98,36 @@ async function main(): Promise<void> {
   })
 
   if (dumpFrames) {
+    // xterm-headless's Terminal#write is asynchronous: the buffer is
+    // updated in a deferred pass, so snapshot() called synchronously
+    // right after write() returns stale content (usually the previous
+    // frame). Use the callback form to await each write. It's slower
+    // but correct, and replay doesn't need to be fast.
+    const writeAndFlush = (data: string): Promise<void> =>
+      new Promise(resolve => term.write(data, () => resolve()))
+
     let prev = ''
     for (let i = 0; i < events.length; i++) {
-      term.write(events[i].data)
+      await writeAndFlush(events[i].data)
       const screen = snapshot(term)
       if (screen === prev) continue
       prev = screen
       const stripped = extractStreamingText(screen)
-      console.log(box(`FRAME ${i + 1}/${events.length}  (+${(events[i].ts - events[0].ts)}ms)`, ''))
+      const assistant = extractAssistantInProgress(screen)
+      console.log(
+        box(
+          `FRAME ${i + 1}/${events.length}  (+${events[i].ts - events[0].ts}ms)`,
+          '',
+        ),
+      )
       console.log('--- raw screen ---')
       console.log(screen)
       console.log()
       console.log('--- extractStreamingText ---')
       console.log(stripped)
+      console.log()
+      console.log('--- extractAssistantInProgress ---')
+      console.log(assistant || '(empty)')
       console.log()
     }
     return

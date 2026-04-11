@@ -78,6 +78,55 @@ export const ASSISTANT_LINE_MARKER = '⏺'
 
 const ASSISTANT_MARKER_RE = /^\s*⏺\s?/
 
+// -----------------------------------------------------------------------------
+// Intermediate chrome: CC's tool-call + thinking UI decorations.
+//
+// These lines appear in the middle of a turn (not at the bottom) while CC is
+// running a tool or thinking. They look superficially like content because
+// they show up between the user's message and the assistant's final text,
+// but they're actually UI furniture:
+//
+//   ⏺ Listing 1 directory… (ctrl+o to expand)     ← tool call label
+//     ⎿  $ ls -1 /private/tmp | wc -l && …        ← tool command echo
+//     ⎿  (result line 1)                          ← tool result sub-item
+//     ⎿  Tip: Run /install-github-app to tag…     ← rotating tip
+//   ✻ Newspapering… (thinking)                    ← rotating spinner
+//
+// Critically, tool-call labels are prefixed with the SAME `⏺` marker CC uses
+// for assistant text. So "find the last `⏺`" would (and did) land on a tool
+// call label and return "Listing 1 directory…" as if it were assistant text.
+// The filter below has to run BEFORE the last-marker scan, not after.
+// -----------------------------------------------------------------------------
+
+// Tree marker (U+23BF, "curly bracket section"). CC uses this for every
+// indented sub-item under a tool call — commands, result lines, tips. A line
+// that starts with it (after optional whitespace) is always chrome.
+const TREE_MARKER_RE = /^\s*⎿/
+
+// Tool call labels end with a keybinding hint CC injects: "(ctrl+o to
+// expand)", "(ctrl+r to retry)", etc. Assistant-authored text essentially
+// never contains this shape, so it's a strong-positive marker. The `\w+`
+// matches "ctrl", "cmd" etc.
+const TOOL_LABEL_HINT_RE = /\(ctrl\+\w+\s+to\s+[^)]+\)/
+
+// Spinner + progress lines: a leading non-word, non-whitespace glyph (CC
+// rotates through ✢ ✶ · ✻ ✽ ✺ etc.) followed by a word ending in `…`, often
+// with a parenthetical qualifier like "(thinking)". The regex explicitly
+// excludes `⏺` so real assistant text ending with `…` isn't misfired.
+const SPINNER_LINE_RE = /^\s*[^\w\s⏺]\s+\S+…/
+
+/**
+ * Returns true if a line is CC's mid-turn tool/thinking UI chrome, not
+ * assistant content. Exported separately so parsers / tests can reason
+ * about each rule.
+ */
+export function isIntermediateChromeLine(line: string): boolean {
+  if (TREE_MARKER_RE.test(line)) return true
+  if (SPINNER_LINE_RE.test(line)) return true
+  if (TOOL_LABEL_HINT_RE.test(line)) return true
+  return false
+}
+
 /**
  * Strip the trailing input-box block from the bottom of the screen.
  * The input box is a contiguous run of chrome lines at the bottom — once
@@ -159,7 +208,17 @@ export function extractAssistantInProgress(screen: string): string {
   const stripped = extractStreamingText(screen)
   if (!stripped) return ''
 
-  const lines = stripped.split('\n')
+  // CRITICAL ordering: strip intermediate chrome BEFORE walking for the
+  // last `⏺` marker. Tool call labels are prefixed with `⏺` too, so if
+  // we walked first we'd land on a label like:
+  //   `⏺ Listing 1 directory… (ctrl+o to expand)`
+  // and return "Listing 1 directory…" as if it were assistant text.
+  // Filtering first means any remaining `⏺` is guaranteed to prefix real
+  // assistant text (or there's no `⏺` at all and we return '' → thinking).
+  const lines = stripped
+    .split('\n')
+    .filter(l => !isIntermediateChromeLine(l))
+
   let lastMarkerIdx = -1
   for (let i = lines.length - 1; i >= 0; i--) {
     if (ASSISTANT_MARKER_RE.test(lines[i] ?? '')) {
