@@ -2,10 +2,11 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 export type JsonlEntry = Record<string, unknown>
 export type JsonlEntryEvent = { entry: JsonlEntry; file: string }
+export type ScreenSnapshot = { plain: string; markdown: string }
 
 const api = {
-  onScreen: (cb: (text: string) => void) => {
-    const listener = (_evt: unknown, text: string) => cb(text)
+  onScreen: (cb: (snap: ScreenSnapshot) => void) => {
+    const listener = (_evt: unknown, snap: ScreenSnapshot) => cb(snap)
     ipcRenderer.on('pty:screen', listener)
     return () => ipcRenderer.removeListener('pty:screen', listener)
   },

@@ -239,6 +239,16 @@ export function extractAssistantInProgress(screen: string): string {
     block.pop()
   }
 
-  return block.join('\n')
+  // Normalize per-line trailing whitespace. CC's Ink pads every rendered
+  // line to the terminal column width (120 chars) with trailing spaces.
+  // The exact amount of padding can shift between frames depending on
+  // layout state, so `extract(screenA) === extract(screenB)` can return
+  // false even when the semantic text is identical. This breaks the
+  // multi-turn "stale baseline" comparison in App.tsx — the streaming
+  // card briefly shows the previous turn's response before the new
+  // tokens arrive, because one trailing-space difference flips the
+  // comparison from stale → fresh. Strip trailing whitespace per line
+  // and the comparison stays stable across Ink's repadding.
+  return block.map(l => l.replace(/[ \t]+$/, '')).join('\n')
 }
 

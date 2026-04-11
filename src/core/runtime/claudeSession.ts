@@ -9,6 +9,79 @@ import { tailNewSessionFile, type JsonlEntry } from './jsonlTailer.js'
 
 const { Terminal } = xtermHeadless
 
+/**
+ * Build the correct markdown emphasis marker for a state:
+ *   bold + italic → ***
+ *   bold only     → **
+ *   italic only   → *
+ *   neither       → ''
+ *
+ * Used by terminalToMarkdown() to emit paired open/close markers at
+ * every state transition. The symmetry is load-bearing — every call to
+ * close must match a call to open with the same state pair, or we
+ * leave unbalanced markers.
+ */
+function emphasisMarker(bold: boolean, italic: boolean): string {
+  if (bold && italic) return '***'
+  if (bold) return '**'
+  if (italic) return '*'
+  return ''
+}
+
+/**
+ * Pure function: walk a Terminal's active buffer and reconstruct
+ * markdown from cell SGR attributes. Extracted from ClaudeSession so
+ * the testbench (testbench/replay.ts) can exercise it against recorded
+ * fixtures without having to instantiate a full session.
+ *
+ * See the detailed rationale on snapshotScreenAsMarkdown() below.
+ */
+export function terminalToMarkdown(
+  term: InstanceType<typeof Terminal>,
+): string {
+  const buf = term.buffer.active
+  const out: string[] = []
+
+  const cell = (buf as { getNullCell?: () => unknown }).getNullCell?.() as
+    | { isBold(): number; isItalic(): number; getChars(): string }
+    | undefined
+
+  for (let y = 0; y < buf.length; y++) {
+    const line = buf.getLine(y)
+    if (!line) {
+      out.push('')
+      continue
+    }
+
+    let row = ''
+    let inBold = false
+    let inItalic = false
+
+    for (let x = 0; x < line.length; x++) {
+      const c = (cell ? line.getCell(x, cell as never) : line.getCell(x)) ?? null
+      if (!c) continue
+      const chars = c.getChars() || ' '
+      const nextBold = c.isBold() !== 0
+      const nextItalic = c.isItalic() !== 0
+
+      if (nextBold !== inBold || nextItalic !== inItalic) {
+        row += emphasisMarker(inBold, inItalic)
+        row += emphasisMarker(nextBold, nextItalic)
+        inBold = nextBold
+        inItalic = nextItalic
+      }
+
+      row += chars
+    }
+
+    row += emphasisMarker(inBold, inItalic)
+    out.push(row.replace(/[ \t]+$/, ''))
+  }
+
+  while (out.length > 0 && out[out.length - 1] === '') out.pop()
+  return out.join('\n')
+}
+
 // Lives under src/core/runtime/ — Node-only. Used by the Electron main
 // process AND the standalone testbench AND the future dispatch-mode
 // runner. Has NO knowledge of Electron, IPC, React, or the DOM.
@@ -57,10 +130,19 @@ export type ClaudeSessionOptions = {
  * naturally by Node's EventEmitter — but if you attach AFTER start() you
  * may miss the very first frames.
  */
+export type ScreenSnapshot = {
+  /** Plain text from translateToString. Source of truth for parsers. */
+  plain: string
+  /** Same screen with bold/italic cell attributes reconstructed as
+   *  markdown syntax (`**...**` / `*...*`). Used by the streaming card
+   *  so CC's in-flight markdown formatting survives our screen scrape. */
+  markdown: string
+}
+
 export type ClaudeSessionEvents = {
   started: [{ projectDir: string }]
   'pty-data': [string]
-  screen: [string]
+  screen: [ScreenSnapshot]
   'jsonl-entry': [JsonlEntry, string]
   'jsonl-error': [Error]
   exit: [{ exitCode: number; signal?: number }]
@@ -196,6 +278,54 @@ export class ClaudeSession extends EventEmitter {
     return lines.join('\n')
   }
 
+  /**
+   * Capture the buffer, but reconstruct markdown syntax from cell-level
+   * SGR attributes as we go.
+   *
+   * Why this exists:
+   *   CC uses `marked` to parse markdown and `formatToken` in
+   *   claude-code-src/utils/markdown.ts to convert each token to an ANSI
+   *   string via chalk. `**bold**` becomes `chalk.bold(text)` — an ANSI
+   *   bold sequence around the text. By the time it hits our headless
+   *   terminal, the `**` characters are GONE but the bold ATTRIBUTE is
+   *   set on every cell in the bold run. `translateToString(true)`
+   *   returns plain text with the attributes dropped, which is why our
+   *   streaming card was showing unformatted text — we were throwing
+   *   away the very formatting we wanted.
+   *
+   * This method reads each cell's `isBold()` / `isItalic()` attributes,
+   * tracks the state across cells, and emits `**` / `*` / `***` markers
+   * at every transition. The result is a markdown-ish reconstruction
+   * that carries the same formatting CC was going to render — just in
+   * markdown source form, which we can feed into react-markdown on the
+   * renderer side.
+   *
+   * What it captures:
+   *   - **bold**  (chalk.bold)
+   *   - *italic*  (chalk.italic)
+   *   - ***bold italic***  (both attributes set — h1 headings for example)
+   *
+   * What it misses:
+   *   - Inline code (`codespan`): CC uses a theme "permission" color
+   *     which is fg-color-mode-dependent. Detecting it requires
+   *     hardcoding specific color values per theme — too brittle for
+   *     v1. Inline code will render as plain text.
+   *   - Fenced code blocks: CC pipes them through highlight.js which
+   *     applies many colors per syntax token. Detecting "this line is
+   *     code" from the cell colors isn't reliable — a prose line with a
+   *     single colored word looks the same. Skipped for now; code
+   *     blocks will render as plain text during streaming and snap into
+   *     full syntax highlighting when the JSONL entry lands.
+   *   - Headings: CC renders h1 as bold+italic+underline, h2 as bold,
+   *     etc. We'll emit them as ***bold italic*** / **bold** which is
+   *     close enough — same visual weight, and markdown renderers
+   *     handle both as distinct emphasis.
+   */
+  snapshotScreenAsMarkdown(): string {
+    if (!this.term) return ''
+    return terminalToMarkdown(this.term)
+  }
+
   /** True if the PTY has exited. */
   isExited(): boolean {
     return this.exited
@@ -220,7 +350,17 @@ export class ClaudeSession extends EventEmitter {
     this.flushTimer = setTimeout(() => {
       this.flushPending = false
       this.flushTimer = null
-      this.emit('screen', this.snapshotScreen())
+      // Emit BOTH plain and markdown snapshots in a single event. The
+      // plain version is still the source of truth for chrome stripping,
+      // marker detection, and baseline comparison (so parsers stay
+      // stable). The markdown version carries bold/italic formatting
+      // reconstructed from cell attributes and is used by the streaming
+      // card for rich rendering. See snapshotScreenAsMarkdown() for why
+      // this dual-channel approach exists.
+      this.emit('screen', {
+        plain: this.snapshotScreen(),
+        markdown: this.snapshotScreenAsMarkdown(),
+      })
     }, this.snapshotIntervalMs)
   }
 

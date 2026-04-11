@@ -73,7 +73,11 @@ const REHYPE_PLUGINS = [rehypeHighlight]
 
 type Props = {
   entries: Entry[]
+  /** Plain-text screen snapshot. Used for baseline comparison. */
   streamingScreen?: string | null
+  /** Same screen with bold/italic cell attributes reconstructed as
+   *  markdown. Used for the actual streaming card render. */
+  streamingScreenMarkdown?: string | null
   streamingBaseline?: string | null
   showSystemEvents: boolean
 }
@@ -81,6 +85,7 @@ type Props = {
 export function Feed({
   entries,
   streamingScreen,
+  streamingScreenMarkdown,
   streamingBaseline,
   showSystemEvents,
 }: Props) {
@@ -112,7 +117,11 @@ export function Feed({
         <EntryRow key={(e as Entry).uuid ?? `i${i}`} entry={e} />
       ))}
       {streamingScreen != null && (
-        <StreamingRow screen={streamingScreen} baseline={streamingBaseline ?? null} />
+        <StreamingRow
+          screen={streamingScreen}
+          screenMarkdown={streamingScreenMarkdown ?? streamingScreen}
+          baseline={streamingBaseline ?? null}
+        />
       )}
       <div ref={endRef} />
     </div>
@@ -355,31 +364,42 @@ function attachmentLabel(entry: Entry): string {
 
 function StreamingRow({
   screen,
+  screenMarkdown,
   baseline,
 }: {
   screen: string
+  screenMarkdown: string
   baseline: string | null
 }) {
-  const rawText = extractAssistantInProgress(screen)
-  const isStale = baseline != null && rawText === baseline
-  const text = !rawText || isStale ? '' : rawText
+  // Staleness detection runs on PLAIN text. The parser walks the
+  // chrome-stripped plain screen to find the last `⏺` block (which is
+  // what we compare against the baseline). We can't use the markdown
+  // version for this — the injected `**`/`*` markers shift the
+  // characters around and would flip comparison results on every
+  // transition. See streamingBaseline in App.tsx.
+  const plainExtract = extractAssistantInProgress(screen)
+  const isStale = baseline != null && plainExtract === baseline
 
-  // Before rendering, normalize the screen-buffer text a little.
-  // CC's Ink wraps and pads lines to the terminal width, which leaves
-  // trailing whitespace on every line in the buffer. We strip it so
-  // the markdown renderer doesn't emit weird spacing. We also collapse
-  // runs of 3+ blank lines — they're always padding from Ink's layout,
-  // never semantic gaps.
-  const normalized = text
-    .split('\n')
-    .map(l => l.replace(/[ \t]+$/, ''))
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
+  // Render uses the MARKDOWN version. Same extraction logic, same
+  // chrome strip — but the resulting text carries bold/italic markers
+  // reconstructed from cell attributes, so react-markdown can render
+  // them as real formatting. This is the whole point of the dual-
+  // snapshot approach in ClaudeSession.
+  const mdExtract = extractAssistantInProgress(screenMarkdown)
+  const show = plainExtract && !isStale
+
+  const display = show
+    ? mdExtract
+        .split('\n')
+        .map(l => l.replace(/[ \t]+$/, ''))
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+    : ''
 
   return (
     <MarkerRow marker="⏺">
-      {normalized ? (
-        <StreamingProse text={normalized} />
+      {display ? (
+        <StreamingProse text={display} />
       ) : (
         <div className="flex items-center gap-2 text-muted text-[12px] py-0.5">
           <span className="streaming-dot inline-block w-1.5 h-1.5 rounded-full bg-accent" />

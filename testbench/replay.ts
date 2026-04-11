@@ -30,6 +30,7 @@ import {
   extractStreamingText,
 } from '../src/core/parsers/streamingScreen.js'
 import { detectTrustDialog } from '../src/core/parsers/trustDialog.js'
+import { terminalToMarkdown } from '../src/core/runtime/claudeSession.js'
 
 type RawEvent = { ts: number; data: string }
 type Meta = { cols?: number; rows?: number; cwd?: string; startedAt?: string }
@@ -140,12 +141,21 @@ async function main(): Promise<void> {
   await new Promise<void>(resolve => setTimeout(resolve, 50))
 
   const screen = snapshot(term)
+  const screenMd = terminalToMarkdown(term)
+
   console.log(box('FINAL RAW SCREEN', screen))
   console.log(box('extractStreamingText (chrome-strip)', extractStreamingText(screen)))
   console.log(
     box(
       'extractAssistantInProgress (just the assistant block)',
       extractAssistantInProgress(screen) || '(no assistant marker on screen)',
+    ),
+  )
+  console.log(
+    box(
+      'terminalToMarkdown (reconstructed bold/italic from cell attrs)',
+      extractAssistantInProgress(screenMd) ||
+        '(no assistant marker on screen)',
     ),
   )
   console.log(

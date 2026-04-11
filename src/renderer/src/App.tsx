@@ -12,7 +12,12 @@ applyTheme(loadSettings())
 
 export default function App() {
   const [entries, setEntries] = useState<Entry[]>([])
+  // `screen` is plain text — source of truth for baseline comparison and
+  // the debug preview pane. `screenMarkdown` is the same screen with bold
+  // and italic runs reconstructed as **/* markers, used by the streaming
+  // card. See snapshotScreenAsMarkdown() in claudeSession.ts.
   const [screen, setScreen] = useState('')
+  const [screenMarkdown, setScreenMarkdown] = useState('')
   const [input, setInput] = useState('')
   const [exited, setExited] = useState<number | null>(null)
   const [projectDir, setProjectDir] = useState<string | null>(null)
@@ -29,7 +34,10 @@ export default function App() {
   }, [screen])
 
   useEffect(() => {
-    const offScreen = window.api.onScreen(setScreen)
+    const offScreen = window.api.onScreen(snap => {
+      setScreen(snap.plain)
+      setScreenMarkdown(snap.markdown)
+    })
     const offExit = window.api.onExit(code => setExited(code))
     const offEntry = window.api.onJsonlEntry(({ entry }) => {
       const uuid = (entry as { uuid?: string }).uuid
@@ -150,6 +158,7 @@ export default function App() {
         <Feed
           entries={entries}
           streamingScreen={awaitingAssistant ? screen : null}
+          streamingScreenMarkdown={awaitingAssistant ? screenMarkdown : null}
           streamingBaseline={streamingBaseline}
           showSystemEvents={settings.showSystemEvents}
         />

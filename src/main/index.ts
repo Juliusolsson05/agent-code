@@ -37,7 +37,7 @@ async function startSession(): Promise<void> {
   })
 
   session.on('started', ({ projectDir }) => send('jsonl:project-dir', projectDir))
-  session.on('screen', text => send('pty:screen', text))
+  session.on('screen', snap => send('pty:screen', snap))
   session.on('jsonl-entry', (entry, file) => send('jsonl:entry', { entry, file }))
   session.on('jsonl-error', err => send('jsonl:error', String(err.message ?? err)))
   session.on('exit', ({ exitCode }) => {
