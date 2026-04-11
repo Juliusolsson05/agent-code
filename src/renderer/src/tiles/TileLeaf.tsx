@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { extractAssistantInProgress } from '../../../core/parsers/streamingScreen'
+import { isConversationEntry } from '../../../core/types/transcript'
 import { Feed } from '../feed/Feed'
 import { TrustDialogModal } from '../feed/TrustDialogModal'
 import { SlashCommandPicker } from './SlashCommandPicker'
@@ -54,6 +55,13 @@ export function TileLeaf({
   workspace,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // Destructure the stable useCallback setter so effect deps don't
+  // spuriously invalidate on every parent render. workspace itself
+  // is a fresh object literal each render, but its methods are
+  // memoed via useCallback in workspaceStore — depping on the
+  // method gives us "re-run only when the workspace rebuilds the
+  // callback", which in practice is never.
+  const { setDraftInput } = workspace
   // Draft input lives in the workspace runtime (not local useState)
   // so it survives TileLeaf unmount when the user switches tabs.
   // App.tsx only mounts the active tab's tree — inactive tabs are
@@ -65,7 +73,7 @@ export function TileLeaf({
   // is runtime.draftInput; this adapter writes THROUGH to the store.
   const input = runtime.draftInput
   const setInputText = (next: string) => {
-    workspace.setDraftInput(sessionId, next)
+    setDraftInput(sessionId, next)
   }
 
   // Auto-grow the composer textarea to fit its content. We keep a single
@@ -94,10 +102,222 @@ export function TileLeaf({
   // vs. stored locally).
   const [slashMode, setSlashMode] = useState(false)
 
+  // ---- Prompt history state ----
+  //
+  // cc-shell keeps its own bash-style history for the composer instead
+  // of forwarding Up/Down to CC. Two reasons:
+  //   1. CC's own history updates CC's own input box in the terminal
+  //      buffer, but our composer is a React textarea — the two states
+  //      never reconcile, so pressing Up in our composer and letting
+  //      CC handle it produced no visible change for the user. The
+  //      whole thing looked broken.
+  //   2. We already have every past user prompt in runtime.entries,
+  //      pulled from the JSONL transcript. Deriving a history list
+  //      from that is nearly free.
+  //
+  // `historyIndex` is null when the user is NOT cycling (fresh draft,
+  // or just typed something), and a number in [0, history.length - 1]
+  // while cycling. 0 = most recent historic prompt, 1 = one before
+  // that, etc. When cycling is active the composer displays the
+  // history[historyIndex] string, not the live draft.
+  //
+  // `historyAnchor` stores whatever was in the composer the moment
+  // the user first pressed Up to enter the cycle. Pressing Down past
+  // the newest historic prompt (i.e. historyIndex back to -1) restores
+  // this string so the user doesn't lose mid-typed work.
+  //
+  // Both pieces of state are component-local (not runtime). They don't
+  // need to survive tab-switch because the moment the user comes back
+  // to the tab, they start fresh — cycling mid-tab-switch isn't a
+  // real workflow. Keeping them local avoids cluttering SessionRuntime
+  // and avoids the re-render cost of threading through the store.
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null)
+  const [historyAnchor, setHistoryAnchor] = useState<string>('')
+
+  // Derive the history list from the transcript. We walk every
+  // ConversationEntry, pull USER-role text content (either from a
+  // plain string content or from the first `text` block of an array
+  // content), and collect them in REVERSE chronological order so
+  // index 0 is the most recent prompt.
+  //
+  // Filter: the user-role slot in CC's JSONL is used for MANY things
+  // besides real typed prompts. Without proper filtering our history
+  // picks up strings the user never actually typed, which feels
+  // exactly like "another prompt got injected into my input" — the
+  // exact bug that forced us to revert the first cut of this feature.
+  //
+  // Concrete noise we've seen in real transcripts (see commit
+  // message for the companion fix commit for the full survey):
+  //
+  //   1. `isMeta: true` entries like "Continue from where you left
+  //      off." — CC's auto-continue hint. User never typed it.
+  //   2. `<local-command-caveat>…` and `<command-name>/clear…` —
+  //      system markers for local-command invocations. Caught by
+  //      the old startsWith('<') filter but still in this list for
+  //      the audit record.
+  //   3. "Unknown skill: resumeOne" and similar — CC's error
+  //      response to bad slash-command invocations. Logged as a
+  //      user-role entry, plain-text content, doesn't start with '<'.
+  //      THE main offender that made it into the first cut.
+  //   4. Tool-result-only user-role entries — no text blocks at
+  //      all, just the results for the previous assistant turn's
+  //      tool_use blocks. Harmless with our "has text" check but
+  //      noted for completeness.
+  //
+  // Positive signal for "this was a real prompt the user typed":
+  // the entry has a `permissionMode` field set. Empirically every
+  // real user prompt in the current transcript (27/27) carries it;
+  // every synthetic entry (isMeta, error responses, local-command
+  // markers) lacks it. `isMeta === true` is a redundant secondary
+  // defense in case CC ever starts writing permissionMode into
+  // synthetic meta entries too. startsWith('<') stays as a tertiary
+  // catch-all for any future tag-shaped synthetics.
+  //
+  // Dedup: adjacent identical prompts (the "oops, meant to add
+  // detail" resubmit pattern) collapse into one entry. Distant
+  // duplicates stay, matching bash history behavior. Memoed on
+  // entries reference so normal re-renders don't rebuild the list.
+  const history = useMemo(() => {
+    const out: string[] = []
+    for (const entry of runtime.entries) {
+      if (!isConversationEntry(entry)) continue
+      if (entry.message.role !== 'user') continue
+      // Positive-signal filter — see the block comment above for
+      // why these two flags are load-bearing. The `as` cast is
+      // because our ConversationEntry type doesn't declare the
+      // optional permissionMode / isMeta fields from CC's JSONL,
+      // but they exist on the wire; we check them dynamically.
+      const meta = entry as unknown as {
+        permissionMode?: string
+        isMeta?: boolean
+      }
+      if (meta.isMeta === true) continue
+      if (meta.permissionMode === undefined) continue
+      const content = entry.message.content
+      let text = ''
+      if (typeof content === 'string') {
+        text = content
+      } else if (Array.isArray(content)) {
+        const firstText = content.find(
+          (b): b is { type: 'text'; text: string } =>
+            (b as { type?: string }).type === 'text' &&
+            typeof (b as { text?: unknown }).text === 'string',
+        )
+        if (firstText) text = firstText.text
+      }
+      text = text.trim()
+      if (!text) continue
+      // Tertiary defense: tag-shaped payloads are always synthetic.
+      if (text.startsWith('<')) continue
+      // Collapse adjacent duplicates.
+      if (out.length > 0 && out[out.length - 1] === text) continue
+      out.push(text)
+    }
+    // Reverse so index 0 is the newest prompt — Up steps backward in
+    // time starting from the most recent one.
+    return out.reverse()
+  }, [runtime.entries])
+
+  // Helper: are we currently in history-cycling mode? Multiple key
+  // handlers consult this and a named check reads cleaner than
+  // `historyIndex !== null` repeated everywhere.
+  const cyclingHistory = historyIndex !== null
+
+  // Helper: cancel history cycling without changing the composer text.
+  // Called whenever the user makes ANY edit that isn't Up/Down — the
+  // invariant is "once you start typing over a recalled prompt, it's
+  // yours, and the next Up starts from the newest entry again."
+  const endHistoryCycle = () => {
+    if (historyIndex !== null) setHistoryIndex(null)
+  }
+
+  // (cursor-row helpers removed — the new history gate fires only
+  // when the composer is entirely empty, so multi-line caret
+  // navigation is moot.)
+
   // When focus flips to this pane, move the DOM caret into its input.
   useEffect(() => {
     if (focused) inputRef.current?.focus()
   }, [focused])
+
+  // Type-to-focus: when the user starts typing anywhere in the
+  // focused pane — feed area, a stray click on a button, whatever —
+  // the keystroke routes to the composer without them having to
+  // click on it first.
+  //
+  // Why this is needed even with the focus-on-focus effect above:
+  // DOM focus wanders. Clicking a feed button, interacting with
+  // the tab bar, switching apps and coming back, hitting a keybind
+  // that focuses something else — all of these leave DOM focus
+  // somewhere other than the composer textarea. The focus-on-pane-
+  // focus effect only fires when `focused` CHANGES, which doesn't
+  // happen in any of those cases. So a fresh keystroke can land
+  // nowhere useful.
+  //
+  // The fix: listen at document level (scoped to the currently
+  // focused pane via the `focused` guard), and when a printable
+  // key comes in while DOM focus is NOT on an editable target,
+  // redirect it to the composer.
+  //
+  // Filter list (all of these are cases where we must NOT steal
+  // the key):
+  //   - `defaultPrevented`: a keybind or earlier handler already
+  //     handled this. Stay out of their way.
+  //   - Any modifier (cmd / ctrl / alt / meta): modifier combos
+  //     are global keybinds, not text input.
+  //   - Non-printable key (e.key.length !== 1): arrow keys,
+  //     Escape, Enter, Backspace, Tab, function keys. Those all
+  //     have multi-char names.
+  //   - Target is already an input / textarea / contentEditable:
+  //     the character is already going somewhere legitimate; don't
+  //     intercept it and double-type.
+  //   - A modal with role="dialog" is open: PathPickerModal,
+  //     TrustDialogModal, or any future modal. Those own keyboard
+  //     focus while visible.
+  //
+  // Injection path: we write directly to SessionRuntime.draftInput
+  // via workspace.setDraftInput (same setter the composer's
+  // onChange uses), then focus() the textarea, then move the
+  // cursor to end on the next frame after React re-renders with
+  // the new value. The rAF is load-bearing: setting selectionStart
+  // synchronously on a textarea whose React-bound `value` hasn't
+  // re-rendered yet targets the OLD value and puts the cursor
+  // at a stale index.
+  useEffect(() => {
+    if (!focused) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key.length !== 1) return
+      const target = e.target as HTMLElement | null
+      if (target) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return
+        if (target.isContentEditable) return
+      }
+      if (document.querySelector('[role="dialog"]')) return
+
+      const el = inputRef.current
+      if (!el) return
+      e.preventDefault()
+      const next = el.value + e.key
+      setDraftInput(sessionId, next)
+      el.focus()
+      requestAnimationFrame(() => {
+        const el2 = inputRef.current
+        if (!el2) return
+        el2.selectionStart = el2.value.length
+        el2.selectionEnd = el2.value.length
+      })
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+    // setDraftInput is a stable useCallback from the workspace hook
+    // so re-destructuring it every render is a no-op for this dep
+    // array. If workspace ever stops memoing it, this effect would
+    // re-subscribe on every render and we'd add/remove a document
+    // listener every frame — so keep setDraftInput memoed upstream.
+  }, [focused, sessionId, setDraftInput])
 
   const send = async (data: string) => {
     await window.api.sendInput(sessionId, data)
@@ -227,6 +447,10 @@ export function TileLeaf({
         await send(input + '\r')
       }
       setInputText('')
+      // Any submit exits history cycling — the prompt is committed
+      // and the next Up should start a fresh walk from the (now
+      // updated) newest entry, not continue from wherever we were.
+      endHistoryCycle()
       return
     }
     if (e.key === 'Escape') {
@@ -245,6 +469,89 @@ export function TileLeaf({
       await send('\x04')
       return
     }
+    // ---- Prompt history: Up cycles BACKWARD into past prompts ----
+    //
+    // Entry gate: we ONLY enter cycling when the composer is
+    // currently empty. That's deliberately more restrictive than
+    // bash's "cycle even with a partial draft and restore on Down".
+    // The permissive version caused real confusion — users pressing
+    // Up with a mid-typed prompt would watch their draft get
+    // replaced with a random historic prompt and think something
+    // was injecting text into their input. The anchor-restore
+    // mechanism was there but non-obvious. Requiring an empty
+    // composer makes the feature discoverable and non-destructive:
+    // you have to actively clear your input before you can cycle.
+    //
+    // Once cycling has STARTED (historyIndex !== null), subsequent
+    // Up/Down steps don't re-check emptiness — the composer is
+    // showing a historic prompt, not user typing, so stepping
+    // further is obviously safe.
+    //
+    // Modifier combos (Shift/Ctrl/Meta/Alt+Up) fall through to the
+    // PTY-forward path so OS line-navigation shortcuts still reach
+    // CC when the user wants them.
+    if (
+      e.key === 'ArrowUp' &&
+      !e.shiftKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      history.length > 0 &&
+      (cyclingHistory || input === '')
+    ) {
+      e.preventDefault()
+      if (!cyclingHistory) {
+        // First entry into cycling: the composer is empty (per the
+        // gate above), so the anchor is also empty. Storing it
+        // anyway keeps the Down-past-newest restore path uniform.
+        setHistoryAnchor('')
+        setHistoryIndex(0)
+        setInputText(history[0])
+      } else {
+        const next = Math.min(historyIndex! + 1, history.length - 1)
+        if (next !== historyIndex) {
+          setHistoryIndex(next)
+          setInputText(history[next])
+        }
+      }
+      return
+    }
+
+    // ---- Prompt history: Down cycles FORWARD toward the anchor ----
+    //
+    // Only meaningful while we're already cycling. Pressing Down
+    // outside a cycle shouldn't do anything (no forward history to
+    // cycle to). We also don't need the cursorOnBottomRow check the
+    // old version had, because the composer's content during
+    // cycling is a historic prompt the user hasn't touched — there's
+    // no multi-line-draft caret navigation to preserve.
+    if (
+      e.key === 'ArrowDown' &&
+      !e.shiftKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      cyclingHistory
+    ) {
+      e.preventDefault()
+      const next = historyIndex! - 1
+      if (next < 0) {
+        // Past the newest historic prompt — restore the anchor
+        // (empty, since the Up gate only lets us in from an empty
+        // composer) and exit cycle mode so the next Up starts fresh.
+        setHistoryIndex(null)
+        setInputText(historyAnchor)
+      } else {
+        setHistoryIndex(next)
+        setInputText(history[next])
+      }
+      return
+    }
+
+    // Fallback: any other Up/Down (not cycling, not at top/bottom
+    // row, or with a modifier) falls through to the old PTY-forward
+    // path so CC's own history / caret navigation still reaches it
+    // when appropriate.
     if (e.key === 'ArrowUp') {
       e.preventDefault()
       await send('\x1b[A')
@@ -390,6 +697,21 @@ export function TileLeaf({
               // onKeyDown called setInputText.
               if (slashMode) return
               setInputText(e.target.value)
+              // ANY user edit (typing, paste, delete) cancels history
+              // cycling: once they've touched the recalled prompt it's
+              // theirs, and the next Up should start fresh from the
+              // newest entry rather than continuing the old cycle.
+              // The Up/Down handlers set historyIndex AND call
+              // setInputText, which would trigger this onChange and
+              // wipe their own state — so we guard against that by
+              // only ending the cycle when the NEW value differs from
+              // whatever history slot we're currently parked on.
+              if (
+                historyIndex !== null &&
+                e.target.value !== history[historyIndex]
+              ) {
+                endHistoryCycle()
+              }
             }}
             onKeyDown={onKeyDown}
             onFocus={onFocusRequest}
