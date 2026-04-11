@@ -168,15 +168,33 @@ select {
 .prose-theme h5,
 .prose-theme h6 { font-size: 13.5px; }
 
-.prose-theme ul,
+/*
+ * Tailwind's preflight resets list-style to none on every ul/ol, which
+ * strips default bullets. We want real bullets and numbers for markdown
+ * lists, so restore them explicitly on .prose-theme scopes only.
+ */
+.prose-theme ul {
+  margin: 0 0 10px;
+  padding-left: 22px;
+  list-style: disc;
+}
+
 .prose-theme ol {
   margin: 0 0 10px;
   padding-left: 22px;
+  list-style: decimal;
 }
+
+.prose-theme ul ul { list-style: circle; }
+.prose-theme ul ul ul { list-style: square; }
 
 .prose-theme li {
   margin: 2px 0;
   line-height: 1.6;
+}
+
+.prose-theme li::marker {
+  color: var(--theme-muted);
 }
 
 .prose-theme li > p { margin: 0; }

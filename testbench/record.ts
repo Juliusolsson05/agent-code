@@ -138,13 +138,18 @@ async function main(): Promise<void> {
   let trustHandled = false
 
   let lastSnapshot = ''
-  session.on('screen', text => {
-    if (text === lastSnapshot) return
-    lastSnapshot = text
-    snapshotsStream.write(JSON.stringify({ ts: Date.now(), text }) + '\n')
+  session.on('screen', snap => {
+    // snap is { plain, markdown } — see ScreenSnapshot in claudeSession.ts.
+    // We persist the plain version (parsers still operate on it); the
+    // markdown version is a render-time convenience the Electron renderer
+    // uses but we don't need to replay here.
+    const plain = snap.plain
+    if (plain === lastSnapshot) return
+    lastSnapshot = plain
+    snapshotsStream.write(JSON.stringify({ ts: Date.now(), text: plain }) + '\n')
 
     if (script?.autoAcceptTrust && !trustHandled) {
-      const trust = detectTrustDialog(text)
+      const trust = detectTrustDialog(plain)
       if (trust.visible) {
         trustHandled = true
         process.stderr.write(

@@ -233,6 +233,32 @@ export function extractAssistantInProgress(screen: string): string {
   const block = lines.slice(lastMarkerIdx)
   block[0] = (block[0] ?? '').replace(ASSISTANT_MARKER_RE, '')
 
+  // CC's Ink wrap-aligns subsequent lines of an assistant block to the
+  // CONTENT column of the first line. The first line starts with `⏺ `
+  // (two visual cells: the marker + a space), so continuation lines get
+  // two leading spaces to keep `-` items and paragraph text horizontally
+  // aligned under the content, not under the marker. Once we strip `⏺ `
+  // off block[0] those two leading spaces on block[1..] become phantom
+  // indentation that markdown parsers read as nesting:
+  //
+  //   `- Python`        ← 0 indent (marker stripped)
+  //   `  - JavaScript`  ← 2 indent, looks like nested list
+  //   `  - Rust`        ← 2 indent, looks like nested list
+  //
+  // → react-markdown parses Python as a top-level item with JS and Rust
+  // nested under it. Visually wrong, and Tailwind's preflight hides the
+  // bullets anyway.
+  //
+  // Fix: peel off 2 leading spaces from every non-first line that has
+  // them. Real semantic 2-space nesting (CC does use 2-space for
+  // nested list items via `'  '.repeat(listDepth)`) gets demoted from
+  // `    - Nested` → `  - Nested`, which is still valid 2-space nesting
+  // relative to the dedented top-level — the geometry is preserved.
+  for (let i = 1; i < block.length; i++) {
+    const ln = block[i] ?? ''
+    if (ln.startsWith('  ')) block[i] = ln.slice(2)
+  }
+
   // Trim trailing blank lines that survived the chrome strip — they're
   // visual padding from CC's layout, not content.
   while (block.length > 0 && (block[block.length - 1] ?? '').trim() === '') {
