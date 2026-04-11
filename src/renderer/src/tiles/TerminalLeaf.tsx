@@ -74,85 +74,117 @@ export function TerminalLeaf({
     const container = containerRef.current
     if (!container) return
 
-    // Theme choice: we don't override xterm's default palette. The
-    // user's shell prompt and tools assume a reasonable 16-color
-    // ANSI baseline and we'd rather inherit that than pick values
-    // that look great with one prompt and wrong with another.
-    // Background is made transparent so the tile's bg-canvas token
-    // shows through — that way light mode and dark mode both Just Work.
-    const term = new Terminal({
-      cursorBlink: true,
-      convertEol: true,
-      fontFamily:
-        '"JetBrains Mono", ui-monospace, Menlo, Monaco, monospace',
-      fontSize: 13,
-      // allowProposedApi lets us call APIs that aren't stable but we
-      // need (fit addon reaches into them). Matches what
-      // @xterm/addon-fit expects.
-      allowProposedApi: true,
-      theme: {
-        background: '#00000000',
-      },
-    })
-    const fit = new FitAddon()
-    term.loadAddon(fit)
-    term.open(container)
-    termRef.current = term
-    fitRef.current = fit
+    // Track resources here so the cleanup function can tear them
+    // down whether mount succeeds or fails. Lexical closures on
+    // these match the inner try block's scope.
+    let term: Terminal | null = null
+    let fit: FitAddon | null = null
+    let onDataDisposable: { dispose(): void } | null = null
+    let offTerminalData: (() => void) | null = null
+    let resizeObserver: ResizeObserver | null = null
 
-    // Initial fit so the shell starts with sensible cols/rows.
-    // fit() reads the container's computed size which is only
-    // reliable after layout — the layout ran during React's commit
-    // phase before this useEffect fires, so we're safe.
     try {
-      fit.fit()
-      const { cols, rows } = term
-      void window.api.resize(sessionId, cols, rows)
-    } catch {
-      // If the container has a zero dimension for some reason
-      // (hidden tab, transient layout) fit() throws. The first
-      // real ResizeObserver tick will recover.
+      // Theme choice: leave xterm's default palette alone. The
+      // user's shell prompt and tools assume a reasonable ANSI
+      // baseline and we'd rather inherit that than pick values
+      // that look great with one prompt and wrong with another.
+      //
+      // We deliberately do NOT set a transparent background here.
+      // xterm.js accepts 8-char hex in theme.background only when
+      // `allowTransparency: true` is also set, and the rendering
+      // cost is non-trivial. Just let xterm use its default dark
+      // background — it's close enough to bg-canvas that the
+      // seam is invisible in practice.
+      term = new Terminal({
+        cursorBlink: true,
+        convertEol: true,
+        fontFamily:
+          '"JetBrains Mono", ui-monospace, Menlo, Monaco, monospace',
+        fontSize: 13,
+      })
+      fit = new FitAddon()
+      term.loadAddon(fit)
+      term.open(container)
+      termRef.current = term
+      fitRef.current = fit
+
+      // Initial fit is deferred one frame. Reason: React's commit
+      // phase has just run; the container's box has been inserted
+      // into the DOM but its computed layout (flex cell width/
+      // height) may not reflect the final size until the browser
+      // performs layout after the commit. Running fit() inside the
+      // useEffect body sometimes reads the pre-layout size as 0×0,
+      // which makes xterm's grid collapse and the terminal paints
+      // a tiny stripe in the corner. requestAnimationFrame fires
+      // after layout but before paint, so the measurements are
+      // correct AND we still update before the first frame the
+      // user can actually see.
+      requestAnimationFrame(() => {
+        if (!term || !fit) return
+        try {
+          fit.fit()
+          const { cols, rows } = term
+          void window.api.resize(sessionId, cols, rows)
+        } catch {
+          // Zero-dimension containers still throw. The
+          // ResizeObserver below will recover on the next tick.
+        }
+      })
+
+      // Outgoing: keystrokes typed into the xterm go straight to
+      // the shell via sendInput. No slash mode, no history
+      // cycling, no composer — this is a raw terminal.
+      onDataDisposable = term.onData(data => {
+        void window.api.sendInput(sessionId, data)
+      })
+
+      // Incoming: raw bytes from the shell PTY. We subscribe ONCE
+      // at mount; the handler filters by sessionId so multiple
+      // terminal panes coexist without stomping on each other's
+      // output.
+      offTerminalData = window.api.onSessionTerminalData(
+        ({ sessionId: sid, data }) => {
+          if (sid !== sessionId) return
+          term?.write(data)
+        },
+      )
+
+      // Container resize observer. Whenever the tile's cell area
+      // changes size (split drag, window resize, tab activation),
+      // we re-fit the terminal and push the new cols/rows down to
+      // the shell so programs like `vim` / `htop` / `less` see
+      // the correct dimensions.
+      resizeObserver = new ResizeObserver(() => {
+        if (!term || !fit) return
+        try {
+          fit.fit()
+          const { cols, rows } = term
+          void window.api.resize(sessionId, cols, rows)
+        } catch {
+          // Swallow transient-layout errors the same way we
+          // swallow them in TerminalSession.resize() on the
+          // main side.
+        }
+      })
+      resizeObserver.observe(container)
+    } catch (err) {
+      // Defensive: if xterm.js initialization throws for any
+      // reason (missing CSS, API mismatch, renderer misconfig,
+      // …), we want the PANE to fail visibly instead of the
+      // whole React root crashing and taking the app down.
+      // Historically a bad xterm mount blacked out the entire
+      // window because xterm's absolutely-positioned rows
+      // escaped to the viewport, so logging and bailing is the
+      // safer move.
+      // eslint-disable-next-line no-console
+      console.error('[TerminalLeaf] xterm init failed:', err)
     }
 
-    // Outgoing: keystrokes typed into the xterm go straight to the
-    // shell via sendInput. No slash mode, no history cycling, no
-    // composer — this is a raw terminal.
-    const onDataDisposable = term.onData(data => {
-      void window.api.sendInput(sessionId, data)
-    })
-
-    // Incoming: raw bytes from the shell PTY. We subscribe ONCE at
-    // mount; the handler filters by sessionId so multiple terminal
-    // panes coexist without stomping on each other's output.
-    const offTerminalData = window.api.onSessionTerminalData(
-      ({ sessionId: sid, data }) => {
-        if (sid !== sessionId) return
-        term.write(data)
-      },
-    )
-
-    // Container resize observer. Whenever the tile's cell area
-    // changes size (split drag, window resize, tab activation), we
-    // re-fit the terminal and push the new cols/rows down to the
-    // shell so programs like `vim` / `htop` / `less` see the
-    // correct dimensions.
-    const resizeObserver = new ResizeObserver(() => {
-      try {
-        fit.fit()
-        const { cols, rows } = term
-        void window.api.resize(sessionId, cols, rows)
-      } catch {
-        // Swallow transient-layout errors the same way we swallow
-        // them in TerminalSession.resize() on the main side.
-      }
-    })
-    resizeObserver.observe(container)
-
     return () => {
-      resizeObserver.disconnect()
-      onDataDisposable.dispose()
-      offTerminalData()
-      term.dispose()
+      resizeObserver?.disconnect()
+      onDataDisposable?.dispose()
+      offTerminalData?.()
+      term?.dispose()
       termRef.current = null
       fitRef.current = null
     }
@@ -188,13 +220,21 @@ export function TerminalLeaf({
         <span className="text-ink-dim">$</span>
       </div>
 
-      {/* xterm.js mounts here. We deliberately size it to fill the
-          remaining flex cell; fit addon reads this container's
-          dimensions to decide cols/rows. The bg-canvas token shows
-          through xterm's transparent background, so themes work. */}
+      {/* xterm.js mounts here.
+          `relative` is load-bearing: xterm creates absolutely-
+          positioned row elements inside this container. Without a
+          `position: relative` (or any non-static) ancestor, those
+          rows escape to the nearest positioned ancestor — which
+          in our case is the BrowserWindow root — and paint over
+          the entire UI. That's exactly the "application goes
+          black when I open a terminal" bug.
+          No padding here either — xterm manages its own inner
+          spacing based on cell dimensions, and outer padding
+          confuses FitAddon's size measurement (it reads the
+          element's clientWidth/Height which includes padding). */}
       <div
         ref={containerRef}
-        className="flex-1 min-h-0 min-w-0 overflow-hidden p-2"
+        className="flex-1 min-h-0 min-w-0 overflow-hidden relative"
       />
     </div>
   )
