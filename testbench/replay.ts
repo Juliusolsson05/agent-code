@@ -29,6 +29,7 @@ import {
   extractAssistantInProgress,
   extractStreamingText,
 } from '../src/core/parsers/streamingScreen.js'
+import { detectSlashPicker } from '../src/core/parsers/slashCommandPicker.js'
 import { detectTrustDialog } from '../src/core/parsers/trustDialog.js'
 import { terminalToMarkdown } from '../src/core/runtime/claudeSession.js'
 
@@ -162,6 +163,12 @@ async function main(): Promise<void> {
     box(
       'detectTrustDialog',
       JSON.stringify(detectTrustDialog(screen), null, 2),
+    ),
+  )
+  console.log(
+    box(
+      'detectSlashPicker',
+      JSON.stringify(detectSlashPicker(term), null, 2),
     ),
   )
 }

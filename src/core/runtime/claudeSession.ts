@@ -4,6 +4,10 @@ import { spawn as ptySpawn, type IPty } from 'node-pty'
 // named exports, so we import the default and destructure.
 import xtermHeadless from '@xterm/headless'
 
+import {
+  detectSlashPicker,
+  type SlashPickerState,
+} from '../parsers/slashCommandPicker.js'
 import { getProjectDirForCwd } from './projectDir.js'
 import { tailNewSessionFile, type JsonlEntry } from './jsonlTailer.js'
 
@@ -137,6 +141,12 @@ export type ScreenSnapshot = {
    *  markdown syntax (`**...**` / `*...*`). Used by the streaming card
    *  so CC's in-flight markdown formatting survives our screen scrape. */
   markdown: string
+  /** Structured slash command picker state detected from cell fg
+   *  colors. `visible: false` when no picker is on screen — the
+   *  common case. See src/core/parsers/slashCommandPicker.ts for
+   *  the detection algorithm. Ships with every snapshot so the
+   *  renderer can react to picker opens/closes immediately. */
+  picker: SlashPickerState
 }
 
 export type ClaudeSessionEvents = {
@@ -360,6 +370,11 @@ export class ClaudeSession extends EventEmitter {
       this.emit('screen', {
         plain: this.snapshotScreen(),
         markdown: this.snapshotScreenAsMarkdown(),
+        // detectSlashPicker walks the buffer once per frame reading
+        // cell fg colors — O(rows × cols) but rows/cols are bounded
+        // (~40×120) and each cell access is a single call. Negligible
+        // compared to the cost of just shipping a frame over IPC.
+        picker: this.term ? detectSlashPicker(this.term) : { visible: false, items: [] },
       })
     }, this.snapshotIntervalMs)
   }

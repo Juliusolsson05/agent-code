@@ -1,0 +1,17 @@
+{
+  "_comment": "Slash command picker fixture. Drives CC through several picker states so we have something concrete to point detectSlashPicker at: empty picker (after `/`), filtered picker (`/in`), further-filtered (`/ini`), then dismissed. Each step is followed by a wait so the screen buffer has time to re-render between sends, and replay --frames can show us what the picker looks like at each stage.",
+  "autoAcceptTrust": true,
+  "steps": [
+    { "type": "wait", "ms": 8000 },
+    { "type": "send", "data": "/" },
+    { "type": "wait", "ms": 1500 },
+    { "type": "send", "data": "i" },
+    { "type": "wait", "ms": 800 },
+    { "type": "send", "data": "n" },
+    { "type": "wait", "ms": 800 },
+    { "type": "send", "data": "i" },
+    { "type": "wait", "ms": 1200 },
+    { "type": "send", "data": "\u001b" },
+    { "type": "wait", "ms": 1500 }
+  ]
+}

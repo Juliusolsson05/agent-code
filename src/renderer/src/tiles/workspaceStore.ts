@@ -41,6 +41,18 @@ import {
 // Per-session runtime state (live; NOT persisted to disk)
 // ---------------------------------------------------------------------------
 
+export type PickerItem = {
+  id: string
+  label: string
+  description: string
+  selected: boolean
+}
+
+export type SlashPickerState = {
+  visible: boolean
+  items: PickerItem[]
+}
+
 export type SessionRuntime = {
   /** Plain-text screen snapshot — source of truth for parsers. */
   screen: string
@@ -56,6 +68,11 @@ export type SessionRuntime = {
   exited: number | null
   /** CC's JSONL project dir (for tooltip / debug). */
   projectDir: string | null
+  /** Slash command picker state parsed in main from the terminal buffer.
+   *  Updated on every screen snapshot. The TileLeaf reacts to
+   *  picker.visible flipping to decide whether to render the picker
+   *  component and whether to route keys through the PTY. */
+  picker: SlashPickerState
 }
 
 const emptyRuntime = (): SessionRuntime => ({
@@ -66,6 +83,7 @@ const emptyRuntime = (): SessionRuntime => ({
   awaitingAssistant: false,
   exited: null,
   projectDir: null,
+  picker: { visible: false, items: [] },
 })
 
 // ---------------------------------------------------------------------------
@@ -146,10 +164,16 @@ export function useWorkspace() {
       updateRuntime(sessionId, { projectDir })
     })
 
-    const offScreen = window.api.onSessionScreen(({ sessionId, plain, markdown }) => {
-      latestScreenRef.current[sessionId] = plain
-      updateRuntime(sessionId, { screen: plain, screenMarkdown: markdown })
-    })
+    const offScreen = window.api.onSessionScreen(
+      ({ sessionId, plain, markdown, picker }) => {
+        latestScreenRef.current[sessionId] = plain
+        updateRuntime(sessionId, {
+          screen: plain,
+          screenMarkdown: markdown,
+          picker,
+        })
+      },
+    )
 
     const offEntry = window.api.onSessionJsonlEntry(({ sessionId, entry }) => {
       const uuid = (entry as { uuid?: string }).uuid

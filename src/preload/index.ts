@@ -13,7 +13,21 @@ import { contextBridge, ipcRenderer } from 'electron'
 // `session:*` channels that carry `{ sessionId, ... }` payloads.
 
 export type JsonlEntry = Record<string, unknown>
-export type ScreenSnapshot = { plain: string; markdown: string }
+export type PickerItem = {
+  id: string
+  label: string
+  description: string
+  selected: boolean
+}
+export type SlashPickerState = {
+  visible: boolean
+  items: PickerItem[]
+}
+export type ScreenSnapshot = {
+  plain: string
+  markdown: string
+  picker: SlashPickerState
+}
 
 export type SessionStartedEvent = { sessionId: string; projectDir: string }
 export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot
