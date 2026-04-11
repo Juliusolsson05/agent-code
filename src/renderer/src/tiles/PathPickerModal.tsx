@@ -1,12 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
+
+import { PathInput } from '../components/PathInput'
 
 // PathPickerModal — modal that asks the user for a working directory
 // when they press ⌘T (or click the + button in the tab bar).
 //
-// Explicitly a TEXT INPUT, not a native folder picker. Keyboard-first,
-// supports `~` and `~/…` expansion (done in main), and keeps the modal
-// open with an inline error if the path is invalid so the user can fix
-// the typo without losing what they've already typed.
+// Most of the complexity (completion dropdown, keyboard nav, tab
+// complete) now lives in <PathInput> so this file stays tiny — just
+// the modal chrome, the error slot, and the cancel/open buttons.
+// PathInput owns typing, suggestions, and all keyboard handling;
+// this component owns submit → validate → spawn.
 
 type Props = {
   open: boolean
@@ -24,21 +27,14 @@ export function PathPickerModal({
   const [value, setValue] = useState(defaultValue)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
 
-  // Reset state every time the modal opens so a stale error from a
-  // previous attempt doesn't carry over, and so the default value
-  // reflects the current most-recent session cwd.
+  // Reset on open so a stale error / value from a previous attempt
+  // doesn't carry over.
   useEffect(() => {
     if (!open) return
     setValue(defaultValue)
     setError(null)
     setBusy(false)
-    // Defer focus until after the element is in the DOM.
-    setTimeout(() => {
-      inputRef.current?.focus()
-      inputRef.current?.select()
-    }, 0)
   }, [open, defaultValue])
 
   if (!open) return null
@@ -51,27 +47,10 @@ export function PathPickerModal({
     if (!result.ok) {
       setError(result.error)
       setBusy(false)
-      inputRef.current?.focus()
       return
     }
     await onAccept(result.path)
     setBusy(false)
-  }
-
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    // Stop propagation so global keybinds (⌘T, ⌘W, etc.) don't fire
-    // while the user is typing in the modal.
-    e.stopPropagation()
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      void submit()
-      return
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      onCancel()
-      return
-    }
   }
 
   return (
@@ -100,13 +79,25 @@ export function PathPickerModal({
           New tab — working directory
         </div>
 
+        {/* PathInput is the reusable piece — input + completion dropdown
+            + keyboard nav — so this file doesn't re-implement any of it. */}
         <div className="relative mb-2">
-          <div className="absolute left-2 top-1/2 -translate-y-1/2 text-accent text-[12px] pointer-events-none select-none">
+          <div className="absolute left-2 top-1/2 -translate-y-1/2 text-accent text-[12px] pointer-events-none select-none z-10">
             ❯
           </div>
-          <input
-            ref={inputRef}
-            className={`
+          <PathInput
+            value={value}
+            onChange={next => {
+              setValue(next)
+              if (error) setError(null)
+            }}
+            onSubmit={() => void submit()}
+            onCancel={onCancel}
+            placeholder="/path/to/project or ~/…"
+            directoriesOnly
+            autoFocus
+            disabled={busy}
+            inputClassName={`
               w-full
               bg-canvas text-ink text-[12px]
               pl-6 pr-3 py-2.5
@@ -116,16 +107,6 @@ export function PathPickerModal({
               outline-none
               transition-colors duration-120
             `}
-            value={value}
-            onChange={e => {
-              setValue(e.target.value)
-              if (error) setError(null)
-            }}
-            onKeyDown={onKeyDown}
-            placeholder="/path/to/project or ~/…"
-            spellCheck={false}
-            autoComplete="off"
-            disabled={busy}
           />
         </div>
 
@@ -136,7 +117,7 @@ export function PathPickerModal({
             <span className="text-danger">{error}</span>
           ) : (
             <span className="text-muted">
-              enter to open · esc to cancel · ~ is expanded
+              tab completes · ↑↓ to browse · enter to open · esc to cancel
             </span>
           )}
         </div>

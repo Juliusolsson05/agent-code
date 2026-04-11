@@ -91,6 +91,21 @@ const api = {
     raw: string,
   ): Promise<{ ok: true; path: string } | { ok: false; error: string }> =>
     ipcRenderer.invoke('fs:expandCwd', raw),
+
+  // --- Directory listing (used by PathInput for completion) ---
+  // Returns up to ~thousands of entries for a given directory. Renderer
+  // filters client-side by the trailing "base" part of the user input.
+  listDirectory: (
+    rawPath: string,
+    opts?: { directoriesOnly?: boolean; showHidden?: boolean },
+  ): Promise<
+    | {
+        ok: true
+        entries: Array<{ name: string; isDirectory: boolean; path: string }>
+        expanded: string
+      }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke('fs:listDirectory', rawPath, opts),
 }
 
 contextBridge.exposeInMainWorld('api', api)

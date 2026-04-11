@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { dirname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { readFile, stat, writeFile, mkdir } from 'fs/promises'
+import { readdir, readFile, stat, writeFile, mkdir } from 'fs/promises'
 import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
@@ -110,6 +110,75 @@ function registerIpc(): void {
     'session:resize',
     (_evt, sessionId: string, cols: number, rows: number) => {
       manager.resize(sessionId, cols, rows)
+    },
+  )
+
+  // --- Directory listing (used by PathInput for completion) ---
+  // Given a directory path (raw user input that may include ~ or be
+  // relative), return its entries as { name, isDirectory } for the
+  // renderer to filter + display as a suggestion dropdown.
+  //
+  // Options:
+  //   directoriesOnly — filter out regular files (default true for
+  //                     cwd pickers, false for file pickers)
+  //   showHidden      — include .dotfile entries (default false)
+  //
+  // Returns { ok: true, entries, expanded } on success — `expanded`
+  // lets the renderer display the resolved path in the UI if it wants.
+  // On failure (ENOENT, not a directory, EACCES, etc.) returns a
+  // discriminated error the caller can show inline instead of throwing.
+  type DirEntry = { name: string; isDirectory: boolean; path: string }
+  type ListResult =
+    | { ok: true; entries: DirEntry[]; expanded: string }
+    | { ok: false; error: string }
+
+  ipcMain.handle(
+    'fs:listDirectory',
+    async (
+      _evt,
+      rawPath: string,
+      opts?: { directoriesOnly?: boolean; showHidden?: boolean },
+    ): Promise<ListResult> => {
+      const directoriesOnly = opts?.directoriesOnly ?? true
+      const showHidden = opts?.showHidden ?? false
+
+      // Expand ~ and resolve to absolute. Empty / `.` / `~` all mean
+      // "home directory" — that's the natural starting point for path
+      // completion in a picker.
+      let expanded = rawPath.trim()
+      if (expanded === '' || expanded === '~') {
+        expanded = homedir()
+      } else if (expanded.startsWith('~/')) {
+        expanded = join(homedir(), expanded.slice(2))
+      }
+      expanded = resolve(expanded)
+
+      try {
+        const dirents = await readdir(expanded, { withFileTypes: true })
+        const entries: DirEntry[] = []
+        for (const d of dirents) {
+          if (!showHidden && d.name.startsWith('.')) continue
+          const isDirectory = d.isDirectory()
+          if (directoriesOnly && !isDirectory) continue
+          entries.push({
+            name: d.name,
+            isDirectory,
+            path: join(expanded, d.name),
+          })
+        }
+        // Sort: directories first, then alpha (case-insensitive).
+        entries.sort((a, b) => {
+          if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
+          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        })
+        return { ok: true, entries, expanded }
+      } catch (err) {
+        const e = err as NodeJS.ErrnoException
+        if (e.code === 'ENOENT') return { ok: false, error: 'does not exist' }
+        if (e.code === 'ENOTDIR') return { ok: false, error: 'not a directory' }
+        if (e.code === 'EACCES') return { ok: false, error: 'permission denied' }
+        return { ok: false, error: e.message ?? 'read failed' }
+      }
     },
   )
 
