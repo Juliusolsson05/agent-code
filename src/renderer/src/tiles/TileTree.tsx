@@ -15,20 +15,9 @@ type Props = {
   node: TileNode
   focusedSessionId: SessionId
   workspace: Workspace
-  /** Open the resume modal pre-filled with the given cwd. Threaded
-   *  from App down to each leaf so TileLeaf can intercept slash
-   *  commands like `/resume` and open our native PathPickerModal
-   *  instead of letting CC's own TUI resume picker fight with our
-   *  screen scrape. */
-  onResumeRequest: (cwd: string) => void
 }
 
-export function TileTree({
-  node,
-  focusedSessionId,
-  workspace,
-  onResumeRequest,
-}: Props) {
+export function TileTree({ node, focusedSessionId, workspace }: Props) {
   if (node.type === 'leaf') {
     const runtime = workspace.getRuntime(node.sessionId)
     return (
@@ -38,7 +27,6 @@ export function TileTree({
         focused={node.sessionId === focusedSessionId}
         onFocusRequest={() => workspace.focusSession(node.sessionId)}
         workspace={workspace}
-        onResumeRequest={onResumeRequest}
       />
     )
   }
@@ -52,7 +40,6 @@ export function TileTree({
           node={node.a}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
-          onResumeRequest={onResumeRequest}
         />
       }
       b={
@@ -60,7 +47,6 @@ export function TileTree({
           node={node.b}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
-          onResumeRequest={onResumeRequest}
         />
       }
       // Resize dragging needs to know which sessions to update the

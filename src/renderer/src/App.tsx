@@ -123,7 +123,6 @@ export default function App() {
             node={activeTab.root}
             focusedSessionId={activeTab.focusedSessionId}
             workspace={workspace}
-            onResumeRequest={onResumeRequest}
           />
         ) : (
           <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
