@@ -166,11 +166,41 @@ export function useWorkspace() {
 
     const offScreen = window.api.onSessionScreen(
       ({ sessionId, plain, markdown, picker }) => {
+        // latestScreenRef is the synchronous source of truth for the
+        // Enter-baseline capture in TileLeaf — always update it, even
+        // when we bail on React state below.
         latestScreenRef.current[sessionId] = plain
-        updateRuntime(sessionId, {
-          screen: plain,
-          screenMarkdown: markdown,
-          picker,
+
+        setRuntimes(prev => {
+          const current = prev[sessionId] ?? emptyRuntime()
+          // Screen snapshots fire continuously (CC redraws its TUI at
+          // ~60Hz) but the actual text is usually identical between
+          // frames — CC is redrawing chrome, cursor, or a spinner that
+          // our parser already strips. Without a bail-out, every idle
+          // frame triggers a new `runtimes` state → useWorkspace
+          // re-render → TileTree/TileLeaf reconcile → Feed.memo check
+          // (which does then skip, but reconciliation to that point
+          // isn't free). Comparing strings by reference first, then by
+          // value, and bailing before setState entirely saves that
+          // whole pass on every no-op frame. This is the difference
+          // between "scheduled work on every frame" and "scheduled work
+          // only when the screen actually changed".
+          if (
+            current.screen === plain &&
+            current.screenMarkdown === markdown &&
+            pickerEqual(current.picker, picker)
+          ) {
+            return prev
+          }
+          return {
+            ...prev,
+            [sessionId]: {
+              ...current,
+              screen: plain,
+              screenMarkdown: markdown,
+              picker,
+            },
+          }
         })
       },
     )
@@ -682,6 +712,29 @@ export function useWorkspace() {
 function titleFromCwd(cwd: string): string {
   const parts = cwd.split('/').filter(Boolean)
   return parts[parts.length - 1] ?? cwd
+}
+
+/**
+ * Cheap structural comparison for SlashPickerState. The picker object
+ * itself is always fresh (parsed anew from each terminal snapshot in
+ * main), so reference equality never holds — we have to look at the
+ * visible flag, the item count, and the per-item id + selected bit.
+ * IDs are short strings, items cap at ~15, so this runs in microseconds
+ * and is still vastly cheaper than letting a no-op screen frame
+ * propagate into a React render.
+ */
+function pickerEqual(
+  a: SlashPickerState,
+  b: SlashPickerState,
+): boolean {
+  if (a.visible !== b.visible) return false
+  if (a.items.length !== b.items.length) return false
+  for (let i = 0; i < a.items.length; i++) {
+    const x = a.items[i]
+    const y = b.items[i]
+    if (x.id !== y.id || x.selected !== y.selected) return false
+  }
+  return true
 }
 
 function setRatioBetween(

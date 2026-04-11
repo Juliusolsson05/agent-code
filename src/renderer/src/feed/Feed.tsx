@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -98,7 +98,51 @@ type Props = {
   showSystemEvents: boolean
 }
 
-export function Feed({
+// -----------------------------------------------------------------------------
+// Memoization strategy — the whole reason this file is fast enough to type in
+// -----------------------------------------------------------------------------
+//
+// Parsing markdown through unified (remark-parse → remark-gfm → rehype-
+// highlight → highlight.js) is EXPENSIVE. A single assistant message with
+// a handful of code blocks easily takes 5-15ms per ReactMarkdown call,
+// and a scrolled-back feed can contain dozens of them. Without memoization,
+// every keystroke in the composer input (which is a sibling component
+// living inside the same TileLeaf) triggers a TileLeaf re-render, which
+// re-renders <Feed>, which re-parses every single markdown block from
+// scratch. That's 100ms+ of blocking work between the browser input event
+// and the next paint — the input literally cannot update until the
+// markdown finishes, and typing becomes unusable.
+//
+// The fix is a two-layer memo:
+//
+//   1. `Feed` itself is memoized. When the parent re-renders for a reason
+//      unrelated to feed content (user typing, focus toggle, split resize,
+//      picker visibility change), Feed sees the same `entries` reference,
+//      same `streamingScreen`, etc., and React.memo's default shallow
+//      compare bails the entire subtree out. Zero markdown work happens.
+//
+//   2. Every row component (`EntryRow`, `ConversationRow`, `TextProse`,
+//      `ToolUseRow`, `ToolResultRow`) is individually memoized. Even when
+//      Feed DOES need to re-render (new entry lands, streaming frame
+//      ticks), existing rows receive the exact same entry/block/text
+//      reference they had last time and skip. Only the genuinely new
+//      row does parse work. This matters because entries are appended,
+//      not replaced — we spread `[...current.entries, newOne]`, so the
+//      array reference is fresh but every existing element is stable.
+//
+// TextProse/StreamingProse are the hottest leaf; memoizing them by the
+// `text` string is the single biggest win because ReactMarkdown itself
+// has no memo and re-parses on every call.
+//
+// What is NOT memoized on purpose: the StreamingRow. It WANTS to re-run
+// on every screen frame — that's literally the streaming preview. But
+// even there, `StreamingProse` is memoed by the extracted text string,
+// so identical consecutive frames (which are common — CC re-renders its
+// screen buffer without the content changing) are free.
+
+export const Feed = memo(FeedImpl)
+
+function FeedImpl({
   entries,
   streamingScreen,
   streamingScreenMarkdown,
@@ -144,14 +188,21 @@ export function Feed({
   )
 }
 
-function EntryRow({ entry }: { entry: Entry }) {
+// Memoized: entry objects are stable across store updates (we append,
+// never mutate), so shallow compare by entry reference skips re-render
+// for every row that didn't itself change.
+const EntryRow = memo(function EntryRow({ entry }: { entry: Entry }) {
   if (isConversationEntry(entry)) {
     return <ConversationRow entry={entry} />
   }
   return <SystemRow entry={entry} />
-}
+})
 
-function ConversationRow({ entry }: { entry: ConversationEntry }) {
+const ConversationRow = memo(function ConversationRow({
+  entry,
+}: {
+  entry: ConversationEntry
+}) {
   const role = entry.message.role
   const content = entry.message.content
 
@@ -176,7 +227,7 @@ function ConversationRow({ entry }: { entry: ConversationEntry }) {
       ))}
     </div>
   )
-}
+})
 
 /* ---------- Marker layout primitives ---------- */
 
@@ -215,7 +266,9 @@ function MarkerRow({
 
 /* ---------- Block dispatcher ---------- */
 
-function Block({
+// Memoized: blocks inside an assistant/user message are stable objects —
+// the entry never mutates, so block identity is a perfect memo key.
+const Block = memo(function Block({
   block,
   role,
 }: {
@@ -255,11 +308,15 @@ function Block({
         </MarkerRow>
       )
   }
-}
+})
 
 /* ---------- Text prose ---------- */
 
-function TextProse({ text }: { text: string }) {
+// Memoized: `text` is a plain string, so shallow compare is exact
+// equality. This is the single biggest win in the file — markdown
+// parsing is the expensive part, and by memoing on the text string we
+// skip the unified pipeline entirely for every row that didn't change.
+const TextProse = memo(function TextProse({ text }: { text: string }) {
   if (!text) return null
   return (
     <div className="prose-theme text-ink text-[13px] leading-[1.65]">
@@ -268,15 +325,24 @@ function TextProse({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 /**
  * Same visual surface as TextProse, but uses the streaming plugin set
  * (remark-breaks added) so hard newlines from the screen buffer survive
  * as <br> in the rendered output. See the comment on STREAMING_REMARK
  * above for the full reasoning.
+ *
+ * Memoized by text string too: CC's screen re-renders fire at ~60Hz
+ * and the extracted assistant text is usually identical between frames
+ * (CC is redrawing chrome, not changing content). Memoing here turns
+ * those redundant frames into free ones.
  */
-function StreamingProse({ text }: { text: string }) {
+const StreamingProse = memo(function StreamingProse({
+  text,
+}: {
+  text: string
+}) {
   if (!text) return null
   return (
     <div className="prose-theme text-ink text-[13px] leading-[1.65]">
@@ -285,11 +351,11 @@ function StreamingProse({ text }: { text: string }) {
       </ReactMarkdown>
     </div>
   )
-}
+})
 
 /* ---------- Tool use: "⏺ Bash  ⎿ $ command" ---------- */
 
-function ToolUseRow({ block }: { block: ToolUseBlock }) {
+const ToolUseRow = memo(function ToolUseRow({ block }: { block: ToolUseBlock }) {
   // Extract the command / description for Bash-like tools. For tools
   // without a `command` field we fall back to stringified input.
   const input = block.input as Record<string, unknown> | undefined
@@ -317,11 +383,15 @@ function ToolUseRow({ block }: { block: ToolUseBlock }) {
       </div>
     </MarkerRow>
   )
-}
+})
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
 
-function ToolResultRow({ block }: { block: ToolResultBlock }) {
+const ToolResultRow = memo(function ToolResultRow({
+  block,
+}: {
+  block: ToolResultBlock
+}) {
   const text =
     typeof block.content === 'string'
       ? block.content
@@ -347,11 +417,11 @@ function ToolResultRow({ block }: { block: ToolResultBlock }) {
       </pre>
     </MarkerRow>
   )
-}
+})
 
 /* ---------- System row (hidden by default; shown when toggled on) ---------- */
 
-function SystemRow({ entry }: { entry: Entry }) {
+const SystemRow = memo(function SystemRow({ entry }: { entry: Entry }) {
   const label =
     entry.type === 'attachment'
       ? attachmentLabel(entry)
@@ -367,7 +437,7 @@ function SystemRow({ entry }: { entry: Entry }) {
       </div>
     </MarkerRow>
   )
-}
+})
 
 function attachmentLabel(entry: Entry): string {
   const a = (entry as { attachment?: Record<string, unknown> }).attachment ?? {}
