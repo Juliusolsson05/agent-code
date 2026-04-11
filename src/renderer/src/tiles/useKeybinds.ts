@@ -22,6 +22,8 @@ import type { Workspace } from './workspaceStore'
 //   cmd-]           next tab
 //   alt-d           split current pane vertically (new pane to the right)
 //   alt-shift-d     split current pane horizontally (new pane below)
+//   alt-t           split with a TERMINAL below (new row, horizontal split)
+//   alt-shift-t     split with a TERMINAL to the right (new column, vertical)
 //   alt-h/j/k/l     navigate panes (vim: left/down/up/right)
 //   alt-ArrowLeft/Right/Up/Down  same, for non-vim users
 //   alt-w           close focused pane (same as cmd-w but alt-keyed)
@@ -179,6 +181,34 @@ export function useKeybinds(
         if (code === 'KeyD' && shift) {
           e.preventDefault()
           void workspace.splitFocused('horizontal')
+          return
+        }
+        // --- Terminal split: alt-t / alt-shift-t ---
+        //
+        // Alt+T        → horizontal split (new row BELOW) with a
+        //                plain shell terminal. "Row below" is the
+        //                natural default because terminals are
+        //                usually scanned at the bottom of the
+        //                screen, not in a side column.
+        // Alt+Shift+T  → vertical split (new column RIGHT) with a
+        //                plain shell terminal. Same keybind
+        //                grammar as alt-d / alt-shift-d but
+        //                inverted-default because terminals lean
+        //                the other way.
+        //
+        // The 't' detection uses e.code === 'KeyT' (not e.key)
+        // because on macOS alt+t produces the Unicode dagger '†',
+        // and holding shift produces 'Ê'. Both are invisible to
+        // key-string matching but show up fine as KeyT via the
+        // physical-key code. See the note on alt-h/j/k/l above.
+        if (code === 'KeyT' && !shift) {
+          e.preventDefault()
+          void workspace.splitFocused('horizontal', 'terminal')
+          return
+        }
+        if (code === 'KeyT' && shift) {
+          e.preventDefault()
+          void workspace.splitFocused('vertical', 'terminal')
           return
         }
         if (code === 'KeyW') {

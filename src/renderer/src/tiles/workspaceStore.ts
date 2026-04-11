@@ -5,6 +5,7 @@ import { extractAssistantInProgress } from '../../../core/parsers/streamingScree
 import {
   RATIO_DEFAULT,
   type SessionId,
+  type SessionKind,
   type SessionMeta,
   type SplitDirection,
   type Tab,
@@ -160,17 +161,6 @@ type PersistedWorkspace = {
   activeTabId: TabId
   sessions: Record<SessionId, SessionMeta>
 }
-
-// Workspace storage version.
-//
-// v1 → initial schema.
-// v2 → SessionMeta.ccSessionId added (cross-reload CC resume).
-//
-// We accept older versions on load too (see the load effect below):
-// missing fields get the default-undefined treatment, so a v1 blob
-// just rehydrates without the resume path wired up. Only a wholly
-// different schema would force a drop.
-const STORAGE_VERSION = 2
 
 // ---------------------------------------------------------------------------
 // The store hook
@@ -462,11 +452,22 @@ export function useWorkspace() {
   // a workspace-scoped identifier for routing, distinct from CC's
   // session UUID.
   const spawn = useCallback(
-    async (cwd: string, resumeSessionId?: string): Promise<SessionId> => {
-      const sessionId = await window.api.spawnSession({ cwd, resumeSessionId })
+    async (
+      cwd: string,
+      opts?: { resumeSessionId?: string; kind?: SessionKind },
+    ): Promise<SessionId> => {
+      const kind: SessionKind = opts?.kind ?? 'claude'
+      const sessionId = await window.api.spawnSession({
+        kind,
+        cwd,
+        resumeSessionId: opts?.resumeSessionId,
+      })
       setState(prev => ({
         ...prev,
-        sessions: { ...prev.sessions, [sessionId]: { cwd } },
+        sessions: {
+          ...prev.sessions,
+          [sessionId]: { cwd, kind },
+        },
       }))
       setRuntimes(prev => ({ ...prev, [sessionId]: emptyRuntime() }))
       return sessionId
@@ -498,7 +499,7 @@ export function useWorkspace() {
   // CC session rather than starting a fresh one.
   const newTab = useCallback(
     async (cwd: string, resumeSessionId?: string) => {
-      const sessionId = await spawn(cwd, resumeSessionId)
+      const sessionId = await spawn(cwd, { resumeSessionId })
       const tabId = crypto.randomUUID()
       const title = titleFromCwd(cwd)
       setState(prev => {
@@ -555,14 +556,14 @@ export function useWorkspace() {
   // Spawns a new session in the parent pane's cwd, inserts a new leaf
   // under a fresh split node, makes the new pane focused.
   const splitFocused = useCallback(
-    async (direction: SplitDirection) => {
+    async (direction: SplitDirection, kind: SessionKind = 'claude') => {
       const tab = state.tabs.find(t => t.id === state.activeTabId)
       if (!tab) return
       const parentSessionId = tab.focusedSessionId
       const parentCwd = state.sessions[parentSessionId]?.cwd
       if (!parentCwd) return
 
-      const newSessionId = await spawn(parentCwd)
+      const newSessionId = await spawn(parentCwd, { kind })
 
       setState(prev => ({
         ...prev,
@@ -770,11 +771,7 @@ export function useWorkspace() {
         activeTabId: state.activeTabId,
         sessions: state.sessions,
       }
-      const json = JSON.stringify(
-        { version: STORAGE_VERSION, workspace: persisted },
-        null,
-        2,
-      )
+      const json = JSON.stringify({ workspace: persisted }, null, 2)
       void window.api.saveWorkspace(json).catch(err => {
         // eslint-disable-next-line no-console
         console.warn('[workspace] save failed:', err)
@@ -804,23 +801,12 @@ export function useWorkspace() {
         return
       }
       try {
-        const parsed = JSON.parse(json) as {
-          version: number
-          workspace: PersistedWorkspace
-        }
-        // Version gate: accept anything between 1 and the current
-        // version. A v1 blob has no ccSessionId on its SessionMetas,
-        // so the rehydrate path just spawns fresh (same as before
-        // this feature existed) — no crash, no silent data loss.
-        // Rejecting unknown-future versions is still important so a
-        // v3 blob from a newer build doesn't get misinterpreted.
-        if (
-          typeof parsed.version !== 'number' ||
-          parsed.version < 1 ||
-          parsed.version > STORAGE_VERSION
-        ) {
-          throw new Error(`unknown workspace version ${parsed.version}`)
-        }
+        // Single-user dev app — no schema versioning. If the load
+        // fails for any reason (corrupt JSON, unexpected shape,
+        // spawn error during rehydrate) we fall through to the
+        // catch below and start fresh. No migrations, no version
+        // gates.
+        const parsed = JSON.parse(json) as { workspace: PersistedWorkspace }
         await rehydrate(parsed.workspace)
       } catch (err) {
         // eslint-disable-next-line no-console
@@ -863,15 +849,24 @@ export function useWorkspace() {
     const freshSessions: Record<SessionId, SessionMeta> = {}
 
     // Spawn sessions in the order they appear in persisted.sessions.
+    //
+    // Each session carries its own `kind` (absent = 'claude' for
+    // backwards compatibility with pre-terminal workspace.json
+    // blobs). Terminal sessions don't have a transcript so the
+    // resumeSessionId is silently ignored for them on the main
+    // side — respawning just starts a fresh shell in the same cwd.
     for (const [oldId, meta] of Object.entries(persisted.sessions)) {
       try {
+        const kind: SessionKind = meta.kind ?? 'claude'
         const newId = await window.api.spawnSession({
+          kind,
           cwd: meta.cwd,
-          resumeSessionId: meta.ccSessionId,
+          resumeSessionId: kind === 'claude' ? meta.ccSessionId : undefined,
         })
         idMap.set(oldId, newId)
-        // Carry ccSessionId forward so the next save cycle doesn't
-        // drop it — see block comment above for why this matters.
+        // Carry the full meta forward — kind + ccSessionId — so the
+        // next save cycle doesn't drop these and cause the session
+        // to degrade on the NEXT reload.
         freshSessions[newId] = meta
       } catch (err) {
         // eslint-disable-next-line no-console

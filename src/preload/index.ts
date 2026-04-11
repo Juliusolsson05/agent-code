@@ -29,7 +29,13 @@ export type ScreenSnapshot = {
   picker: SlashPickerState
 }
 
-export type SessionStartedEvent = { sessionId: string; projectDir: string }
+export type SessionKind = 'claude' | 'terminal'
+export type SessionStartedEvent = {
+  sessionId: string
+  kind: SessionKind
+  /** Undefined for terminal sessions — they don't have a CC project dir. */
+  projectDir?: string
+}
 export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot
 export type SessionJsonlEntryEvent = {
   sessionId: string
@@ -37,6 +43,8 @@ export type SessionJsonlEntryEvent = {
   file: string
 }
 export type SessionJsonlErrorEvent = { sessionId: string; message: string }
+/** Raw PTY output for a terminal session — destined for xterm.js. */
+export type SessionTerminalDataEvent = { sessionId: string; data: string }
 export type SessionExitEvent = {
   sessionId: string
   exitCode: number
@@ -70,6 +78,10 @@ export type SessionInfo = {
 const api = {
   // --- Session lifecycle ---
   spawnSession: (options: {
+    /** Optional. Defaults to 'claude' on the main side so existing
+     *  callers don't need to change. Pass 'terminal' to spawn a
+     *  plain shell session instead. */
+    kind?: SessionKind
     cwd: string
     cols?: number
     rows?: number
@@ -102,6 +114,11 @@ const api = {
 
   onSessionJsonlError: (cb: (e: SessionJsonlErrorEvent) => void): Unsub =>
     subscribe('session:jsonl-error', cb),
+
+  /** Raw PTY bytes for terminal sessions. Claude sessions do NOT
+   *  emit on this channel — they use screen/jsonl-entry instead. */
+  onSessionTerminalData: (cb: (e: SessionTerminalDataEvent) => void): Unsub =>
+    subscribe('session:terminal-data', cb),
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),

@@ -40,6 +40,13 @@ function send(channel: string, ...args: unknown[]): void {
 
 // Wire every manager event to a matching IPC channel. Each payload
 // carries the sessionId so the renderer can route to the right tile.
+//
+// Note: terminal-data is a new channel specific to plain shell
+// sessions. Claude sessions use screen / jsonl-entry / jsonl-error
+// to surface their structured state; terminal sessions just forward
+// raw PTY bytes for xterm.js to render. Keeping them on separate
+// channels avoids making every Claude pane listener unpack/ignore
+// terminal bytes it doesn't care about.
 function wireManagerIPC(): void {
   manager.on('started', payload => send('session:started', payload))
   manager.on('screen', payload => send('session:screen', payload))
@@ -49,6 +56,9 @@ function wireManagerIPC(): void {
       sessionId,
       message: String(error.message ?? error),
     }),
+  )
+  manager.on('terminal-data', payload =>
+    send('session:terminal-data', payload),
   )
   manager.on('exit', payload => send('session:exit', payload))
 }
@@ -93,6 +103,7 @@ function registerIpc(): void {
     async (
       _evt,
       options: {
+        kind?: 'claude' | 'terminal'
         cwd: string
         cols?: number
         rows?: number

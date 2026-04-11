@@ -45,11 +45,35 @@ export type Tab = {
   focusedSessionId: SessionId
 }
 
+/**
+ * Which kind of backend a session drives.
+ *
+ *   'claude'   — a Claude Code child process. The pane renders the
+ *                full cc-shell UI (feed, composer, slash picker, …)
+ *                driven by the JSONL transcript + headless terminal
+ *                screen scrape.
+ *   'terminal' — a plain shell child process. The pane renders an
+ *                xterm.js instance that receives raw PTY bytes and
+ *                forwards keystrokes back. VS Code-style integrated
+ *                terminal with no cc-shell chrome.
+ *
+ * Persisted in SessionMeta so a reload restores each pane to the
+ * right component. Absent (= undefined) in pre-terminal workspace.json
+ * blobs, treated as 'claude' at load time.
+ */
+export type SessionKind = 'claude' | 'terminal'
+
 export type SessionMeta = {
   /** cwd the session was spawned with — needed to respawn on relaunch. */
   cwd: string
   /** Optional user-provided or derived label shown in tab titles. */
   title?: string
+  /**
+   * Which backend runs in this pane. Defaults to 'claude' when
+   * absent so pre-terminal workspace.json blobs keep working — the
+   * tile tree is always there, but old entries never carried kind.
+   */
+  kind?: SessionKind
   /**
    * CC's own session UUID (distinct from cc-shell's SessionId which is
    * a per-launch routing key). Captured from the `sessionId` field on
@@ -65,9 +89,9 @@ export type SessionMeta = {
    * workspaceStore.rehydrate() and the jsonl-entry handler that
    * captures it.
    *
-   * Optional because: (a) brand-new sessions haven't received their
-   * first JSONL entry yet, (b) pre-v2 workspace.json blobs from
-   * before this feature was added don't carry the field.
+   * Only meaningful for kind === 'claude'. Terminal sessions don't
+   * have a JSONL transcript so there's nothing to resume; a reload
+   * just spawns a fresh shell in the same cwd.
    */
   ccSessionId?: string
 }

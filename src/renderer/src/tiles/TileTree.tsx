@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react'
 
+import { TerminalLeaf } from './TerminalLeaf'
 import { TileLeaf } from './TileLeaf'
 import type { Workspace } from './workspaceStore'
 import type { SessionId, TileNode } from './types'
@@ -19,6 +20,23 @@ type Props = {
 
 export function TileTree({ node, focusedSessionId, workspace }: Props) {
   if (node.type === 'leaf') {
+    // Dispatch by session kind. Terminal panes get TerminalLeaf
+    // (just an xterm.js instance); everything else (absent or
+    // 'claude') falls through to TileLeaf with the full cc-shell
+    // chrome. Meta.kind being absent is the pre-terminal schema
+    // and is treated as claude.
+    const meta = workspace.state.sessions[node.sessionId]
+    const kind = meta?.kind ?? 'claude'
+    if (kind === 'terminal') {
+      return (
+        <TerminalLeaf
+          sessionId={node.sessionId}
+          focused={node.sessionId === focusedSessionId}
+          onFocusRequest={() => workspace.focusSession(node.sessionId)}
+          workspace={workspace}
+        />
+      )
+    }
     const runtime = workspace.getRuntime(node.sessionId)
     return (
       <TileLeaf
