@@ -107,6 +107,22 @@ export type SessionRuntime = {
    *  picker.visible flipping to decide whether to render the picker
    *  component and whether to route keys through the PTY. */
   picker: SlashPickerState
+  /** Draft input text for this session's composer. Lives in runtime
+   *  (not component-local useState) so it survives TileLeaf unmount.
+   *
+   *  Why it has to be here and not inside TileLeaf:
+   *    App.tsx only renders the active tab's TileTree — inactive tabs
+   *    are UNMOUNTED, not hidden. When the user switches away from a
+   *    tab mid-draft, the old TileLeaf unmounts and its local state is
+   *    destroyed; switching back remounts a fresh instance with an
+   *    empty input. The user sees their typing vanish.
+   *
+   *  Keying drafts by sessionId also means split panes each get their
+   *  own draft (they have distinct sessionIds), which matches the
+   *  "each pane is its own conversation" mental model. And when a
+   *  session is killed, its runtime is deleted along with everything
+   *  else in it — no draft leaks past session teardown. */
+  draftInput: string
 }
 
 const emptyRuntime = (): SessionRuntime => ({
@@ -119,6 +135,7 @@ const emptyRuntime = (): SessionRuntime => ({
   exited: null,
   projectDir: null,
   picker: { visible: false, items: [] },
+  draftInput: '',
 })
 
 // ---------------------------------------------------------------------------
@@ -672,6 +689,19 @@ export function useWorkspace() {
     [updateRuntime],
   )
 
+  // ---- Update the per-session draft input (composer text) ----
+  //
+  // Called from TileLeaf on every onChange/onKeyDown that mutates the
+  // composer text. Lives in runtime so it survives TileLeaf unmount
+  // when the user switches tabs. See SessionRuntime.draftInput for
+  // the reasoning.
+  const setDraftInput = useCallback(
+    (sessionId: SessionId, text: string) => {
+      updateRuntime(sessionId, { draftInput: text })
+    },
+    [updateRuntime],
+  )
+
   // ---- Persist to disk on every mutation (debounced) ----
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
@@ -834,6 +864,7 @@ export function useWorkspace() {
     resizeFocusedDirectional,
     setSplitRatio,
     setStreamingBaseline,
+    setDraftInput,
   }
 }
 

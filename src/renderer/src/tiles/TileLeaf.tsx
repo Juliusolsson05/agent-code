@@ -54,9 +54,19 @@ export function TileLeaf({
   workspace,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  // Per-leaf input state — lives with the instance so the typed value
-  // persists across unrelated re-renders of the parent.
-  const [input, setInputText] = useState('')
+  // Draft input lives in the workspace runtime (not local useState)
+  // so it survives TileLeaf unmount when the user switches tabs.
+  // App.tsx only mounts the active tab's tree — inactive tabs are
+  // unmounted, not hidden — so any component-local state dies on
+  // tab switch. See SessionRuntime.draftInput for the full reasoning.
+  //
+  // We keep a local `setInputText` adapter so the rest of this file
+  // reads the same way it did before the hoist. The source of truth
+  // is runtime.draftInput; this adapter writes THROUGH to the store.
+  const input = runtime.draftInput
+  const setInputText = (next: string) => {
+    workspace.setDraftInput(sessionId, next)
+  }
 
   // Auto-grow the composer textarea to fit its content. We keep a single
   // line by default, but as the user types (or pastes) a long prompt the
