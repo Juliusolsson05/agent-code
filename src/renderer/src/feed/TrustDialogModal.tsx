@@ -1,13 +1,9 @@
 import { detectTrustDialog } from '../../../core/parsers/trustDialog'
 
-// Trust-dialog overlay. See the comment in the previous pre-Tailwind
-// version for the full design rationale. Short version: the React
-// modal surfaces CC's "Accessing workspace" prompt as a real widget so
-// the user isn't stuck staring at raw terminal text, and the Accept /
-// Decline buttons synthesize the same keystrokes CC already listens
-// for (\r / \x1b). Detection is delegated to core/parsers/trustDialog
-// so the testbench's auto-accept mode and this modal share one source
-// of truth.
+// Trust-dialog overlay. Sharp edges, no rounding, no shadow frills —
+// matches the rest of the app's aesthetic. Detection is delegated to
+// core/parsers/trustDialog so the testbench's auto-accept mode and this
+// modal share one source of truth.
 
 type Props = {
   screen: string
@@ -29,41 +25,32 @@ export function TrustDialogModal({ screen, onSend }: Props) {
         modal-fade
         fixed inset-0 z-[1000]
         flex items-center justify-center
-        bg-canvas/75 backdrop-blur-md
+        bg-canvas/80 backdrop-blur-sm
       "
     >
       <div
         className="
           modal-pop
-          w-[460px] max-w-[calc(100vw-64px)]
-          bg-surface border border-border-hi rounded-xl
-          p-7 pb-5
-          shadow-[0_24px_60px_rgba(0,0,0,0.6),0_2px_8px_rgba(0,0,0,0.4)]
+          w-[480px] max-w-[calc(100vw-64px)]
+          bg-surface border border-border-hi
+          p-6
         "
       >
-        <div className="flex items-center gap-3 mb-4">
-          <WarnIcon />
-          <div className="font-display text-[18px] font-semibold tracking-tight text-ink leading-none">
+        <div className="flex items-start gap-3 mb-4">
+          <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
+          <div className="text-[14px] font-semibold text-ink leading-[1.3]">
             Trust this folder?
           </div>
         </div>
 
-        <div className="text-[13.5px] leading-[1.6] text-ink-dim">
+        <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">
           <p className="mb-3">Claude Code is about to access:</p>
           {state.workspace && (
-            <pre
-              className="
-                font-code text-[12.5px]
-                bg-code-bg border border-code-border
-                rounded-md px-3 py-2.5 mb-3
-                text-accent
-                overflow-x-auto whitespace-nowrap
-              "
-            >
+            <pre className="bg-code-bg text-accent px-3 py-2 mb-3 overflow-x-auto whitespace-nowrap text-[11.5px]">
               {state.workspace}
             </pre>
           )}
-          <p className="text-[12.5px] text-muted">
+          <p className="text-[11.5px] text-muted">
             Claude Code will be able to{' '}
             <strong className="text-ink font-semibold">
               read, edit, and execute files
@@ -73,63 +60,36 @@ export function TrustDialogModal({ screen, onSend }: Props) {
           </p>
         </div>
 
-        <div className="flex justify-end gap-2.5 mt-6">
+        <div className="flex justify-end gap-2 mt-6 pl-6">
           <button
             type="button"
             onClick={decline}
             className="
-              px-4 py-2 rounded-lg text-[13px] font-medium
+              px-4 py-1.5 text-[12px]
               bg-transparent text-ink-dim
               border border-border
               hover:border-border-hi hover:text-ink
-              transition-colors duration-150
-              active:translate-y-px
+              transition-colors duration-120
             "
           >
-            Cancel
+            cancel
           </button>
           <button
             type="button"
             onClick={accept}
             autoFocus
             className="
-              px-4 py-2 rounded-lg text-[13px] font-semibold
+              px-4 py-1.5 text-[12px] font-semibold
               bg-accent text-accent-fg
               border border-accent
               hover:brightness-110
-              transition-all duration-150
-              active:translate-y-px
-              shadow-[0_1px_0_rgba(255,255,255,0.1)_inset]
+              transition-all duration-120
             "
           >
-            Yes, I trust this folder
+            trust this folder
           </button>
         </div>
       </div>
     </div>
-  )
-}
-
-function WarnIcon() {
-  // Theme-aware warning glyph. Uses the accent color so it picks up the
-  // right mood per theme (lime in Noir, oxblood in Paper, green in
-  // Phosphor, ember in Ember).
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className="text-accent flex-shrink-0"
-      aria-hidden="true"
-    >
-      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-      <line x1="12" y1="9" x2="12" y2="13" />
-      <line x1="12" y1="17" x2="12.01" y2="17" />
-    </svg>
   )
 }

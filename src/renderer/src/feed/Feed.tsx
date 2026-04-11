@@ -13,45 +13,77 @@ import {
   type ToolUseBlock,
 } from '../../../core/types/transcript'
 
-// remarkPlugins/rehypePlugins are stable references — defining them at
-// module scope avoids React re-rendering ReactMarkdown's internal cache
-// on every parent render. (react-markdown v10 specifically warns about this.)
+// -----------------------------------------------------------------------------
+// Feed — Claude Code TUI-style inline rendering.
+//
+// Design rules (discussed with the user):
+//   1. No bubbles. No cards. No role labels. Messages flow inline like a
+//      terminal session — each block gets a single-char marker in the
+//      accent color, content wraps with a hanging indent beside it.
+//   2. User text → `❯`. Assistant text → `⏺`. Tool results and CC's
+//      sub-items → `⎿`. Same markers CC's own TUI uses.
+//   3. System entries (permission-mode, file-history-snapshot, hook
+//      attachments) are hidden by default and only render when the
+//      user opts in via settings.
+//   4. Sharp everything — no border-radius, no shadows, no pills. The
+//      visual rhythm comes entirely from the marker + hanging indent.
+//
+// Hanging indent implementation:
+//   <div flex gap-3>
+//     <span w-3 text-accent>⏺</span>
+//     <div flex-1 min-w-0>...content wraps here...</div>
+//   </div>
+//
+// Because the marker column is a fixed width and the content column is
+// flex-1, long lines wrap under the content column only — they don't
+// creep back under the marker. Standard hanging-indent pattern.
+// -----------------------------------------------------------------------------
+
 const REMARK_PLUGINS = [remarkGfm]
 const REHYPE_PLUGINS = [rehypeHighlight]
 
 type Props = {
   entries: Entry[]
-  /** If non-null, render a streaming-preview card at the end of the feed. */
   streamingScreen?: string | null
-  /** Baseline snapshot captured at submit time. See the comment on
-   *  `streamingBaseline` in App.tsx for why. */
   streamingBaseline?: string | null
+  showSystemEvents: boolean
 }
 
-export function Feed({ entries, streamingScreen, streamingBaseline }: Props) {
+export function Feed({
+  entries,
+  streamingScreen,
+  streamingBaseline,
+  showSystemEvents,
+}: Props) {
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
   }, [entries.length, streamingScreen])
 
-  if (entries.length === 0 && !streamingScreen) {
+  // Visible entries = all entries if system events are shown, otherwise
+  // skip attachment / permission-mode / file-history-snapshot.
+  const visible = showSystemEvents
+    ? entries
+    : entries.filter(e => isConversationEntry(e))
+
+  if (visible.length === 0 && !streamingScreen) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="font-display italic text-muted text-[15px] tracking-wide">
-          waiting for Claude Code to start writing entries…
+        <div className="text-muted text-[12px]">
+          waiting for Claude Code…
         </div>
       </div>
     )
   }
 
   return (
-    <div className="max-w-[820px] mx-auto px-7 pt-8 pb-6 flex flex-col gap-5">
-      {entries.map((e, i) => (
+    <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
+      {visible.map((e, i) => (
         <EntryRow key={(e as Entry).uuid ?? `i${i}`} entry={e} />
       ))}
       {streamingScreen != null && (
-        <StreamingCard screen={streamingScreen} baseline={streamingBaseline ?? null} />
+        <StreamingRow screen={streamingScreen} baseline={streamingBaseline ?? null} />
       )}
       <div ref={endRef} />
     </div>
@@ -69,49 +101,65 @@ function ConversationRow({ entry }: { entry: ConversationEntry }) {
   const role = entry.message.role
   const content = entry.message.content
 
+  // Simple string content — render as a single marker + text line.
   if (typeof content === 'string') {
     return (
-      <article className="flex flex-col gap-1.5" data-fresh="1">
-        <RoleLabel role={role} />
-        <div className="flex flex-col gap-2">
-          <TextBubble text={content} role={role} />
-        </div>
-      </article>
+      <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
+        <TextProse text={content} />
+      </MarkerRow>
     )
   }
 
   if (!Array.isArray(content)) return null
 
+  // Multi-block content — render each block with its own layout.
+  // Role only matters for the FIRST text block (to decide ❯ vs ⏺);
+  // tool_use and tool_result blocks carry their own semantics.
   return (
-    <article className="flex flex-col gap-1.5" data-fresh="1">
-      <RoleLabel role={role} />
-      <div className="flex flex-col gap-2">
-        {content.map((block, i) => (
-          <Block key={i} block={block} role={role} />
-        ))}
-      </div>
-    </article>
-  )
-}
-
-function RoleLabel({ role }: { role: 'user' | 'assistant' }) {
-  // Role label sits above the bubble. Uses the theme's display font
-  // (serif in Noir/Paper/Ember, mono in Phosphor) so it reads as part
-  // of the typographic system, not a generic UI chrome sans-serif.
-  const label = role === 'assistant' ? 'Claude' : 'You'
-  const color = role === 'assistant' ? 'text-role-assistant' : 'text-role-user'
-  return (
-    <div
-      className={`
-        font-display ${color}
-        text-[11px] font-semibold uppercase
-        tracking-[0.15em] leading-none
-      `}
-    >
-      {label}
+    <div className="flex flex-col gap-2">
+      {content.map((block, i) => (
+        <Block key={i} block={block} role={role} />
+      ))}
     </div>
   )
 }
+
+/* ---------- Marker layout primitives ---------- */
+
+/**
+ * The core layout: a fixed-width marker column + flex-1 content column
+ * that enforces hanging indent. Used by every rendered block.
+ */
+function MarkerRow({
+  marker,
+  tone = 'accent',
+  children,
+  indent = 0,
+}: {
+  marker: string
+  tone?: 'accent' | 'muted' | 'ink'
+  children: React.ReactNode
+  indent?: number
+}) {
+  const toneClass =
+    tone === 'accent' ? 'text-accent' : tone === 'muted' ? 'text-muted' : 'text-ink-dim'
+  return (
+    <div
+      className="flex gap-2.5"
+      style={indent ? { paddingLeft: `${indent * 22}px` } : undefined}
+    >
+      <span
+        className={`${toneClass} flex-shrink-0 w-3 text-[13px] leading-[1.65] select-none`}
+        aria-hidden="true"
+      >
+        {marker}
+      </span>
+      <div className="flex-1 min-w-0">{children}</div>
+    </div>
+  )
+}
+
+/* ---------- Block dispatcher ---------- */
 
 function Block({
   block,
@@ -122,73 +170,45 @@ function Block({
 }) {
   switch (block.type) {
     case 'text':
-      return <TextBubble text={(block as { text: string }).text} role={role} />
-    case 'thinking':
       return (
-        <details
-          className="
-            rounded-lg px-4 py-2.5
-            bg-surface border border-border
-            text-muted text-[12px]
-          "
-        >
-          <summary className="cursor-pointer uppercase tracking-wider text-[10px] font-semibold select-none">
-            thinking
-          </summary>
-          <pre
-            className="
-              mt-2.5 font-code text-[11.5px] leading-relaxed
-              text-ink-dim whitespace-pre-wrap break-words
-              max-h-[480px] overflow-auto
-            "
-          >
-            {(block as { thinking: string }).thinking}
-          </pre>
-        </details>
+        <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
+          <TextProse text={(block as { text: string }).text} />
+        </MarkerRow>
+      )
+    case 'thinking':
+      // Thinking is usually noise — dim + collapsed behind a disclosure,
+      // with the ⏺ marker so it sits in the assistant column rhythm.
+      return (
+        <MarkerRow marker="⏺" tone="muted">
+          <details className="text-muted text-[12px]">
+            <summary className="cursor-pointer select-none">thinking</summary>
+            <pre className="mt-1.5 whitespace-pre-wrap break-words text-ink-dim text-[11.5px] leading-relaxed opacity-80">
+              {(block as { thinking: string }).thinking}
+            </pre>
+          </details>
+        </MarkerRow>
       )
     case 'tool_use':
-      return <ToolUseCard block={block as ToolUseBlock} />
+      return <ToolUseRow block={block as ToolUseBlock} />
     case 'tool_result':
-      return <ToolResultCard block={block as ToolResultBlock} />
+      return <ToolResultRow block={block as ToolResultBlock} />
     default:
       return (
-        <details className="rounded-lg px-4 py-2.5 bg-surface border border-border text-muted text-[12px]">
-          <summary className="cursor-pointer uppercase tracking-wider text-[10px] font-semibold select-none">
+        <MarkerRow marker="⏺" tone="muted">
+          <div className="text-muted text-[11px] uppercase tracking-wider">
             {block.type}
-          </summary>
-          <pre className="mt-2.5 font-code text-[11.5px] whitespace-pre-wrap break-words max-h-[480px] overflow-auto">
-            {safeStringify(block)}
-          </pre>
-        </details>
+          </div>
+        </MarkerRow>
       )
   }
 }
 
-function TextBubble({
-  text,
-  role,
-}: {
-  text: string
-  role: 'user' | 'assistant'
-}) {
+/* ---------- Text prose ---------- */
+
+function TextProse({ text }: { text: string }) {
   if (!text) return null
-  // User bubbles have a left accent bar + tinted background so the eye
-  // lands on them as "input". Assistant bubbles are the surface color
-  // with a subtle border, letting the content dominate the visual
-  // rhythm of the page. This is the readable-long-conversation pattern
-  // that works across all four themes because it uses tokens.
-  const roleClasses =
-    role === 'user'
-      ? 'border-l-2 border-role-user bg-surface pl-4 pr-4 py-3'
-      : 'bg-transparent px-0 py-1'
   return (
-    <div
-      className={`
-        prose-theme rounded-md
-        ${roleClasses}
-        text-[14px] leading-[1.65] text-ink
-      `}
-    >
+    <div className="prose-theme text-ink text-[13px] leading-[1.65]">
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
         {text}
       </ReactMarkdown>
@@ -196,77 +216,69 @@ function TextBubble({
   )
 }
 
-function ToolUseCard({ block }: { block: ToolUseBlock }) {
+/* ---------- Tool use: "⏺ Bash  ⎿ $ command" ---------- */
+
+function ToolUseRow({ block }: { block: ToolUseBlock }) {
+  // Extract the command / description for Bash-like tools. For tools
+  // without a `command` field we fall back to stringified input.
+  const input = block.input as Record<string, unknown> | undefined
+  const headline = typeof input?.command === 'string'
+    ? input.command
+    : typeof input?.description === 'string'
+      ? input.description
+      : typeof input?.path === 'string'
+        ? input.path
+        : null
+
   return (
-    <div
-      className="
-        rounded-lg px-4 py-3
-        bg-tool-bg border border-tool-border
-      "
-    >
-      <div className="flex items-center gap-2.5 text-[11px] font-semibold">
-        <ToolIcon />
-        <span className="font-code text-ink tracking-tight">{block.name}</span>
+    <MarkerRow marker="⏺">
+      <div>
+        <div className="text-[13px] leading-[1.65]">
+          <span className="text-accent font-semibold">{block.name}</span>
+        </div>
+        {headline && (
+          <MarkerRow marker="⎿" tone="muted">
+            <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
+              {headline}
+            </pre>
+          </MarkerRow>
+        )}
       </div>
-      <details className="mt-2">
-        <summary className="cursor-pointer uppercase tracking-wider text-[9px] font-bold text-muted select-none">
-          input
-        </summary>
-        <pre
-          className="
-            mt-2 px-3 py-2.5
-            rounded-md bg-code-bg border border-code-border
-            font-code text-[11.5px] leading-relaxed
-            whitespace-pre-wrap break-words
-            max-h-[320px] overflow-auto
-            text-ink-dim
-          "
-        >
-          {safeStringify(block.input)}
-        </pre>
-      </details>
-    </div>
+    </MarkerRow>
   )
 }
 
-function ToolResultCard({ block }: { block: ToolResultBlock }) {
+/* ---------- Tool result: "⎿  (lines of output)" ---------- */
+
+function ToolResultRow({ block }: { block: ToolResultBlock }) {
   const text =
     typeof block.content === 'string'
       ? block.content
       : Array.isArray(block.content)
         ? block.content
-            .map(c => (typeof c === 'string' ? c : c.text ?? safeStringify(c)))
+            .map(c => (typeof c === 'string' ? c : c.text ?? ''))
             .join('\n')
-        : safeStringify(block.content)
+        : String(block.content)
+
   const isError = block.is_error === true
+  const trimmed = text.replace(/\s+$/, '')
+
   return (
-    <div
-      className={`
-        rounded-lg px-4 py-3 border
-        ${isError ? 'bg-[color:var(--theme-danger)]/10 border-danger' : 'bg-result-bg border-result-border'}
-      `}
-    >
-      <div className="flex items-center gap-2.5 text-[11px] font-semibold">
-        <span className={`${isError ? 'text-danger' : 'text-muted'}`}>
-          {isError ? '✕' : '↳'}
-        </span>
-        <span className="font-code tracking-tight text-ink-dim">result</span>
-      </div>
+    <MarkerRow marker="⎿" tone={isError ? 'muted' : 'muted'}>
       <pre
-        className="
-          mt-2 px-3 py-2.5
-          rounded-md bg-code-bg border border-code-border
-          font-code text-[11.5px] leading-relaxed
-          whitespace-pre-wrap break-words
-          max-h-[480px] overflow-auto
-          text-ink-dim
-        "
+        className={`
+          font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
+          max-h-[360px] overflow-auto
+          ${isError ? 'text-danger' : 'text-ink-dim'}
+        `}
       >
-        {text}
+        {trimmed}
       </pre>
-    </div>
+    </MarkerRow>
   )
 }
+
+/* ---------- System row (hidden by default; shown when toggled on) ---------- */
 
 function SystemRow({ entry }: { entry: Entry }) {
   const label =
@@ -278,9 +290,11 @@ function SystemRow({ entry }: { entry: Entry }) {
           ? 'file history snapshot'
           : entry.type
   return (
-    <div className="text-[10px] font-code text-muted tracking-wide py-0.5 pl-0.5 opacity-70">
-      · {label}
-    </div>
+    <MarkerRow marker="·" tone="muted">
+      <div className="text-[11px] text-muted leading-[1.65] opacity-60">
+        {label}
+      </div>
+    </MarkerRow>
   )
 }
 
@@ -291,15 +305,9 @@ function attachmentLabel(entry: Entry): string {
   return 'attachment'
 }
 
-function safeStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2)
-  } catch {
-    return String(value)
-  }
-}
+/* ---------- Streaming row (transient preview) ---------- */
 
-function StreamingCard({
+function StreamingRow({
   screen,
   baseline,
 }: {
@@ -308,45 +316,20 @@ function StreamingCard({
 }) {
   const text = extractAssistantInProgress(screen)
   const isStale = baseline != null && text === baseline
-  const display = !text || isStale ? 'thinking…' : text
+  const display = !text || isStale ? null : text
 
   return (
-    <article className="flex flex-col gap-1.5 opacity-95" data-fresh="1">
-      <div className="flex items-center gap-2 font-display text-[11px] font-semibold uppercase tracking-[0.15em] text-role-assistant">
-        Claude
-        <span className="streaming-dot text-accent text-[10px]">●</span>
-      </div>
-      <pre
-        className="
-          font-code text-[12.5px] leading-[1.6]
-          bg-surface border border-border
-          rounded-lg px-4 py-3
-          whitespace-pre
-          overflow-x-auto
-          max-h-[480px] overflow-y-auto
-          text-ink
-        "
-      >
-        {display}
-      </pre>
-    </article>
-  )
-}
-
-function ToolIcon() {
-  return (
-    <svg
-      width="11"
-      height="11"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      className="text-muted"
-      aria-hidden="true"
-    >
-      <path d="M6.5 2L2 6.5l5 5c.5.5 1.4.5 2 0 .6-.6.6-1.5 0-2L3.5 4" />
-      <path d="M11 5l4 4-3 3-4-4" />
-    </svg>
+    <MarkerRow marker="⏺">
+      {display ? (
+        <pre className="font-code text-[13px] leading-[1.6] text-ink whitespace-pre-wrap break-words m-0">
+          {display}
+        </pre>
+      ) : (
+        <div className="flex items-center gap-2 text-muted text-[12px]">
+          <span className="streaming-dot inline-block w-1.5 h-1.5 rounded-full bg-accent" />
+          <span>thinking…</span>
+        </div>
+      )}
+    </MarkerRow>
   )
 }

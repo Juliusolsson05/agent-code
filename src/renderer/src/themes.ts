@@ -1,97 +1,108 @@
-// Theme registry — UI metadata only. The actual colors live in
-// src/renderer/src/styles.css where each `[data-theme="..."]` block
-// sets CSS custom properties. This file exists so the ThemePicker can
-// render previews and a dropdown without hardcoding theme-specific
-// knowledge. Adding a theme = add a block in styles.css + append an
-// entry here.
+// Settings store: theme mode (dark/light), accent color, and visibility
+// toggles for the live terminal preview and system events. Deliberately
+// simple — no opinionated theme variants, just two modes plus an accent
+// picker the user drives themselves.
 //
-// Why the swatches are hardcoded duplicates of the CSS values:
-// the picker needs to preview themes WITHOUT activating them (so the
-// user can browse before committing). The only way to read a CSS
-// variable from a theme you're not currently using is to instantiate
-// a hidden element with that data-theme and read computed styles —
-// heavyweight. A typed `swatches` array is 8 lines, type-safe, and
-// obviously right.
+// Why accent is a single color set via inline style on <html> rather
+// than a data attribute with preset CSS blocks:
+//   If we kept a hardcoded palette in CSS, adding a color would mean
+//   touching CSS. A single CSS custom property mutated at runtime lets
+//   us ship as many presets as we want from TypeScript without touching
+//   styles.css, and would also make user-picked arbitrary colors trivial
+//   later. Today we expose a preset palette, but the plumbing doesn't
+//   care.
 
-export type ThemeId = 'noir' | 'paper' | 'phosphor' | 'ember'
+export type ThemeMode = 'dark' | 'light'
+export type AccentId =
+  | 'lime'
+  | 'amber'
+  | 'sky'
+  | 'magenta'
+  | 'gold'
+  | 'coral'
+  | 'sage'
+  | 'lavender'
 
-export type ThemeMeta = {
-  id: ThemeId
-  /** Display name shown in the picker. */
+export type AccentMeta = {
+  id: AccentId
   name: string
-  /** One-line description of the mood / direction. */
-  blurb: string
-  /** Three preview swatch colors: [canvas, ink, accent]. Used in the
-   *  picker swatch squares. Keep in sync with styles.css. */
-  swatches: [string, string, string]
-  /** Name of the display font stack used by this theme, shown in the
-   *  picker so the user can see the typographic identity at a glance. */
-  displayFont: string
+  /** RGB hex for each mode so the swatch stays legible on both backgrounds. */
+  dark: string
+  light: string
+  /** Contrast text color for use on solid accent backgrounds (buttons). */
+  fgDark: string
+  fgLight: string
 }
 
-export const THEMES: ThemeMeta[] = [
-  {
-    id: 'noir',
-    name: 'Noir',
-    blurb: 'Editorial dark. Carbon + cream, Fraunces display, electric lime.',
-    swatches: ['#09090b', '#ebe5d9', '#c8ff5a'],
-    displayFont: 'Fraunces',
-  },
-  {
-    id: 'paper',
-    name: 'Paper',
-    blurb: 'Warm notebook. Cream + charcoal, Instrument Serif, oxblood.',
-    swatches: ['#f4eedb', '#1c1612', '#8b2635'],
-    displayFont: 'Instrument Serif',
-  },
-  {
-    id: 'phosphor',
-    name: 'Phosphor',
-    blurb: 'Vintage CRT. Green-on-black, all Space Mono, subtle scanlines.',
-    swatches: ['#050a05', '#8ae88a', '#c8ff5a'],
-    displayFont: 'Space Mono',
-  },
-  {
-    id: 'ember',
-    name: 'Ember',
-    blurb: 'Warm drama. Brown-black + cream, Playfair Display, ember red.',
-    swatches: ['#130c0a', '#f0e6d8', '#ff5c35'],
-    displayFont: 'Playfair Display',
-  },
+export const ACCENTS: AccentMeta[] = [
+  { id: 'lime',     name: 'Lime',     dark: '#7dd3a0', light: '#4b8a63', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'amber',    name: 'Amber',    dark: '#ff9f4a', light: '#b05d14', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'sky',      name: 'Sky',      dark: '#6bb6ff', light: '#2c6bb5', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'magenta',  name: 'Magenta',  dark: '#e66ed9', light: '#a23895', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'gold',     name: 'Gold',     dark: '#f5d64a', light: '#9a7c16', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'coral',    name: 'Coral',    dark: '#ff6b6b', light: '#b83c3c', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'sage',     name: 'Sage',     dark: '#a8c49a', light: '#5f7a52', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'lavender', name: 'Lavender', dark: '#b5a3ff', light: '#6e57c7', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
 ]
 
-export const DEFAULT_THEME: ThemeId = 'noir'
+export type Settings = {
+  mode: ThemeMode
+  accent: AccentId
+  showTerminalPreview: boolean
+  showSystemEvents: boolean
+}
 
-const STORAGE_KEY = 'cc-shell:theme'
+export const DEFAULT_SETTINGS: Settings = {
+  mode: 'dark',
+  accent: 'lime',
+  showTerminalPreview: false,
+  showSystemEvents: false,
+}
 
-/**
- * Read the persisted theme choice from localStorage, falling back to the
- * default. Validated against THEMES so a stale/tampered value can't break
- * the app — anything unknown falls back.
- */
-export function loadThemeFromStorage(): ThemeId {
+const STORAGE_KEY = 'cc-shell:settings'
+
+export function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (raw && THEMES.some(t => t.id === raw)) return raw as ThemeId
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<Settings>
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        // Validate enums so a stale / tampered value can't break the app.
+        mode: parsed.mode === 'light' ? 'light' : 'dark',
+        accent: ACCENTS.some(a => a.id === parsed.accent)
+          ? (parsed.accent as AccentId)
+          : DEFAULT_SETTINGS.accent,
+      }
+    }
   } catch {
-    // localStorage may be unavailable (e.g. incognito / hardened mode).
-    // Silently fall through to the default.
+    // localStorage may be unavailable in hardened Electron modes — fall
+    // through to defaults.
   }
-  return DEFAULT_THEME
+  return DEFAULT_SETTINGS
+}
+
+export function saveSettings(s: Settings): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(s))
+  } catch {
+    // see loadSettings
+  }
 }
 
 /**
- * Persist + apply a theme. The apply step sets `data-theme` on the
- * document root which triggers every theme-token CSS variable to
- * cascade through the whole DOM — no React re-render required for
- * the paint, just for any components that want to show the current
- * theme ID in their UI (the picker label, for instance).
+ * Apply mode + accent to the <html> element. Mode flips data-mode (which
+ * cascades the mode-scoped CSS block). Accent writes the single custom
+ * property both tokens read from. Called at module-eval time (for the
+ * initial paint) and again any time the user changes settings.
  */
-export function applyTheme(id: ThemeId): void {
-  document.documentElement.dataset.theme = id
-  try {
-    localStorage.setItem(STORAGE_KEY, id)
-  } catch {
-    // see loadThemeFromStorage
-  }
+export function applyTheme(s: Settings): void {
+  const root = document.documentElement
+  root.dataset.mode = s.mode
+  const accent = ACCENTS.find(a => a.id === s.accent) ?? ACCENTS[0]
+  const hex = s.mode === 'dark' ? accent.dark : accent.light
+  const fg = s.mode === 'dark' ? accent.fgDark : accent.fgLight
+  root.style.setProperty('--theme-accent', hex)
+  root.style.setProperty('--theme-accent-fg', fg)
 }

@@ -1,41 +1,33 @@
 /*
- * cc-shell theme engine
+ * cc-shell styles — v2: "native Claude Code, but typeset"
  *
- * Architecture:
- *   1. @import "tailwindcss" — Tailwind v4 pulls its own preflight + utilities.
- *   2. @theme inline — bind Tailwind semantic color/font classes to CSS
- *      custom properties. Writing `bg-canvas` in JSX resolves to whatever
- *      `--theme-canvas` is set to at that point in the DOM.
- *   3. :root has the default (Noir) theme.
- *   4. `[data-theme="paper"]`, etc. override the custom properties — changing
- *      the attribute on <html> instantly re-themes everything, zero JS.
+ * Hard aesthetic rules (don't deviate without the user's explicit OK):
+ *   1. No border-radius anywhere. Sharp rectangles.
+ *   2. Monospace everywhere. One font family. No display serifs.
+ *   3. No bubbles, no cards, no role labels. Inline flow.
+ *   4. Messages are prefixed with ❯ / ⏺ / ⎿ markers in the accent color.
+ *   5. System rows (permission mode, hooks, file-history) are hidden
+ *      unless the user explicitly asks to see them. Zero clutter.
  *
- * Why tokens instead of hardcoded Tailwind colors:
- *   The whole point is that adding a new theme = 12 lines of CSS, not a
- *   codebase-wide find/replace. Every component references tokens by name
- *   (`text-ink`, `bg-surface`, `border-border`, `font-display`, …) and
- *   automatically picks up the active theme.
- *
- * Fonts:
- *   Each theme uses a different font stack as part of its identity.
- *   They're all loaded up front via @import so theme switching is instant
- *   (no FOIT on switch). Google Fonts is the CDN — one request per family.
+ * Theme architecture:
+ *   - Two modes: dark (default) and light. Applied via [data-mode=""]
+ *     on <html>. Each mode overrides a small set of surface/ink tokens.
+ *   - Accent is a SINGLE color token set dynamically via inline style on
+ *     <html> (document.documentElement.style.setProperty). The user
+ *     picks from a small palette; every marker, streaming dot, link,
+ *     and focus ring pulls from this one token.
+ *   - Tailwind v4 @theme inline binds utility classes (`bg-canvas`,
+ *     `text-ink`, `text-accent`, `font-code`, …) to the tokens, so
+ *     mode/accent changes cascade through the DOM with zero React work.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Space+Mono:wght@400;700&family=Playfair+Display:wght@400;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @import "tailwindcss";
 
 /* ---------- Token → Tailwind binding ---------- */
-/*
- * `@theme inline` tells Tailwind v4 to generate utility classes that read
- * these variables at runtime rather than baking the value in at build time.
- * That's the only way theme switching works: if these values were baked
- * in, changing data-theme would do nothing because the classes would still
- * reference the default.
- */
+
 @theme inline {
-  /* Surfaces & ink */
   --color-canvas: var(--theme-canvas);
   --color-surface: var(--theme-surface);
   --color-surface-hi: var(--theme-surface-hi);
@@ -45,188 +37,75 @@
   --color-border: var(--theme-border);
   --color-border-hi: var(--theme-border-hi);
 
-  /* Accents */
   --color-accent: var(--theme-accent);
   --color-accent-fg: var(--theme-accent-fg);
   --color-accent-soft: var(--theme-accent-soft);
-  --color-role-user: var(--theme-role-user);
-  --color-role-assistant: var(--theme-role-assistant);
 
-  /* Tool call card backgrounds */
-  --color-tool-bg: var(--theme-tool-bg);
-  --color-tool-border: var(--theme-tool-border);
-  --color-result-bg: var(--theme-result-bg);
-  --color-result-border: var(--theme-result-border);
-  --color-danger: var(--theme-danger);
-
-  /* Code blocks: always a dark inset surface so highlight.js github-dark
-     colors stay legible under every theme (including Paper, where the
-     surface is cream). Treating code as a tactile object on the page. */
   --color-code-bg: var(--theme-code-bg);
   --color-code-border: var(--theme-code-border);
+  --color-danger: var(--theme-danger);
 
-  /* Fonts */
-  --font-display: var(--theme-font-display);
-  --font-body: var(--theme-font-body);
   --font-code: var(--theme-font-code);
+
+  /* Kill the default radius scale — we want sharp everywhere, so
+     if anyone does reach for `rounded-*` by accident, it still collapses
+     to zero. Component code shouldn't use radius classes at all. */
+  --radius-none: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-full: 9999px; /* preserved ONLY for the streaming dot */
 }
 
-/* ---------- Theme: Noir (default) ---------- */
-/*
- * Editorial dark. Carbon blacks with a whisper of warmth, a cream-white
- * ink, and a single electric-lime accent that carries every interactive
- * signal (streaming dot, focus rings, user role). Fraunces for display
- * because its opsz axis gives us real weight at header sizes without a
- * second font family. Monospace body (JetBrains Mono) because this is
- * a dev tool and the typographic rhythm of code should feel native, not
- * pasted into an article layout.
- */
+/* ---------- Mode: Dark (default) ---------- */
+
 :root,
-[data-theme="noir"] {
-  --theme-canvas: #09090b;
-  --theme-surface: #121215;
-  --theme-surface-hi: #18181c;
-  --theme-ink: #ebe5d9;
-  --theme-ink-dim: #b8b3a4;
-  --theme-muted: #6a6862;
-  --theme-border: #1f1f24;
-  --theme-border-hi: #2a2a30;
+[data-mode="dark"] {
+  --theme-canvas: #0a0a0a;
+  --theme-surface: #111113;
+  --theme-surface-hi: #17171a;
+  --theme-ink: #e8e8e6;
+  --theme-ink-dim: #a8a8a4;
+  --theme-muted: #5a5a56;
+  --theme-border: #1a1a1c;
+  --theme-border-hi: #272729;
 
-  --theme-accent: #c8ff5a;
+  /* Default accent — overridden at runtime via applyAccent(). */
+  --theme-accent: #7dd3a0;
   --theme-accent-fg: #0a0a0a;
-  --theme-accent-soft: rgba(200, 255, 90, 0.12);
-  --theme-role-user: #7fc7ff;
-  --theme-role-assistant: #c8ff5a;
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 12%, transparent);
 
-  --theme-tool-bg: #0e1410;
-  --theme-tool-border: #1d2a21;
-  --theme-result-bg: #0d1118;
-  --theme-result-border: #1a2030;
+  --theme-code-bg: #050507;
+  --theme-code-border: #16161a;
   --theme-danger: #ff6b6b;
 
-  --theme-code-bg: #070709;
-  --theme-code-border: #1c1c22;
-
-  --theme-font-display: 'Fraunces', 'Times New Roman', serif;
-  --theme-font-body: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --theme-font-code: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --theme-font-code: 'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace;
 }
 
-/* ---------- Theme: Paper ---------- */
-/*
- * Warm bookish light. Cream canvas with a slight warmth (not pure white,
- * which feels clinical), rich charcoal ink, oxblood accent. Instrument
- * Serif for display — it's an elegant transitional with real character at
- * display sizes and evaporates at body sizes, so we pair it with DM Sans
- * for everything that isn't a header. Code is IBM Plex Mono because it
- * has the best lowercase of any free mono. The whole theme reads like a
- * page from a well-designed notebook.
- */
-[data-theme="paper"] {
-  --theme-canvas: #f4eedb;
-  --theme-surface: #eae3c9;
-  --theme-surface-hi: #e0d8ba;
-  --theme-ink: #1c1612;
-  --theme-ink-dim: #4a4038;
-  --theme-muted: #78685c;
-  --theme-border: #d6cbae;
-  --theme-border-hi: #c0b594;
+/* ---------- Mode: Light ---------- */
 
-  --theme-accent: #8b2635;
-  --theme-accent-fg: #f4eedb;
-  --theme-accent-soft: rgba(139, 38, 53, 0.12);
-  --theme-role-user: #1e4a6b;
-  --theme-role-assistant: #8b2635;
+[data-mode="light"] {
+  --theme-canvas: #faf9f6;
+  --theme-surface: #f1efe9;
+  --theme-surface-hi: #e8e5dc;
+  --theme-ink: #19181a;
+  --theme-ink-dim: #4a4a48;
+  --theme-muted: #8a8880;
+  --theme-border: #e2ddd1;
+  --theme-border-hi: #c8c3b5;
 
-  --theme-tool-bg: #ebe2c3;
-  --theme-tool-border: #c7bc97;
-  --theme-result-bg: #ebe3c8;
-  --theme-result-border: #cbc099;
-  --theme-danger: #8b2635;
+  --theme-accent: #6e9e80;
+  --theme-accent-fg: #faf9f6;
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 14%, transparent);
 
-  /* Paper's code blocks: warm dark plate, like letterpress ink on
-     tinted stock. Contrasts the cream page so code feels inset. */
-  --theme-code-bg: #241a14;
-  --theme-code-border: #3a2a1c;
-
-  --theme-font-display: 'Instrument Serif', 'Times New Roman', serif;
-  --theme-font-body: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
-  --theme-font-code: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
-}
-
-/* ---------- Theme: Phosphor ---------- */
-/*
- * Vintage CRT terminal. Everything in Space Mono so the whole UI feels
- * like one typewriter. Deep green-black canvas, phosphor green ink,
- * bright phosphor accent. A subtle scanline overlay on the canvas
- * (added in body::before below) completes the CRT illusion without
- * being obnoxious.
- */
-[data-theme="phosphor"] {
-  --theme-canvas: #050a05;
-  --theme-surface: #0a120a;
-  --theme-surface-hi: #0f1a0f;
-  --theme-ink: #8ae88a;
-  --theme-ink-dim: #5ba85b;
-  --theme-muted: #3a6a3a;
-  --theme-border: #1a2a1a;
-  --theme-border-hi: #2a4a2a;
-
-  --theme-accent: #c8ff5a;
-  --theme-accent-fg: #050a05;
-  --theme-accent-soft: rgba(138, 232, 138, 0.12);
-  --theme-role-user: #a8ffa8;
-  --theme-role-assistant: #c8ff5a;
-
-  --theme-tool-bg: #0b150b;
-  --theme-tool-border: #1f3a1f;
-  --theme-result-bg: #0a140a;
-  --theme-result-border: #1a2c1a;
-  --theme-danger: #ff9a3c;
-
-  --theme-code-bg: #040904;
-  --theme-code-border: #142414;
-
-  --theme-font-display: 'Space Mono', ui-monospace, monospace;
-  --theme-font-body: 'Space Mono', ui-monospace, monospace;
-  --theme-font-code: 'Space Mono', ui-monospace, monospace;
-}
-
-/* ---------- Theme: Ember ---------- */
-/*
- * Warm drama. Deep brown-black with a hot ember-red accent, cream ink.
- * Playfair Display for display — it's dramatic, has huge x-height contrast,
- * and pairs loudly with a clean mono. This is the "reading by firelight"
- * theme: high contrast where it matters, warm everywhere else.
- */
-[data-theme="ember"] {
-  --theme-canvas: #130c0a;
-  --theme-surface: #1c120e;
-  --theme-surface-hi: #241a12;
-  --theme-ink: #f0e6d8;
-  --theme-ink-dim: #c4b498;
-  --theme-muted: #87725a;
-  --theme-border: #2a1c12;
-  --theme-border-hi: #3a2a1a;
-
-  --theme-accent: #ff5c35;
-  --theme-accent-fg: #130c0a;
-  --theme-accent-soft: rgba(255, 92, 53, 0.14);
-  --theme-role-user: #ffb87a;
-  --theme-role-assistant: #ff5c35;
-
-  --theme-tool-bg: #1a120c;
-  --theme-tool-border: #342012;
-  --theme-result-bg: #16100c;
-  --theme-result-border: #2e1c10;
-  --theme-danger: #ff5c35;
-
-  --theme-code-bg: #0e0805;
-  --theme-code-border: #271810;
-
-  --theme-font-display: 'Playfair Display', 'Times New Roman', serif;
-  --theme-font-body: 'JetBrains Mono', ui-monospace, Menlo, monospace;
-  --theme-font-code: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  /* Code blocks stay dark even in light mode so highlight.js github-dark
+     colors are legible. Treated as an inset tactile object on the page. */
+  --theme-code-bg: #12120f;
+  --theme-code-border: #262622;
+  --theme-danger: #b03a3a;
 }
 
 /* ---------- Globals ---------- */
@@ -237,60 +116,29 @@ body,
   height: 100%;
   background: var(--theme-canvas);
   color: var(--theme-ink);
-  font-family: var(--theme-font-body);
+  font-family: var(--theme-font-code);
+  font-feature-settings: 'ss01' on, 'cv11' on; /* JetBrains Mono alternates */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/*
- * CRT scanline overlay. Only active when data-theme="phosphor" because
- * other themes don't want it. Fixed position + pointer-events: none so
- * it sits above content without blocking clicks. Low opacity keeps it
- * suggestive instead of aggressive — the goal is vintage nostalgia,
- * not a migraine.
- */
-html[data-theme="phosphor"] body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 999;
-  background: repeating-linear-gradient(
-    to bottom,
-    rgba(0, 0, 0, 0) 0,
-    rgba(0, 0, 0, 0) 2px,
-    rgba(0, 0, 0, 0.06) 3px,
-    rgba(0, 0, 0, 0) 4px
-  );
+/* Make sure default browser rounding on form elements is gone too. */
+input,
+button,
+textarea,
+select {
+  border-radius: 0;
+  font-family: inherit;
 }
 
+/* ---------- Prose (react-markdown output) ---------- */
 /*
- * A very subtle grain for the Paper theme — sells the paper metaphor
- * without being noticeable. SVG feTurbulence via data URL keeps it to
- * a single CSS declaration with no assets.
+ * Minimal inline-flowing prose. No padding, no background, no borders.
+ * Just text rhythm. Code blocks are a dark inset slab with NO radius
+ * and NO border — a flat tactile plate on the page. Inline code is the
+ * accent color with no chip background.
  */
-html[data-theme="paper"] body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 999;
-  background-image: url("data:image/svg+xml;utf8,<svg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)' opacity='0.35'/></svg>");
-  opacity: 0.08;
-  mix-blend-mode: multiply;
-}
 
-/* ---------- Markdown prose inside .prose-theme ---------- */
-/*
- * Scoped styles for react-markdown output. We can't use @tailwindcss/
- * typography because its colors are baked in — we'd have to rewrite
- * them per theme anyway. Instead, this block styles every element
- * react-markdown emits and references theme tokens, so it just works
- * under any theme.
- *
- * All selectors are scoped under `.prose-theme` so they don't leak to
- * other markup (especially react-markdown's class-free elements).
- */
 .prose-theme > *:first-child { margin-top: 0; }
 .prose-theme > *:last-child { margin-bottom: 0; }
 
@@ -306,20 +154,19 @@ html[data-theme="paper"] body::before {
 .prose-theme h4,
 .prose-theme h5,
 .prose-theme h6 {
-  margin: 18px 0 8px;
-  font-family: var(--theme-font-display);
-  font-weight: 600;
+  margin: 16px 0 8px;
+  font-weight: 700;
   line-height: 1.2;
   color: var(--theme-ink);
-  letter-spacing: -0.01em;
+  letter-spacing: -0.005em;
 }
 
-.prose-theme h1 { font-size: 22px; }
-.prose-theme h2 { font-size: 19px; }
-.prose-theme h3 { font-size: 17px; }
+.prose-theme h1 { font-size: 17px; }
+.prose-theme h2 { font-size: 15px; }
+.prose-theme h3 { font-size: 14px; }
 .prose-theme h4,
 .prose-theme h5,
-.prose-theme h6 { font-size: 15px; }
+.prose-theme h6 { font-size: 13.5px; }
 
 .prose-theme ul,
 .prose-theme ol {
@@ -328,7 +175,7 @@ html[data-theme="paper"] body::before {
 }
 
 .prose-theme li {
-  margin: 3px 0;
+  margin: 2px 0;
   line-height: 1.6;
 }
 
@@ -347,11 +194,9 @@ html[data-theme="paper"] body::before {
 
 .prose-theme blockquote {
   margin: 0 0 10px;
-  padding: 8px 16px;
-  border-left: 3px solid var(--theme-accent);
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--theme-accent);
   color: var(--theme-ink-dim);
-  background: var(--theme-accent-soft);
-  border-radius: 0 6px 6px 0;
 }
 
 .prose-theme strong {
@@ -364,28 +209,24 @@ html[data-theme="paper"] body::before {
   font-style: italic;
 }
 
-/* Inline code: chip-styled with theme accent */
+/* Inline code: no background, just accent color. Light and typographic. */
 .prose-theme code:not(pre code) {
-  font-family: var(--theme-font-code);
-  font-size: 0.875em;
-  background: var(--theme-surface-hi);
-  border: 1px solid var(--theme-border);
-  border-radius: 4px;
-  padding: 1.5px 6px;
+  font-size: 0.925em;
   color: var(--theme-accent);
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
-/* Fenced code blocks: always a dark inset plate so highlight.js github-dark
-   stays legible even in Paper's cream theme. Reads as a material inset
-   into the page, not a CSS afterthought. */
+/* Fenced code blocks: dark inset plate, no border, no radius. */
 .prose-theme pre {
-  margin: 12px 0;
+  margin: 10px 0;
   background: var(--theme-code-bg);
-  border: 1px solid var(--theme-code-border);
-  border-radius: 8px;
-  padding: 14px 16px;
+  border: none;
+  border-radius: 0;
+  padding: 12px 14px;
   overflow-x: auto;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.6;
 }
 
@@ -393,43 +234,46 @@ html[data-theme="paper"] body::before {
   background: transparent !important;
   border: none;
   padding: 0;
-  font-family: var(--theme-font-code);
   color: #e8e8e8;
 }
 
 .prose-theme table {
   border-collapse: collapse;
   margin: 12px 0;
-  font-size: 12.5px;
+  font-size: 12px;
   width: 100%;
-  border: 1px solid var(--theme-border);
-  border-radius: 6px;
-  overflow: hidden;
 }
 
 .prose-theme th,
 .prose-theme td {
   border: 1px solid var(--theme-border);
-  padding: 7px 11px;
+  padding: 5px 9px;
   text-align: left;
 }
 
 .prose-theme th {
   background: var(--theme-surface-hi);
-  font-weight: 600;
+  font-weight: 700;
   color: var(--theme-ink);
 }
 
 .prose-theme hr {
   border: none;
   border-top: 1px solid var(--theme-border);
-  margin: 18px 0;
+  margin: 16px 0;
+}
+
+/* highlight.js github-dark applied to fenced blocks.
+   Transparent background so our code-bg shows through. */
+.prose-theme .hljs {
+  background: transparent !important;
+  color: #e8e8e8;
 }
 
 /* ---------- Streaming dot pulse ---------- */
 @keyframes cc-pulse {
-  0%, 100% { opacity: 0.35; transform: scale(0.9); }
-  50%      { opacity: 1;    transform: scale(1.1); }
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.05); }
 }
 
 .streaming-dot {
@@ -437,38 +281,25 @@ html[data-theme="paper"] body::before {
 }
 
 /* ---------- Modal animations ---------- */
-@keyframes cc-fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-
+@keyframes cc-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cc-pop {
-  from { transform: translateY(12px) scale(0.95); opacity: 0; }
-  to   { transform: translateY(0) scale(1);       opacity: 1; }
+  from { transform: translateY(8px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
 }
 
-.modal-fade { animation: cc-fade 150ms ease-out; }
-.modal-pop  { animation: cc-pop 200ms cubic-bezier(0.2, 0.9, 0.3, 1.15); }
+.modal-fade { animation: cc-fade 140ms ease-out; }
+.modal-pop  { animation: cc-pop 160ms cubic-bezier(0.2, 0.9, 0.3, 1.1); }
 
-/* ---------- Feed entry staggered reveal ---------- */
-/*
- * Each new entry fades + slides in. Not applied to pre-existing history
- * (so loading a long session doesn't become a cascade) — only entries
- * whose `data-fresh` attribute is set.
- */
-@keyframes cc-rise {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
+/* ---------- Focus ring ---------- */
+:focus-visible {
+  outline: 1px solid var(--theme-accent);
+  outline-offset: 1px;
 }
 
-[data-fresh="1"] {
-  animation: cc-rise 260ms cubic-bezier(0.18, 0.9, 0.32, 1) both;
-}
-
-/* ---------- Custom scrollbars per theme ---------- */
+/* ---------- Custom scrollbars: thin, quiet ---------- */
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-track {
@@ -477,30 +308,9 @@ html[data-theme="paper"] body::before {
 
 *::-webkit-scrollbar-thumb {
   background: var(--theme-border-hi);
-  border-radius: 6px;
   border: 2px solid var(--theme-canvas);
 }
 
 *::-webkit-scrollbar-thumb:hover {
   background: var(--theme-muted);
-}
-
-/* ---------- Focus ring using theme accent ---------- */
-:focus-visible {
-  outline: 2px solid var(--theme-accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
-/* ---------- Highlight.js theme overrides so code colors follow the theme ---------- */
-/*
- * highlight.js github-dark ships fixed colors. We override just the
- * background so it blends with the theme surface — the syntax colors
- * are left alone because they still read fine on any dark surface and
- * the Paper theme's code blocks are dark-on-dark by design (code as a
- * tactile object, like an inset).
- */
-.prose-theme .hljs {
-  background: transparent !important;
-  color: var(--theme-ink);
 }
