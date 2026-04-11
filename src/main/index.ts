@@ -138,6 +138,22 @@ function registerIpc(): void {
     return await manager.kill(sessionId)
   })
 
+  // --- Terminal attach/replay ---
+  //
+  // Called once by TerminalLeaf on mount. Returns the full buffered
+  // output of the terminal session so far, AND flips the manager's
+  // "attached" flag so subsequent PTY data events broadcast live.
+  //
+  // The race being fixed: between the spawnSession IPC resolving
+  // and TerminalLeaf's useEffect running, the shell has already
+  // printed its prompt. Without this buffered replay the renderer
+  // would see nothing but a blinking cursor — exactly the bug the
+  // user reported. See the big block comment on
+  // SessionManager.terminalBuffers for the full reasoning.
+  ipcMain.handle('session:terminal-attach', (_evt, sessionId: string) => {
+    return manager.attachTerminal(sessionId)
+  })
+
   // --- Per-session I/O ---
   ipcMain.handle(
     'session:input',

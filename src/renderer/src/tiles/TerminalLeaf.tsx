@@ -138,16 +138,65 @@ export function TerminalLeaf({
         void window.api.sendInput(sessionId, data)
       })
 
-      // Incoming: raw bytes from the shell PTY. We subscribe ONCE
-      // at mount; the handler filters by sessionId so multiple
-      // terminal panes coexist without stomping on each other's
-      // output.
+      // Incoming: raw bytes from the shell PTY.
+      //
+      // The subscribe+attach+drain dance below fixes the
+      // "missed prompt" race. Sequence:
+      //
+      //   1. Subscribe to 'session:terminal-data' FIRST. Any live
+      //      events main broadcasts from this point forward
+      //      arrive at our handler — but until the attach
+      //      response lands, main hasn't flipped its attached
+      //      flag so no live events are actually broadcast. The
+      //      subscription is harmless-but-ready.
+      //
+      //   2. Call attachTerminal(sessionId). Main atomically
+      //      returns the full buffered output so far AND flips
+      //      the attached flag in the same synchronous block, so
+      //      no PTY bytes can be lost between the read and the
+      //      flag flip.
+      //
+      //   3. Between the attach IPC send and its response, main
+      //      may begin broadcasting live events (because the
+      //      attached flag was flipped). Our live handler queues
+      //      them into `backlogQueue` instead of writing them to
+      //      xterm — we don't want them appearing before the
+      //      buffer.
+      //
+      //   4. When attach resolves, write the buffer to xterm
+      //      first, then drain the queue, then flip the flag so
+      //      future events write directly.
+      //
+      // Without this sequence, the shell's initial prompt (which
+      // fires BEFORE the renderer even mounts TerminalLeaf) is
+      // silently dropped and the user sees a blank terminal with
+      // just a blinking cursor. Exactly the bug reported.
+      let attachedBackfillDone = false
+      const backlogQueue: string[] = []
       offTerminalData = window.api.onSessionTerminalData(
         ({ sessionId: sid, data }) => {
           if (sid !== sessionId) return
+          if (!attachedBackfillDone) {
+            backlogQueue.push(data)
+            return
+          }
           term?.write(data)
         },
       )
+      void window.api.attachTerminal(sessionId).then(buffer => {
+        // The cleanup below may have disposed the term already
+        // (transient remount, rapid tab switch). Check before
+        // touching it.
+        if (!termRef.current) return
+        if (buffer) termRef.current.write(buffer)
+        // Drain any live events that arrived between subscribe
+        // and attach-response. These are strictly AFTER the
+        // buffer's last byte because main buffered silently
+        // until we called attach.
+        for (const d of backlogQueue) termRef.current.write(d)
+        backlogQueue.length = 0
+        attachedBackfillDone = true
+      })
 
       // Container resize observer. Whenever the tile's cell area
       // changes size (split drag, window resize, tab activation),

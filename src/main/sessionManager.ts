@@ -78,8 +78,46 @@ type RegistryEntry =
   | { kind: 'claude'; session: ClaudeSession }
   | { kind: 'terminal'; session: TerminalSession }
 
+// Rolling buffer cap for terminal replay. 256 KB is enough to hold
+// the recent scrollback of a normal interactive shell session —
+// well beyond "the shell prompt and a few commands ago" which is
+// the actual requirement. Past the cap we keep the tail (newest
+// content wins) so long-running shells don't blow up memory.
+const TERMINAL_BUFFER_CAP = 256 * 1024
+
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
+
+  // Terminal attach/replay state.
+  //
+  // Why: when the renderer opens a new terminal pane, the sequence
+  // is (1) spawn the session on the main side, (2) IPC invoke
+  // resolves with sessionId, (3) renderer re-renders, (4)
+  // TerminalLeaf mounts, (5) useEffect runs and subscribes to
+  // 'session:terminal-data'. Between steps 1 and 5 the shell has
+  // already started, sourced its rc files, and printed its prompt —
+  // all of which fires as 'data' events on the TerminalSession that
+  // reach main before any subscriber exists. Without buffering
+  // those events are dropped, and the user sees an empty xterm
+  // with a blinking cursor: the shell is waiting for input but
+  // there's nothing on screen.
+  //
+  // Fix is two-part:
+  //   - Buffer every byte of PTY output per session in
+  //     `terminalBuffers`. Subject to TERMINAL_BUFFER_CAP.
+  //   - Only broadcast 'terminal-data' events to the renderer
+  //     AFTER the renderer has called attachTerminal(sessionId),
+  //     which atomically returns the current buffer AND flips
+  //     the attached flag. Before attach, data accumulates in the
+  //     buffer silently.
+  //
+  // The atomic grab-and-attach is critical: if we broadcast while
+  // the buffer was still accumulating, the renderer would receive
+  // duplicate bytes (once in the buffer, once as a live event).
+  // Toggling the flag in the same synchronous tick as the buffer
+  // read means no data can slip through between the two.
+  private readonly terminalBuffers = new Map<string, string>()
+  private readonly terminalAttached = new Set<string>()
 
   /**
    * Spawn a new session and return its sessionId. Blocks until the PTY
@@ -141,6 +179,12 @@ export class SessionManager extends EventEmitter {
       rows: options.rows ?? 24,
     })
 
+    // Initialize an empty buffer entry NOW, before start() fires any
+    // data events. The buffer accumulates every byte of PTY output
+    // and is replayed to the renderer on attach — see the block
+    // comment on terminalBuffers above for the full reasoning.
+    this.terminalBuffers.set(sessionId, '')
+
     // Terminal sessions only emit started / data / exit. The 'data'
     // event carries raw PTY bytes for xterm.js on the renderer side;
     // we forward it on a dedicated 'terminal-data' channel so the
@@ -149,17 +193,69 @@ export class SessionManager extends EventEmitter {
     session.on('started', () =>
       this.emit('started', { sessionId, kind, projectDir: undefined }),
     )
-    session.on('data', data =>
-      this.emit('terminal-data', { sessionId, data }),
-    )
+    session.on('data', data => {
+      // Always append to the rolling buffer so a later attach can
+      // replay the full history. Cap at TERMINAL_BUFFER_CAP —
+      // longer sessions just lose the oldest bytes, which is the
+      // standard terminal scrollback behavior.
+      const prev = this.terminalBuffers.get(sessionId) ?? ''
+      let next = prev + data
+      if (next.length > TERMINAL_BUFFER_CAP) {
+        next = next.slice(next.length - TERMINAL_BUFFER_CAP)
+      }
+      this.terminalBuffers.set(sessionId, next)
+      // Only broadcast live events AFTER the renderer has attached.
+      // Before attach, the data is still in the buffer and will be
+      // replayed when the renderer calls attachTerminal. See the
+      // block comment on terminalBuffers for why this is
+      // race-free.
+      if (this.terminalAttached.has(sessionId)) {
+        this.emit('terminal-data', { sessionId, data })
+      }
+    })
     session.on('exit', ({ exitCode, signal }) => {
       this.emit('exit', { sessionId, exitCode, signal })
       this.sessions.delete(sessionId)
+      this.terminalBuffers.delete(sessionId)
+      this.terminalAttached.delete(sessionId)
     })
 
     this.sessions.set(sessionId, { kind: 'terminal', session })
     await session.start()
     return sessionId
+  }
+
+  /**
+   * Terminal attach/replay entry point.
+   *
+   * Called by the renderer when a TerminalLeaf mounts and wants to
+   * hook up its xterm.js instance to an already-running terminal
+   * session. Returns the current output buffer AND flips the
+   * attached flag, both synchronously in the same tick so no PTY
+   * data can slip between the two operations.
+   *
+   * Usage from the renderer (see TerminalLeaf.tsx):
+   *   1. Subscribe to 'session:terminal-data' first so no events
+   *      after attach are missed.
+   *   2. Call attachTerminal(sessionId); write returned buffer to
+   *      xterm. Any live events that arrived between subscribe and
+   *      this point must be queued and written AFTER the buffer —
+   *      see the queue logic in TerminalLeaf.
+   *   3. Subsequent live events write directly to xterm.
+   *
+   * Returns '' if the session doesn't exist or isn't a terminal —
+   * silently safe so a stale attach call on a dead session doesn't
+   * error.
+   */
+  attachTerminal(sessionId: string): string {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind !== 'terminal') return ''
+    const buffer = this.terminalBuffers.get(sessionId) ?? ''
+    // Flip the attach flag in the SAME synchronous block as reading
+    // the buffer. JavaScript is single-threaded and event emission
+    // can only happen on a later tick, so nothing can sneak in.
+    this.terminalAttached.add(sessionId)
+    return buffer
   }
 
   /**

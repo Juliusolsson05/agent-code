@@ -91,6 +91,22 @@ const api = {
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
 
+  /**
+   * Attach this renderer to a terminal session's live data stream.
+   * Returns the full buffered output so far — every byte the shell
+   * has written since spawn. Main flips the session's attached flag
+   * atomically so subsequent PTY data broadcasts live via
+   * 'session:terminal-data'.
+   *
+   * The renderer must subscribe to 'session:terminal-data' BEFORE
+   * calling this, then queue any live events it receives until the
+   * attach response arrives — otherwise events between subscribe
+   * and attach response are silently missed. See TerminalLeaf.tsx
+   * for the queue pattern.
+   */
+  attachTerminal: (sessionId: string): Promise<string> =>
+    ipcRenderer.invoke('session:terminal-attach', sessionId),
+
   // --- Resume picker: list previous sessions recorded in a cwd ---
   listSessionsForCwd: (cwd: string, limit?: number): Promise<SessionInfo[]> =>
     ipcRenderer.invoke('session:list-for-cwd', cwd, limit),
