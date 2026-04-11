@@ -310,6 +310,156 @@ button {
   vertical-align: middle;
 }
 
+/* ---------- Trust dialog modal ---------- */
+/*
+ * Shown as an overlay when detectTrustDialog(screen) returns visible=true.
+ * Backdrop dims the whole app; the modal itself is centered. All
+ * interaction funnels through the two buttons — no other UI is usable
+ * while the modal is open (because clicks go through to the backdrop,
+ * which does nothing). We don't bother trapping focus strictly because
+ * the two buttons are the only focusable elements in the overlay and
+ * autoFocus on "accept" handles the common path.
+ */
+
+.trust-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 5, 8, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: trust-fade-in 140ms ease-out;
+}
+
+@keyframes trust-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.trust-modal {
+  background: #141418;
+  border: 1px solid #2a2a32;
+  border-radius: 12px;
+  padding: 24px 28px 20px;
+  max-width: 460px;
+  width: calc(100vw - 64px);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.6),
+    0 2px 8px rgba(0, 0, 0, 0.4);
+  animation: trust-pop 180ms cubic-bezier(0.2, 0.9, 0.3, 1.1);
+}
+
+@keyframes trust-pop {
+  from { transform: translateY(10px) scale(0.96); opacity: 0; }
+  to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+.trust-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.trust-modal-icon {
+  font-size: 22px;
+  color: #f5c14a;
+}
+
+.trust-modal-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: #f0f0f0;
+  letter-spacing: 0.1px;
+}
+
+.trust-modal-body {
+  color: #c8c8c8;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.trust-modal-body p {
+  margin: 0 0 12px;
+}
+
+.trust-modal-path {
+  font-family: 'SF Mono', 'JetBrains Mono', Menlo, Monaco, monospace;
+  font-size: 12.5px;
+  background: #08080a;
+  border: 1px solid #1f1f1f;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #e8b8a0;
+  margin: 0 0 12px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.trust-modal-warning {
+  color: #b0b0b0;
+  font-size: 12.5px;
+}
+
+.trust-modal-warning strong {
+  color: #e8e8e8;
+}
+
+.trust-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition:
+    background 120ms,
+    border-color 120ms,
+    transform 60ms;
+  font-family: inherit;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn-secondary {
+  background: transparent;
+  border-color: #2a2a32;
+  color: #b8b8b8;
+}
+
+.btn-secondary:hover {
+  border-color: #444;
+  color: #e8e8e8;
+}
+
+.btn-primary {
+  background: #4a9eff;
+  border-color: #4a9eff;
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: #5fa9ff;
+  border-color: #5fa9ff;
+}
+
+.btn-primary:focus-visible {
+  outline: 2px solid #7fbcff;
+  outline-offset: 2px;
+}
+
 .entry-user .block-text {
   background: #0e1620;
   border-color: #1a2c3f;

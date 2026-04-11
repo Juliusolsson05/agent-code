@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Feed } from './feed/Feed'
+import { TrustDialogModal } from './feed/TrustDialogModal'
 import type { Entry } from '../../core/types/transcript'
 import { extractAssistantInProgress } from '../../core/parsers/streamingScreen'
 
@@ -181,6 +182,15 @@ export default function App() {
           autoComplete="off"
         />
       </footer>
+
+      {/*
+        Trust dialog overlay: renders nothing unless detectTrustDialog
+        recognizes CC's "Accessing workspace" prompt on the screen buffer.
+        Owns its own detection — the App doesn't need a visibility flag.
+        Accept / Cancel synthesize the same keystrokes CC already listens
+        for (Enter / Esc) so there's no new protocol to maintain.
+      */}
+      <TrustDialogModal screen={screen} onSend={sendKey} />
     </div>
   )
 }
