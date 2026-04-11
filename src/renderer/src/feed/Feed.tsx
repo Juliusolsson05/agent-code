@@ -1,4 +1,12 @@
-import { createContext, memo, useContext, useEffect, useMemo, useRef } from 'react'
+import {
+  createContext,
+  memo,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
@@ -130,6 +138,10 @@ function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
 }
 
 type Props = {
+  /** Session identity — used as the key for per-session scroll
+   *  position persistence across Feed unmount/remount (tab switches).
+   *  See `scrollPositions` below. */
+  sessionId: string
   entries: Entry[]
   /** Plain-text screen snapshot. Used for baseline comparison. */
   streamingScreen?: string | null
@@ -139,6 +151,44 @@ type Props = {
   streamingBaseline?: string | null
   showSystemEvents: boolean
 }
+
+// ---------------------------------------------------------------------------
+// Per-session scroll position memory.
+//
+// When the user switches tabs, App.tsx unmounts the inactive tab's
+// TileTree — and with it, every Feed inside. When they switch back,
+// a fresh Feed mounts with a brand-new scroll container at scrollTop=0.
+// Without intervention that snaps the viewport to the top (or to a
+// weird "just after first paint" position), which the user rightly
+// called out as "weird and stupid."
+//
+// The fix is to persist each Feed's scroll state OUTSIDE the React
+// component tree so it survives unmount. A module-level Map keyed by
+// sessionId is the simplest possible store: no re-renders, no store
+// plumbing, no prop noise. We record (scrollTop + stickyBottom flag)
+// on every scroll tick and read them back in a useLayoutEffect on
+// mount to restore the viewport BEFORE the browser paints.
+//
+// Why not put this in SessionRuntime: scroll position is a pure UI
+// concern — no IPC, no persistence across app restarts, no other
+// consumer. Hoisting it into the runtime state would force Feed to
+// take an extra prop (workspace or a setter) and would invalidate
+// Feed's React.memo shallow-compare on every scroll tick because the
+// runtime object reference would change. Module-level Map sidesteps
+// both problems.
+//
+// The Map is not bounded — if a session is killed, its entry sticks
+// around forever. That's fine: each entry is two numbers and a
+// boolean, and the Map only grows by the count of sessions EVER
+// opened in this browser process lifetime (which typically resets
+// on Electron window reload). Adding a cleanup on session kill
+// would be a minor optimization if that ever matters.
+// ---------------------------------------------------------------------------
+type ScrollPosition = {
+  scrollTop: number
+  stickyBottom: boolean
+}
+const scrollPositions = new Map<string, ScrollPosition>()
 
 // -----------------------------------------------------------------------------
 // Memoization strategy — the whole reason this file is fast enough to type in
@@ -185,6 +235,7 @@ type Props = {
 export const Feed = memo(FeedImpl)
 
 function FeedImpl({
+  sessionId,
   entries,
   streamingScreen,
   streamingScreenMarkdown,
@@ -226,10 +277,47 @@ function FeedImpl({
   // matters.
   const scrollerRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
-  const stickyBottomRef = useRef(true)
+  // Restore stickyBottom from the persisted map on first render so
+  // the auto-scroll effect below makes the right decision without
+  // needing to wait for the scroll listener to run. Defaults to
+  // true for brand-new sessions (no saved position yet).
+  const stickyBottomRef = useRef(
+    scrollPositions.get(sessionId)?.stickyBottom ?? true,
+  )
+
+  // Restore the saved scroll position on mount — synchronously, via
+  // useLayoutEffect, so the browser never paints the scroller at
+  // scrollTop=0 before we restore. Using useEffect here would flash
+  // the top of the feed for one frame before the restore landed.
+  //
+  // If we were sticky-bottom when we last unmounted, restoration
+  // means "scroll to bottom after layout" (which the auto-scroll
+  // effect below handles via stickyBottomRef.current=true). Otherwise
+  // we pin scrollTop to the exact saved value — the content height
+  // on remount matches the height at save time since the content
+  // didn't change while we were unmounted.
+  //
+  // The sessionId dep is load-bearing: if the user resumes a
+  // different session in the same pane slot (not the current flow
+  // but possible if we ever allow in-place session swap), we need
+  // to re-restore from the new key. Today it's effectively a
+  // mount-only effect.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    const saved = scrollPositions.get(sessionId)
+    if (!saved) return
+    if (saved.stickyBottom) {
+      el.scrollTop = el.scrollHeight
+    } else {
+      el.scrollTop = saved.scrollTop
+    }
+  }, [sessionId])
 
   // One scroll listener for the container. Installed once on mount,
-  // teared down on unmount. Updates stickyBottomRef imperatively.
+  // teared down on unmount. Updates stickyBottomRef imperatively AND
+  // persists the position into the module-level map so a later
+  // unmount/remount can restore it.
   useEffect(() => {
     const el = scrollerRef.current
     if (!el) return
@@ -240,13 +328,17 @@ function FeedImpl({
       // rounding errors and a little bounce when a new row lands.
       const gap = el.scrollHeight - (el.scrollTop + el.clientHeight)
       stickyBottomRef.current = gap < 48
+      scrollPositions.set(sessionId, {
+        scrollTop: el.scrollTop,
+        stickyBottom: stickyBottomRef.current,
+      })
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     // Run once so the initial state reflects the current position
     // rather than defaulting to true forever.
     onScroll()
     return () => el.removeEventListener('scroll', onScroll)
-  }, [])
+  }, [sessionId])
 
   // Auto-scroll on content changes, but ONLY when sticky. The effect
   // runs on every change that would grow the feed (a new entry) or
