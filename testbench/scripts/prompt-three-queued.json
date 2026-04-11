@@ -1,0 +1,13 @@
+{
+  "_comment": "Queued-message fixture: sends THREE user prompts in rapid succession with only 1s between sends, so prompts 2 and 3 land while CC is still generating its response to prompt 1. This exercises CC's internal messageQueueManager (claude-code-src/coordinator/messageQueueManager.ts) which enqueues prompts during an active query and dequeues them when the query completes. Two things we want to catch: (a) CC's TUI visually dims the `⏺` marker for queued assistant slots, which collides with our streamingScreen.extractAssistantInProgress parser's 'find last ⏺' walk and likely causes it to latch onto the wrong block; (b) queued messages only land in the JSONL AFTER they're dequeued and processed, so there's a window where our feed shows less than the screen does. The tail wait is long enough for all three turns to complete so we can inspect the final JSONL order.",
+  "autoAcceptTrust": true,
+  "steps": [
+    { "type": "wait", "ms": 8000 },
+    { "type": "send", "data": "say hi in three words\r" },
+    { "type": "wait", "ms": 1000 },
+    { "type": "send", "data": "now name three colors\r" },
+    { "type": "wait", "ms": 1000 },
+    { "type": "send", "data": "finally count one two three\r" },
+    { "type": "wait", "ms": 45000 }
+  ]
+}

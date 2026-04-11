@@ -410,6 +410,8 @@ const Block = memo(function Block({
           return <MultiEditRow block={tu} />
         case 'Write':
           return <WriteRow block={tu} />
+        case 'TodoWrite':
+          return <TodoRow block={tu} />
         default:
           return <ToolUseRow block={tu} />
       }
@@ -769,6 +771,139 @@ const WriteRow = memo(function WriteRow({ block }: { block: ToolUseBlock }) {
   )
 })
 
+/* ---------- TodoWrite: rendered checklist ---------- */
+//
+// CC's TodoWrite tool carries the full todo list on every call — not a
+// diff. The `input.todos` array IS the current state after the write,
+// so to render the "live task list" UX the user wants, we just show
+// every item in the most recent TodoWrite call.
+//
+// Schema (pinned by claude-code-src/utils/todo/types.ts):
+//   { todos: [{ content: string,
+//               status: 'pending' | 'in_progress' | 'completed',
+//               activeForm: string }, ...] }
+//
+// `activeForm` is the present-continuous label CC uses for in-progress
+// items ("Refactoring parser" vs "Refactor parser"). We surface it only
+// when an item is actually in_progress, otherwise `content` reads more
+// naturally in a checklist.
+//
+// We deliberately avoid merging across successive TodoWrite calls in
+// one turn: each TodoWrite is its own row. If the user runs a big
+// session with 6 TodoWrite updates, they'll see 6 checklists in the
+// feed and the rightmost one (furthest down) is the final state. This
+// mirrors how CC's own TUI shows the history, and it preserves the
+// "append-only feed" mental model the rest of Feed.tsx assumes.
+
+type TodoItem = {
+  content: string
+  status: 'pending' | 'in_progress' | 'completed'
+  activeForm: string
+}
+
+/** Type-narrow a TodoWrite tool_use.input without trusting the static
+ *  `unknown` typing from the transcript types. Missing fields become
+ *  safe defaults so a malformed call renders as an empty checklist
+ *  instead of crashing Feed. */
+function parseTodos(block: ToolUseBlock): TodoItem[] {
+  const input = (block.input ?? {}) as Record<string, unknown>
+  const raw = Array.isArray(input.todos) ? input.todos : []
+  return raw.map(t => {
+    const item = (t ?? {}) as Record<string, unknown>
+    const status =
+      item.status === 'in_progress' || item.status === 'completed'
+        ? item.status
+        : 'pending'
+    return {
+      content: typeof item.content === 'string' ? item.content : '',
+      status,
+      activeForm: typeof item.activeForm === 'string' ? item.activeForm : '',
+    }
+  })
+}
+
+const TodoRow = memo(function TodoRow({ block }: { block: ToolUseBlock }) {
+  const todos = useMemo(() => parseTodos(block), [block])
+  const done = todos.filter(t => t.status === 'completed').length
+  return (
+    <MarkerRow marker="⏺">
+      <div className="flex flex-col gap-1">
+        {/* Tiny header so the reader knows this is the task list, plus
+            a progress count on the right. Muted so it doesn't fight
+            the checklist below for attention. */}
+        <div className="flex items-baseline justify-between text-[13px] leading-[1.65]">
+          <span className="text-accent font-semibold">TodoWrite</span>
+          <span className="text-muted text-[11px] tabular-nums">
+            {done} / {todos.length} done
+          </span>
+        </div>
+        {todos.length === 0 ? (
+          <div className="text-muted text-[12px] italic">(empty list)</div>
+        ) : (
+          <ul className="flex flex-col gap-0.5 list-none m-0 p-0">
+            {todos.map((t, i) => (
+              <TodoItemRow key={i} item={t} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </MarkerRow>
+  )
+})
+
+// Per-item row — split out so the memo key is the item object (stable
+// inside a memoed parent) and the visual decisions live next to a
+// single item at a time.
+const TodoItemRow = memo(function TodoItemRow({ item }: { item: TodoItem }) {
+  // Glyph + tone selection by status. Unicode box glyphs were chosen
+  // over emoji check marks for two reasons: (1) they're single-cell
+  // monospace characters, so they align perfectly with the rest of
+  // our monospace UI regardless of font fallback; (2) they work in
+  // both dark and light modes without needing extra colored SVGs.
+  //
+  //   pending      → ☐  (empty box)
+  //   in_progress  → ◐  (half-filled circle — suggests motion)
+  //   completed    → ☑  (checked box)
+  const glyph =
+    item.status === 'completed'
+      ? '☑'
+      : item.status === 'in_progress'
+        ? '◐'
+        : '☐'
+  const textCls =
+    item.status === 'completed'
+      ? 'text-muted line-through'
+      : item.status === 'in_progress'
+        ? 'text-ink'
+        : 'text-ink-dim'
+  const glyphCls =
+    item.status === 'completed'
+      ? 'text-accent'
+      : item.status === 'in_progress'
+        ? 'text-accent'
+        : 'text-muted'
+  // When in_progress, prefer activeForm ("Refactoring parser") over
+  // content ("Refactor parser") — matches CC's own TUI labeling and
+  // is load-bearing for the "what is Claude doing right now?" read.
+  const label =
+    item.status === 'in_progress' && item.activeForm
+      ? item.activeForm
+      : item.content
+  return (
+    <li className="flex items-start gap-2 text-[13px] leading-[1.55]">
+      <span
+        className={`${glyphCls} select-none flex-shrink-0 w-4 tabular-nums`}
+        aria-hidden="true"
+      >
+        {glyph}
+      </span>
+      <span className={`${textCls} flex-1 min-w-0 break-words`}>
+        {label}
+      </span>
+    </li>
+  )
+})
+
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
 
 /**
@@ -812,14 +947,17 @@ const ToolResultRow = memo(function ToolResultRow({
   const isError = block.is_error === true
   const trimmed = text.replace(/\s+$/, '')
 
-  // File-write tools: rendered diff/content lives on the preceding
-  // tool_use row. Suppress the success result entirely. Errors still
-  // render as a normal result row so failures are never hidden.
+  // File-write tools AND TodoWrite: the rendered diff/content/checklist
+  // on the preceding tool_use row already tells the story. The result
+  // in all four cases is a stub success string that would just clutter
+  // the feed. Errors still fall through to the normal result renderer
+  // so failures remain visible.
   if (
     !isError &&
     (sourceTool === 'Edit' ||
       sourceTool === 'MultiEdit' ||
-      sourceTool === 'Write')
+      sourceTool === 'Write' ||
+      sourceTool === 'TodoWrite')
   ) {
     return null
   }

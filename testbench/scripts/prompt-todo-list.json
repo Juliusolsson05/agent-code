@@ -1,0 +1,9 @@
+{
+  "_comment": "TodoWrite rendering fixture. A casual 'make me a todo list' prompt does NOT reliably trigger the TodoWrite tool — CC just writes a markdown numbered list as plain assistant text. To force the tool path we explicitly instruct CC to USE the TodoWrite tool and give it a concrete multi-step task it would normally track. The task (planning coffee) is deliberately trivial so CC doesn't try to execute it; we just want the TodoWrite call with 5 items.",
+  "autoAcceptTrust": true,
+  "steps": [
+    { "type": "wait", "ms": 8000 },
+    { "type": "send", "data": "Use the TodoWrite tool RIGHT NOW to create a 5-item todo list for making pour-over coffee. Don't execute any steps — just call TodoWrite with the 5 items, each with content and activeForm. Then stop.\r" },
+    { "type": "wait", "ms": 30000 }
+  ]
+}

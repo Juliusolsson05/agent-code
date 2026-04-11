@@ -53,6 +53,32 @@ export type SlashPickerState = {
   items: PickerItem[]
 }
 
+/**
+ * A message currently in CC's internal message queue.
+ *
+ * When the user types while CC is still generating, CC's
+ * messageQueueManager (see claude-code-src/coordinator/messageQueueManager.ts)
+ * buffers the prompt in process memory until the active query ends,
+ * then dequeues it and starts a new query. The queued message does
+ * NOT appear as a `user` transcript entry during this window — it
+ * only materializes when CC starts processing it — so without
+ * special handling our feed shows nothing for the in-limbo prompt.
+ *
+ * CC DOES emit structured `type: 'queue-operation'` JSONL entries for
+ * every enqueue / dequeue, carrying the full content for enqueues.
+ * We consume those and mirror them into this runtime array so the
+ * UI can show a live "N pending" strip above the composer. The array
+ * is a FIFO — enqueue appends, dequeue shifts the head — so order
+ * follows CC's internal ordering without any extra bookkeeping.
+ */
+export type QueuedMessage = {
+  /** The prompt text the user typed. */
+  content: string
+  /** CC's timestamp from the queue-operation entry; used as a stable
+   *  React key and for sort-debug if we ever need it. */
+  timestamp: string
+}
+
 export type SessionRuntime = {
   /** Plain-text screen snapshot — source of truth for parsers. */
   screen: string
@@ -62,8 +88,16 @@ export type SessionRuntime = {
   streamingBaseline: string | null
   /** Parsed JSONL entries for this session's feed. */
   entries: Entry[]
-  /** True between "user pressed Enter" and "assistant entry lands in JSONL". */
+  /** True between "user pressed Enter" and "assistant entry lands in JSONL".
+   *  IMPORTANT: we also hold this flag true while `queuedMessages.length > 0`,
+   *  because an assistant entry landing for turn N doesn't mean CC is idle —
+   *  it might already be dequeueing turn N+1. See the jsonl-entry handler
+   *  in useWorkspace for the exact logic. */
   awaitingAssistant: boolean
+  /** Messages currently sitting in CC's message queue, in FIFO order.
+   *  Populated from `type: 'queue-operation'` JSONL entries, NOT by
+   *  peeking at the composer input. See QueuedMessage above. */
+  queuedMessages: QueuedMessage[]
   /** PTY exit code, null if still running. */
   exited: number | null
   /** CC's JSONL project dir (for tooltip / debug). */
@@ -81,6 +115,7 @@ const emptyRuntime = (): SessionRuntime => ({
   streamingBaseline: null,
   entries: [],
   awaitingAssistant: false,
+  queuedMessages: [],
   exited: null,
   projectDir: null,
   picker: { visible: false, items: [] },
@@ -212,11 +247,91 @@ export function useWorkspace() {
         if (seen.has(uuid)) return
         seen.add(uuid)
       }
+
+      // ---------------------------------------------------------------
+      // queue-operation entries are special: they're not conversation
+      // content, they're CC's internal message-queue bookkeeping. See
+      // claude-code-src/coordinator/messageQueueManager.ts and the
+      // QueuedMessage type in this file for full background.
+      //
+      // We DON'T push them into `entries` — they'd render as noise in
+      // the feed (and SystemRow doesn't know how to style them anyway).
+      // We DO mirror them into `queuedMessages` so the UI can show a
+      // live "pending" strip above the composer, and we keep
+      // `awaitingAssistant` true while the queue is non-empty (so the
+      // streaming card stays visible during the N-seconds-to-minutes
+      // window between dequeue and the actual user/assistant entries
+      // materializing in the transcript).
+      //
+      // Enqueue shape: { type: 'queue-operation', operation: 'enqueue',
+      //                  content: string, timestamp: string }
+      // Dequeue shape: { type: 'queue-operation', operation: 'dequeue',
+      //                  timestamp: string }
+      //
+      // We dedupe enqueue entries by (timestamp + content) so a
+      // tail-from-beginning on session resume doesn't double-add
+      // historical queue operations. In the normal live-append case
+      // the timestamp is monotonically unique and the dedupe is a no-op.
+      // ---------------------------------------------------------------
+      const entryType = (entry as { type?: string }).type
+      if (entryType === 'queue-operation') {
+        const op = entry as {
+          operation?: 'enqueue' | 'dequeue'
+          content?: string
+          timestamp?: string
+        }
+        setRuntimes(prev => {
+          const current = prev[sessionId] ?? emptyRuntime()
+          let nextQueue = current.queuedMessages
+          if (op.operation === 'enqueue' && typeof op.content === 'string') {
+            const ts = op.timestamp ?? String(Date.now())
+            // Skip duplicates on resume: the tailer reads from offset 0
+            // on construction, so every historical queue-op would
+            // otherwise be replayed and rebuild a phantom backlog.
+            const already = current.queuedMessages.some(
+              q => q.timestamp === ts && q.content === op.content,
+            )
+            if (!already) {
+              nextQueue = [
+                ...current.queuedMessages,
+                { content: op.content, timestamp: ts },
+              ]
+            }
+          } else if (op.operation === 'dequeue') {
+            // FIFO: drop the head. If the queue is already empty that's
+            // fine — dequeue-on-empty happens during resume replay
+            // when the enqueue was earlier dedupe-skipped.
+            nextQueue = current.queuedMessages.slice(1)
+          }
+          return {
+            ...prev,
+            [sessionId]: {
+              ...current,
+              queuedMessages: nextQueue,
+              // Any queue activity means CC has pending work in flight;
+              // force the streaming flag on so the UI doesn't look
+              // idle while the queue drains.
+              awaitingAssistant:
+                nextQueue.length > 0 ? true : current.awaitingAssistant,
+            },
+          }
+        })
+        return
+      }
+
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const nextEntries = [...current.entries, entry as Entry]
-        const clearsAwaiting =
+        // Only clear awaitingAssistant on an assistant entry AND when
+        // the queue is empty — if CC still has queued work to process,
+        // the streaming card should stay live so the next turn's
+        // "thinking…" is visible. Without this, submitting three
+        // messages in a row would flash the streaming card on and off
+        // between turns and make the UI feel broken.
+        const isAssistant =
           (entry as { type?: string }).type === 'assistant'
+        const clearsAwaiting =
+          isAssistant && current.queuedMessages.length === 0
             ? false
             : current.awaitingAssistant
         return {

@@ -43,6 +43,27 @@ export function isPromptLine(line: string): boolean {
   return /^\s*[❯>]\s*$/.test(line)
 }
 
+/**
+ * A line that starts with `❯` followed by text content. CC uses this
+ * shape for queued user messages (and for the "your submitted prompt"
+ * echo at the top of a turn). Distinct from `isPromptLine` above which
+ * matches the empty composer indicator only.
+ *
+ * We need this as its own predicate because queued messages visually
+ * appear BELOW the assistant's in-progress response in CC's layout —
+ * i.e. between the last `⏺` marker and the bottom chrome. The
+ * assistant extraction walk would otherwise slurp them up as if they
+ * were part of the assistant block, so extractAssistantInProgress
+ * uses it as a stop-terminator. See the comment on that function for
+ * the bleed-through reproduction.
+ *
+ * Leading whitespace is allowed because CC indents queued messages
+ * two cells — `  ❯ now name three colors`.
+ */
+export function isUserPromptLine(line: string): boolean {
+  return /^\s*❯\s+\S/.test(line)
+}
+
 /** The persistent bottom status row that shows mode + effort + hints. */
 export function isStatusLine(line: string): boolean {
   return STATUS_LINE_MARKERS.some(m => line.includes(m))
@@ -228,9 +249,41 @@ export function extractAssistantInProgress(screen: string): string {
   }
   if (lastMarkerIdx === -1) return ''
 
+  // Find where the assistant block ENDS. Without this, the walk below
+  // would grab every line from the marker to the bottom of the stripped
+  // screen — which is WRONG when CC is showing queued user messages.
+  //
+  // Reproduction (see testbench/scripts/prompt-three-queued.json):
+  //   The user submits three prompts in rapid succession. CC enqueues
+  //   prompts 2 and 3, then renders its TUI like this:
+  //
+  //     ❯ say hi in three words
+  //     ⏺ Hi there, friend              ← actual assistant response
+  //       ❯ now name three colors       ← queued message echo
+  //       ❯ finally count one two three ← queued message echo
+  //
+  //   `last ⏺` lands on the real response, and the slice from there
+  //   to the end slurps the queued `❯` lines INTO the assistant block.
+  //   The StreamingRow then renders those queued lines as if they
+  //   were part of the assistant's answer, which is exactly the
+  //   "queue bleeds into rendering" bug the user reported.
+  //
+  // Fix: scan forward from the assistant marker and stop at the first
+  // line that looks like a queued user prompt. Everything from the
+  // marker up to (but excluding) that stop line is the real assistant
+  // block. If no queued line is found, the walk consumes to the end
+  // as before.
+  let endIdx = lines.length
+  for (let i = lastMarkerIdx + 1; i < lines.length; i++) {
+    if (isUserPromptLine(lines[i] ?? '')) {
+      endIdx = i
+      break
+    }
+  }
+
   // Slice from the marker line to the end, then strip the marker itself
   // off the head line so the output reads as plain text.
-  const block = lines.slice(lastMarkerIdx)
+  const block = lines.slice(lastMarkerIdx, endIdx)
   block[0] = (block[0] ?? '').replace(ASSISTANT_MARKER_RE, '')
 
   // CC's Ink wrap-aligns subsequent lines of an assistant block to the
@@ -259,9 +312,25 @@ export function extractAssistantInProgress(screen: string): string {
     if (ln.startsWith('  ')) block[i] = ln.slice(2)
   }
 
-  // Trim trailing blank lines that survived the chrome strip — they're
-  // visual padding from CC's layout, not content.
-  while (block.length > 0 && (block[block.length - 1] ?? '').trim() === '') {
+  // Trim trailing blank lines AND divider lines that survived the
+  // chrome strip. Blanks are visual padding from CC's layout; dividers
+  // are the horizontal rule CC draws between the conversation area
+  // and the input box ("────────────────…"). Neither is content.
+  //
+  // Why this needs to happen here and not in extractStreamingText:
+  // extractStreamingText walks from the bottom up until it hits a
+  // non-chrome line, which is the "❯ Press up to edit" input hint —
+  // and that hint isn't chrome by the isChromeLine definition
+  // (it has text after the `❯`). The divider that sits BETWEEN the
+  // real assistant text and that hint therefore survives the first
+  // strip. The assistant extractor is the right place to drop it
+  // because it's the only caller that cares about "just the
+  // assistant block" without any surrounding layout.
+  while (
+    block.length > 0 &&
+    ((block[block.length - 1] ?? '').trim() === '' ||
+      isDividerLine(block[block.length - 1] ?? ''))
+  ) {
     block.pop()
   }
 
