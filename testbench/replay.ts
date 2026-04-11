@@ -116,6 +116,13 @@ async function main(): Promise<void> {
       prev = screen
       const stripped = extractStreamingText(screen)
       const assistant = extractAssistantInProgress(screen)
+      // Reconstruct the bold/italic markdown version of the frame too.
+      // This is what the renderer's streaming card actually shows, so a
+      // frame-by-frame diff of THIS output is how we catch mid-stream
+      // regressions in terminalToMarkdown (e.g. the fat-session
+      // markdown-streaming hypothesis).
+      const mdScreen = terminalToMarkdown(term)
+      const assistantMd = extractAssistantInProgress(mdScreen)
       console.log(
         box(
           `FRAME ${i + 1}/${events.length}  (+${events[i].ts - events[0].ts}ms)`,
@@ -128,8 +135,11 @@ async function main(): Promise<void> {
       console.log('--- extractStreamingText ---')
       console.log(stripped)
       console.log()
-      console.log('--- extractAssistantInProgress ---')
+      console.log('--- extractAssistantInProgress (plain) ---')
       console.log(assistant || '(empty)')
+      console.log()
+      console.log('--- extractAssistantInProgress (markdown — cell-attr reconstruction) ---')
+      console.log(assistantMd || '(empty)')
       console.log()
     }
     return

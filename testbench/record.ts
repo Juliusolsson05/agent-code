@@ -21,11 +21,13 @@
  * iterate on parsers offline against the same data.
  */
 
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, writeFile, copyFile } from 'fs/promises'
 import { createWriteStream } from 'fs'
 import { join } from 'path'
+import { randomUUID } from 'crypto'
 
 import { ClaudeSession } from '../src/core/runtime/claudeSession.js'
+import { getProjectDirForCwd } from '../src/core/runtime/projectDir.js'
 import {
   detectTrustDialog,
   TRUST_DIALOG_ACCEPT_KEYS,
@@ -82,11 +84,37 @@ async function main(): Promise<void> {
   const scripted = !!scriptPath
   const script: Script | null = scripted ? await loadScript(scriptPath!) : null
 
+  // Resume-fixture mode — CC_SHELL_RESUME_FIXTURE points at a JSONL file
+  // that represents an existing CC session transcript (usually a real
+  // session we copied out of ~/.claude/projects/ for fixture testing).
+  //
+  // Flow: we mint a fresh UUID, copy the fixture into CC's projects dir
+  // under <newId>.jsonl, then pass that UUID as resumeSessionId to
+  // ClaudeSession. CC's --resume <uuid> loads the file as prior context
+  // so the next prompt executes against the full conversation history.
+  //
+  // We deliberately copy (not symlink or mutate in place) because CC
+  // appends to the resumed session file as it runs, and we don't want
+  // to corrupt the fixture or the original conversation this file came
+  // from. The target file in CC's projects dir is disposable — it gets
+  // overwritten on the next test run.
+  const resumeFixture = process.env.CC_SHELL_RESUME_FIXTURE || null
+
   const ts = new Date().toISOString().replace(/[:.]/g, '-')
   const recordingDir = join('recordings', ts)
   await mkdir(recordingDir, { recursive: true })
 
-  const meta = {
+  const meta: {
+    startedAt: string
+    cwd: string
+    cols: number
+    rows: number
+    binary: string
+    mode: string
+    scriptPath: string | null
+    resumeFixture: string | null
+    resumeSessionId: string | null
+  } = {
     startedAt: new Date().toISOString(),
     cwd: process.env.CC_SHELL_CWD || process.cwd(),
     cols: process.stdout.columns ?? 120,
@@ -94,7 +122,29 @@ async function main(): Promise<void> {
     binary: process.env.CC_SHELL_CLAUDE_BINARY || 'claude',
     mode: scripted ? 'scripted' : 'interactive',
     scriptPath: scriptPath ?? null,
+    resumeFixture: resumeFixture,
+    resumeSessionId: null,
   }
+
+  // If we're resuming from a fixture, stage it into CC's project dir
+  // NOW (before the session starts) so CC sees it on the filesystem
+  // when it boots with --resume. We do this in the cwd-derived
+  // projects dir, not the fixture's original location — CC indexes by
+  // cwd, so the file must live under the sanitized-cwd directory that
+  // matches `meta.cwd` or --resume will fail to find it.
+  let resumeSessionId: string | null = null
+  if (resumeFixture) {
+    const projectDir = await getProjectDirForCwd(meta.cwd)
+    await mkdir(projectDir, { recursive: true })
+    resumeSessionId = randomUUID()
+    const stagedPath = join(projectDir, `${resumeSessionId}.jsonl`)
+    await copyFile(resumeFixture, stagedPath)
+    meta.resumeSessionId = resumeSessionId
+    process.stderr.write(
+      `[record] staged fixture ${resumeFixture}\n[record]   → ${stagedPath}\n[record] CC will --resume ${resumeSessionId}\n`,
+    )
+  }
+
   await writeFile(join(recordingDir, 'meta.json'), JSON.stringify(meta, null, 2))
 
   // Open append streams for high-frequency channels.
@@ -109,6 +159,9 @@ async function main(): Promise<void> {
     rows: meta.rows,
     binary: meta.binary,
     snapshotIntervalMs: 16,
+    // If set, ClaudeSession.start() will pass --resume <uuid> to the
+    // claude binary and tail the existing JSONL we just staged.
+    resumeSessionId: resumeSessionId ?? undefined,
   })
 
   let firstStartedLogged = false
