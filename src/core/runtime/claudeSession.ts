@@ -4,12 +4,18 @@ import { spawn as ptySpawn, type IPty } from 'node-pty'
 // named exports, so we import the default and destructure.
 import xtermHeadless from '@xterm/headless'
 
+import { join } from 'path'
+
 import {
   detectSlashPicker,
   type SlashPickerState,
 } from '../parsers/slashCommandPicker.js'
 import { getProjectDirForCwd } from './projectDir.js'
-import { tailNewSessionFile, type JsonlEntry } from './jsonlTailer.js'
+import {
+  tailNewSessionFile,
+  tailSessionFile,
+  type JsonlEntry,
+} from './jsonlTailer.js'
 
 const { Terminal } = xtermHeadless
 
@@ -114,6 +120,14 @@ export type ClaudeSessionOptions = {
    * (~60 Hz). Set to 0 to emit on every PTY chunk.
    */
   snapshotIntervalMs?: number
+  /**
+   * If set, spawn claude with `--resume <uuid>` and tail the existing
+   * `<projectDir>/<uuid>.jsonl` file from its current content instead
+   * of waiting for a new file. The first wave of `jsonl-entry` events
+   * after `started` will carry the session's entire history, which the
+   * renderer should render as the feed.
+   */
+  resumeSessionId?: string
 }
 
 /**
@@ -187,6 +201,7 @@ export class ClaudeSession extends EventEmitter {
   private readonly binary: string
   private readonly extraEnv: Record<string, string | undefined>
   private readonly snapshotIntervalMs: number
+  private readonly resumeSessionId: string | null
 
   constructor(options: ClaudeSessionOptions = {}) {
     super()
@@ -196,6 +211,7 @@ export class ClaudeSession extends EventEmitter {
     this.binary = options.binary ?? 'claude'
     this.extraEnv = options.env ?? {}
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
+    this.resumeSessionId = options.resumeSessionId ?? null
   }
 
   /**
@@ -215,11 +231,32 @@ export class ClaudeSession extends EventEmitter {
     })
 
     const projectDir = await getProjectDirForCwd(this.cwd)
-    this.stopJsonlTail = await tailNewSessionFile(
-      projectDir,
-      (entry, file) => this.emit('jsonl-entry', entry, file),
-      err => this.emit('jsonl-error', err),
-    )
+
+    // JSONL tailer selection:
+    //   - New session: wait for CC to create a NEW <uuid>.jsonl file
+    //     we haven't seen yet. tailNewSessionFile snapshots the
+    //     existing files first so old sessions don't get re-emitted.
+    //   - Resume: we KNOW the file path — it's
+    //     <projectDir>/<resumeSessionId>.jsonl. Tail it directly so
+    //     the full existing history is emitted to the renderer as
+    //     `jsonl-entry` events and the feed rehydrates. FileTailer's
+    //     readNew() reads from offset 0 on construct, which gives
+    //     us the backfill for free.
+    if (this.resumeSessionId) {
+      const filePath = join(projectDir, `${this.resumeSessionId}.jsonl`)
+      const stop = tailSessionFile(
+        filePath,
+        entry => this.emit('jsonl-entry', entry, filePath),
+        err => this.emit('jsonl-error', err),
+      )
+      this.stopJsonlTail = stop
+    } else {
+      this.stopJsonlTail = await tailNewSessionFile(
+        projectDir,
+        (entry, file) => this.emit('jsonl-entry', entry, file),
+        err => this.emit('jsonl-error', err),
+      )
+    }
 
     const env: Record<string, string> = {}
     // Start with current process env so PATH, HOME etc. propagate.
@@ -238,7 +275,17 @@ export class ClaudeSession extends EventEmitter {
       else env[k] = v
     }
 
-    this.pty = ptySpawn(this.binary, [], {
+    // Forward `--resume <uuid>` when we're resuming an existing session.
+    // CC validates the UUID itself and falls back to an interactive
+    // picker if the uuid doesn't match a file in the project — but we
+    // only ever pass uuids we just listed from the filesystem, so the
+    // validation should always pass.
+    const args: string[] = []
+    if (this.resumeSessionId) {
+      args.push('--resume', this.resumeSessionId)
+    }
+
+    this.pty = ptySpawn(this.binary, args, {
       name: 'xterm-256color',
       cols: this.cols,
       rows: this.rows,

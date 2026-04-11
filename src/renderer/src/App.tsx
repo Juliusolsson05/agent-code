@@ -57,6 +57,17 @@ export default function App() {
     [workspace],
   )
 
+  const onPathPickerResume = useCallback(
+    async (cwd: string, sessionId: string) => {
+      // Resume reuses newTab's plumbing — same workspace entry, same
+      // tile tree shape — but passes the resume id through to the
+      // spawn call so main spawns claude with --resume <uuid>.
+      await workspace.newTab(cwd, sessionId)
+      setPathPickerOpen(false)
+    },
+    [workspace],
+  )
+
   useKeybinds(workspace, onNewTabRequest)
 
   const { state, activeTab } = workspace
@@ -106,6 +117,7 @@ export default function App() {
         defaultValue={pathPickerDefault}
         onCancel={() => setPathPickerOpen(false)}
         onAccept={onPathPickerAccept}
+        onResume={onPathPickerResume}
       />
     </div>
   )

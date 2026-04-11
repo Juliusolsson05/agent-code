@@ -55,16 +55,33 @@ function subscribe<T>(channel: string, cb: (payload: T) => void): Unsub {
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
+export type SessionInfo = {
+  sessionId: string
+  summary: string
+  lastModified: number
+  fileSize: number
+  customTitle?: string
+  firstPrompt?: string
+  gitBranch?: string
+  cwd?: string
+  createdAt?: number
+}
+
 const api = {
   // --- Session lifecycle ---
   spawnSession: (options: {
     cwd: string
     cols?: number
     rows?: number
+    resumeSessionId?: string
   }): Promise<string> => ipcRenderer.invoke('session:spawn', options),
 
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
+
+  // --- Resume picker: list previous sessions recorded in a cwd ---
+  listSessionsForCwd: (cwd: string, limit?: number): Promise<SessionInfo[]> =>
+    ipcRenderer.invoke('session:list-for-cwd', cwd, limit),
 
   // --- Per-session I/O ---
   sendInput: (sessionId: string, data: string): Promise<void> =>

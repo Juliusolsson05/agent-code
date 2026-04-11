@@ -222,15 +222,25 @@ export function useWorkspace() {
   //
   // Wrapped so callers don't have to touch window.api directly. Updates
   // state.sessions synchronously after main responds with an id.
-  const spawn = useCallback(async (cwd: string): Promise<SessionId> => {
-    const sessionId = await window.api.spawnSession({ cwd })
-    setState(prev => ({
-      ...prev,
-      sessions: { ...prev.sessions, [sessionId]: { cwd } },
-    }))
-    setRuntimes(prev => ({ ...prev, [sessionId]: emptyRuntime() }))
-    return sessionId
-  }, [])
+  //
+  // `resumeSessionId` (optional) triggers a resume: main spawns claude
+  // with `--resume <uuid>` and tails the existing session file, so the
+  // renderer receives the full session history as jsonl-entry events
+  // immediately after started. Our own sessionId is still fresh — it's
+  // a workspace-scoped identifier for routing, distinct from CC's
+  // session UUID.
+  const spawn = useCallback(
+    async (cwd: string, resumeSessionId?: string): Promise<SessionId> => {
+      const sessionId = await window.api.spawnSession({ cwd, resumeSessionId })
+      setState(prev => ({
+        ...prev,
+        sessions: { ...prev.sessions, [sessionId]: { cwd } },
+      }))
+      setRuntimes(prev => ({ ...prev, [sessionId]: emptyRuntime() }))
+      return sessionId
+    },
+    [],
+  )
 
   // ---- Action: kill a session (main process call) ----
   const killSession = useCallback(async (sessionId: SessionId) => {
@@ -252,10 +262,11 @@ export function useWorkspace() {
   // ---- Action: new tab ----
   //
   // Spawns a new session in the given cwd, creates a tab with one leaf,
-  // and makes it active.
+  // and makes it active. Pass `resumeSessionId` to resume an existing
+  // CC session rather than starting a fresh one.
   const newTab = useCallback(
-    async (cwd: string) => {
-      const sessionId = await spawn(cwd)
+    async (cwd: string, resumeSessionId?: string) => {
+      const sessionId = await spawn(cwd, resumeSessionId)
       const tabId = crypto.randomUUID()
       const title = titleFromCwd(cwd)
       setState(prev => {

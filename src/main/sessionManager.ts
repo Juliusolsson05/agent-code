@@ -36,6 +36,8 @@ export type SpawnOptions = {
   cwd: string
   cols?: number
   rows?: number
+  /** If set, spawn with --resume <uuid> and tail the existing file. */
+  resumeSessionId?: string
 }
 
 export interface SessionManager {
@@ -68,6 +70,7 @@ export class SessionManager extends EventEmitter {
       cols: options.cols ?? 120,
       rows: options.rows ?? 40,
       snapshotIntervalMs: 16,
+      resumeSessionId: options.resumeSessionId,
     })
 
     // Wire every ClaudeSession event to a manager-level event with

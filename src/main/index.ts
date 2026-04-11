@@ -5,6 +5,7 @@ import { readdir, readFile, stat, writeFile, mkdir } from 'fs/promises'
 import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
+import { listSessionsForCwd } from '../core/runtime/sessionList.js'
 
 // Main process — thin Electron host over SessionManager.
 //
@@ -89,8 +90,36 @@ function registerIpc(): void {
   // --- Session lifecycle ---
   ipcMain.handle(
     'session:spawn',
-    async (_evt, options: { cwd: string; cols?: number; rows?: number }) => {
+    async (
+      _evt,
+      options: {
+        cwd: string
+        cols?: number
+        rows?: number
+        resumeSessionId?: string
+      },
+    ) => {
       return await manager.spawn(options)
+    },
+  )
+
+  // --- Session listing for the resume picker ---
+  //
+  // Called by PathPickerModal when the user types a cwd — returns a
+  // list of previous sessions in that directory so they can resume one
+  // instead of starting fresh. Empty array when the cwd has no
+  // recorded history yet.
+  ipcMain.handle(
+    'session:list-for-cwd',
+    async (_evt, cwd: string, limit?: number) => {
+      try {
+        return await listSessionsForCwd(cwd, { limit })
+      } catch (err) {
+        // Don't let a listing error brick the modal — return empty.
+        // eslint-disable-next-line no-console
+        console.warn('[session:list-for-cwd] failed:', err)
+        return []
+      }
     },
   )
 
