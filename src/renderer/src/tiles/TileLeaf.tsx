@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { extractAssistantInProgress } from '../../../core/parsers/streamingScreen'
+import { isConversationEntry } from '../../../core/types/transcript'
 import { Feed } from '../feed/Feed'
 import { TrustDialogModal } from '../feed/TrustDialogModal'
 import { SlashCommandPicker } from './SlashCommandPicker'
@@ -93,6 +94,119 @@ export function TileLeaf({
   // but we use slashMode to decide whether keys should be forwarded
   // vs. stored locally).
   const [slashMode, setSlashMode] = useState(false)
+
+  // ---- Prompt history state ----
+  //
+  // cc-shell keeps its own bash-style history for the composer instead
+  // of forwarding Up/Down to CC. Two reasons:
+  //   1. CC's own history updates CC's own input box in the terminal
+  //      buffer, but our composer is a React textarea — the two states
+  //      never reconcile, so pressing Up in our composer and letting
+  //      CC handle it produced no visible change for the user. The
+  //      whole thing looked broken.
+  //   2. We already have every past user prompt in runtime.entries,
+  //      pulled from the JSONL transcript. Deriving a history list
+  //      from that is nearly free.
+  //
+  // `historyIndex` is null when the user is NOT cycling (fresh draft,
+  // or just typed something), and a number in [0, history.length - 1]
+  // while cycling. 0 = most recent historic prompt, 1 = one before
+  // that, etc. When cycling is active the composer displays the
+  // history[historyIndex] string, not the live draft.
+  //
+  // `historyAnchor` stores whatever was in the composer the moment
+  // the user first pressed Up to enter the cycle. Pressing Down past
+  // the newest historic prompt (i.e. historyIndex back to -1) restores
+  // this string so the user doesn't lose mid-typed work.
+  //
+  // Both pieces of state are component-local (not runtime). They don't
+  // need to survive tab-switch because the moment the user comes back
+  // to the tab, they start fresh — cycling mid-tab-switch isn't a
+  // real workflow. Keeping them local avoids cluttering SessionRuntime
+  // and avoids the re-render cost of threading through the store.
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null)
+  const [historyAnchor, setHistoryAnchor] = useState<string>('')
+
+  // Derive the history list from the transcript. We walk every
+  // ConversationEntry, pull USER-role text content (either from a
+  // plain string content or from the first `text` block of an array
+  // content), and collect them in REVERSE chronological order so
+  // index 0 is the most recent prompt.
+  //
+  // Skipped:
+  //   - assistant entries (history is the user's typing)
+  //   - user entries whose content is tool_result-only (no user text)
+  //   - system-reminder text blocks CC injects into user messages
+  //     (they start with '<' — cheap heuristic that avoids false
+  //     positives on real prompts that happen to contain '<' later
+  //     on, because we only look at the FIRST text block)
+  //   - empty strings
+  //
+  // Deduped adjacent identical prompts (the common "resubmitted the
+  // same prompt" case) collapse into one entry; distant duplicates
+  // stay, matching bash behavior. Memoed on entries reference so we
+  // don't rebuild the list on every render.
+  const history = useMemo(() => {
+    const out: string[] = []
+    for (const entry of runtime.entries) {
+      if (!isConversationEntry(entry)) continue
+      if (entry.message.role !== 'user') continue
+      const content = entry.message.content
+      let text = ''
+      if (typeof content === 'string') {
+        text = content
+      } else if (Array.isArray(content)) {
+        const firstText = content.find(
+          (b): b is { type: 'text'; text: string } =>
+            (b as { type?: string }).type === 'text' &&
+            typeof (b as { text?: unknown }).text === 'string',
+        )
+        if (firstText) text = firstText.text
+      }
+      text = text.trim()
+      if (!text) continue
+      // Skip system-reminder payloads that ride inside user messages.
+      if (text.startsWith('<')) continue
+      // Collapse adjacent duplicates.
+      if (out.length > 0 && out[out.length - 1] === text) continue
+      out.push(text)
+    }
+    // Reverse so index 0 is the newest prompt — Up steps backward in
+    // time starting from the most recent one.
+    return out.reverse()
+  }, [runtime.entries])
+
+  // Helper: are we currently in history-cycling mode? Multiple key
+  // handlers consult this and a named check reads cleaner than
+  // `historyIndex !== null` repeated everywhere.
+  const cyclingHistory = historyIndex !== null
+
+  // Helper: cancel history cycling without changing the composer text.
+  // Called whenever the user makes ANY edit that isn't Up/Down — the
+  // invariant is "once you start typing over a recalled prompt, it's
+  // yours, and the next Up starts from the newest entry again."
+  const endHistoryCycle = () => {
+    if (historyIndex !== null) setHistoryIndex(null)
+  }
+
+  // Helper: compute "is the cursor at the top row of the textarea?"
+  // Used to decide whether Up should navigate history or just move
+  // the caret up within a multi-line prompt. We check whether there's
+  // any newline before the selection start; if not, we're on line 0.
+  const cursorOnTopRow = (): boolean => {
+    const el = inputRef.current
+    if (!el) return true
+    const start = el.selectionStart ?? 0
+    return !el.value.slice(0, start).includes('\n')
+  }
+
+  // Mirror of cursorOnTopRow for Down: is the cursor on the last row?
+  const cursorOnBottomRow = (): boolean => {
+    const el = inputRef.current
+    if (!el) return true
+    const start = el.selectionStart ?? 0
+    return !el.value.slice(start).includes('\n')
+  }
 
   // When focus flips to this pane, move the DOM caret into its input.
   useEffect(() => {
@@ -227,6 +341,10 @@ export function TileLeaf({
         await send(input + '\r')
       }
       setInputText('')
+      // Any submit exits history cycling — the prompt is committed
+      // and the next Up should start a fresh walk from the (now
+      // updated) newest entry, not continue from wherever we were.
+      endHistoryCycle()
       return
     }
     if (e.key === 'Escape') {
@@ -245,6 +363,76 @@ export function TileLeaf({
       await send('\x04')
       return
     }
+    // ---- Prompt history: Up cycles BACKWARD into past prompts ----
+    //
+    // Only when we're at the top row of the textarea. On a multi-line
+    // draft the user still expects plain Up to move the caret to the
+    // previous line; we only hijack it when there's nowhere higher
+    // to go. Shift/Ctrl/Meta+Up also fall through so OS-level line
+    // navigation shortcuts still work.
+    //
+    // On first Up press we snapshot the live draft into historyAnchor
+    // so pressing Down past the newest entry can restore it. Subsequent
+    // Ups just advance the index through the history. We cap at the
+    // oldest available entry — no wrap-around, no PTY forward.
+    if (
+      e.key === 'ArrowUp' &&
+      !e.shiftKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      cursorOnTopRow() &&
+      history.length > 0
+    ) {
+      e.preventDefault()
+      if (!cyclingHistory) {
+        setHistoryAnchor(input)
+        setHistoryIndex(0)
+        setInputText(history[0])
+      } else {
+        const next = Math.min(historyIndex! + 1, history.length - 1)
+        if (next !== historyIndex) {
+          setHistoryIndex(next)
+          setInputText(history[next])
+        }
+      }
+      return
+    }
+
+    // ---- Prompt history: Down cycles FORWARD toward the draft ----
+    //
+    // Only meaningful while we're already cycling. Pressing Down
+    // outside a cycle shouldn't do anything (no forward history to
+    // cycle to). Same top/bottom-row gating as Up so in-textarea
+    // caret movement works normally for multi-line drafts.
+    if (
+      e.key === 'ArrowDown' &&
+      !e.shiftKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      cursorOnBottomRow() &&
+      cyclingHistory
+    ) {
+      e.preventDefault()
+      const next = historyIndex! - 1
+      if (next < 0) {
+        // Past the newest historic prompt — restore the draft the
+        // user had typed before they started cycling, and exit cycle
+        // mode so the next Up starts fresh.
+        setHistoryIndex(null)
+        setInputText(historyAnchor)
+      } else {
+        setHistoryIndex(next)
+        setInputText(history[next])
+      }
+      return
+    }
+
+    // Fallback: any other Up/Down (not cycling, not at top/bottom
+    // row, or with a modifier) falls through to the old PTY-forward
+    // path so CC's own history / caret navigation still reaches it
+    // when appropriate.
     if (e.key === 'ArrowUp') {
       e.preventDefault()
       await send('\x1b[A')
@@ -390,6 +578,21 @@ export function TileLeaf({
               // onKeyDown called setInputText.
               if (slashMode) return
               setInputText(e.target.value)
+              // ANY user edit (typing, paste, delete) cancels history
+              // cycling: once they've touched the recalled prompt it's
+              // theirs, and the next Up should start fresh from the
+              // newest entry rather than continuing the old cycle.
+              // The Up/Down handlers set historyIndex AND call
+              // setInputText, which would trigger this onChange and
+              // wipe their own state — so we guard against that by
+              // only ending the cycle when the NEW value differs from
+              // whatever history slot we're currently parked on.
+              if (
+                historyIndex !== null &&
+                e.target.value !== history[historyIndex]
+              ) {
+                endHistoryCycle()
+              }
             }}
             onKeyDown={onKeyDown}
             onFocus={onFocusRequest}
