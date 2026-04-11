@@ -44,7 +44,30 @@ type Props = {
   focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
+  /** Called when the user triggers /resume inside this pane. See the
+   *  slash-mode Enter handler below for the full interception flow. */
+  onResumeRequest: (cwd: string) => void
 }
+
+// Slash commands that cc-shell handles natively instead of forwarding
+// to CC. When the user commits one of these via the slash picker, we
+// send ESC to CC to dismiss its own picker and run our handler.
+//
+// Why intercept rather than let CC handle it:
+//   CC's /resume opens a full-screen session picker IN THE TERMINAL.
+//   Our renderer scrapes the screen for a single in-flight assistant
+//   block — it doesn't know how to interpret CC's picker UI, so the
+//   user sees the feed go garbled and nothing that looks like a
+//   session picker. Meanwhile cc-shell already has a native session
+//   picker (PathPickerModal + ResumeSection), driven by the same
+//   core/runtime/sessionList.ts lister CC's picker uses underneath.
+//   So we intercept at the composer and hand off to the native modal.
+//
+// Keys are the exact strings the picker's `id` field reports, which
+// matches what CC prints in its picker rows ("/resume", "/help", …).
+// Add more entries here as we build out more native slash-command
+// handlers. See TileLeaf's slash-mode Enter handler for the call site.
+const NATIVE_SLASH_COMMANDS = new Set<string>(['/resume'])
 
 export function TileLeaf({
   sessionId,
@@ -52,6 +75,7 @@ export function TileLeaf({
   focused,
   onFocusRequest,
   workspace,
+  onResumeRequest,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   // Per-leaf input state — lives with the instance so the typed value
@@ -132,6 +156,45 @@ export function TileLeaf({
         return
       }
       if (e.key === 'Enter') {
+        // Before committing to CC, check if the user is about to run
+        // a slash command we handle natively (see NATIVE_SLASH_COMMANDS
+        // above). Two detection paths, ORed together so we catch the
+        // command regardless of how the user invoked it:
+        //
+        //   1. The exact text typed into the composer is a native
+        //      command. Fast path — no dependency on CC's picker state
+        //      being live (which matters when the user types fast and
+        //      hits Enter before the next screen snapshot lands).
+        //   2. CC's slash picker has a SELECTED row and that row's id
+        //      is a native command. Catches the case where the user
+        //      typed a partial prefix ("/res") and let the picker
+        //      fuzzy-match them up to /resume.
+        //
+        // If either matches: send ESC to CC to dismiss its own picker,
+        // exit slash mode, and run the native handler. We do NOT send
+        // Enter to CC in this path — CC's /resume would otherwise try
+        // to take over the screen with its own picker and fight our
+        // renderer.
+        const selectedNative = runtime.picker.items.find(
+          i => i.selected && NATIVE_SLASH_COMMANDS.has(i.id),
+        )
+        const typedNative = NATIVE_SLASH_COMMANDS.has(input.trim())
+          ? input.trim()
+          : null
+        const nativeId = selectedNative?.id ?? typedNative
+        if (nativeId) {
+          await send('\x1b')
+          exitSlashMode()
+          if (nativeId === '/resume') {
+            // Look up the pane's cwd from the workspace so the resume
+            // modal pre-fills the session list for THIS pane's project,
+            // matching the ⌘⇧R keybind's behavior (see useKeybinds.ts).
+            const cwd = workspace.state.sessions[sessionId]?.cwd ?? ''
+            onResumeRequest(cwd)
+          }
+          return
+        }
+
         // Commit whatever CC has highlighted. If there's no highlight
         // CC will just send the literal text as a regular prompt.
         await send('\r')
