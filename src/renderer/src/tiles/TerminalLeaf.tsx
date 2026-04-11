@@ -196,6 +196,15 @@ export function TerminalLeaf({
         for (const d of backlogQueue) termRef.current.write(d)
         backlogQueue.length = 0
         attachedBackfillDone = true
+        // Now that content has landed, force-focus the terminal
+        // so the very first keystroke the user makes lands in
+        // xterm. The focus-on-mount effect above already called
+        // focus() once, but the attach replay can take a moment
+        // (IPC round trip + first paint) and during that window
+        // focus might have drifted to somewhere else — this
+        // re-focus closes the gap if the pane is still the
+        // workspace-focused one.
+        if (focused) termRef.current.focus()
       })
 
       // Container resize observer. Whenever the tile's cell area
@@ -248,9 +257,34 @@ export function TerminalLeaf({
   // so keystrokes go through xterm's onData. Without this a
   // newly-activated pane would need a mouse click before it could
   // accept keys.
+  //
+  // This effect only fires when `focused` *changes* — it doesn't
+  // help when DOM focus drifts away while the pane is already
+  // focused at the workspace level. For that we have the
+  // synchronous `focusTerminal()` handler below, wired into the
+  // outer div's onMouseDown.
   useEffect(() => {
     if (focused) termRef.current?.focus()
   }, [focused])
+
+  // Imperative re-focus. Called from outer-div mousedown so that
+  // ANY click inside the terminal pane re-focuses xterm's helper
+  // textarea synchronously, even when the workspace-level
+  // `focused` prop hasn't changed.
+  //
+  // Root cause for why this is load-bearing: the user reported
+  // backspace working "about half the time". Symptom was a focus
+  // drift — DOM focus could wander off xterm (browser clicks, app
+  // switch, some invisible element grabbing focus) without our
+  // React state catching it, so some keystrokes hit xterm and
+  // others were dropped by the browser since xterm's hidden
+  // textarea wasn't the activeElement. Wiring a direct focus call
+  // on every click inside the pane closes the gap — if the user
+  // is clicking or typing here, they want xterm to have focus,
+  // period.
+  const focusTerminal = () => {
+    termRef.current?.focus()
+  }
 
   return (
     <div
@@ -259,7 +293,23 @@ export function TerminalLeaf({
         border ${focused ? 'border-accent' : 'border-border'}
         bg-canvas
       `}
-      onMouseDown={onFocusRequest}
+      // Two things happen on mousedown inside this pane:
+      //   1. onFocusRequest lets the workspace know this pane is
+      //      now the active one (updates workspace.focusedSessionId
+      //      and the useKeybinds router).
+      //   2. focusTerminal synchronously focuses xterm's hidden
+      //      textarea so the very next keystroke lands in the
+      //      terminal. Without step 2, DOM focus could still be
+      //      wherever it drifted to (see focusTerminal's block
+      //      comment above for the backspace-half-the-time bug).
+      //      The React `focused` prop might already be true if the
+      //      pane was already "workspace-focused", so the
+      //      useEffect-based refocus below won't re-fire; this is
+      //      the synchronous safety net.
+      onMouseDown={() => {
+        onFocusRequest()
+        focusTerminal()
+      }}
     >
       {/* Compact header to match TileLeaf's status strip so a
           mixed layout doesn't look ragged. We don't have CC-style
