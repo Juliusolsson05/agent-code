@@ -50,6 +50,14 @@ export type Settings = {
   accent: AccentId
   showTerminalPreview: boolean
   showSystemEvents: boolean
+  /**
+   * High contrast override: pure #000 canvas + #fff ink, regardless of
+   * mode. Overrides the mode token block via a higher-cascade CSS rule
+   * keyed on `[data-contrast="high"]`. Orthogonal to `mode` — we keep
+   * mode around so toggling contrast off returns to whatever mode the
+   * user had selected.
+   */
+  highContrast: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -57,6 +65,7 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: 'lime',
   showTerminalPreview: false,
   showSystemEvents: false,
+  highContrast: false,
 }
 
 const STORAGE_KEY = 'cc-shell:settings'
@@ -74,6 +83,7 @@ export function loadSettings(): Settings {
         accent: ACCENTS.some(a => a.id === parsed.accent)
           ? (parsed.accent as AccentId)
           : DEFAULT_SETTINGS.accent,
+        highContrast: parsed.highContrast === true,
       }
     }
   } catch {
@@ -100,6 +110,15 @@ export function saveSettings(s: Settings): void {
 export function applyTheme(s: Settings): void {
   const root = document.documentElement
   root.dataset.mode = s.mode
+  // High-contrast flag is written as a separate data attribute so the
+  // corresponding CSS block (see styles.css) can override the mode
+  // tokens without touching the mode value itself — that way toggling
+  // contrast off falls right back into the user's saved mode.
+  if (s.highContrast) {
+    root.dataset.contrast = 'high'
+  } else {
+    delete root.dataset.contrast
+  }
   const accent = ACCENTS.find(a => a.id === s.accent) ?? ACCENTS[0]
   const hex = s.mode === 'dark' ? accent.dark : accent.light
   const fg = s.mode === 'dark' ? accent.fgDark : accent.fgLight

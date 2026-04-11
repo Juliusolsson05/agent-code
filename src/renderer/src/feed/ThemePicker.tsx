@@ -110,6 +110,11 @@ export function ThemePicker({ settings, onChange }: Props) {
 
           <Section title="view">
             <Toggle
+              label="High contrast"
+              value={settings.highContrast}
+              onChange={v => update({ highContrast: v })}
+            />
+            <Toggle
               label="Live terminal preview"
               value={settings.showTerminalPreview}
               onChange={v => update({ showTerminalPreview: v })}

@@ -108,6 +108,34 @@
   --theme-danger: #b03a3a;
 }
 
+/* ---------- High contrast override ---------- */
+/*
+ * Orthogonal to mode. When the user flips the checkbox on, we set
+ * `data-contrast="high"` on <html> and this block's single-attribute
+ * selector matches. Because source order resolves specificity ties in
+ * CSS, this block MUST stay AFTER both mode blocks above — otherwise
+ * the mode tokens would override back on every theme apply.
+ *
+ * Pure #000 canvas / #fff ink, single grey ink-dim, minimal greys for
+ * borders. Accent stays whatever the user picked — it still reads
+ * cleanly on black and the swatches are part of the user's identity
+ * preference, not accessibility.
+ */
+[data-contrast="high"] {
+  --theme-canvas: #000000;
+  --theme-surface: #000000;
+  --theme-surface-hi: #0a0a0a;
+  --theme-ink: #ffffff;
+  --theme-ink-dim: #e8e8e8;
+  --theme-muted: #9a9a9a;
+  --theme-border: #3a3a3a;
+  --theme-border-hi: #5a5a5a;
+
+  --theme-code-bg: #000000;
+  --theme-code-border: #3a3a3a;
+  --theme-danger: #ff5c5c;
+}
+
 /* ---------- Globals ---------- */
 
 html,
