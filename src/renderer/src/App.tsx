@@ -1,6 +1,7 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import { ThemePicker } from './feed/ThemePicker'
+import { PathPickerModal } from './tiles/PathPickerModal'
 import { TabBar } from './tiles/TabBar'
 import { TileTree } from './tiles/TileTree'
 import { useKeybinds } from './tiles/useKeybinds'
@@ -80,8 +81,14 @@ export default function App() {
         </div>
       </div>
 
-      {/* Active tab's tile tree, or a welcome screen if the workspace
-          is entirely empty (first launch, or user closed every tab). */}
+      {/*
+        Active tab's tile tree OR welcome/fallback.
+        We deliberately show WelcomeEmpty whenever activeTab is null —
+        even if state.tabs.length > 0 — so a broken boot (e.g. a stale
+        workspace.json with phantom sessions) still gives the user a
+        clickable escape hatch. Otherwise the main area renders null
+        and the app looks bricked.
+      */}
       <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
         {activeTab ? (
           <TileTree
@@ -89,9 +96,9 @@ export default function App() {
             focusedSessionId={activeTab.focusedSessionId}
             workspace={workspace}
           />
-        ) : state.tabs.length === 0 ? (
+        ) : (
           <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
-        ) : null}
+        )}
       </main>
 
       <PathPickerModal
