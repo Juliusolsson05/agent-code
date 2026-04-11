@@ -1,107 +1,43 @@
 import { EventEmitter } from 'events'
-import { spawn as ptySpawn, type IPty } from 'node-pty'
-// @xterm/headless is published as CommonJS; Node's ESM interop can't see its
-// named exports, so we import the default and destructure.
-import xtermHeadless from '@xterm/headless'
-
 import { join } from 'path'
 
 import {
   detectSlashPicker,
   type SlashPickerState,
 } from '../parsers/claude/slashCommandPicker.js'
-import { getProjectDirForCwd } from './projectDir.js'
 import {
   tailNewSessionFile,
   tailSessionFile,
   type JsonlEntry,
 } from './jsonlTailer.js'
+import { getProjectDirForCwd } from './projectDir.js'
+import { PtyScreen, terminalToMarkdown } from './ptyScreen.js'
 
-const { Terminal } = xtermHeadless
-
-/**
- * Build the correct markdown emphasis marker for a state:
- *   bold + italic → ***
- *   bold only     → **
- *   italic only   → *
- *   neither       → ''
- *
- * Used by terminalToMarkdown() to emit paired open/close markers at
- * every state transition. The symmetry is load-bearing — every call to
- * close must match a call to open with the same state pair, or we
- * leave unbalanced markers.
- */
-function emphasisMarker(bold: boolean, italic: boolean): string {
-  if (bold && italic) return '***'
-  if (bold) return '**'
-  if (italic) return '*'
-  return ''
-}
-
-/**
- * Pure function: walk a Terminal's active buffer and reconstruct
- * markdown from cell SGR attributes. Extracted from ClaudeSession so
- * the testbench (testbench/replay.ts) can exercise it against recorded
- * fixtures without having to instantiate a full session.
- *
- * See the detailed rationale on snapshotScreenAsMarkdown() below.
- */
-export function terminalToMarkdown(
-  term: InstanceType<typeof Terminal>,
-): string {
-  const buf = term.buffer.active
-  const out: string[] = []
-
-  const cell = (buf as { getNullCell?: () => unknown }).getNullCell?.() as
-    | { isBold(): number; isItalic(): number; getChars(): string }
-    | undefined
-
-  for (let y = 0; y < buf.length; y++) {
-    const line = buf.getLine(y)
-    if (!line) {
-      out.push('')
-      continue
-    }
-
-    let row = ''
-    let inBold = false
-    let inItalic = false
-
-    for (let x = 0; x < line.length; x++) {
-      const c = (cell ? line.getCell(x, cell as never) : line.getCell(x)) ?? null
-      if (!c) continue
-      const chars = c.getChars() || ' '
-      const nextBold = c.isBold() !== 0
-      const nextItalic = c.isItalic() !== 0
-
-      if (nextBold !== inBold || nextItalic !== inItalic) {
-        row += emphasisMarker(inBold, inItalic)
-        row += emphasisMarker(nextBold, nextItalic)
-        inBold = nextBold
-        inItalic = nextItalic
-      }
-
-      row += chars
-    }
-
-    row += emphasisMarker(inBold, inItalic)
-    out.push(row.replace(/[ \t]+$/, ''))
-  }
-
-  while (out.length > 0 && out[out.length - 1] === '') out.pop()
-  return out.join('\n')
-}
+// Re-export terminalToMarkdown so existing callers (testbench/replay.ts)
+// that imported it from this file keep working. The actual implementation
+// now lives in ptyScreen.ts — it's agent-agnostic — but the testbench
+// shouldn't need to care about that refactor.
+export { terminalToMarkdown }
 
 // Lives under src/core/runtime/ — Node-only. Used by the Electron main
-// process AND the standalone testbench AND the future dispatch-mode
-// runner. Has NO knowledge of Electron, IPC, React, or the DOM.
+// process AND the standalone testbench. Has NO knowledge of Electron,
+// IPC, React, or the DOM.
 //
-// The session class owns:
-//   - the PTY child process (`claude` running interactively)
-//   - the headless terminal that parses CC's ANSI output
-//   - the JSONL file watcher for the session's transcript
+// ClaudeSession composes a PtyScreen (the provider-agnostic PTY + xterm
+// primitive) with the Claude-specific wiring:
+//   - Spawns `claude` with the CLAUDE_CODE_ENTRYPOINT env flag so CC
+//     knows it's running inside a desktop wrapper.
+//   - Passes `--resume <uuid>` when resuming an existing session.
+//   - Attaches a JSONL tailer to ~/.claude/projects/<sanitized-cwd>/
+//     before the PTY spawns so we don't miss any transcript entries.
+//   - Enriches the base PtyScreen screen snapshot with Claude's slash
+//     command picker state (detected from cell fg colors on every
+//     frame).
 //
-// It emits events. Hosts (electron / testbench / etc.) subscribe.
+// The public event shape is unchanged from the pre-refactor version —
+// existing callers in main / testbench didn't need to change. The
+// difference is that the PTY + xterm + throttled flush + dual snapshot
+// plumbing now lives in one place that CodexSession will also use.
 
 export type ClaudeSessionOptions = {
   /** Working directory CC will run in. Defaults to process.cwd(). */
@@ -138,8 +74,8 @@ export type ClaudeSessionOptions = {
  *   pty-data       — raw bytes received from the PTY (string); use this for
  *                    full fidelity recording in the testbench
  *   screen         — throttled snapshot of the headless terminal buffer as
- *                    plain text (no colors yet); use this for the live
- *                    streaming preview in the renderer
+ *                    plain text + markdown + slash picker state; use this
+ *                    for the live streaming preview in the renderer
  *   jsonl-entry    — a parsed JSONL entry from CC's transcript file
  *   jsonl-error    — non-fatal parse / tail error from the jsonl tailer
  *   exit           — the PTY child exited; payload is { exitCode, signal? }
@@ -157,7 +93,7 @@ export type ScreenSnapshot = {
   markdown: string
   /** Structured slash command picker state detected from cell fg
    *  colors. `visible: false` when no picker is on screen — the
-   *  common case. See src/core/parsers/slashCommandPicker.ts for
+   *  common case. See src/core/parsers/claude/slashCommandPicker.ts for
    *  the detection algorithm. Ships with every snapshot so the
    *  renderer can react to picker opens/closes immediately. */
   picker: SlashPickerState
@@ -188,30 +124,86 @@ export interface ClaudeSession {
 }
 
 export class ClaudeSession extends EventEmitter {
-  private pty: IPty | null = null
-  private term: InstanceType<typeof Terminal> | null = null
+  private readonly ptyScreen: PtyScreen
   private stopJsonlTail: (() => Promise<void>) | null = null
-  private flushTimer: ReturnType<typeof setTimeout> | null = null
-  private flushPending = false
   private exited = false
 
   private readonly cwd: string
-  private readonly cols: number
-  private readonly rows: number
-  private readonly binary: string
-  private readonly extraEnv: Record<string, string | undefined>
-  private readonly snapshotIntervalMs: number
   private readonly resumeSessionId: string | null
 
   constructor(options: ClaudeSessionOptions = {}) {
     super()
     this.cwd = options.cwd ?? process.cwd()
-    this.cols = options.cols ?? 120
-    this.rows = options.rows ?? 40
-    this.binary = options.binary ?? 'claude'
-    this.extraEnv = options.env ?? {}
-    this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
     this.resumeSessionId = options.resumeSessionId ?? null
+
+    // Build the env CC expects. We start from process.env so PATH,
+    // HOME, and friends propagate — a shell without PATH can't run
+    // any of the user's tools — then force the TERM / COLORTERM
+    // flags so Ink renders cleanly, then set the
+    // CLAUDE_CODE_ENTRYPOINT flag so CC takes the desktop-wrapper
+    // code path (matches main.tsx:825 of claude-code-src:
+    // clientType === 'claude-desktop'). Caller overrides from
+    // options.env win last.
+    //
+    // PtyScreen deliberately does NOT merge process.env itself —
+    // different providers want different flags baked in and mixing
+    // them produces surprises — so we build the full env here.
+    const env: Record<string, string | undefined> = {}
+    for (const [k, v] of Object.entries(process.env)) {
+      if (typeof v === 'string') env[k] = v
+    }
+    env.TERM = 'xterm-256color'
+    env.COLORTERM = 'truecolor'
+    env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop'
+    for (const [k, v] of Object.entries(options.env ?? {})) {
+      if (v === undefined) delete env[k]
+      else env[k] = v
+    }
+
+    // Forward `--resume <uuid>` when we're resuming an existing session.
+    // CC validates the UUID itself and falls back to an interactive
+    // picker if the uuid doesn't match a file in the project — but we
+    // only ever pass uuids we just listed from the filesystem, so the
+    // validation should always pass.
+    const args: string[] = []
+    if (this.resumeSessionId) {
+      args.push('--resume', this.resumeSessionId)
+    }
+
+    this.ptyScreen = new PtyScreen({
+      binary: options.binary ?? 'claude',
+      args,
+      cwd: this.cwd,
+      cols: options.cols ?? 120,
+      rows: options.rows ?? 40,
+      env,
+      snapshotIntervalMs: options.snapshotIntervalMs ?? 16,
+    })
+
+    // Forward PTY bytes straight through — used by the testbench for
+    // high-fidelity recording. Not used by the renderer (it consumes
+    // `screen` instead).
+    this.ptyScreen.on('pty-data', data => this.emit('pty-data', data))
+
+    // Enrich the base screen snapshot with Claude's slash command
+    // picker state before re-emitting. The picker detector walks the
+    // headless xterm buffer reading cell fg colors — O(rows × cols)
+    // per frame, bounded to ~40×120, negligible compared to shipping
+    // a frame over IPC.
+    this.ptyScreen.on('screen', base => {
+      const term = this.ptyScreen.getTerminal()
+      this.emit('screen', {
+        plain: base.plain,
+        markdown: base.markdown,
+        picker: term ? detectSlashPicker(term) : { visible: false, items: [] },
+      })
+    })
+
+    this.ptyScreen.on('exit', ({ exitCode, signal }) => {
+      this.exited = true
+      this.emit('exit', { exitCode, signal })
+      void this.cleanup()
+    })
   }
 
   /**
@@ -221,15 +213,6 @@ export class ClaudeSession extends EventEmitter {
    * the child terminates.
    */
   async start(): Promise<void> {
-    if (this.pty) throw new Error('ClaudeSession already started')
-
-    this.term = new Terminal({
-      cols: this.cols,
-      rows: this.rows,
-      allowProposedApi: true,
-      scrollback: 10000,
-    })
-
     const projectDir = await getProjectDirForCwd(this.cwd)
 
     // JSONL tailer selection:
@@ -258,129 +241,34 @@ export class ClaudeSession extends EventEmitter {
       )
     }
 
-    const env: Record<string, string> = {}
-    // Start with current process env so PATH, HOME etc. propagate.
-    for (const [k, v] of Object.entries(process.env)) {
-      if (typeof v === 'string') env[k] = v
-    }
-    // Force a true-color xterm so Ink renders cleanly.
-    env.TERM = 'xterm-256color'
-    env.COLORTERM = 'truecolor'
-    // Tell CC it's running inside a desktop wrapper. Matches main.tsx:825
-    // of claude-code-src — `clientType === 'claude-desktop'` branch.
-    env.CLAUDE_CODE_ENTRYPOINT = 'claude-desktop'
-    // Apply caller overrides last so they win.
-    for (const [k, v] of Object.entries(this.extraEnv)) {
-      if (v === undefined) delete env[k]
-      else env[k] = v
-    }
-
-    // Forward `--resume <uuid>` when we're resuming an existing session.
-    // CC validates the UUID itself and falls back to an interactive
-    // picker if the uuid doesn't match a file in the project — but we
-    // only ever pass uuids we just listed from the filesystem, so the
-    // validation should always pass.
-    const args: string[] = []
-    if (this.resumeSessionId) {
-      args.push('--resume', this.resumeSessionId)
-    }
-
-    this.pty = ptySpawn(this.binary, args, {
-      name: 'xterm-256color',
-      cols: this.cols,
-      rows: this.rows,
-      cwd: this.cwd,
-      env,
-    })
-
-    this.pty.onData((data: string) => {
-      this.emit('pty-data', data)
-      this.term?.write(data)
-      this.scheduleFlush()
-    })
-
-    this.pty.onExit(({ exitCode, signal }) => {
-      this.exited = true
-      this.emit('exit', { exitCode, signal })
-      void this.cleanup()
-    })
-
+    await this.ptyScreen.start()
     this.emit('started', { projectDir })
   }
 
   /** Write raw bytes to the PTY. Used for keystroke synthesis. */
   write(data: string): void {
-    this.pty?.write(data)
+    this.ptyScreen.write(data)
   }
 
   /** Resize both the PTY and the headless terminal in lockstep. */
   resize(cols: number, rows: number): void {
-    this.pty?.resize(cols, rows)
-    this.term?.resize(cols, rows)
+    this.ptyScreen.resize(cols, rows)
   }
 
   /**
    * Capture the headless terminal's current visible buffer as plain text.
-   * Synchronous — call any time after `start()`.
+   * Synchronous — call any time after `start()`. Forwards to PtyScreen.
    */
   snapshotScreen(): string {
-    if (!this.term) return ''
-    const buf = this.term.buffer.active
-    const lines: string[] = []
-    for (let i = 0; i < buf.length; i++) {
-      const line = buf.getLine(i)
-      lines.push(line ? line.translateToString(true) : '')
-    }
-    while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
-    return lines.join('\n')
+    return this.ptyScreen.snapshotScreen()
   }
 
   /**
-   * Capture the buffer, but reconstruct markdown syntax from cell-level
-   * SGR attributes as we go.
-   *
-   * Why this exists:
-   *   CC uses `marked` to parse markdown and `formatToken` in
-   *   claude-code-src/utils/markdown.ts to convert each token to an ANSI
-   *   string via chalk. `**bold**` becomes `chalk.bold(text)` — an ANSI
-   *   bold sequence around the text. By the time it hits our headless
-   *   terminal, the `**` characters are GONE but the bold ATTRIBUTE is
-   *   set on every cell in the bold run. `translateToString(true)`
-   *   returns plain text with the attributes dropped, which is why our
-   *   streaming card was showing unformatted text — we were throwing
-   *   away the very formatting we wanted.
-   *
-   * This method reads each cell's `isBold()` / `isItalic()` attributes,
-   * tracks the state across cells, and emits `**` / `*` / `***` markers
-   * at every transition. The result is a markdown-ish reconstruction
-   * that carries the same formatting CC was going to render — just in
-   * markdown source form, which we can feed into react-markdown on the
-   * renderer side.
-   *
-   * What it captures:
-   *   - **bold**  (chalk.bold)
-   *   - *italic*  (chalk.italic)
-   *   - ***bold italic***  (both attributes set — h1 headings for example)
-   *
-   * What it misses:
-   *   - Inline code (`codespan`): CC uses a theme "permission" color
-   *     which is fg-color-mode-dependent. Detecting it requires
-   *     hardcoding specific color values per theme — too brittle for
-   *     v1. Inline code will render as plain text.
-   *   - Fenced code blocks: CC pipes them through highlight.js which
-   *     applies many colors per syntax token. Detecting "this line is
-   *     code" from the cell colors isn't reliable — a prose line with a
-   *     single colored word looks the same. Skipped for now; code
-   *     blocks will render as plain text during streaming and snap into
-   *     full syntax highlighting when the JSONL entry lands.
-   *   - Headings: CC renders h1 as bold+italic+underline, h2 as bold,
-   *     etc. We'll emit them as ***bold italic*** / **bold** which is
-   *     close enough — same visual weight, and markdown renderers
-   *     handle both as distinct emphasis.
+   * Capture the buffer with bold/italic reconstructed from cell
+   * attributes. Forwards to PtyScreen.snapshotScreenAsMarkdown.
    */
   snapshotScreenAsMarkdown(): string {
-    if (!this.term) return ''
-    return terminalToMarkdown(this.term)
+    return this.ptyScreen.snapshotScreenAsMarkdown()
   }
 
   /** True if the PTY has exited. */
@@ -390,48 +278,13 @@ export class ClaudeSession extends EventEmitter {
 
   /** Stop the session: kill the PTY, close the JSONL watcher. Idempotent. */
   async stop(): Promise<void> {
-    try {
-      this.pty?.kill()
-    } catch {
-      // already gone
-    }
-    this.pty = null
+    await this.ptyScreen.stop()
     await this.cleanup()
   }
 
   // ---------------------------------------------------------------------------
 
-  private scheduleFlush(): void {
-    if (this.flushPending) return
-    this.flushPending = true
-    this.flushTimer = setTimeout(() => {
-      this.flushPending = false
-      this.flushTimer = null
-      // Emit BOTH plain and markdown snapshots in a single event. The
-      // plain version is still the source of truth for chrome stripping,
-      // marker detection, and baseline comparison (so parsers stay
-      // stable). The markdown version carries bold/italic formatting
-      // reconstructed from cell attributes and is used by the streaming
-      // card for rich rendering. See snapshotScreenAsMarkdown() for why
-      // this dual-channel approach exists.
-      this.emit('screen', {
-        plain: this.snapshotScreen(),
-        markdown: this.snapshotScreenAsMarkdown(),
-        // detectSlashPicker walks the buffer once per frame reading
-        // cell fg colors — O(rows × cols) but rows/cols are bounded
-        // (~40×120) and each cell access is a single call. Negligible
-        // compared to the cost of just shipping a frame over IPC.
-        picker: this.term ? detectSlashPicker(this.term) : { visible: false, items: [] },
-      })
-    }, this.snapshotIntervalMs)
-  }
-
   private async cleanup(): Promise<void> {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer)
-      this.flushTimer = null
-    }
-    this.flushPending = false
     if (this.stopJsonlTail) {
       try {
         await this.stopJsonlTail()
