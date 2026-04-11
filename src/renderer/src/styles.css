@@ -248,11 +248,19 @@ select {
   line-height: 1.6;
 }
 
+/*
+ * Reset the wrapping <code> element inside <pre> — no chip, no padding,
+ * no color override. Deliberately DON'T set `color` here: highlight.js's
+ * github-dark theme sets `.hljs-*` token colors with single-class
+ * specificity, and `.prose-theme pre code { color: ... }` would win by
+ * compound-selector specificity (0,2,1) > (0,1,0) and flatten every
+ * token back to one color. Letting hljs handle color is the whole point
+ * of shipping the theme.
+ */
 .prose-theme pre code {
   background: transparent !important;
   border: none;
   padding: 0;
-  color: #e8e8e8;
 }
 
 .prose-theme table {
@@ -281,11 +289,14 @@ select {
   margin: 16px 0;
 }
 
-/* highlight.js github-dark applied to fenced blocks.
-   Transparent background so our code-bg shows through. */
+/*
+ * highlight.js github-dark ships with `background: #0d1117` on `.hljs`.
+ * We override ONLY the background (so our theme-controlled code-bg shows
+ * through) and deliberately leave color alone so the token class rules
+ * can set it. See the explanation on `.prose-theme pre code` above.
+ */
 .prose-theme .hljs {
   background: transparent !important;
-  color: #e8e8e8;
 }
 
 /* ---------- Streaming dot pulse ---------- */

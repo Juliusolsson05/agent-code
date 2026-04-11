@@ -69,7 +69,23 @@ import {
 // richer formatting on top of the same base layout.
 const COMPLETED_REMARK = [remarkGfm]
 const STREAMING_REMARK = [remarkGfm, remarkBreaks]
-const REHYPE_PLUGINS = [rehypeHighlight]
+// rehype-highlight config:
+//   detect: true  — when a fence has no language (```…```), lowlight
+//                   auto-detects the language. Without this, unlabeled
+//                   fences stay plain text. CC models commonly emit
+//                   unlabeled fences for shell output and short snippets,
+//                   so this is load-bearing for the common case.
+//   languages: undefined — use the `common` set (~40 languages). Covers
+//                   every mainstream language; the full set would triple
+//                   the bundle for marginal benefit.
+//
+// Plugin instance is frozen at module scope (with the options baked in)
+// because react-markdown v10 caches parse results keyed on plugin
+// identity — passing [rehypeHighlight, options] at the call site would
+// create a fresh options object every render and bust the cache.
+const REHYPE_PLUGINS: import('react-markdown').Options['rehypePlugins'] = [
+  [rehypeHighlight, { detect: true }],
+]
 
 type Props = {
   entries: Entry[]
