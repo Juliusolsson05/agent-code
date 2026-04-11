@@ -212,10 +212,10 @@ function buildSidePath(
 }
 
 /**
- * Walk a tree following a side path (produced by buildSidePath) for
- * `depth` steps and return the node at that position. Used by
- * resizeInDirection to look up the split we want to adjust without
- * re-walking from root each time.
+ * Walk a tree following a side path for `depth` steps and return the
+ * node at that position. Forward iteration from root: step 0 is root,
+ * step 1 is one level in, etc. Used by resizeInDirection to look up
+ * the split we want to adjust without re-walking from scratch.
  */
 function nodeAtPath(
   root: TileNode,
@@ -231,32 +231,42 @@ function nodeAtPath(
 }
 
 /**
- * Return a new tree with the split at `sides[0..pathLen-1]` having its
+ * Return a new tree with the split at depth `targetDepth` having its
  * ratio replaced. Pure — builds a new spine down to the target split,
  * leaves unrelated subtrees shared with the input.
+ *
+ * Indexing invariant (important): walk FORWARD from the root, reading
+ * sides[0], sides[1], sides[2]… until `offset === targetDepth`. An
+ * earlier version of this used `sides[sides.length - pathLen]` which
+ * indexed from the END of the path and shifted wrongly between
+ * recursion levels — it happened to land correctly for paths made of
+ * uniform `a`s or `b`s (top pane with sides=['a'], or the bottom-of-
+ * bottom chain with sides=['b','b']) but silently dropped writes for
+ * every mixed path in between. That was the "only the bottom pane's
+ * ↓ resize does anything" symptom.
  */
 function replaceRatioAtPath(
   node: TileNode,
   sides: Array<'a' | 'b'>,
-  pathLen: number,
+  offset: number,
+  targetDepth: number,
   newRatio: number,
 ): TileNode {
-  if (pathLen === 0) {
-    // We've arrived at the target split — update its ratio.
+  if (offset === targetDepth) {
     if (node.type !== 'split') return node
     return { ...node, ratio: newRatio }
   }
   if (node.type !== 'split') return node
-  const side = sides[sides.length - pathLen]
+  const side = sides[offset]
   if (side === 'a') {
     return {
       ...node,
-      a: replaceRatioAtPath(node.a, sides, pathLen - 1, newRatio),
+      a: replaceRatioAtPath(node.a, sides, offset + 1, targetDepth, newRatio),
     }
   }
   return {
     ...node,
-    b: replaceRatioAtPath(node.b, sides, pathLen - 1, newRatio),
+    b: replaceRatioAtPath(node.b, sides, offset + 1, targetDepth, newRatio),
   }
 }
 
@@ -303,15 +313,19 @@ export function resizeInDirection(
   // fraction, so moving the divider left or up means LESS `a`.
   const sign = direction === 'right' || direction === 'down' ? +1 : -1
 
-  // Walk from the innermost (deepest) split outward, returning the
+  // Walk from the innermost split (deepest) outward, returning the
   // first one whose direction matches the arrow axis. That's the
-  // split the user's focused pane is closest to on that axis.
-  for (let depth = sides.length; depth >= 1; depth--) {
-    const parent = nodeAtPath(root, sides, depth - 1)
+  // split whose divider is closest to the focused pane on that axis.
+  //
+  // `targetDepth` is the depth of the candidate split — 0 means root,
+  // sides.length - 1 means the innermost split on the path (parent of
+  // the focused leaf). We check them in order innermost → outermost.
+  for (let targetDepth = sides.length - 1; targetDepth >= 0; targetDepth--) {
+    const parent = nodeAtPath(root, sides, targetDepth)
     if (parent.type !== 'split') continue
     if (parent.direction !== wantAxis) continue
     const newRatio = clampRatio(parent.ratio + sign * delta)
-    return replaceRatioAtPath(root, sides, depth - 1, newRatio)
+    return replaceRatioAtPath(root, sides, 0, targetDepth, newRatio)
   }
 
   return root
