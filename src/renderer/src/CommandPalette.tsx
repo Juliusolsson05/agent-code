@@ -134,6 +134,12 @@ export function buildCommands(): CommandDef[] {
       shortcut: '⌥J',
       action: ({ workspace }) => workspace.navigate('down'),
     },
+    {
+      id: 'undo-close',
+      label: 'Undo Close',
+      shortcut: '⌘⇧T',
+      action: ({ workspace }) => void workspace.undoClose(),
+    },
   ]
 }
 

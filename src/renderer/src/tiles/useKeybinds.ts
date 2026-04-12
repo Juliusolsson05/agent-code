@@ -69,6 +69,16 @@ export function useKeybinds(
         return
       }
 
+      // --- CMD: undo close (⌘⇧T) ---
+      // Same shortcut as Chrome's "reopen closed tab". Pops the most
+      // recent entry from the undo-close stack and restores it — either
+      // re-splitting a pane in place or re-inserting a whole tab.
+      if (cmd && shift && k.toLowerCase() === 't' && !alt) {
+        e.preventDefault()
+        void workspace.undoClose()
+        return
+      }
+
       // --- CMD: tab management ---
       if (cmd && !alt) {
         if (k === 't' && !shift) {

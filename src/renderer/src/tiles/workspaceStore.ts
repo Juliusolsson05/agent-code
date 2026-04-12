@@ -21,6 +21,12 @@ import {
   resizeInDirection,
   splitLeaf,
 } from './treeOps'
+import {
+  UndoCloseStack,
+  findParentSplitInfo,
+  reinsertPane,
+  type ClosedEntry,
+} from '../lib/undoClose'
 
 // Workspace store — single React hook that owns:
 //   - The workspace state (tabs + tile trees + session metadata)
@@ -186,6 +192,12 @@ export function useWorkspace() {
   // Latest screen per session — mirrored from state into a ref so the
   // Enter handler in TileLeaf can capture a baseline synchronously.
   const latestScreenRef = useRef<Record<SessionId, string>>({})
+
+  // Undo-close stack — mutable ref because the stack is imperative
+  // (push/pop) and we don't want React re-renders on every close.
+  // The undoClose action reads it and the command palette peeks at
+  // .length to show/hide the command.
+  const undoStackRef = useRef(new UndoCloseStack())
 
   // ---- Helpers ----
 
@@ -525,8 +537,23 @@ export function useWorkspace() {
     async (tabId: TabId) => {
       const tab = state.tabs.find(t => t.id === tabId)
       if (!tab) return
-      // Kill every session in this tab.
+
+      // Capture undo info before killing anything.
+      const tabIdx = state.tabs.findIndex(t => t.id === tabId)
       const ids = collectLeaves(tab.root)
+      const allMetas: Record<SessionId, SessionMeta> = {}
+      for (const id of ids) {
+        if (state.sessions[id]) allMetas[id] = state.sessions[id]
+      }
+      undoStackRef.current.push({
+        type: 'tab',
+        closedAt: Date.now(),
+        tab: { ...tab },
+        tabIndex: tabIdx,
+        sessionMetas: allMetas,
+      })
+
+      // Kill every session in this tab.
       await Promise.all(ids.map(id => window.api.killSession(id)))
       setRuntimes(prev => {
         const next = { ...prev }
@@ -548,7 +575,7 @@ export function useWorkspace() {
         return { ...prev, tabs, activeTabId, sessions }
       })
     },
-    [state.tabs],
+    [state.tabs, state.sessions],
   )
 
   // ---- Action: split the focused pane ----
@@ -586,10 +613,49 @@ export function useWorkspace() {
   // collapses to nothing, closes the whole tab. If that was the last
   // tab, leaves the workspace in an empty state — the UI shows a
   // welcome screen prompting for a new tab.
+  //
+  // Before destroying anything, we capture undo info and push it onto
+  // the undo-close stack so the user can restore the pane (or tab)
+  // with a single command within the next 2 minutes.
   const closeFocused = useCallback(async () => {
     const tab = state.tabs.find(t => t.id === state.activeTabId)
     if (!tab) return
     const targetId = tab.focusedSessionId
+    const sessionMeta = state.sessions[targetId]
+
+    // Capture undo info BEFORE mutating the tree. Two cases:
+    //   1. Pane inside a split → record the parent split's geometry
+    //      and the surviving sibling's anchor leaf so we can re-split.
+    //   2. Last pane in a tab → record the whole tab so we can
+    //      re-insert it at the same index.
+    const parentInfo = findParentSplitInfo(tab.root, targetId)
+    if (parentInfo && sessionMeta) {
+      undoStackRef.current.push({
+        type: 'pane',
+        closedAt: Date.now(),
+        tabId: tab.id,
+        sessionMeta,
+        direction: parentInfo.direction,
+        ratio: parentInfo.ratio,
+        side: parentInfo.side,
+        siblingLeafId: parentInfo.siblingLeafId,
+      })
+    } else if (!parentInfo && sessionMeta) {
+      // This pane IS the root — closing it kills the tab. Capture
+      // the tab-level undo entry.
+      const tabIdx = state.tabs.findIndex(t => t.id === tab.id)
+      const allMetas: Record<SessionId, SessionMeta> = {}
+      for (const leafId of collectLeaves(tab.root)) {
+        if (state.sessions[leafId]) allMetas[leafId] = state.sessions[leafId]
+      }
+      undoStackRef.current.push({
+        type: 'tab',
+        closedAt: Date.now(),
+        tab: { ...tab },
+        tabIndex: tabIdx,
+        sessionMetas: allMetas,
+      })
+    }
 
     await window.api.killSession(targetId)
 
@@ -632,7 +698,7 @@ export function useWorkspace() {
       delete sessions[targetId]
       return { ...prev, tabs, sessions }
     })
-  }, [state.activeTabId, state.tabs])
+  }, [state.activeTabId, state.tabs, state.sessions])
 
   // ---- Action: focus a specific session in the active tab ----
   const focusSession = useCallback((sessionId: SessionId) => {
@@ -923,6 +989,115 @@ export function useWorkspace() {
     })
   }, [newTab])
 
+  // ---- Action: undo close ----
+  //
+  // Pops the most recent entry from the undo stack and restores it.
+  // For panes: finds the surviving sibling in the current tree by its
+  // anchor leaf, re-wraps it in a split with the restored session on
+  // the correct side, and respawns the session (with --resume for
+  // Claude sessions so the conversation comes back).
+  //
+  // For tabs: respawns every session in the tab, remaps the session
+  // ids in the tree (since the new spawn produces new ids), and
+  // re-inserts the tab at its original index (clamped to bounds).
+  const undoClose = useCallback(async () => {
+    const entry = undoStackRef.current.pop()
+    if (!entry) return
+
+    if (entry.type === 'pane') {
+      // Find which tab the sibling leaf is in now.
+      const targetTab = state.tabs.find(t =>
+        collectLeaves(t.root).includes(entry.siblingLeafId),
+      )
+      if (!targetTab) return // sibling was also closed — stale undo
+
+      // Respawn the session. For Claude sessions with a ccSessionId,
+      // pass --resume so the conversation history replays via JSONL.
+      const meta = entry.sessionMeta
+      const newSessionId = await spawn(meta.cwd, {
+        kind: meta.kind ?? 'claude',
+        resumeSessionId: meta.providerSessionId,
+      })
+
+      setState(prev => {
+        const tabs = prev.tabs.map(t => {
+          if (t.id !== targetTab.id) return t
+          const newRoot = reinsertPane(
+            t.root,
+            entry.siblingLeafId,
+            newSessionId,
+            entry.direction,
+            entry.ratio,
+            entry.side,
+          )
+          if (!newRoot) return t // anchor not found — bail
+          return {
+            ...t,
+            root: newRoot,
+            focusedSessionId: newSessionId,
+          }
+        })
+        return { ...prev, tabs }
+      })
+    } else {
+      // Tab undo: respawn every session and remap the tree.
+      const idMap = new Map<SessionId, SessionId>()
+      const freshSessions: Record<SessionId, SessionMeta> = {}
+
+      for (const [oldId, meta] of Object.entries(entry.sessionMetas)) {
+        try {
+          const kind: SessionKind = meta.kind ?? 'claude'
+          const newId = await spawn(meta.cwd, {
+            kind,
+            resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
+          })
+          idMap.set(oldId, newId)
+          freshSessions[newId] = meta
+        } catch {
+          // If one session fails to spawn, skip it — restore what we can.
+        }
+      }
+
+      if (idMap.size === 0) return // nothing survived
+
+      const remapNode = (n: TileNode): TileNode => {
+        if (n.type === 'leaf') {
+          const mapped = idMap.get(n.sessionId)
+          return mapped ? { type: 'leaf', sessionId: mapped } : n
+        }
+        return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
+      }
+
+      const restoredRoot = remapNode(entry.tab.root)
+      const leaves = collectLeaves(restoredRoot)
+      if (leaves.length === 0) return
+
+      const restoredFocused =
+        idMap.get(entry.tab.focusedSessionId) ?? leaves[0]
+      const restoredTab: Tab = {
+        id: crypto.randomUUID(),
+        title: entry.tab.title,
+        root: restoredRoot,
+        focusedSessionId: restoredFocused,
+      }
+
+      setState(prev => {
+        const insertIdx = Math.min(entry.tabIndex, prev.tabs.length)
+        const tabs = [...prev.tabs]
+        tabs.splice(insertIdx, 0, restoredTab)
+        return {
+          ...prev,
+          tabs,
+          activeTabId: restoredTab.id,
+        }
+      })
+    }
+  }, [spawn, state.tabs])
+
+  /** Peek at the undo stack length — used by the command palette to
+   *  show/hide the "Undo Close" command. */
+  const undoCloseCount = undoStackRef.current.length
+
   const activeTab = useMemo(
     () => state.tabs.find(t => t.id === state.activeTabId) ?? null,
     [state.activeTabId, state.tabs],
@@ -952,6 +1127,8 @@ export function useWorkspace() {
     setSplitRatio,
     setStreamingBaseline,
     setDraftInput,
+    undoClose,
+    undoCloseCount,
   }
 }
 
