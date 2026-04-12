@@ -19,7 +19,7 @@ import {
   MultiEditRow,
   WriteRow,
   TodoRow,
-} from './claude/ClaudeRows'
+} from '../../../providers/claude/renderer/rows/ClaudeRows'
 import { CodexToolRow } from './codex/CodexRows'
 import {
   isConversationEntry,

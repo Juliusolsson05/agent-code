@@ -4,14 +4,14 @@ import { join } from 'path'
 import {
   detectSlashPicker,
   type SlashPickerState,
-} from '../parsers/claude/slashCommandPicker.js'
+} from '../parsers/slashCommandPicker.js'
 import {
   tailNewSessionFile,
   tailSessionFile,
   type JsonlEntry,
-} from '../../shared/runtime/jsonlTailer.js'
-import { getProjectDirForCwd } from '../../shared/runtime/projectDir.js'
-import { PtyScreen, terminalToMarkdown } from '../../shared/runtime/ptyScreen.js'
+} from '../../../shared/runtime/jsonlTailer.js'
+import { getProjectDirForCwd } from '../../../shared/runtime/projectDir.js'
+import { PtyScreen, terminalToMarkdown } from '../../../shared/runtime/ptyScreen.js'
 
 // Re-export terminalToMarkdown so existing callers (testbench/replay.ts)
 // that imported it from this file keep working. The actual implementation

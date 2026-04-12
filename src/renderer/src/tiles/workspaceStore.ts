@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Entry } from '../../../shared/types/transcript'
-import { detectActivity } from '../../../core/parsers/claude/streamingScreen'
+import { detectActivity } from '../../../providers/claude/parsers/streamingScreen'
 import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
 import {
   RATIO_DEFAULT,

@@ -15,8 +15,8 @@ import hljs from 'highlight.js'
 import { normalizeCodeLanguage } from '../../../../shared/code/language'
 import { diffLines, type DiffLine } from '../../../../shared/parsers/lineDiff'
 import type { ToolUseBlock } from '../../../../shared/types/transcript'
-import { CodeBlock } from '../../code/CodeBlock'
-import { CodeRenderContext, MarkerRow } from '../Feed'
+import { CodeBlock } from '../../../../renderer/src/code/CodeBlock'
+import { CodeRenderContext, MarkerRow } from '../../../../renderer/src/feed/Feed'
 
 /* ---------- Shared helpers ---------- */
 

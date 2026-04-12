@@ -6,7 +6,7 @@ import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
 import { LspManager } from './lspManager.js'
-import { listSessionsForCwd } from '../core/runtime/sessionList.js'
+import { listSessionsForCwd } from '../providers/claude/runtime/sessionList.js'
 import { listCodexSessions } from '../core/runtime/codexSessionList.js'
 
 // Main process — thin Electron host over SessionManager.

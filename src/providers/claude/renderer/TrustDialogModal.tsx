@@ -1,4 +1,4 @@
-import { detectTrustDialog } from '../../../core/parsers/claude/trustDialog'
+import { detectTrustDialog } from '../parsers/trustDialog'
 
 // Trust-dialog overlay. Sharp edges, no rounding, no shadow frills —
 // matches the rest of the app's aesthetic. Detection is delegated to

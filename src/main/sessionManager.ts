@@ -4,7 +4,7 @@ import { EventEmitter } from 'events'
 import {
   ClaudeSession,
   type ScreenSnapshot,
-} from '../core/runtime/claudeSession.js'
+} from '../providers/claude/runtime/claudeSession.js'
 import { CodexSession } from '../core/runtime/codexSession.js'
 import { TerminalSession } from '../shared/runtime/terminalSession.js'
 import type { JsonlEntry } from '../shared/runtime/jsonlTailer.js'

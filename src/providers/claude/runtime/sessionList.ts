@@ -1,7 +1,7 @@
 import { readdir, stat, open } from 'fs/promises'
 import { basename, join } from 'path'
 
-import { getProjectDirForCwd } from '../../shared/runtime/projectDir.js'
+import { getProjectDirForCwd } from '../../../shared/runtime/projectDir.js'
 
 // Session lister — reimplements the minimal subset of CC's
 // utils/listSessionsImpl.ts needed to power the cc-shell resume UI.
