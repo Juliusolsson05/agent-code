@@ -1,8 +1,18 @@
+import { useEffect, useState } from 'react'
+
 import type { Workspace } from './workspaceStore'
 
 // TabBar — one row of tab chrome at the top of the window. Each tab has
 // a title, a close button, and activates on click. The `+` button opens
 // the new-tab flow (pickDirectory → newTab).
+//
+// Traffic light inset: on macOS with `titleBarStyle: 'hiddenInset'`,
+// the close/minimize/zoom buttons sit inside the content area. The
+// old approach was a hardcoded `w-[70px]` spacer, which broke at
+// non-default zoom levels and display scales. Now the main process
+// pushes the actual right-edge X position of the traffic light
+// buttons via IPC, and we use it as a dynamic width. Falls back to
+// 70px if the IPC hasn't fired yet (first frame).
 
 type Props = {
   workspace: Workspace
@@ -11,6 +21,14 @@ type Props = {
 
 export function TabBar({ workspace, onNewTabRequest }: Props) {
   const { state, activateTab, closeTab } = workspace
+
+  // Dynamic traffic light inset from main process. Updated on
+  // resize / zoom / display change. 70 is the fallback for the
+  // first frame before main pushes the value.
+  const [trafficInset, setTrafficInset] = useState(70)
+  useEffect(() => {
+    return window.api.onTrafficLightInset(setTrafficInset)
+  }, [])
 
   return (
     <div
@@ -22,9 +40,10 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
         [-webkit-app-region:drag]
       "
     >
-      {/* Traffic-light padding on macOS. Keeps the first tab from
-          sitting under the red/yellow/green circles. */}
-      <div className="w-[70px] flex-shrink-0" />
+      {/* Traffic-light padding on macOS. Width is pushed from the main
+          process based on the actual button positions — zoom-safe and
+          scale-safe. See pushTrafficLightInset() in main/index.ts. */}
+      <div className="flex-shrink-0" style={{ width: trafficInset }} />
 
       {/* Tab list */}
       <div className="flex items-stretch flex-1 min-w-0 [-webkit-app-region:no-drag]">

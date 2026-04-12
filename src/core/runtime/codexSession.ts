@@ -1,5 +1,9 @@
 import { EventEmitter } from 'events'
+import { createWriteStream, mkdirSync, type WriteStream } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
 
+import { extractCodexAssistantInProgress } from '../parsers/codex/streamingScreen.js'
 import type { SlashPickerState } from '../parsers/claude/slashCommandPicker.js'
 import type { JsonlEntry } from './jsonlTailer.js'
 import { getCodexSessionsDir } from './codexProjectDir.js'
@@ -93,10 +97,30 @@ export class CodexSession extends EventEmitter {
   private readonly ptyScreen: PtyScreen
   private exited = false
   private readonly cwd: string
+  // Debug log — writes every screen snapshot + extract to a file
+  // so we can diagnose "thinking forever" bugs in the live app.
+  // Written to /tmp/cc-shell-codex-debug-<ts>.log.
+  private debugLog: WriteStream | null = null
+  private debugSnapCount = 0
 
   constructor(options: CodexSessionOptions = {}) {
     super()
     this.cwd = options.cwd ?? process.cwd()
+
+    // Open a debug log for this session.
+    try {
+      const debugDir = join(tmpdir(), 'cc-shell-debug')
+      mkdirSync(debugDir, { recursive: true })
+      const ts = new Date().toISOString().replace(/[:.]/g, '-')
+      this.debugLog = createWriteStream(
+        join(debugDir, `codex-${ts}.log`),
+        { flags: 'a' },
+      )
+      this.debugLog.write(`[codex-debug] session started at ${ts}\n`)
+      this.debugLog.write(`[codex-debug] cwd: ${this.cwd}\n`)
+    } catch {
+      // Debug logging is best-effort; don't break the session.
+    }
 
     // Build the env. Start from process.env so PATH etc. propagate.
     // Force TERM + COLORTERM for proper color output. No
@@ -136,6 +160,23 @@ export class CodexSession extends EventEmitter {
     // just pass through the base snapshot with a static "not visible"
     // picker so the renderer's picker component stays hidden.
     this.ptyScreen.on('screen', base => {
+      // Debug: log every Nth snapshot + the parser extract so we can
+      // diagnose streaming-card issues from a live app session.
+      this.debugSnapCount++
+      if (this.debugLog) {
+        const extract = extractCodexAssistantInProgress(base.plain)
+        this.debugLog.write(
+          `[snap ${this.debugSnapCount}] extract=${JSON.stringify(extract.slice(0, 120))} plainLen=${base.plain.length}\n`,
+        )
+        // Dump full screen periodically so we can see exactly what
+        // the headless xterm buffer contains.
+        if (this.debugSnapCount % 30 === 1) {
+          this.debugLog.write(
+            `--- FULL SCREEN (snap ${this.debugSnapCount}) ---\n${base.plain}\n--- END ---\n`,
+          )
+        }
+      }
+
       this.emit('screen', {
         plain: base.plain,
         markdown: base.markdown,

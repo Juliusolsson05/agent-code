@@ -170,6 +170,12 @@ const api = {
       }
     | { ok: false; error: string }
   > => ipcRenderer.invoke('fs:listDirectory', rawPath, opts),
+
+  // --- Traffic light inset (macOS) ---
+  // Main pushes the right-edge X of the traffic light buttons so the
+  // tab bar can pad itself dynamically. Zoom-safe, scale-safe.
+  onTrafficLightInset: (cb: (insetPx: number) => void): Unsub =>
+    subscribe('traffic-light-inset', cb),
 }
 
 contextBridge.exposeInMainWorld('api', api)

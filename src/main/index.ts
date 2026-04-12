@@ -30,6 +30,39 @@ const STATE_DIR = join(homedir(), '.config', 'cc-shell')
 const STATE_FILE = join(STATE_DIR, 'workspace.json')
 
 let mainWindow: BrowserWindow | null = null
+
+/**
+ * Push the traffic light (close/minimize/zoom) right-edge inset to the
+ * renderer as a CSS custom property. The renderer uses this to pad the
+ * tab bar so tabs don't sit under the buttons — zoom-safe, scale-safe,
+ * no magic pixel values.
+ *
+ * On non-macOS platforms or when the position isn't available, falls
+ * back to 0 (no inset needed — the title bar is separate).
+ */
+function pushTrafficLightInset(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  // getWindowButtonPosition returns { x, y } of the top-left of the
+  // FIRST button (close). The three buttons are each ~14px wide with
+  // ~6px gaps, arranged left-to-right: close, minimize, zoom. The
+  // right edge of the zoom button is roughly x + 68 CSS pixels at 1x
+  // scale. But we want to be precise, so we add a comfortable margin
+  // past the reported x position. The x value already accounts for
+  // the hiddenInset padding.
+  try {
+    const pos = mainWindow.getWindowButtonPosition()
+    if (pos) {
+      // pos.x is the left edge of the close button. The three buttons
+      // span ~54px total, plus we want ~8px breathing room after the
+      // last button. Round up to avoid sub-pixel clipping.
+      const inset = Math.ceil(pos.x + 62)
+      mainWindow.webContents.send('traffic-light-inset', inset)
+    }
+  } catch {
+    // getWindowButtonPosition throws on non-macOS. Silently skip —
+    // the renderer defaults to 0.
+  }
+}
 const manager = new SessionManager()
 
 function send(channel: string, ...args: unknown[]): void {
@@ -80,7 +113,14 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
+    pushTrafficLightInset()
   })
+
+  // Recompute the traffic light inset whenever the window geometry
+  // changes — zoom level, display scale, fullscreen toggle. Electron
+  // doesn't offer a "traffic light moved" event, but resize covers
+  // every case that shifts them.
+  mainWindow.on('resize', pushTrafficLightInset)
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
