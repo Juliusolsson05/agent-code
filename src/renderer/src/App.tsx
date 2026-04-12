@@ -69,8 +69,8 @@ export default function App() {
   )
 
   const onPathPickerAccept = useCallback(
-    async (cwd: string) => {
-      await workspace.newTab(cwd)
+    async (cwd: string, provider?: 'claude' | 'codex') => {
+      await workspace.newTab(cwd, undefined, provider)
       setPathPickerOpen(false)
     },
     [workspace],

@@ -520,8 +520,8 @@ export function useWorkspace() {
   // and makes it active. Pass `resumeSessionId` to resume an existing
   // CC session rather than starting a fresh one.
   const newTab = useCallback(
-    async (cwd: string, resumeSessionId?: string) => {
-      const sessionId = await spawn(cwd, { resumeSessionId })
+    async (cwd: string, resumeSessionId?: string, kind?: SessionKind) => {
+      const sessionId = await spawn(cwd, { resumeSessionId, kind })
       const tabId = crypto.randomUUID()
       const title = titleFromCwd(cwd)
       setState(prev => {

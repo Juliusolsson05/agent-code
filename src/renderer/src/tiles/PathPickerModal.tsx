@@ -57,6 +57,8 @@ export function PathPickerModal({
   const [value, setValue] = useState(defaultValue)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // Provider toggle: Claude (default) or Codex. Resets on modal open.
+  const [provider, setProvider] = useState<AgentProvider>('claude')
 
   // Resume list state. We eagerly refresh the list whenever the path
   // changes and resolves to a valid directory — gives the user live
@@ -80,6 +82,7 @@ export function PathPickerModal({
     setSessions([])
     setSessionsLoading(false)
     setResolvedPath(null)
+    setProvider('claude')
   }, [open, defaultValue])
 
   // Refresh the sessions list whenever the typed path changes. Run
@@ -122,7 +125,7 @@ export function PathPickerModal({
       setBusy(false)
       return
     }
-    await onAccept(result.path)
+    await onAccept(result.path, provider)
     setBusy(false)
   }
 
@@ -170,8 +173,28 @@ export function PathPickerModal({
           max-h-[80vh] flex flex-col
         "
       >
-        <div className="text-[13px] font-semibold text-ink mb-4 flex-shrink-0">
+        <div className="text-[13px] font-semibold text-ink mb-3 flex-shrink-0">
           New tab — working directory
+        </div>
+
+        {/* Provider toggle: Claude / Codex */}
+        <div className="flex gap-2 mb-3 flex-shrink-0">
+          {(['claude', 'codex'] as const).map(p => (
+            <button
+              key={p}
+              type="button"
+              onClick={() => setProvider(p)}
+              className={`
+                px-3 py-1 text-[11px] font-semibold uppercase tracking-wider
+                border transition-colors duration-120
+                ${provider === p
+                  ? 'bg-accent text-accent-fg border-accent'
+                  : 'bg-transparent text-muted border-border hover:border-border-hi hover:text-ink'}
+              `}
+            >
+              {p === 'claude' ? 'Claude' : 'Codex'}
+            </button>
+          ))}
         </div>
 
         <div className="relative mb-2 flex-shrink-0">
