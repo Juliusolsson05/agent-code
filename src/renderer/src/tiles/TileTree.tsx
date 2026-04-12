@@ -1,7 +1,7 @@
 import { useCallback, useRef } from 'react'
 
+import { getRendererProvider } from '../../../providers/registry.renderer'
 import { TerminalLeaf } from './TerminalLeaf'
-import { TileLeaf } from './TileLeaf'
 import type { Workspace } from './workspaceStore'
 import type { SessionId, TileNode } from './types'
 import { collectLeaves } from './treeOps'
@@ -20,13 +20,10 @@ type Props = {
 
 export function TileTree({ node, focusedSessionId, workspace }: Props) {
   if (node.type === 'leaf') {
-    // Dispatch by session kind. Terminal panes get TerminalLeaf
-    // (just an xterm.js instance); both agent providers (claude
-    // and codex) fall through to TileLeaf which provides the full
-    // feed + composer UI — Feed handles the provider-specific row
-    // rendering internally. Meta.kind absent = claude (back-compat).
     const meta = workspace.state.sessions[node.sessionId]
     const kind = meta?.kind ?? 'claude'
+
+    // Terminal panes get TerminalLeaf (just an xterm.js instance).
     if (kind === 'terminal') {
       return (
         <TerminalLeaf
@@ -37,9 +34,16 @@ export function TileTree({ node, focusedSessionId, workspace }: Props) {
         />
       )
     }
+
+    // Agent providers (claude, codex) dispatch through the registry.
+    // The shell never imports provider-specific code directly — only
+    // through getProvider(). Each provider's config.TileLeaf owns
+    // the full pane: feed, composer, slash picker, trust dialog, etc.
+    const provider = getRendererProvider(kind)
     const runtime = workspace.getRuntime(node.sessionId)
+    const LeafComponent = provider.TileLeaf
     return (
-      <TileLeaf
+      <LeafComponent
         sessionId={node.sessionId}
         runtime={runtime}
         focused={node.sessionId === focusedSessionId}
