@@ -5,6 +5,7 @@ import {
   ClaudeSession,
   type ScreenSnapshot,
 } from '../core/runtime/claudeSession.js'
+import { CodexSession } from '../core/runtime/codexSession.js'
 import { TerminalSession } from '../core/runtime/terminalSession.js'
 import type { JsonlEntry } from '../core/runtime/jsonlTailer.js'
 
@@ -76,6 +77,7 @@ export interface SessionManager {
 // kind so kill/write/resize can dispatch without sniffing the object.
 type RegistryEntry =
   | { kind: 'claude'; session: ClaudeSession }
+  | { kind: 'codex'; session: CodexSession }
   | { kind: 'terminal'; session: TerminalSession }
 
 // Rolling buffer cap for terminal replay. 256 KB is enough to hold
@@ -168,6 +170,41 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessions.set(sessionId, { kind: 'claude', session })
+      await session.start()
+      return sessionId
+    }
+
+    if (kind === 'codex') {
+      const session = new CodexSession({
+        cwd: options.cwd,
+        cols: options.cols ?? 120,
+        rows: options.rows ?? 40,
+        resumeSessionId: options.resumeSessionId,
+      })
+
+      // Wire events — same shape as Claude so the IPC forwarder
+      // in main/index.ts doesn't need codex-specific branches.
+      session.on('started', ({ projectDir }) =>
+        this.emit('started', { sessionId, kind, projectDir }),
+      )
+      session.on('pty-data', data =>
+        this.emit('pty-data', { sessionId, data }),
+      )
+      session.on('screen', snap =>
+        this.emit('screen', { sessionId, ...snap }),
+      )
+      session.on('jsonl-entry', (entry, file) =>
+        this.emit('jsonl-entry', { sessionId, entry, file }),
+      )
+      session.on('jsonl-error', error =>
+        this.emit('jsonl-error', { sessionId, error }),
+      )
+      session.on('exit', ({ exitCode, signal }) => {
+        this.emit('exit', { sessionId, exitCode, signal })
+        this.sessions.delete(sessionId)
+      })
+
+      this.sessions.set(sessionId, { kind: 'codex', session })
       await session.start()
       return sessionId
     }
