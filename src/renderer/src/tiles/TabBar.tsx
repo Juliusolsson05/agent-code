@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 
+import type { TileNode } from './types'
 import type { Workspace } from './workspaceStore'
 
 // TabBar — one row of tab chrome at the top of the window. Each tab has
@@ -19,8 +20,14 @@ type Props = {
   onNewTabRequest: () => void
 }
 
+/** Collect every leaf session ID from a tile tree. */
+function collectSessionIds(node: TileNode): string[] {
+  if (node.type === 'leaf') return [node.sessionId]
+  return [...collectSessionIds(node.a), ...collectSessionIds(node.b)]
+}
+
 export function TabBar({ workspace, onNewTabRequest }: Props) {
-  const { state, activateTab, closeTab } = workspace
+  const { state, runtimes, activateTab, closeTab } = workspace
 
   // Dynamic traffic light inset from main process. Updated on
   // resize / zoom / display change. 70 is the fallback for the
@@ -49,6 +56,20 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
       <div className="flex items-stretch flex-1 min-w-0 [-webkit-app-region:no-drag]">
         {state.tabs.map(tab => {
           const active = tab.id === state.activeTabId
+          // Derive active/total pane counts from the tile tree +
+          // runtimes. Pure derivation — no extra state needed.
+          const sessionIds = collectSessionIds(tab.root)
+          const total = sessionIds.length
+          // "active" = agent is currently working (generating a
+          // response), not just "process hasn't exited". The
+          // awaitingAssistant flag is set between user submit and
+          // assistant entry landing — that's the real activity signal.
+          const alive = sessionIds.filter(id => {
+            const rt = runtimes[id]
+            return rt?.awaitingAssistant === true
+          }).length
+          const allDone = alive === 0
+
           return (
             <div
               key={tab.id}
@@ -76,6 +97,19 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
               />
               <span className="flex-1 min-w-0 text-[11px] truncate tabular-nums">
                 {tab.title}
+              </span>
+              {/* Active/total pane badge — green when at least one
+                  session is alive, red when all have exited. */}
+              <span
+                className={`
+                  flex-shrink-0
+                  text-[9px] font-code font-semibold tabular-nums
+                  text-white
+                  px-1.5 py-0.5 leading-none
+                  ${allDone ? 'bg-red-500/80' : 'bg-green-500/80'}
+                `}
+              >
+                {alive}/{total}
               </span>
               <button
                 type="button"
