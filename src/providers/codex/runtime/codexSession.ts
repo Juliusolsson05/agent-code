@@ -131,7 +131,12 @@ export class CodexSession extends EventEmitter {
       resumeThreadId: this.resumeSessionId ?? undefined,
     })
 
-    // Forward raw PTY bytes (used by testbench recording).
+    // Forward raw PTY bytes — SessionManager expects this event.
+    this.pty.onData((data: string) => {
+      this.emit('pty-data', data)
+    })
+
+    // Forward screen snapshots.
     this.headless.on('screen', snap => {
       this.emit('screen', {
         plain: snap.plain,

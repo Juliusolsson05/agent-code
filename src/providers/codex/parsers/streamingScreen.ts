@@ -1,28 +1,49 @@
-// Codex TUI chrome stripper — counterpart to
-// src/core/parsers/claude/streamingScreen.ts.
+// Codex TUI chrome stripper + assistant extractor.
 //
-// Codex's TUI markers (confirmed from testbench recordings):
-//   › (U+203A) — user prompt prefix
-//   • (U+2022) — assistant text + tool call prefix
-//   │ └        — tool output sub-items (box drawing)
-//   ──────     — horizontal divider (same as Claude)
-//   gpt-X.Y … — status line (model + cwd, no ⏵⏵ prefix)
-//   ╭╮╰╯│     — banner box around "OpenAI Codex (vX.Y.Z)"
+// Codex's TUI markers (confirmed from recording 2026-04-12T13-36-22):
 //
-// The structure mirrors Claude's parser: strip the bottom chrome
-// (status row, dividers, empty prompt), then walk backward for the
-// last assistant marker to extract the in-progress response.
+//   › (U+203A)  — user prompt prefix (empty composer or submitted prompt)
+//   • (U+2022)  — assistant text, tool calls, and working indicator
+//   ◦ (U+25E6)  — alternate assistant marker (older versions)
+//   └           — tool output sub-item prefix
+//   │           — tool output continuation
+//   ──────      — horizontal divider
+//   ╭╮╰╯│      — welcome banner box-drawing
 //
-// Pure: no Node, no DOM, no IO. Importable from main, renderer, testbench.
+// Status line patterns (bottom of screen):
+//   "gpt-5.4 medium fast · ~/path"
+//   "gpt-5.4 medium fast · ~/path · Main [default]"
+//   "tab to queue message ... N% context left"
+//
+// Working indicators (all prefixed with •):
+//   "• Working (Ns • esc to interrupt)"
+//   "• Working (Ns • esc to interrupt) · 1 background terminal running"
+//   "• Booting MCP server: name (Ns • esc to interrupt)"
+//
+// Tool-call chrome (prefixed with • but NOT assistant content):
+//   "• Ran git status --short"
+//   "• Explored"
+//   "• Edited 4 files (+18 -2)"
+//   "• Called codex.list_mcp_resources({})"
+//   "• Calling codex.list_mcp_resources({})"
+//   "• Spawned Name [role] (model)"
+//   "• Closed Name [role]"
+//   "• Updated Plan"
+//   "• Finished waiting"
+//
+// Pure: no Node, no DOM, no IO.
 
 const BOX_CHARS_RE = /[╭╮╰╯─│┌┐└┘├┤┬┴┼━┃═║]/g
 
-// Codex status line markers. Unlike Claude's "⏵⏵ bypass permissions on",
-// codex shows "gpt-X.Y model · ~/path" or just the model name.
+// --- Status line detection ---
+//
+// Codex's persistent status row at the bottom. Multiple variants
+// observed in recordings. We match substrings, not full lines.
 const CODEX_STATUS_MARKERS = [
-  'gpt-',        // model prefix in status
-  '/model',      // hint to change model
-  '/fast',       // fast mode hint
+  'gpt-',                // model name prefix
+  'context left',        // "82% context left" on the queue hint line
+  'tab to queue',        // queue hint
+  '/model to change',    // hint inside the welcome banner
 ]
 
 /** Horizontal-rule line: at least 10 ─/━/═ chars and almost nothing else. */
@@ -35,8 +56,9 @@ export function isCodexDividerLine(line: string): boolean {
 
 /**
  * Codex's prompt-indicator row: `›` followed by whitespace only (empty
- * composer). Accept optional markdown emphasis wrappers because
- * terminalToMarkdown may bold the prompt glyph.
+ * composer) or placeholder text like "Improve documentation in @filename".
+ * Accept optional markdown emphasis wrappers because terminalToMarkdown
+ * may bold the prompt glyph.
  */
 export function isCodexPromptLine(line: string): boolean {
   return /^\s*(?:\*{1,3})?›(?:\*{1,3})?\s*$/.test(line)
@@ -44,15 +66,14 @@ export function isCodexPromptLine(line: string): boolean {
 
 /**
  * A line that starts with `›` followed by text content — a user
- * prompt echo or the composer with placeholder text. Used as a
- * stop-terminator when extracting the assistant block (same role
- * as Claude's isUserPromptLine).
+ * prompt echo or the composer with active input/placeholder text.
+ * Used as a stop-terminator when extracting the assistant block.
  */
 export function isCodexUserPromptLine(line: string): boolean {
   return /^\s*(?:\*{1,3})?›(?:\*{1,3})?\s+\S/.test(line)
 }
 
-/** Codex's persistent status row — model + cwd. */
+/** Codex's persistent status row — model + cwd + hints. */
 export function isCodexStatusLine(line: string): boolean {
   return CODEX_STATUS_MARKERS.some(m => line.includes(m))
 }
@@ -73,53 +94,155 @@ export function isCodexChromeLine(line: string): boolean {
   return false
 }
 
-// The assistant marker codex uses — • (U+2022, bullet).
-const CODEX_ASSISTANT_MARKER = '[•◦]'
-const CODEX_ASSISTANT_MARKER_RE = new RegExp(
-  String.raw`^\s*(?:\*{1,3})?${CODEX_ASSISTANT_MARKER}(?:\*{1,3})?\s?`,
-)
+// --- Assistant marker ---
 
-// Codex tool-output sub-items use box-drawing: │ and └
+const CODEX_ASSISTANT_MARKER_RE = /^\s*(?:\*{1,3})?[•◦](?:\*{1,3})?\s?/
+
+// --- Intermediate chrome: tool calls, spinners, working status ---
+//
+// These lines are prefixed with • (same as assistant text) but are
+// NOT real assistant content. They must be filtered BEFORE we walk
+// backward looking for the last • marker, otherwise we'd land on
+// "• Ran git status" or "• Working (3s...)" instead of the real
+// response text.
+
+// Tool-output sub-items: │ and └ prefixes.
 const CODEX_TREE_MARKER_RE = /^\s*[│└]/
 
-// Codex spinner — uses braille spinner chars (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏)
-// followed by a word, similar to Claude's ✻ spinners.
+// Braille spinner characters (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏).
 const CODEX_SPINNER_RE = /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/
 
-// Codex "Working" progress line. Uses the SAME `•` prefix as real
-// assistant text, but carries a progress counter and "esc to interrupt"
-// hint. Without filtering this, extractCodexAssistantInProgress walks
-// backward and lands on "• Working (3s • esc to interrupt)" instead
-// of the real response — showing "Working (3s...)" as the streaming
-// card content. Confirmed from testbench recording
-// 2026-04-12T07-45-34-280Z, snap 8.
-const CODEX_WORKING_RE = new RegExp(
-  String.raw`^\s*(?:\*{1,3})?${CODEX_ASSISTANT_MARKER}(?:\*{1,3})?\s+Working\s*\(`,
-)
-
-// Codex tool-call label with esc hint — "• Ran printf 'hello" is
-// a tool label when followed by sub-items, but "• Working (3s •
-// esc to interrupt)" is ALWAYS chrome. The "esc to interrupt" hint
-// distinguishes chrome from real content.
+// "• Working (Ns • esc to interrupt)" — the primary activity indicator.
+// Also matches "• Booting MCP server: name (Ns • esc to interrupt)".
 const CODEX_ESC_HINT_RE = /esc to interrupt/
+
+// Tool-call labels: "• Ran ...", "• Explored", "• Edited ...", etc.
+// These are one-line summaries of tool executions. They always start
+// with • followed by a past-tense or gerund verb. We identify them
+// by the verb patterns observed in recordings.
+//
+// Why not just check for "esc to interrupt"? Because tool-call labels
+// like "• Ran git status" do NOT have the esc hint — only the Working
+// spinner does. But they ARE chrome that should be filtered from the
+// assistant text extraction.
+const CODEX_TOOL_CALL_VERBS = [
+  'Ran ',
+  'Explored',
+  'Edited ',
+  'Called ',
+  'Calling ',
+  'Spawned ',
+  'Closed ',
+  'Updated Plan',
+  'Finished waiting',
+  'Booting MCP',
+  'Created ',
+  'Deleted ',
+  'Wrote ',
+  'Read ',
+  'Listed ',
+  'Searched ',
+]
+
+// Build a regex that matches "• <verb>" for any of the known verbs.
+const CODEX_TOOL_CALL_RE = new RegExp(
+  String.raw`^\s*(?:\*{1,3})?[•◦](?:\*{1,3})?\s+(?:${CODEX_TOOL_CALL_VERBS.map(v => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`,
+)
 
 /**
  * Returns true if a line is codex's mid-turn tool/thinking UI chrome.
+ * Must be called on individual lines, not the full screen text.
  */
 export function isCodexIntermediateChromeLine(line: string): boolean {
   if (CODEX_TREE_MARKER_RE.test(line)) return true
   if (CODEX_SPINNER_RE.test(line)) return true
-  if (CODEX_WORKING_RE.test(line)) return true
   if (CODEX_ESC_HINT_RE.test(line)) return true
+  if (CODEX_TOOL_CALL_RE.test(line)) return true
   return false
 }
+
+// --- Trust dialog detection (inlined) ---
+
+const TRUST_DIALOG_MARKERS = [
+  'Do you trust the contents of this directory',
+  'Yes, continue',
+  'No, quit',
+]
+
+function isTrustDialogVisible(screen: string): boolean {
+  return TRUST_DIALOG_MARKERS.every(m => screen.includes(m))
+}
+
+// --- Resume picker detection ---
+
+const RESUME_PICKER_MARKERS = [
+  'Resume a previous session',
+  'enter to resume',
+  'esc to start new',
+]
+
+function isResumePicker(screen: string): boolean {
+  return RESUME_PICKER_MARKERS.every(m => screen.includes(m))
+}
+
+// --- Activity detection ---
+//
+// Detect whether Codex is actively working from the screen buffer.
+// Returns a status string when working, null when idle.
+
+/** Working line regex — extracts timing. */
+const CODEX_WORKING_RE = /[•◦]\s+Working\s*\((\d+(?:m\s+\d+)?)s/
+
+/** Booting MCP regex. */
+const CODEX_BOOTING_RE = /[•◦]\s+Booting\s+MCP\s+server:\s+(\S+)/
+
+/**
+ * Detect Codex's activity state from the plain-text screen buffer.
+ * Scans the last ~15 lines (where the working indicator sits).
+ *
+ * Returns a short status string when working, or null when idle.
+ */
+export function detectCodexActivity(screen: string): string | null {
+  if (!screen) return null
+  const lines = screen.split('\n')
+
+  const start = Math.max(0, lines.length - 15)
+  for (let i = lines.length - 1; i >= start; i--) {
+    const line = lines[i] ?? ''
+
+    // Primary: "• Working (Ns • esc to interrupt)"
+    const workMatch = CODEX_WORKING_RE.exec(line)
+    if (workMatch) {
+      return `working… ${workMatch[1]}s`
+    }
+
+    // Secondary: "• Booting MCP server: name (...)"
+    const bootMatch = CODEX_BOOTING_RE.exec(line)
+    if (bootMatch) {
+      return `booting ${bootMatch[1]}…`
+    }
+
+    // Braille spinner (rare — usually accompanied by Working)
+    if (CODEX_SPINNER_RE.test(line)) {
+      return 'working…'
+    }
+  }
+
+  return null
+}
+
+// --- Streaming text extraction ---
 
 /**
  * Strip the bottom chrome from a codex screen snapshot.
  * Returns everything above the persistent input box + status row.
+ * Returns '' when the trust dialog or resume picker is on screen.
  */
 export function extractCodexStreamingText(screen: string): string {
   if (!screen) return ''
+  if (isTrustDialogVisible(screen)) return ''
+  if (isResumePicker(screen)) return ''
+
   const lines = screen.split('\n')
 
   // Walk from bottom up, stripping contiguous chrome.
@@ -145,18 +268,23 @@ export function extractCodexStreamingText(screen: string): string {
   return head.slice(start).join('\n')
 }
 
+// --- Assistant text extraction ---
+
 /**
  * Extract just the most-recent assistant text block from a codex
  * screen snapshot.
  *
- * Same algorithm as Claude's extractAssistantInProgress:
+ * Algorithm:
  *   1. Strip bottom chrome via extractCodexStreamingText.
- *   2. Filter intermediate chrome (tool sub-items, spinners).
- *   3. Walk backward for the last `•` marker.
+ *   2. Filter intermediate chrome (tool calls, spinners, sub-items).
+ *   3. Walk backward for the last `•` marker that ISN'T chrome.
  *   4. Slice from that marker to the first `›` user-prompt line
  *      (stop-terminator for queued messages).
  *   5. Strip the marker off the head line.
  *   6. Trim trailing blanks + dividers.
+ *
+ * Returns '' when no assistant text is on screen — the consumer
+ * should show a "thinking…" or activity placeholder in that case.
  */
 export function extractCodexAssistantInProgress(screen: string): string {
   const stripped = extractCodexStreamingText(screen)
@@ -165,6 +293,9 @@ export function extractCodexAssistantInProgress(screen: string): string {
   const allLines = stripped.split('\n')
 
   // Filter intermediate chrome before walking for the marker.
+  // This removes tool-call labels, tree sub-items, spinners, and
+  // working indicators — all of which use the same `•` prefix as
+  // real assistant text.
   const lines = allLines.filter(l => !isCodexIntermediateChromeLine(l))
 
   // Find the last assistant marker.
@@ -176,27 +307,13 @@ export function extractCodexAssistantInProgress(screen: string): string {
     }
   }
 
-  // Fallback: if filtering removed ALL `•` lines (the only `•` on
-  // screen was the Working spinner), check the UNFILTERED lines for
-  // the Working status and return a clean "working..." indicator
-  // so the streaming card shows progress instead of "thinking..."
-  // forever. This is the exact bug: during a long tool execution
-  // the Working spinner is the ONLY `•` on screen, our filter
-  // removes it, and the extractor returns '' → "thinking..." for
-  // the entire duration.
-  //
-  // Confirmed from debug log: snap 31 had only
-  // `• Working (0s • esc to interrupt)` as a `•` line; filter
-  // removed it; lastMarkerIdx = -1; streaming card showed
-  // "thinking..." until snap 43 when `• Hello.` appeared.
+  // Fallback: if filtering removed ALL `•` lines, check if there's
+  // a Working indicator in the unfiltered text and return a clean
+  // activity status so the consumer shows progress instead of
+  // "thinking…" forever.
   if (lastMarkerIdx === -1) {
-    // Check if there's a Working line in the unfiltered text.
-    const workingLine = allLines.find(l => CODEX_WORKING_RE.test(l))
-    if (workingLine) {
-      // Extract the timing: "Working (3s • esc to interrupt)" → "working…"
-      const match = workingLine.match(/Working\s*\((\d+)s/)
-      return match ? `working… ${match[1]}s` : 'working…'
-    }
+    const activity = detectCodexActivity(stripped)
+    if (activity) return activity
     return ''
   }
 
