@@ -13,7 +13,7 @@
 import { memo } from 'react'
 
 import type { ToolUseBlock } from '../../../../shared/types/transcript'
-import { MarkerRow } from '../Feed'
+import { MarkerRow } from '../../../../renderer/src/feed/Feed'
 
 /**
  * Generic codex tool-use row. Renders the tool name + a preview of

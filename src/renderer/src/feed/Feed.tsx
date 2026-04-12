@@ -20,7 +20,7 @@ import {
   WriteRow,
   TodoRow,
 } from '../../../providers/claude/renderer/rows/ClaudeRows'
-import { CodexToolRow } from './codex/CodexRows'
+import { CodexToolRow } from '../../../providers/codex/renderer/rows/CodexRows'
 import {
   isConversationEntry,
   type ContentBlock,

@@ -5,7 +5,7 @@ import {
   ClaudeSession,
   type ScreenSnapshot,
 } from '../providers/claude/runtime/claudeSession.js'
-import { CodexSession } from '../core/runtime/codexSession.js'
+import { CodexSession } from '../providers/codex/runtime/codexSession.js'
 import { TerminalSession } from '../shared/runtime/terminalSession.js'
 import type { JsonlEntry } from '../shared/runtime/jsonlTailer.js'
 

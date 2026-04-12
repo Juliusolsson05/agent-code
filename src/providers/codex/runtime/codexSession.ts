@@ -3,10 +3,14 @@ import { mkdir, readdir, stat } from 'fs/promises'
 import { join } from 'path'
 import { watch } from 'chokidar'
 
-import type { SlashPickerState } from '../parsers/claude/slashCommandPicker.js'
-import { tailSessionFile, type JsonlEntry } from '../../shared/runtime/jsonlTailer.js'
-import { getCodexSessionsDir } from './codexProjectDir.js'
-import { PtyScreen } from '../../shared/runtime/ptyScreen.js'
+// SlashPickerState is defined in multiple places (preload, workspaceStore,
+// Claude's parser). Codex doesn't have a slash picker, but ScreenSnapshot
+// requires the type for interface compatibility. Import from preload —
+// it's the IPC boundary type accessible to main-process code.
+import type { SlashPickerState } from '../../../preload/index.js'
+import { tailSessionFile, type JsonlEntry } from '../../../shared/runtime/jsonlTailer.js'
+import { getCodexSessionsDir } from './projectDir.js'
+import { PtyScreen } from '../../../shared/runtime/ptyScreen.js'
 
 // CodexSession — OpenAI Codex agent session.
 //

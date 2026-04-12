@@ -1,7 +1,7 @@
 import { readdir, stat, open } from 'fs/promises'
 import { join } from 'path'
 
-import { getCodexSessionsDir } from './codexProjectDir.js'
+import { getCodexSessionsDir } from './projectDir.js'
 
 // Codex session lister — walks ~/.codex/sessions/YYYY/MM/DD/ for
 // rollout-*.jsonl files and extracts summary metadata for the resume

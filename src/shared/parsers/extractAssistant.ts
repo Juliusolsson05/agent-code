@@ -8,7 +8,7 @@
 // `provider` argument so the callers stay provider-agnostic.
 
 import { extractAssistantInProgress as claudeExtract } from '../../providers/claude/parsers/streamingScreen.js'
-import { extractCodexAssistantInProgress as codexExtract } from '../../core/parsers/codex/streamingScreen.js'
+import { extractCodexAssistantInProgress as codexExtract } from '../../providers/codex/parsers/streamingScreen.js'
 
 export type AgentProvider = 'claude' | 'codex'
 

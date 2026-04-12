@@ -3,4 +3,4 @@
 // this file re-exports the union so provider-agnostic code
 // (Feed framework, workspaceStore) can import a single Entry type.
 export * from '../../providers/claude/types/claudeTranscript.js'
-export * from '../../core/types/codexTranscript.js'
+export * from '../../providers/codex/types/codexTranscript.js'
