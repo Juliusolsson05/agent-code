@@ -18,6 +18,7 @@ import {
   adjustNearestSplitRatio,
   closeLeaf,
   collectLeaves,
+  equalizeRatios,
   findNeighbor,
   normalizeTree,
   resizeInDirection,
@@ -1138,18 +1139,34 @@ export function useWorkspace() {
     }
   }, [spawn, state.tabs])
 
-  // ---- Action: normalize layout ----
+  // ---- Action: normalize layout (soft) ----
   //
-  // Rebuild the active tab's tile tree as a balanced grid where every
-  // pane gets equal space. No sessions are spawned or killed — we just
-  // restructure the tree. See normalizeTree() in treeOps.ts for the
-  // grid construction algorithm.
+  // Keep the existing tree structure but set every split ratio to 0.5.
+  // Equalizes spacing without rearranging panes — if you have three
+  // vertical panes on the left and one on the right, they stay that
+  // way but all dividers move to the midpoint.
   const normalizeLayout = useCallback(() => {
+    setState(prev => ({
+      ...prev,
+      tabs: prev.tabs.map(t =>
+        t.id === prev.activeTabId
+          ? { ...t, root: equalizeRatios(t.root) }
+          : t,
+      ),
+    }))
+  }, [])
+
+  // ---- Action: hard normalize layout ----
+  //
+  // Flatten the tree and rebuild as a balanced grid where every pane
+  // gets equal space. Changes the arrangement — all panes end up in
+  // a rows × cols grid. No sessions are spawned or killed.
+  const hardNormalizeLayout = useCallback(() => {
     setState(prev => {
       const tab = prev.tabs.find(t => t.id === prev.activeTabId)
       if (!tab) return prev
       const leaves = collectLeaves(tab.root)
-      if (leaves.length <= 1) return prev // nothing to normalize
+      if (leaves.length <= 1) return prev
       const newRoot = normalizeTree(leaves)
       return {
         ...prev,
@@ -1196,6 +1213,7 @@ export function useWorkspace() {
     undoClose,
     undoCloseCount,
     normalizeLayout,
+    hardNormalizeLayout,
   }
 }
 

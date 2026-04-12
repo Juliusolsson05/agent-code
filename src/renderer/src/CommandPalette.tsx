@@ -145,6 +145,11 @@ export function buildCommands(): CommandDef[] {
       label: 'Normalize Layout',
       action: ({ workspace }) => workspace.normalizeLayout(),
     },
+    {
+      id: 'hard-normalize-layout',
+      label: 'Hard Normalize Layout',
+      action: ({ workspace }) => workspace.hardNormalizeLayout(),
+    },
   ]
 }
 

@@ -342,6 +342,34 @@ export function firstLeaf(node: TileNode): SessionId {
 }
 
 /**
+ * Equalize spacing across the tree, preserving the existing structure
+ * (directions, nesting, leaf order). This is the "soft" normalize.
+ *
+ * At each split, the ratio is set proportional to the number of leaves
+ * on each side so every leaf in the subtree gets equal space. A split
+ * with 3 leaves on side `a` and 2 on side `b` gets ratio 3/5 — side
+ * `a` takes 60% of the space, which is then divided among its 3
+ * children equally via recursion.
+ *
+ * This means a left column with 3 panes stacked vertically and a right
+ * column with 2 panes gets a 60/40 horizontal split, with the left
+ * column internally split 33/33/33 and the right 50/50. Every leaf
+ * ends up the same size.
+ */
+export function equalizeRatios(node: TileNode): TileNode {
+  if (node.type === 'leaf') return node
+  const countA = collectLeaves(node.a).length
+  const countB = collectLeaves(node.b).length
+  const total = countA + countB
+  return {
+    ...node,
+    ratio: clampRatio(countA / total),
+    a: equalizeRatios(node.a),
+    b: equalizeRatios(node.b),
+  }
+}
+
+/**
  * Build a balanced grid tree from a flat list of session ids.
  *
  * The grid has `cols = ceil(sqrt(N))` columns and `rows = ceil(N/cols)`
