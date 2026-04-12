@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { Entry } from '../../../shared/types/transcript'
+import type { ConversationEntry, Entry } from '../../../shared/types/transcript'
 import { detectActivity } from '../../../providers/claude/parsers/streamingScreen'
 import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
 import {
@@ -139,6 +139,11 @@ export type SessionRuntime = {
    *  (e.g. "Cogitating…", "Reading file…"). Null when idle. Updated
    *  on every screen snapshot (~60 Hz) via detectActivity(). */
   activityStatus: string | null
+  /** Transient toast message shown above the composer. Single-slot:
+   *  a new toast replaces any in-flight one. Null when nothing to show.
+   *  Auto-cleared by a timeout in showPaneToast — components just read
+   *  it and render when non-null. */
+  paneToast: string | null
 }
 
 const emptyRuntime = (): SessionRuntime => ({
@@ -153,6 +158,7 @@ const emptyRuntime = (): SessionRuntime => ({
   picker: { visible: false, items: [] },
   draftInput: '',
   activityStatus: null,
+  paneToast: null,
 })
 
 function isCodexRolloutEntry(entry: Record<string, unknown>): boolean {
@@ -190,15 +196,165 @@ function isOptimisticCodexUserEntry(entry: Entry | undefined): boolean {
   return typeof entry.uuid === 'string' && entry.uuid.startsWith('optimistic-codex-user:')
 }
 
+function parseCodexJson(input: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(input) as unknown
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+function codexOutputText(output: unknown): string {
+  if (typeof output === 'string') return output
+  if (Array.isArray(output)) {
+    return output
+      .map(item => {
+        if (typeof item === 'string') return item
+        const rec = item as Record<string, unknown>
+        return typeof rec.text === 'string' ? rec.text : JSON.stringify(item, null, 2)
+      })
+      .join('\n')
+  }
+  return JSON.stringify(output ?? '', null, 2)
+}
+
+function stripCodexExecWrapper(output: string): string {
+  const marker = '\nOutput:\n'
+  const idx = output.indexOf(marker)
+  if (!output.startsWith('Chunk ID:') || idx === -1) return output
+  return output.slice(idx + marker.length)
+}
+
+function isCodexExecWrapperOutput(output: string): boolean {
+  return output.startsWith('Chunk ID:') && output.includes('\nProcess exited with code ')
+}
+
+function codexToolUseEntry(
+  uuid: string,
+  timestamp: string | undefined,
+  id: string,
+  name: string,
+  input: unknown,
+): Entry {
+  return {
+    type: 'assistant',
+    uuid,
+    parentUuid: null,
+    timestamp,
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id,
+          name,
+          input,
+        },
+      ],
+    },
+  }
+}
+
+function codexToolResultEntry(
+  uuid: string,
+  timestamp: string | undefined,
+  toolUseId: string,
+  content: string,
+  isError = false,
+  codex?: Record<string, unknown>,
+): Entry {
+  const resultBlock = {
+    type: 'tool_result',
+    tool_use_id: toolUseId,
+    content,
+    is_error: isError,
+    codex,
+  }
+
+  return {
+    type: 'user',
+    uuid,
+    parentUuid: null,
+    timestamp,
+    message: {
+      role: 'user',
+      content: [resultBlock],
+    },
+  }
+}
+
 function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
-  if (entry.type !== 'response_item') return []
+  const uuid =
+    `${String(entry.timestamp ?? Date.now())}:${String((entry.payload as Record<string, unknown> | undefined)?.id ?? (entry.payload as Record<string, unknown> | undefined)?.call_id ?? (entry.payload as Record<string, unknown> | undefined)?.type ?? entry.type)}`
+  const timestamp =
+    typeof entry.timestamp === 'string' ? entry.timestamp : undefined
+
   const payload = entry.payload as Record<string, unknown> | undefined
   if (!payload || typeof payload.type !== 'string') return []
 
-  const uuid =
-    `${String(entry.timestamp ?? Date.now())}:${String(payload.id ?? payload.call_id ?? payload.type)}`
-  const timestamp =
-    typeof entry.timestamp === 'string' ? entry.timestamp : undefined
+  if (entry.type === 'event_msg') {
+    if (
+      payload.type === 'exec_command_end' &&
+      typeof payload.call_id === 'string'
+    ) {
+      const output = String(
+        payload.aggregated_output ??
+        payload.formatted_output ??
+        payload.stdout ??
+        payload.stderr ??
+        '',
+      )
+      const exitCode =
+        typeof payload.exit_code === 'number' ? payload.exit_code : 0
+      if (!output.trim() && exitCode === 0) return []
+      return [
+        codexToolResultEntry(
+          uuid,
+          timestamp,
+          payload.call_id,
+          output,
+          exitCode !== 0 || payload.status === 'failed',
+          {
+            kind: 'exec_command_end',
+            parsedCmd: Array.isArray(payload.parsed_cmd) ? payload.parsed_cmd : [],
+            command: Array.isArray(payload.command) ? payload.command : [],
+            cwd: typeof payload.cwd === 'string' ? payload.cwd : null,
+            exitCode,
+          },
+        ),
+      ]
+    }
+
+    if (
+      payload.type === 'patch_apply_end' &&
+      typeof payload.call_id === 'string'
+    ) {
+      const stdout = typeof payload.stdout === 'string' ? payload.stdout : ''
+      const stderr = typeof payload.stderr === 'string' ? payload.stderr : ''
+      const content = stdout || stderr
+      return [
+        codexToolResultEntry(
+          uuid,
+          timestamp,
+          payload.call_id,
+          content,
+          payload.success !== true,
+          {
+            kind: 'patch_apply_end',
+            success: payload.success === true,
+            changes: payload.changes && typeof payload.changes === 'object'
+              ? payload.changes as Record<string, unknown>
+              : {},
+          },
+        ),
+      ]
+    }
+
+    return []
+  }
+
+  if (entry.type !== 'response_item') return []
 
   if (
     payload.type === 'message' &&
@@ -232,65 +388,115 @@ function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   }
 
   if (
+    payload.type === 'custom_tool_call' &&
+    typeof payload.call_id === 'string' &&
+    typeof payload.name === 'string'
+  ) {
+    const input =
+      typeof payload.input === 'string'
+        ? parseCodexJson(payload.input) ?? { raw: payload.input }
+        : { raw: '' }
+    return [codexToolUseEntry(uuid, timestamp, payload.call_id, payload.name, input)]
+  }
+
+  if (
     payload.type === 'function_call' &&
     typeof payload.call_id === 'string' &&
     typeof payload.name === 'string'
   ) {
-    let input: unknown = { arguments: payload.arguments }
-    if (typeof payload.arguments === 'string') {
-      try {
-        input = JSON.parse(payload.arguments)
-      } catch {
-        input = { arguments: payload.arguments }
-      }
-    }
-    return [
-      {
-        type: 'assistant',
-        uuid,
-        parentUuid: null,
-        timestamp,
-        message: {
-          role: 'assistant',
-          content: [
-            {
-              type: 'tool_use',
-              id: payload.call_id,
-              name: payload.name,
-              input,
-            },
-          ],
-        },
-      },
-    ]
+    const input =
+      typeof payload.arguments === 'string'
+        ? parseCodexJson(payload.arguments) ?? { arguments: payload.arguments }
+        : { arguments: payload.arguments }
+    return [codexToolUseEntry(uuid, timestamp, payload.call_id, payload.name, input)]
   }
 
   if (payload.type === 'function_call_output' && typeof payload.call_id === 'string') {
-    const output =
-      typeof payload.output === 'string'
-        ? payload.output
-        : JSON.stringify(payload.output ?? '', null, 2)
+    const output = stripCodexExecWrapper(codexOutputText(payload.output))
+    if (!output.trim() || isCodexExecWrapperOutput(codexOutputText(payload.output))) {
+      return []
+    }
+    return [codexToolResultEntry(uuid, timestamp, payload.call_id, output)]
+  }
+
+  if (payload.type === 'custom_tool_call_output' && typeof payload.call_id === 'string') {
+    const output = codexOutputText(payload.output)
+    const parsed = parseCodexJson(output)
+    const normalized =
+      typeof parsed?.output === 'string' ? parsed.output : output
+    const metadata = parsed?.metadata
+    const exitCode =
+      metadata && typeof metadata === 'object' && typeof (metadata as Record<string, unknown>).exit_code === 'number'
+        ? (metadata as Record<string, unknown>).exit_code as number
+        : 0
+    if (
+      typeof normalized === 'string' &&
+      normalized.startsWith('Success. Updated the following files:')
+    ) {
+      return []
+    }
     return [
-      {
-        type: 'user',
+      codexToolResultEntry(
         uuid,
-        parentUuid: null,
         timestamp,
-        message: {
-          role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: payload.call_id,
-              content: output,
-            },
-          ],
-        },
-      },
+        payload.call_id,
+        normalized,
+        exitCode !== 0,
+        { kind: 'custom_tool_call_output' },
+      ),
     ]
   }
 
   return []
+}
+
+function extractEmbeddedClaudeProgressEntry(
+  entry: Record<string, unknown>,
+): ConversationEntry | null {
+  if (entry.type !== 'progress') return null
+  const data = entry.data as Record<string, unknown> | undefined
+  const embedded = data?.message as Record<string, unknown> | undefined
+  if (!embedded) return null
+
+  const type = embedded.type
+  if (type !== 'assistant' && type !== 'user') return null
+  if (!embedded.message || typeof embedded.message !== 'object') return null
+
+  return {
+    type,
+    uuid:
+      typeof embedded.uuid === 'string'
+        ? embedded.uuid
+        : `${String(entry.timestamp ?? Date.now())}:progress:${type}`,
+    parentUuid:
+      typeof embedded.parentUuid === 'string' ? embedded.parentUuid : null,
+    timestamp:
+      typeof embedded.timestamp === 'string'
+        ? embedded.timestamp
+        : typeof entry.timestamp === 'string'
+          ? entry.timestamp
+          : undefined,
+    sessionId:
+      typeof embedded.sessionId === 'string'
+        ? embedded.sessionId
+        : typeof entry.sessionId === 'string'
+          ? entry.sessionId
+          : undefined,
+    gitBranch:
+      typeof embedded.gitBranch === 'string'
+        ? embedded.gitBranch
+        : typeof entry.gitBranch === 'string'
+          ? entry.gitBranch
+          : undefined,
+    cwd:
+      typeof embedded.cwd === 'string'
+        ? embedded.cwd
+        : typeof entry.cwd === 'string'
+          ? entry.cwd
+          : undefined,
+    isSidechain: embedded.isSidechain === true,
+    message: embedded.message as ConversationEntry['message'],
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -474,13 +680,6 @@ export function useWorkspace() {
         return
       }
 
-      const uuid = (entry as { uuid?: string }).uuid
-      const seen = (seenUuidsRef.current[sessionId] ??= new Set())
-      if (uuid) {
-        if (seen.has(uuid)) return
-        seen.add(uuid)
-      }
-
       // ---------------------------------------------------------------
       // queue-operation entries are CC's internal message-queue
       // bookkeeping. See claude-code-src/utils/messageQueueManager.ts
@@ -613,17 +812,26 @@ export function useWorkspace() {
         })
       }
 
+      const feedEntry =
+        extractEmbeddedClaudeProgressEntry(entry as Record<string, unknown>) ??
+        (entry as Entry)
+      const uuid = (feedEntry as { uuid?: string }).uuid
+      const seen = (seenUuidsRef.current[sessionId] ??= new Set())
+      if (uuid) {
+        if (seen.has(uuid)) return
+        seen.add(uuid)
+      }
+
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
-        const nextEntries = [...current.entries, entry as Entry]
+        const nextEntries = [...current.entries, feedEntry]
         // Only clear awaitingAssistant on an assistant entry AND when
         // the queue is empty — if CC still has queued work to process,
         // the streaming card should stay live so the next turn's
         // "thinking…" is visible. Without this, submitting three
         // messages in a row would flash the streaming card on and off
         // between turns and make the UI feel broken.
-        const isAssistant =
-          (entry as { type?: string }).type === 'assistant'
+        const isAssistant = feedEntry.type === 'assistant'
         const clearsAwaiting =
           isAssistant && current.queuedMessages.length === 0
             ? false
@@ -1141,6 +1349,30 @@ export function useWorkspace() {
     [updateRuntime],
   )
 
+  // ---- Pane toast: transient feedback above the composer ----
+  //
+  // Single-slot, auto-dismiss. Calling showPaneToast while a previous
+  // toast is still visible replaces it and resets the timer. The
+  // timeout ref lives outside React state so we can clear it without
+  // causing a re-render.
+  const paneToastTimers = useRef<Record<SessionId, ReturnType<typeof setTimeout>>>({})
+
+  const showPaneToast = useCallback(
+    (sessionId: SessionId, message: string, durationMs = 2000) => {
+      // Clear any in-flight timer for this pane.
+      const prev = paneToastTimers.current[sessionId]
+      if (prev) clearTimeout(prev)
+
+      updateRuntime(sessionId, { paneToast: message })
+
+      paneToastTimers.current[sessionId] = setTimeout(() => {
+        updateRuntime(sessionId, { paneToast: null })
+        delete paneToastTimers.current[sessionId]
+      }, durationMs)
+    },
+    [updateRuntime],
+  )
+
   // ---- Persist to disk on every mutation (debounced) ----
   //
   // The save is extracted into a stable helper so it can be called both
@@ -1536,6 +1768,7 @@ export function useWorkspace() {
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
     setDraftInput,
+    showPaneToast,
     undoClose,
     undoCloseCount,
     normalizeLayout,

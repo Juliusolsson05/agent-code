@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Workspace } from './tiles/workspaceStore'
+import { extractLastAssistantText } from './copyAssistant'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -27,6 +28,7 @@ export type CommandContext = {
   onNewTabRequest: () => void
   onResumeRequest: (defaultCwd: string) => void
   toggleGitBar: () => void
+  toggleDebugPanel: () => void
   /** Enter resume sub-mode inside the palette (instead of closing). */
   enterResumeMode: () => void
   close: () => void
@@ -151,6 +153,27 @@ export function buildCommands(): CommandDef[] {
       label: 'Toggle Git Bar',
       action: ({ toggleGitBar }) => toggleGitBar(),
     },
+    {
+      id: 'toggle-debug-panel',
+      label: 'Toggle Debug Panel',
+      action: ({ toggleDebugPanel }) => toggleDebugPanel(),
+    },
+    {
+      id: 'copy-last-assistant',
+      label: 'Copy Last Response',
+      action: ({ workspace }) => {
+        const tab = workspace.activeTab
+        if (!tab) return
+        const sessionId = tab.focusedSessionId
+        const runtime = workspace.getRuntime(sessionId)
+        const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+        const text = extractLastAssistantText(runtime.entries, kind)
+        if (text) {
+          void navigator.clipboard.writeText(text)
+          workspace.showPaneToast(sessionId, 'Copied to clipboard')
+        }
+      },
+    },
   ]
 }
 
@@ -184,6 +207,7 @@ type Props = {
   onNewTabRequest: () => void
   onResumeRequest: (defaultCwd: string) => void
   toggleGitBar: () => void
+  toggleDebugPanel: () => void
 }
 
 export function CommandPalette({
@@ -193,6 +217,7 @@ export function CommandPalette({
   onNewTabRequest,
   onResumeRequest,
   toggleGitBar,
+  toggleDebugPanel,
 }: Props) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -275,6 +300,7 @@ export function CommandPalette({
         onNewTabRequest,
         onResumeRequest,
         toggleGitBar,
+        toggleDebugPanel,
         enterResumeMode,
         close: onClose,
       }
@@ -286,7 +312,7 @@ export function CommandPalette({
       onClose()
       void cmd.action(ctx)
     },
-    [workspace, onNewTabRequest, onResumeRequest, toggleGitBar, enterResumeMode, onClose],
+    [workspace, onNewTabRequest, onResumeRequest, toggleGitBar, toggleDebugPanel, enterResumeMode, onClose],
   )
 
   const executeResume = useCallback(

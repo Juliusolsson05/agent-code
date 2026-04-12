@@ -1,3 +1,7 @@
+/* Scan provider and shared directories for Tailwind classes. */
+@source "../../../src/providers";
+@source "../../../src/shared";
+
 /*
  * cc-shell styles — v2: "native Claude Code, but typeset"
  *
@@ -463,6 +467,13 @@ select {
 
 .modal-fade { animation: cc-fade 140ms ease-out; }
 .modal-pop  { animation: cc-pop 160ms cubic-bezier(0.2, 0.9, 0.3, 1.1); }
+
+/* ---------- Toast animations ---------- */
+@keyframes cc-toast-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.toast-enter { animation: cc-toast-in 150ms ease-out forwards; }
 
 /* ---------- Focus ring ---------- */
 :focus-visible {

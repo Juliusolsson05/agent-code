@@ -452,7 +452,18 @@ export function TileLeaf({
       // envelope) so nothing changes for the 99% case and we don't
       // risk confusing CC's paste handler with zero-newline payloads.
       try {
-        if (input.includes('\n')) {
+        // Codex enables bracketed paste mode (\x1b[?2004h). When we
+        // send text + \r as one chunk, the PTY sees it as a paste
+        // event and the \r gets absorbed as a literal character
+        // instead of triggering submit. Fix: ALWAYS use bracketed
+        // paste for Codex, even for single-line prompts. The paste
+        // brackets tell Codex "this is user text", and the trailing
+        // \r outside the brackets is the submit action.
+        //
+        // Claude also enables bracketed paste but handles the
+        // text+\r-in-one-chunk case correctly, so we only force
+        // the paste envelope for Codex.
+        if (input.includes('\n') || provider === 'codex') {
           await send(`\x1b[200~${input}\x1b[201~\r`)
         } else {
           await send(input + '\r')
@@ -678,6 +689,27 @@ export function TileLeaf({
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Pane toast — transient single-slot feedback (e.g. "Copied to clipboard").
+          Renders above the composer so it's contextually tied to this pane,
+          not floating over the feed content. Auto-dismissed by the store
+          timeout; we just render when non-null. */}
+      {runtime.paneToast && (
+        <div className="
+          flex-shrink-0 flex justify-center
+          px-3 py-1.5
+          border-t border-border bg-surface
+        ">
+          <span className="
+            toast-enter
+            text-[11px] font-code text-white font-semibold
+            bg-accent/80
+            px-3 py-0.5
+          ">
+            {runtime.paneToast}
+          </span>
         </div>
       )}
 
