@@ -118,35 +118,74 @@ export const CodeRenderContext = createContext<{
   workspaceRoot: null,
 })
 
-function MarkdownPre({ children }: { children?: ReactNode }) {
+/**
+ * Custom <pre> renderer: strips the default <pre> wrapper and lets
+ * our MarkdownCode component handle ALL the rendering for fenced
+ * code blocks. Without this, react-markdown wraps block code in
+ * <pre><code class="language-X">…</code></pre> and our CodeBlock
+ * would be nested inside the browser's default <pre> styling.
+ *
+ * Inline code is NOT affected — inline `code` never gets a <pre>
+ * wrapper in react-markdown's output.
+ */
+function MarkdownPre({
+  children,
+  node,
+}: {
+  children?: ReactNode
+  node?: unknown
+}) {
+  // Tag the children so MarkdownCode knows this code element came
+  // from inside a <pre> (i.e., it's a fenced/indented code block,
+  // not an inline backtick). We pass through the children as-is;
+  // the <pre> wrapper is removed.
+  void node
   return <>{children}</>
 }
 
+/**
+ * Custom <code> renderer. Handles two distinct cases:
+ *
+ * 1. INLINE code: `variableName` in prose. Detected by the absence
+ *    of a `language-*` className AND single-line text. Renders as a
+ *    plain <code> element with the existing prose-theme inline-code
+ *    styling (accent color, no background).
+ *
+ * 2. FENCED code blocks: ```language\n...\n```. Detected by the
+ *    presence of a `language-*` className OR multi-line text (which
+ *    means it came through MarkdownPre above). Renders via CodeBlock
+ *    with syntax highlighting.
+ *
+ * Why the className + newline heuristic:
+ *   react-markdown v10 doesn't pass a reliable `inline` prop to the
+ *   code component. The only signals are: (a) fenced blocks get
+ *   className="language-X" when labeled, (b) fenced blocks have
+ *   newlines in their text, (c) inline code has neither. Checking
+ *   both catches labeled fences, unlabeled fences (multi-line), and
+ *   inline backticks.
+ */
 function MarkdownCode({
   className,
   children,
-  inline,
 }: {
   className?: string
   children?: ReactNode
-  inline?: boolean
 }) {
   const { sessionId, workspaceRoot } = useContext(CodeRenderContext)
   const text = String(children ?? '').replace(/\n$/, '')
   const language = className?.match(/language-([\w-]+)/)?.[1] ?? null
-  if (inline) {
+
+  // Inline code: no language class AND no newlines → plain <code>.
+  // This preserves the existing prose-theme styling where inline
+  // code is accent-colored with no background chip.
+  const isInline = !language && !text.includes('\n')
+  if (isInline) {
     return <code>{children}</code>
   }
-  // Use CodeBlock for ALL fenced code blocks — both labeled and
-  // unlabeled. CodeBlock handles:
-  //   - Labeled blocks: hljs.highlight with the explicit language
-  //   - Unlabeled blocks: hljs.highlightAuto (same behavior as the
-  //     old rehype-highlight with detect:true that was working before)
-  //
-  // The old version dropped highlighting for unlabeled blocks
-  // (rendered as plain monospace), which broke the colored code
-  // the user was used to seeing in Claude's responses. Claude
-  // emits unlabeled fences constantly.
+
+  // Fenced/indented code block → full CodeBlock with highlighting.
+  // allowAutoDetect for unlabeled blocks restores the old
+  // rehype-highlight detect:true behavior.
   return (
     <CodeBlock
       code={text}
