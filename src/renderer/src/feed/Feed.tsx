@@ -19,6 +19,7 @@ import {
   WriteRow,
   TodoRow,
 } from './claude/ClaudeRows'
+import { CodexToolRow } from './codex/CodexRows'
 import {
   isConversationEntry,
   type ContentBlock,
@@ -124,6 +125,7 @@ const REHYPE_PLUGINS: import('react-markdown').Options['rehypePlugins'] = [
 // text string, so repeat renders are cheap.
 // -----------------------------------------------------------------------------
 
+const ProviderContext = createContext<AgentProvider>('claude')
 const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new Map())
 
 function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
@@ -142,11 +144,17 @@ function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
   return map
 }
 
+/** Which agent provider this Feed is rendering for. Determines
+ *  which row renderers are used for tool_use blocks. */
+export type AgentProvider = 'claude' | 'codex'
+
 type Props = {
   /** Session identity — used as the key for per-session scroll
    *  position persistence across Feed unmount/remount (tab switches).
    *  See `scrollPositions` below. */
   sessionId: string
+  /** Which provider's row renderers to use. Default 'claude'. */
+  provider?: AgentProvider
   entries: Entry[]
   /** Plain-text screen snapshot. Used for baseline comparison. */
   streamingScreen?: string | null
@@ -154,6 +162,12 @@ type Props = {
    *  markdown. Used for the actual streaming card render. */
   streamingScreenMarkdown?: string | null
   streamingBaseline?: string | null
+  /** Activity status detected from the screen buffer. Non-null when
+   *  CC is actively working — carries the spinner verb text (e.g.
+   *  "Cogitating…"). Used to show a working indicator at the bottom
+   *  of the feed and to enrich the "thinking…" fallback in the
+   *  streaming row with the actual verb CC is displaying. */
+  activityStatus?: string | null
   showSystemEvents: boolean
 }
 
@@ -241,10 +255,12 @@ export const Feed = memo(FeedImpl)
 
 function FeedImpl({
   sessionId,
+  provider = 'claude',
   entries,
   streamingScreen,
   streamingScreenMarkdown,
   streamingBaseline,
+  activityStatus,
   showSystemEvents,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
@@ -414,6 +430,7 @@ function FeedImpl({
   }
 
   return (
+    <ProviderContext.Provider value={provider}>
     <ToolUseIndexContext.Provider value={toolUseIndex}>
       <div
         ref={scrollerRef}
@@ -428,12 +445,23 @@ function FeedImpl({
               screen={streamingScreen}
               screenMarkdown={streamingScreenMarkdown ?? streamingScreen}
               baseline={streamingBaseline ?? null}
+              activityStatus={activityStatus ?? null}
             />
+          )}
+          {/* Activity indicator: shown when CC is working but the
+              streaming row isn't active yet (e.g. the very start of a
+              turn before awaitingAssistant flips, or during tool
+              execution between JSONL entries). The streaming row
+              handles its own "thinking…" state internally, so we only
+              render this when the streaming row is absent. */}
+          {streamingScreen == null && activityStatus && (
+            <ActivityIndicator status={activityStatus} />
           )}
           <div ref={endRef} />
         </div>
       </div>
     </ToolUseIndexContext.Provider>
+    </ProviderContext.Provider>
   )
 }
 
@@ -568,6 +596,7 @@ const Block = memo(function Block({
   block: ContentBlock
   role: 'user' | 'assistant'
 }) {
+  const currentProvider = useContext(ProviderContext)
   switch (block.type) {
     case 'text': {
       // Only text blocks under a user role represent an actual user
@@ -596,11 +625,17 @@ const Block = memo(function Block({
         </MarkerRow>
       )
     case 'tool_use': {
-      // Dispatch by tool name so Edit / MultiEdit / Write / Read each
-      // get their own visually rich renderer. Anything unknown falls
-      // through to the generic one-line ToolUseRow so new tools never
-      // render as nothing.
+      // Dispatch tool_use blocks to provider-specific row renderers.
+      // Claude has rich renderers for Edit/MultiEdit/Write/TodoWrite;
+      // codex uses a generic CodexToolRow for now (will grow per-tool
+      // renderers as we learn codex's tool shapes from recordings).
+      // eslint-disable-next-line react-hooks/rules-of-hooks
+      const currentProvider = useContext(ProviderContext)
       const tu = block as ToolUseBlock
+      if (currentProvider === 'codex') {
+        return <CodexToolRow block={tu} />
+      }
+      // Claude provider — dispatch by tool name.
       switch (tu.name) {
         case 'Edit':
           return <EditRow block={tu} />
@@ -845,10 +880,12 @@ function StreamingRow({
   screen,
   screenMarkdown,
   baseline,
+  activityStatus,
 }: {
   screen: string
   screenMarkdown: string
   baseline: string | null
+  activityStatus: string | null
 }) {
   // Staleness detection runs on PLAIN text. The parser walks the
   // chrome-stripped plain screen to find the last `⏺` block (which is
@@ -882,9 +919,29 @@ function StreamingRow({
       ) : (
         <div className="flex items-center gap-2 text-muted text-[12px] py-0.5">
           <span className="streaming-dot inline-block w-1.5 h-1.5 rounded-full bg-accent" />
-          <span>thinking…</span>
+          <span>{activityStatus ?? 'thinking…'}</span>
         </div>
       )}
+    </MarkerRow>
+  )
+}
+
+/* ---------- Activity indicator (standalone, outside streaming row) ---------- */
+
+// Shown at the bottom of the feed when CC is working but the streaming
+// row isn't active (awaitingAssistant is false). Covers tool execution,
+// the gap at the very start of a turn, and any state where the spinner
+// is visible on CC's screen but we haven't flipped into streaming mode
+// yet. Uses the same marker + hanging indent layout as everything else
+// in the feed for visual consistency.
+
+function ActivityIndicator({ status }: { status: string }) {
+  return (
+    <MarkerRow marker="⏺">
+      <div className="flex items-center gap-2 text-muted text-[12px] py-0.5">
+        <span className="streaming-dot inline-block w-1.5 h-1.5 rounded-full bg-accent" />
+        <span>{status}</span>
+      </div>
     </MarkerRow>
   )
 }

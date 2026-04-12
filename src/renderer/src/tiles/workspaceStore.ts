@@ -133,6 +133,11 @@ export type SessionRuntime = {
    *  session is killed, its runtime is deleted along with everything
    *  else in it — no draft leaks past session teardown. */
   draftInput: string
+  /** Activity status detected from CC's screen buffer. Non-null when
+   *  CC is actively working (spinner visible) — carries the verb text
+   *  (e.g. "Cogitating…", "Reading file…"). Null when idle. Updated
+   *  on every screen snapshot (~60 Hz) via detectActivity(). */
+  activityStatus: string | null
 }
 
 const emptyRuntime = (): SessionRuntime => ({
@@ -146,6 +151,7 @@ const emptyRuntime = (): SessionRuntime => ({
   projectDir: null,
   picker: { visible: false, items: [] },
   draftInput: '',
+  activityStatus: null,
 })
 
 // ---------------------------------------------------------------------------
@@ -265,6 +271,7 @@ export function useWorkspace() {
               screen: plain,
               screenMarkdown: markdown,
               picker,
+              activityStatus: detectActivity(plain),
             },
           }
         })

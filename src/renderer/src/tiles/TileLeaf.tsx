@@ -612,6 +612,7 @@ export function TileLeaf({
             runtime.awaitingAssistant ? runtime.screenMarkdown : null
           }
           streamingBaseline={runtime.streamingBaseline}
+          activityStatus={runtime.activityStatus}
           showSystemEvents={false}
         />
       </div>
