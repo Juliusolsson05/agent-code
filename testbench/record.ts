@@ -27,6 +27,7 @@ import { join } from 'path'
 import { randomUUID } from 'crypto'
 
 import { ClaudeSession } from '../src/core/runtime/claudeSession.js'
+import { CodexSession } from '../src/core/runtime/codexSession.js'
 import { getProjectDirForCwd } from '../src/core/runtime/projectDir.js'
 import {
   detectTrustDialog,
@@ -165,22 +166,24 @@ async function main(): Promise<void> {
   // Session creation: dispatch by provider. Both session classes emit
   // the same event shape (started, pty-data, screen, jsonl-entry,
   // jsonl-error, exit) so the recording wiring below works for both.
-  if (provider === 'codex') {
-    // TODO: Replace with CodexSession once src/core/runtime/codexSession.ts lands (Task 8).
-    throw new Error(
-      'CodexSession not yet implemented. Run with CC_SHELL_PROVIDER=claude (default) for now.',
-    )
-  }
-  const session = new ClaudeSession({
-    cwd: meta.cwd,
-    cols: meta.cols,
-    rows: meta.rows,
-    binary: meta.binary,
-    snapshotIntervalMs: 16,
-    // If set, ClaudeSession.start() will pass --resume <uuid> to the
-    // claude binary and tail the existing JSONL we just staged.
-    resumeSessionId: resumeSessionId ?? undefined,
-  })
+  const session =
+    provider === 'codex'
+      ? new CodexSession({
+          cwd: meta.cwd,
+          cols: meta.cols,
+          rows: meta.rows,
+          binary: meta.binary,
+          snapshotIntervalMs: 16,
+          resumeSessionId: resumeSessionId ?? undefined,
+        })
+      : new ClaudeSession({
+          cwd: meta.cwd,
+          cols: meta.cols,
+          rows: meta.rows,
+          binary: meta.binary,
+          snapshotIntervalMs: 16,
+          resumeSessionId: resumeSessionId ?? undefined,
+        })
 
   let firstStartedLogged = false
 

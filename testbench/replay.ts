@@ -83,12 +83,41 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
+  // Codex replay uses the codex-specific parsers. We dynamically
+  // import them so the claude parsers don't even load when running
+  // codex replays (avoids any transitive dependency confusion).
   if (provider === 'codex') {
-    // TODO: Replace with codex parser imports once src/core/parsers/codex/ lands (Task 7).
-    console.error(
-      'Codex replay not yet implemented. Run with CC_SHELL_PROVIDER=claude (default) for now.',
-    )
-    process.exit(1)
+    const { extractCodexStreamingText, extractCodexAssistantInProgress } =
+      await import('../src/core/parsers/codex/streamingScreen.js')
+    // Codex replay follows the same flow as claude replay below,
+    // but uses codex parsers. For now, only final-state replay is
+    // supported (no --frames mode yet — we need more codex-specific
+    // parser passes to make per-frame dumps useful).
+    const dumpFrames = process.argv.includes('--frames')
+    if (dumpFrames) {
+      console.error('[replay] --frames not yet supported for codex provider')
+      process.exit(1)
+    }
+    const meta = await loadMeta(recordingDir)
+    const events = await loadRawEvents(recordingDir)
+    console.log(box('META', JSON.stringify(meta, null, 2)))
+    console.log(`${events.length} raw events in stream`)
+    if (events.length === 0) { console.error('empty recording'); process.exit(1) }
+    const span = (events[events.length - 1].ts - events[0].ts) / 1000
+    console.log(`spans ${span.toFixed(2)}s wall clock\n`)
+    const term = new Terminal({
+      cols: meta.cols ?? 120, rows: meta.rows ?? 40,
+      allowProposedApi: true, scrollback: 10000,
+    })
+    for (const ev of events) term.write(ev.data)
+    await new Promise<void>(resolve => setTimeout(resolve, 50))
+    const screen = snapshot(term)
+    const screenMd = terminalToMarkdown(term)
+    console.log(box('FINAL RAW SCREEN', screen))
+    console.log(box('extractCodexStreamingText', extractCodexStreamingText(screen)))
+    console.log(box('extractCodexAssistantInProgress', extractCodexAssistantInProgress(screen) || '(empty)'))
+    console.log(box('terminalToMarkdown (codex)', extractCodexAssistantInProgress(screenMd) || '(empty)'))
+    return
   }
 
   const dumpFrames = process.argv.includes('--frames')
