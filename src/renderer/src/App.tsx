@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { CommandPalette } from './CommandPalette'
 import { ThemePicker } from './feed/ThemePicker'
 import { PathPickerModal } from './tiles/PathPickerModal'
 import { TabBar } from './tiles/TabBar'
@@ -27,6 +28,7 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(loadSettings())
   const [pathPickerOpen, setPathPickerOpen] = useState(false)
   const [pathPickerDefault, setPathPickerDefault] = useState('')
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const workspace = useWorkspace()
 
   // Pre-fill the path input with a sensible default when the modal
@@ -85,7 +87,11 @@ export default function App() {
     [workspace],
   )
 
-  useKeybinds(workspace, onNewTabRequest, onResumeRequest)
+  const toggleCommandPalette = useCallback(() => {
+    setCommandPaletteOpen(prev => !prev)
+  }, [])
+
+  useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
   const { state, activeTab } = workspace
 
@@ -128,6 +134,14 @@ export default function App() {
           <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
         )}
       </main>
+
+      <CommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        workspace={workspace}
+        onNewTabRequest={onNewTabRequest}
+        onResumeRequest={onResumeRequest}
+      />
 
       <PathPickerModal
         open={pathPickerOpen}

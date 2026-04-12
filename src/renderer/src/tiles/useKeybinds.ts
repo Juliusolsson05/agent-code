@@ -47,11 +47,13 @@ import type { Workspace } from './workspaceStore'
 
 type NewTabRequester = () => Promise<void> | void
 type ResumeRequester = (defaultCwd: string) => Promise<void> | void
+type CommandPaletteToggle = () => void
 
 export function useKeybinds(
   workspace: Workspace,
   onNewTabRequest: NewTabRequester,
   onResumeRequest: ResumeRequester,
+  onCommandPalette?: CommandPaletteToggle,
 ): void {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -59,6 +61,13 @@ export function useKeybinds(
       const alt = e.altKey
       const shift = e.shiftKey
       const k = e.key
+
+      // --- CMD: command palette ---
+      if (cmd && shift && k.toLowerCase() === 'p' && !alt) {
+        e.preventDefault()
+        onCommandPalette?.()
+        return
+      }
 
       // --- CMD: tab management ---
       if (cmd && !alt) {
@@ -258,5 +267,5 @@ export function useKeybinds(
     return () => {
       document.removeEventListener('keydown', handler, { capture: true })
     }
-  }, [workspace, onNewTabRequest])
+  }, [workspace, onNewTabRequest, onCommandPalette])
 }
