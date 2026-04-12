@@ -373,10 +373,23 @@ function FeedImpl({
   }, [entries.length, streamingScreen])
 
   // Visible entries = all entries if system events are shown, otherwise
-  // skip attachment / permission-mode / file-history-snapshot.
+  // skip attachment / permission-mode / file-history-snapshot AND
+  // isMeta entries. isMeta entries are CC's system-injected user-role
+  // messages: task-notification results from subagents, auto-continue
+  // hints ("Continue from where you left off."), system-reminder
+  // payloads, etc. They carry `isMeta: true` on the entry but pass
+  // the isConversationEntry check because they have type='user' and
+  // a real message object. Without this filter, a background agent's
+  // completion notification would render as a full UserBand in the
+  // feed with raw <task-notification> XML visible — exactly the bug
+  // the user reported.
   const visible = showSystemEvents
     ? entries
-    : entries.filter(e => isConversationEntry(e))
+    : entries.filter(e => {
+        if (!isConversationEntry(e)) return false
+        if ((e as unknown as { isMeta?: boolean }).isMeta === true) return false
+        return true
+      })
 
   // Index EVERY tool_use block (not just the visible set) so tool_result
   // lookups still resolve even when showSystemEvents is off and some
