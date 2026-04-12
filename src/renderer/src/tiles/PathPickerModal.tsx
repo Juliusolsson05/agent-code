@@ -34,12 +34,15 @@ type SessionInfo = {
 // the modal chrome, session list fetching, and the submit → validate
 // → spawn wiring.
 
+export type AgentProvider = 'claude' | 'codex'
+
 type Props = {
   open: boolean
   defaultValue?: string
   onCancel: () => void
-  /** Called when the user opens a brand-new session for `cwd`. */
-  onAccept: (expandedPath: string) => void | Promise<void>
+  /** Called when the user opens a brand-new session for `cwd`.
+   *  Now carries the selected provider so App knows which kind to spawn. */
+  onAccept: (expandedPath: string, provider: AgentProvider) => void | Promise<void>
   /** Called when the user picks a previous session to resume. */
   onResume: (expandedPath: string, sessionId: string) => void | Promise<void>
 }

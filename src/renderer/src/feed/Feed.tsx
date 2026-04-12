@@ -629,8 +629,6 @@ const Block = memo(function Block({
       // Claude has rich renderers for Edit/MultiEdit/Write/TodoWrite;
       // codex uses a generic CodexToolRow for now (will grow per-tool
       // renderers as we learn codex's tool shapes from recordings).
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const currentProvider = useContext(ProviderContext)
       const tu = block as ToolUseBlock
       if (currentProvider === 'codex') {
         return <CodexToolRow block={tu} />
