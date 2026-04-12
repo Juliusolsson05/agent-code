@@ -25,6 +25,12 @@ import { join } from 'path'
 import xtermHeadless from '@xterm/headless'
 const { Terminal } = xtermHeadless
 
+// Provider selection: CC_SHELL_PROVIDER=claude (default) or codex.
+// Determines which parser set to run against the recording.
+type Provider = 'claude' | 'codex'
+const provider: Provider =
+  (process.env.CC_SHELL_PROVIDER as Provider | undefined) ?? 'claude'
+
 import {
   extractAssistantInProgress,
   extractStreamingText,
@@ -74,6 +80,14 @@ async function main(): Promise<void> {
   const recordingDir = process.argv[2]
   if (!recordingDir) {
     console.error('usage: tsx testbench/replay.ts <recordingDir> [--frames]')
+    process.exit(1)
+  }
+
+  if (provider === 'codex') {
+    // TODO: Replace with codex parser imports once src/core/parsers/codex/ lands (Task 7).
+    console.error(
+      'Codex replay not yet implemented. Run with CC_SHELL_PROVIDER=claude (default) for now.',
+    )
     process.exit(1)
   }
 

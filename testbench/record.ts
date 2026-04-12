@@ -33,6 +33,15 @@ import {
   TRUST_DIALOG_ACCEPT_KEYS,
 } from '../src/core/parsers/claude/trustDialog.js'
 
+// Provider selection: CC_SHELL_PROVIDER=claude (default) or codex.
+// When codex is selected, we swap in CodexSession instead of
+// ClaudeSession. The rest of the recording flow (PTY bridging,
+// snapshot logging, scripted mode) is identical — both session
+// classes emit the same event shape by design.
+type Provider = 'claude' | 'codex'
+const provider: Provider =
+  (process.env.CC_SHELL_PROVIDER as Provider | undefined) ?? 'claude'
+
 // ---- Scripted-mode types --------------------------------------------------
 //
 // When `$CC_SHELL_SCRIPT` points at a JSON file, record.ts runs in
@@ -153,6 +162,15 @@ async function main(): Promise<void> {
   const snapshotsStream = createWriteStream(join(recordingDir, 'snapshots.jsonl'), { flags: 'a' })
   const jsonlStream = createWriteStream(join(recordingDir, 'jsonl.jsonl'), { flags: 'a' })
 
+  // Session creation: dispatch by provider. Both session classes emit
+  // the same event shape (started, pty-data, screen, jsonl-entry,
+  // jsonl-error, exit) so the recording wiring below works for both.
+  if (provider === 'codex') {
+    // TODO: Replace with CodexSession once src/core/runtime/codexSession.ts lands (Task 8).
+    throw new Error(
+      'CodexSession not yet implemented. Run with CC_SHELL_PROVIDER=claude (default) for now.',
+    )
+  }
   const session = new ClaudeSession({
     cwd: meta.cwd,
     cols: meta.cols,

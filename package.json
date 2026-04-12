@@ -9,7 +9,11 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "record": "tsx testbench/record.ts",
+    "record:claude": "CC_SHELL_PROVIDER=claude tsx testbench/record.ts",
+    "record:codex": "CC_SHELL_PROVIDER=codex tsx testbench/record.ts",
     "replay": "tsx testbench/replay.ts",
+    "replay:claude": "CC_SHELL_PROVIDER=claude tsx testbench/replay.ts",
+    "replay:codex": "CC_SHELL_PROVIDER=codex tsx testbench/replay.ts",
     "postinstall": "electron-rebuild -f -w node-pty"
   },
   "dependencies": {
