@@ -4,9 +4,9 @@ import { join } from 'path'
 import { watch } from 'chokidar'
 
 import type { SlashPickerState } from '../parsers/claude/slashCommandPicker.js'
-import { tailSessionFile, type JsonlEntry } from './jsonlTailer.js'
+import { tailSessionFile, type JsonlEntry } from '../../shared/runtime/jsonlTailer.js'
 import { getCodexSessionsDir } from './codexProjectDir.js'
-import { PtyScreen } from './ptyScreen.js'
+import { PtyScreen } from '../../shared/runtime/ptyScreen.js'
 
 // CodexSession — OpenAI Codex agent session.
 //

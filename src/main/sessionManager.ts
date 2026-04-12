@@ -6,8 +6,8 @@ import {
   type ScreenSnapshot,
 } from '../core/runtime/claudeSession.js'
 import { CodexSession } from '../core/runtime/codexSession.js'
-import { TerminalSession } from '../core/runtime/terminalSession.js'
-import type { JsonlEntry } from '../core/runtime/jsonlTailer.js'
+import { TerminalSession } from '../shared/runtime/terminalSession.js'
+import type { JsonlEntry } from '../shared/runtime/jsonlTailer.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event

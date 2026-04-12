@@ -22,7 +22,7 @@ import {
 import {
   languageFileExtension,
   supportsLsp,
-} from '../core/code/language.js'
+} from '../shared/code/language.js'
 
 const require = createRequire(import.meta.url)
 

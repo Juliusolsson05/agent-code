@@ -7,8 +7,8 @@
 // text from this screen snapshot." This module routes based on a
 // `provider` argument so the callers stay provider-agnostic.
 
-import { extractAssistantInProgress as claudeExtract } from './claude/streamingScreen.js'
-import { extractCodexAssistantInProgress as codexExtract } from './codex/streamingScreen.js'
+import { extractAssistantInProgress as claudeExtract } from '../../core/parsers/claude/streamingScreen.js'
+import { extractCodexAssistantInProgress as codexExtract } from '../../core/parsers/codex/streamingScreen.js'
 
 export type AgentProvider = 'claude' | 'codex'
 

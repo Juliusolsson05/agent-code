@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { extractAssistantInProgress } from '../../../core/parsers/extractAssistant'
-import { isConversationEntry } from '../../../core/types/transcript'
+import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
+import { isConversationEntry } from '../../../shared/types/transcript'
 import { Feed } from '../feed/Feed'
 import { TrustDialogModal } from '../feed/TrustDialogModal'
 import { SlashCommandPicker } from './SlashCommandPicker'

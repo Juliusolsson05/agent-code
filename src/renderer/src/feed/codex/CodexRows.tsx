@@ -12,7 +12,7 @@
 
 import { memo } from 'react'
 
-import type { ToolUseBlock } from '../../../../core/types/transcript'
+import type { ToolUseBlock } from '../../../../shared/types/transcript'
 import { MarkerRow } from '../Feed'
 
 /**

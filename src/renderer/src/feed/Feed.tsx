@@ -13,7 +13,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 
-import { extractAssistantInProgress } from '../../../core/parsers/extractAssistant'
+import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
 import {
   EditRow,
   MultiEditRow,
@@ -28,7 +28,7 @@ import {
   type Entry,
   type ToolResultBlock,
   type ToolUseBlock,
-} from '../../../core/types/transcript'
+} from '../../../shared/types/transcript'
 import { CodeBlock } from '../code/CodeBlock'
 
 // -----------------------------------------------------------------------------
