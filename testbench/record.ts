@@ -129,7 +129,9 @@ async function main(): Promise<void> {
     cwd: process.env.CC_SHELL_CWD || process.cwd(),
     cols: process.stdout.columns ?? 120,
     rows: process.stdout.rows ?? 40,
-    binary: process.env.CC_SHELL_CLAUDE_BINARY || 'claude',
+    binary:
+      process.env.CC_SHELL_BINARY ??
+      (provider === 'codex' ? 'codex' : 'claude'),
     mode: scripted ? 'scripted' : 'interactive',
     scriptPath: scriptPath ?? null,
     resumeFixture: resumeFixture,

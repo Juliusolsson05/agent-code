@@ -885,30 +885,71 @@ function StreamingRow({
   baseline: string | null
   activityStatus: string | null
 }) {
-  // Staleness detection runs on PLAIN text. The parser walks the
-  // chrome-stripped plain screen to find the last `⏺` block (which is
-  // what we compare against the baseline). We can't use the markdown
-  // version for this — the injected `**`/`*` markers shift the
-  // characters around and would flip comparison results on every
-  // transition. See streamingBaseline in App.tsx.
+  // ALL structural detection runs on PLAIN text — the parsers look for
+  // `⏺`, `⎿`, spinner glyphs etc. which are literal characters in the
+  // plain snapshot. In the markdown snapshot, `terminalToMarkdown()`
+  // wraps bold cells in `**…**`, so `⏺` becomes `**⏺**` and none of
+  // the regexes match. Running the parser on markdown was the bug that
+  // caused streaming to show "thinking…" forever even while CC was
+  // actively outputting text.
+  //
+  // Instead we extract from PLAIN, then use the line indices to grab
+  // the corresponding lines from the markdown snapshot. The line count
+  // is identical between plain and markdown (terminalToMarkdown walks
+  // the same rows), so a 1:1 index mapping is correct.
   const plainExtract = extractAssistantInProgress(screen)
   const isStale = baseline != null && plainExtract === baseline
-
-  // Render uses the MARKDOWN version. Same extraction logic, same
-  // chrome strip — but the resulting text carries bold/italic markers
-  // reconstructed from cell attributes, so react-markdown can render
-  // them as real formatting. This is the whole point of the dual-
-  // snapshot approach in ClaudeSession.
-  const mdExtract = extractAssistantInProgress(screenMarkdown)
   const show = plainExtract && !isStale
 
-  const display = show
-    ? mdExtract
-        .split('\n')
-        .map(l => l.replace(/[ \t]+$/, ''))
-        .join('\n')
-        .replace(/\n{3,}/g, '\n\n')
-    : ''
+  // Map the assistant block to markdown lines. We find where the
+  // extracted block sits in the chrome-stripped plain text, then pull
+  // the same line range from the markdown version. Both snapshots
+  // have the same number of lines (one per terminal row), so we can
+  // index directly.
+  let display = ''
+  if (show) {
+    const plainLines = screen.split('\n')
+    const mdLines = screenMarkdown.split('\n')
+    const extractLines = plainExtract.split('\n')
+
+    // Find the first extracted line in the plain screen. Walk backward
+    // since the assistant block is near the bottom.
+    const firstExtractLine = extractLines[0]?.replace(/[ \t]+$/, '') ?? ''
+    let startIdx = -1
+    for (let i = plainLines.length - 1; i >= 0; i--) {
+      const plain = plainLines[i]?.replace(/[ \t]+$/, '') ?? ''
+      // The extracted text has the `⏺ ` marker stripped, so compare
+      // against the plain line with the marker also stripped.
+      const stripped = plain.replace(/^\s*⏺\s?/, '')
+      if (stripped === firstExtractLine || plain === firstExtractLine) {
+        startIdx = i
+        break
+      }
+    }
+
+    if (startIdx >= 0 && startIdx + extractLines.length <= mdLines.length) {
+      // Pull the corresponding markdown lines and strip the marker
+      // + continuation indent the same way extractAssistantInProgress
+      // does for the plain version.
+      const mdBlock = mdLines
+        .slice(startIdx, startIdx + extractLines.length)
+        .map((l, i) => {
+          let cleaned = l.replace(/[ \t]+$/, '')
+          if (i === 0) {
+            // Strip the marker (possibly wrapped in bold: **⏺** or **⏺ **)
+            cleaned = cleaned.replace(/^\s*(\*{1,3})?⏺(\*{1,3})?\s?/, '')
+          } else {
+            // Strip 2-char continuation indent (same as the plain parser)
+            if (cleaned.startsWith('  ')) cleaned = cleaned.slice(2)
+          }
+          return cleaned
+        })
+      display = mdBlock.join('\n').replace(/\n{3,}/g, '\n\n')
+    } else {
+      // Fallback: use plain text if we couldn't map indices.
+      display = plainExtract
+    }
+  }
 
   return (
     <MarkerRow marker="⏺">
