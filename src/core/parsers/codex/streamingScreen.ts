@@ -80,12 +80,29 @@ const CODEX_TREE_MARKER_RE = /^\s*[│└]/
 // followed by a word, similar to Claude's ✻ spinners.
 const CODEX_SPINNER_RE = /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/
 
+// Codex "Working" progress line. Uses the SAME `•` prefix as real
+// assistant text, but carries a progress counter and "esc to interrupt"
+// hint. Without filtering this, extractCodexAssistantInProgress walks
+// backward and lands on "• Working (3s • esc to interrupt)" instead
+// of the real response — showing "Working (3s...)" as the streaming
+// card content. Confirmed from testbench recording
+// 2026-04-12T07-45-34-280Z, snap 8.
+const CODEX_WORKING_RE = /^\s*•\s+Working\s*\(/
+
+// Codex tool-call label with esc hint — "• Ran printf 'hello" is
+// a tool label when followed by sub-items, but "• Working (3s •
+// esc to interrupt)" is ALWAYS chrome. The "esc to interrupt" hint
+// distinguishes chrome from real content.
+const CODEX_ESC_HINT_RE = /esc to interrupt/
+
 /**
  * Returns true if a line is codex's mid-turn tool/thinking UI chrome.
  */
 export function isCodexIntermediateChromeLine(line: string): boolean {
   if (CODEX_TREE_MARKER_RE.test(line)) return true
   if (CODEX_SPINNER_RE.test(line)) return true
+  if (CODEX_WORKING_RE.test(line)) return true
+  if (CODEX_ESC_HINT_RE.test(line)) return true
   return false
 }
 

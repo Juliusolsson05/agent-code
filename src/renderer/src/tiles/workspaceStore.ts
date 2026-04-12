@@ -831,30 +831,65 @@ export function useWorkspace() {
   )
 
   // ---- Persist to disk on every mutation (debounced) ----
+  //
+  // The save is extracted into a stable helper so it can be called both
+  // from the debounce timer AND from the beforeunload flush below. We
+  // keep a ref to the latest state so the beforeunload handler (which
+  // can't close over React state) always serializes the freshest version.
+  const latestStateRef = useRef(state)
+  latestStateRef.current = state
+
+  const flushSave = useCallback(() => {
+    const s = latestStateRef.current
+    const persisted: PersistedWorkspace = {
+      tabs: s.tabs.map(t => ({
+        id: t.id,
+        title: t.title,
+        focusedSessionId: t.focusedSessionId,
+        root: t.root,
+      })),
+      activeTabId: s.activeTabId,
+      sessions: s.sessions,
+    }
+    const json = JSON.stringify({ workspace: persisted }, null, 2)
+    void window.api.saveWorkspace(json).catch(err => {
+      // eslint-disable-next-line no-console
+      console.warn('[workspace] save failed:', err)
+    })
+  }, [])
+
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
-    saveTimerRef.current = setTimeout(() => {
-      const persisted: PersistedWorkspace = {
-        tabs: state.tabs.map(t => ({
-          id: t.id,
-          title: t.title,
-          focusedSessionId: t.focusedSessionId,
-          root: t.root,
-        })),
-        activeTabId: state.activeTabId,
-        sessions: state.sessions,
-      }
-      const json = JSON.stringify({ workspace: persisted }, null, 2)
-      void window.api.saveWorkspace(json).catch(err => {
-        // eslint-disable-next-line no-console
-        console.warn('[workspace] save failed:', err)
-      })
-    }, 400)
+    saveTimerRef.current = setTimeout(flushSave, 400)
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
-  }, [state])
+  }, [state, flushSave])
+
+  // ---- Flush on window close ----
+  //
+  // The debounced save has a 400ms window where a mutation hasn't been
+  // written yet. If the user quits the app during that window, the
+  // latest state is lost — tabs vanish, sessions can't resume.
+  //
+  // Fix: listen for `beforeunload` (fires synchronously before the
+  // renderer is torn down) and flush immediately. The IPC invoke is
+  // async but Electron's main process receives the message before the
+  // window actually closes — the write lands. This is the same pattern
+  // VS Code uses for its workspace state.
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      // Cancel the debounced timer so we don't double-save.
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
+      }
+      flushSave()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [flushSave])
 
   // ---- Load on first mount ----
   //
