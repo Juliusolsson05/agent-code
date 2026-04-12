@@ -12,12 +12,16 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "types": ["node"]
+    "types": ["node"],
+    "paths": {
+      "claude-code-headless": ["./claude-code-headless/src/index.ts"]
+    }
   },
   "include": [
     "electron.vite.config.ts",
     "src/main/**/*",
     "src/preload/**/*",
-    "src/core/**/*"
+    "src/core/**/*",
+    "claude-code-headless/src/**/*"
   ]
 }

@@ -4,8 +4,7 @@
 
 import type { MainProviderConfig } from '../shared/types/providerConfig'
 import { ClaudeSession } from './claude/runtime/claudeSession'
-import { listSessionsForCwd } from './claude/runtime/sessionList'
-import { getProjectDirForCwd } from '../shared/runtime/projectDir'
+import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
 import { CodexSession } from './codex/runtime/codexSession'
 import { listCodexSessions } from './codex/runtime/sessionList'
 import { getCodexSessionsDir } from './codex/runtime/projectDir'

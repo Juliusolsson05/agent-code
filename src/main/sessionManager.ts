@@ -4,7 +4,7 @@ import { EventEmitter } from 'events'
 import { getMainProvider } from '../providers/registry.main.js'
 import type { ScreenSnapshot } from '../providers/claude/runtime/claudeSession.js'
 import { TerminalSession } from '../shared/runtime/terminalSession.js'
-import type { JsonlEntry } from '../shared/runtime/jsonlTailer.js'
+import type { JsonlEntry } from 'claude-code-headless'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
