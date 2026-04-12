@@ -21,10 +21,10 @@ type Props = {
 export function TileTree({ node, focusedSessionId, workspace }: Props) {
   if (node.type === 'leaf') {
     // Dispatch by session kind. Terminal panes get TerminalLeaf
-    // (just an xterm.js instance); everything else (absent or
-    // 'claude') falls through to TileLeaf with the full cc-shell
-    // chrome. Meta.kind being absent is the pre-terminal schema
-    // and is treated as claude.
+    // (just an xterm.js instance); both agent providers (claude
+    // and codex) fall through to TileLeaf which provides the full
+    // feed + composer UI — Feed handles the provider-specific row
+    // rendering internally. Meta.kind absent = claude (back-compat).
     const meta = workspace.state.sessions[node.sessionId]
     const kind = meta?.kind ?? 'claude'
     if (kind === 'terminal') {

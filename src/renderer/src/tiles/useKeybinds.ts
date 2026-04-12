@@ -230,6 +230,22 @@ export function useKeybinds(
           void workspace.splitFocused('vertical', 'terminal')
           return
         }
+        // --- Codex split: alt-c / alt-shift-c ---
+        //
+        // Same grammar as terminal (alt-t): default is horizontal
+        // (new row below), shift flips to vertical (new column).
+        // Uses e.code === 'KeyC' for the same macOS alt-letter
+        // reason as the others.
+        if (code === 'KeyC' && !shift) {
+          e.preventDefault()
+          void workspace.splitFocused('horizontal', 'codex')
+          return
+        }
+        if (code === 'KeyC' && shift) {
+          e.preventDefault()
+          void workspace.splitFocused('vertical', 'codex')
+          return
+        }
         if (code === 'KeyW') {
           e.preventDefault()
           void workspace.closeFocused()
