@@ -24,6 +24,8 @@ import type { Workspace } from './workspaceStore'
 //   alt-shift-d     split current pane horizontally (new pane below)
 //   alt-t           split with a TERMINAL below (new row, horizontal split)
 //   alt-shift-t     split with a TERMINAL to the right (new column, vertical)
+//   alt-c           split with CODEX below (new row, horizontal split)
+//   alt-shift-c     split with CODEX to the right (new column, vertical)
 //   alt-h/j/k/l     navigate panes (vim: left/down/up/right)
 //   alt-ArrowLeft/Right/Up/Down  same, for non-vim users
 //   alt-w           close focused pane (same as cmd-w but alt-keyed)

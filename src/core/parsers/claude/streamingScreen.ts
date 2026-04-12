@@ -148,6 +148,71 @@ export function isIntermediateChromeLine(line: string): boolean {
   return false
 }
 
+// ---------------------------------------------------------------------------
+// Activity detection: is CC actively working right now?
+//
+// CC renders a spinner line while it's busy — one of the rotating glyphs
+// (✢ ✶ · ✻ ✽ ✺) followed by a verb ending in "…", e.g. "✻ Cogitating…".
+// This is the single most reliable screen-level signal: it's present IFF
+// CC is processing (API call in flight, tool executing, thinking). When CC
+// is idle (waiting for user input), the spinner line is absent and the
+// screen shows only the prompt indicator (❯).
+//
+// We also detect tool-call labels ("⏺ Reading file… (ctrl+o to expand)")
+// as a secondary signal — these persist while a tool is running even
+// between spinner frame updates.
+//
+// The detector returns either null (idle) or a status string extracted
+// from the spinner verb, so the UI can show "Working…" / "Thinking…" etc.
+// ---------------------------------------------------------------------------
+
+/**
+ * Regex to extract the verb from a spinner line. Captures the word
+ * before the "…" — e.g. from "✻ Cogitating… (thinking)" we get
+ * "Cogitating". The parenthetical qualifier is optional.
+ */
+const SPINNER_VERB_RE = /^\s*[^\w\s⏺]\s+(\S+)…/
+
+/**
+ * Detect CC's activity state from the plain-text screen buffer.
+ *
+ * Returns a short status string when CC is working (e.g. "Cogitating…",
+ * "Reading file…"), or null when idle. Scans the screen bottom-up
+ * because the spinner sits near the bottom of the content area, just
+ * above the input chrome.
+ */
+export function detectActivity(screen: string): string | null {
+  if (!screen) return null
+  const lines = screen.split('\n')
+
+  // Walk bottom-up: the spinner line sits between the content and
+  // the input chrome. We scan the last ~15 lines which is more than
+  // enough to cover the chrome + spinner region.
+  const start = Math.max(0, lines.length - 15)
+  for (let i = lines.length - 1; i >= start; i--) {
+    const line = lines[i] ?? ''
+
+    // Primary signal: the rotating-glyph spinner line.
+    const verbMatch = SPINNER_VERB_RE.exec(line)
+    if (verbMatch) {
+      return `${verbMatch[1]}…`
+    }
+
+    // Secondary signal: a tool-call label with a keybinding hint.
+    // These show "⏺ Editing src/foo.ts… (ctrl+o to expand)". We
+    // extract the text between ⏺ and the hint as the status.
+    if (TOOL_LABEL_HINT_RE.test(line) && ASSISTANT_MARKER_RE.test(line)) {
+      const cleaned = line
+        .replace(ASSISTANT_MARKER_RE, '')
+        .replace(TOOL_LABEL_HINT_RE, '')
+        .trim()
+      if (cleaned) return cleaned
+    }
+  }
+
+  return null
+}
+
 /**
  * Strip the trailing input-box block from the bottom of the screen.
  * The input box is a contiguous run of chrome lines at the bottom — once
