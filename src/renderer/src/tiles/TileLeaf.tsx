@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { extractAssistantInProgress } from '../../../core/parsers/claude/streamingScreen'
+import { extractAssistantInProgress } from '../../../core/parsers/extractAssistant'
 import { isConversationEntry } from '../../../core/types/transcript'
 import { Feed } from '../feed/Feed'
 import { TrustDialogModal } from '../feed/TrustDialogModal'
@@ -426,7 +426,8 @@ export function TileLeaf({
       // reliably. latestScreenRef is mutated synchronously on every
       // IPC screen event so this is always current.
       const screen = workspace.latestScreenRef.current[sessionId] ?? ''
-      const baseline = extractAssistantInProgress(screen)
+      const provider = workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
+      const baseline = extractAssistantInProgress(screen, provider)
       workspace.setStreamingBaseline(sessionId, baseline)
 
       // Multi-line prompts (user hit Shift+Enter one or more times

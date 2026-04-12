@@ -12,7 +12,7 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import rehypeHighlight from 'rehype-highlight'
 
-import { extractAssistantInProgress } from '../../../core/parsers/claude/streamingScreen'
+import { extractAssistantInProgress } from '../../../core/parsers/extractAssistant'
 import {
   EditRow,
   MultiEditRow,
@@ -897,7 +897,8 @@ function StreamingRow({
   // the corresponding lines from the markdown snapshot. The line count
   // is identical between plain and markdown (terminalToMarkdown walks
   // the same rows), so a 1:1 index mapping is correct.
-  const plainExtract = extractAssistantInProgress(screen)
+  const currentProvider = useContext(ProviderContext)
+  const plainExtract = extractAssistantInProgress(screen, currentProvider)
   const isStale = baseline != null && plainExtract === baseline
   const show = plainExtract && !isStale
 

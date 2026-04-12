@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Entry } from '../../../core/types/transcript'
-import {
-  detectActivity,
-  extractAssistantInProgress,
-} from '../../../core/parsers/claude/streamingScreen'
+import { detectActivity } from '../../../core/parsers/claude/streamingScreen'
+import { extractAssistantInProgress } from '../../../core/parsers/extractAssistant'
 import {
   RATIO_DEFAULT,
   type SessionId,
