@@ -33,9 +33,13 @@ export function isCodexDividerLine(line: string): boolean {
   return dividerChars >= nonSpace * 0.8
 }
 
-/** Codex's prompt-indicator row: `›` followed by whitespace only (empty composer). */
+/**
+ * Codex's prompt-indicator row: `›` followed by whitespace only (empty
+ * composer). Accept optional markdown emphasis wrappers because
+ * terminalToMarkdown may bold the prompt glyph.
+ */
 export function isCodexPromptLine(line: string): boolean {
-  return /^\s*›\s*$/.test(line)
+  return /^\s*(?:\*{1,3})?›(?:\*{1,3})?\s*$/.test(line)
 }
 
 /**
@@ -45,7 +49,7 @@ export function isCodexPromptLine(line: string): boolean {
  * as Claude's isUserPromptLine).
  */
 export function isCodexUserPromptLine(line: string): boolean {
-  return /^\s*›\s+\S/.test(line)
+  return /^\s*(?:\*{1,3})?›(?:\*{1,3})?\s+\S/.test(line)
 }
 
 /** Codex's persistent status row — model + cwd. */
@@ -70,8 +74,10 @@ export function isCodexChromeLine(line: string): boolean {
 }
 
 // The assistant marker codex uses — • (U+2022, bullet).
-const CODEX_ASSISTANT_MARKER = '•'
-const CODEX_ASSISTANT_MARKER_RE = /^\s*•\s?/
+const CODEX_ASSISTANT_MARKER = '[•◦]'
+const CODEX_ASSISTANT_MARKER_RE = new RegExp(
+  String.raw`^\s*(?:\*{1,3})?${CODEX_ASSISTANT_MARKER}(?:\*{1,3})?\s?`,
+)
 
 // Codex tool-output sub-items use box-drawing: │ and └
 const CODEX_TREE_MARKER_RE = /^\s*[│└]/
@@ -87,7 +93,9 @@ const CODEX_SPINNER_RE = /^\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s/
 // of the real response — showing "Working (3s...)" as the streaming
 // card content. Confirmed from testbench recording
 // 2026-04-12T07-45-34-280Z, snap 8.
-const CODEX_WORKING_RE = /^\s*•\s+Working\s*\(/
+const CODEX_WORKING_RE = new RegExp(
+  String.raw`^\s*(?:\*{1,3})?${CODEX_ASSISTANT_MARKER}(?:\*{1,3})?\s+Working\s*\(`,
+)
 
 // Codex tool-call label with esc hint — "• Ran printf 'hello" is
 // a tool label when followed by sub-items, but "• Working (3s •

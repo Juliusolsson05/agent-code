@@ -1,9 +1,0 @@
-{
-  "_comment": "List fixture: asks CC for a bulleted list so we can verify that markdown lists survive terminalToMarkdown reconstruction. Tests whether CC's Ink emits `- ` prefixes to the terminal (markdown list) or uses a different character / layout we need to handle specially.",
-  "autoAcceptTrust": true,
-  "steps": [
-    { "type": "wait", "ms": 8000 },
-    { "type": "send", "data": "give me a bulleted list of three popular programming languages, with a short note about each\r" },
-    { "type": "wait", "ms": 20000 }
-  ]
-}

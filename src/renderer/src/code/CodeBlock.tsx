@@ -78,9 +78,13 @@ export const CodeBlock = memo(function CodeBlock({
 
   useEffect(() => {
     let disposed = false
-    let cleanupDiagnostics: (() => void) | null = null
-    let closeTimer: number | null = null
-    let cleanupEditor: (() => void) | null = null
+    // Collect ALL cleanup functions as they're created — even inside
+    // the async block. The effect cleanup runs them all, regardless
+    // of how far the async init got before unmount. This fixes the
+    // MaxListenersExceeded leak: the old code stored cleanupDiagnostics
+    // in a local that the cleanup closure couldn't reach if the async
+    // hadn't finished yet, so the IPC listener was never removed.
+    const cleanups: Array<() => void> = []
 
     void (async () => {
       const { ensureSemanticProvider, getMonaco } = await import('./monacoRuntime')
@@ -88,8 +92,12 @@ export const CodeBlock = memo(function CodeBlock({
       if (disposed || !containerRef.current) return
 
       await ensureSemanticProvider(monaco, workspaceRoot, normalizedLanguage)
+      if (disposed) return
+
       const uri = monaco.Uri.parse(clientUri)
       const model = monaco.editor.createModel(code, normalizedLanguage, uri)
+      cleanups.push(() => model.dispose())
+
       const editor = monaco.editor.create(containerRef.current, {
         model,
         readOnly: true,
@@ -123,6 +131,7 @@ export const CodeBlock = memo(function CodeBlock({
           alwaysConsumeMouseWheel: false,
         },
       })
+      cleanups.push(() => editor.dispose())
 
       const syncHeight = () => {
         const nextHeight = Math.min(Math.max(editor.getContentHeight(), 48), 360)
@@ -134,6 +143,7 @@ export const CodeBlock = memo(function CodeBlock({
 
       syncHeight()
       const sizeSub = editor.onDidContentSizeChange(syncHeight)
+      cleanups.push(() => sizeSub.dispose())
 
       if (workspaceRoot && supportsLsp(normalizedLanguage)) {
         await window.api.openLspDocument({
@@ -143,7 +153,9 @@ export const CodeBlock = memo(function CodeBlock({
           workspaceRoot,
           filePath: path ?? null,
         })
-        cleanupDiagnostics = window.api.onLspDiagnostics(event => {
+        if (disposed) return
+
+        const unsubDiag = window.api.onLspDiagnostics(event => {
           if (event.clientUri !== clientUri) return
           monaco.editor.setModelMarkers(
             model,
@@ -165,39 +177,23 @@ export const CodeBlock = memo(function CodeBlock({
             })),
           )
         })
+        cleanups.push(unsubDiag)
+        cleanups.push(() => void window.api.closeLspDocument(clientUri))
       }
 
-      if (disposed) {
-        cleanupDiagnostics?.()
-        sizeSub.dispose()
-        editor.dispose()
-        model.dispose()
-        if (workspaceRoot && supportsLsp(normalizedLanguage)) {
-          void window.api.closeLspDocument(clientUri)
-        }
-        return
-      }
+      if (disposed) return
 
-      closeTimer = window.setTimeout(() => {
-        syncHeight()
-      }, 0)
-
-      cleanupEditor = () => {
-        if (closeTimer != null) window.clearTimeout(closeTimer)
-        cleanupDiagnostics?.()
-        sizeSub.dispose()
-        editor.dispose()
-        model.dispose()
-        if (workspaceRoot && supportsLsp(normalizedLanguage)) {
-          void window.api.closeLspDocument(clientUri)
-        }
-      }
-      if (disposed) cleanupEditor()
+      const timer = window.setTimeout(() => syncHeight(), 0)
+      cleanups.push(() => window.clearTimeout(timer))
     })()
 
     return () => {
       disposed = true
-      cleanupEditor?.()
+      // Run all cleanups in reverse order (LIFO) so resources that
+      // depend on earlier ones are released first.
+      for (let i = cleanups.length - 1; i >= 0; i--) {
+        try { cleanups[i]() } catch { /* best-effort */ }
+      }
     }
   }, [clientUri, code, engine, normalizedLanguage, path, workspaceRoot])
 

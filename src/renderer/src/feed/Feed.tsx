@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -514,9 +515,22 @@ function FeedImpl({
         className="h-full overflow-auto"
       >
         <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
-          {visible.map((e, i) => (
-            <EntryRow key={(e as Entry).uuid ?? `i${i}`} entry={e} />
-          ))}
+          {visible.map((e, i) => {
+            const key = (e as Entry).uuid ?? `i${i}`
+            // The last EAGER_TAIL entries render immediately — they're
+            // in or near the current viewport (the user sees the bottom
+            // of the feed on load). Everything above starts as a
+            // lightweight placeholder and mounts when the user scrolls
+            // up to it. Once mounted, never unmounts — React.memo
+            // keeps re-renders free and we avoid the re-parse cost
+            // that virtualization (unmount→remount) would cause.
+            const eager = i >= visible.length - EAGER_TAIL
+            return (
+              <LazyEntry key={key} eager={eager} scrollerRef={scrollerRef}>
+                <EntryRow entry={e} />
+              </LazyEntry>
+            )
+          })}
           {streamingScreen != null && (
             <StreamingRow
               screen={streamingScreen}
@@ -542,6 +556,112 @@ function FeedImpl({
     </ProviderContext.Provider>
   )
 }
+
+// ---------------------------------------------------------------------------
+// Lazy entry mounting — the key to rendering fat conversations.
+// ---------------------------------------------------------------------------
+//
+// Problem: a resumed session can have 200+ entries. Mounting all of them
+// at once means 200 ReactMarkdown parses + CodeBlock syntax highlights
+// in a single blocking render pass. That's multiple seconds of frozen UI,
+// and the DOM ends up with thousands of nodes the browser has to lay out
+// even though the user only sees the bottom ~20 entries.
+//
+// Solution: entries in the last EAGER_TAIL positions render immediately
+// (they're in/near the viewport). Everything above starts as a thin
+// placeholder div. An IntersectionObserver watches each placeholder and
+// swaps in the real content when the user scrolls up to it. Once
+// mounted, the entry stays mounted forever — React.memo keeps
+// subsequent re-renders free, and we avoid the re-parse cost that full
+// virtualization (unmount→remount on scroll) would cause.
+//
+// Why not full virtualization (react-window / tanstack-virtual):
+//   - Our entry count is low hundreds, not tens of thousands.
+//   - Virtualization unmounts rows that scroll out of view. Re-mounting
+//     means re-parsing markdown (React.memo doesn't survive unmount).
+//     We'd need a separate parsed-output cache. Complexity for no gain.
+//   - Variable row heights (user prompt = 1 line, assistant with code
+//     blocks = 500px+) make fixed-size virtualizers useless and
+//     measured-height virtualizers finicky.
+//   - The streaming row at the bottom grows continuously during
+//     generation. Virtualizers don't handle a row whose height changes
+//     every frame well.
+//
+// The EAGER_TAIL count is generous: 30 entries covers roughly 2-3
+// screenfuls so the user never sees a placeholder flash on initial
+// load or on tab-switch restore. Scrolling up past the eager zone
+// triggers lazy mount with a 200px rootMargin (entries mount one
+// screenful before they're visible), so the user never sees the swap.
+
+const EAGER_TAIL = 30
+
+/**
+ * Wraps a single feed entry. If `eager` is true, renders children
+ * immediately. Otherwise, renders a placeholder and waits for the
+ * IntersectionObserver to fire before mounting the real content.
+ *
+ * Once mounted, stays mounted permanently — the `mounted` state only
+ * transitions false→true, never back. This is load-bearing: unmounting
+ * would discard React.memo's cached render tree and force a full
+ * re-parse of the entry's markdown on the next scroll-into-view.
+ */
+const LazyEntry = memo(function LazyEntry({
+  eager,
+  scrollerRef,
+  children,
+}: {
+  eager: boolean
+  scrollerRef: React.RefObject<HTMLDivElement | null>
+  children: ReactNode
+}) {
+  const [mounted, setMounted] = useState(eager)
+  const placeholderRef = useRef<HTMLDivElement>(null)
+
+  // If this entry starts lazy but later falls into the eager zone
+  // (e.g. entries above it were filtered out, shrinking the list),
+  // mount it immediately.
+  useEffect(() => {
+    if (eager && !mounted) setMounted(true)
+  }, [eager, mounted])
+
+  useEffect(() => {
+    if (mounted) return
+    const el = placeholderRef.current
+    if (!el) return
+
+    // Use the scroll container as the intersection root so the
+    // observer fires relative to the visible scroll area, not the
+    // document viewport. rootMargin adds 200px of lookahead above
+    // the viewport so entries mount before the user scrolls to them
+    // — no visible placeholder flash.
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setMounted(true)
+          observer.disconnect()
+        }
+      },
+      { root: scrollerRef.current, rootMargin: '200px 0px 200px 0px' },
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [mounted, scrollerRef])
+
+  if (!mounted) {
+    // Placeholder: a fixed-height div that approximates a typical
+    // entry. The exact height doesn't matter much — it just needs to
+    // be non-zero so the scroll container has enough height for the
+    // IntersectionObserver to fire as the user scrolls. Once the real
+    // content mounts, it takes its natural height and the scrollbar
+    // adjusts. The 48px estimate is conservative (a single-line tool
+    // result or system row). Taller entries will cause a small layout
+    // shift on mount, but that happens off-screen (200px above the
+    // viewport) so the user never sees it.
+    return <div ref={placeholderRef} className="min-h-[48px]" />
+  }
+
+  return <>{children}</>
+})
 
 // Memoized: entry objects are stable across store updates (we append,
 // never mutate), so shallow compare by entry reference skips re-render
@@ -879,8 +999,9 @@ const ToolResultRow = memo(function ToolResultRow({
   }
 
   // Read tool result: strip the line-number prefix and render as a
-  // code slab. CC's Read emits lines like "42\tactual code here",
-  // which would mix poorly with the rest of the text layout.
+  // code slab with LSP highlighting. CC's Read emits lines like
+  // "42\tactual code here" — we strip the prefix and pass the file
+  // path so CodeBlock can infer the language and use Monaco/LSP.
   if (sourceTool === 'Read' && !isError) {
     const stripped = stripLineNumberPrefix(trimmed)
     const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
@@ -899,6 +1020,31 @@ const ToolResultRow = memo(function ToolResultRow({
           path={filePath}
           workspaceRoot={codeContext.workspaceRoot}
           codeId={`read:${block.tool_use_id}`}
+          engine="monaco"
+        />
+      </MarkerRow>
+    )
+  }
+
+  // Grep tool result: render with CodeBlock so results get syntax
+  // highlighting based on the file pattern / path. Grep output is
+  // already formatted text but benefits from language-aware coloring.
+  if (sourceTool === 'Grep' && !isError) {
+    const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
+      | Record<string, unknown>
+      | undefined
+    const filePath =
+      typeof sourceInput?.path === 'string'
+        ? sourceInput.path
+        : null
+    return (
+      <MarkerRow marker="⎿" tone="muted">
+        <CodeBlock
+          code={trimmed}
+          path={filePath}
+          workspaceRoot={codeContext.workspaceRoot}
+          codeId={`grep:${block.tool_use_id}`}
+          engine="monaco"
         />
       </MarkerRow>
     )
@@ -935,6 +1081,18 @@ function stripLineNumberPrefix(text: string): string {
     .split('\n')
     .map(line => line.replace(/^\s*\d+\t/, ''))
     .join('\n')
+}
+
+function stripStreamingMarker(line: string, provider: AgentProvider): string {
+  // Provider-specific because the streaming preview is assembled in two
+  // stages: parse structure from the plain screen, then pull the same line
+  // range out of the markdown reconstruction. If the marker stripper only
+  // knows Claude's `⏺`, Codex lines won't line up and the markdown path can
+  // re-introduce prompt/status chrome even when the plain parser was right.
+  if (provider === 'codex') {
+    return line.replace(/^\s*(\*{1,3})?[•◦](\*{1,3})?\s?/, '')
+  }
+  return line.replace(/^\s*(\*{1,3})?⏺(\*{1,3})?\s?/, '')
 }
 
 /* ---------- System row (hidden by default; shown when toggled on) ---------- */
@@ -1013,7 +1171,7 @@ function StreamingRow({
       const plain = plainLines[i]?.replace(/[ \t]+$/, '') ?? ''
       // The extracted text has the `⏺ ` marker stripped, so compare
       // against the plain line with the marker also stripped.
-      const stripped = plain.replace(/^\s*⏺\s?/, '')
+      const stripped = stripStreamingMarker(plain, currentProvider)
       if (stripped === firstExtractLine || plain === firstExtractLine) {
         startIdx = i
         break
@@ -1030,7 +1188,7 @@ function StreamingRow({
           let cleaned = l.replace(/[ \t]+$/, '')
           if (i === 0) {
             // Strip the marker (possibly wrapped in bold: **⏺** or **⏺ **)
-            cleaned = cleaned.replace(/^\s*(\*{1,3})?⏺(\*{1,3})?\s?/, '')
+            cleaned = stripStreamingMarker(cleaned, currentProvider)
           } else {
             // Strip 2-char continuation indent (same as the plain parser)
             if (cleaned.startsWith('  ')) cleaned = cleaned.slice(2)

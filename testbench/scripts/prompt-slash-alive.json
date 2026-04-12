@@ -1,9 +1,0 @@
-{
-  "_comment": "Slash picker fixture WITHOUT dismissal — ends with the picker still on screen so the final frame is inspectable. We use this to reverse-engineer the picker's visual format: which character columns the items live in, how highlighted rows are encoded (spoiler from CC source: ink `inverse: true`, i.e. cell.isInverse() in @xterm/headless), and where the list ends.",
-  "autoAcceptTrust": true,
-  "steps": [
-    { "type": "wait", "ms": 8000 },
-    { "type": "send", "data": "/i" },
-    { "type": "wait", "ms": 2500 }
-  ]
-}

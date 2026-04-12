@@ -1,9 +1,0 @@
-{
-  "_comment": "Real prompt fixture: lets CC start, auto-accepts the trust dialog, sends a tiny prompt, waits for the streaming response. Captures a real assistant turn so we can validate parsers (extractStreamingText, future detectAssistantMessage) against actual mid-stream and post-stream screens.",
-  "autoAcceptTrust": true,
-  "steps": [
-    { "type": "wait", "ms": 8000 },
-    { "type": "send", "data": "say hi in three words\r" },
-    { "type": "wait", "ms": 18000 }
-  ]
-}

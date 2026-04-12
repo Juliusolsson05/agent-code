@@ -172,6 +172,24 @@ function extractCodexProviderSessionId(entry: Record<string, unknown>): string |
   return typeof payload?.id === 'string' ? payload.id : null
 }
 
+function entryTextContent(entry: Entry): string | null {
+  if (entry.type !== 'user' && entry.type !== 'assistant') return null
+  const content = (entry as { message?: { content?: unknown } }).message?.content
+  if (!Array.isArray(content)) return null
+  const texts = content
+    .map(block => {
+      const item = block as Record<string, unknown>
+      return item.type === 'text' && typeof item.text === 'string' ? item.text : null
+    })
+    .filter((text): text is string => text !== null)
+  return texts.length > 0 ? texts.join('\n') : null
+}
+
+function isOptimisticCodexUserEntry(entry: Entry | undefined): boolean {
+  if (!entry || entry.type !== 'user') return false
+  return typeof entry.uuid === 'string' && entry.uuid.startsWith('optimistic-codex-user:')
+}
+
 function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   if (entry.type !== 'response_item') return []
   const payload = entry.payload as Record<string, unknown> | undefined
@@ -423,7 +441,22 @@ export function useWorkspace() {
 
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
-          const nextEntries = [...current.entries, ...mapped]
+          let baseEntries = current.entries
+          const firstMapped = mapped[0]
+          const lastExisting = current.entries[current.entries.length - 1]
+          // Codex can sit on the raw-terminal path for a while before the
+          // rollout file attaches. We inject an optimistic local user row at
+          // submit time so the pane doesn't look dead, then drop it once the
+          // real rollout user message lands. Match on adjacent text only —
+          // conservative reconciliation is better than deleting real history.
+          if (
+            firstMapped?.type === 'user' &&
+            isOptimisticCodexUserEntry(lastExisting) &&
+            entryTextContent(lastExisting) === entryTextContent(firstMapped)
+          ) {
+            baseEntries = current.entries.slice(0, -1)
+          }
+          const nextEntries = [...baseEntries, ...mapped]
           const lastMapped = mapped[mapped.length - 1]
           const clearsAwaiting =
             lastMapped.type === 'assistant' && current.queuedMessages.length === 0
@@ -675,6 +708,67 @@ export function useWorkspace() {
     delete seenUuidsRef.current[sessionId]
     delete latestScreenRef.current[sessionId]
   }, [])
+
+  // ---- Action: replace the focused session in-place ----
+  //
+  // Kills the current session in the focused leaf and spawns a new one
+  // in the same position. Used by the resume flow to swap a session
+  // without changing the tile tree structure — the pane stays where it
+  // is, only its backing session changes.
+  const replaceSession = useCallback(
+    async (
+      cwd: string,
+      opts?: { resumeSessionId?: string; kind?: SessionKind },
+    ) => {
+      const tab = state.tabs.find(t => t.id === state.activeTabId)
+      if (!tab) return
+      const oldId = tab.focusedSessionId
+
+      // Kill the old session.
+      await window.api.killSession(oldId)
+      setRuntimes(prev => {
+        const next = { ...prev }
+        delete next[oldId]
+        return next
+      })
+      delete seenUuidsRef.current[oldId]
+      delete latestScreenRef.current[oldId]
+
+      // Spawn the replacement.
+      const newId = await spawn(cwd, opts)
+
+      // Swap the sessionId in the tree. Walk the tile tree and replace
+      // every occurrence of oldId with newId (there should be exactly
+      // one — the focused leaf).
+      const remapNode = (n: TileNode): TileNode => {
+        if (n.type === 'leaf') {
+          return n.sessionId === oldId
+            ? { type: 'leaf', sessionId: newId }
+            : n
+        }
+        return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
+      }
+
+      setState(prev => {
+        const sessions = { ...prev.sessions }
+        delete sessions[oldId]
+        return {
+          ...prev,
+          tabs: prev.tabs.map(t => {
+            if (t.id !== prev.activeTabId) return t
+            return {
+              ...t,
+              root: remapNode(t.root),
+              focusedSessionId:
+                t.focusedSessionId === oldId ? newId : t.focusedSessionId,
+            }
+          }),
+          sessions,
+        }
+      })
+    },
+    [spawn, state.activeTabId, state.tabs],
+  )
 
   // ---- Action: new tab ----
   //
@@ -980,6 +1074,59 @@ export function useWorkspace() {
     },
     [updateRuntime],
   )
+
+  // Codex live rendering is TUI-first, with rollout JSON as a later source
+  // of truth. That means a broken/missing rollout attach should NOT leave the
+  // feed blank after submit. We add a local user row immediately and reconcile
+  // it away when the real rollout user message shows up.
+  const addOptimisticCodexUserEntry = useCallback((sessionId: SessionId, text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setRuntimes(prev => {
+      const current = prev[sessionId] ?? emptyRuntime()
+      const last = current.entries[current.entries.length - 1]
+      if (isOptimisticCodexUserEntry(last) && entryTextContent(last) === trimmed) {
+        return prev
+      }
+      const optimistic: Entry = {
+        type: 'user',
+        uuid: `optimistic-codex-user:${Date.now()}`,
+        parentUuid: null,
+        timestamp: new Date().toISOString(),
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: trimmed }],
+        },
+      }
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          entries: [...current.entries, optimistic],
+        },
+      }
+    })
+  }, [])
+
+  const removeOptimisticCodexUserEntry = useCallback((sessionId: SessionId, text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    setRuntimes(prev => {
+      const current = prev[sessionId]
+      if (!current || current.entries.length === 0) return prev
+      const last = current.entries[current.entries.length - 1]
+      if (!isOptimisticCodexUserEntry(last) || entryTextContent(last) !== trimmed) {
+        return prev
+      }
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          entries: current.entries.slice(0, -1),
+        },
+      }
+    })
+  }, [])
 
   // ---- Update the per-session draft input (composer text) ----
   //
@@ -1386,12 +1533,15 @@ export function useWorkspace() {
     resizeFocusedDirectional,
     setSplitRatio,
     setStreamingBaseline,
+    addOptimisticCodexUserEntry,
+    removeOptimisticCodexUserEntry,
     setDraftInput,
     undoClose,
     undoCloseCount,
     normalizeLayout,
     hardNormalizeLayout,
     rotateLayout,
+    replaceSession,
   }
 }
 

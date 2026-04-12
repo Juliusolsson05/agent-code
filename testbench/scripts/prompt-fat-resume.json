@@ -1,9 +1,0 @@
-{
-  "_comment": "Resume an existing fat conversation (set CC_SHELL_RESUME_FIXTURE to point at the JSONL) and ask a meta question. Used to reproduce the 'markdown streaming fails on fat sessions' hypothesis — we want a realistic, long-context scenario where CC has to stream a multi-paragraph answer referencing prior turns. The long waits are calibrated for a ~8MB transcript: the first is boot + history hydration, the second is the model actually generating.",
-  "autoAcceptTrust": true,
-  "steps": [
-    { "type": "wait", "ms": 12000 },
-    { "type": "send", "data": "What have we been working on? Give me a bullet-point summary with short code examples.\r" },
-    { "type": "wait", "ms": 60000 }
-  ]
-}

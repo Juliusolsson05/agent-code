@@ -5,12 +5,7 @@ dist
 .DS_Store
 *.log
 .vite
-recordings/
-# Real conversation JSONL dumps used as fixtures for perf/parser testing.
-# These are multi-MB personal transcripts; scripts in testbench/ reference
-# them by path, but the files themselves stay local.
-testbench/fixtures/
-
+temp.txt
 # TypeScript incremental build cache
 *.tsbuildinfo
 

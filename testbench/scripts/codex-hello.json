@@ -1,9 +1,0 @@
-{
-  "_comment": "Codex hello fixture: waits 12s for codex to fully boot (banner + composer ready), then sends a single short prompt. The wait is deliberately longer than Claude's because codex's TUI takes a few seconds to initialize the model connection and render the composer. autoAcceptTrust is set but codex may not have a trust dialog — harmless if not.",
-  "autoAcceptTrust": true,
-  "steps": [
-    { "type": "wait", "ms": 12000 },
-    { "type": "send", "data": "say hello world in one sentence\r" },
-    { "type": "wait", "ms": 30000 }
-  ]
-}

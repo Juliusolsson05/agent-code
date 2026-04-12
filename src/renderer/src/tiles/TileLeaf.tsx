@@ -320,7 +320,10 @@ export function TileLeaf({
   }, [focused, sessionId, setDraftInput])
 
   const send = async (data: string) => {
-    await window.api.sendInput(sessionId, data)
+    const ok = await window.api.sendInput(sessionId, data)
+    if (!ok) {
+      throw new Error(`sendInput failed for missing session ${sessionId}`)
+    }
   }
 
   const exitSlashMode = () => {
@@ -429,6 +432,12 @@ export function TileLeaf({
       const provider = workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
       const baseline = extractAssistantInProgress(screen, provider)
       workspace.setStreamingBaseline(sessionId, baseline)
+      if (provider === 'codex') {
+        // Codex does not reliably give us a structured user message at submit
+        // time the way Claude does. Seed the feed immediately from the local
+        // composer state so "submit" is visible even if rollout JSON is late.
+        workspace.addOptimisticCodexUserEntry(sessionId, input)
+      }
 
       // Multi-line prompts (user hit Shift+Enter one or more times
       // before committing): wrap the body in bracketed paste so CC's
@@ -442,12 +451,22 @@ export function TileLeaf({
       // For single-line prompts we keep the old path (no paste
       // envelope) so nothing changes for the 99% case and we don't
       // risk confusing CC's paste handler with zero-newline payloads.
-      if (input.includes('\n')) {
-        await send(`\x1b[200~${input}\x1b[201~\r`)
-      } else {
-        await send(input + '\r')
+      try {
+        if (input.includes('\n')) {
+          await send(`\x1b[200~${input}\x1b[201~\r`)
+        } else {
+          await send(input + '\r')
+        }
+        setInputText('')
+      } catch (err) {
+        // Keep the draft visible if main no longer has a live session for this
+        // pane. Clearing the composer on a dropped write makes the failure look
+        // like Codex ignored the prompt when it never received it.
+        if (provider === 'codex') {
+          workspace.removeOptimisticCodexUserEntry(sessionId, input)
+        }
+        console.warn('[TileLeaf] submit failed', err)
       }
-      setInputText('')
       // Any submit exits history cycling — the prompt is committed
       // and the next Up should start a fresh walk from the (now
       // updated) newest entry, not continue from wherever we were.

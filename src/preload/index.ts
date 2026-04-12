@@ -132,7 +132,7 @@ const api = {
     ipcRenderer.invoke('session:list-for-cwd', cwd, limit, provider),
 
   // --- Per-session I/O ---
-  sendInput: (sessionId: string, data: string): Promise<void> =>
+  sendInput: (sessionId: string, data: string): Promise<boolean> =>
     ipcRenderer.invoke('session:input', sessionId, data),
 
   resize: (sessionId: string, cols: number, rows: number): Promise<void> =>
@@ -225,6 +225,22 @@ const api = {
   // tab bar can pad itself dynamically. Zoom-safe, scale-safe.
   onTrafficLightInset: (cb: (insetPx: number) => void): Unsub =>
     subscribe('traffic-light-inset', cb),
+
+  // --- Git info (used by GitBar) ---
+  gitStatus: (cwd: string): Promise<
+    | {
+        ok: true
+        branch: string
+        files: Array<{ file: string; additions: number; deletions: number }>
+        commits: Array<{
+          hash: string
+          subject: string
+          author: string
+          relativeDate: string
+        }>
+      }
+    | { ok: false }
+  > => ipcRenderer.invoke('git:status', cwd),
 }
 
 contextBridge.exposeInMainWorld('api', api)

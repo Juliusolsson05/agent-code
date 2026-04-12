@@ -1,6 +1,0 @@
-{
-  "_comment": "Records CC's startup screen with no prompts. Captures the welcome banner + bordered input box chrome — useful for tightening extractStreamingText against real input-box layout without burning API calls or risking races with another active CC session.",
-  "steps": [
-    { "type": "wait", "ms": 6000 }
-  ]
-}

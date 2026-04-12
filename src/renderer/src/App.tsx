@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { CommandPalette } from './CommandPalette'
+import { GitBar } from './GitBar'
 import { ThemePicker } from './feed/ThemePicker'
 import { PathPickerModal } from './tiles/PathPickerModal'
 import { TabBar } from './tiles/TabBar'
@@ -29,6 +30,7 @@ export default function App() {
   const [pathPickerOpen, setPathPickerOpen] = useState(false)
   const [pathPickerDefault, setPathPickerDefault] = useState('')
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [gitBarOpen, setGitBarOpen] = useState(false)
   const workspace = useWorkspace()
 
   // Pre-fill the path input with a sensible default when the modal
@@ -124,17 +126,30 @@ export default function App() {
         clickable escape hatch. Otherwise the main area renders null
         and the app looks bricked.
       */}
-      <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
-        {activeTab ? (
-          <TileTree
-            node={activeTab.root}
-            focusedSessionId={activeTab.focusedSessionId}
-            workspace={workspace}
+      <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
+        <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
+          {activeTab ? (
+            <TileTree
+              node={activeTab.root}
+              focusedSessionId={activeTab.focusedSessionId}
+              workspace={workspace}
+            />
+          ) : (
+            <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
+          )}
+        </main>
+
+        {gitBarOpen && (
+          <GitBar
+            cwd={
+              activeTab
+                ? workspace.state.sessions[activeTab.focusedSessionId]?.cwd ?? null
+                : null
+            }
+            onClose={() => setGitBarOpen(false)}
           />
-        ) : (
-          <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
         )}
-      </main>
+      </div>
 
       <CommandPalette
         open={commandPaletteOpen}
@@ -142,6 +157,7 @@ export default function App() {
         workspace={workspace}
         onNewTabRequest={onNewTabRequest}
         onResumeRequest={onResumeRequest}
+        toggleGitBar={() => setGitBarOpen(prev => !prev)}
       />
 
       <PathPickerModal

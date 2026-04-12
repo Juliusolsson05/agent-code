@@ -1,8 +1,0 @@
-{
-  "_comment": "Records CC's main UI by navigating past the trust dialog. Sends Enter to accept the highlighted 'Yes, I trust' option, then waits for the welcome banner + bordered input box to render. This is the canonical fixture for testing extractStreamingText against CC's idle main UI.",
-  "steps": [
-    { "type": "wait", "ms": 3500 },
-    { "type": "send", "data": "\r" },
-    { "type": "wait", "ms": 6000 }
-  ]
-}

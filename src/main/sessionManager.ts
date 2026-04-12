@@ -300,8 +300,17 @@ export class SessionManager extends EventEmitter {
    * doesn't exist — this happens naturally if a session exits between
    * the renderer queueing input and the main process handling it.
    */
-  write(sessionId: string, data: string): void {
-    this.sessions.get(sessionId)?.session.write(data)
+  write(sessionId: string, data: string): boolean {
+    const entry = this.sessions.get(sessionId)
+    if (!entry) {
+      // A silent miss here is brutal to debug from the renderer: the composer
+      // clears, the feed may show an optimistic user row, and nothing ever
+      // reaches the PTY. Surface the miss to callers so they can log/retain
+      // the draft instead of pretending the send succeeded.
+      return false
+    }
+    entry.session.write(data)
+    return true
   }
 
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */

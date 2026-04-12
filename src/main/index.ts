@@ -216,7 +216,15 @@ function registerIpc(): void {
   ipcMain.handle(
     'session:input',
     (_evt, sessionId: string, data: string) => {
-      manager.write(sessionId, data)
+      const ok = manager.write(sessionId, data)
+      if (!ok) {
+        // eslint-disable-next-line no-console
+        console.warn('[session:input] dropped write for missing session', {
+          sessionId,
+          dataLength: data.length,
+        })
+      }
+      return ok
     },
   )
 
@@ -410,6 +418,86 @@ function registerIpc(): void {
   // the Electron app was launched from).
   ipcMain.handle('workspace:defaultCwd', () => {
     return process.env.CC_SHELL_CWD || process.cwd()
+  })
+
+  // --- Git info (used by GitBar) ---
+  //
+  // Runs git commands in a given cwd and returns structured data.
+  // All commands are read-only — no mutations. Errors return empty
+  // results so the UI degrades gracefully for non-git directories.
+
+  ipcMain.handle('git:status', async (_evt, cwd: string) => {
+    try {
+      const { execFile } = await import('child_process')
+      const { promisify } = await import('util')
+      const exec = promisify(execFile)
+
+      // git diff --numstat gives us per-file +/- counts.
+      // Includes both staged and unstaged changes.
+      const { stdout: diffStat } = await exec(
+        'git', ['diff', 'HEAD', '--numstat'],
+        { cwd, timeout: 5000 },
+      )
+
+      const files: Array<{
+        file: string
+        additions: number
+        deletions: number
+      }> = []
+
+      for (const line of diffStat.trim().split('\n')) {
+        if (!line) continue
+        const [add, del, file] = line.split('\t')
+        if (!file) continue
+        files.push({
+          file,
+          // Binary files show '-' for both counts.
+          additions: add === '-' ? 0 : parseInt(add, 10) || 0,
+          deletions: del === '-' ? 0 : parseInt(del, 10) || 0,
+        })
+      }
+
+      // Latest 5 commits: hash, subject, author, relative date.
+      const { stdout: logOut } = await exec(
+        'git',
+        ['log', '--oneline', '--format=%h\t%s\t%an\t%cr', '-5'],
+        { cwd, timeout: 5000 },
+      )
+
+      const commits: Array<{
+        hash: string
+        subject: string
+        author: string
+        relativeDate: string
+      }> = []
+
+      for (const line of logOut.trim().split('\n')) {
+        if (!line) continue
+        const [hash, subject, author, relativeDate] = line.split('\t')
+        if (!hash) continue
+        commits.push({
+          hash,
+          subject: subject ?? '',
+          author: author ?? '',
+          relativeDate: relativeDate ?? '',
+        })
+      }
+
+      // Current branch name.
+      const { stdout: branchOut } = await exec(
+        'git', ['rev-parse', '--abbrev-ref', 'HEAD'],
+        { cwd, timeout: 5000 },
+      )
+
+      return {
+        ok: true as const,
+        branch: branchOut.trim(),
+        files,
+        commits,
+      }
+    } catch {
+      return { ok: false as const }
+    }
   })
 }
 
