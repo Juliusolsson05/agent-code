@@ -353,7 +353,7 @@ export function useWorkspace() {
       }
 
       // Capture CC's own session UUID from the first entry that
-      // carries one, and persist it into SessionMeta.ccSessionId so
+      // carries one, and persist it into SessionMeta.providerSessionId so
       // the next app launch can pass --resume <uuid> to spawnSession
       // and get the same conversation back. Without this, every
       // reload is a fresh blank session — the tile tree survives
@@ -377,20 +377,20 @@ export function useWorkspace() {
         setState(prev => {
           const meta = prev.sessions[sessionId]
           if (!meta) return prev
-          if (meta.ccSessionId === ccId) return prev
+          if (meta.providerSessionId === ccId) return prev
           // Guard: once captured, never overwrite. A resumed session
           // that receives fresh entries tagged with the same
-          // ccSessionId is a no-op (first branch catches it); a
+          // providerSessionId is a no-op (first branch catches it); a
           // resumed session that somehow receives entries with a
           // DIFFERENT sessionId would indicate a bug upstream, and
           // we'd rather keep the original value than track the
           // mutation.
-          if (meta.ccSessionId) return prev
+          if (meta.providerSessionId) return prev
           return {
             ...prev,
             sessions: {
               ...prev.sessions,
-              [sessionId]: { ...meta, ccSessionId: ccId },
+              [sessionId]: { ...meta, providerSessionId: ccId },
             },
           }
         })
@@ -823,16 +823,16 @@ export function useWorkspace() {
    * plus the old→new id mapping.
    *
    * Resume semantics: if the persisted SessionMeta carries a
-   * `ccSessionId`, we pass it to the spawn call as `resumeSessionId`
+   * `providerSessionId`, we pass it to the spawn call as `resumeSessionId`
    * so claude boots with `--resume <uuid>` and the full conversation
    * history — tool calls, transcript, queue state, the lot — comes
    * back. The cc-shell SessionId we mint here is a fresh routing
    * key; CC's own session UUID is the thing we care about preserving.
    *
-   * The ccSessionId is ALSO threaded into freshSessions[newId] so
+   * The providerSessionId is ALSO threaded into freshSessions[newId] so
    * the runtime meta after rehydrate matches pre-reload state and
    * the next save cycle writes it straight back. Without this, the
-   * first save after a resume would drop ccSessionId and the NEXT
+   * first save after a resume would drop providerSessionId and the NEXT
    * reload would lose context again.
    *
    * Failure modes:
@@ -861,10 +861,10 @@ export function useWorkspace() {
         const newId = await window.api.spawnSession({
           kind,
           cwd: meta.cwd,
-          resumeSessionId: kind === 'claude' ? meta.ccSessionId : undefined,
+          resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
         })
         idMap.set(oldId, newId)
-        // Carry the full meta forward — kind + ccSessionId — so the
+        // Carry the full meta forward — kind + providerSessionId — so the
         // next save cycle doesn't drop these and cause the session
         // to degrade on the NEXT reload.
         freshSessions[newId] = meta

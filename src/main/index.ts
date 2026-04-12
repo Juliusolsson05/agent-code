@@ -103,7 +103,7 @@ function registerIpc(): void {
     async (
       _evt,
       options: {
-        kind?: 'claude' | 'terminal'
+        kind?: 'claude' | 'codex' | 'terminal'
         cwd: string
         cols?: number
         rows?: number

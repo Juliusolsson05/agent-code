@@ -30,7 +30,7 @@ import type { JsonlEntry } from '../core/runtime/jsonlTailer.js'
 // IPC forwarder can emit them on kind-specific channels if it wants
 // (today the renderer just checks the kind on its side).
 
-export type SessionKind = 'claude' | 'terminal'
+export type SessionKind = 'claude' | 'codex' | 'terminal'
 
 export type ManagerEvents = {
   started: [{ sessionId: string; kind: SessionKind; projectDir?: string }]

@@ -29,7 +29,7 @@ export type ScreenSnapshot = {
   picker: SlashPickerState
 }
 
-export type SessionKind = 'claude' | 'terminal'
+export type SessionKind = 'claude' | 'codex' | 'terminal'
 export type SessionStartedEvent = {
   sessionId: string
   kind: SessionKind

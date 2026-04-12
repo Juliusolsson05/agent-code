@@ -61,7 +61,7 @@ export type Tab = {
  * right component. Absent (= undefined) in pre-terminal workspace.json
  * blobs, treated as 'claude' at load time.
  */
-export type SessionKind = 'claude' | 'terminal'
+export type SessionKind = 'claude' | 'codex' | 'terminal'
 
 export type SessionMeta = {
   /** cwd the session was spawned with — needed to respawn on relaunch. */
@@ -93,7 +93,7 @@ export type SessionMeta = {
    * have a JSONL transcript so there's nothing to resume; a reload
    * just spawns a fresh shell in the same cwd.
    */
-  ccSessionId?: string
+  providerSessionId?: string
 }
 
 export type WorkspaceState = {
