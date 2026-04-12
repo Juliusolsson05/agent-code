@@ -1,11 +1,8 @@
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 
-import {
-  ClaudeSession,
-  type ScreenSnapshot,
-} from '../providers/claude/runtime/claudeSession.js'
-import { CodexSession } from '../providers/codex/runtime/codexSession.js'
+import { getMainProvider } from '../providers/registry.main.js'
+import type { ScreenSnapshot } from '../providers/claude/runtime/claudeSession.js'
 import { TerminalSession } from '../shared/runtime/terminalSession.js'
 import type { JsonlEntry } from '../shared/runtime/jsonlTailer.js'
 
@@ -75,9 +72,11 @@ export interface SessionManager {
 
 // Internal registry shape: we store the concrete instance plus its
 // kind so kill/write/resize can dispatch without sniffing the object.
+// The registry holds concrete session instances. Agent sessions
+// (claude, codex) are created via the provider registry; terminal
+// sessions are handled directly.
 type RegistryEntry =
-  | { kind: 'claude'; session: ClaudeSession }
-  | { kind: 'codex'; session: CodexSession }
+  | { kind: 'claude' | 'codex'; session: unknown }
   | { kind: 'terminal'; session: TerminalSession }
 
 // Rolling buffer cap for terminal replay. 256 KB is enough to hold
@@ -133,79 +132,44 @@ export class SessionManager extends EventEmitter {
     const kind: SessionKind = options.kind ?? 'claude'
     const sessionId = randomUUID()
 
-    if (kind === 'claude') {
-      const session = new ClaudeSession({
+    // Agent providers (claude, codex) — dispatched through the registry.
+    // Both providers emit the same event shape (started, pty-data,
+    // screen, jsonl-entry, jsonl-error, exit), so the wiring is
+    // identical. The registry handles which concrete session class to
+    // instantiate. This eliminates the if/else duplication that caused
+    // cross-provider breakage when editing one provider's spawn logic.
+    if (kind === 'claude' || kind === 'codex') {
+      const provider = getMainProvider(kind)
+      const session = provider.createSession({
         cwd: options.cwd,
         cols: options.cols ?? 120,
         rows: options.rows ?? 40,
         snapshotIntervalMs: 16,
         resumeSessionId: options.resumeSessionId,
-      })
+      }) as import('events').EventEmitter
 
-      // Wire every ClaudeSession event to a manager-level event with
-      // sessionId attached. The main-process IPC forwarder listens once
-      // here and dispatches to the renderer with the id included.
-      session.on('started', ({ projectDir }) =>
+      session.on('started', ({ projectDir }: { projectDir: string }) =>
         this.emit('started', { sessionId, kind, projectDir }),
       )
-      session.on('pty-data', data =>
+      session.on('pty-data', (data: string) =>
         this.emit('pty-data', { sessionId, data }),
       )
-      session.on('screen', snap =>
+      session.on('screen', (snap: ScreenSnapshot) =>
         this.emit('screen', { sessionId, ...snap }),
       )
-      session.on('jsonl-entry', (entry, file) =>
+      session.on('jsonl-entry', (entry: JsonlEntry, file: string) =>
         this.emit('jsonl-entry', { sessionId, entry, file }),
       )
-      session.on('jsonl-error', error =>
+      session.on('jsonl-error', (error: Error) =>
         this.emit('jsonl-error', { sessionId, error }),
       )
-      session.on('exit', ({ exitCode, signal }) => {
-        this.emit('exit', { sessionId, exitCode, signal })
-        // Clean up the registry entry when the child exits so kill() and
-        // list() stay accurate. We intentionally DON'T re-spawn here —
-        // the renderer decides what to do on exit (probably: mark the
-        // pane dead, offer relaunch).
-        this.sessions.delete(sessionId)
-      })
-
-      this.sessions.set(sessionId, { kind: 'claude', session })
-      await session.start()
-      return sessionId
-    }
-
-    if (kind === 'codex') {
-      const session = new CodexSession({
-        cwd: options.cwd,
-        cols: options.cols ?? 120,
-        rows: options.rows ?? 40,
-        resumeSessionId: options.resumeSessionId,
-      })
-
-      // Wire events — same shape as Claude so the IPC forwarder
-      // in main/index.ts doesn't need codex-specific branches.
-      session.on('started', ({ projectDir }) =>
-        this.emit('started', { sessionId, kind, projectDir }),
-      )
-      session.on('pty-data', data =>
-        this.emit('pty-data', { sessionId, data }),
-      )
-      session.on('screen', snap =>
-        this.emit('screen', { sessionId, ...snap }),
-      )
-      session.on('jsonl-entry', (entry, file) =>
-        this.emit('jsonl-entry', { sessionId, entry, file }),
-      )
-      session.on('jsonl-error', error =>
-        this.emit('jsonl-error', { sessionId, error }),
-      )
-      session.on('exit', ({ exitCode, signal }) => {
+      session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
         this.emit('exit', { sessionId, exitCode, signal })
         this.sessions.delete(sessionId)
       })
 
-      this.sessions.set(sessionId, { kind: 'codex', session })
-      await session.start()
+      this.sessions.set(sessionId, { kind, session })
+      await (session as unknown as { start(): Promise<void> }).start()
       return sessionId
     }
 

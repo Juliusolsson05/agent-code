@@ -6,8 +6,7 @@ import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
 import { LspManager } from './lspManager.js'
-import { listSessionsForCwd } from '../providers/claude/runtime/sessionList.js'
-import { listCodexSessions } from '../providers/codex/runtime/sessionList.js'
+import { getMainProvider } from '../providers/registry.main.js'
 
 // Main process — thin Electron host over SessionManager.
 //
@@ -173,16 +172,10 @@ function registerIpc(): void {
       provider: 'claude' | 'codex' = 'claude',
     ) => {
       try {
-        if (provider === 'codex') {
-          const sessions = await listCodexSessions({
-            // Codex sessions are global, not per-cwd, so we read a
-            // slightly wider slice first and then filter client-facing
-            // results down to the requested cwd.
-            limit: Math.max(limit ?? 20, 100),
-          })
-          return sessions.filter(s => s.cwd === cwd).slice(0, limit ?? 20)
-        }
-        return await listSessionsForCwd(cwd, { limit })
+        // Dispatch session listing through the provider registry.
+        // Each provider's listSessions handles its own storage format.
+        const providerConfig = getMainProvider(provider)
+        return await providerConfig.listSessions(cwd, limit ?? 20)
       } catch (err) {
         // Don't let a listing error brick the modal — return empty.
         // eslint-disable-next-line no-console
