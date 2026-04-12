@@ -153,8 +153,13 @@ export class CodexSession extends EventEmitter {
       snapshotIntervalMs: options.snapshotIntervalMs ?? 16,
     })
 
-    // Forward PTY bytes.
-    this.ptyScreen.on('pty-data', data => this.emit('pty-data', data))
+    // Forward PTY bytes + debug log.
+    this.ptyScreen.on('pty-data', data => {
+      if (this.debugLog) {
+        this.debugLog.write(`[pty-data] len=${data.length}\n`)
+      }
+      this.emit('pty-data', data)
+    })
 
     // Emit screen snapshots. No slash-picker enrichment yet —
     // just pass through the base snapshot with a static "not visible"
@@ -168,9 +173,10 @@ export class CodexSession extends EventEmitter {
         this.debugLog.write(
           `[snap ${this.debugSnapCount}] extract=${JSON.stringify(extract.slice(0, 120))} plainLen=${base.plain.length}\n`,
         )
-        // Dump full screen periodically so we can see exactly what
-        // the headless xterm buffer contains.
-        if (this.debugSnapCount % 30 === 1) {
+        // Dump full screen frequently — every 10th snap — so we
+        // can see exactly what the headless xterm buffer contains
+        // during the "thinking forever" window.
+        if (this.debugSnapCount % 10 === 1) {
           this.debugLog.write(
             `--- FULL SCREEN (snap ${this.debugSnapCount}) ---\n${base.plain}\n--- END ---\n`,
           )
@@ -205,6 +211,11 @@ export class CodexSession extends EventEmitter {
   }
 
   write(data: string): void {
+    // Debug: log every write so we can verify keystrokes reach the PTY.
+    if (this.debugLog) {
+      const preview = data.replace(/\r/g, '⏎').replace(/\n/g, '⏎').slice(0, 60)
+      this.debugLog.write(`[write] ${JSON.stringify(preview)}\n`)
+    }
     this.ptyScreen.write(data)
   }
 
