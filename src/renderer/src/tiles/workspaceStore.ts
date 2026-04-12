@@ -22,6 +22,7 @@ import {
   findNeighbor,
   normalizeTree,
   resizeInDirection,
+  rotateTree,
   splitLeaf,
 } from './treeOps'
 import {
@@ -154,6 +155,126 @@ const emptyRuntime = (): SessionRuntime => ({
   activityStatus: null,
 })
 
+function isCodexRolloutEntry(entry: Record<string, unknown>): boolean {
+  const type = entry.type
+  return (
+    type === 'session_meta' ||
+    type === 'response_item' ||
+    type === 'event_msg' ||
+    type === 'turn_context' ||
+    type === 'compacted'
+  )
+}
+
+function extractCodexProviderSessionId(entry: Record<string, unknown>): string | null {
+  if (entry.type !== 'session_meta') return null
+  const payload = entry.payload as Record<string, unknown> | undefined
+  return typeof payload?.id === 'string' ? payload.id : null
+}
+
+function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
+  if (entry.type !== 'response_item') return []
+  const payload = entry.payload as Record<string, unknown> | undefined
+  if (!payload || typeof payload.type !== 'string') return []
+
+  const uuid =
+    `${String(entry.timestamp ?? Date.now())}:${String(payload.id ?? payload.call_id ?? payload.type)}`
+  const timestamp =
+    typeof entry.timestamp === 'string' ? entry.timestamp : undefined
+
+  if (
+    payload.type === 'message' &&
+    (payload.role === 'user' || payload.role === 'assistant')
+  ) {
+    const role = payload.role
+    const content = Array.isArray(payload.content)
+      ? payload.content
+          .map(block => {
+            const item = block as Record<string, unknown>
+            const text = typeof item.text === 'string' ? item.text : null
+            if (!text) return null
+            if (item.type === 'input_text' || item.type === 'output_text') {
+              return { type: 'text' as const, text }
+            }
+            return null
+          })
+          .filter((block): block is { type: 'text'; text: string } => block !== null)
+      : []
+
+    if (content.length === 0) return []
+    return [
+      {
+        type: role,
+        uuid,
+        parentUuid: null,
+        timestamp,
+        message: { role, content },
+      },
+    ]
+  }
+
+  if (
+    payload.type === 'function_call' &&
+    typeof payload.call_id === 'string' &&
+    typeof payload.name === 'string'
+  ) {
+    let input: unknown = { arguments: payload.arguments }
+    if (typeof payload.arguments === 'string') {
+      try {
+        input = JSON.parse(payload.arguments)
+      } catch {
+        input = { arguments: payload.arguments }
+      }
+    }
+    return [
+      {
+        type: 'assistant',
+        uuid,
+        parentUuid: null,
+        timestamp,
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: payload.call_id,
+              name: payload.name,
+              input,
+            },
+          ],
+        },
+      },
+    ]
+  }
+
+  if (payload.type === 'function_call_output' && typeof payload.call_id === 'string') {
+    const output =
+      typeof payload.output === 'string'
+        ? payload.output
+        : JSON.stringify(payload.output ?? '', null, 2)
+    return [
+      {
+        type: 'user',
+        uuid,
+        parentUuid: null,
+        timestamp,
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: payload.call_id,
+              content: output,
+            },
+          ],
+        },
+      },
+    ]
+  }
+
+  return []
+}
+
 // ---------------------------------------------------------------------------
 // Persisted state shape (serialized to ~/.config/cc-shell/workspace.json)
 // ---------------------------------------------------------------------------
@@ -279,6 +400,47 @@ export function useWorkspace() {
     )
 
     const offEntry = window.api.onSessionJsonlEntry(({ sessionId, entry }) => {
+      if (isCodexRolloutEntry(entry)) {
+        const codexId = extractCodexProviderSessionId(entry)
+        if (codexId) {
+          setState(prev => {
+            const meta = prev.sessions[sessionId]
+            if (!meta) return prev
+            if (meta.providerSessionId === codexId) return prev
+            if (meta.providerSessionId) return prev
+            return {
+              ...prev,
+              sessions: {
+                ...prev.sessions,
+                [sessionId]: { ...meta, providerSessionId: codexId },
+              },
+            }
+          })
+        }
+
+        const mapped = mapCodexRolloutToFeedEntries(entry)
+        if (mapped.length === 0) return
+
+        setRuntimes(prev => {
+          const current = prev[sessionId] ?? emptyRuntime()
+          const nextEntries = [...current.entries, ...mapped]
+          const lastMapped = mapped[mapped.length - 1]
+          const clearsAwaiting =
+            lastMapped.type === 'assistant' && current.queuedMessages.length === 0
+              ? false
+              : current.awaitingAssistant
+          return {
+            ...prev,
+            [sessionId]: {
+              ...current,
+              entries: nextEntries,
+              awaitingAssistant: clearsAwaiting,
+            },
+          }
+        })
+        return
+      }
+
       const uuid = (entry as { uuid?: string }).uuid
       const seen = (seenUuidsRef.current[sessionId] ??= new Set())
       if (uuid) {
@@ -1177,6 +1339,21 @@ export function useWorkspace() {
     })
   }, [])
 
+  // ---- Action: rotate layout ----
+  //
+  // Flip every split direction in the active tab's tree: vertical
+  // becomes horizontal and vice versa. Turns rows into columns.
+  const rotateLayout = useCallback(() => {
+    setState(prev => ({
+      ...prev,
+      tabs: prev.tabs.map(t =>
+        t.id === prev.activeTabId
+          ? { ...t, root: rotateTree(t.root) }
+          : t,
+      ),
+    }))
+  }, [])
+
   /** Peek at the undo stack length — used by the command palette to
    *  show/hide the "Undo Close" command. */
   const undoCloseCount = undoStackRef.current.length
@@ -1214,6 +1391,7 @@ export function useWorkspace() {
     undoCloseCount,
     normalizeLayout,
     hardNormalizeLayout,
+    rotateLayout,
   }
 }
 

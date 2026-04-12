@@ -386,6 +386,28 @@ select {
   padding: 0;
 }
 
+.code-block-shell {
+  margin: 10px 0;
+  background: var(--theme-code-bg);
+  border: none;
+  min-height: 48px;
+}
+
+.code-block-static {
+  background: var(--theme-code-bg);
+}
+
+.code-block-static .hljs,
+.diff-line-code.hljs {
+  background: transparent !important;
+}
+
+.code-block-shell .monaco-editor,
+.code-block-shell .monaco-editor .margin,
+.code-block-shell .monaco-editor-background {
+  background: var(--theme-code-bg) !important;
+}
+
 .prose-theme table {
   border-collapse: collapse;
   margin: 12px 0;

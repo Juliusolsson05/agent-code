@@ -6,11 +6,11 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  type ReactNode,
 } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
-import rehypeHighlight from 'rehype-highlight'
 
 import { extractAssistantInProgress } from '../../../core/parsers/extractAssistant'
 import {
@@ -28,6 +28,7 @@ import {
   type ToolResultBlock,
   type ToolUseBlock,
 } from '../../../core/types/transcript'
+import { CodeBlock } from '../code/CodeBlock'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.
@@ -84,24 +85,6 @@ import {
 // richer formatting on top of the same base layout.
 const COMPLETED_REMARK = [remarkGfm]
 const STREAMING_REMARK = [remarkGfm, remarkBreaks]
-// rehype-highlight config:
-//   detect: true  — when a fence has no language (```…```), lowlight
-//                   auto-detects the language. Without this, unlabeled
-//                   fences stay plain text. CC models commonly emit
-//                   unlabeled fences for shell output and short snippets,
-//                   so this is load-bearing for the common case.
-//   languages: undefined — use the `common` set (~40 languages). Covers
-//                   every mainstream language; the full set would triple
-//                   the bundle for marginal benefit.
-//
-// Plugin instance is frozen at module scope (with the options baked in)
-// because react-markdown v10 caches parse results keyed on plugin
-// identity — passing [rehypeHighlight, options] at the call site would
-// create a fresh options object every render and bust the cache.
-const REHYPE_PLUGINS: import('react-markdown').Options['rehypePlugins'] = [
-  [rehypeHighlight, { detect: true }],
-]
-
 // -----------------------------------------------------------------------------
 // Tool-use index: a map from tool_use_id → ToolUseBlock, built once per
 // render pass over the entire feed. Used by ToolResultRow to look up
@@ -127,6 +110,58 @@ const REHYPE_PLUGINS: import('react-markdown').Options['rehypePlugins'] = [
 
 const ProviderContext = createContext<AgentProvider>('claude')
 const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new Map())
+export const CodeRenderContext = createContext<{
+  sessionId: string
+  workspaceRoot: string | null
+}>({
+  sessionId: '',
+  workspaceRoot: null,
+})
+
+function MarkdownPre({ children }: { children?: ReactNode }) {
+  return <>{children}</>
+}
+
+function MarkdownCode({
+  className,
+  children,
+  inline,
+}: {
+  className?: string
+  children?: ReactNode
+  inline?: boolean
+}) {
+  const { sessionId, workspaceRoot } = useContext(CodeRenderContext)
+  const text = String(children ?? '').replace(/\n$/, '')
+  const language = className?.match(/language-([\w-]+)/)?.[1] ?? null
+  if (inline) {
+    return <code>{children}</code>
+  }
+  // Use CodeBlock for ALL fenced code blocks — both labeled and
+  // unlabeled. CodeBlock handles:
+  //   - Labeled blocks: hljs.highlight with the explicit language
+  //   - Unlabeled blocks: hljs.highlightAuto (same behavior as the
+  //     old rehype-highlight with detect:true that was working before)
+  //
+  // The old version dropped highlighting for unlabeled blocks
+  // (rendered as plain monospace), which broke the colored code
+  // the user was used to seeing in Claude's responses. Claude
+  // emits unlabeled fences constantly.
+  return (
+    <CodeBlock
+      code={text}
+      language={language}
+      workspaceRoot={workspaceRoot}
+      codeId={`${sessionId}:${text.slice(0, 24)}`}
+      allowAutoDetect={!language}
+    />
+  )
+}
+
+const MARKDOWN_COMPONENTS: import('react-markdown').Options['components'] = {
+  pre: MarkdownPre,
+  code: MarkdownCode,
+}
 
 function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
   const map = new Map<string, ToolUseBlock>()
@@ -169,6 +204,7 @@ type Props = {
    *  streaming row with the actual verb CC is displaying. */
   activityStatus?: string | null
   showSystemEvents: boolean
+  workspaceRoot?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +298,7 @@ function FeedImpl({
   streamingBaseline,
   activityStatus,
   showSystemEvents,
+  workspaceRoot = null,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
@@ -432,6 +469,7 @@ function FeedImpl({
   return (
     <ProviderContext.Provider value={provider}>
     <ToolUseIndexContext.Provider value={toolUseIndex}>
+    <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
       <div
         ref={scrollerRef}
         className="h-full overflow-auto"
@@ -460,6 +498,7 @@ function FeedImpl({
           <div ref={endRef} />
         </div>
       </div>
+    </CodeRenderContext.Provider>
     </ToolUseIndexContext.Provider>
     </ProviderContext.Provider>
   )
@@ -670,7 +709,10 @@ const TextProse = memo(function TextProse({ text }: { text: string }) {
   if (!text) return null
   return (
     <div className="prose-theme text-ink text-[13px] leading-[1.65]">
-      <ReactMarkdown remarkPlugins={COMPLETED_REMARK} rehypePlugins={REHYPE_PLUGINS}>
+      <ReactMarkdown
+        remarkPlugins={COMPLETED_REMARK}
+        components={MARKDOWN_COMPONENTS}
+      >
         {text}
       </ReactMarkdown>
     </div>
@@ -696,7 +738,10 @@ const StreamingProse = memo(function StreamingProse({
   if (!text) return null
   return (
     <div className="prose-theme text-ink text-[13px] leading-[1.65]">
-      <ReactMarkdown remarkPlugins={STREAMING_REMARK} rehypePlugins={REHYPE_PLUGINS}>
+      <ReactMarkdown
+        remarkPlugins={STREAMING_REMARK}
+        components={MARKDOWN_COMPONENTS}
+      >
         {text}
       </ReactMarkdown>
     </div>
@@ -764,6 +809,7 @@ const ToolResultRow = memo(function ToolResultRow({
   block: ToolResultBlock
 }) {
   const toolUseIndex = useContext(ToolUseIndexContext)
+  const codeContext = useContext(CodeRenderContext)
   const sourceTool = toolUseIndex.get(block.tool_use_id)?.name
 
   const text =
@@ -798,16 +844,23 @@ const ToolResultRow = memo(function ToolResultRow({
   // which would mix poorly with the rest of the text layout.
   if (sourceTool === 'Read' && !isError) {
     const stripped = stripLineNumberPrefix(trimmed)
+    const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
+      | Record<string, unknown>
+      | undefined
+    const filePath =
+      typeof sourceInput?.file_path === 'string'
+        ? sourceInput.file_path
+        : typeof sourceInput?.path === 'string'
+          ? sourceInput.path
+          : null
     return (
       <MarkerRow marker="⎿" tone="muted">
-        {/* text-code-ink, not text-ink: the slab is always dark so
-            the prose ink would be invisible in light mode. Same
-            reason as DiffSlab. */}
-        <pre
-          className="bg-code-bg font-code text-[12px] leading-[1.55] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink"
-        >
-          {stripped}
-        </pre>
+        <CodeBlock
+          code={stripped}
+          path={filePath}
+          workspaceRoot={codeContext.workspaceRoot}
+          codeId={`read:${block.tool_use_id}`}
+        />
       </MarkerRow>
     )
   }

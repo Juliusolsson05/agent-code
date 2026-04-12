@@ -27,6 +27,9 @@ export default defineConfig({
         input: resolve(__dirname, 'src/renderer/index.html')
       }
     },
-    plugins: [react(), tailwindcss()]
+    plugins: [react(), tailwindcss()],
+    optimizeDeps: {
+      include: ['monaco-editor']
+    }
   }
 })

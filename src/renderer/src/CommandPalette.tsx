@@ -150,6 +150,11 @@ export function buildCommands(): CommandDef[] {
       label: 'Hard Normalize Layout',
       action: ({ workspace }) => workspace.hardNormalizeLayout(),
     },
+    {
+      id: 'rotate-layout',
+      label: 'Rotate Layout',
+      action: ({ workspace }) => workspace.rotateLayout(),
+    },
   ]
 }
 

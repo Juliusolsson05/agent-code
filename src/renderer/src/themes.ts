@@ -124,4 +124,5 @@ export function applyTheme(s: Settings): void {
   const fg = s.mode === 'dark' ? accent.fgDark : accent.fgLight
   root.style.setProperty('--theme-accent', hex)
   root.style.setProperty('--theme-accent-fg', fg)
+  window.dispatchEvent(new CustomEvent('cc-shell:theme-changed', { detail: s }))
 }

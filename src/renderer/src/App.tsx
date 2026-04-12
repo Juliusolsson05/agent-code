@@ -77,11 +77,12 @@ export default function App() {
   )
 
   const onPathPickerResume = useCallback(
-    async (cwd: string, sessionId: string) => {
+    async (cwd: string, sessionId: string, provider: 'claude' | 'codex') => {
       // Resume reuses newTab's plumbing — same workspace entry, same
       // tile tree shape — but passes the resume id through to the
-      // spawn call so main spawns claude with --resume <uuid>.
-      await workspace.newTab(cwd, sessionId)
+      // spawn call so main spawns the selected provider with its
+      // provider-native resume command.
+      await workspace.newTab(cwd, sessionId, provider)
       setPathPickerOpen(false)
     },
     [workspace],

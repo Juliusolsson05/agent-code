@@ -44,7 +44,11 @@ type Props = {
    *  Now carries the selected provider so App knows which kind to spawn. */
   onAccept: (expandedPath: string, provider: AgentProvider) => void | Promise<void>
   /** Called when the user picks a previous session to resume. */
-  onResume: (expandedPath: string, sessionId: string) => void | Promise<void>
+  onResume: (
+    expandedPath: string,
+    sessionId: string,
+    provider: AgentProvider,
+  ) => void | Promise<void>
 }
 
 export function PathPickerModal({
@@ -105,13 +109,13 @@ export function PathPickerModal({
       }
       setResolvedPath(result.path)
       setSessionsLoading(true)
-      const list = await window.api.listSessionsForCwd(result.path, 20)
+      const list = await window.api.listSessionsForCwd(result.path, 20, provider)
       if (v !== reqVersion.current) return
       setSessions(list)
       setSessionsLoading(false)
     }, 150)
     return () => clearTimeout(t)
-  }, [value, open])
+  }, [value, open, provider])
 
   if (!open) return null
 
@@ -146,7 +150,7 @@ export function PathPickerModal({
       }
       path = result.path
     }
-    await onResume(path, sessionId)
+    await onResume(path, sessionId, provider)
     setBusy(false)
   }
 

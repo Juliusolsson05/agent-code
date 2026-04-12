@@ -608,6 +608,7 @@ export function TileLeaf({
         <Feed
           sessionId={sessionId}
           provider={(workspace.state.sessions[sessionId]?.kind === 'codex') ? 'codex' : 'claude'}
+          workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
           entries={runtime.entries}
           streamingScreen={runtime.awaitingAssistant ? runtime.screen : null}
           streamingScreenMarkdown={

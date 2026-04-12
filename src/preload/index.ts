@@ -50,6 +50,22 @@ export type SessionExitEvent = {
   exitCode: number
   signal?: number
 }
+export type LspSemanticLegend = {
+  tokenTypes: string[]
+  tokenModifiers: string[]
+}
+export type LspDiagnostic = {
+  message: string
+  severity: 'error' | 'warning' | 'info' | 'hint'
+  startLine: number
+  startCharacter: number
+  endLine: number
+  endCharacter: number
+}
+export type LspDiagnosticsEvent = {
+  clientUri: string
+  diagnostics: LspDiagnostic[]
+}
 
 type Unsub = () => void
 
@@ -108,8 +124,12 @@ const api = {
     ipcRenderer.invoke('session:terminal-attach', sessionId),
 
   // --- Resume picker: list previous sessions recorded in a cwd ---
-  listSessionsForCwd: (cwd: string, limit?: number): Promise<SessionInfo[]> =>
-    ipcRenderer.invoke('session:list-for-cwd', cwd, limit),
+  listSessionsForCwd: (
+    cwd: string,
+    limit?: number,
+    provider: 'claude' | 'codex' = 'claude',
+  ): Promise<SessionInfo[]> =>
+    ipcRenderer.invoke('session:list-for-cwd', cwd, limit, provider),
 
   // --- Per-session I/O ---
   sendInput: (sessionId: string, data: string): Promise<void> =>
@@ -138,6 +158,35 @@ const api = {
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),
+
+  // --- LSP / Monaco code intelligence ---
+  ensureLspLegend: (
+    workspaceRoot: string,
+    language: string,
+  ): Promise<LspSemanticLegend | null> =>
+    ipcRenderer.invoke('lsp:ensure-legend', workspaceRoot, language),
+
+  openLspDocument: (params: {
+    clientUri: string
+    content: string
+    language: string
+    workspaceRoot: string
+    filePath?: string | null
+  }): Promise<void> => ipcRenderer.invoke('lsp:open-document', params),
+
+  changeLspDocument: (clientUri: string, content: string): Promise<void> =>
+    ipcRenderer.invoke('lsp:change-document', clientUri, content),
+
+  closeLspDocument: (clientUri: string): Promise<void> =>
+    ipcRenderer.invoke('lsp:close-document', clientUri),
+
+  getLspSemanticTokens: (
+    clientUri: string,
+  ): Promise<{ data: number[] } | null> =>
+    ipcRenderer.invoke('lsp:get-semantic-tokens', clientUri),
+
+  onLspDiagnostics: (cb: (e: LspDiagnosticsEvent) => void): Unsub =>
+    subscribe('lsp:diagnostics', cb),
 
   // --- Workspace persistence ---
   // Main just does the disk I/O. The renderer decides the JSON shape.

@@ -19,6 +19,7 @@
   "include": [
     "src/renderer/**/*",
     "src/preload/index.d.ts",
+    "src/core/code/**/*",
     "src/core/types/**/*",
     "src/core/parsers/**/*"
   ]

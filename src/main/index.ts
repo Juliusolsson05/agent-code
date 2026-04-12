@@ -5,7 +5,9 @@ import { readdir, readFile, stat, writeFile, mkdir } from 'fs/promises'
 import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
+import { LspManager } from './lspManager.js'
 import { listSessionsForCwd } from '../core/runtime/sessionList.js'
+import { listCodexSessions } from '../core/runtime/codexSessionList.js'
 
 // Main process — thin Electron host over SessionManager.
 //
@@ -64,6 +66,7 @@ function pushTrafficLightInset(): void {
   }
 }
 const manager = new SessionManager()
+const lspManager = new LspManager()
 
 function send(channel: string, ...args: unknown[]): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -94,6 +97,7 @@ function wireManagerIPC(): void {
     send('session:terminal-data', payload),
   )
   manager.on('exit', payload => send('session:exit', payload))
+  lspManager.on('diagnostics', payload => send('lsp:diagnostics', payload))
 }
 
 function createWindow(): void {
@@ -162,8 +166,22 @@ function registerIpc(): void {
   // recorded history yet.
   ipcMain.handle(
     'session:list-for-cwd',
-    async (_evt, cwd: string, limit?: number) => {
+    async (
+      _evt,
+      cwd: string,
+      limit?: number,
+      provider: 'claude' | 'codex' = 'claude',
+    ) => {
       try {
+        if (provider === 'codex') {
+          const sessions = await listCodexSessions({
+            // Codex sessions are global, not per-cwd, so we read a
+            // slightly wider slice first and then filter client-facing
+            // results down to the requested cwd.
+            limit: Math.max(limit ?? 20, 100),
+          })
+          return sessions.filter(s => s.cwd === cwd).slice(0, limit ?? 20)
+        }
         return await listSessionsForCwd(cwd, { limit })
       } catch (err) {
         // Don't let a listing error brick the modal — return empty.
@@ -208,6 +226,45 @@ function registerIpc(): void {
       manager.resize(sessionId, cols, rows)
     },
   )
+
+  // --- LSP-backed code intelligence for Monaco code blocks ---
+  ipcMain.handle(
+    'lsp:ensure-legend',
+    async (_evt, workspaceRoot: string, language: string) => {
+      return await lspManager.ensureSemanticLegend(workspaceRoot, language)
+    },
+  )
+
+  ipcMain.handle(
+    'lsp:open-document',
+    async (
+      _evt,
+      params: {
+        clientUri: string
+        content: string
+        language: string
+        workspaceRoot: string
+        filePath?: string | null
+      },
+    ) => {
+      await lspManager.openDocument(params)
+    },
+  )
+
+  ipcMain.handle(
+    'lsp:change-document',
+    async (_evt, clientUri: string, content: string) => {
+      await lspManager.changeDocument(clientUri, content)
+    },
+  )
+
+  ipcMain.handle('lsp:close-document', async (_evt, clientUri: string) => {
+    await lspManager.closeDocument(clientUri)
+  })
+
+  ipcMain.handle('lsp:get-semantic-tokens', async (_evt, clientUri: string) => {
+    return await lspManager.getSemanticTokens(clientUri)
+  })
 
   // --- Directory listing (used by PathInput for completion) ---
   // Given a directory path (raw user input that may include ~ or be
@@ -370,9 +427,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   void manager.killAll()
+  void lspManager.dispose()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
   void manager.killAll()
+  void lspManager.dispose()
 })

@@ -1,11 +1,10 @@
 import { EventEmitter } from 'events'
-import { createWriteStream, mkdirSync, type WriteStream } from 'fs'
+import { mkdir, readdir, stat } from 'fs/promises'
 import { join } from 'path'
-import { tmpdir } from 'os'
+import { watch } from 'chokidar'
 
-import { extractCodexAssistantInProgress } from '../parsers/codex/streamingScreen.js'
 import type { SlashPickerState } from '../parsers/claude/slashCommandPicker.js'
-import type { JsonlEntry } from './jsonlTailer.js'
+import { tailSessionFile, type JsonlEntry } from './jsonlTailer.js'
 import { getCodexSessionsDir } from './codexProjectDir.js'
 import { PtyScreen } from './ptyScreen.js'
 
@@ -29,13 +28,18 @@ import { PtyScreen } from './ptyScreen.js'
 // This means SessionManager's event-wiring code works for both
 // without any kind-specific branches.
 //
-// V1 simplification: we do NOT tail the codex rollout file yet.
-// The screen scrape is the primary data source for the streaming
-// card, and the feed can start empty. Once we have a working live
-// pane and real recordings, we'll add JSONL tailing by watching
-// the codex sessions directory for new rollout-*.jsonl files (same
-// pattern as Claude's tailNewSessionFile but pointed at a different
-// directory and with a different filename glob).
+// Unlike the first integration pass, we DO tail the rollout file now.
+// That's load-bearing for three things:
+//   1. capturing the provider session/thread id from session_meta
+//   2. populating the feed with tool calls + final messages
+//   3. making resume work after app reload
+//
+// Codex stores rollout files in a global date tree instead of Claude's
+// per-cwd project dir, so the tailer logic below has two modes:
+//   - fresh session: watch ~/.codex/sessions recursively for the first
+//     new rollout-*.jsonl file and tail it from offset 0
+//   - resume: find the existing rollout file by thread id and tail it
+//     directly (Codex resume writes back into the existing file)
 
 export type CodexSessionOptions = {
   /** Working directory codex will run in. Defaults to process.cwd(). */
@@ -95,32 +99,15 @@ export interface CodexSession {
 
 export class CodexSession extends EventEmitter {
   private readonly ptyScreen: PtyScreen
+  private stopJsonlTail: (() => Promise<void>) | null = null
   private exited = false
   private readonly cwd: string
-  // Debug log — writes every screen snapshot + extract to a file
-  // so we can diagnose "thinking forever" bugs in the live app.
-  // Written to /tmp/cc-shell-codex-debug-<ts>.log.
-  private debugLog: WriteStream | null = null
-  private debugSnapCount = 0
+  private readonly resumeSessionId: string | null
 
   constructor(options: CodexSessionOptions = {}) {
     super()
     this.cwd = options.cwd ?? process.cwd()
-
-    // Open a debug log for this session.
-    try {
-      const debugDir = join(tmpdir(), 'cc-shell-debug')
-      mkdirSync(debugDir, { recursive: true })
-      const ts = new Date().toISOString().replace(/[:.]/g, '-')
-      this.debugLog = createWriteStream(
-        join(debugDir, `codex-${ts}.log`),
-        { flags: 'a' },
-      )
-      this.debugLog.write(`[codex-debug] session started at ${ts}\n`)
-      this.debugLog.write(`[codex-debug] cwd: ${this.cwd}\n`)
-    } catch {
-      // Debug logging is best-effort; don't break the session.
-    }
+    this.resumeSessionId = options.resumeSessionId ?? null
 
     // Build the env. Start from process.env so PATH etc. propagate.
     // Force TERM + COLORTERM for proper color output. No
@@ -139,8 +126,8 @@ export class CodexSession extends EventEmitter {
     // Codex uses a subcommand for resume: `codex resume <id>`.
     // For a fresh session we just run `codex` with no args.
     const args: string[] = []
-    if (options.resumeSessionId) {
-      args.push('resume', options.resumeSessionId)
+    if (this.resumeSessionId) {
+      args.push('resume', this.resumeSessionId)
     }
 
     this.ptyScreen = new PtyScreen({
@@ -153,36 +140,13 @@ export class CodexSession extends EventEmitter {
       snapshotIntervalMs: options.snapshotIntervalMs ?? 16,
     })
 
-    // Forward PTY bytes + debug log.
-    this.ptyScreen.on('pty-data', data => {
-      if (this.debugLog) {
-        this.debugLog.write(`[pty-data] len=${data.length}\n`)
-      }
-      this.emit('pty-data', data)
-    })
+    // Forward PTY bytes.
+    this.ptyScreen.on('pty-data', data => this.emit('pty-data', data))
 
     // Emit screen snapshots. No slash-picker enrichment yet —
     // just pass through the base snapshot with a static "not visible"
     // picker so the renderer's picker component stays hidden.
     this.ptyScreen.on('screen', base => {
-      // Debug: log every Nth snapshot + the parser extract so we can
-      // diagnose streaming-card issues from a live app session.
-      this.debugSnapCount++
-      if (this.debugLog) {
-        const extract = extractCodexAssistantInProgress(base.plain)
-        this.debugLog.write(
-          `[snap ${this.debugSnapCount}] extract=${JSON.stringify(extract.slice(0, 120))} plainLen=${base.plain.length}\n`,
-        )
-        // Dump full screen frequently — every 10th snap — so we
-        // can see exactly what the headless xterm buffer contains
-        // during the "thinking forever" window.
-        if (this.debugSnapCount % 10 === 1) {
-          this.debugLog.write(
-            `--- FULL SCREEN (snap ${this.debugSnapCount}) ---\n${base.plain}\n--- END ---\n`,
-          )
-        }
-      }
-
       this.emit('screen', {
         plain: base.plain,
         markdown: base.markdown,
@@ -197,25 +161,37 @@ export class CodexSession extends EventEmitter {
   }
 
   /**
-   * Spawn the codex binary. The JSONL tailer is NOT wired yet (v1
-   * simplification — see the block comment at the top of this file).
-   * The streaming card works via screen scrape alone.
+   * Spawn the codex binary and wire the rollout tailer.
    */
   async start(): Promise<void> {
     // Emit the sessions dir as the "project dir" so the renderer
     // has a path to show in the pane header. For Claude this is
     // per-cwd; for codex it's the global sessions root.
     const projectDir = getCodexSessionsDir()
+    if (this.resumeSessionId) {
+      const rolloutPath = await findCodexRolloutPathById(
+        projectDir,
+        this.resumeSessionId,
+      )
+      if (rolloutPath) {
+        this.stopJsonlTail = tailSessionFile(
+          rolloutPath,
+          entry => this.emit('jsonl-entry', entry, rolloutPath),
+          err => this.emit('jsonl-error', err),
+        )
+      }
+    } else {
+      this.stopJsonlTail = await tailNewCodexSessionFile(
+        projectDir,
+        (entry, file) => this.emit('jsonl-entry', entry, file),
+        err => this.emit('jsonl-error', err),
+      )
+    }
     await this.ptyScreen.start()
     this.emit('started', { projectDir })
   }
 
   write(data: string): void {
-    // Debug: log every write so we can verify keystrokes reach the PTY.
-    if (this.debugLog) {
-      const preview = data.replace(/\r/g, '⏎').replace(/\n/g, '⏎').slice(0, 60)
-      this.debugLog.write(`[write] ${JSON.stringify(preview)}\n`)
-    }
     this.ptyScreen.write(data)
   }
 
@@ -236,6 +212,86 @@ export class CodexSession extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    await this.stopJsonlTail?.().catch(() => {})
     await this.ptyScreen.stop()
   }
+}
+
+const CODEX_ROLLOUT_RE =
+  /^rollout-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
+
+async function tailNewCodexSessionFile(
+  sessionsDir: string,
+  onEntry: (entry: JsonlEntry, file: string) => void,
+  onError?: (err: Error) => void,
+): Promise<() => Promise<void>> {
+  await mkdir(sessionsDir, { recursive: true })
+
+  const existing = new Set<string>()
+  const primingWatcher = watch(sessionsDir, {
+    persistent: true,
+    ignoreInitial: false,
+    depth: 4,
+  })
+  await new Promise<void>(resolve => {
+    primingWatcher.on('add', filePath => existing.add(filePath))
+    primingWatcher.on('ready', resolve)
+  })
+  await primingWatcher.close()
+
+  let stopTail: (() => Promise<void>) | null = null
+  const watcher = watch(sessionsDir, {
+    persistent: true,
+    ignoreInitial: true,
+    depth: 4,
+  })
+  watcher.on('add', filePath => {
+    if (stopTail) return
+    const name = filePath.split('/').pop() ?? ''
+    if (!CODEX_ROLLOUT_RE.test(name)) return
+    if (existing.has(filePath)) return
+    stopTail = tailSessionFile(
+      filePath,
+      entry => onEntry(entry, filePath),
+      onError,
+    )
+  })
+  watcher.on('error', err => onError?.(err as Error))
+
+  return async () => {
+    await watcher.close()
+    await stopTail?.().catch(() => {})
+  }
+}
+
+async function findCodexRolloutPathById(
+  dir: string,
+  sessionId: string,
+  depth = 0,
+): Promise<string | null> {
+  let names: string[]
+  try {
+    names = await readdir(dir)
+  } catch {
+    return null
+  }
+
+  for (const name of names) {
+    const full = join(dir, name)
+    try {
+      const info = await stat(full)
+      if (info.isDirectory() && depth < 3) {
+        const nested = await findCodexRolloutPathById(full, sessionId, depth + 1)
+        if (nested) return nested
+        continue
+      }
+      if (!info.isFile()) continue
+      const match = CODEX_ROLLOUT_RE.exec(name)
+      if (match?.[2] === sessionId) return full
+    } catch {
+      // Skip unreadable filesystem entries.
+    }
+  }
+
+  return null
 }

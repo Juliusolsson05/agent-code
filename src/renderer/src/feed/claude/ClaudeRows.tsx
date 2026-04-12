@@ -9,11 +9,14 @@
 // Lives under feed/claude/ so codex can have its own sibling set
 // (feed/codex/CodexRows.tsx) without mixing provider logic.
 
-import { memo, useMemo } from 'react'
+import { memo, useContext, useMemo } from 'react'
+import hljs from 'highlight.js'
 
+import { normalizeCodeLanguage } from '../../../../core/code/language'
 import { diffLines, type DiffLine } from '../../../../core/parsers/lineDiff'
 import type { ToolUseBlock } from '../../../../core/types/transcript'
-import { MarkerRow } from '../Feed'
+import { CodeBlock } from '../../code/CodeBlock'
+import { CodeRenderContext, MarkerRow } from '../Feed'
 
 /* ---------- Shared helpers ---------- */
 
@@ -61,11 +64,38 @@ function FileToolHeader({
   )
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function toHighlightLanguage(language: string): string | null {
+  if (language === 'javascriptreact') return 'javascript'
+  if (language === 'typescriptreact') return 'typescript'
+  return hljs.getLanguage(language) ? language : null
+}
+
 /**
  * Render a precomputed DiffLine[] as a flat code-slab with per-line
- * red/green tinting.
+ * red/green tinting plus syntax-highlighted text inside each line.
+ *
+ * Why highlight line-by-line instead of sending the whole diff through
+ * a single highlighter:
+ * the +/- prefix and background tint live at the ROW level. If we
+ * tokenized the whole diff blob, we'd lose the easy mapping from "this
+ * is an added line" to "paint this row green". Per-line tokenization
+ * keeps the git-style diff semantics and still gives the user syntax
+ * colors inside each row.
  */
-function DiffSlab({ lines }: { lines: DiffLine[] }) {
+function DiffSlab({
+  lines,
+  filePath,
+}: {
+  lines: DiffLine[]
+  filePath?: string
+}) {
   if (lines.length === 0) {
     return (
       <div className="bg-code-bg text-muted text-[11px] font-code px-3 py-2">
@@ -73,6 +103,18 @@ function DiffSlab({ lines }: { lines: DiffLine[] }) {
       </div>
     )
   }
+  const highlightLanguage = useMemo(() => {
+    return toHighlightLanguage(normalizeCodeLanguage(undefined, filePath))
+  }, [filePath])
+  const renderedLines = useMemo(
+    () =>
+      lines.map(line => {
+        if (line.text === '') return '\u200b'
+        if (!highlightLanguage) return escapeHtml(line.text)
+        return hljs.highlight(line.text, { language: highlightLanguage }).value
+      }),
+    [highlightLanguage, lines],
+  )
   return (
     <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
       {lines.map((l, i) => {
@@ -100,9 +142,10 @@ function DiffSlab({ lines }: { lines: DiffLine[] }) {
             >
               {l.kind === 'ctx' ? ' ' : l.kind}
             </span>
-            <span className={`${bodyTone} flex-1 min-w-0 break-all`}>
-              {l.text === '' ? '\u200b' : l.text}
-            </span>
+            <span
+              className={`${bodyTone} diff-line-code hljs flex-1 min-w-0 break-all`}
+              dangerouslySetInnerHTML={{ __html: renderedLines[i] ?? '\u200b' }}
+            />
           </div>
         )
       })}
@@ -122,7 +165,7 @@ export const EditRow = memo(function EditRow({ block }: { block: ToolUseBlock })
     <MarkerRow marker="⏺">
       <div className="flex flex-col gap-1">
         <FileToolHeader name="Edit" filePath={filePath} />
-        <DiffSlab lines={lines} />
+        <DiffSlab lines={lines} filePath={filePath} />
       </div>
     </MarkerRow>
   )
@@ -155,7 +198,13 @@ export const MultiEditRow = memo(function MultiEditRow({
         />
         <div className="flex flex-col gap-2">
           {normalized.map((e, i) => (
-            <MultiEditChunk key={i} index={i} total={normalized.length} edit={e} />
+            <MultiEditChunk
+              key={i}
+              index={i}
+              total={normalized.length}
+              filePath={filePath}
+              edit={e}
+            />
           ))}
         </div>
       </div>
@@ -166,10 +215,12 @@ export const MultiEditRow = memo(function MultiEditRow({
 const MultiEditChunk = memo(function MultiEditChunk({
   index,
   total,
+  filePath,
   edit,
 }: {
   index: number
   total: number
+  filePath: string
   edit: { oldString: string; newString: string }
 }) {
   const lines = useMemo(
@@ -183,7 +234,7 @@ const MultiEditChunk = memo(function MultiEditChunk({
           change {index + 1} / {total}
         </div>
       )}
-      <DiffSlab lines={lines} />
+      <DiffSlab lines={lines} filePath={filePath} />
     </div>
   )
 })
@@ -194,23 +245,26 @@ export const WriteRow = memo(function WriteRow({ block }: { block: ToolUseBlock 
   const input = (block.input ?? {}) as Record<string, unknown>
   const filePath = typeof input.file_path === 'string' ? input.file_path : ''
   const content = typeof input.content === 'string' ? input.content : ''
-  const lines = useMemo<DiffLine[]>(
-    () =>
-      content === ''
-        ? []
-        : content.split('\n').map(text => ({ kind: '+' as const, text })),
-    [content],
-  )
-  if (lines.length > 0 && lines[lines.length - 1].text === '') lines.pop()
+  const codeContext = useContext(CodeRenderContext)
+  const lineCount = useMemo(() => {
+    if (!content) return 0
+    const normalized = content.endsWith('\n') ? content.slice(0, -1) : content
+    return normalized === '' ? 0 : normalized.split('\n').length
+  }, [content])
   return (
     <MarkerRow marker="⏺">
       <div className="flex flex-col gap-1">
         <FileToolHeader
           name="Write"
           filePath={filePath}
-          extra={`${lines.length} line${lines.length === 1 ? '' : 's'}`}
+          extra={`${lineCount} line${lineCount === 1 ? '' : 's'}`}
         />
-        <DiffSlab lines={lines} />
+        <CodeBlock
+          code={content}
+          path={filePath}
+          workspaceRoot={codeContext.workspaceRoot}
+          codeId={`write:${block.id}`}
+        />
       </div>
     </MarkerRow>
   )
