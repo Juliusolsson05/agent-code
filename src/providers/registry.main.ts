@@ -6,8 +6,7 @@ import type { MainProviderConfig } from '../shared/types/providerConfig'
 import { ClaudeSession } from './claude/runtime/claudeSession'
 import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
 import { CodexSession } from './codex/runtime/codexSession'
-import { listCodexSessions } from './codex/runtime/sessionList'
-import { getCodexSessionsDir } from './codex/runtime/projectDir'
+import { listCodexSessions, getCodexSessionsDir } from 'codex-headless'
 
 const claudeMain: MainProviderConfig = {
   id: 'claude',
@@ -21,7 +20,7 @@ const codexMain: MainProviderConfig = {
   id: 'codex',
   name: 'Codex',
   createSession: (opts) => new CodexSession(opts),
-  listSessions: (cwd, limit) => listCodexSessions(cwd, limit),
+  listSessions: (_cwd, limit) => listCodexSessions({ limit }),
   getProjectDir: async () => getCodexSessionsDir(),
 }
 

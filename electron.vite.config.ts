@@ -3,18 +3,20 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { resolve } from 'path'
 
-// Resolve claude-code-headless from the submodule source directly.
-// Only main + preload use the package (it imports Node APIs like
-// EventEmitter, chokidar, fs). The renderer CANNOT import it — Vite
-// would try to bundle Node modules for the browser and fail. Renderer
-// imports the pure types/parsers from src/shared/ instead.
+// Resolve headless packages from the submodule sources directly.
+// Only main + preload use these (they import Node APIs like
+// EventEmitter, chokidar, fs). The renderer CANNOT import them —
+// Vite would try to bundle Node modules for the browser and fail.
 const headlessAlias = {
   'claude-code-headless': resolve(__dirname, 'claude-code-headless/src/index.ts'),
+  'codex-headless': resolve(__dirname, 'codex-headless/src/index.ts'),
 }
+
+const headlessExclude = ['claude-code-headless', 'codex-headless']
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['claude-code-headless'] })],
+    plugins: [externalizeDepsPlugin({ exclude: headlessExclude })],
     resolve: { alias: headlessAlias },
     build: {
       rollupOptions: {
@@ -23,7 +25,7 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin({ exclude: ['claude-code-headless'] })],
+    plugins: [externalizeDepsPlugin({ exclude: headlessExclude })],
     resolve: { alias: headlessAlias },
     build: {
       rollupOptions: {

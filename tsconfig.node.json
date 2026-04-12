@@ -14,7 +14,8 @@
     "isolatedModules": true,
     "types": ["node"],
     "paths": {
-      "claude-code-headless": ["./claude-code-headless/src/index.ts"]
+      "claude-code-headless": ["./claude-code-headless/src/index.ts"],
+      "codex-headless": ["./codex-headless/src/index.ts"]
     }
   },
   "include": [
@@ -22,6 +23,9 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/core/**/*",
-    "claude-code-headless/src/**/*"
+    "src/shared/**/*",
+    "src/providers/**/*",
+    "claude-code-headless/src/**/*",
+    "codex-headless/src/**/*"
   ]
 }
