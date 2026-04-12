@@ -42,8 +42,10 @@ export const CodeBlock = memo(function CodeBlock({
     () => normalizeCodeLanguage(language, path),
     [language, path],
   )
+  const shouldUseStaticFallback =
+    engine === 'monaco' && allowAutoDetect && normalizedLanguage === 'plaintext'
 
-  if (engine === 'static') {
+  if (engine === 'static' || shouldUseStaticFallback) {
     const highlighted = useMemo(() => {
       if (!code) return ''
       if (normalizedLanguage !== 'plaintext' && hljs.getLanguage(normalizedLanguage)) {

@@ -28,6 +28,7 @@ export type ToolResultBlock = {
   tool_use_id: string
   content: string | Array<{ type: string; text?: string }>
   is_error?: boolean
+  codex?: Record<string, unknown>
 }
 
 export type ContentBlock =

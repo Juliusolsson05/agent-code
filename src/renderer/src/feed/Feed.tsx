@@ -20,7 +20,10 @@ import {
   WriteRow,
   TodoRow,
 } from '../../../providers/claude/renderer/rows/ClaudeRows'
-import { CodexToolRow } from '../../../providers/codex/renderer/rows/CodexRows'
+import {
+  CodexToolRow,
+  CodexToolResultRow,
+} from '../../../providers/codex/renderer/rows/CodexRows'
 import {
   isConversationEntry,
   type ContentBlock,
@@ -193,6 +196,7 @@ function MarkdownCode({
       language={language}
       workspaceRoot={workspaceRoot}
       codeId={`${sessionId}:${text.slice(0, 24)}`}
+      engine="monaco"
       allowAutoDetect={!language}
     />
   )
@@ -846,6 +850,9 @@ const Block = memo(function Block({
       }
     }
     case 'tool_result':
+      if (currentProvider === 'codex') {
+        return <CodexToolResultRow block={block as ToolResultBlock} />
+      }
       return <ToolResultRow block={block as ToolResultBlock} />
     default:
       return (
@@ -1021,6 +1028,7 @@ const ToolResultRow = memo(function ToolResultRow({
           workspaceRoot={codeContext.workspaceRoot}
           codeId={`read:${block.tool_use_id}`}
           engine="monaco"
+          allowAutoDetect
         />
       </MarkerRow>
     )
@@ -1045,6 +1053,7 @@ const ToolResultRow = memo(function ToolResultRow({
           workspaceRoot={codeContext.workspaceRoot}
           codeId={`grep:${block.tool_use_id}`}
           engine="monaco"
+          allowAutoDetect
         />
       </MarkerRow>
     )
