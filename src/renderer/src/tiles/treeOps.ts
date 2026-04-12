@@ -340,3 +340,72 @@ export function firstLeaf(node: TileNode): SessionId {
   if (node.type === 'leaf') return node.sessionId
   return firstLeaf(node.a)
 }
+
+/**
+ * Build a balanced grid tree from a flat list of session ids.
+ *
+ * The grid has `cols = ceil(sqrt(N))` columns and `rows = ceil(N/cols)`
+ * rows. Every pane gets equal space. The last row may have fewer panes
+ * than the others — those panes simply get wider (they share fewer
+ * vertical splits).
+ *
+ * The tree is built from binary splits only (our tile model is binary).
+ * To give N items equal width in a row, we chain them with ratios
+ * 1/N, 1/(N-1), 1/(N-2), … so each pane gets exactly 1/N of the row.
+ * Rows are stacked the same way with horizontal splits.
+ *
+ * Pure function — no side effects, no session spawning.
+ */
+export function normalizeTree(leaves: SessionId[]): TileNode {
+  if (leaves.length === 0) throw new Error('normalizeTree: no leaves')
+  if (leaves.length === 1) return { type: 'leaf', sessionId: leaves[0] }
+
+  const cols = Math.ceil(Math.sqrt(leaves.length))
+  const rows = Math.ceil(leaves.length / cols)
+
+  // Chunk leaves into rows.
+  const rowChunks: SessionId[][] = []
+  for (let r = 0; r < rows; r++) {
+    rowChunks.push(leaves.slice(r * cols, (r + 1) * cols))
+  }
+
+  // Build each row as a chain of vertical splits.
+  const rowNodes: TileNode[] = rowChunks.map(chunk => chainSplits(chunk, 'vertical'))
+
+  // Stack rows as a chain of horizontal splits.
+  return chainSplits(rowNodes, 'horizontal')
+}
+
+/**
+ * Chain N items (leaves or subtrees) into a right-leaning binary split
+ * tree with equal sizing. The ratio at each level is 1/remaining so
+ * every item gets exactly 1/N of the total space.
+ *
+ * Works for both TileNode[] (stacking row subtrees) and SessionId[]
+ * (building a single row).
+ */
+function chainSplits(
+  items: (TileNode | SessionId)[],
+  direction: SplitDirection,
+): TileNode {
+  const toNode = (item: TileNode | SessionId): TileNode =>
+    typeof item === 'string' ? { type: 'leaf', sessionId: item } : item
+
+  if (items.length === 1) return toNode(items[0])
+
+  // Build right-to-left so the chain leans right:
+  //   split(a, split(b, split(c, d)))
+  // Ratios: 1/4, 1/3, 1/2 for 4 items → each gets 25%.
+  let node = toNode(items[items.length - 1])
+  for (let i = items.length - 2; i >= 0; i--) {
+    const remaining = items.length - i
+    node = {
+      type: 'split',
+      direction,
+      ratio: clampRatio(1 / remaining),
+      a: toNode(items[i]),
+      b: node,
+    }
+  }
+  return node
+}

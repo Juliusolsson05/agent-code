@@ -19,6 +19,7 @@ import {
   closeLeaf,
   collectLeaves,
   findNeighbor,
+  normalizeTree,
   resizeInDirection,
   splitLeaf,
 } from './treeOps'
@@ -1137,6 +1138,28 @@ export function useWorkspace() {
     }
   }, [spawn, state.tabs])
 
+  // ---- Action: normalize layout ----
+  //
+  // Rebuild the active tab's tile tree as a balanced grid where every
+  // pane gets equal space. No sessions are spawned or killed — we just
+  // restructure the tree. See normalizeTree() in treeOps.ts for the
+  // grid construction algorithm.
+  const normalizeLayout = useCallback(() => {
+    setState(prev => {
+      const tab = prev.tabs.find(t => t.id === prev.activeTabId)
+      if (!tab) return prev
+      const leaves = collectLeaves(tab.root)
+      if (leaves.length <= 1) return prev // nothing to normalize
+      const newRoot = normalizeTree(leaves)
+      return {
+        ...prev,
+        tabs: prev.tabs.map(t =>
+          t.id === prev.activeTabId ? { ...t, root: newRoot } : t,
+        ),
+      }
+    })
+  }, [])
+
   /** Peek at the undo stack length — used by the command palette to
    *  show/hide the "Undo Close" command. */
   const undoCloseCount = undoStackRef.current.length
@@ -1172,6 +1195,7 @@ export function useWorkspace() {
     setDraftInput,
     undoClose,
     undoCloseCount,
+    normalizeLayout,
   }
 }
 

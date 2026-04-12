@@ -140,6 +140,11 @@ export function buildCommands(): CommandDef[] {
       shortcut: '⌘⇧T',
       action: ({ workspace }) => void workspace.undoClose(),
     },
+    {
+      id: 'normalize-layout',
+      label: 'Normalize Layout',
+      action: ({ workspace }) => workspace.normalizeLayout(),
+    },
   ]
 }
 

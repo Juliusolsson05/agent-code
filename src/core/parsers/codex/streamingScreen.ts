@@ -154,10 +154,10 @@ export function extractCodexAssistantInProgress(screen: string): string {
   const stripped = extractCodexStreamingText(screen)
   if (!stripped) return ''
 
+  const allLines = stripped.split('\n')
+
   // Filter intermediate chrome before walking for the marker.
-  const lines = stripped
-    .split('\n')
-    .filter(l => !isCodexIntermediateChromeLine(l))
+  const lines = allLines.filter(l => !isCodexIntermediateChromeLine(l))
 
   // Find the last assistant marker.
   let lastMarkerIdx = -1
@@ -167,7 +167,30 @@ export function extractCodexAssistantInProgress(screen: string): string {
       break
     }
   }
-  if (lastMarkerIdx === -1) return ''
+
+  // Fallback: if filtering removed ALL `•` lines (the only `•` on
+  // screen was the Working spinner), check the UNFILTERED lines for
+  // the Working status and return a clean "working..." indicator
+  // so the streaming card shows progress instead of "thinking..."
+  // forever. This is the exact bug: during a long tool execution
+  // the Working spinner is the ONLY `•` on screen, our filter
+  // removes it, and the extractor returns '' → "thinking..." for
+  // the entire duration.
+  //
+  // Confirmed from debug log: snap 31 had only
+  // `• Working (0s • esc to interrupt)` as a `•` line; filter
+  // removed it; lastMarkerIdx = -1; streaming card showed
+  // "thinking..." until snap 43 when `• Hello.` appeared.
+  if (lastMarkerIdx === -1) {
+    // Check if there's a Working line in the unfiltered text.
+    const workingLine = allLines.find(l => CODEX_WORKING_RE.test(l))
+    if (workingLine) {
+      // Extract the timing: "Working (3s • esc to interrupt)" → "working…"
+      const match = workingLine.match(/Working\s*\((\d+)s/)
+      return match ? `working… ${match[1]}s` : 'working…'
+    }
+    return ''
+  }
 
   // Find where the assistant block ends — stop at user prompt lines.
   let endIdx = lines.length
