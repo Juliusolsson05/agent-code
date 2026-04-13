@@ -1552,9 +1552,19 @@ export function useWorkspace() {
   const activateTab = useCallback((tabId: TabId) => {
     setState(prev => ({ ...prev, activeTabId: tabId }))
     setSpotlight(null)
-    setTileTabs(prev => (prev && prev.tabIds.includes(tabId)
-      ? { ...prev, focusedTabId: tabId }
-      : null))
+    // Preserve tile-tabs mode when the activated tab is part of the
+    // tiled set — just shift the focused tile. If it's NOT part of
+    // the set, leave tile-tabs ALONE rather than nuking the mode.
+    // The previous behavior (setting null) caused the tile layout to
+    // silently collapse whenever the user clicked any other tab in
+    // the bar, which read as a phantom "auto-deselect."
+    setTileTabs(prev => {
+      if (!prev) return prev
+      if (prev.tabIds.includes(tabId)) {
+        return { ...prev, focusedTabId: tabId }
+      }
+      return prev
+    })
   }, [])
 
   const activateTabByIndex = useCallback((index: number) => {
@@ -1563,12 +1573,15 @@ export function useWorkspace() {
       return t ? { ...prev, activeTabId: t.id } : prev
     })
     setSpotlight(null)
+    // Same preservation rule as activateTab — see comment there.
     setTileTabs(prev => {
       const target = stateRef.current.tabs[index]
+      if (!prev) return prev
       if (!target) return prev
-      return prev && prev.tabIds.includes(target.id)
-        ? { ...prev, focusedTabId: target.id }
-        : null
+      if (prev.tabIds.includes(target.id)) {
+        return { ...prev, focusedTabId: target.id }
+      }
+      return prev
     })
   }, [])
 
