@@ -621,6 +621,25 @@ type SpotlightState = {
   focusedSessionId: SessionId
 }
 
+// ReaderMode — like Spotlight, but renders ONLY the most recent
+// assistant message (markdown-only, no tool chrome, no composer).
+// Read-only "zen" view for catching up on what an agent just wrote
+// without the visual noise of a 5-pane workspace. Pills at the top
+// let the user switch which session they're reading.
+//
+// Why a separate state slot rather than a "spotlight mode" enum:
+//   - Spotlight is full-pane interactive; ReaderMode is text-only.
+//     They want different parents in the render tree (ReaderMode
+//     bypasses TileLeaf entirely).
+//   - Composability: opening Reader from inside Spotlight, or vice
+//     versa, is easier when each owns its own boolean — toggling
+//     Reader doesn't have to remember whether to leave you in
+//     Spotlight afterward.
+type ReaderModeState = {
+  tabId: TabId
+  focusedSessionId: SessionId
+}
+
 type TileTabsState = {
   tabIds: TabId[]
   focusedTabId: TabId
@@ -653,6 +672,7 @@ export function useWorkspace() {
   const [runtimes, setRuntimes] = useState<Record<SessionId, SessionRuntime>>({})
   const [spotlight, setSpotlight] = useState<SpotlightState | null>(null)
   const [tileTabs, setTileTabs] = useState<TileTabsState | null>(null)
+  const [readerMode, setReaderMode] = useState<ReaderModeState | null>(null)
 
   // Ref mirror of runtimes so the debounced save callback can read
   // current drafts without re-creating the callback on every render.
@@ -1613,6 +1633,39 @@ export function useWorkspace() {
     }))
   }, [])
 
+  // ReaderMode toggle. Mirrors toggleSpotlight: enters with the
+  // active tab's currently-focused session, exits if already on for
+  // the active tab. Closes Spotlight and tile-tabs on entry so the
+  // three "fullscreen" modes remain mutually exclusive — leaving
+  // them stacked would create rendering ambiguity in App.tsx.
+  const toggleReaderMode = useCallback(() => {
+    const current = stateRef.current
+    const activeTab = current.tabs.find(t => t.id === current.activeTabId)
+    if (!activeTab) return
+    setSpotlight(null)
+    setTileTabs(null)
+    setReaderMode(prev => {
+      if (prev?.tabId === activeTab.id) return null
+      return {
+        tabId: activeTab.id,
+        focusedSessionId: activeTab.focusedSessionId,
+      }
+    })
+  }, [])
+
+  // Switch which session is being read inside ReaderMode. Mirrors
+  // setSpotlightSession exactly — also updates the tab's
+  // focusedSessionId so leaving Reader returns to that pane.
+  const setReaderModeSession = useCallback((sessionId: SessionId) => {
+    setReaderMode(prev => (prev ? { ...prev, focusedSessionId: sessionId } : prev))
+    setState(prev => ({
+      ...prev,
+      tabs: prev.tabs.map(t =>
+        t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
+      ),
+    }))
+  }, [])
+
   const openTileTabs = useCallback(
     (tabIds: TabId[], direction: SplitDirection = 'vertical') => {
       const current = stateRef.current
@@ -2304,6 +2357,28 @@ export function useWorkspace() {
     }
   }, [spotlight, state.tabs])
 
+  // Same invalidation rule for ReaderMode — if the tab disappears or
+  // its leaves change so the focused session no longer exists, drop
+  // out of Reader cleanly. Without this, closing the last pane in
+  // the tab while Reader is open would leave a dangling focused
+  // sessionId and a blank screen.
+  useEffect(() => {
+    if (!readerMode) return
+    const tab = state.tabs.find(t => t.id === readerMode.tabId)
+    if (!tab) {
+      setReaderMode(null)
+      return
+    }
+    const leaves = collectLeaves(tab.root)
+    if (leaves.length === 0) {
+      setReaderMode(null)
+      return
+    }
+    if (!leaves.includes(readerMode.focusedSessionId)) {
+      setReaderMode(prev => (prev ? { ...prev, focusedSessionId: leaves[0] } : prev))
+    }
+  }, [readerMode, state.tabs])
+
   useEffect(() => {
     if (!tileTabs) return
     const validTabIds = tileTabs.tabIds.filter(id => state.tabs.some(t => t.id === id))
@@ -2353,6 +2428,9 @@ export function useWorkspace() {
     activeTab,
     spotlight,
     tileTabs,
+    readerMode,
+    toggleReaderMode,
+    setReaderModeSession,
     latestScreenRef,
     getRuntime,
     statusMode,
