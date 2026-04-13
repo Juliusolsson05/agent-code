@@ -7,7 +7,6 @@ import {
 } from '../../../shared/types/transcript'
 // Direct file imports — parser files are pure TypeScript, safe for
 // the renderer. Package entry points pull in Node deps (pty, fs).
-import { detectActivity } from '../../../shared/parsers/claudeScreen'
 import { detectCodexApproval } from '../../../shared/parsers/codexScreen'
 import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
 import {
@@ -141,10 +140,12 @@ export type SessionRuntime = {
    *  session is killed, its runtime is deleted along with everything
    *  else in it — no draft leaks past session teardown. */
   draftInput: string
-  /** Activity status detected from CC's screen buffer. Non-null when
-   *  CC is actively working (spinner visible) — carries the verb text
-   *  (e.g. "Cogitating…", "Reading file…"). Null when idle. Updated
-   *  on every screen snapshot (~60 Hz) via detectActivity(). */
+  /** Activity status forwarded by the provider (Claude's spinner verb
+   *  like "Cogitating…", Codex's bottom-row text like "working… 12s").
+   *  Non-null when the agent is actively working; null when idle.
+   *  Source of truth lives in each provider's headless package and
+   *  arrives via the process-state IPC handler — the renderer no
+   *  longer parses the screen for this. */
   activityStatus: string | null
   /** Transient toast message shown above the composer. Single-slot:
    *  a new toast replaces any in-flight one. Null when nothing to show.
@@ -758,7 +759,12 @@ export function useWorkspace() {
               screen: plain,
               screenMarkdown: markdown,
               picker,
-              activityStatus: detectActivity(plain),
+              // activityStatus is owned by the process-state IPC handler
+              // below — it carries the provider-correct verb (Claude's
+              // spinner verb, Codex's bottom-row text). Recomputing it
+              // here from `detectActivity(plain)` was Claude-specific
+              // and would overwrite Codex's status with null on every
+              // frame, racing the process-state writer.
               pendingApproval: nextApproval,
             },
           }
@@ -1046,11 +1052,20 @@ export function useWorkspace() {
       updateRuntime(sessionId, { exited: exitCode })
     })
 
-    // Provider-emitted activity state. For Claude this comes from its
-    // process inspector; for Codex it comes from the explicit bottom
-    // "Working (... • esc to interrupt)" row in the TUI.
-    const offProcessState = window.api.onSessionProcessState(({ sessionId, active }) => {
-      updateRuntime(sessionId, { awaitingAssistant: active })
+    // Provider-emitted activity state. Both providers now derive this
+    // from their own screen spinner detector — Claude's rotating-glyph
+    // line, Codex's bottom "Working (...)" row — and forward the
+    // verb/status string alongside the boolean. When status arrives
+    // we adopt it directly; the renderer used to redundantly run
+    // Claude's detectActivity on every screen frame to derive the
+    // verb, which was both wasteful and wrong for Codex (the parser
+    // is Claude-specific). On idle transitions, status is undefined
+    // and we clear activityStatus too.
+    const offProcessState = window.api.onSessionProcessState(({ sessionId, active, status }) => {
+      updateRuntime(sessionId, {
+        awaitingAssistant: active,
+        activityStatus: active ? (status ?? null) : null,
+      })
     })
 
     const offTrustDialog = window.api.onSessionTrustDialog(({ sessionId, visible, workspace }) => {

@@ -176,8 +176,9 @@ const api = {
   onSessionTerminalData: (cb: (e: SessionTerminalDataEvent) => void): Unsub =>
     subscribe('session:terminal-data', cb),
 
-  onSessionProcessState: (cb: (e: { sessionId: string; active: boolean }) => void): Unsub =>
-    subscribe('session:process-state', cb),
+  onSessionProcessState: (
+    cb: (e: { sessionId: string; active: boolean; status?: string }) => void,
+  ): Unsub => subscribe('session:process-state', cb),
 
   onSessionTrustDialog: (cb: (e: SessionTrustDialogEvent) => void): Unsub =>
     subscribe('session:trust-dialog', cb),

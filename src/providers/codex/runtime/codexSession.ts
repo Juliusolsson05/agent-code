@@ -43,7 +43,16 @@ export type CodexSessionEvents = {
   screen: [CodexScreenSnapshot]
   'jsonl-entry': [CodexRolloutLine, string]
   'jsonl-error': [Error]
-  'process-state': [{ active: boolean }]
+  // process-state carries the optional spinner-derived status string
+  // (e.g. "working… 12s") so the renderer can show provider-specific
+  // verbiage in its activity indicator. Without this, the renderer
+  // falls back to Claude's detectActivity which doesn't recognize
+  // Codex's bottom Working row and shows a generic "thinking…".
+  'process-state': [{ active: boolean; status?: string }]
+  // Trust dialog visibility — fires on EVERY transition (open + close).
+  // Matches the shape Claude already emits so SessionManager's
+  // provider-agnostic forwarder picks it up without changes.
+  'trust-dialog': [{ visible: boolean; workspace?: string }]
   exit: [{ exitCode: number; signal?: number }]
 }
 
@@ -148,12 +157,25 @@ export class CodexSession extends EventEmitter {
       })
     })
 
-    this.headless.on('activity', () => {
-      this.emit('process-state', { active: true })
+    // Forward the activity status string (the bottom Working row text
+    // parsed by codex-headless). Without `status`, the renderer's
+    // ActivityIndicator falls back to detectActivity on the screen
+    // plaintext, which is a Claude-specific spinner detector and
+    // returns null for Codex panes — leaving them with the generic
+    // "thinking…" placeholder despite the working state being known.
+    this.headless.on('activity', status => {
+      this.emit('process-state', { active: true, status })
     })
 
     this.headless.on('idle', () => {
       this.emit('process-state', { active: false })
+    })
+
+    // Forward trust dialog state. The headless emits on every
+    // transition (visible + hidden) so the renderer can mount and
+    // unmount the modal in lockstep with Codex's own dialog.
+    this.headless.on('trust-dialog', state => {
+      this.emit('trust-dialog', state)
     })
 
     // Forward rollout entries as jsonl-entry (matches Claude's event name).

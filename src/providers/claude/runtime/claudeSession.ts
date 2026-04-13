@@ -36,7 +36,10 @@ export type ClaudeSessionEvents = {
   screen: [ScreenSnapshot]
   'jsonl-entry': [JsonlEntry, string]
   'jsonl-error': [Error]
-  'process-state': [{ active: boolean }]
+  // Optional status: the spinner verb ("Cogitating…", "Cascading…",
+  // …) so the renderer can label its activity indicator with what CC
+  // is actually doing rather than a generic "thinking…" placeholder.
+  'process-state': [{ active: boolean; status?: string }]
   'trust-dialog': [TrustDialogState]
   'resume-prompt': [ResumePromptState]
   'compaction-state': [CompactionState]
@@ -148,8 +151,8 @@ export class ClaudeSession extends EventEmitter {
     // positives. Screen-spinner detection is the same signal Codex
     // uses; emitting process-state with the same shape keeps the
     // SessionManager / IPC / renderer wiring unchanged.
-    this.headless.on('activity', () => {
-      this.emit('process-state', { active: true })
+    this.headless.on('activity', status => {
+      this.emit('process-state', { active: true, status })
     })
     this.headless.on('idle', () => {
       this.emit('process-state', { active: false })

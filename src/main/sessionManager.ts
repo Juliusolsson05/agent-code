@@ -38,7 +38,7 @@ export type ManagerEvents = {
   /** Emitted only by Claude sessions — parsed JSONL entries. */
   'jsonl-entry': [{ sessionId: string; entry: JsonlEntry; file: string }]
   'jsonl-error': [{ sessionId: string; error: Error }]
-  'process-state': [{ sessionId: string; active: boolean }]
+  'process-state': [{ sessionId: string; active: boolean; status?: string }]
   'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
   'resume-prompt': [{
     sessionId: string
@@ -180,7 +180,7 @@ export class SessionManager extends EventEmitter {
       session.on('jsonl-error', (error: Error) =>
         this.emit('jsonl-error', { sessionId, error }),
       )
-      session.on('process-state', (state: { active: boolean }) =>
+      session.on('process-state', (state: { active: boolean; status?: string }) =>
         this.emit('process-state', { sessionId, ...state }),
       )
       session.on('trust-dialog', (state: { visible: boolean; workspace?: string }) =>
