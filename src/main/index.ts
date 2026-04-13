@@ -535,10 +535,20 @@ app.whenReady().then(async () => {
   if (tmuxAvailable) {
     try {
       const raw = await readFile(STATE_FILE, 'utf8')
+      // workspace.json is wrapped: { workspace: { sessions: {...} } }.
+      // The renderer's saveWorkspace() writes { workspace: workspaceState }
+      // — so persisted sessions live one level deep, not at the root.
+      // Reading parsed.sessions directly (as the original code did)
+      // always returned undefined, which is why recovery silently
+      // reported "0 recoverable" even when tmuxName WAS persisted.
       const parsed = JSON.parse(raw) as {
-        sessions?: Record<string, { kind?: string; tmuxName?: string }>
+        workspace?: {
+          sessions?: Record<string, { kind?: string; tmuxName?: string }>
+        }
       }
-      const persisted: PersistedTerminalRef[] = Object.entries(parsed.sessions ?? {})
+      const persisted: PersistedTerminalRef[] = Object.entries(
+        parsed.workspace?.sessions ?? {},
+      )
         .filter(([, meta]) => meta?.kind === 'terminal' && typeof meta?.tmuxName === 'string')
         .map(([sessionId, meta]) => ({ sessionId, tmuxName: meta!.tmuxName! }))
       recoveryReport = await reconcile(tmuxRegistry, persisted)
