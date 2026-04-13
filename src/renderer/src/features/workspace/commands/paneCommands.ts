@@ -21,6 +21,11 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => void workspace.closeFocused(),
   },
   {
+    id: 'bury-pane',
+    title: 'Bury Pane',
+    run: ({ workspace }) => workspace.buryFocused(),
+  },
+  {
     id: 'terminal-horizontal',
     title: 'New Terminal Right',
     shortcut: '⌥T',
@@ -73,6 +78,12 @@ export const paneCommands: CommandDef[] = [
     title: 'Undo Close',
     shortcut: '⌘⇧T',
     run: ({ workspace }) => void workspace.undoClose(),
+  },
+  {
+    id: 'revive-pane',
+    title: 'Revive Buried Pane',
+    when: ({ workspace }) => workspace.state.buried.length > 0,
+    run: ({ ui }) => ui.enterBuriedMode(),
   },
   {
     id: 'toggle-tail',

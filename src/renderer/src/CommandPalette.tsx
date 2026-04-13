@@ -21,7 +21,14 @@ type SessionInfo = {
   createdAt?: number
 }
 
-type PaletteMode = 'commands' | 'resume'
+type BuriedPaneInfo = {
+  id: string
+  label: string
+  description: string
+  buriedAt: number
+}
+
+type PaletteMode = 'commands' | 'resume' | 'buried'
 
 type Props = {
   open: boolean
@@ -93,6 +100,30 @@ export function CommandPalette({
     setSessionsLoading(false)
   }, [focusedCwd, focusedProvider])
 
+  const buried = useMemo<BuriedPaneInfo[]>(
+    () =>
+      [...workspace.state.buried]
+        .sort((a, b) => b.buriedAt - a.buriedAt)
+        .map(entry => {
+          const kind = entry.sessionMeta.kind ?? 'claude'
+          const cwd = entry.sessionMeta.cwd
+          const cwdBase = cwd.split('/').filter(Boolean).pop() ?? cwd
+          return {
+            id: entry.id,
+            label: `${kind} · ${cwdBase}`,
+            description: `${entry.sourceTabTitle} · ${cwd}`,
+            buriedAt: entry.buriedAt,
+          }
+        }),
+    [workspace.state.buried],
+  )
+
+  const enterBuriedMode = useCallback(() => {
+    setMode('buried')
+    setQuery('')
+    setSelectedIndex(0)
+  }, [])
+
   const commandContext = useMemo<CommandContext>(
     () => ({
       workspace,
@@ -105,6 +136,7 @@ export function CommandPalette({
         toggleDebugPanel,
         toggleCustomRendering,
         enterResumeMode,
+        enterBuriedMode,
         closePalette: onClose,
       },
       flags: {
@@ -121,6 +153,7 @@ export function CommandPalette({
       toggleDebugPanel,
       toggleCustomRendering,
       enterResumeMode,
+      enterBuriedMode,
       onClose,
       customRenderingEnabled,
     ],
@@ -141,13 +174,20 @@ export function CommandPalette({
           fuzzyMatch(s.gitBranch ?? '', query),
       )
     }
+    if (mode === 'buried') {
+      if (!query.trim()) return buried
+      return buried.filter(
+        item =>
+          fuzzyMatch(item.label, query) || fuzzyMatch(item.description, query),
+      )
+    }
     if (!query.trim()) return commands
     return commands.filter(
       command =>
         fuzzyMatch(command.title, query) ||
         command.keywords.some(keyword => fuzzyMatch(keyword, query)),
     )
-  }, [mode, commands, sessions, query])
+  }, [mode, buried, commands, sessions, query])
 
   useEffect(() => {
     if (open) {
@@ -155,6 +195,7 @@ export function CommandPalette({
       setSelectedIndex(0)
       setMode('commands')
       setSessions([])
+      setSessionsLoading(false)
       requestAnimationFrame(() => inputRef.current?.focus())
     }
   }, [open])
@@ -171,7 +212,7 @@ export function CommandPalette({
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
-      if (command.id === 'resume-session') {
+      if (command.id === 'resume-session' || command.id === 'revive-pane') {
         void command.run(commandContext)
         return
       }
@@ -193,12 +234,20 @@ export function CommandPalette({
     [onClose, focusedCwd, focusedProvider, workspace],
   )
 
+  const executeBuried = useCallback(
+    (item: BuriedPaneInfo) => {
+      onClose()
+      workspace.reviveBuried(item.id)
+    },
+    [onClose, workspace],
+  )
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
-        if (mode === 'resume') {
+        if (mode === 'resume' || mode === 'buried') {
           setMode('commands')
           setQuery('')
           setSelectedIndex(0)
@@ -222,13 +271,16 @@ export function CommandPalette({
         if (mode === 'resume') {
           const session = filtered[selectedIndex] as SessionInfo | undefined
           if (session) executeResume(session)
+        } else if (mode === 'buried') {
+          const item = filtered[selectedIndex] as BuriedPaneInfo | undefined
+          if (item) executeBuried(item)
         } else {
           const command = filtered[selectedIndex] as ResolvedCommand | undefined
           if (command) executeCommand(command)
         }
       }
     },
-    [mode, filtered, selectedIndex, executeCommand, executeResume, onClose],
+    [mode, filtered, selectedIndex, executeBuried, executeCommand, executeResume, onClose],
   )
 
   if (!open) return null
@@ -256,6 +308,11 @@ export function CommandPalette({
               resume {focusedProvider} &rsaquo;
             </span>
           )}
+          {mode === 'buried' && (
+            <span className="text-accent text-[11px] flex-shrink-0 select-none">
+              revive &rsaquo;
+            </span>
+          )}
           <input
             ref={inputRef}
             type="text"
@@ -265,7 +322,13 @@ export function CommandPalette({
               outline-none
               placeholder:text-muted
             "
-            placeholder={mode === 'resume' ? 'Search sessions…' : 'Type a command…'}
+            placeholder={
+              mode === 'resume'
+                ? 'Search sessions…'
+                : mode === 'buried'
+                  ? 'Search buried panes…'
+                  : 'Type a command…'
+            }
             value={query}
             onChange={e => {
               setQuery(e.target.value)
@@ -341,6 +404,36 @@ export function CommandPalette({
                   <div className="text-[10px] text-muted mt-0.5 truncate">
                     {session.gitBranch ? `${session.gitBranch} · ` : ''}
                     {session.cwd ?? focusedCwd ?? ''}
+                  </div>
+                </div>
+              ))
+            ))}
+
+          {mode === 'buried' &&
+            (filtered.length === 0 ? (
+              <div className="px-3 py-4 text-muted text-[12px] text-center">
+                No buried panes
+              </div>
+            ) : (
+              (filtered as BuriedPaneInfo[]).map((item, i) => (
+                <div
+                  key={item.id}
+                  className={`
+                    px-3 py-2
+                    cursor-pointer
+                    border-b border-border last:border-b-0
+                    ${
+                      i === selectedIndex
+                        ? 'bg-accent/15 text-ink'
+                        : 'text-ink-dim hover:bg-surface-hi'
+                    }
+                  `}
+                  onMouseEnter={() => setSelectedIndex(i)}
+                  onClick={() => executeBuried(item)}
+                >
+                  <div className="text-[12px] truncate">{item.label}</div>
+                  <div className="text-[10px] text-muted mt-0.5 truncate">
+                    {item.description}
                   </div>
                 </div>
               ))

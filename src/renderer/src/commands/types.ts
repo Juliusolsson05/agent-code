@@ -11,6 +11,7 @@ export type CommandContext = {
     toggleDebugPanel: () => void
     toggleCustomRendering: () => void
     enterResumeMode: () => void
+    enterBuriedMode: () => void
     closePalette: () => void
   }
   flags: {

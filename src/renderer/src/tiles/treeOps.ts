@@ -50,20 +50,59 @@ export function splitLeaf(
   direction: SplitDirection,
   newSessionId: SessionId,
 ): TileNode {
+  return insertBesideLeaf(
+    node,
+    targetSessionId,
+    direction,
+    RATIO_DEFAULT,
+    'b',
+    newSessionId,
+  )
+}
+
+/**
+ * Insert a new leaf beside an existing one with explicit geometry.
+ * Used by revive flows that want to preserve an older split ratio/side
+ * as closely as possible instead of always creating a default 50/50
+ * right/bottom split.
+ */
+export function insertBesideLeaf(
+  node: TileNode,
+  targetSessionId: SessionId,
+  direction: SplitDirection,
+  ratio: number,
+  side: 'a' | 'b',
+  newSessionId: SessionId,
+): TileNode {
   if (node.type === 'leaf') {
     if (node.sessionId !== targetSessionId) return node
+    const newLeaf: TileNode = { type: 'leaf', sessionId: newSessionId }
     return {
       type: 'split',
       direction,
-      ratio: RATIO_DEFAULT,
-      a: node,
-      b: { type: 'leaf', sessionId: newSessionId },
+      ratio: clampRatio(ratio),
+      a: side === 'a' ? newLeaf : node,
+      b: side === 'b' ? newLeaf : node,
     }
   }
   return {
     ...node,
-    a: splitLeaf(node.a, targetSessionId, direction, newSessionId),
-    b: splitLeaf(node.b, targetSessionId, direction, newSessionId),
+    a: insertBesideLeaf(
+      node.a,
+      targetSessionId,
+      direction,
+      ratio,
+      side,
+      newSessionId,
+    ),
+    b: insertBesideLeaf(
+      node.b,
+      targetSessionId,
+      direction,
+      ratio,
+      side,
+      newSessionId,
+    ),
   }
 }
 

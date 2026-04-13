@@ -10,6 +10,7 @@ import {
 import { detectCodexApproval } from '../../../shared/parsers/codexScreen'
 import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
 import {
+  type BuriedPaneRecord,
   RATIO_DEFAULT,
   type SessionId,
   type SessionKind,
@@ -26,6 +27,7 @@ import {
   collectLeaves,
   equalizeRatios,
   findNeighbor,
+  insertBesideLeaf,
   normalizeTree,
   resizeInDirection,
   rotateTree,
@@ -621,6 +623,7 @@ type PersistedWorkspace = {
   }>
   activeTabId: TabId
   sessions: Record<SessionId, SessionMeta>
+  buried?: BuriedPaneRecord[]
   /** Draft input text per session, keyed by sessionId. Persisted so
    *  in-progress prompts survive app crashes and restarts. Only
    *  non-empty drafts are saved to keep the file small. */
@@ -676,6 +679,7 @@ export function useWorkspace() {
     tabs: [],
     activeTabId: '',
     sessions: {},
+    buried: [],
   })
 
   // Ref mirror of state so IPC callbacks (which close over stale state)
@@ -1532,6 +1536,202 @@ export function useWorkspace() {
     })
   }, [state.activeTabId, state.tabs, state.sessions])
 
+  // ---- Action: bury focused pane ----
+  //
+  // Removes the focused pane from the visible layout without killing
+  // the underlying session. The session keeps running in the
+  // background and remains eligible for revive.
+  const buryFocused = useCallback(() => {
+    const tab = state.tabs.find(t => t.id === state.activeTabId)
+    if (!tab) return
+
+    const targetId = tab.focusedSessionId
+    const sessionMeta = state.sessions[targetId]
+    if (!sessionMeta) return
+
+    const parentInfo = findParentSplitInfo(tab.root, targetId)
+    const tabIndex = state.tabs.findIndex(t => t.id === tab.id)
+    const buriedRecord: BuriedPaneRecord = {
+      id: targetId,
+      sessionId: targetId,
+      sessionMeta,
+      buriedAt: Date.now(),
+      sourceTabId: tab.id,
+      sourceTabTitle: tab.title,
+      sourceTabIndex: tabIndex,
+      direction: parentInfo?.direction,
+      ratio: parentInfo?.ratio,
+      side: parentInfo?.side,
+      siblingLeafId: parentInfo?.siblingLeafId,
+    }
+
+    const kindLabel = sessionMeta.kind ?? 'claude'
+    const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
+    showToast(`Buried ${kindLabel} pane (${cwdBase})`)
+
+    setState(prev => {
+      const tabs = [...prev.tabs]
+      const tabIdx = tabs.findIndex(t => t.id === prev.activeTabId)
+      if (tabIdx === -1) return prev
+
+      const currentTab = tabs[tabIdx]
+      const nextRoot = closeLeaf(currentTab.root, targetId)
+      if (nextRoot === null) {
+        const remaining = tabs.filter((_, i) => i !== tabIdx)
+        return {
+          ...prev,
+          tabs: remaining,
+          activeTabId: remaining[Math.max(0, tabIdx - 1)]?.id ?? '',
+          buried: [
+            ...prev.buried.filter(entry => entry.sessionId !== targetId),
+            buriedRecord,
+          ],
+        }
+      }
+
+      const nextFocused = collectLeaves(nextRoot)[0]
+      tabs[tabIdx] = {
+        ...currentTab,
+        root: nextRoot,
+        focusedSessionId: nextFocused,
+      }
+      return {
+        ...prev,
+        tabs,
+        buried: [
+          ...prev.buried.filter(entry => entry.sessionId !== targetId),
+          buriedRecord,
+        ],
+      }
+    })
+    setSpotlight(prev => (prev?.tabId === tab.id ? null : prev))
+  }, [showToast, state.activeTabId, state.sessions, state.tabs])
+
+  // ---- Action: revive buried pane ----
+  //
+  // Restores a buried session into the most plausible visible location.
+  // First choice is the original sibling anchor, then the original tab,
+  // then the best current tab by cwd/kind/title affinity, and finally
+  // a fresh single-pane tab if no good target exists.
+  const reviveBuried = useCallback((buriedId: string) => {
+    const current = stateRef.current
+    const entry = current.buried.find(item => item.id === buriedId)
+    if (!entry) return
+
+    const chooseFallbackTab = (): Tab | null => {
+      const scored = current.tabs
+        .map(tab => {
+          let score = 0
+          if (tab.id === entry.sourceTabId) score += 100
+          if (tab.title === entry.sourceTabTitle) score += 20
+          const leafIds = collectLeaves(tab.root)
+          for (const leafId of leafIds) {
+            const meta = current.sessions[leafId]
+            if (!meta) continue
+            if (meta.cwd === entry.sessionMeta.cwd) score += 15
+            if ((meta.kind ?? 'claude') === (entry.sessionMeta.kind ?? 'claude')) score += 5
+          }
+          return { tab, score }
+        })
+        .filter(candidate => candidate.score > 0)
+        .sort((a, b) => b.score - a.score)
+      return scored[0]?.tab ?? current.tabs[0] ?? null
+    }
+
+    const anchorTab = entry.siblingLeafId
+      ? current.tabs.find(tab => collectLeaves(tab.root).includes(entry.siblingLeafId!))
+      : null
+    const targetTab = anchorTab ?? chooseFallbackTab()
+
+    setState(prev => {
+      const nextBuried = prev.buried.filter(item => item.id !== buriedId)
+
+      if (!targetTab) {
+        const tabId = crypto.randomUUID()
+        const title = titleFromCwd(entry.sessionMeta.cwd)
+        const revivedTab: Tab = {
+          id: tabId,
+          title,
+          root: { type: 'leaf', sessionId: entry.sessionId },
+          focusedSessionId: entry.sessionId,
+        }
+        return {
+          ...prev,
+          tabs: [...prev.tabs, revivedTab],
+          activeTabId: tabId,
+          buried: nextBuried,
+        }
+      }
+
+      const target = prev.tabs.find(tab => tab.id === targetTab.id)
+      if (!target) {
+        const tabId = crypto.randomUUID()
+        const title = titleFromCwd(entry.sessionMeta.cwd)
+        const revivedTab: Tab = {
+          id: tabId,
+          title,
+          root: { type: 'leaf', sessionId: entry.sessionId },
+          focusedSessionId: entry.sessionId,
+        }
+        return {
+          ...prev,
+          tabs: [...prev.tabs, revivedTab],
+          activeTabId: tabId,
+          buried: nextBuried,
+        }
+      }
+
+      const leafIds = collectLeaves(target.root)
+      const cwdLeaf =
+        leafIds.find(leafId => prev.sessions[leafId]?.cwd === entry.sessionMeta.cwd) ?? null
+      const anchorLeafId =
+        (entry.siblingLeafId && leafIds.includes(entry.siblingLeafId))
+          ? entry.siblingLeafId
+          : (cwdLeaf ?? target.focusedSessionId ?? leafIds[0] ?? null)
+
+      if (!anchorLeafId) {
+        const tabId = crypto.randomUUID()
+        const title = titleFromCwd(entry.sessionMeta.cwd)
+        const revivedTab: Tab = {
+          id: tabId,
+          title,
+          root: { type: 'leaf', sessionId: entry.sessionId },
+          focusedSessionId: entry.sessionId,
+        }
+        return {
+          ...prev,
+          tabs: [...prev.tabs, revivedTab],
+          activeTabId: tabId,
+          buried: nextBuried,
+        }
+      }
+
+      const revivedRoot = insertBesideLeaf(
+        target.root,
+        anchorLeafId,
+        entry.direction ?? 'vertical',
+        entry.ratio ?? RATIO_DEFAULT,
+        entry.side ?? 'b',
+        entry.sessionId,
+      )
+
+      return {
+        ...prev,
+        tabs: prev.tabs.map(tab =>
+          tab.id === target.id
+            ? {
+                ...tab,
+                root: revivedRoot,
+                focusedSessionId: entry.sessionId,
+              }
+            : tab,
+        ),
+        activeTabId: target.id,
+        buried: nextBuried,
+      }
+    })
+  }, [])
+
   // ---- Action: focus a specific session in the active tab ----
   const focusSession = useCallback((sessionId: SessionId) => {
     setState(prev => ({
@@ -2106,6 +2306,7 @@ export function useWorkspace() {
       })),
       activeTabId: s.activeTabId,
       sessions: s.sessions,
+      buried: s.buried,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
     const json = JSON.stringify({ workspace: persisted }, null, 2)
@@ -2284,10 +2485,26 @@ export function useWorkspace() {
     const activeTabId =
       newTabs.find(t => t.id === persisted.activeTabId)?.id ?? newTabs[0].id
 
+    const remappedBuried = (persisted.buried ?? [])
+      .map(entry => {
+        const mappedSessionId = idMap.get(entry.sessionId)
+        if (!mappedSessionId) return null
+        return {
+          ...entry,
+          id: mappedSessionId,
+          sessionId: mappedSessionId,
+          siblingLeafId: entry.siblingLeafId
+            ? (idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId)
+            : undefined,
+        } satisfies BuriedPaneRecord
+      })
+      .filter((entry): entry is BuriedPaneRecord => entry !== null)
+
     setState({
       tabs: newTabs,
       activeTabId,
       sessions: freshSessions,
+      buried: remappedBuried,
     })
     // Initialize empty runtimes for every session so TileLeaf renders
     // "thinking…" instead of undefined while the first frame of screen
@@ -2606,6 +2823,8 @@ export function useWorkspace() {
     killSession,
     splitFocused,
     closeFocused,
+    buryFocused,
+    reviveBuried,
     focusSession,
     focusSessionInTab,
     navigate,

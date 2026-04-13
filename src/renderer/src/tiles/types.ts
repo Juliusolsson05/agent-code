@@ -108,6 +108,26 @@ export type SessionMeta = {
   tmuxName?: string
 }
 
+export type BuriedPaneRecord = {
+  /** Stable id for picker actions; same as sessionId for now. */
+  id: string
+  /** The live hidden session. Remains running while buried. */
+  sessionId: SessionId
+  /** Persisted session metadata so reload/revive can describe it. */
+  sessionMeta: SessionMeta
+  buriedAt: number
+  /** Where the pane came from before it was removed from the tree. */
+  sourceTabId: TabId
+  sourceTabTitle: string
+  sourceTabIndex: number
+  /** Placement hint captured from the parent split when available. */
+  direction?: SplitDirection
+  ratio?: number
+  side?: 'a' | 'b'
+  /** Anchor leaf from the surviving sibling subtree, if any. */
+  siblingLeafId?: SessionId
+}
+
 export type WorkspaceState = {
   tabs: Tab[]
   activeTabId: TabId
@@ -117,6 +137,8 @@ export type WorkspaceState = {
    * tree) get garbage collected by assertInvariants.
    */
   sessions: Record<SessionId, SessionMeta>
+  /** Hidden-but-live sessions removed from the visible layout. */
+  buried: BuriedPaneRecord[]
 }
 
 export const RATIO_MIN = 0.1
