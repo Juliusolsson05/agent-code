@@ -24,8 +24,20 @@ export type SlashPickerState = {
   items: PickerItem[]
 }
 export type ScreenSnapshot = {
+  /** Visible viewport text — what CC's TUI is showing right now.
+   *  Source of truth for current-state parsers (trust dialog,
+   *  slash picker, activity spinner). */
   plain: string
+  /** Viewport with bold/italic re-emitted as markdown. */
   markdown: string
+  /** Wider window (last ~200 rows including scrollback) used by
+   *  the streaming extractor. CC's responses can grow taller than
+   *  the viewport, scrolling the opening `⏺` marker into
+   *  scrollback; without this wider snapshot the streaming card
+   *  stays blank for long replies. */
+  recent: string
+  /** Markdown counterpart of `recent`. */
+  recentMarkdown: string
   picker: SlashPickerState
 }
 

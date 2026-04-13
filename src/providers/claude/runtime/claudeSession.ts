@@ -27,6 +27,10 @@ export type ClaudeSessionOptions = {
 export type ScreenSnapshot = {
   plain: string
   markdown: string
+  /** Wider window for the streaming extractor (see headless package
+   *  HeadlessTerminal docstring for the why). */
+  recent: string
+  recentMarkdown: string
   picker: SlashPickerState
 }
 
@@ -134,6 +138,8 @@ export class ClaudeSession extends EventEmitter {
       this.emit('screen', {
         plain: snap.plain,
         markdown: snap.markdown,
+        recent: snap.recent,
+        recentMarkdown: snap.recentMarkdown,
         picker: this.headless?.getSlashPickerState() ?? this.picker,
       })
     })

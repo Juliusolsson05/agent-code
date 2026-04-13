@@ -97,10 +97,20 @@ export type QueuedMessage = {
 }
 
 export type SessionRuntime = {
-  /** Plain-text screen snapshot — source of truth for parsers. */
+  /** Visible viewport — source of truth for current-state parsers
+   *  (trust dialog, slash picker, activity indicator). */
   screen: string
-  /** Same screen with bold/italic reconstructed from cell attributes. */
+  /** Viewport with bold/italic reconstructed from cell attributes. */
   screenMarkdown: string
+  /** Wider window (last ~200 rows including scrollback) used by the
+   *  streaming card's extractAssistantInProgress. CC's responses
+   *  often grow taller than the 40-row viewport, scrolling the
+   *  opening `⏺` marker out of view; without this wider snapshot
+   *  the streaming card stayed blank for long replies until the
+   *  JSONL entry landed. */
+  recentScreen: string
+  /** Markdown counterpart of `recentScreen`. */
+  recentScreenMarkdown: string
   /** Streaming-card baseline captured at submit time. */
   streamingBaseline: string | null
   /** Parsed JSONL entries for this session's feed. */
@@ -184,6 +194,8 @@ export type SessionRuntime = {
 const emptyRuntime = (): SessionRuntime => ({
   screen: '',
   screenMarkdown: '',
+  recentScreen: '',
+  recentScreenMarkdown: '',
   streamingBaseline: null,
   entries: [],
   awaitingAssistant: false,
@@ -674,11 +686,16 @@ export function useWorkspace() {
     })
 
     const offScreen = window.api.onSessionScreen(
-      ({ sessionId, plain, markdown, picker }) => {
+      ({ sessionId, plain, markdown, recent, recentMarkdown, picker }) => {
         // latestScreenRef is the synchronous source of truth for the
         // Enter-baseline capture in TileLeaf — always update it, even
         // when we bail on React state below.
-        latestScreenRef.current[sessionId] = plain
+        // Use `recent` (wider window) so the baseline includes any
+        // assistant text that may have already scrolled out of the
+        // viewport. The baseline comparison is the basis for "is the
+        // streaming card stale?", which depends on seeing the same
+        // marker the streaming extractor will see.
+        latestScreenRef.current[sessionId] = recent
 
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
@@ -697,6 +714,8 @@ export function useWorkspace() {
           if (
             current.screen === plain &&
             current.screenMarkdown === markdown &&
+            current.recentScreen === recent &&
+            current.recentScreenMarkdown === recentMarkdown &&
             pickerEqual(current.picker, picker)
           ) {
             return prev
@@ -758,6 +777,8 @@ export function useWorkspace() {
               ...current,
               screen: plain,
               screenMarkdown: markdown,
+              recentScreen: recent,
+              recentScreenMarkdown: recentMarkdown,
               picker,
               // activityStatus is owned by the process-state IPC handler
               // below — it carries the provider-correct verb (Claude's

@@ -661,9 +661,16 @@ export function TileLeaf({
           provider={(workspace.state.sessions[sessionId]?.kind === 'codex') ? 'codex' : 'claude'}
           workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
           entries={runtime.entries}
-          streamingScreen={runtime.awaitingAssistant ? runtime.screen : null}
+          // Feed the WIDER `recentScreen` to the streaming extractor.
+          // The extractor walks bottom-up looking for the `⏺` marker;
+          // CC's longer responses scroll the marker out of the 40-row
+          // viewport, so passing `screen` (viewport only) made the
+          // streaming card stay blank for any reply taller than the
+          // viewport. `recentScreen` covers ~200 rows of scrollback,
+          // enough to keep the marker visible for typical responses.
+          streamingScreen={runtime.awaitingAssistant ? runtime.recentScreen : null}
           streamingScreenMarkdown={
-            runtime.awaitingAssistant ? runtime.screenMarkdown : null
+            runtime.awaitingAssistant ? runtime.recentScreenMarkdown : null
           }
           streamingBaseline={runtime.streamingBaseline}
           activityStatus={runtime.activityStatus}

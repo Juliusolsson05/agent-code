@@ -34,6 +34,12 @@ export type CodexSessionOptions = {
 export type CodexScreenSnapshot = {
   plain: string
   markdown: string
+  /** Wider window for the streaming extractor — see HeadlessTerminal
+   *  package docstring. Codex's TUI renders shorter assistant blocks
+   *  than CC's, so the extractor here usually doesn't need it, but
+   *  we forward for shape parity with ClaudeSession. */
+  recent: string
+  recentMarkdown: string
   picker: SlashPickerState
 }
 
@@ -151,6 +157,8 @@ export class CodexSession extends EventEmitter {
       this.emit('screen', {
         plain: snap.plain,
         markdown: snap.markdown,
+        recent: snap.recent,
+        recentMarkdown: snap.recentMarkdown,
         // Codex doesn't have a slash picker yet — static "not visible"
         // so the renderer's picker component stays hidden.
         picker: { visible: false, items: [] },
