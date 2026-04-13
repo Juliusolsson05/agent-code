@@ -631,7 +631,7 @@ type TileTabsState = {
 export function useWorkspace() {
   // GlobalToast lives one level up in the provider tree (mounted in
   // main.tsx). Reading it here lets close actions surface a brief
-  // "Closed — ⌘⇧T to undo" hint without each caller having to know
+  // "Closed — ⌘⇧T (Undo Close)" hint without each caller having to know
   // about the toast system. The hook returns a stable callback so
   // re-renders don't churn close handlers.
   const { showToast } = useGlobalToast()
@@ -1324,7 +1324,7 @@ export function useWorkspace() {
       })
       // Surface a brief undo hint. The label uses the tab title so
       // the user can confirm at a glance which thing they killed.
-      showToast(`Closed “${tab.title}” — ⌘⇧T to undo`)
+      showToast(`Closed “${tab.title}” — ⌘⇧T (Undo Close)`)
 
       // Kill every session in this tab.
       await Promise.all(ids.map(id => window.api.killSession(id)))
@@ -1418,7 +1418,7 @@ export function useWorkspace() {
       // can recognize which pane they killed when several look alike.
       const kindLabel = sessionMeta.kind ?? 'claude'
       const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
-      showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T to undo`)
+      showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T (Undo Close)`)
     } else if (!parentInfo && sessionMeta) {
       // This pane IS the root — closing it kills the tab. Capture
       // the tab-level undo entry.
@@ -1436,7 +1436,7 @@ export function useWorkspace() {
       })
       // Tab-level close — same shape as closeTab's toast for
       // consistency, since the user closed an entire tab here too.
-      showToast(`Closed “${tab.title}” — ⌘⇧T to undo`)
+      showToast(`Closed “${tab.title}” — ⌘⇧T (Undo Close)`)
     }
 
     await window.api.killSession(targetId)
