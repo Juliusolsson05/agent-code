@@ -620,6 +620,12 @@ type SpotlightState = {
   focusedSessionId: SessionId
 }
 
+type TileTabsState = {
+  tabIds: TabId[]
+  focusedTabId: TabId
+  direction: SplitDirection
+}
+
 export function useWorkspace() {
   const [state, setState] = useState<WorkspaceState>({
     tabs: [],
@@ -637,6 +643,7 @@ export function useWorkspace() {
   // persistent state — runtime rebuilds from IPC events after respawn.
   const [runtimes, setRuntimes] = useState<Record<SessionId, SessionRuntime>>({})
   const [spotlight, setSpotlight] = useState<SpotlightState | null>(null)
+  const [tileTabs, setTileTabs] = useState<TileTabsState | null>(null)
 
   // Ref mirror of runtimes so the debounced save callback can read
   // current drafts without re-creating the callback on every render.
@@ -1462,6 +1469,26 @@ export function useWorkspace() {
     ))
   }, [])
 
+  const focusSessionInTab = useCallback((tabId: TabId, sessionId: SessionId) => {
+    setState(prev => ({
+      ...prev,
+      activeTabId: tabId,
+      tabs: prev.tabs.map(t =>
+        t.id === tabId ? { ...t, focusedSessionId: sessionId } : t,
+      ),
+    }))
+    setSpotlight(prev => (
+      prev && prev.tabId === tabId
+        ? { ...prev, focusedSessionId: sessionId }
+        : prev
+    ))
+    setTileTabs(prev => (
+      prev && prev.tabIds.includes(tabId)
+        ? { ...prev, focusedTabId: tabId }
+        : prev
+    ))
+  }, [])
+
   // ---- Action: navigate focus geometrically (alt-hjkl) ----
   const navigate = useCallback(
     (direction: 'left' | 'right' | 'up' | 'down') => {
@@ -1477,6 +1504,9 @@ export function useWorkspace() {
   const activateTab = useCallback((tabId: TabId) => {
     setState(prev => ({ ...prev, activeTabId: tabId }))
     setSpotlight(null)
+    setTileTabs(prev => (prev && prev.tabIds.includes(tabId)
+      ? { ...prev, focusedTabId: tabId }
+      : null))
   }, [])
 
   const activateTabByIndex = useCallback((index: number) => {
@@ -1485,9 +1515,24 @@ export function useWorkspace() {
       return t ? { ...prev, activeTabId: t.id } : prev
     })
     setSpotlight(null)
+    setTileTabs(prev => {
+      const target = stateRef.current.tabs[index]
+      if (!target) return prev
+      return prev && prev.tabIds.includes(target.id)
+        ? { ...prev, focusedTabId: target.id }
+        : null
+    })
   }, [])
 
   const nextTab = useCallback(() => {
+    const tiled = tileTabs
+    if (tiled && tiled.tabIds.length > 1) {
+      const idx = tiled.tabIds.indexOf(tiled.focusedTabId)
+      const nextId = tiled.tabIds[(idx + 1 + tiled.tabIds.length) % tiled.tabIds.length]
+      setState(prev => ({ ...prev, activeTabId: nextId }))
+      setTileTabs(prev => (prev ? { ...prev, focusedTabId: nextId } : prev))
+      return
+    }
     setState(prev => {
       const idx = prev.tabs.findIndex(t => t.id === prev.activeTabId)
       if (idx === -1) return prev
@@ -1495,9 +1540,18 @@ export function useWorkspace() {
       return { ...prev, activeTabId: next.id }
     })
     setSpotlight(null)
-  }, [])
+  }, [tileTabs])
 
   const prevTab = useCallback(() => {
+    const tiled = tileTabs
+    if (tiled && tiled.tabIds.length > 1) {
+      const idx = tiled.tabIds.indexOf(tiled.focusedTabId)
+      const nextId =
+        tiled.tabIds[(idx - 1 + tiled.tabIds.length) % tiled.tabIds.length]
+      setState(prev => ({ ...prev, activeTabId: nextId }))
+      setTileTabs(prev => (prev ? { ...prev, focusedTabId: nextId } : prev))
+      return
+    }
     setState(prev => {
       const idx = prev.tabs.findIndex(t => t.id === prev.activeTabId)
       if (idx === -1) return prev
@@ -1505,12 +1559,13 @@ export function useWorkspace() {
       return { ...prev, activeTabId: next.id }
     })
     setSpotlight(null)
-  }, [])
+  }, [tileTabs])
 
   const toggleSpotlight = useCallback(() => {
     const current = stateRef.current
     const activeTab = current.tabs.find(t => t.id === current.activeTabId)
     if (!activeTab) return
+    setTileTabs(null)
     setSpotlight(prev => {
       if (prev?.tabId === activeTab.id) return null
       return {
@@ -1528,6 +1583,34 @@ export function useWorkspace() {
         t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
       ),
     }))
+  }, [])
+
+  const openTileTabs = useCallback(
+    (tabIds: TabId[], direction: SplitDirection = 'vertical') => {
+      const current = stateRef.current
+      const valid = tabIds.filter(id => current.tabs.some(t => t.id === id))
+      if (valid.length < 2) return
+      const focusedTabId = valid.includes(current.activeTabId)
+        ? current.activeTabId
+        : valid[0]
+      setSpotlight(null)
+      setTileTabs({ tabIds: valid, focusedTabId, direction })
+      setState(prev => ({ ...prev, activeTabId: focusedTabId }))
+    },
+    [],
+  )
+
+  const closeTileTabs = useCallback(() => {
+    setTileTabs(null)
+  }, [])
+
+  const focusTiledTab = useCallback((tabId: TabId) => {
+    setTileTabs(prev => (
+      prev && prev.tabIds.includes(tabId)
+        ? { ...prev, focusedTabId: tabId }
+        : prev
+    ))
+    setState(prev => ({ ...prev, activeTabId: tabId }))
   }, [])
 
   // ---- Action: adjust the ratio of the split containing the focused pane ----
@@ -1576,6 +1659,25 @@ export function useWorkspace() {
           return { ...t, root: setRatioBetween(t.root, fromSessionId, toSessionId, ratio) }
         }),
       }))
+    },
+    [],
+  )
+
+  const setSplitRatioInTab = useCallback(
+    (tabId: TabId, fromSessionId: SessionId, toSessionId: SessionId, ratio: number) => {
+      setState(prev => ({
+        ...prev,
+        activeTabId: tabId,
+        tabs: prev.tabs.map(t => {
+          if (t.id !== tabId) return t
+          return { ...t, root: setRatioBetween(t.root, fromSessionId, toSessionId, ratio) }
+        }),
+      }))
+      setTileTabs(prev => (
+        prev && prev.tabIds.includes(tabId)
+          ? { ...prev, focusedTabId: tabId }
+          : prev
+      ))
     },
     [],
   )
@@ -2088,6 +2190,28 @@ export function useWorkspace() {
     }
   }, [spotlight, state.tabs])
 
+  useEffect(() => {
+    if (!tileTabs) return
+    const validTabIds = tileTabs.tabIds.filter(id => state.tabs.some(t => t.id === id))
+    if (validTabIds.length < 2) {
+      setTileTabs(null)
+      return
+    }
+    const focusedTabId = validTabIds.includes(tileTabs.focusedTabId)
+      ? tileTabs.focusedTabId
+      : validTabIds[0]
+    if (
+      validTabIds.length !== tileTabs.tabIds.length ||
+      focusedTabId !== tileTabs.focusedTabId
+    ) {
+      setTileTabs({
+        ...tileTabs,
+        tabIds: validTabIds,
+        focusedTabId,
+      })
+    }
+  }, [tileTabs, state.tabs])
+
   // ---- Status mode: color-coded pane headers ----
   const [statusMode, setStatusMode] = useState(false)
   const toggleStatusMode = useCallback(() => {
@@ -2099,6 +2223,7 @@ export function useWorkspace() {
     runtimes,
     activeTab,
     spotlight,
+    tileTabs,
     latestScreenRef,
     getRuntime,
     statusMode,
@@ -2111,6 +2236,7 @@ export function useWorkspace() {
     splitFocused,
     closeFocused,
     focusSession,
+    focusSessionInTab,
     navigate,
     activateTab,
     activateTabByIndex,
@@ -2119,6 +2245,7 @@ export function useWorkspace() {
     resizeFocused,
     resizeFocusedDirectional,
     setSplitRatio,
+    setSplitRatioInTab,
     setStreamingBaseline,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
@@ -2132,6 +2259,9 @@ export function useWorkspace() {
     replaceSession,
     toggleSpotlight,
     setSpotlightSession,
+    openTileTabs,
+    closeTileTabs,
+    focusTiledTab,
   }
 }
 

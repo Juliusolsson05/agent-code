@@ -8,6 +8,8 @@ import { ThemePicker } from './feed/ThemePicker'
 import { PathPickerModal } from './tiles/PathPickerModal'
 import { SpotlightView } from './tiles/SpotlightView'
 import { TabBar } from './tiles/TabBar'
+import { TileTabsModal } from './tiles/TileTabsModal'
+import { TileTabsView } from './tiles/TileTabsView'
 import { TileTree } from './tiles/TileTree'
 import { useKeybinds } from './tiles/useKeybinds'
 import { useWorkspace } from './tiles/workspaceStore'
@@ -33,6 +35,7 @@ export default function App() {
   const [pathPickerOpen, setPathPickerOpen] = useState(false)
   const [pathPickerDefault, setPathPickerDefault] = useState('')
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [tileTabsModalOpen, setTileTabsModalOpen] = useState(false)
   const [gitBarOpen, setGitBarOpen] = useState(false)
   const [debugPanelOpen, setDebugPanelOpen] = useState(false)
   // Feed-side "rich rendering" opt-in. Off by default per user
@@ -108,6 +111,10 @@ export default function App() {
     setCommandPaletteOpen(prev => !prev)
   }, [])
 
+  const onTileTabsRequest = useCallback(() => {
+    setTileTabsModalOpen(true)
+  }, [])
+
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
   const { state, activeTab } = workspace
@@ -145,11 +152,14 @@ export default function App() {
       */}
       <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
         <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
-          {activeTab ? (
+          {workspace.tileTabs ? (
+            <TileTabsView workspace={workspace} />
+          ) : activeTab ? (
             workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
               <SpotlightView workspace={workspace} />
             ) : (
               <TileTree
+                tabId={activeTab.id}
                 node={activeTab.root}
                 focusedSessionId={activeTab.focusedSessionId}
                 workspace={workspace}
@@ -189,6 +199,7 @@ export default function App() {
         onResumeRequest={onResumeRequest}
         toggleGitBar={() => setGitBarOpen(prev => !prev)}
         toggleDebugPanel={() => setDebugPanelOpen(prev => !prev)}
+        onTileTabsRequest={onTileTabsRequest}
         toggleCustomRendering={toggleCustomRendering}
         customRenderingEnabled={customRendering}
       />
@@ -199,6 +210,19 @@ export default function App() {
         onCancel={() => setPathPickerOpen(false)}
         onAccept={onPathPickerAccept}
         onResume={onPathPickerResume}
+      />
+
+      <TileTabsModal
+        open={tileTabsModalOpen}
+        tabs={workspace.state.tabs.map(tab => ({ id: tab.id, title: tab.title }))}
+        initialSelectedIds={
+          workspace.tileTabs?.tabIds ?? (activeTab ? [activeTab.id] : [])
+        }
+        onCancel={() => setTileTabsModalOpen(false)}
+        onConfirm={tabIds => {
+          workspace.openTileTabs(tabIds)
+          setTileTabsModalOpen(false)
+        }}
       />
     </div>
     </CustomRenderingContext.Provider>

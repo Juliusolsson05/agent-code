@@ -3,7 +3,7 @@ import { useCallback, useRef } from 'react'
 import { getRendererProvider } from '../../../providers/registry.renderer'
 import { TerminalLeaf } from './TerminalLeaf'
 import type { Workspace } from './workspaceStore'
-import type { SessionId, TileNode } from './types'
+import type { SessionId, TabId, TileNode } from './types'
 import { collectLeaves } from './treeOps'
 
 // TileTree — recursive renderer for a tab's binary-split tree.
@@ -13,14 +13,15 @@ import { collectLeaves } from './treeOps'
 // arbitrary split nesting Just Work — the tree is literally the layout.
 
 type Props = {
+  tabId: TabId
   node: TileNode
   focusedSessionId: SessionId
   workspace: Workspace
 }
 
-export function TileTree({ node, focusedSessionId, workspace }: Props) {
+export function TileTree({ tabId, node, focusedSessionId, workspace }: Props) {
   if (node.type === 'leaf') {
-    return renderWorkspaceLeaf(node.sessionId, focusedSessionId, workspace)
+    return renderWorkspaceLeaf(node.sessionId, focusedSessionId, workspace, tabId)
   }
 
   return (
@@ -29,6 +30,7 @@ export function TileTree({ node, focusedSessionId, workspace }: Props) {
       ratio={node.ratio}
       a={
         <TileTree
+          tabId={tabId}
           node={node.a}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
@@ -36,6 +38,7 @@ export function TileTree({ node, focusedSessionId, workspace }: Props) {
       }
       b={
         <TileTree
+          tabId={tabId}
           node={node.b}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
@@ -46,6 +49,7 @@ export function TileTree({ node, focusedSessionId, workspace }: Props) {
       // identity for this split.
       aSessionId={firstLeafId(node.a)}
       bSessionId={firstLeafId(node.b)}
+      tabId={tabId}
       workspace={workspace}
     />
   )
@@ -55,6 +59,7 @@ export function renderWorkspaceLeaf(
   sessionId: SessionId,
   focusedSessionId: SessionId,
   workspace: Workspace,
+  tabId: TabId = workspace.state.activeTabId,
 ) {
   const meta = workspace.state.sessions[sessionId]
   const kind = meta?.kind ?? 'claude'
@@ -64,7 +69,7 @@ export function renderWorkspaceLeaf(
       <TerminalLeaf
         sessionId={sessionId}
         focused={sessionId === focusedSessionId}
-        onFocusRequest={() => workspace.focusSession(sessionId)}
+        onFocusRequest={() => workspace.focusSessionInTab(tabId, sessionId)}
         workspace={workspace}
       />
     )
@@ -78,7 +83,7 @@ export function renderWorkspaceLeaf(
       sessionId={sessionId}
       runtime={runtime}
       focused={sessionId === focusedSessionId}
-      onFocusRequest={() => workspace.focusSession(sessionId)}
+      onFocusRequest={() => workspace.focusSessionInTab(tabId, sessionId)}
       workspace={workspace}
     />
   )
@@ -93,6 +98,7 @@ function firstLeafId(n: TileNode): SessionId {
 // ---------------------------------------------------------------------------
 
 type SplitProps = {
+  tabId: TabId
   direction: 'vertical' | 'horizontal'
   ratio: number
   a: React.ReactNode
@@ -109,6 +115,7 @@ function SplitContainer({
   b,
   aSessionId,
   bSessionId,
+  tabId,
   workspace,
 }: SplitProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -138,7 +145,7 @@ function SplitContainer({
         const rel = isVertical
           ? (ev.clientX - rect.left) / rect.width
           : (ev.clientY - rect.top) / rect.height
-        workspace.setSplitRatio(aSessionId, bSessionId, rel)
+        workspace.setSplitRatioInTab(tabId, aSessionId, bSessionId, rel)
       }
       const onUp = () => {
         document.removeEventListener('mousemove', onMove)
@@ -147,7 +154,7 @@ function SplitContainer({
       document.addEventListener('mousemove', onMove)
       document.addEventListener('mouseup', onUp)
     },
-    [aSessionId, bSessionId, isVertical, workspace],
+    [aSessionId, bSessionId, isVertical, tabId, workspace],
   )
 
   return (

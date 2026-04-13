@@ -27,6 +27,7 @@ export type CommandContext = {
   workspace: Workspace
   onNewTabRequest: () => void
   onResumeRequest: (defaultCwd: string) => void
+  onTileTabsRequest: () => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
   toggleCustomRendering: () => void
@@ -182,6 +183,16 @@ export function buildCommands(): CommandDef[] {
       action: ({ workspace }) => workspace.toggleSpotlight(),
     },
     {
+      id: 'tile-tabs',
+      label: 'Tile Tabs',
+      action: ({ onTileTabsRequest }) => onTileTabsRequest(),
+    },
+    {
+      id: 'exit-tiled-tabs',
+      label: 'Exit Tiled Tabs',
+      action: ({ workspace }) => workspace.closeTileTabs(),
+    },
+    {
       id: 'copy-last-assistant',
       label: 'Copy Last Response',
       action: ({ workspace }) => {
@@ -229,6 +240,7 @@ type Props = {
   workspace: Workspace
   onNewTabRequest: () => void
   onResumeRequest: (defaultCwd: string) => void
+  onTileTabsRequest: () => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
   toggleCustomRendering: () => void
@@ -241,6 +253,7 @@ export function CommandPalette({
   workspace,
   onNewTabRequest,
   onResumeRequest,
+  onTileTabsRequest,
   toggleGitBar,
   toggleDebugPanel,
   toggleCustomRendering,
@@ -337,6 +350,7 @@ export function CommandPalette({
         workspace,
         onNewTabRequest,
         onResumeRequest,
+        onTileTabsRequest,
         toggleGitBar,
         toggleDebugPanel,
         toggleCustomRendering,
@@ -352,7 +366,7 @@ export function CommandPalette({
       onClose()
       void cmd.action(ctx)
     },
-    [workspace, onNewTabRequest, onResumeRequest, toggleGitBar, toggleDebugPanel, toggleCustomRendering, customRenderingEnabled, enterResumeMode, onClose],
+    [workspace, onNewTabRequest, onResumeRequest, onTileTabsRequest, toggleGitBar, toggleDebugPanel, toggleCustomRendering, customRenderingEnabled, enterResumeMode, onClose],
   )
 
   const executeResume = useCallback(

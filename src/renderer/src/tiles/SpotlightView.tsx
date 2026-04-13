@@ -47,7 +47,12 @@ export function SpotlightView({ workspace }: Props) {
         </div>
       </div>
       <div className="flex-1 min-h-0 min-w-0">
-        {renderWorkspaceLeaf(focusedSessionId, focusedSessionId, workspace)}
+        {renderWorkspaceLeaf(
+          focusedSessionId,
+          focusedSessionId,
+          workspace,
+          activeTab.id,
+        )}
       </div>
     </div>
   )
