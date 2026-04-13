@@ -141,9 +141,19 @@ export class ClaudeSession extends EventEmitter {
     this.headless.on('jsonl-error', err =>
       this.emit('jsonl-error', err),
     )
-    this.headless.on('process-state', state =>
-      this.emit('process-state', state),
-    )
+    // Activity detection — derive process-state from the screen-based
+    // spinner. CC's caffeinate-based ProcessInspector was stripped from
+    // the headless package because caffeinate isn't reliably spawned
+    // (fast turns skip it) and parent-shell caffeinates caused false
+    // positives. Screen-spinner detection is the same signal Codex
+    // uses; emitting process-state with the same shape keeps the
+    // SessionManager / IPC / renderer wiring unchanged.
+    this.headless.on('activity', () => {
+      this.emit('process-state', { active: true })
+    })
+    this.headless.on('idle', () => {
+      this.emit('process-state', { active: false })
+    })
     this.headless.on('trust-dialog', state =>
       this.emit('trust-dialog', state),
     )
