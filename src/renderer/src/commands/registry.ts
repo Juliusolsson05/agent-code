@@ -6,6 +6,7 @@ import { settingsCommands } from '../features/settings/commands/settingsCommands
 import { spotlightCommands } from '../features/spotlight/commands/spotlightCommands'
 import { tileTabsCommands } from '../features/tile-tabs/commands/tileTabsCommands'
 import { readerCommands } from '../features/reader/commands/readerCommands'
+import { copyAssistantCommands } from '../features/copy-assistant/commands/copyAssistantCommands'
 import type { CommandContext, CommandDef, ResolvedCommand } from './types'
 
 const commandDefs: CommandDef[] = [
@@ -17,6 +18,7 @@ const commandDefs: CommandDef[] = [
   ...readerCommands,
   ...tileTabsCommands,
   ...settingsCommands,
+  ...copyAssistantCommands,
 ]
 
 export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {

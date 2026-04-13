@@ -691,6 +691,7 @@ export function TileLeaf({
           streamingBaseline={runtime.streamingBaseline}
           activityStatus={runtime.activityStatus}
           tailMode={runtime.tailMode}
+          pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
           showSystemEvents={false}
           onScrollInfo={onScrollInfo}
         />

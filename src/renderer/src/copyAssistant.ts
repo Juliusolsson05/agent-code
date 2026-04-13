@@ -55,3 +55,8 @@ function extractClaude(entries: readonly Entry[]): string | null {
   }
   return null
 }
+
+export {
+  extractAssistantByUuid,
+  assistantUuidsWithText,
+} from './features/copy-assistant/lib/extractAssistantByUuid'

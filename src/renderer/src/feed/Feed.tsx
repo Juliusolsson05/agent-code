@@ -321,6 +321,13 @@ type Props = {
    *  streaming row with the actual verb CC is displaying. */
   activityStatus?: string | null
   tailMode?: boolean
+  /**
+   * UUID of the assistant entry currently highlighted by the
+   * "Copy Assistant Message" picker. Null when the picker is not
+   * active. Drives a 2px accent outline on the matching row and
+   * auto-scrolls into view when the value changes.
+   */
+  pickerSelectedUuid?: string | null
   showSystemEvents: boolean
   workspaceRoot?: string | null
   /** Called on every scroll tick with the current position. */
@@ -418,6 +425,7 @@ function FeedImpl({
   streamingBaseline,
   activityStatus,
   tailMode = false,
+  pickerSelectedUuid = null,
   showSystemEvents,
   workspaceRoot = null,
   onScrollInfo,
@@ -576,6 +584,22 @@ function FeedImpl({
     if (el) el.scrollTop = el.scrollHeight
   }, [entries.length, streamingScreen, tailMode])
 
+  // When the picker selection changes, scroll the highlighted entry
+  // into view. Uses scrollIntoView({block: 'nearest'}) so we don't
+  // jump for entries already visible — only when the selection
+  // moves off-screen.
+  useEffect(() => {
+    if (!pickerSelectedUuid) return
+    const root = scrollerRef.current
+    if (!root) return
+    const target = root.querySelector(
+      `[data-entry-uuid="${pickerSelectedUuid}"]`,
+    ) as HTMLElement | null
+    if (target) {
+      target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    }
+  }, [pickerSelectedUuid])
+
   // Visible entries = all entries if system events are shown, otherwise
   // skip attachment / permission-mode / file-history-snapshot AND
   // isMeta entries. isMeta entries are CC's system-injected user-role
@@ -626,7 +650,8 @@ function FeedImpl({
       >
         <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
           {visible.map((e, i) => {
-            const key = (e as Entry).uuid ?? `i${i}`
+            const uuid = (e as Entry).uuid
+            const key = uuid ?? `i${i}`
             // The last EAGER_TAIL entries render immediately — they're
             // in or near the current viewport (the user sees the bottom
             // of the feed on load). Everything above starts as a
@@ -635,10 +660,25 @@ function FeedImpl({
             // keeps re-renders free and we avoid the re-parse cost
             // that virtualization (unmount→remount) would cause.
             const eager = i >= visible.length - EAGER_TAIL
+            const selected =
+              pickerSelectedUuid != null && uuid === pickerSelectedUuid
+            // Wrapper carries the uuid attribute (for scrollIntoView
+            // lookup) and the outline class when selected by the
+            // Copy Assistant picker.
             return (
-              <LazyEntry key={key} eager={eager} scrollerRef={scrollerRef}>
-                <EntryRow entry={e} />
-              </LazyEntry>
+              <div
+                key={key}
+                data-entry-uuid={uuid ?? undefined}
+                className={
+                  selected
+                    ? 'outline outline-2 outline-accent outline-offset-2 transition-[outline-color] duration-150'
+                    : undefined
+                }
+              >
+                <LazyEntry eager={eager} scrollerRef={scrollerRef}>
+                  <EntryRow entry={e} />
+                </LazyEntry>
+              </div>
             )
           })}
           {streamingScreen != null && (

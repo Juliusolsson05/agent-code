@@ -73,6 +73,45 @@ export function useKeybinds(
         return
       }
 
+      // --- Copy Assistant picker (Up/Down/Enter/Esc) ---
+      //
+      // Active when the focused pane's runtime has assistantPicker set.
+      // Capture all four keys here so the focused composer doesn't
+      // receive them. Picker dismisses on Enter (after copy) and Esc
+      // (without copy); arrow keys move the selection. Lives BEFORE
+      // the Spotlight Esc handler so picker-Esc wins when both modes
+      // are active (shouldn't happen — picker is feed-only — but the
+      // ordering keeps the intent local).
+      const focusedSessionId = workspace.activeTab?.focusedSessionId
+      const picker = focusedSessionId
+        ? workspace.runtimes[focusedSessionId]?.assistantPicker
+        : null
+      if (picker && focusedSessionId) {
+        if (k === 'ArrowUp') {
+          e.preventDefault()
+          workspace.pickerMove(focusedSessionId, -1)
+          return
+        }
+        if (k === 'ArrowDown') {
+          e.preventDefault()
+          workspace.pickerMove(focusedSessionId, +1)
+          return
+        }
+        if (k === 'Enter') {
+          e.preventDefault()
+          void workspace.pickerConfirm(focusedSessionId)
+          return
+        }
+        if (k === 'Escape') {
+          e.preventDefault()
+          workspace.pickerCancel(focusedSessionId)
+          return
+        }
+        // Other keys fall through — typing into the composer doesn't
+        // cancel the picker. If we want "any keystroke cancels",
+        // that's a one-line follow-up.
+      }
+
       if (k === 'Escape' && workspace.spotlight) {
         e.preventDefault()
         workspace.toggleSpotlight()
