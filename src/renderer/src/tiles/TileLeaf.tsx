@@ -12,7 +12,7 @@ import type { ScrollInfo } from '../feed/Feed'
 import { TrustDialogModal } from '../../../providers/claude/renderer/TrustDialogModal'
 import { SlashCommandPicker } from '../../../providers/claude/renderer/SlashCommandPicker'
 import type { SessionRuntime, Workspace } from './workspaceStore'
-import type { SessionId } from './types'
+import type { SessionId, SessionKind } from './types'
 
 // TileLeaf — one pane. A "mini cc-shell" self-contained in a box:
 //   header strip (project dir + status)
@@ -690,6 +690,7 @@ export function TileLeaf({
           }
           streamingBaseline={runtime.streamingBaseline}
           activityStatus={runtime.activityStatus}
+          tailMode={runtime.tailMode}
           showSystemEvents={false}
           onScrollInfo={onScrollInfo}
         />
@@ -805,12 +806,22 @@ export function TileLeaf({
           extreme bottom there's still an entry on screen. */}
       {runtime.entries.length > 0 && (
         <div className="flex-shrink-0 flex justify-end px-3 leading-none">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-code text-muted">
+              {providerLabel(workspace.state.sessions[sessionId]?.kind)}
+            </span>
+            {runtime.tailMode && (
+              <span className="text-[10px] font-code uppercase tracking-wider text-accent">
+                TAIL
+              </span>
+            )}
           <span className="text-[12px] font-code tabular-nums text-accent">
             {Math.max(
               1,
               Math.ceil((1 - scrollFraction) * runtime.entries.length),
             )}/{runtime.entries.length}
           </span>
+          </div>
         </div>
       )}
 
@@ -897,4 +908,16 @@ function shortenCwd(cwd: string | null): string {
   const parts = cwd.split('/').filter(Boolean)
   if (parts.length <= 2) return '/' + parts.join('/')
   return '…/' + parts.slice(-2).join('/')
+}
+
+function providerLabel(kind: SessionKind | undefined): string {
+  switch (kind) {
+    case 'codex':
+      return 'Codex'
+    case 'terminal':
+      return 'Terminal'
+    case 'claude':
+    default:
+      return 'Claude Code'
+  }
 }

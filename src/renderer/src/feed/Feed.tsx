@@ -320,6 +320,7 @@ type Props = {
    *  of the feed and to enrich the "thinking…" fallback in the
    *  streaming row with the actual verb CC is displaying. */
   activityStatus?: string | null
+  tailMode?: boolean
   showSystemEvents: boolean
   workspaceRoot?: string | null
   /** Called on every scroll tick with the current position. */
@@ -416,6 +417,7 @@ function FeedImpl({
   streamingScreenMarkdown,
   streamingBaseline,
   activityStatus,
+  tailMode = false,
   showSystemEvents,
   workspaceRoot = null,
   onScrollInfo,
@@ -490,6 +492,11 @@ function FeedImpl({
   useLayoutEffect(() => {
     const el = scrollerRef.current
     if (!el) return
+    if (tailMode) {
+      el.scrollTop = el.scrollHeight
+      stickyBottomRef.current = true
+      return
+    }
     const saved = scrollPositions.get(sessionId)
     if (!saved || saved.stickyBottom) {
       // Case 1 or 2: pin to bottom. We do this synchronously in
@@ -506,7 +513,7 @@ function FeedImpl({
       el.scrollTop = saved.scrollTop
       stickyBottomRef.current = false
     }
-  }, [sessionId])
+  }, [sessionId, tailMode])
 
   // One scroll listener for the container. Updates stickyBottomRef
   // imperatively AND persists the position into the module-level
@@ -525,6 +532,16 @@ function FeedImpl({
     const el = scrollerRef.current
     if (!el) return
     const onScroll = () => {
+      if (tailMode) {
+        el.scrollTop = el.scrollHeight
+        stickyBottomRef.current = true
+        scrollPositions.set(sessionId, {
+          scrollTop: el.scrollTop,
+          stickyBottom: true,
+        })
+        if (onScrollInfo) onScrollInfo({ fraction: 0 })
+        return
+      }
       const gap = el.scrollHeight - (el.scrollTop + el.clientHeight)
       stickyBottomRef.current = gap < 48
       scrollPositions.set(sessionId, {
@@ -543,7 +560,7 @@ function FeedImpl({
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [sessionId, onScrollInfo])
+  }, [sessionId, onScrollInfo, tailMode])
 
   // Auto-scroll on content changes, but ONLY when sticky. The effect
   // runs on every change that would grow the feed (a new entry) or
@@ -551,13 +568,13 @@ function FeedImpl({
   // user is scrolled up, we skip — they're reading earlier content
   // and we don't want to yank them back.
   useEffect(() => {
-    if (!stickyBottomRef.current) return
+    if (!tailMode && !stickyBottomRef.current) return
     // scrollTop = scrollHeight pins to bottom without the smooth-scroll
     // overshoot scrollIntoView sometimes produces. Direct, instant,
     // no animation frames.
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [entries.length, streamingScreen])
+  }, [entries.length, streamingScreen, tailMode])
 
   // Visible entries = all entries if system events are shown, otherwise
   // skip attachment / permission-mode / file-history-snapshot AND
@@ -592,7 +609,7 @@ function FeedImpl({
     return (
       <div className="h-full flex items-center justify-center">
         <div className="text-muted text-[12px]">
-          waiting for Claude Code…
+          {provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'}
         </div>
       </div>
     )
