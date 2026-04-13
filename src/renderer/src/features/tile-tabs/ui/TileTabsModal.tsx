@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import type { TabId } from './types'
+import type { TabId } from '../../../tiles/types'
 
 type TileTabOption = {
   id: TabId
@@ -23,11 +23,23 @@ export function TileTabsModal({
   onConfirm,
 }: Props) {
   const [selected, setSelected] = useState<TabId[]>(initialSelectedIds)
+  const wasOpenRef = useRef(false)
+
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      setSelected(initialSelectedIds)
+    }
+    wasOpenRef.current = open
+  }, [open, initialSelectedIds])
 
   useEffect(() => {
     if (!open) return
-    setSelected(initialSelectedIds)
-  }, [open, initialSelectedIds])
+    const validIds = new Set(tabs.map(tab => tab.id))
+    setSelected(prev => {
+      const next = prev.filter(id => validIds.has(id))
+      return next.length === prev.length ? prev : next
+    })
+  }, [open, tabs])
 
   const selectedSet = useMemo(() => new Set(selected), [selected])
 

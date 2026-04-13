@@ -1,0 +1,102 @@
+import { extractLastAssistantText } from '../../../copyAssistant'
+import type { CommandDef } from '../../../commands/types'
+
+export const paneCommands: CommandDef[] = [
+  {
+    id: 'split-vertical',
+    title: 'Split Pane Right',
+    shortcut: '⌥D',
+    run: ({ workspace }) => void workspace.splitFocused('vertical'),
+  },
+  {
+    id: 'split-horizontal',
+    title: 'Split Pane Down',
+    shortcut: '⌥⇧D',
+    run: ({ workspace }) => void workspace.splitFocused('horizontal'),
+  },
+  {
+    id: 'close-pane',
+    title: 'Close Pane',
+    shortcut: '⌘W',
+    run: ({ workspace }) => void workspace.closeFocused(),
+  },
+  {
+    id: 'terminal-horizontal',
+    title: 'New Terminal Right',
+    shortcut: '⌥T',
+    run: ({ workspace }) => void workspace.splitFocused('vertical', 'terminal'),
+  },
+  {
+    id: 'terminal-vertical',
+    title: 'New Terminal Below',
+    shortcut: '⌥⇧T',
+    run: ({ workspace }) => void workspace.splitFocused('horizontal', 'terminal'),
+  },
+  {
+    id: 'codex-vertical',
+    title: 'New Codex Right',
+    shortcut: '⌥C',
+    run: ({ workspace }) => void workspace.splitFocused('vertical', 'codex'),
+  },
+  {
+    id: 'codex-horizontal',
+    title: 'New Codex Below',
+    shortcut: '⌥⇧C',
+    run: ({ workspace }) => void workspace.splitFocused('horizontal', 'codex'),
+  },
+  {
+    id: 'nav-left',
+    title: 'Focus Pane Left',
+    shortcut: '⌥H',
+    run: ({ workspace }) => workspace.navigate('left'),
+  },
+  {
+    id: 'nav-right',
+    title: 'Focus Pane Right',
+    shortcut: '⌥L',
+    run: ({ workspace }) => workspace.navigate('right'),
+  },
+  {
+    id: 'nav-up',
+    title: 'Focus Pane Up',
+    shortcut: '⌥K',
+    run: ({ workspace }) => workspace.navigate('up'),
+  },
+  {
+    id: 'nav-down',
+    title: 'Focus Pane Down',
+    shortcut: '⌥J',
+    run: ({ workspace }) => workspace.navigate('down'),
+  },
+  {
+    id: 'undo-close',
+    title: 'Undo Close',
+    shortcut: '⌘⇧T',
+    run: ({ workspace }) => void workspace.undoClose(),
+  },
+  {
+    id: 'toggle-tail',
+    title: 'Toggle Tail',
+    run: ({ workspace }) => {
+      const tab = workspace.activeTab
+      if (!tab) return
+      workspace.toggleTailMode(tab.focusedSessionId)
+    },
+  },
+  {
+    id: 'copy-last-assistant',
+    title: 'Copy Last Response',
+    run: ({ workspace }) => {
+      const tab = workspace.activeTab
+      if (!tab) return
+      const sessionId = tab.focusedSessionId
+      const runtime = workspace.getRuntime(sessionId)
+      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      const text = extractLastAssistantText(runtime.entries, kind)
+      if (text) {
+        void navigator.clipboard.writeText(text)
+        workspace.showPaneToast(sessionId, 'Copied to clipboard')
+      }
+    },
+  },
+]

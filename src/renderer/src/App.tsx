@@ -3,17 +3,24 @@ import { useCallback, useEffect, useState } from 'react'
 import { CommandPalette } from './CommandPalette'
 import { CustomRenderingContext } from './CustomRenderingContext'
 import { DebugPanel } from './DebugPanel'
+import { SettingsPage } from './features/settings/ui/SettingsPage'
+import { SpotlightView } from './features/spotlight/ui/SpotlightView'
+import { ReaderView } from './features/reader/ui/ReaderView'
+import { TileTabsModal } from './features/tile-tabs/ui/TileTabsModal'
+import { TileTabsView } from './features/tile-tabs/ui/TileTabsView'
+import {
+  applyTheme,
+  loadSettings,
+  type Settings,
+} from './features/settings/state/settingsBridge'
 import { GitBar } from './GitBar'
 import { ThemePicker } from './feed/ThemePicker'
 import { PathPickerModal } from './tiles/PathPickerModal'
-import { SpotlightView } from './tiles/SpotlightView'
 import { TabBar } from './tiles/TabBar'
-import { TileTabsModal } from './tiles/TileTabsModal'
-import { TileTabsView } from './tiles/TileTabsView'
 import { TileTree } from './tiles/TileTree'
+import type { TabId } from './tiles/types'
 import { useKeybinds } from './tiles/useKeybinds'
 import { useWorkspace } from './tiles/workspaceStore'
-import { applyTheme, loadSettings, type Settings } from './themes'
 
 // App — thin shell around the workspace hook.
 //
@@ -36,6 +43,8 @@ export default function App() {
   const [pathPickerDefault, setPathPickerDefault] = useState('')
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [tileTabsModalOpen, setTileTabsModalOpen] = useState(false)
+  const [tileTabsInitialSelectedIds, setTileTabsInitialSelectedIds] = useState<TabId[]>([])
+  const [settingsPageOpen, setSettingsPageOpen] = useState(false)
   const [gitBarOpen, setGitBarOpen] = useState(false)
   const [debugPanelOpen, setDebugPanelOpen] = useState(false)
   // Feed-side "rich rendering" opt-in. Off by default per user
@@ -112,8 +121,11 @@ export default function App() {
   }, [])
 
   const onTileTabsRequest = useCallback(() => {
+    setTileTabsInitialSelectedIds(
+      workspace.tileTabs?.tabIds ?? (workspace.activeTab ? [workspace.activeTab.id] : []),
+    )
     setTileTabsModalOpen(true)
-  }, [])
+  }, [workspace.activeTab, workspace.tileTabs])
 
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
@@ -155,7 +167,14 @@ export default function App() {
           {workspace.tileTabs ? (
             <TileTabsView workspace={workspace} />
           ) : activeTab ? (
-            workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
+            // Mode dispatch: ReaderMode beats Spotlight (it's the
+            // narrower, more focused view); Spotlight beats the
+            // default tree. Each is mutually exclusive — entering
+            // any of them clears the others (see toggleReaderMode /
+            // toggleSpotlight in workspaceStore).
+            workspace.readerMode && workspace.readerMode.tabId === activeTab.id ? (
+              <ReaderView workspace={workspace} />
+            ) : workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
               <SpotlightView workspace={workspace} />
             ) : (
               <TileTree
@@ -200,6 +219,7 @@ export default function App() {
         toggleGitBar={() => setGitBarOpen(prev => !prev)}
         toggleDebugPanel={() => setDebugPanelOpen(prev => !prev)}
         onTileTabsRequest={onTileTabsRequest}
+        onSettingsRequest={() => setSettingsPageOpen(true)}
         toggleCustomRendering={toggleCustomRendering}
         customRenderingEnabled={customRendering}
       />
@@ -215,14 +235,17 @@ export default function App() {
       <TileTabsModal
         open={tileTabsModalOpen}
         tabs={workspace.state.tabs.map(tab => ({ id: tab.id, title: tab.title }))}
-        initialSelectedIds={
-          workspace.tileTabs?.tabIds ?? (activeTab ? [activeTab.id] : [])
-        }
+        initialSelectedIds={tileTabsInitialSelectedIds}
         onCancel={() => setTileTabsModalOpen(false)}
         onConfirm={tabIds => {
           workspace.openTileTabs(tabIds)
           setTileTabsModalOpen(false)
         }}
+      />
+
+      <SettingsPage
+        open={settingsPageOpen}
+        onClose={() => setSettingsPageOpen(false)}
       />
     </div>
     </CustomRenderingContext.Provider>

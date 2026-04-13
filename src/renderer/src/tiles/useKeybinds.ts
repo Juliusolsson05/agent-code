@@ -79,6 +79,15 @@ export function useKeybinds(
         return
       }
 
+      // Esc also exits Reader Mode. Same one-key dismiss pattern as
+      // Spotlight — both are read-only "fullscreen" overlays the user
+      // expects to bail out of with Escape.
+      if (k === 'Escape' && workspace.readerMode) {
+        e.preventDefault()
+        workspace.toggleReaderMode()
+        return
+      }
+
       // --- CMD: undo close (⌘⇧T) ---
       // Same shortcut as Chrome's "reopen closed tab". Pops the most
       // recent entry from the undo-close stack and restores it — either

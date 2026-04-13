@@ -190,6 +190,8 @@ export type SessionRuntime = {
     statusText?: string
     errorText?: string
   } | null
+  /** Force the feed to stay pinned to newest output, like tail -f. */
+  tailMode: boolean
 }
 
 const emptyRuntime = (): SessionRuntime => ({
@@ -211,6 +213,7 @@ const emptyRuntime = (): SessionRuntime => ({
   pendingTrustDialog: null,
   pendingResumePrompt: null,
   pendingCompaction: null,
+  tailMode: false,
 })
 
 function isCodexRolloutEntry(entry: Record<string, unknown>): boolean {
@@ -711,6 +714,19 @@ export function useWorkspace() {
     },
     [runtimes],
   )
+
+  const toggleTailMode = useCallback((sessionId: SessionId) => {
+    setRuntimes(prev => {
+      const current = prev[sessionId] ?? emptyRuntime()
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          tailMode: !current.tailMode,
+        },
+      }
+    })
+  }, [])
 
   // ---- IPC subscription: dispatch all session events to the right runtime ----
   //
@@ -2485,6 +2501,7 @@ export function useWorkspace() {
     focusTiledTabByIndex,
     resizeFocusedTiledTab,
     resizeTiledTabByIndex,
+    toggleTailMode,
   }
 }
 

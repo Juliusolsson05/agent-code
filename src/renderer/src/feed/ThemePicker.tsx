@@ -6,7 +6,7 @@ import {
   type AccentId,
   type Settings,
   type ThemeMode,
-} from '../themes'
+} from '../features/settings/state/settingsBridge'
 
 // Settings menu — a small button in the header that opens a floating
 // panel with: mode toggle (dark/light), accent color swatches, and a

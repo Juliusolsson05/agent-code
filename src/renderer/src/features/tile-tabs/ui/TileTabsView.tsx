@@ -1,5 +1,5 @@
-import { TileTree } from './TileTree'
-import type { Workspace } from './workspaceStore'
+import { TileTree } from '../../../tiles/TileTree'
+import type { Workspace } from '../../../tiles/workspaceStore'
 
 type Props = {
   workspace: Workspace
