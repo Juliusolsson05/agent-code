@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { CodeBlock } from '../../../code/CodeBlock'
+import { CodeRenderContext } from '../../../feed/Feed'
 import { extractAssistantInProgress } from '../../../../../shared/parsers/extractAssistant'
 import { extractLastAssistantText } from '../../../copyAssistant'
 import { collectLeaves } from '../../../tiles/treeOps'
@@ -22,6 +24,57 @@ import type { SessionId, Workspace } from '../../../tiles/workspaceStore'
 // which session they're reading without leaving Reader Mode.
 
 const REMARK_PLUGINS = [remarkGfm]
+
+// Markdown renderer pieces — mirrored from Feed.tsx so the typography
+// in Reader matches an assistant message in the normal feed exactly.
+//
+// Keeping local copies (instead of importing MARKDOWN_COMPONENTS from
+// Feed) because Feed doesn't export them and pulling them out right
+// now would collide with the in-flight features/ refactor. When that
+// refactor lands we should consolidate this into a shared
+// assistantMarkdown.tsx module that Feed also consumes — tracked as
+// a follow-up on the Reader plan.
+function MarkdownPre({ children }: { children?: ReactNode }) {
+  // Strip the default <pre> wrapper — MarkdownCode below renders
+  // fenced blocks via CodeBlock directly, so we don't want the
+  // browser's default <pre> styling nested around our component.
+  return <>{children}</>
+}
+
+function MarkdownCode({
+  className,
+  children,
+}: {
+  className?: string
+  children?: ReactNode
+}) {
+  const { sessionId, workspaceRoot } = useContext(CodeRenderContext)
+  const text = String(children ?? '').replace(/\n$/, '')
+  const language = className?.match(/language-([\w-]+)/)?.[1] ?? null
+
+  // Inline code: no language AND no newlines → plain <code>, styled
+  // by the prose theme (accent color, no background chip).
+  const isInline = !language && !text.includes('\n')
+  if (isInline) {
+    return <code>{children}</code>
+  }
+
+  return (
+    <CodeBlock
+      code={text}
+      language={language}
+      workspaceRoot={workspaceRoot}
+      codeId={`${sessionId}:${text.slice(0, 24)}`}
+      engine="monaco"
+      allowAutoDetect={!language}
+    />
+  )
+}
+
+const MARKDOWN_COMPONENTS: import('react-markdown').Options['components'] = {
+  pre: MarkdownPre,
+  code: MarkdownCode,
+}
 
 type Props = {
   workspace: Workspace
@@ -100,6 +153,7 @@ function ReaderBody({
   const runtime = workspace.getRuntime(sessionId)
   const meta = workspace.state.sessions[sessionId]
   const provider = (meta?.kind === 'codex') ? 'codex' : 'claude'
+  const workspaceRoot = meta?.cwd ?? null
 
   // Live text resolver.
   //
@@ -111,8 +165,8 @@ function ReaderBody({
   //     idle sessions and the source-of-truth once the turn finishes.
   //
   // Computing both each render is cheap; the bigger render cost is
-  // ReactMarkdown, so we memo the chosen text and only re-parse when
-  // it actually changes.
+  // ReactMarkdown (code blocks especially), so we memo the chosen
+  // text and only re-parse when it actually changes.
   const text = useMemo<string | null>(() => {
     if (runtime.awaitingAssistant && runtime.recentScreen) {
       const live = extractAssistantInProgress(runtime.recentScreen, provider)
@@ -153,20 +207,27 @@ function ReaderBody({
   }
 
   return (
-    <div
-      ref={scrollerRef}
-      onScroll={onScroll}
-      className="flex-1 min-h-0 min-w-0 overflow-auto"
-    >
-      {/* Centered narrow column for readability. max-w-3xl keeps line
-          length around 80ch which is the usual sweet spot for prose. */}
-      <article className="
-        mx-auto max-w-3xl px-8 py-10
-        text-ink text-[15px] leading-[1.7]
-      ">
-        <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{text}</ReactMarkdown>
-      </article>
-    </div>
+    <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
+      <div
+        ref={scrollerRef}
+        onScroll={onScroll}
+        className="flex-1 min-h-0 min-w-0 overflow-auto"
+      >
+        {/* Centered narrow column for readability. max-w-3xl keeps line
+            length around 80ch which is the usual sweet spot for prose. */}
+        <article className="
+          mx-auto max-w-3xl px-8 py-10
+          text-ink text-[15px] leading-[1.7]
+        ">
+          <ReactMarkdown
+            remarkPlugins={REMARK_PLUGINS}
+            components={MARKDOWN_COMPONENTS}
+          >
+            {text}
+          </ReactMarkdown>
+        </article>
+      </div>
+    </CodeRenderContext.Provider>
   )
 }
 
