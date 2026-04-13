@@ -584,10 +584,22 @@ function FeedImpl({
     if (el) el.scrollTop = el.scrollHeight
   }, [entries.length, streamingScreen, tailMode])
 
-  // When the picker selection changes, scroll the highlighted entry
-  // into view. Uses scrollIntoView({block: 'nearest'}) so we don't
-  // jump for entries already visible — only when the selection
-  // moves off-screen.
+  // When the picker selection changes, smoothly tween the scroller
+  // so the highlighted entry centers in the viewport.
+  //
+  // We do NOT use native scrollIntoView({behavior:'smooth'}) because:
+  //   - With block:'nearest' it no-ops when the target is already on
+  //     screen, so rapid arrow presses after a manual scroll land on
+  //     already-visible entries and produce zero motion (user report:
+  //     "my arrow key does nothing after I scroll").
+  //   - With block:'center' native smooth scroll was observably shaky
+  //     here — the feed's own scroll listener fires on every frame of
+  //     the animation and was fighting the browser's scroll queue.
+  //
+  // A custom rAF tween is ~20 lines, interrupt-safe (new target
+  // cancels any in-flight animation), and completely independent of
+  // whatever the scroll listener is doing.
+  const scrollAnimFrameRef = useRef<number | null>(null)
   useEffect(() => {
     if (!pickerSelectedUuid) return
     const root = scrollerRef.current
@@ -595,8 +607,47 @@ function FeedImpl({
     const target = root.querySelector(
       `[data-entry-uuid="${pickerSelectedUuid}"]`,
     ) as HTMLElement | null
-    if (target) {
-      target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    if (!target) return
+
+    // Compute desired scrollTop so the target's vertical center aligns
+    // with the scroller's vertical center. Clamp to the scroller's
+    // scrollable range so we don't try to scroll past start/end.
+    const targetCenter = target.offsetTop + target.offsetHeight / 2
+    const desired = targetCenter - root.clientHeight / 2
+    const maxScroll = root.scrollHeight - root.clientHeight
+    const to = Math.max(0, Math.min(maxScroll, desired))
+    const from = root.scrollTop
+    const distance = to - from
+    if (Math.abs(distance) < 1) return
+
+    // Cancel any in-flight animation so rapid Up/Down presses don't
+    // compound into a runaway scroll.
+    if (scrollAnimFrameRef.current !== null) {
+      cancelAnimationFrame(scrollAnimFrameRef.current)
+      scrollAnimFrameRef.current = null
+    }
+
+    const duration = 180
+    const startTime = performance.now()
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3) // easeOutCubic
+
+    const step = (now: number) => {
+      const elapsed = now - startTime
+      const t = Math.min(1, elapsed / duration)
+      root.scrollTop = from + distance * ease(t)
+      if (t < 1) {
+        scrollAnimFrameRef.current = requestAnimationFrame(step)
+      } else {
+        scrollAnimFrameRef.current = null
+      }
+    }
+    scrollAnimFrameRef.current = requestAnimationFrame(step)
+
+    return () => {
+      if (scrollAnimFrameRef.current !== null) {
+        cancelAnimationFrame(scrollAnimFrameRef.current)
+        scrollAnimFrameRef.current = null
+      }
     }
   }, [pickerSelectedUuid])
 
