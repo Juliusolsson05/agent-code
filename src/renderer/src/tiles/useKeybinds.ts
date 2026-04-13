@@ -58,6 +58,8 @@ export function useKeybinds(
   onCommandPalette?: CommandPaletteToggle,
 ): void {
   useEffect(() => {
+    let pendingTiledResizeIndex: number | null = null
+
     const handler = (e: KeyboardEvent) => {
       const cmd = e.metaKey
       const alt = e.altKey
@@ -89,6 +91,30 @@ export function useKeybinds(
 
       // --- CMD: tab management ---
       if (cmd && !alt) {
+        if (workspace.tileTabs && pendingTiledResizeIndex !== null) {
+          if (k === 'ArrowLeft') {
+            e.preventDefault()
+            workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, -0.03)
+            return
+          }
+          if (k === 'ArrowRight') {
+            e.preventDefault()
+            workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, 0.03)
+            return
+          }
+          if (workspace.tileTabs.direction === 'horizontal') {
+            if (k === 'ArrowUp') {
+              e.preventDefault()
+              workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, -0.03)
+              return
+            }
+            if (k === 'ArrowDown') {
+              e.preventDefault()
+              workspace.resizeTiledTabByIndex(pendingTiledResizeIndex, 0.03)
+              return
+            }
+          }
+        }
         if (k === 't' && !shift) {
           e.preventDefault()
           void onNewTabRequest()
@@ -134,7 +160,12 @@ export function useKeybinds(
         const digit = parseInt(k, 10)
         if (!Number.isNaN(digit) && digit >= 1 && digit <= 9) {
           e.preventDefault()
-          workspace.activateTabByIndex(digit - 1)
+          if (workspace.tileTabs) {
+            pendingTiledResizeIndex = digit - 1
+            workspace.focusTiledTabByIndex(digit - 1)
+          } else {
+            workspace.activateTabByIndex(digit - 1)
+          }
           return
         }
       }
@@ -294,12 +325,24 @@ export function useKeybinds(
       }
     }
 
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Meta') pendingTiledResizeIndex = null
+    }
+
+    const onBlur = () => {
+      pendingTiledResizeIndex = null
+    }
+
     // capture: true — run BEFORE focused input sees the key. Without
     // this, the input would consume keys like 'd', 'h', etc. before
     // our handler fires.
     document.addEventListener('keydown', handler, { capture: true })
+    document.addEventListener('keyup', onKeyUp, { capture: true })
+    window.addEventListener('blur', onBlur)
     return () => {
       document.removeEventListener('keydown', handler, { capture: true })
+      document.removeEventListener('keyup', onKeyUp, { capture: true })
+      window.removeEventListener('blur', onBlur)
     }
-  }, [workspace, onNewTabRequest, onCommandPalette])
+  }, [workspace, onNewTabRequest, onResumeRequest, onCommandPalette])
 }

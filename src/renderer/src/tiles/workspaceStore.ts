@@ -624,6 +624,7 @@ type TileTabsState = {
   tabIds: TabId[]
   focusedTabId: TabId
   direction: SplitDirection
+  ratios: number[]
 }
 
 export function useWorkspace() {
@@ -864,17 +865,21 @@ export function useWorkspace() {
           // triggered the handler (mapped.length === 0 passes through
           // the guard above). Guard with ?. to avoid crashing on
           // undefined.type.
-          const lastMapped = mapped[mapped.length - 1]
-          const clearsAwaiting =
-            lastMapped?.type === 'assistant' && current.queuedMessages.length === 0
-              ? false
-              : current.awaitingAssistant
+          // Awaiting state is owned exclusively by the headless's
+          // spinner-based process-state event. We used to flip it to
+          // false here when an assistant entry arrived, but CC writes
+          // assistant chunks MID-TURN (between tool cycles in a
+          // multi-tool reply) while the spinner is still on screen —
+          // and that flip caused the indicator to flash idle for the
+          // ~500ms gap before the next spinner snapshot reasserted
+          // active. The user reported this as "marks idle for a half
+          // second between messages." Trust the headless signal.
           return {
             ...prev,
             [sessionId]: {
               ...current,
               entries: nextEntries,
-              awaitingAssistant: clearsAwaiting,
+              awaitingAssistant: current.awaitingAssistant,
               // Merge JSONL request with any screen-sourced fields
               // already in flight (reason / options / selectedIndex).
               // See the screen handler above for the dual-source rule.
@@ -1040,23 +1045,16 @@ export function useWorkspace() {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const nextEntries = [...current.entries, feedEntry]
-        // Only clear awaitingAssistant on an assistant entry AND when
-        // the queue is empty — if CC still has queued work to process,
-        // the streaming card should stay live so the next turn's
-        // "thinking…" is visible. Without this, submitting three
-        // messages in a row would flash the streaming card on and off
-        // between turns and make the UI feel broken.
-        const isAssistant = feedEntry.type === 'assistant'
-        const clearsAwaiting =
-          isAssistant && current.queuedMessages.length === 0
-            ? false
-            : current.awaitingAssistant
+        // Awaiting state is owned by the headless's spinner-based
+        // process-state event — see the matching comment in the
+        // codex-rollout handler above for why we no longer flip it on
+        // assistant JSONL entries.
         return {
           ...prev,
           [sessionId]: {
             ...current,
             entries: nextEntries,
-            awaitingAssistant: clearsAwaiting,
+            awaitingAssistant: current.awaitingAssistant,
             // The compact-summary feed entry IS the completion signal —
             // it's only written after CC finishes the summarization turn.
             // We previously gated this on `phase === 'done'` but nothing
@@ -1594,7 +1592,12 @@ export function useWorkspace() {
         ? current.activeTabId
         : valid[0]
       setSpotlight(null)
-      setTileTabs({ tabIds: valid, focusedTabId, direction })
+      setTileTabs({
+        tabIds: valid,
+        focusedTabId,
+        direction,
+        ratios: equalRatios(valid.length),
+      })
       setState(prev => ({ ...prev, activeTabId: focusedTabId }))
     },
     [],
@@ -1611,6 +1614,67 @@ export function useWorkspace() {
         : prev
     ))
     setState(prev => ({ ...prev, activeTabId: tabId }))
+  }, [])
+
+  const focusTiledTabByIndex = useCallback((index: number) => {
+    setTileTabs(prev => {
+      if (!prev) return prev
+      const tabId = prev.tabIds[index]
+      if (!tabId) return prev
+      setState(statePrev => ({ ...statePrev, activeTabId: tabId }))
+      return { ...prev, focusedTabId: tabId }
+    })
+  }, [])
+
+  const resizeFocusedTiledTab = useCallback((delta: number) => {
+    setTileTabs(prev => {
+      if (!prev || prev.tabIds.length < 2) return prev
+      const idx = prev.tabIds.indexOf(prev.focusedTabId)
+      if (idx === -1) return prev
+
+      const leftIndex = idx === prev.tabIds.length - 1 ? idx - 1 : idx
+      const rightIndex = idx === prev.tabIds.length - 1 ? idx : idx + 1
+      if (leftIndex < 0 || rightIndex >= prev.ratios.length) return prev
+
+      const nextRatios = [...prev.ratios]
+      const signedDelta = idx === prev.tabIds.length - 1 ? -delta : delta
+      const nextLeft = nextRatios[leftIndex] + signedDelta
+      const nextRight = nextRatios[rightIndex] - signedDelta
+      const minRatio = 0.12
+      if (nextLeft < minRatio || nextRight < minRatio) return prev
+
+      nextRatios[leftIndex] = nextLeft
+      nextRatios[rightIndex] = nextRight
+      return {
+        ...prev,
+        ratios: normalizeRatios(nextRatios),
+      }
+    })
+  }, [])
+
+  const resizeTiledTabByIndex = useCallback((index: number, delta: number) => {
+    setTileTabs(prev => {
+      if (!prev || prev.tabIds.length < 2) return prev
+      if (index < 0 || index >= prev.tabIds.length) return prev
+
+      const leftIndex = index === prev.tabIds.length - 1 ? index - 1 : index
+      const rightIndex = index === prev.tabIds.length - 1 ? index : index + 1
+      if (leftIndex < 0 || rightIndex >= prev.ratios.length) return prev
+
+      const nextRatios = [...prev.ratios]
+      const signedDelta = index === prev.tabIds.length - 1 ? -delta : delta
+      const nextLeft = nextRatios[leftIndex] + signedDelta
+      const nextRight = nextRatios[rightIndex] - signedDelta
+      const minRatio = 0.12
+      if (nextLeft < minRatio || nextRight < minRatio) return prev
+
+      nextRatios[leftIndex] = nextLeft
+      nextRatios[rightIndex] = nextRight
+      return {
+        ...prev,
+        ratios: normalizeRatios(nextRatios),
+      }
+    })
   }, [])
 
   // ---- Action: adjust the ratio of the split containing the focused pane ----
@@ -2208,6 +2272,21 @@ export function useWorkspace() {
         ...tileTabs,
         tabIds: validTabIds,
         focusedTabId,
+        ratios:
+          tileTabs.ratios.length === validTabIds.length
+            ? normalizeRatios(tileTabs.ratios)
+            : equalRatios(validTabIds.length),
+      })
+      return
+    }
+    const normalizedRatios =
+      tileTabs.ratios.length === validTabIds.length
+        ? normalizeRatios(tileTabs.ratios)
+        : equalRatios(validTabIds.length)
+    if (!ratiosEqual(normalizedRatios, tileTabs.ratios)) {
+      setTileTabs({
+        ...tileTabs,
+        ratios: normalizedRatios,
       })
     }
   }, [tileTabs, state.tabs])
@@ -2262,6 +2341,9 @@ export function useWorkspace() {
     openTileTabs,
     closeTileTabs,
     focusTiledTab,
+    focusTiledTabByIndex,
+    resizeFocusedTiledTab,
+    resizeTiledTabByIndex,
   }
 }
 
@@ -2272,6 +2354,26 @@ export function useWorkspace() {
 function titleFromCwd(cwd: string): string {
   const parts = cwd.split('/').filter(Boolean)
   return parts[parts.length - 1] ?? cwd
+}
+
+function equalRatios(count: number): number[] {
+  if (count <= 0) return []
+  return Array.from({ length: count }, () => 1 / count)
+}
+
+function normalizeRatios(ratios: number[]): number[] {
+  if (ratios.length === 0) return []
+  const total = ratios.reduce((sum, value) => sum + value, 0)
+  if (total <= 0) return equalRatios(ratios.length)
+  return ratios.map(value => value / total)
+}
+
+function ratiosEqual(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (Math.abs(a[i] - b[i]) > 0.0001) return false
+  }
+  return true
 }
 
 /**

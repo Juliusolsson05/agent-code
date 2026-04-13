@@ -23,10 +23,12 @@ export function TileTabsView({ workspace }: Props) {
     >
       {tabs.map((tab, index) => {
         const focused = tab.id === tileTabs.focusedTabId
+        const ratio = tileTabs.ratios[index] ?? 1 / tabs.length
         return (
           <div
             key={tab.id}
-            className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden"
+            className="relative min-h-0 min-w-0 flex flex-col overflow-hidden"
+            style={{ flex: `0 0 ${ratio * 100}%` }}
           >
             <section
               className={`flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden ${
@@ -45,24 +47,35 @@ export function TileTabsView({ workspace }: Props) {
                     : 'border-border bg-surface'
                 }`}
               >
-                <div className="min-w-0">
-                  <div className="text-[12px] font-semibold text-ink truncate">
-                    {tab.title}
-                  </div>
-                  <div className="text-[10px] uppercase tracking-wider text-muted">
-                    Tiled Tab
+                <div className="min-w-0 flex items-center gap-2">
+                  <span className="inline-flex items-center justify-center w-5 h-5 text-[10px] border border-border text-muted flex-shrink-0">
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-[12px] font-semibold text-ink truncate">
+                      {tab.title}
+                    </div>
+                    <div className="text-[10px] uppercase tracking-wider text-muted">
+                      Tiled Tab
+                    </div>
                   </div>
                 </div>
+                <div className="text-[10px] uppercase tracking-wider text-muted flex-shrink-0">
+                  {Math.round(ratio * 100)}%
+                </div>
               </div>
-              <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+              <div className="relative flex-1 min-h-0 min-w-0 overflow-hidden">
                 <TileTree
                   tabId={tab.id}
                   node={tab.root}
-                  focusedSessionId={tab.focusedSessionId}
+                  focusedSessionId={focused ? tab.focusedSessionId : null}
                   workspace={workspace}
                 />
               </div>
             </section>
+            {!focused && (
+              <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />
+            )}
           </div>
         )
       })}

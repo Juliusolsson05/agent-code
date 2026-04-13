@@ -191,23 +191,37 @@ export function TileLeaf({
   // detail" resubmit pattern) collapse into one entry. Distant
   // duplicates stay, matching bash history behavior. Memoed on
   // entries reference so normal re-renders don't rebuild the list.
+  const sessionKind = workspace.state.sessions[sessionId]?.kind
   const history = useMemo(() => {
     const out: string[] = []
     for (const entry of runtime.entries) {
       if (!isConversationEntry(entry)) continue
       if (entry.message.role !== 'user') continue
       if (isCompactSummaryEntry(entry)) continue
-      // Positive-signal filter — see the block comment above for
-      // why these two flags are load-bearing. The `as` cast is
-      // because our ConversationEntry type doesn't declare the
-      // optional permissionMode / isMeta fields from CC's JSONL,
-      // but they exist on the wire; we check them dynamically.
+
+      // Per-provider synthetic-entry filter.
+      //
+      // Claude path — uses `permissionMode` as the positive signal
+      // because CC's user-role slot is shared with isMeta hints,
+      // error responses, and local-command markers. See the long
+      // comment above for the full survey.
+      //
+      // Codex path — `permissionMode` is a CC-only field, so the
+      // Claude filter would (and previously did) reject every Codex
+      // prompt and leave Up doing nothing. Codex's user-role slot
+      // is well-behaved: real prompts arrive as a normalized
+      // `{type:'text'}` content block via `response_item` mapping
+      // (workspaceStore.ts:442), while tool results are a
+      // `{type:'tool_result'}` block. Selecting on "has at least one
+      // text block" naturally accepts the former and rejects the
+      // latter without needing a Codex-specific positive flag.
       const meta = entry as unknown as {
         permissionMode?: string
         isMeta?: boolean
       }
       if (meta.isMeta === true) continue
-      if (meta.permissionMode === undefined) continue
+      if (sessionKind !== 'codex' && meta.permissionMode === undefined) continue
+
       const content = entry.message.content
       let text = ''
       if (typeof content === 'string') {
@@ -231,7 +245,7 @@ export function TileLeaf({
     // Reverse so index 0 is the newest prompt — Up steps backward in
     // time starting from the most recent one.
     return out.reverse()
-  }, [runtime.entries])
+  }, [runtime.entries, sessionKind])
 
   // Helper: are we currently in history-cycling mode? Multiple key
   // handlers consult this and a named check reads cleaner than
@@ -636,14 +650,16 @@ export function TileLeaf({
       onMouseDown={onFocusRequest}
     >
       {/* Pane header: compact status strip.
-          In status mode, the header bg turns green (agent working) or
-          red (exited / idle) so the user can see at a glance which
-          panes are still active. */}
+          In status mode, working panes paint with the theme accent;
+          idle/exited panes get no fill — the absence of color is the
+          signal, so a glance across the grid highlights only the
+          panes that still want attention. Previous design used
+          green/red, but red read as "error" for merely idle panes. */}
       <div className={`flex items-center justify-between px-3 border-b border-border text-[10px] font-code select-none ${
         workspace.statusMode
           ? runtime.awaitingAssistant
-            ? 'bg-green-600 text-white'
-            : 'bg-red-600 text-white'
+            ? 'bg-accent text-accent-fg'
+            : 'bg-surface text-muted'
           : 'bg-surface text-muted'
       } ${workspace.statusMode ? 'py-0 min-h-[5px]' : 'py-1'}`}>
         <span className="truncate" title={runtime.projectDir ?? 'no project dir'}>

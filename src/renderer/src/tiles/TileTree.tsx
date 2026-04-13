@@ -15,7 +15,7 @@ import { collectLeaves } from './treeOps'
 type Props = {
   tabId: TabId
   node: TileNode
-  focusedSessionId: SessionId
+  focusedSessionId: SessionId | null
   workspace: Workspace
 }
 
@@ -57,7 +57,7 @@ export function TileTree({ tabId, node, focusedSessionId, workspace }: Props) {
 
 export function renderWorkspaceLeaf(
   sessionId: SessionId,
-  focusedSessionId: SessionId,
+  focusedSessionId: SessionId | null,
   workspace: Workspace,
   tabId: TabId = workspace.state.activeTabId,
 ) {
