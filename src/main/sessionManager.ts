@@ -380,11 +380,15 @@ export class SessionManager extends EventEmitter {
     const entry = this.sessions.get(sessionId)
     if (!entry) return false
     await entry.session.stop()
-    // P1: closing a terminal also kills its tmux session. P2 will
-    // re-route this through an undo tray that defers the kill.
-    if (entry.kind === 'terminal' && entry.tmuxName && this.tmuxRegistry) {
-      await this.tmuxRegistry.killSession(entry.tmuxName)
-    }
+    // For tmux-backed terminals, stop() detaches the client but
+    // intentionally leaves the tmux session alive so undo-close can
+    // re-attach to it (scrollback intact, environment intact, any
+    // long-running process still running). The eventual GC happens
+    // on next app launch via tmuxRecovery — when a session is closed
+    // and the user never undoes, it falls out of workspace.json, and
+    // launch-time reconcile() classifies the still-alive tmux as an
+    // orphan and kills it. This is the explicit "buffer for undo"
+    // behavior the user asked for in the P1 brainstorm.
     this.sessions.delete(sessionId)
     return true
   }

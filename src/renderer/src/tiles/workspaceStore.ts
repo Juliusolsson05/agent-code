@@ -1156,13 +1156,21 @@ export function useWorkspace() {
   const spawn = useCallback(
     async (
       cwd: string,
-      opts?: { resumeSessionId?: string; kind?: SessionKind },
+      opts?: {
+        resumeSessionId?: string
+        kind?: SessionKind
+        /** Forwarded to the spawn IPC. Used by undo-close to attach
+         *  to the same tmux session that backed the closed terminal,
+         *  preserving scrollback and any running process. */
+        recoverTmuxName?: string
+      },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? 'claude'
       const { sessionId, tmuxName } = await window.api.spawnSession({
         kind,
         cwd,
         resumeSessionId: opts?.resumeSessionId,
+        recoverTmuxName: opts?.recoverTmuxName,
       })
       setState(prev => ({
         ...prev,
@@ -2105,12 +2113,19 @@ export function useWorkspace() {
       )
       if (!targetTab) return // sibling was also closed — stale undo
 
-      // Respawn the session. For Claude sessions with a ccSessionId,
-      // pass --resume so the conversation history replays via JSONL.
+      // Respawn the session.
+      //   - Claude/Codex with providerSessionId → pass --resume so
+      //     the conversation history replays via JSONL.
+      //   - Terminal with tmuxName → pass recoverTmuxName so the
+      //     same tmux session is re-attached, preserving scrollback
+      //     and any running process. Without this, "undo close" on
+      //     a terminal would respawn an empty shell — defeating the
+      //     point of having a tmux backing.
       const meta = entry.sessionMeta
       const newSessionId = await spawn(meta.cwd, {
         kind: meta.kind ?? 'claude',
         resumeSessionId: meta.providerSessionId,
+        recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
       })
 
       setState(prev => {
@@ -2141,9 +2156,12 @@ export function useWorkspace() {
       for (const [oldId, meta] of Object.entries(entry.sessionMetas)) {
         try {
           const kind: SessionKind = meta.kind ?? 'claude'
+          // Same per-kind recover hint as the pane-undo branch above:
+          // tmuxName for terminals, providerSessionId for agents.
           const newId = await spawn(meta.cwd, {
             kind,
             resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
+            recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = meta
