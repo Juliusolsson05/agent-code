@@ -171,11 +171,15 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
                       workspaceRoot={codeContext.workspaceRoot}
                       codeId={`codex-patch:${block.tool_use_id}:${filePath}`}
                     />
-                  ) : (
-                    <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
-                      {text}
-                    </pre>
-                  )}
+                  ) : text ? (
+                    <CodeBlock
+                      code={text}
+                      workspaceRoot={codeContext.workspaceRoot}
+                      codeId={`codex-patch-fallback:${block.tool_use_id}:${filePath}`}
+                      engine="monaco"
+                      allowAutoDetect
+                    />
+                  ) : null}
                 </div>
               )
             })}
@@ -186,6 +190,23 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   }
 
   if (!text && !isError) return null
+
+  // Route through CodeBlock for consistent rendering with Claude —
+  // gives syntax highlighting, Monaco when available, and the same
+  // visual treatment as Claude's tool result rows.
+  if (!isError && text) {
+    return (
+      <MarkerRow marker="⎿" tone="muted">
+        <CodeBlock
+          code={text}
+          workspaceRoot={codeContext.workspaceRoot}
+          codeId={`codex-result:${block.tool_use_id}`}
+          engine="monaco"
+          allowAutoDetect
+        />
+      </MarkerRow>
+    )
+  }
 
   return (
     <MarkerRow marker="⎿" tone="muted">

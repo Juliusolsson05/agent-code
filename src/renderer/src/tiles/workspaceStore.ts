@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { ConversationEntry, Entry } from '../../../shared/types/transcript'
-import { detectActivity } from '../../../providers/claude/parsers/streamingScreen'
+import {
+  isCompactSummaryEntry,
+  type ConversationEntry,
+  type Entry,
+} from '../../../shared/types/transcript'
+// Direct file imports — parser files are pure TypeScript, safe for
+// the renderer. Package entry points pull in Node deps (pty, fs).
+import { detectActivity } from '../../../shared/parsers/claudeScreen'
+import { detectCodexApproval } from '../../../shared/parsers/codexScreen'
 import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
 import {
   RATIO_DEFAULT,
@@ -144,6 +151,33 @@ export type SessionRuntime = {
    *  Auto-cleared by a timeout in showPaneToast — components just read
    *  it and render when non-null. */
   paneToast: string | null
+  /** Pending Codex exec approval request, if the model asked to run a
+   *  command that requires user approval. */
+  pendingApproval: {
+    callId: string | null
+    command: string[]
+    workdir: string | null
+    reason?: string | null
+    options?: string[]
+    selectedIndex?: number
+  } | null
+  /** Pending Claude trust dialog, sourced from headless parser events. */
+  pendingTrustDialog: {
+    workspace?: string
+  } | null
+  /** Pending Claude resume-choice prompt parsed from the live screen. */
+  pendingResumePrompt: {
+    sessionAgeText?: string
+    tokenCountText?: string
+    options?: string[]
+    selectedIndex?: number
+  } | null
+  /** Pending Claude compaction status sourced from headless parser events. */
+  pendingCompaction: {
+    phase: 'running' | 'error' | 'done'
+    statusText?: string
+    errorText?: string
+  } | null
 }
 
 const emptyRuntime = (): SessionRuntime => ({
@@ -159,6 +193,10 @@ const emptyRuntime = (): SessionRuntime => ({
   draftInput: '',
   activityStatus: null,
   paneToast: null,
+  pendingApproval: null,
+  pendingTrustDialog: null,
+  pendingResumePrompt: null,
+  pendingCompaction: null,
 })
 
 function isCodexRolloutEntry(entry: Record<string, unknown>): boolean {
@@ -256,6 +294,23 @@ function codexToolUseEntry(
   }
 }
 
+function codexAssistantTextEntry(
+  uuid: string,
+  timestamp: string | undefined,
+  text: string,
+): Entry {
+  return {
+    type: 'assistant',
+    uuid,
+    parentUuid: null,
+    timestamp,
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+    },
+  }
+}
+
 function codexToolResultEntry(
   uuid: string,
   timestamp: string | undefined,
@@ -294,6 +349,21 @@ function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   if (!payload || typeof payload.type !== 'string') return []
 
   if (entry.type === 'event_msg') {
+    if (payload.type === 'exec_approval_request') {
+      const command = Array.isArray(payload.command)
+        ? payload.command.filter((part): part is string => typeof part === 'string')
+        : []
+      const workdir = typeof payload.workdir === 'string' ? payload.workdir : null
+      const summary = [
+        'Permission required before Codex can run a command.',
+        command.length > 0 ? `Command: ${command.join(' ')}` : null,
+        workdir ? `Directory: ${workdir}` : null,
+      ]
+        .filter((line): line is string => line !== null)
+        .join('\n')
+      return summary ? [codexAssistantTextEntry(uuid, timestamp, summary)] : []
+    }
+
     if (
       payload.type === 'exec_command_end' &&
       typeof payload.call_id === 'string'
@@ -520,6 +590,10 @@ type PersistedWorkspace = {
   }>
   activeTabId: TabId
   sessions: Record<SessionId, SessionMeta>
+  /** Draft input text per session, keyed by sessionId. Persisted so
+   *  in-progress prompts survive app crashes and restarts. Only
+   *  non-empty drafts are saved to keep the file small. */
+  drafts?: Record<SessionId, string>
 }
 
 // ---------------------------------------------------------------------------
@@ -528,6 +602,11 @@ type PersistedWorkspace = {
 
 export type Workspace = ReturnType<typeof useWorkspace>
 
+type SpotlightState = {
+  tabId: TabId
+  focusedSessionId: SessionId
+}
+
 export function useWorkspace() {
   const [state, setState] = useState<WorkspaceState>({
     tabs: [],
@@ -535,9 +614,21 @@ export function useWorkspace() {
     sessions: {},
   })
 
+  // Ref mirror of state so IPC callbacks (which close over stale state)
+  // can read the current session metadata (e.g. kind) without causing
+  // re-subscriptions on every state change.
+  const stateRef = useRef(state)
+  stateRef.current = state
+
   // Per-session runtime state. Keyed by sessionId. NOT part of
   // persistent state — runtime rebuilds from IPC events after respawn.
   const [runtimes, setRuntimes] = useState<Record<SessionId, SessionRuntime>>({})
+  const [spotlight, setSpotlight] = useState<SpotlightState | null>(null)
+
+  // Ref mirror of runtimes so the debounced save callback can read
+  // current drafts without re-creating the callback on every render.
+  const latestRuntimesRef = useRef(runtimes)
+  latestRuntimesRef.current = runtimes
 
   // Seen uuids per session, for JSONL dedup. Refs because we never
   // render against them — they're bookkeeping.
@@ -609,6 +700,57 @@ export function useWorkspace() {
           ) {
             return prev
           }
+          // Detect Codex approval overlay from the screen. Only runs
+          // for codex sessions — Claude has its own trust dialog path.
+          //
+          // Two sources feed `pendingApproval`:
+          //   1. JSONL `exec_approval_request` — authoritative for
+          //      `callId` / `command` / `workdir`. The callId is what
+          //      we match against `exec_command_end` to dismiss.
+          //   2. Screen scrape — authoritative for the dynamic UI bits
+          //      the user actually sees (`reason`, `options`,
+          //      `selectedIndex`) since arrow-key nav only updates the
+          //      TUI, never the JSONL.
+          //
+          // Originally this handler clobbered the JSONL fields with
+          // `callId: null`, which broke dismissal: when
+          // `exec_command_end` arrived later, the comparison
+          // `current.pendingApproval?.callId === resolvedCallId` saw
+          // `null === "real-id"` and the modal stuck forever. Now we
+          // MERGE — JSONL fields survive screen frames; screen fields
+          // overwrite their counterparts on every frame.
+          //
+          // When the screen shows no overlay we PRESERVE a JSONL-sourced
+          // approval (callId !== null) — the rule is "JSONL opens it,
+          // JSONL closes it". A screen-only approval (callId === null)
+          // can be cleared by a stale frame because there's no JSONL
+          // dismissal event coming.
+          const sessionKind = stateRef.current.sessions[sessionId]?.kind
+          const screenApproval = sessionKind === 'codex'
+            ? detectCodexApproval(plain)
+            : null
+          const nextApproval = screenApproval
+            ? current.pendingApproval?.callId
+              ? {
+                  ...current.pendingApproval,
+                  reason: screenApproval.reason,
+                  options: screenApproval.options,
+                  selectedIndex: screenApproval.selectedIndex,
+                }
+              : {
+                  callId: null,
+                  command: screenApproval.command
+                    ? screenApproval.command.split(/\s+/)
+                    : [],
+                  workdir: null,
+                  reason: screenApproval.reason,
+                  options: screenApproval.options,
+                  selectedIndex: screenApproval.selectedIndex,
+                }
+            : current.pendingApproval?.callId
+              ? current.pendingApproval
+              : null
+
           return {
             ...prev,
             [sessionId]: {
@@ -617,6 +759,7 @@ export function useWorkspace() {
               screenMarkdown: markdown,
               picker,
               activityStatus: detectActivity(plain),
+              pendingApproval: nextApproval,
             },
           }
         })
@@ -642,8 +785,39 @@ export function useWorkspace() {
           })
         }
 
+        // Codex activity detection via structured turn events. These are
+        // the authoritative signal — no screen scraping needed. When a
+        // turn starts, the agent is working. When it completes, it's idle.
+        const payload = entry.payload as Record<string, unknown> | undefined
+        if (entry.type === 'event_msg') {
+          const pt = payload?.type
+          if (pt === 'turn_started' || pt === 'task_started') {
+            updateRuntime(sessionId, { awaitingAssistant: true })
+          } else if (pt === 'turn_complete' || pt === 'task_complete') {
+            updateRuntime(sessionId, { awaitingAssistant: false })
+          }
+        }
+
         const mapped = mapCodexRolloutToFeedEntries(entry)
-        if (mapped.length === 0) return
+        const approvalRequest =
+          entry.type === 'event_msg' && payload?.type === 'exec_approval_request'
+            ? {
+                callId: typeof payload.call_id === 'string' ? payload.call_id : null,
+                command: Array.isArray(payload.command)
+                  ? payload.command.filter(
+                      (part): part is string => typeof part === 'string',
+                    )
+                  : [],
+                workdir: typeof payload.workdir === 'string' ? payload.workdir : null,
+              }
+            : null
+        const approvalResolvedCallId =
+          entry.type === 'event_msg' &&
+          payload?.type === 'exec_command_end' &&
+          typeof payload.call_id === 'string'
+            ? payload.call_id
+            : null
+        if (mapped.length === 0 && !approvalRequest && !approvalResolvedCallId) return
 
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
@@ -663,9 +837,14 @@ export function useWorkspace() {
             baseEntries = current.entries.slice(0, -1)
           }
           const nextEntries = [...baseEntries, ...mapped]
+          // lastMapped can be undefined when mapped is empty — this
+          // happens when only an approvalRequest or approvalResolvedCallId
+          // triggered the handler (mapped.length === 0 passes through
+          // the guard above). Guard with ?. to avoid crashing on
+          // undefined.type.
           const lastMapped = mapped[mapped.length - 1]
           const clearsAwaiting =
-            lastMapped.type === 'assistant' && current.queuedMessages.length === 0
+            lastMapped?.type === 'assistant' && current.queuedMessages.length === 0
               ? false
               : current.awaitingAssistant
           return {
@@ -674,6 +853,20 @@ export function useWorkspace() {
               ...current,
               entries: nextEntries,
               awaitingAssistant: clearsAwaiting,
+              // Merge JSONL request with any screen-sourced fields
+              // already in flight (reason / options / selectedIndex).
+              // See the screen handler above for the dual-source rule.
+              pendingApproval: approvalRequest
+                ? {
+                    ...approvalRequest,
+                    reason: current.pendingApproval?.reason,
+                    options: current.pendingApproval?.options,
+                    selectedIndex: current.pendingApproval?.selectedIndex,
+                  }
+                : approvalResolvedCallId &&
+                    current.pendingApproval?.callId === approvalResolvedCallId
+                  ? null
+                  : current.pendingApproval,
             },
           }
         })
@@ -842,6 +1035,15 @@ export function useWorkspace() {
             ...current,
             entries: nextEntries,
             awaitingAssistant: clearsAwaiting,
+            // The compact-summary feed entry IS the completion signal —
+            // it's only written after CC finishes the summarization turn.
+            // We previously gated this on `phase === 'done'` but nothing
+            // ever wrote that phase, so the banner stuck until a manual
+            // dismiss. Clearing unconditionally on the summary entry is
+            // the intended behavior.
+            pendingCompaction: isCompactSummaryEntry(feedEntry)
+              ? null
+              : current.pendingCompaction,
           },
         }
       })
@@ -856,11 +1058,64 @@ export function useWorkspace() {
       updateRuntime(sessionId, { exited: exitCode })
     })
 
+    // Process-state events from the ProcessInspector (~1Hz, only on
+    // change). Updates awaitingAssistant based on caffeinate presence.
+    //
+    // Only applies to Claude sessions — Codex uses IOKit power
+    // assertions (not caffeinate), so the inspector always reports
+    // false for Codex and would wrongly override the JSONL-based
+    // awaitingAssistant. Codex keeps its existing JSONL-driven
+    // activity detection until we add an IOKit-aware inspector.
+    const offProcessState = window.api.onSessionProcessState(({ sessionId, active }) => {
+      const kind = stateRef.current.sessions[sessionId]?.kind
+      if (kind === 'codex') return
+      updateRuntime(sessionId, { awaitingAssistant: active })
+    })
+
+    const offTrustDialog = window.api.onSessionTrustDialog(({ sessionId, visible, workspace }) => {
+      updateRuntime(sessionId, {
+        pendingTrustDialog: visible ? { workspace } : null,
+      })
+    })
+
+    const offResumePrompt = window.api.onSessionResumePrompt(({
+      sessionId,
+      visible,
+      sessionAgeText,
+      tokenCountText,
+      options,
+      selectedIndex,
+    }) => {
+      updateRuntime(sessionId, {
+        pendingResumePrompt: visible
+          ? { sessionAgeText, tokenCountText, options, selectedIndex }
+          : null,
+      })
+    })
+
+    const offCompactionState = window.api.onSessionCompactionState(({
+      sessionId,
+      visible,
+      phase,
+      statusText,
+      errorText,
+    }) => {
+      updateRuntime(sessionId, {
+        pendingCompaction: visible && phase
+          ? { phase, statusText, errorText }
+          : null,
+      })
+    })
+
     return () => {
       offStarted()
       offScreen()
       offEntry()
       offErr()
+      offProcessState()
+      offTrustDialog()
+      offResumePrompt()
+      offCompactionState()
       offExit()
     }
   }, [updateRuntime])
@@ -1048,6 +1303,7 @@ export function useWorkspace() {
             : prev.activeTabId
         return { ...prev, tabs, activeTabId, sessions }
       })
+      setSpotlight(prev => (prev?.tabId === tabId ? null : prev))
     },
     [state.tabs, state.sessions],
   )
@@ -1182,6 +1438,11 @@ export function useWorkspace() {
         t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
       ),
     }))
+    setSpotlight(prev => (
+      prev && prev.tabId === stateRef.current.activeTabId
+        ? { ...prev, focusedSessionId: sessionId }
+        : prev
+    ))
   }, [])
 
   // ---- Action: navigate focus geometrically (alt-hjkl) ----
@@ -1198,6 +1459,7 @@ export function useWorkspace() {
   // ---- Action: activate a tab by id or index ----
   const activateTab = useCallback((tabId: TabId) => {
     setState(prev => ({ ...prev, activeTabId: tabId }))
+    setSpotlight(null)
   }, [])
 
   const activateTabByIndex = useCallback((index: number) => {
@@ -1205,6 +1467,7 @@ export function useWorkspace() {
       const t = prev.tabs[index]
       return t ? { ...prev, activeTabId: t.id } : prev
     })
+    setSpotlight(null)
   }, [])
 
   const nextTab = useCallback(() => {
@@ -1214,6 +1477,7 @@ export function useWorkspace() {
       const next = prev.tabs[(idx + 1) % prev.tabs.length]
       return { ...prev, activeTabId: next.id }
     })
+    setSpotlight(null)
   }, [])
 
   const prevTab = useCallback(() => {
@@ -1223,6 +1487,30 @@ export function useWorkspace() {
       const next = prev.tabs[(idx - 1 + prev.tabs.length) % prev.tabs.length]
       return { ...prev, activeTabId: next.id }
     })
+    setSpotlight(null)
+  }, [])
+
+  const toggleSpotlight = useCallback(() => {
+    const current = stateRef.current
+    const activeTab = current.tabs.find(t => t.id === current.activeTabId)
+    if (!activeTab) return
+    setSpotlight(prev => {
+      if (prev?.tabId === activeTab.id) return null
+      return {
+        tabId: activeTab.id,
+        focusedSessionId: activeTab.focusedSessionId,
+      }
+    })
+  }, [])
+
+  const setSpotlightSession = useCallback((sessionId: SessionId) => {
+    setSpotlight(prev => (prev ? { ...prev, focusedSessionId: sessionId } : prev))
+    setState(prev => ({
+      ...prev,
+      tabs: prev.tabs.map(t =>
+        t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
+      ),
+    }))
   }, [])
 
   // ---- Action: adjust the ratio of the split containing the focused pane ----
@@ -1342,9 +1630,14 @@ export function useWorkspace() {
   // composer text. Lives in runtime so it survives TileLeaf unmount
   // when the user switches tabs. See SessionRuntime.draftInput for
   // the reasoning.
+  // Draft version counter — bumped on every draft change so the save
+  // effect picks it up without watching the full runtimes object.
+  const [draftVersion, setDraftVersion] = useState(0)
+
   const setDraftInput = useCallback(
     (sessionId: SessionId, text: string) => {
       updateRuntime(sessionId, { draftInput: text })
+      setDraftVersion(v => v + 1)
     },
     [updateRuntime],
   )
@@ -1384,6 +1677,11 @@ export function useWorkspace() {
 
   const flushSave = useCallback(() => {
     const s = latestStateRef.current
+    // Collect non-empty drafts so in-progress prompts survive crashes.
+    const drafts: Record<SessionId, string> = {}
+    for (const [id, rt] of Object.entries(latestRuntimesRef.current)) {
+      if (rt.draftInput) drafts[id] = rt.draftInput
+    }
     const persisted: PersistedWorkspace = {
       tabs: s.tabs.map(t => ({
         id: t.id,
@@ -1393,6 +1691,7 @@ export function useWorkspace() {
       })),
       activeTabId: s.activeTabId,
       sessions: s.sessions,
+      drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
     const json = JSON.stringify({ workspace: persisted }, null, 2)
     void window.api.saveWorkspace(json).catch(err => {
@@ -1408,7 +1707,7 @@ export function useWorkspace() {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
     }
-  }, [state, flushSave])
+  }, [state, draftVersion, flushSave])
 
   // ---- Flush on window close ----
   //
@@ -1568,9 +1867,22 @@ export function useWorkspace() {
     // Initialize empty runtimes for every session so TileLeaf renders
     // "thinking…" instead of undefined while the first frame of screen
     // data arrives.
+    // Initialize runtimes, restoring persisted drafts so in-progress
+    // prompts survive crashes and restarts.
     setRuntimes(() => {
       const out: Record<SessionId, SessionRuntime> = {}
-      for (const id of Object.keys(freshSessions)) out[id] = emptyRuntime()
+      for (const [oldId, newId] of idMap.entries()) {
+        const rt = emptyRuntime()
+        // Restore draft from the persisted workspace if it exists.
+        const draft = persisted.drafts?.[oldId]
+        if (draft) rt.draftInput = draft
+        out[newId] = rt
+      }
+      // Fill any sessions that weren't in the id map (shouldn't happen
+      // but defensive).
+      for (const id of Object.keys(freshSessions)) {
+        if (!out[id]) out[id] = emptyRuntime()
+      }
       return out
     })
   }, [newTab])
@@ -1742,12 +2054,38 @@ export function useWorkspace() {
     [state.activeTabId, state.tabs],
   )
 
+  useEffect(() => {
+    if (!spotlight) return
+    const tab = state.tabs.find(t => t.id === spotlight.tabId)
+    if (!tab) {
+      setSpotlight(null)
+      return
+    }
+    const leaves = collectLeaves(tab.root)
+    if (leaves.length === 0) {
+      setSpotlight(null)
+      return
+    }
+    if (!leaves.includes(spotlight.focusedSessionId)) {
+      setSpotlight(prev => (prev ? { ...prev, focusedSessionId: leaves[0] } : prev))
+    }
+  }, [spotlight, state.tabs])
+
+  // ---- Status mode: color-coded pane headers ----
+  const [statusMode, setStatusMode] = useState(false)
+  const toggleStatusMode = useCallback(() => {
+    setStatusMode(prev => !prev)
+  }, [])
+
   return {
     state,
     runtimes,
     activeTab,
+    spotlight,
     latestScreenRef,
     getRuntime,
+    statusMode,
+    toggleStatusMode,
     // actions
     newTab,
     closeTab,
@@ -1775,6 +2113,8 @@ export function useWorkspace() {
     hardNormalizeLayout,
     rotateLayout,
     replaceSession,
+    toggleSpotlight,
+    setSpotlightSession,
   }
 }
 

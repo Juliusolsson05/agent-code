@@ -71,6 +71,12 @@ export function useKeybinds(
         return
       }
 
+      if (k === 'Escape' && workspace.spotlight) {
+        e.preventDefault()
+        workspace.toggleSpotlight()
+        return
+      }
+
       // --- CMD: undo close (⌘⇧T) ---
       // Same shortcut as Chrome's "reopen closed tab". Pops the most
       // recent entry from the undo-close stack and restores it — either

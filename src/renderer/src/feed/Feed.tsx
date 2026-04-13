@@ -25,8 +25,11 @@ import {
   CodexToolResultRow,
 } from '../../../providers/codex/renderer/rows/CodexRows'
 import {
+  isCompactBoundaryEntry,
+  isCompactSummaryEntry,
   isConversationEntry,
   type ContentBlock,
+  type CompactSummaryEntry,
   type ConversationEntry,
   type Entry,
   type ToolResultBlock,
@@ -227,6 +230,13 @@ function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
  *  which row renderers are used for tool_use blocks. */
 export type AgentProvider = 'claude' | 'codex'
 
+/** Scroll info pushed from Feed to its parent on every scroll tick.
+ *  Used by TileLeaf to render the scroll position indicator. */
+export type ScrollInfo = {
+  /** 0 = at bottom, 1 = at top. */
+  fraction: number
+}
+
 type Props = {
   /** Session identity — used as the key for per-session scroll
    *  position persistence across Feed unmount/remount (tab switches).
@@ -249,6 +259,8 @@ type Props = {
   activityStatus?: string | null
   showSystemEvents: boolean
   workspaceRoot?: string | null
+  /** Called on every scroll tick with the current position. */
+  onScrollInfo?: (info: ScrollInfo) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +355,7 @@ function FeedImpl({
   activityStatus,
   showSystemEvents,
   workspaceRoot = null,
+  onScrollInfo,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
@@ -455,10 +468,19 @@ function FeedImpl({
         scrollTop: el.scrollTop,
         stickyBottom: stickyBottomRef.current,
       })
+      // Push scroll position to parent for the scroll indicator.
+      // fraction=0 at bottom, fraction=1 at top.
+      if (onScrollInfo) {
+        const maxScroll = el.scrollHeight - el.clientHeight
+        const fraction = maxScroll > 0
+          ? 1 - (el.scrollTop / maxScroll)
+          : 0
+        onScrollInfo({ fraction })
+      }
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [sessionId])
+  }, [sessionId, onScrollInfo])
 
   // Auto-scroll on content changes, but ONLY when sticky. The effect
   // runs on every change that would grow the feed (a new entry) or
@@ -488,6 +510,8 @@ function FeedImpl({
   const visible = showSystemEvents
     ? entries
     : entries.filter(e => {
+        if (isCompactBoundaryEntry(e)) return true
+        if (isCompactSummaryEntry(e)) return true
         if (!isConversationEntry(e)) return false
         if ((e as unknown as { isMeta?: boolean }).isMeta === true) return false
         return true
@@ -671,6 +695,12 @@ const LazyEntry = memo(function LazyEntry({
 // never mutate), so shallow compare by entry reference skips re-render
 // for every row that didn't itself change.
 const EntryRow = memo(function EntryRow({ entry }: { entry: Entry }) {
+  if (isCompactBoundaryEntry(entry)) {
+    return <CompactBoundaryRow />
+  }
+  if (isCompactSummaryEntry(entry)) {
+    return <CompactSummaryRow entry={entry} />
+  }
   if (isConversationEntry(entry)) {
     return <ConversationRow entry={entry} />
   }
@@ -747,6 +777,89 @@ const ConversationRow = memo(function ConversationRow({
 function UserBand({ children }: { children: React.ReactNode }) {
   return (
     <div className="bg-user-bg -mx-8 px-8 py-3">
+      {children}
+    </div>
+  )
+}
+
+const CompactBoundaryRow = memo(function CompactBoundaryRow() {
+  return (
+    <MarkerRow marker="·" tone="muted">
+      <div className="text-[11px] uppercase tracking-wider text-muted">
+        Conversation compacted
+      </div>
+    </MarkerRow>
+  )
+})
+
+const CompactSummaryRow = memo(function CompactSummaryRow({
+  entry,
+}: {
+  entry: CompactSummaryEntry
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const text = useMemo(() => compactSummaryText(entry), [entry])
+  const compact = text.length > 2400 || text.split('\n').length > 24
+  const visibleText = compact && !expanded ? truncateCompactSummary(text) : text
+
+  return (
+    <div className="border border-border bg-surface">
+      <div className="border-b border-border px-4 py-2 flex items-center justify-between gap-3">
+        <div className="text-[11px] uppercase tracking-wider text-accent font-semibold">
+          Conversation Summary
+        </div>
+        {compact && (
+          <button
+            type="button"
+            onClick={() => setExpanded(prev => !prev)}
+            className="text-[11px] font-code text-muted hover:text-ink transition-colors"
+          >
+            {expanded ? 'collapse' : 'expand'}
+          </button>
+        )}
+      </div>
+      <div className="px-4 py-3">
+        <TextProse text={visibleText} />
+      </div>
+    </div>
+  )
+})
+
+function compactSummaryText(entry: CompactSummaryEntry): string {
+  const content = entry.message.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(block => {
+      const item = block as ContentBlock & { text?: string; thinking?: string }
+      if (item.type === 'text' && typeof item.text === 'string') return item.text
+      if (item.type === 'thinking' && typeof item.thinking === 'string') return item.thinking
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function truncateCompactSummary(text: string): string {
+  const lines = text.split('\n')
+  if (lines.length > 24) {
+    return `${lines.slice(0, 24).join('\n')}\n\n[summary truncated]`
+  }
+  if (text.length > 2400) {
+    return `${text.slice(0, 2400).trimEnd()}\n\n[summary truncated]`
+  }
+  return text
+}
+
+/**
+ * Background band for tool output (Read, Grep, Edit results).
+ * Subtler than UserBand — a faint step away from canvas that groups
+ * tool output visually without competing with user turns or assistant
+ * text. Same edge-to-edge trick as UserBand.
+ */
+function ToolBand({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="bg-tool-bg -mx-8 px-8 py-2">
       {children}
     </div>
   )
@@ -838,11 +951,11 @@ const Block = memo(function Block({
       // Claude provider — dispatch by tool name.
       switch (tu.name) {
         case 'Edit':
-          return <EditRow block={tu} />
+          return <ToolBand><EditRow block={tu} /></ToolBand>
         case 'MultiEdit':
-          return <MultiEditRow block={tu} />
+          return <ToolBand><MultiEditRow block={tu} /></ToolBand>
         case 'Write':
-          return <WriteRow block={tu} />
+          return <ToolBand><WriteRow block={tu} /></ToolBand>
         case 'TodoWrite':
           return <TodoRow block={tu} />
         default:
@@ -1021,16 +1134,18 @@ const ToolResultRow = memo(function ToolResultRow({
           ? sourceInput.path
           : null
     return (
-      <MarkerRow marker="⎿" tone="muted">
-        <CodeBlock
-          code={stripped}
-          path={filePath}
-          workspaceRoot={codeContext.workspaceRoot}
-          codeId={`read:${block.tool_use_id}`}
-          engine="monaco"
-          allowAutoDetect
-        />
-      </MarkerRow>
+      <ToolBand>
+        <MarkerRow marker="⎿" tone="muted">
+          <CodeBlock
+            code={stripped}
+            path={filePath}
+            workspaceRoot={codeContext.workspaceRoot}
+            codeId={`read:${block.tool_use_id}`}
+            engine="monaco"
+            allowAutoDetect
+          />
+        </MarkerRow>
+      </ToolBand>
     )
   }
 
@@ -1046,16 +1161,18 @@ const ToolResultRow = memo(function ToolResultRow({
         ? sourceInput.path
         : null
     return (
-      <MarkerRow marker="⎿" tone="muted">
-        <CodeBlock
-          code={trimmed}
-          path={filePath}
-          workspaceRoot={codeContext.workspaceRoot}
-          codeId={`grep:${block.tool_use_id}`}
-          engine="monaco"
-          allowAutoDetect
-        />
-      </MarkerRow>
+      <ToolBand>
+        <MarkerRow marker="⎿" tone="muted">
+          <CodeBlock
+            code={trimmed}
+            path={filePath}
+            workspaceRoot={codeContext.workspaceRoot}
+            codeId={`grep:${block.tool_use_id}`}
+            engine="monaco"
+            allowAutoDetect
+          />
+        </MarkerRow>
+      </ToolBand>
     )
   }
 

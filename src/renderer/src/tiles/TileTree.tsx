@@ -20,37 +20,7 @@ type Props = {
 
 export function TileTree({ node, focusedSessionId, workspace }: Props) {
   if (node.type === 'leaf') {
-    const meta = workspace.state.sessions[node.sessionId]
-    const kind = meta?.kind ?? 'claude'
-
-    // Terminal panes get TerminalLeaf (just an xterm.js instance).
-    if (kind === 'terminal') {
-      return (
-        <TerminalLeaf
-          sessionId={node.sessionId}
-          focused={node.sessionId === focusedSessionId}
-          onFocusRequest={() => workspace.focusSession(node.sessionId)}
-          workspace={workspace}
-        />
-      )
-    }
-
-    // Agent providers (claude, codex) dispatch through the registry.
-    // The shell never imports provider-specific code directly — only
-    // through getProvider(). Each provider's config.TileLeaf owns
-    // the full pane: feed, composer, slash picker, trust dialog, etc.
-    const provider = getRendererProvider(kind)
-    const runtime = workspace.getRuntime(node.sessionId)
-    const LeafComponent = provider.TileLeaf
-    return (
-      <LeafComponent
-        sessionId={node.sessionId}
-        runtime={runtime}
-        focused={node.sessionId === focusedSessionId}
-        onFocusRequest={() => workspace.focusSession(node.sessionId)}
-        workspace={workspace}
-      />
-    )
+    return renderWorkspaceLeaf(node.sessionId, focusedSessionId, workspace)
   }
 
   return (
@@ -76,6 +46,39 @@ export function TileTree({ node, focusedSessionId, workspace }: Props) {
       // identity for this split.
       aSessionId={firstLeafId(node.a)}
       bSessionId={firstLeafId(node.b)}
+      workspace={workspace}
+    />
+  )
+}
+
+export function renderWorkspaceLeaf(
+  sessionId: SessionId,
+  focusedSessionId: SessionId,
+  workspace: Workspace,
+) {
+  const meta = workspace.state.sessions[sessionId]
+  const kind = meta?.kind ?? 'claude'
+
+  if (kind === 'terminal') {
+    return (
+      <TerminalLeaf
+        sessionId={sessionId}
+        focused={sessionId === focusedSessionId}
+        onFocusRequest={() => workspace.focusSession(sessionId)}
+        workspace={workspace}
+      />
+    )
+  }
+
+  const provider = getRendererProvider(kind)
+  const runtime = workspace.getRuntime(sessionId)
+  const LeafComponent = provider.TileLeaf
+  return (
+    <LeafComponent
+      sessionId={sessionId}
+      runtime={runtime}
+      focused={sessionId === focusedSessionId}
+      onFocusRequest={() => workspace.focusSession(sessionId)}
       workspace={workspace}
     />
   )

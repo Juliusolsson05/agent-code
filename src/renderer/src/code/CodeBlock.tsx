@@ -45,31 +45,21 @@ export const CodeBlock = memo(function CodeBlock({
   const shouldUseStaticFallback =
     engine === 'monaco' && allowAutoDetect && normalizedLanguage === 'plaintext'
 
-  if (engine === 'static' || shouldUseStaticFallback) {
-    const highlighted = useMemo(() => {
-      if (!code) return ''
-      if (normalizedLanguage !== 'plaintext' && hljs.getLanguage(normalizedLanguage)) {
-        return hljs.highlight(code, { language: normalizedLanguage }).value
-      }
-      if (allowAutoDetect) {
-        return hljs.highlightAuto(code).value
-      }
-      return null
-    }, [code, normalizedLanguage])
-
-    return (
-      <pre className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink">
-        {highlighted == null ? (
-          <code>{code}</code>
-        ) : (
-          <code
-            className={`hljs${normalizedLanguage !== 'plaintext' ? ` language-${normalizedLanguage}` : ''}`}
-            dangerouslySetInnerHTML={{ __html: highlighted }}
-          />
-        )}
-      </pre>
-    )
-  }
+  // ALL hooks must be called unconditionally — React requires the same
+  // hooks in the same order on every render. The early-return for static
+  // rendering used to call useMemo/useRef/useId conditionally, which
+  // crashed when shouldUseStaticFallback flipped (e.g. Codex sessions
+  // with allowAutoDetect where the language resolves after first render).
+  const highlighted = useMemo(() => {
+    if (!code) return ''
+    if (normalizedLanguage !== 'plaintext' && hljs.getLanguage(normalizedLanguage)) {
+      return hljs.highlight(code, { language: normalizedLanguage }).value
+    }
+    if (allowAutoDetect) {
+      return hljs.highlightAuto(code).value
+    }
+    return null
+  }, [code, normalizedLanguage, allowAutoDetect])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const reactId = useId().replace(/:/g, '_')
@@ -78,7 +68,13 @@ export const CodeBlock = memo(function CodeBlock({
     [codeId, normalizedLanguage, path, reactId],
   )
 
+  // Hoisted above the static early-return so React sees the same hooks
+  // on every render. When the static path is active, containerRef.current
+  // is null (the <div ref={containerRef}> isn't in the DOM) so the
+  // effect bails immediately — no Monaco editor gets created.
+  const useMonaco = engine !== 'static' && !shouldUseStaticFallback
   useEffect(() => {
+    if (!useMonaco) return
     let disposed = false
     // Collect ALL cleanup functions as they're created — even inside
     // the async block. The effect cleanup runs them all, regardless
@@ -197,7 +193,24 @@ export const CodeBlock = memo(function CodeBlock({
         try { cleanups[i]() } catch { /* best-effort */ }
       }
     }
-  }, [clientUri, code, engine, normalizedLanguage, path, workspaceRoot])
+  }, [useMonaco, clientUri, code, engine, normalizedLanguage, path, workspaceRoot])
+
+  // Static/fallback early return — placed AFTER all hooks so the hook
+  // call order is identical on every render regardless of code path.
+  if (!useMonaco) {
+    return (
+      <pre className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink">
+        {highlighted == null ? (
+          <code>{code}</code>
+        ) : (
+          <code
+            className={`hljs${normalizedLanguage !== 'plaintext' ? ` language-${normalizedLanguage}` : ''}`}
+            dangerouslySetInnerHTML={{ __html: highlighted }}
+          />
+        )}
+      </pre>
+    )
+  }
 
   return <div ref={containerRef} className="code-block-shell w-full overflow-hidden" />
 })

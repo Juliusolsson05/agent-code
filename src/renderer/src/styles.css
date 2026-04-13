@@ -66,6 +66,11 @@
      the dark canvas — without matching any existing chrome color. */
   --color-user-bg: var(--theme-user-bg);
 
+  /* Tool result background — a subtler version of user-bg for Read,
+     Grep, Edit code blocks. Distinguishes tool output from bare
+     assistant text without being as prominent as user turns. */
+  --color-tool-bg: var(--theme-tool-bg);
+
   /* Diff surfaces for Edit / MultiEdit rendering.
      - add: a soft green-tinted band behind `+` lines
      - remove: a soft red-tinted band behind `-` lines
@@ -131,6 +136,7 @@
      enough that it doesn't feel like a chat bubble. Slightly warmer
      than surface-hi so it reads as its own layer, not elevated chrome. */
   --theme-user-bg: #1f1f23;
+  --theme-tool-bg: #151518;
 
   /* Dark-mode diff colors. These sit on top of --theme-code-bg
      (#050507), so even though they look dim in isolation the
@@ -178,6 +184,7 @@
      Darker than surface/surface-hi so user turns pop instead of blending
      into chrome that shares those tokens. */
   --theme-user-bg: #d8d4c6;
+  --theme-tool-bg: #e4e1d8;
 
   /* Light-mode diff colors. Code blocks in light mode still use the
      DARK code-bg (#12120f) — see the note on --theme-code-bg above —
@@ -226,6 +233,7 @@
      against #fff ink. #1a1a1a is the minimum step that's unambiguously
      "not black" on OLED without graying out the text. */
   --theme-user-bg: #1a1a1a;
+  --theme-tool-bg: #111111;
 
   /* High-contrast diff colors: darker bases (we live on a #000 slab)
      with brighter fg indicators so the +/- gutters are unmissable. */

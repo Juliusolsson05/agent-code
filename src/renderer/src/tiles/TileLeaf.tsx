@@ -1,8 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
-import { isConversationEntry } from '../../../shared/types/transcript'
+import {
+  isCompactSummaryEntry,
+  isConversationEntry,
+} from '../../../shared/types/transcript'
+import { CodexApprovalModal } from '../../../providers/codex/renderer/CodexApprovalModal'
+import { ResumePromptModal } from '../../../providers/claude/renderer/ResumePromptModal'
 import { Feed } from '../feed/Feed'
+import type { ScrollInfo } from '../feed/Feed'
 import { TrustDialogModal } from '../../../providers/claude/renderer/TrustDialogModal'
 import { SlashCommandPicker } from '../../../providers/claude/renderer/SlashCommandPicker'
 import type { SessionRuntime, Workspace } from './workspaceStore'
@@ -102,6 +108,14 @@ export function TileLeaf({
   // vs. stored locally).
   const [slashMode, setSlashMode] = useState(false)
 
+  // Scroll position for the indicator above the composer. Updated on
+  // every scroll tick via onScrollInfo callback from Feed. fraction=0
+  // means at bottom, fraction=1 means at top.
+  const [scrollFraction, setScrollFraction] = useState(0)
+  const onScrollInfo = useCallback((info: ScrollInfo) => {
+    setScrollFraction(info.fraction)
+  }, [])
+
   // ---- Prompt history state ----
   //
   // cc-shell keeps its own bash-style history for the composer instead
@@ -182,6 +196,7 @@ export function TileLeaf({
     for (const entry of runtime.entries) {
       if (!isConversationEntry(entry)) continue
       if (entry.message.role !== 'user') continue
+      if (isCompactSummaryEntry(entry)) continue
       // Positive-signal filter — see the block comment above for
       // why these two flags are load-bearing. The `as` cast is
       // because our ConversationEntry type doesn't declare the
@@ -521,12 +536,18 @@ export function TileLeaf({
     // Modifier combos (Shift/Ctrl/Meta/Alt+Up) fall through to the
     // PTY-forward path so OS line-navigation shortcuts still reach
     // CC when the user wants them.
+    // Skip history cycling when the approval overlay is visible —
+    // arrow keys need to reach the PTY so Codex can navigate its
+    // selection list.
     if (
       e.key === 'ArrowUp' &&
       !e.shiftKey &&
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
+      !runtime.pendingApproval &&
+      !runtime.pendingTrustDialog &&
+      !runtime.pendingResumePrompt &&
       history.length > 0 &&
       (cyclingHistory || input === '')
     ) {
@@ -562,6 +583,9 @@ export function TileLeaf({
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
+      !runtime.pendingApproval &&
+      !runtime.pendingTrustDialog &&
+      !runtime.pendingResumePrompt &&
       cyclingHistory
     ) {
       e.preventDefault()
@@ -611,22 +635,19 @@ export function TileLeaf({
       `}
       onMouseDown={onFocusRequest}
     >
-      {/* Pane header: compact status strip */}
-      <div className="flex items-center justify-between px-3 py-1 border-b border-border bg-surface text-[10px] text-muted font-code select-none">
+      {/* Pane header: compact status strip.
+          In status mode, the header bg turns green (agent working) or
+          red (exited / idle) so the user can see at a glance which
+          panes are still active. */}
+      <div className={`flex items-center justify-between px-3 border-b border-border text-[10px] font-code select-none ${
+        workspace.statusMode
+          ? runtime.awaitingAssistant
+            ? 'bg-green-600 text-white'
+            : 'bg-red-600 text-white'
+          : 'bg-surface text-muted'
+      } ${workspace.statusMode ? 'py-0 min-h-[5px]' : 'py-1'}`}>
         <span className="truncate" title={runtime.projectDir ?? 'no project dir'}>
           {shortenCwd(runtime.projectDir)}
-        </span>
-        <span
-          className={`flex items-center gap-1 ${running ? 'text-ink-dim' : 'text-muted'}`}
-        >
-          <span
-            className={`inline-block w-1 h-1 rounded-full ${
-              running ? 'bg-accent' : 'bg-muted'
-            } ${running && runtime.awaitingAssistant ? 'streaming-dot' : ''}`}
-          />
-          <span className="tabular-nums">
-            {running ? 'live' : `exited ${runtime.exited}`}
-          </span>
         </span>
       </div>
 
@@ -647,6 +668,7 @@ export function TileLeaf({
           streamingBaseline={runtime.streamingBaseline}
           activityStatus={runtime.activityStatus}
           showSystemEvents={false}
+          onScrollInfo={onScrollInfo}
         />
       </div>
 
@@ -692,6 +714,43 @@ export function TileLeaf({
         </div>
       )}
 
+      {/* Codex approval prompt — rendered inline in the pane, matching
+          how Codex's TUI draws it. Sits between feed and composer. */}
+      <CodexApprovalModal
+        approval={runtime.pendingApproval}
+        onSend={send}
+      />
+
+      <ResumePromptModal
+        prompt={runtime.pendingResumePrompt}
+        onSend={send}
+      />
+
+      {runtime.pendingCompaction && runtime.pendingCompaction.phase !== 'done' && (
+        <div
+          className={`flex-shrink-0 border-t px-5 py-2 font-code text-[12px] leading-[1.6] ${
+            runtime.pendingCompaction.phase === 'error'
+              ? 'text-danger border-danger/30 bg-danger/8'
+              : 'text-ink border-border bg-surface'
+          }`}
+        >
+          <div className="font-semibold">
+            {runtime.pendingCompaction.phase === 'error'
+              ? 'Compaction failed'
+              : 'Compacting conversation'}
+          </div>
+          {((runtime.pendingCompaction.phase === 'error'
+            ? runtime.pendingCompaction.errorText
+            : runtime.pendingCompaction.statusText)) && (
+            <div className="mt-0.5 whitespace-pre-wrap break-words opacity-90">
+              {runtime.pendingCompaction.phase === 'error'
+                ? runtime.pendingCompaction.errorText
+                : runtime.pendingCompaction.statusText}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Pane toast — transient single-slot feedback (e.g. "Copied to clipboard").
           Renders above the composer so it's contextually tied to this pane,
           not floating over the feed content. Auto-dismissed by the store
@@ -709,6 +768,25 @@ export function TileLeaf({
             px-3 py-0.5
           ">
             {runtime.paneToast}
+          </span>
+        </div>
+      )}
+
+      {/* Scroll position indicator — sits just above the composer,
+          right-aligned. Shows which entry you're looking at out of
+          the total. Feed emits `fraction = 1 - scrollTop/maxScroll`,
+          so fraction=0 at the bottom (newest entry visible) and
+          fraction=1 at the top (oldest). We invert before display so
+          the badge reads natural-order: latest = N/N, oldest = 1/N.
+          Floor at 1 so the badge never reads 0/N — even at the
+          extreme bottom there's still an entry on screen. */}
+      {runtime.entries.length > 0 && (
+        <div className="flex-shrink-0 flex justify-end px-3 leading-none">
+          <span className="text-[12px] font-code tabular-nums text-accent">
+            {Math.max(
+              1,
+              Math.ceil((1 - scrollFraction) * runtime.entries.length),
+            )}/{runtime.entries.length}
           </span>
         </div>
       )}
@@ -786,7 +864,7 @@ export function TileLeaf({
 
       {/* Per-pane trust dialog: only shown if THIS pane's screen buffer
           contains the trust prompt. Other panes have their own modals. */}
-      <TrustDialogModal screen={runtime.screen} onSend={send} />
+      <TrustDialogModal state={runtime.pendingTrustDialog} onSend={send} />
     </div>
   )
 }

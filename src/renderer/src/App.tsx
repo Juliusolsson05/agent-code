@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { CommandPalette } from './CommandPalette'
+import { DebugPanel } from './DebugPanel'
 import { GitBar } from './GitBar'
 import { ThemePicker } from './feed/ThemePicker'
 import { PathPickerModal } from './tiles/PathPickerModal'
+import { SpotlightView } from './tiles/SpotlightView'
 import { TabBar } from './tiles/TabBar'
 import { TileTree } from './tiles/TileTree'
 import { useKeybinds } from './tiles/useKeybinds'
@@ -31,6 +33,7 @@ export default function App() {
   const [pathPickerDefault, setPathPickerDefault] = useState('')
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitBarOpen, setGitBarOpen] = useState(false)
+  const [debugPanelOpen, setDebugPanelOpen] = useState(false)
   const workspace = useWorkspace()
 
   // Pre-fill the path input with a sensible default when the modal
@@ -129,11 +132,15 @@ export default function App() {
       <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
         <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
           {activeTab ? (
-            <TileTree
-              node={activeTab.root}
-              focusedSessionId={activeTab.focusedSessionId}
-              workspace={workspace}
-            />
+            workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
+              <SpotlightView workspace={workspace} />
+            ) : (
+              <TileTree
+                node={activeTab.root}
+                focusedSessionId={activeTab.focusedSessionId}
+                workspace={workspace}
+              />
+            )
           ) : (
             <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
           )}
@@ -149,6 +156,15 @@ export default function App() {
             onClose={() => setGitBarOpen(false)}
           />
         )}
+
+        {debugPanelOpen && activeTab && (
+          <DebugPanel
+            sessionId={activeTab.focusedSessionId}
+            runtime={workspace.getRuntime(activeTab.focusedSessionId)}
+            kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
+            onClose={() => setDebugPanelOpen(false)}
+          />
+        )}
       </div>
 
       <CommandPalette
@@ -158,6 +174,7 @@ export default function App() {
         onNewTabRequest={onNewTabRequest}
         onResumeRequest={onResumeRequest}
         toggleGitBar={() => setGitBarOpen(prev => !prev)}
+        toggleDebugPanel={() => setDebugPanelOpen(prev => !prev)}
       />
 
       <PathPickerModal

@@ -13,3 +13,4 @@ temp.txt
 # of cc-shell, intentionally left untracked. Live next to the project as
 # a developer's local checkout.
 claude-code-src/
+file-dumps/

@@ -159,6 +159,16 @@ export function buildCommands(): CommandDef[] {
       action: ({ toggleDebugPanel }) => toggleDebugPanel(),
     },
     {
+      id: 'toggle-status-mode',
+      label: 'Toggle Status Mode',
+      action: ({ workspace }) => workspace.toggleStatusMode(),
+    },
+    {
+      id: 'toggle-spotlight',
+      label: 'Toggle Spotlight',
+      action: ({ workspace }) => workspace.toggleSpotlight(),
+    },
+    {
       id: 'copy-last-assistant',
       label: 'Copy Last Response',
       action: ({ workspace }) => {
