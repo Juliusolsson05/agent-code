@@ -6,6 +6,8 @@ import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
 import { LspManager } from './lspManager.js'
+import { TmuxRegistry } from './tmux/TmuxRegistry.js'
+import { reconcile, type PersistedTerminalRef } from './tmux/tmuxRecovery.js'
 import { getMainProvider } from '../providers/registry.main.js'
 
 // Main process — thin Electron host over SessionManager.
@@ -64,7 +66,14 @@ function pushTrafficLightInset(): void {
     // the renderer defaults to 0.
   }
 }
-const manager = new SessionManager()
+// SessionManager is constructed inside whenReady so we can await
+// TmuxRegistry.detectAvailability() first — terminal sessions need
+// to know during spawn whether a tmux backend is available, and
+// detection requires a child-process roundtrip. The 'let' is
+// load-bearing: every other module-scope reference is inside
+// callbacks that fire after the assignment.
+let manager: SessionManager = null as unknown as SessionManager
+let tmuxRegistry: TmuxRegistry | null = null
 const lspManager = new LspManager()
 
 function send(channel: string, ...args: unknown[]): void {
@@ -500,7 +509,53 @@ function registerIpc(): void {
 
 // ---------- App lifecycle ----------
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Tmux availability is checked once at startup. The cost is a
+  // child-process roundtrip on `tmux -V` — cheap enough to await
+  // before any IPC is wired. Result is cached on the registry; call
+  // sites use isAvailable() synchronously thereafter.
+  tmuxRegistry = new TmuxRegistry()
+  const tmuxAvailable = await tmuxRegistry.detectAvailability()
+  console.log(
+    tmuxAvailable
+      ? '[tmux] available — terminals will persist across restarts'
+      : '[tmux] not installed — terminals will use direct PTY (non-persistent)',
+  )
+
+  // Recovery runs BEFORE SessionManager is constructed so the
+  // renderer's first session-spawn can ask to recover an alive
+  // tmux session by name. Reads the persisted workspace.json
+  // directly — it's the same file the renderer will load shortly via
+  // workspace:load IPC, but we need the tmuxName values earlier.
+  let recoveryReport: { recoverable: PersistedTerminalRef[]; lost: string[]; orphans: string[] } = {
+    recoverable: [],
+    lost: [],
+    orphans: [],
+  }
+  if (tmuxAvailable) {
+    try {
+      const raw = await readFile(STATE_FILE, 'utf8')
+      const parsed = JSON.parse(raw) as {
+        sessions?: Record<string, { kind?: string; tmuxName?: string }>
+      }
+      const persisted: PersistedTerminalRef[] = Object.entries(parsed.sessions ?? {})
+        .filter(([, meta]) => meta?.kind === 'terminal' && typeof meta?.tmuxName === 'string')
+        .map(([sessionId, meta]) => ({ sessionId, tmuxName: meta!.tmuxName! }))
+      recoveryReport = await reconcile(tmuxRegistry, persisted)
+      console.log(
+        `[tmux] recovery: ${recoveryReport.recoverable.length} recoverable, ${recoveryReport.lost.length} lost, ${recoveryReport.orphans.length} orphans cleaned`,
+      )
+    } catch (err) {
+      // Missing/corrupt workspace.json is fine — fresh launch falls
+      // through with empty buckets. Log so a real failure is visible.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('[tmux] recovery failed (treating all sessions as fresh):', err)
+      }
+    }
+  }
+
+  manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null)
+
   wireManagerIPC()
   registerIpc()
   createWindow()

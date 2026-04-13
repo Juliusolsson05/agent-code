@@ -94,6 +94,18 @@ export type SessionMeta = {
    * just spawns a fresh shell in the same cwd.
    */
   providerSessionId?: string
+  /**
+   * For tmux-backed terminals (P1): the registry-managed tmux
+   * session name. Captured from the spawn IPC response and passed
+   * back as `recoverTmuxName` on subsequent launches so the same
+   * tmux session is re-attached instead of respawned. Without this,
+   * persistence wouldn't work — the renderer would have no way to
+   * tell main "this old session is the one I want."
+   *
+   * Undefined for direct-PTY terminals (when tmux isn't available)
+   * and for agent sessions (P3 may extend this; not in P1).
+   */
+  tmuxName?: string
 }
 
 export type WorkspaceState = {

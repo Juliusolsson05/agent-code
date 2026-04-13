@@ -5,6 +5,7 @@ import { getMainProvider } from '../providers/registry.main.js'
 import type { ScreenSnapshot } from '../providers/claude/runtime/claudeSession.js'
 import { TerminalSession } from '../shared/runtime/terminalSession.js'
 import type { JsonlEntry } from 'claude-code-headless'
+import { TmuxRegistry } from './tmux/TmuxRegistry.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -70,6 +71,20 @@ export type SpawnOptions = {
   /** Claude only: if set, spawn with --resume <uuid> and tail the
    *  existing session file. Silently ignored for terminal sessions. */
   resumeSessionId?: string
+  /** Terminal + tmux only: when set AND tmux is available, attach to
+   *  this existing tmux session instead of creating a new one. Used
+   *  by the workspace reload path to recover persistent terminals
+   *  (see Task 8 / tmuxRecovery). When the named session no longer
+   *  exists, falls back to creating a fresh one. */
+  recoverTmuxName?: string
+}
+
+export type SpawnResult = {
+  sessionId: string
+  /** Set only when a tmux-backed terminal was spawned (or recovered).
+   *  Renderer must persist this so a subsequent launch can recover
+   *  the same session via `recoverTmuxName`. */
+  tmuxName?: string
 }
 
 export interface SessionManager {
@@ -94,7 +109,7 @@ export interface SessionManager {
 // sessions are handled directly.
 type RegistryEntry =
   | { kind: 'claude' | 'codex'; session: unknown }
-  | { kind: 'terminal'; session: TerminalSession }
+  | { kind: 'terminal'; session: TerminalSession; tmuxName: string | null }
 
 // Rolling buffer cap for terminal replay. 256 KB is enough to hold
 // the recent scrollback of a normal interactive shell session —
@@ -105,6 +120,15 @@ const TERMINAL_BUFFER_CAP = 256 * 1024
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
+
+  // Optional tmux backing for terminal sessions. Constructed by the
+  // app entrypoint AFTER detectAvailability() has resolved — we only
+  // accept a registry that is known to be usable, so a non-null value
+  // here means tmux IS installed. When null, terminal sessions fall
+  // back to direct PTY spawn (no persistence).
+  constructor(private readonly tmuxRegistry: TmuxRegistry | null = null) {
+    super()
+  }
 
   // Terminal attach/replay state.
   //
@@ -145,7 +169,7 @@ export class SessionManager extends EventEmitter {
    * For Claude sessions, start() also attaches the JSONL watcher; for
    * terminal sessions it's just the PTY spawn.
    */
-  async spawn(options: SpawnOptions): Promise<string> {
+  async spawn(options: SpawnOptions): Promise<SpawnResult> {
     const kind: SessionKind = options.kind ?? 'claude'
     const sessionId = randomUUID()
 
@@ -206,14 +230,44 @@ export class SessionManager extends EventEmitter {
 
       this.sessions.set(sessionId, { kind, session })
       await (session as unknown as { start(): Promise<void> }).start()
-      return sessionId
+      return { sessionId }
     }
 
     // kind === 'terminal'
+    //
+    // Tmux backing is opt-in based on registry availability. When the
+    // registry says yes, we either reuse an existing tmux session
+    // (recovery path — `recoverTmuxName` was passed and the session
+    // is alive) or create a fresh one. When tmux is unavailable, fall
+    // through to the direct PTY path that's existed since day one.
+    const useTmux = this.tmuxRegistry?.isAvailable() === true
+    let tmuxSessionName: string | null = null
+    if (useTmux) {
+      const reg = this.tmuxRegistry!
+      if (
+        options.recoverTmuxName &&
+        (await reg.sessionExists(options.recoverTmuxName))
+      ) {
+        // Reattach path — tmux owned this session through the previous
+        // cc-shell launch and it's still alive. Reuse the name; do
+        // NOT createSession (that would error or duplicate).
+        tmuxSessionName = options.recoverTmuxName
+      } else {
+        tmuxSessionName = reg.generateName()
+        await reg.createSession({
+          name: tmuxSessionName,
+          command: process.env.SHELL ?? '/bin/zsh',
+          cwd: options.cwd,
+        })
+      }
+    }
+
     const session = new TerminalSession({
       cwd: options.cwd,
       cols: options.cols ?? 80,
       rows: options.rows ?? 24,
+      runtime: useTmux ? 'tmux' : 'direct',
+      tmuxSessionName: tmuxSessionName ?? undefined,
     })
 
     // Initialize an empty buffer entry NOW, before start() fires any
@@ -257,9 +311,9 @@ export class SessionManager extends EventEmitter {
       this.terminalAttached.delete(sessionId)
     })
 
-    this.sessions.set(sessionId, { kind: 'terminal', session })
+    this.sessions.set(sessionId, { kind: 'terminal', session, tmuxName: tmuxSessionName })
     await session.start()
-    return sessionId
+    return { sessionId, tmuxName: tmuxSessionName ?? undefined }
   }
 
   /**
@@ -326,6 +380,11 @@ export class SessionManager extends EventEmitter {
     const entry = this.sessions.get(sessionId)
     if (!entry) return false
     await entry.session.stop()
+    // P1: closing a terminal also kills its tmux session. P2 will
+    // re-route this through an undo tray that defers the kill.
+    if (entry.kind === 'terminal' && entry.tmuxName && this.tmuxRegistry) {
+      await this.tmuxRegistry.killSession(entry.tmuxName)
+    }
     this.sessions.delete(sessionId)
     return true
   }

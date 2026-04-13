@@ -1159,7 +1159,7 @@ export function useWorkspace() {
       opts?: { resumeSessionId?: string; kind?: SessionKind },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? 'claude'
-      const sessionId = await window.api.spawnSession({
+      const { sessionId, tmuxName } = await window.api.spawnSession({
         kind,
         cwd,
         resumeSessionId: opts?.resumeSessionId,
@@ -1168,7 +1168,10 @@ export function useWorkspace() {
         ...prev,
         sessions: {
           ...prev.sessions,
-          [sessionId]: { cwd, kind },
+          // Persist tmuxName when main returns one — that's the
+          // signal that this terminal got tmux backing and is eligible
+          // for cross-restart recovery on next launch.
+          [sessionId]: { cwd, kind, ...(tmuxName ? { tmuxName } : {}) },
         },
       }))
       setRuntimes(prev => ({ ...prev, [sessionId]: emptyRuntime() }))
@@ -1992,16 +1995,26 @@ export function useWorkspace() {
     for (const [oldId, meta] of Object.entries(persisted.sessions)) {
       try {
         const kind: SessionKind = meta.kind ?? 'claude'
-        const newId = await window.api.spawnSession({
+        // For terminal sessions with a persisted tmuxName, pass it as
+        // recoverTmuxName so main re-attaches the alive tmux session
+        // (or falls back to fresh spawn if it died). Agents ignore
+        // recoverTmuxName at the main side; safe to omit for them.
+        const { sessionId: newId, tmuxName: nextTmuxName } = await window.api.spawnSession({
           kind,
           cwd: meta.cwd,
           resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
+          recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
         })
         idMap.set(oldId, newId)
-        // Carry the full meta forward — kind + providerSessionId — so the
-        // next save cycle doesn't drop these and cause the session
-        // to degrade on the NEXT reload.
-        freshSessions[newId] = meta
+        // Carry the full meta forward — kind + providerSessionId +
+        // tmuxName — so the next save cycle doesn't drop these and
+        // cause the session to degrade on the NEXT reload. tmuxName
+        // is replaced with whatever main reported (recovered name
+        // when alive, fresh name when respawned).
+        freshSessions[newId] = {
+          ...meta,
+          ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
+        }
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(`[workspace] failed to respawn ${meta.cwd}:`, err)

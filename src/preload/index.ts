@@ -134,7 +134,14 @@ const api = {
     cols?: number
     rows?: number
     resumeSessionId?: string
-  }): Promise<string> => ipcRenderer.invoke('session:spawn', options),
+    /** Terminal + tmux only: when set AND tmux is available, attach
+     *  to this existing tmux session instead of creating a new one.
+     *  Used by the workspace reload path to recover persistent
+     *  terminals. Falls back to fresh spawn if the session no longer
+     *  exists. */
+    recoverTmuxName?: string
+  }): Promise<{ sessionId: string; tmuxName?: string }> =>
+    ipcRenderer.invoke('session:spawn', options),
 
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),

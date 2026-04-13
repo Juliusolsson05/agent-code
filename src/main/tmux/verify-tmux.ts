@@ -3,6 +3,7 @@
 // the verify scripts in the headless packages.
 
 import { TmuxRegistry } from './TmuxRegistry.js'
+import { reconcile } from './tmuxRecovery.js'
 
 const PREFIX = process.env.TMUX_TEST_PREFIX ?? 'ccshell-verify-'
 let failed = 0
@@ -58,6 +59,33 @@ async function main(): Promise<void> {
     `expected ${JSON.stringify(names)}, got ${JSON.stringify([...listedNames])}`,
   )
   for (const n of names) await registry.killSession(n)
+
+  // Recovery check: create two sessions, simulate one as "persisted"
+  // and the other as an orphan. Reconcile and verify all three buckets.
+  const sessionA = registry.generateName()
+  const sessionB = registry.generateName()
+  await registry.createSession({ name: sessionA, command: process.env.SHELL ?? '/bin/zsh' })
+  await registry.createSession({ name: sessionB, command: process.env.SHELL ?? '/bin/zsh' })
+
+  const report = await reconcile(registry, [
+    { sessionId: 'fake-id-a', tmuxName: sessionA },
+    { sessionId: 'fake-id-dead', tmuxName: `${PREFIX}does-not-exist` },
+  ])
+
+  check(
+    'reconcile recovers the alive+known session',
+    report.recoverable.length === 1 && report.recoverable[0].tmuxName === sessionA,
+  )
+  check(
+    'reconcile flags the dead+known session as lost',
+    report.lost.length === 1 && report.lost[0] === 'fake-id-dead',
+  )
+  check(
+    'reconcile killed the orphan',
+    !(await registry.sessionExists(sessionB)),
+  )
+
+  await registry.killSession(sessionA)
 
   if (failed > 0) process.exit(1)
 }

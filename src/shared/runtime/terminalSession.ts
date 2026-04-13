@@ -42,6 +42,23 @@ export type TerminalSessionOptions = {
   shell?: string
   /** Extra environment overrides for the spawned shell. */
   env?: Record<string, string | undefined>
+  /**
+   * Backend used to host the shell.
+   *
+   *   'direct' — node-pty spawns the shell directly. Original behavior;
+   *              terminal dies with cc-shell.
+   *
+   *   'tmux'   — node-pty spawns `tmux attach -t <tmuxSessionName>`.
+   *              The tmux session must already exist (TmuxRegistry
+   *              creates it before TerminalSession.start() is called).
+   *              Closing this client detaches but does NOT kill the
+   *              tmux session — that's the registry's job.
+   */
+  runtime?: 'direct' | 'tmux'
+  /** Required when runtime === 'tmux'. The session name to attach to. */
+  tmuxSessionName?: string
+  /** Path to tmux binary. Only meaningful when runtime === 'tmux'. */
+  tmuxBinary?: string
 }
 
 /**
@@ -85,6 +102,9 @@ export class TerminalSession extends EventEmitter {
   private readonly rows: number
   private readonly shell: string
   private readonly extraEnv: Record<string, string | undefined>
+  private readonly runtime: 'direct' | 'tmux'
+  private readonly tmuxSessionName: string | null
+  private readonly tmuxBinary: string
 
   constructor(options: TerminalSessionOptions = {}) {
     super()
@@ -101,6 +121,12 @@ export class TerminalSession extends EventEmitter {
       process.env.SHELL ??
       '/bin/zsh'
     this.extraEnv = options.env ?? {}
+    this.runtime = options.runtime ?? 'direct'
+    this.tmuxSessionName = options.tmuxSessionName ?? null
+    this.tmuxBinary = options.tmuxBinary ?? 'tmux'
+    if (this.runtime === 'tmux' && !this.tmuxSessionName) {
+      throw new Error('TerminalSession: runtime="tmux" requires tmuxSessionName')
+    }
   }
 
   /**
@@ -130,13 +156,31 @@ export class TerminalSession extends EventEmitter {
       else env[k] = v
     }
 
-    this.pty = ptySpawn(this.shell, [], {
-      name: 'xterm-256color',
-      cols: this.cols,
-      rows: this.rows,
-      cwd: this.cwd,
-      env,
-    })
+    if (this.runtime === 'tmux' && this.tmuxSessionName) {
+      // Attach to a pre-existing tmux session as a child PTY. The
+      // registry guarantees the session exists; if it doesn't, tmux
+      // will exit immediately and we'll surface that via onExit
+      // below — same code path as a shell that crashes on launch.
+      this.pty = ptySpawn(
+        this.tmuxBinary,
+        ['attach', '-t', this.tmuxSessionName],
+        {
+          name: 'xterm-256color',
+          cols: this.cols,
+          rows: this.rows,
+          cwd: this.cwd,
+          env,
+        },
+      )
+    } else {
+      this.pty = ptySpawn(this.shell, [], {
+        name: 'xterm-256color',
+        cols: this.cols,
+        rows: this.rows,
+        cwd: this.cwd,
+        env,
+      })
+    }
 
     this.pty.onData((data: string) => {
       this.emit('data', data)
@@ -176,8 +220,24 @@ export class TerminalSession extends EventEmitter {
     return this.exited
   }
 
-  /** Stop the session: kill the PTY. Idempotent. */
+  /** Stop the session: kill the PTY (direct mode) or detach the
+   *  tmux client (tmux mode). Idempotent. */
   async stop(): Promise<void> {
+    if (this.runtime === 'tmux' && this.pty) {
+      // Detach this client cleanly so the tmux session keeps running
+      // for next launch. Sending the tmux detach prefix (^B d) is the
+      // most reliable way — killing the PTY would also work but leaves
+      // a transient "[detached]" message the next attacher would see.
+      try {
+        this.pty.write('\x02d')   // ^B then 'd' — tmux's default detach binding
+        // Give tmux ~50ms to process the detach before we kill the
+        // PTY as a safety net. Without this fall-through, an
+        // unresponsive tmux server would leave the PTY orphaned.
+        await new Promise(r => setTimeout(r, 50))
+      } catch {
+        // PTY might already be gone — fall through to kill.
+      }
+    }
     try {
       this.pty?.kill()
     } catch {
