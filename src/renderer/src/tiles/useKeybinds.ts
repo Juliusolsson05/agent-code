@@ -252,16 +252,8 @@ export function useKeybinds(
         }
         // --- Terminal split: alt-t / alt-shift-t ---
         //
-        // Alt+T        → horizontal split (new row BELOW) with a
-        //                plain shell terminal. "Row below" is the
-        //                natural default because terminals are
-        //                usually scanned at the bottom of the
-        //                screen, not in a side column.
-        // Alt+Shift+T  → vertical split (new column RIGHT) with a
-        //                plain shell terminal. Same keybind
-        //                grammar as alt-d / alt-shift-d but
-        //                inverted-default because terminals lean
-        //                the other way.
+        // Keep the same grammar as the generic split bindings above:
+        // no shift = vertical/right, shift = horizontal/down.
         //
         // The 't' detection uses e.code === 'KeyT' (not e.key)
         // because on macOS alt+t produces the Unicode dagger '†',
@@ -270,28 +262,28 @@ export function useKeybinds(
         // physical-key code. See the note on alt-h/j/k/l above.
         if (code === 'KeyT' && !shift) {
           e.preventDefault()
-          void workspace.splitFocused('horizontal', 'terminal')
+          void workspace.splitFocused('vertical', 'terminal')
           return
         }
         if (code === 'KeyT' && shift) {
           e.preventDefault()
-          void workspace.splitFocused('vertical', 'terminal')
+          void workspace.splitFocused('horizontal', 'terminal')
           return
         }
         // --- Codex split: alt-c / alt-shift-c ---
         //
-        // Same grammar as terminal (alt-t): default is horizontal
-        // (new row below), shift flips to vertical (new column).
-        // Uses e.code === 'KeyC' for the same macOS alt-letter
-        // reason as the others.
+        // Same grammar as the generic split bindings above:
+        // no shift = vertical/right, shift = horizontal/down.
+        // Uses e.code === 'KeyC' for the same macOS alt-letter reason
+        // as the others.
         if (code === 'KeyC' && !shift) {
           e.preventDefault()
-          void workspace.splitFocused('horizontal', 'codex')
+          void workspace.splitFocused('vertical', 'codex')
           return
         }
         if (code === 'KeyC' && shift) {
           e.preventDefault()
-          void workspace.splitFocused('vertical', 'codex')
+          void workspace.splitFocused('horizontal', 'codex')
           return
         }
         if (code === 'KeyW') {

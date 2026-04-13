@@ -347,13 +347,19 @@ export function firstLeaf(node: TileNode): SessionId {
  *
  * The tricky part: binary splits compound. A chain of 3 leaves in the
  * same direction with ratio 0.5 at each split gives 50/25/25 — not
- * 33/33/33. To get equal sizing, a chain of N same-direction splits
- * needs ratios 1/N, 1/(N-1), 1/(N-2), … from outermost to innermost.
+ * 33/33/33. And the chain is not guaranteed to lean only on one side:
+ * repeated splits can build the same-direction subtree through either
+ * `a` or `b`.
  *
- * Algorithm: count how many same-direction siblings are chained from
- * this node (walking down the `b` side while direction matches), then
- * assign 1/(chainLength) to this split. Recurse into children that
- * break the chain (different direction or leaf) independently.
+ * Algorithm: for each split, count how many effective "lanes" each
+ * child contributes in this axis. A child split in the SAME direction
+ * contributes the sum of its descendants' lanes; a leaf or an
+ * opposite-direction subtree contributes exactly 1 lane in this axis.
+ * The split ratio then becomes `lanes(a) / (lanes(a) + lanes(b))`.
+ *
+ * This preserves structure but makes every pane in a same-direction
+ * group occupy the same visual share, regardless of whether the tree
+ * is left-leaning, right-leaning, or mixed.
  *
  * Two columns at 50/50, each with 3 rows: the top-level vertical
  * split gets 0.5 (2 columns). Each column's horizontal chain of 3
@@ -361,40 +367,29 @@ export function firstLeaf(node: TileNode): SessionId {
  */
 export function equalizeRatios(node: TileNode): TileNode {
   if (node.type === 'leaf') return node
-  return equalizeChain(node, countChain(node))
-}
-
-/**
- * Count how many items are chained on the `b` side in the same
- * direction. A chain of 3 leaves connected by 2 same-direction
- * splits returns 3. A split whose `b` child has a different
- * direction or is a leaf returns 2 (just a and b).
- */
-function countChain(node: TileNode): number {
-  if (node.type === 'leaf') return 1
-  if (node.b.type === 'split' && node.b.direction === node.direction) {
-    return 1 + countChain(node.b)
-  }
-  return 2
-}
-
-/**
- * Set the ratio at this split to 1/chainLen, then recurse. The `b`
- * child continues the chain (if same direction) with chainLen-1;
- * children that break the chain start fresh with their own count.
- */
-function equalizeChain(node: TileNode, chainLen: number): TileNode {
-  if (node.type === 'leaf') return node
-  const sameChain =
-    node.b.type === 'split' && node.b.direction === node.direction
+  const lanesA = countAxisLanes(node.a, node.direction)
+  const lanesB = countAxisLanes(node.b, node.direction)
   return {
     ...node,
-    ratio: clampRatio(1 / chainLen),
+    ratio: clampRatio(lanesA / (lanesA + lanesB)),
     a: equalizeRatios(node.a),
-    b: sameChain
-      ? equalizeChain(node.b, chainLen - 1)
-      : equalizeRatios(node.b),
+    b: equalizeRatios(node.b),
   }
+}
+
+/**
+ * Count how many effective panes this subtree contributes along one
+ * axis. Opposite-direction subtrees count as a single lane because
+ * they stack panes in the other dimension; same-direction subtrees
+ * expand the lane count by both children.
+ */
+function countAxisLanes(node: TileNode, axis: SplitDirection): number {
+  if (node.type === 'leaf') return 1
+  if (node.direction !== axis) return 1
+  return (
+    countAxisLanes(node.a, axis) +
+    countAxisLanes(node.b, axis)
+  )
 }
 
 /**
