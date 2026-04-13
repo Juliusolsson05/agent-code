@@ -29,6 +29,10 @@ export type CommandContext = {
   onResumeRequest: (defaultCwd: string) => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
+  toggleCustomRendering: () => void
+  /** Current state of the custom-rendering flag, so the palette can
+   *  show the on/off marker on the command row. */
+  customRenderingEnabled: boolean
   /** Enter resume sub-mode inside the palette (instead of closing). */
   enterResumeMode: () => void
   close: () => void
@@ -159,6 +163,15 @@ export function buildCommands(): CommandDef[] {
       action: ({ toggleDebugPanel }) => toggleDebugPanel(),
     },
     {
+      id: 'toggle-custom-rendering',
+      // Label reflects current state so the user can tell what the
+      // toggle is about to do. The palette itself doesn't remember
+      // state across opens; we thread the current flag in via the
+      // command context and rebuild labels on each render.
+      label: 'Toggle Custom Rendering',
+      action: ({ toggleCustomRendering }) => toggleCustomRendering(),
+    },
+    {
       id: 'toggle-status-mode',
       label: 'Toggle Status Mode',
       action: ({ workspace }) => workspace.toggleStatusMode(),
@@ -218,6 +231,8 @@ type Props = {
   onResumeRequest: (defaultCwd: string) => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
+  toggleCustomRendering: () => void
+  customRenderingEnabled: boolean
 }
 
 export function CommandPalette({
@@ -228,6 +243,8 @@ export function CommandPalette({
   onResumeRequest,
   toggleGitBar,
   toggleDebugPanel,
+  toggleCustomRendering,
+  customRenderingEnabled,
 }: Props) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -237,7 +254,18 @@ export function CommandPalette({
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const commands = useMemo(() => buildCommands(), [])
+  // Commands rebuild whenever the custom-rendering flag changes so
+  // the "Toggle Custom Rendering" row's label reflects current state
+  // (on/off marker). Other commands don't depend on state so this
+  // is cheap.
+  const commands = useMemo(() => {
+    const cmds = buildCommands()
+    return cmds.map(c =>
+      c.id === 'toggle-custom-rendering'
+        ? { ...c, label: `Toggle Custom Rendering  (${customRenderingEnabled ? 'on' : 'off'})` }
+        : c,
+    )
+  }, [customRenderingEnabled])
 
   const filtered = useMemo(() => {
     if (mode === 'resume') {
@@ -311,6 +339,8 @@ export function CommandPalette({
         onResumeRequest,
         toggleGitBar,
         toggleDebugPanel,
+        toggleCustomRendering,
+        customRenderingEnabled,
         enterResumeMode,
         close: onClose,
       }
@@ -322,7 +352,7 @@ export function CommandPalette({
       onClose()
       void cmd.action(ctx)
     },
-    [workspace, onNewTabRequest, onResumeRequest, toggleGitBar, toggleDebugPanel, enterResumeMode, onClose],
+    [workspace, onNewTabRequest, onResumeRequest, toggleGitBar, toggleDebugPanel, toggleCustomRendering, customRenderingEnabled, enterResumeMode, onClose],
   )
 
   const executeResume = useCallback(

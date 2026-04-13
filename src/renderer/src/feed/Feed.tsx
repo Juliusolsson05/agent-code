@@ -36,6 +36,9 @@ import {
   type ToolUseBlock,
 } from '../../../shared/types/transcript'
 import { CodeBlock } from '../code/CodeBlock'
+import { useCustomRendering } from '../CustomRenderingContext'
+import { detectGitIntent } from '../../../shared/git/gitDetect'
+import { GitCardRow } from '../git/GitRows'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.
@@ -117,6 +120,16 @@ const STREAMING_REMARK = [remarkGfm, remarkBreaks]
 
 const ProviderContext = createContext<AgentProvider>('claude')
 const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new Map())
+// Reverse of ToolUseIndexContext — lets the tool_use dispatcher peek
+// at the paired result block, so a single combined widget can render
+// both sides (command + output) on one row. Needed for the git
+// widgets: the result content lives on a later entry but the widget
+// wants it available when the tool_use row mounts. When the result
+// hasn't arrived yet the map returns undefined and the widget renders
+// a "running…" placeholder; on the next entry wave it re-renders
+// with the real output.
+const ToolResultIndexContext =
+  createContext<Map<string, ToolResultBlock>>(new Map())
 export const CodeRenderContext = createContext<{
   sessionId: string
   workspaceRoot: string | null
@@ -224,6 +237,56 @@ function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
     }
   }
   return map
+}
+
+/**
+ * Reverse index: tool_use_id -> the paired tool_result block. Built
+ * alongside the forward index but scoped separately so the two maps
+ * can be memoized independently. Agents sometimes emit a result
+ * without a preceding use (rare — synthetic error paths), those get
+ * indexed by their own tool_use_id regardless.
+ */
+function buildToolResultIndex(entries: Entry[]): Map<string, ToolResultBlock> {
+  const map = new Map<string, ToolResultBlock>()
+  for (const e of entries) {
+    if (!isConversationEntry(e)) continue
+    const content = e.message.content
+    if (!Array.isArray(content)) continue
+    for (const b of content) {
+      if (b.type === 'tool_result') {
+        const tr = b as ToolResultBlock
+        map.set(tr.tool_use_id, tr)
+      }
+    }
+  }
+  return map
+}
+
+/** Extract the command string from a Bash / exec_command tool_use
+ *  block, normalizing across providers. Claude passes the command
+ *  as `input.command: string`. Codex passes `input.cmd` which may
+ *  be a string OR a pre-split array (for the actual argv form). */
+function extractToolCommand(block: ToolUseBlock): string | null {
+  const input = block.input as Record<string, unknown> | undefined
+  if (!input) return null
+  if (typeof input.command === 'string') return input.command
+  if (typeof input.cmd === 'string') return input.cmd
+  if (Array.isArray(input.cmd)) return input.cmd.filter(s => typeof s === 'string').join(' ')
+  return null
+}
+
+/** Flatten a tool_result's content to a plain string — both providers
+ *  use either a string or an array of `{type:'text',text:string}`. */
+function toolResultText(block: ToolResultBlock): string {
+  if (typeof block.content === 'string') return block.content
+  if (Array.isArray(block.content)) {
+    return block.content
+      .map(item => typeof item === 'string' ? item
+                 : typeof (item as { text?: unknown }).text === 'string' ? (item as { text: string }).text
+                 : '')
+      .join('\n')
+  }
+  return ''
 }
 
 /** Which agent provider this Feed is rendering for. Determines
@@ -523,6 +586,7 @@ function FeedImpl({
   // build (single pass) and the resulting Map is handed to result rows
   // via context.
   const toolUseIndex = useMemo(() => buildToolUseIndex(entries), [entries])
+  const toolResultIndex = useMemo(() => buildToolResultIndex(entries), [entries])
 
   if (visible.length === 0 && !streamingScreen) {
     return (
@@ -537,6 +601,7 @@ function FeedImpl({
   return (
     <ProviderContext.Provider value={provider}>
     <ToolUseIndexContext.Provider value={toolUseIndex}>
+    <ToolResultIndexContext.Provider value={toolResultIndex}>
     <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
       <div
         ref={scrollerRef}
@@ -580,6 +645,7 @@ function FeedImpl({
         </div>
       </div>
     </CodeRenderContext.Provider>
+    </ToolResultIndexContext.Provider>
     </ToolUseIndexContext.Provider>
     </ProviderContext.Provider>
   )
@@ -912,6 +978,9 @@ const Block = memo(function Block({
   role: 'user' | 'assistant'
 }) {
   const currentProvider = useContext(ProviderContext)
+  const toolUseIndex = useContext(ToolUseIndexContext)
+  const toolResultIndex = useContext(ToolResultIndexContext)
+  const { enabled: customRendering } = useCustomRendering()
   switch (block.type) {
     case 'text': {
       // Only text blocks under a user role represent an actual user
@@ -945,6 +1014,36 @@ const Block = memo(function Block({
       // codex uses a generic CodexToolRow for now (will grow per-tool
       // renderers as we learn codex's tool shapes from recordings).
       const tu = block as ToolUseBlock
+
+      // Custom rendering: intercept shell/bash invocations that are
+      // recognized git commands and render them as a purpose-built
+      // widget. Claude's tool name is 'Bash'; Codex's is
+      // 'exec_command' (the function-call name). Both carry the
+      // command string via extractToolCommand.
+      //
+      // We render on the tool_use row. The paired result block is
+      // looked up from the reverse index; if not yet present (result
+      // hasn't arrived), the widget shows a "running…" placeholder
+      // sourced purely from the command. The companion tool_result
+      // block is suppressed below so the widget is the single
+      // surface for this command.
+      if (
+        customRendering
+        && (tu.name === 'Bash' || tu.name === 'exec_command')
+      ) {
+        const cmd = extractToolCommand(tu)
+        const intent = detectGitIntent(cmd)
+        if (intent && cmd) {
+          const paired = toolResultIndex.get(tu.id)
+          const output = paired ? toolResultText(paired) : ''
+          return (
+            <ToolBand>
+              <GitCardRow intent={intent} output={output} />
+            </ToolBand>
+          )
+        }
+      }
+
       if (currentProvider === 'codex') {
         return <CodexToolRow block={tu} />
       }
@@ -962,11 +1061,27 @@ const Block = memo(function Block({
           return <ToolUseRow block={tu} />
       }
     }
-    case 'tool_result':
-      if (currentProvider === 'codex') {
-        return <CodexToolResultRow block={block as ToolResultBlock} />
+    case 'tool_result': {
+      const tr = block as ToolResultBlock
+      // When custom rendering captured this result's source tool as
+      // a git command, the tool_use row already rendered the widget
+      // and consumed the output. Render nothing here so the output
+      // doesn't duplicate below the card.
+      if (customRendering) {
+        const sourceTu = toolUseIndex.get(tr.tool_use_id)
+        if (
+          sourceTu
+          && (sourceTu.name === 'Bash' || sourceTu.name === 'exec_command')
+          && detectGitIntent(extractToolCommand(sourceTu))
+        ) {
+          return null
+        }
       }
-      return <ToolResultRow block={block as ToolResultBlock} />
+      if (currentProvider === 'codex') {
+        return <CodexToolResultRow block={tr} />
+      }
+      return <ToolResultRow block={tr} />
+    }
     default:
       return (
         <MarkerRow marker="⏺" tone="muted">

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 import { CommandPalette } from './CommandPalette'
+import { CustomRenderingContext } from './CustomRenderingContext'
 import { DebugPanel } from './DebugPanel'
 import { GitBar } from './GitBar'
 import { ThemePicker } from './feed/ThemePicker'
@@ -34,6 +35,16 @@ export default function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [gitBarOpen, setGitBarOpen] = useState(false)
   const [debugPanelOpen, setDebugPanelOpen] = useState(false)
+  // Feed-side "rich rendering" opt-in. Off by default per user
+  // instruction; flipped via the command palette. Lives up here
+  // (rather than in Feed.tsx) because every feed inside every
+  // tile tree needs to share the flag — provider at App sees
+  // all of them via context.
+  const [customRendering, setCustomRendering] = useState(false)
+  const toggleCustomRendering = useCallback(
+    () => setCustomRendering(prev => !prev),
+    [],
+  )
   const workspace = useWorkspace()
 
   // Pre-fill the path input with a sensible default when the modal
@@ -102,6 +113,9 @@ export default function App() {
   const { state, activeTab } = workspace
 
   return (
+    <CustomRenderingContext.Provider
+      value={{ enabled: customRendering, toggle: toggleCustomRendering }}
+    >
     <div className="h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
       {/* Tab bar */}
       <TabBar workspace={workspace} onNewTabRequest={onNewTabRequest} />
@@ -175,6 +189,8 @@ export default function App() {
         onResumeRequest={onResumeRequest}
         toggleGitBar={() => setGitBarOpen(prev => !prev)}
         toggleDebugPanel={() => setDebugPanelOpen(prev => !prev)}
+        toggleCustomRendering={toggleCustomRendering}
+        customRenderingEnabled={customRendering}
       />
 
       <PathPickerModal
@@ -185,6 +201,7 @@ export default function App() {
         onResume={onPathPickerResume}
       />
     </div>
+    </CustomRenderingContext.Provider>
   )
 }
 
