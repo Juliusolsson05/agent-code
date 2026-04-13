@@ -94,20 +94,49 @@ export function detectGitIntent(cmd: string | undefined | null): GitIntent | nul
   const trimmed = cmd.trim()
   if (!trimmed) return null
 
-  // Bail on multi-command constructions. We only handle single-command
-  // git invocations. Detecting these via simple substring is imperfect
-  // (matches inside quoted strings too) but the cost of a false bail
-  // is "render generically" which is fine — we're never going to render
-  // a pipe chain as a git widget anyway.
-  //
-  // NOTE: `git commit -m "$(cat <<'EOF' ... EOF)"` is the one important
-  // exception. Those heredoc-commits are how agents build multi-line
-  // commit bodies. We special-case them below by matching the commit
-  // shape first, before falling through to the bail heuristics.
+  // Heredoc-commits (`git commit -m "$(cat <<'EOF' ... EOF)"`) are the
+  // canonical multi-line commit shape agents emit. Match commit at the
+  // top before any chain-splitting / bail logic so the heredoc body
+  // can't trip the heuristics below.
   if (/^git\s+commit\b/.test(trimmed)) {
     return parseCommit(trimmed)
   }
-  if (/[|&;><]/.test(trimmed.replace(/"[^"]*"|'[^']*'/g, ''))) return null
+
+  // Chained commands (`git status && git add -A && git commit -m ...`)
+  // are the workflow agents actually use — fetch state, stage, commit
+  // in one shot. We split the chain on top-level `&&` / `;` (ignoring
+  // anything inside quoted runs so heredocs don't get torn apart) and
+  // pick the highest-priority git intent we find. The widget then
+  // receives the combined stdout; each parser is anchored on its own
+  // unmistakable shape (commit on `[branch sha]`, push on `To `,
+  // status on section headers, diff on `diff --git`) so prefix noise
+  // from earlier commands in the chain is harmless.
+  //
+  // Priority order encodes "what is the user actually trying to see":
+  // commit > push > log > diff > status > add. A commit chained after
+  // status renders as a commit card, not a status card, because the
+  // commit is the meaningful event. add is lowest because its output
+  // is usually empty and exists only as setup for whatever follows.
+  const segments = splitTopLevel(trimmed)
+  if (segments.length > 1) {
+    const intents: GitIntent[] = []
+    for (const seg of segments) {
+      const sub = detectGitIntent(seg.trim())
+      if (sub) intents.push(sub)
+    }
+    if (intents.length === 0) return null
+    const priority: Record<GitIntent['kind'], number> = {
+      commit: 6, push: 5, log: 4, diff: 3, status: 2, add: 1,
+    }
+    intents.sort((a, b) => priority[b.kind] - priority[a.kind])
+    return intents[0]
+  }
+
+  // Single-command: still bail on pipes / redirects. Those almost
+  // always make the output unparseable (`git diff | head -20`
+  // truncates mid-hunk; `git diff > /dev/null` produces no stdout
+  // at all). Generic renderer handles them fine.
+  if (/[|><]/.test(trimmed.replace(/"[^"]*"|'[^']*'/g, ''))) return null
 
   // Must start with `git ` — no `/usr/bin/git`, no `git -C …` for now.
   // Those are valid but rare and add edge cases we don't need for v1.
@@ -212,6 +241,55 @@ function parseCommit(cmd: string): GitCommitIntent | null {
 }
 
 // ---------- tokenizer ----------
+
+/**
+ * Split a command string into segments at top-level `&&` or `;`
+ * separators, ignoring anything inside double- or single-quoted
+ * runs. The agent's typical heredoc-commit pattern wraps the
+ * commit body inside `"$(cat <<'EOF' ... EOF)"` — the outer `"..."`
+ * keeps the heredoc body invisible to this splitter, so we can
+ * still segment a chain like:
+ *
+ *   git status && git add -A && git commit -m "$(cat <<'EOF'
+ *   subject
+ *   EOF
+ *   )"
+ *
+ * into three pieces without slicing the heredoc.
+ */
+function splitTopLevel(s: string): string[] {
+  const out: string[] = []
+  let buf = ''
+  let i = 0
+  let quote: '"' | "'" | null = null
+  while (i < s.length) {
+    const c = s[i]
+    if (quote) {
+      if (c === quote) quote = null
+      buf += c
+      i++
+      continue
+    }
+    if (c === '"' || c === "'") { quote = c; buf += c; i++; continue }
+    // `&&` separator — two chars, only at top level.
+    if (c === '&' && s[i + 1] === '&') {
+      out.push(buf)
+      buf = ''
+      i += 2
+      continue
+    }
+    if (c === ';') {
+      out.push(buf)
+      buf = ''
+      i++
+      continue
+    }
+    buf += c
+    i++
+  }
+  if (buf) out.push(buf)
+  return out
+}
 
 /**
  * Split a command argument string into shell-like tokens. Handles
