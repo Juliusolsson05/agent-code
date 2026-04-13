@@ -785,19 +785,7 @@ export function useWorkspace() {
           })
         }
 
-        // Codex activity detection via structured turn events. These are
-        // the authoritative signal — no screen scraping needed. When a
-        // turn starts, the agent is working. When it completes, it's idle.
         const payload = entry.payload as Record<string, unknown> | undefined
-        if (entry.type === 'event_msg') {
-          const pt = payload?.type
-          if (pt === 'turn_started' || pt === 'task_started') {
-            updateRuntime(sessionId, { awaitingAssistant: true })
-          } else if (pt === 'turn_complete' || pt === 'task_complete') {
-            updateRuntime(sessionId, { awaitingAssistant: false })
-          }
-        }
-
         const mapped = mapCodexRolloutToFeedEntries(entry)
         const approvalRequest =
           entry.type === 'event_msg' && payload?.type === 'exec_approval_request'
@@ -1058,17 +1046,10 @@ export function useWorkspace() {
       updateRuntime(sessionId, { exited: exitCode })
     })
 
-    // Process-state events from the ProcessInspector (~1Hz, only on
-    // change). Updates awaitingAssistant based on caffeinate presence.
-    //
-    // Only applies to Claude sessions — Codex uses IOKit power
-    // assertions (not caffeinate), so the inspector always reports
-    // false for Codex and would wrongly override the JSONL-based
-    // awaitingAssistant. Codex keeps its existing JSONL-driven
-    // activity detection until we add an IOKit-aware inspector.
+    // Provider-emitted activity state. For Claude this comes from its
+    // process inspector; for Codex it comes from the explicit bottom
+    // "Working (... • esc to interrupt)" row in the TUI.
     const offProcessState = window.api.onSessionProcessState(({ sessionId, active }) => {
-      const kind = stateRef.current.sessions[sessionId]?.kind
-      if (kind === 'codex') return
       updateRuntime(sessionId, { awaitingAssistant: active })
     })
 

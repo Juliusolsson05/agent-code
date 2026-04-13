@@ -43,6 +43,7 @@ export type CodexSessionEvents = {
   screen: [CodexScreenSnapshot]
   'jsonl-entry': [CodexRolloutLine, string]
   'jsonl-error': [Error]
+  'process-state': [{ active: boolean }]
   exit: [{ exitCode: number; signal?: number }]
 }
 
@@ -147,6 +148,14 @@ export class CodexSession extends EventEmitter {
       })
     })
 
+    this.headless.on('activity', () => {
+      this.emit('process-state', { active: true })
+    })
+
+    this.headless.on('idle', () => {
+      this.emit('process-state', { active: false })
+    })
+
     // Forward rollout entries as jsonl-entry (matches Claude's event name).
     this.headless.on('rollout-entry', (line, file) => {
       this.emit('jsonl-entry', line as unknown as CodexRolloutLine, file)
@@ -165,10 +174,9 @@ export class CodexSession extends EventEmitter {
     // ordering as ClaudeSession to avoid missing early entries.
     const { sessionsDir } = await this.headless.start()
 
-    // No process inspector for Codex — it uses IOKit power assertions
-    // instead of caffeinate, so the caffeinate-based inspector would
-    // always report inactive. Codex activity detection stays JSONL-driven
-    // (awaitingAssistant set by the rollout entry handler).
+    // Codex activity is derived from its explicit bottom working row,
+    // parsed in codex-headless and forwarded here as process-state for
+    // app-level compatibility.
 
     this.emit('started', { projectDir: sessionsDir })
   }
