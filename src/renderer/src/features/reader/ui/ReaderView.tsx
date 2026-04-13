@@ -214,8 +214,13 @@ function ReaderBody({
         className="flex-1 min-h-0 min-w-0 overflow-auto"
       >
         {/* Centered narrow column for readability. max-w-3xl keeps line
-            length around 80ch which is the usual sweet spot for prose. */}
+            length around 80ch which is the usual sweet spot for prose.
+            prose-theme is load-bearing: it's the CSS class in styles.css
+            that styles h1/h2/p/ul/li/strong/em/inline-code etc. Without
+            it, ReactMarkdown still emits the right tags but the browser
+            defaults render everything as a flat white paragraph run. */}
         <article className="
+          prose-theme
           mx-auto max-w-3xl px-8 py-10
           text-ink text-[15px] leading-[1.7]
         ">
