@@ -45,6 +45,26 @@ export type SessionJsonlEntryEvent = {
 export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 /** Raw PTY output for a terminal session — destined for xterm.js. */
 export type SessionTerminalDataEvent = { sessionId: string; data: string }
+export type SessionTrustDialogEvent = {
+  sessionId: string
+  visible: boolean
+  workspace?: string
+}
+export type SessionResumePromptEvent = {
+  sessionId: string
+  visible: boolean
+  sessionAgeText?: string
+  tokenCountText?: string
+  options?: string[]
+  selectedIndex?: number
+}
+export type SessionCompactionStateEvent = {
+  sessionId: string
+  visible: boolean
+  phase?: 'running' | 'error' | 'done'
+  statusText?: string
+  errorText?: string
+}
 export type SessionExitEvent = {
   sessionId: string
   exitCode: number
@@ -155,6 +175,18 @@ const api = {
    *  emit on this channel — they use screen/jsonl-entry instead. */
   onSessionTerminalData: (cb: (e: SessionTerminalDataEvent) => void): Unsub =>
     subscribe('session:terminal-data', cb),
+
+  onSessionProcessState: (cb: (e: { sessionId: string; active: boolean }) => void): Unsub =>
+    subscribe('session:process-state', cb),
+
+  onSessionTrustDialog: (cb: (e: SessionTrustDialogEvent) => void): Unsub =>
+    subscribe('session:trust-dialog', cb),
+
+  onSessionResumePrompt: (cb: (e: SessionResumePromptEvent) => void): Unsub =>
+    subscribe('session:resume-prompt', cb),
+
+  onSessionCompactionState: (cb: (e: SessionCompactionStateEvent) => void): Unsub =>
+    subscribe('session:compaction-state', cb),
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),

@@ -1,21 +1,13 @@
-import { detectTrustDialog } from '../parsers/trustDialog'
-
-// Trust-dialog overlay. Sharp edges, no rounding, no shadow frills —
-// matches the rest of the app's aesthetic. Detection is delegated to
-// core/parsers/trustDialog so the testbench's auto-accept mode and this
-// modal share one source of truth.
-
 type Props = {
-  screen: string
-  onSend: (data: string) => void
+  state: { workspace?: string } | null
+  onSend: (data: string) => Promise<void>
 }
 
-export function TrustDialogModal({ screen, onSend }: Props) {
-  const state = detectTrustDialog(screen)
-  if (!state.visible) return null
+export function TrustDialogModal({ state, onSend }: Props) {
+  if (!state) return null
 
-  const accept = () => onSend('\r')
-  const decline = () => onSend('\x1b')
+  const accept = () => { void onSend('\r') }
+  const decline = () => { void onSend('\x1b') }
 
   return (
     <div

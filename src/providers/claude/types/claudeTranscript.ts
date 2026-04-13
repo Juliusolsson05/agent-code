@@ -57,17 +57,54 @@ export type ConversationEntry = {
   isSidechain?: boolean
 }
 
+export type CompactBoundaryEntry = {
+  type: 'system'
+  subtype: 'compact_boundary'
+  content: 'Conversation compacted'
+  uuid?: string
+  compactMetadata?: {
+    trigger?: 'manual' | 'auto'
+    preTokens?: number
+    preCompactDiscoveredTools?: string[]
+    [k: string]: unknown
+  }
+  [k: string]: unknown
+}
+
+export type CompactSummaryEntry = ConversationEntry & {
+  type: 'user'
+  isCompactSummary: true
+  isVisibleInTranscriptOnly?: boolean
+}
+
 export type SystemEntry = {
   type: string
   uuid?: string
   [k: string]: unknown
 }
 
-export type Entry = ConversationEntry | SystemEntry
+export type Entry =
+  | ConversationEntry
+  | CompactBoundaryEntry
+  | CompactSummaryEntry
+  | SystemEntry
 
 export function isConversationEntry(e: Entry): e is ConversationEntry {
   return (
     (e.type === 'user' || e.type === 'assistant') &&
+    typeof (e as ConversationEntry).message === 'object' &&
+    (e as ConversationEntry).message !== null
+  )
+}
+
+export function isCompactBoundaryEntry(e: Entry): e is CompactBoundaryEntry {
+  return e.type === 'system' && (e as { subtype?: unknown }).subtype === 'compact_boundary'
+}
+
+export function isCompactSummaryEntry(e: Entry): e is CompactSummaryEntry {
+  return (
+    e.type === 'user' &&
+    (e as { isCompactSummary?: unknown }).isCompactSummary === true &&
     typeof (e as ConversationEntry).message === 'object' &&
     (e as ConversationEntry).message !== null
   )

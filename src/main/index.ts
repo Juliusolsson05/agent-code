@@ -95,6 +95,10 @@ function wireManagerIPC(): void {
   manager.on('terminal-data', payload =>
     send('session:terminal-data', payload),
   )
+  manager.on('process-state', payload => send('session:process-state', payload))
+  manager.on('trust-dialog', payload => send('session:trust-dialog', payload))
+  manager.on('resume-prompt', payload => send('session:resume-prompt', payload))
+  manager.on('compaction-state', payload => send('session:compaction-state', payload))
   manager.on('exit', payload => send('session:exit', payload))
   lspManager.on('diagnostics', payload => send('lsp:diagnostics', payload))
 }

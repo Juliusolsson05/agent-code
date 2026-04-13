@@ -38,6 +38,23 @@ export type ManagerEvents = {
   /** Emitted only by Claude sessions — parsed JSONL entries. */
   'jsonl-entry': [{ sessionId: string; entry: JsonlEntry; file: string }]
   'jsonl-error': [{ sessionId: string; error: Error }]
+  'process-state': [{ sessionId: string; active: boolean }]
+  'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
+  'resume-prompt': [{
+    sessionId: string
+    visible: boolean
+    sessionAgeText?: string
+    tokenCountText?: string
+    options?: string[]
+    selectedIndex?: number
+  }]
+  'compaction-state': [{
+    sessionId: string
+    visible: boolean
+    phase?: 'running' | 'error' | 'done'
+    statusText?: string
+    errorText?: string
+  }]
   /** Emitted only by terminal sessions — raw PTY output for xterm.js. */
   'terminal-data': [{ sessionId: string; data: string }]
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
@@ -163,6 +180,25 @@ export class SessionManager extends EventEmitter {
       session.on('jsonl-error', (error: Error) =>
         this.emit('jsonl-error', { sessionId, error }),
       )
+      session.on('process-state', (state: { active: boolean }) =>
+        this.emit('process-state', { sessionId, ...state }),
+      )
+      session.on('trust-dialog', (state: { visible: boolean; workspace?: string }) =>
+        this.emit('trust-dialog', { sessionId, ...state }),
+      )
+      session.on('resume-prompt', (state: {
+        visible: boolean
+        sessionAgeText?: string
+        tokenCountText?: string
+        options?: string[]
+        selectedIndex?: number
+      }) => this.emit('resume-prompt', { sessionId, ...state }))
+      session.on('compaction-state', (state: {
+        visible: boolean
+        phase?: 'running' | 'error' | 'done'
+        statusText?: string
+        errorText?: string
+      }) => this.emit('compaction-state', { sessionId, ...state }))
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
         this.emit('exit', { sessionId, exitCode, signal })
         this.sessions.delete(sessionId)

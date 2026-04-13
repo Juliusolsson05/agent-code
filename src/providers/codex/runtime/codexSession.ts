@@ -164,6 +164,12 @@ export class CodexSession extends EventEmitter {
     // Start the transcript tailer BEFORE we emit started — same
     // ordering as ClaudeSession to avoid missing early entries.
     const { sessionsDir } = await this.headless.start()
+
+    // No process inspector for Codex — it uses IOKit power assertions
+    // instead of caffeinate, so the caffeinate-based inspector would
+    // always report inactive. Codex activity detection stays JSONL-driven
+    // (awaitingAssistant set by the rollout entry handler).
+
     this.emit('started', { projectDir: sessionsDir })
   }
 

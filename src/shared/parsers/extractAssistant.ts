@@ -7,8 +7,11 @@
 // text from this screen snapshot." This module routes based on a
 // `provider` argument so the callers stay provider-agnostic.
 
-import { extractAssistantInProgress as claudeExtract } from '../../providers/claude/parsers/streamingScreen.js'
-import { extractCodexAssistantInProgress as codexExtract } from '../../providers/codex/parsers/streamingScreen.js'
+// Direct file imports — the parser files are pure TypeScript, safe for
+// the renderer bundle. The headless package entry points pull in Node
+// deps so we can't import through them in browser context.
+import { extractAssistantInProgress as claudeExtract } from './claudeScreen'
+import { extractCodexAssistantInProgress as codexExtract } from './codexScreen'
 
 export type AgentProvider = 'claude' | 'codex'
 
