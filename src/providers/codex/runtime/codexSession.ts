@@ -29,6 +29,7 @@ export type CodexSessionOptions = {
   env?: Record<string, string | undefined>
   snapshotIntervalMs?: number
   resumeSessionId?: string
+  dangerousMode?: boolean
 }
 
 export type CodexScreenSnapshot = {
@@ -89,6 +90,7 @@ export class CodexSession extends EventEmitter {
   private readonly env: Record<string, string | undefined>
   private readonly snapshotIntervalMs: number
   private readonly resumeSessionId: string | null
+  private readonly dangerousMode: boolean
 
   constructor(options: CodexSessionOptions = {}) {
     super()
@@ -97,6 +99,7 @@ export class CodexSession extends EventEmitter {
     this.rows = options.rows ?? 40
     this.binary = options.binary ?? 'codex'
     this.resumeSessionId = options.resumeSessionId ?? null
+    this.dangerousMode = options.dangerousMode === true
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
 
     // Build env: start from process.env so PATH, HOME, API keys
@@ -117,6 +120,9 @@ export class CodexSession extends EventEmitter {
   async start(): Promise<void> {
     // Codex uses a subcommand for resume: `codex resume <id>`.
     const args: string[] = []
+    if (this.dangerousMode) {
+      args.push('--dangerously-bypass-approvals-and-sandbox')
+    }
     if (this.resumeSessionId) {
       args.push('resume', this.resumeSessionId)
     }

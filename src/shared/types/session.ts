@@ -15,6 +15,7 @@ export type SessionOptions = {
   env?: Record<string, string | undefined>
   snapshotIntervalMs?: number
   resumeSessionId?: string
+  dangerousMode?: boolean
 }
 
 export type SessionInfo = {

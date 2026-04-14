@@ -22,6 +22,7 @@ export type ClaudeSessionOptions = {
   env?: Record<string, string | undefined>
   snapshotIntervalMs?: number
   resumeSessionId?: string
+  dangerousMode?: boolean
 }
 
 export type ScreenSnapshot = {
@@ -78,6 +79,7 @@ export class ClaudeSession extends EventEmitter {
   private readonly env: Record<string, string | undefined>
   private readonly snapshotIntervalMs: number
   private readonly resumeSessionId: string | null
+  private readonly dangerousMode: boolean
 
   constructor(options: ClaudeSessionOptions = {}) {
     super()
@@ -86,6 +88,7 @@ export class ClaudeSession extends EventEmitter {
     this.rows = options.rows ?? 40
     this.binary = options.binary ?? 'claude'
     this.resumeSessionId = options.resumeSessionId ?? null
+    this.dangerousMode = options.dangerousMode === true
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
 
     const env: Record<string, string | undefined> = {}
@@ -105,6 +108,7 @@ export class ClaudeSession extends EventEmitter {
   async start(): Promise<void> {
     const args: string[] = []
     if (this.resumeSessionId) args.push('--resume', this.resumeSessionId)
+    if (this.dangerousMode) args.push('--dangerously-skip-permissions')
 
     const cleanEnv: Record<string, string> = {}
     for (const [k, v] of Object.entries(this.env)) {

@@ -71,6 +71,8 @@ export type SpawnOptions = {
   /** Claude only: if set, spawn with --resume <uuid> and tail the
    *  existing session file. Silently ignored for terminal sessions. */
   resumeSessionId?: string
+  /** Agent sessions only: opt into provider-specific dangerous mode. */
+  dangerousMode?: boolean
   /** Terminal + tmux only: when set AND tmux is available, attach to
    *  this existing tmux session instead of creating a new one. Used
    *  by the workspace reload path to recover persistent terminals
@@ -187,6 +189,7 @@ export class SessionManager extends EventEmitter {
         rows: options.rows ?? 40,
         snapshotIntervalMs: 16,
         resumeSessionId: options.resumeSessionId,
+        dangerousMode: options.dangerousMode,
       }) as import('events').EventEmitter
 
       session.on('started', ({ projectDir }: { projectDir: string }) =>
