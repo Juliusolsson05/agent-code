@@ -36,9 +36,9 @@ import {
   type ToolUseBlock,
 } from '../../../shared/types/transcript'
 import { CodeBlock } from '../code/CodeBlock'
-import { useCustomRendering } from '../CustomRenderingContext'
 import { detectGitIntent } from '../../../shared/git/gitDetect'
 import { GitCardRow } from '../git/GitRows'
+import { useAppStore } from '../state/hooks'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.
@@ -328,7 +328,6 @@ type Props = {
    * auto-scrolls into view when the value changes.
    */
   pickerSelectedUuid?: string | null
-  showSystemEvents: boolean
   workspaceRoot?: string | null
   /** Called on every scroll tick with the current position. */
   onScrollInfo?: (info: ScrollInfo) => void
@@ -426,7 +425,6 @@ function FeedImpl({
   activityStatus,
   tailMode = false,
   pickerSelectedUuid = null,
-  showSystemEvents,
   workspaceRoot = null,
   onScrollInfo,
 }: Props) {
@@ -472,6 +470,16 @@ function FeedImpl({
   const stickyBottomRef = useRef(
     scrollPositions.get(sessionId)?.stickyBottom ?? true,
   )
+  // Previous scrollTop, used to distinguish "the user started
+  // scrolling upward" from incidental near-bottom jitter. This is
+  // load-bearing during active turns: with the old "gap < 48"
+  // heuristic alone, a tiny upward wheel tick still counted as
+  // sticky, and the next ~60 Hz screen update snapped the feed right
+  // back down before the user could accumulate enough distance to
+  // escape. Any real upward movement should break follow
+  // immediately; re-follow only when the user intentionally returns
+  // near the bottom.
+  const lastScrollTopRef = useRef(0)
 
   // Restore the saved scroll position on mount — synchronously, via
   // useLayoutEffect, so the browser never paints the scroller at
@@ -503,6 +511,7 @@ function FeedImpl({
     if (tailMode) {
       el.scrollTop = el.scrollHeight
       stickyBottomRef.current = true
+      lastScrollTopRef.current = el.scrollTop
       return
     }
     const saved = scrollPositions.get(sessionId)
@@ -516,10 +525,12 @@ function FeedImpl({
       // the user flagged.
       el.scrollTop = el.scrollHeight
       stickyBottomRef.current = true
+      lastScrollTopRef.current = el.scrollTop
     } else {
       // Case 3: restore exact position.
       el.scrollTop = saved.scrollTop
       stickyBottomRef.current = false
+      lastScrollTopRef.current = el.scrollTop
     }
   }, [sessionId, tailMode])
 
@@ -543,6 +554,7 @@ function FeedImpl({
       if (tailMode) {
         el.scrollTop = el.scrollHeight
         stickyBottomRef.current = true
+        lastScrollTopRef.current = el.scrollTop
         scrollPositions.set(sessionId, {
           scrollTop: el.scrollTop,
           stickyBottom: true,
@@ -551,7 +563,11 @@ function FeedImpl({
         return
       }
       const gap = el.scrollHeight - (el.scrollTop + el.clientHeight)
-      stickyBottomRef.current = gap < 48
+      const scrollingUp = el.scrollTop < lastScrollTopRef.current
+      const nearBottom = gap < 48
+      stickyBottomRef.current =
+        scrollingUp && gap > 0 ? false : nearBottom
+      lastScrollTopRef.current = el.scrollTop
       scrollPositions.set(sessionId, {
         scrollTop: el.scrollTop,
         stickyBottom: stickyBottomRef.current,
@@ -651,9 +667,8 @@ function FeedImpl({
     }
   }, [pickerSelectedUuid])
 
-  // Visible entries = all entries if system events are shown, otherwise
-  // skip attachment / permission-mode / file-history-snapshot AND
-  // isMeta entries. isMeta entries are CC's system-injected user-role
+  // Visible entries skip system/meta noise by default. isMeta entries are
+  // CC's system-injected user-role
   // messages: task-notification results from subagents, auto-continue
   // hints ("Continue from where you left off."), system-reminder
   // payloads, etc. They carry `isMeta: true` on the entry but pass
@@ -662,19 +677,17 @@ function FeedImpl({
   // completion notification would render as a full UserBand in the
   // feed with raw <task-notification> XML visible — exactly the bug
   // the user reported.
-  const visible = showSystemEvents
-    ? entries
-    : entries.filter(e => {
-        if (isCompactBoundaryEntry(e)) return true
-        if (isCompactSummaryEntry(e)) return true
-        if (!isConversationEntry(e)) return false
-        if ((e as unknown as { isMeta?: boolean }).isMeta === true) return false
-        return true
-      })
+  const visible = entries.filter(e => {
+    if (isCompactBoundaryEntry(e)) return true
+    if (isCompactSummaryEntry(e)) return true
+    if (!isConversationEntry(e)) return false
+    if ((e as unknown as { isMeta?: boolean }).isMeta === true) return false
+    return true
+  })
 
   // Index EVERY tool_use block (not just the visible set) so tool_result
-  // lookups still resolve even when showSystemEvents is off and some
-  // synthetic entries have been filtered out. The index is cheap to
+  // lookups still resolve even when some synthetic entries have been
+  // filtered out. The index is cheap to
   // build (single pass) and the resulting Map is handed to result rows
   // via context.
   const toolUseIndex = useMemo(() => buildToolUseIndex(entries), [entries])
@@ -1088,7 +1101,7 @@ const Block = memo(function Block({
   const currentProvider = useContext(ProviderContext)
   const toolUseIndex = useContext(ToolUseIndexContext)
   const toolResultIndex = useContext(ToolResultIndexContext)
-  const { enabled: customRendering } = useCustomRendering()
+  const customRendering = useAppStore(state => state.settings.customRendering)
   switch (block.type) {
     case 'text': {
       // Only text blocks under a user role represent an actual user

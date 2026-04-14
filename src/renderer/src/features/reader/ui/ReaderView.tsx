@@ -181,21 +181,25 @@ function ReaderBody({
   // there's only one growing block, not a list of entries.
   const scrollerRef = useRef<HTMLDivElement>(null)
   const [stickToBottom, setStickToBottom] = useState(true)
+  const lastScrollTopRef = useRef(0)
   useEffect(() => {
     if (!stickToBottom) return
     const el = scrollerRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
+    lastScrollTopRef.current = el.scrollTop
   }, [text, stickToBottom])
 
   const onScroll = () => {
     const el = scrollerRef.current
     if (!el) return
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    const scrollingUp = el.scrollTop < lastScrollTopRef.current
     // 32px threshold — lets the user scroll up by a small amount
     // without immediately re-pinning, but also catches "I scrolled
     // to within a few pixels of the bottom and want auto-follow back."
-    setStickToBottom(distanceFromBottom < 32)
+    setStickToBottom(scrollingUp && distanceFromBottom > 0 ? false : distanceFromBottom < 32)
+    lastScrollTopRef.current = el.scrollTop
   }
 
   if (!text) {

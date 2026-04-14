@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 
+import { useAppStore } from '../state/hooks'
 import type { Workspace } from './workspaceStore'
 
 // Keybinds: global window-level listeners. The handler is attached to
@@ -57,6 +58,9 @@ export function useKeybinds(
   onResumeRequest: ResumeRequester,
   onCommandPalette?: CommandPaletteToggle,
 ): void {
+  const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
+  const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
+
   useEffect(() => {
     let pendingTiledResizeIndex: number | null = null
 
@@ -124,6 +128,12 @@ export function useKeybinds(
       if (k === 'Escape' && workspace.readerMode) {
         e.preventDefault()
         workspace.toggleReaderMode()
+        return
+      }
+
+      if (k === 'Escape' && settingsPageOpen) {
+        e.preventDefault()
+        closeSettingsPage()
         return
       }
 
@@ -384,5 +394,12 @@ export function useKeybinds(
       document.removeEventListener('keyup', onKeyUp, { capture: true })
       window.removeEventListener('blur', onBlur)
     }
-  }, [workspace, onNewTabRequest, onResumeRequest, onCommandPalette])
+  }, [
+    closeSettingsPage,
+    onCommandPalette,
+    onNewTabRequest,
+    onResumeRequest,
+    settingsPageOpen,
+    workspace,
+  ])
 }

@@ -1,26 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
+
 import {
   ACCENTS,
-  applyTheme,
-  saveSettings,
   type AccentId,
   type Settings,
   type ThemeMode,
-} from '../features/settings/state/settingsBridge'
-
-// Settings menu — a small button in the header that opens a floating
-// panel with: mode toggle (dark/light), accent color swatches, and a
-// couple of visibility toggles.
-//
-// Kept flat and fast: one dropdown, everything visible, no nested
-// accordions. The settings surface is intentionally small.
+} from '../state/settings/types'
 
 type Props = {
   settings: Settings
-  onChange: (next: Settings) => void
+  onChange: (patch: Partial<Settings>) => void
 }
 
-export function ThemePicker({ settings, onChange }: Props) {
+export function AppearanceMenu({ settings, onChange }: Props) {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
 
@@ -41,19 +33,12 @@ export function ThemePicker({ settings, onChange }: Props) {
     }
   }, [open])
 
-  const update = (patch: Partial<Settings>) => {
-    const next = { ...settings, ...patch }
-    applyTheme(next)
-    saveSettings(next)
-    onChange(next)
-  }
-
   return (
     <div ref={rootRef} className="relative">
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
-        title="Settings"
+        title="Appearance"
         aria-haspopup="menu"
         aria-expanded={open}
         className="
@@ -65,7 +50,7 @@ export function ThemePicker({ settings, onChange }: Props) {
           [-webkit-app-region:no-drag]
         "
       >
-        <SettingsIcon />
+        <EyeIcon />
       </button>
 
       {open && (
@@ -83,12 +68,12 @@ export function ThemePicker({ settings, onChange }: Props) {
               <ModeButton
                 mode="dark"
                 current={settings.mode}
-                onPick={m => update({ mode: m })}
+                onPick={mode => onChange({ mode })}
               />
               <ModeButton
                 mode="light"
                 current={settings.mode}
-                onPick={m => update({ mode: m })}
+                onPick={mode => onChange({ mode })}
               />
             </div>
           </Section>
@@ -102,28 +87,10 @@ export function ThemePicker({ settings, onChange }: Props) {
                   color={settings.mode === 'dark' ? a.dark : a.light}
                   name={a.name}
                   active={settings.accent === a.id}
-                  onPick={id => update({ accent: id })}
+                  onPick={accent => onChange({ accent })}
                 />
               ))}
             </div>
-          </Section>
-
-          <Section title="view">
-            <Toggle
-              label="High contrast"
-              value={settings.highContrast}
-              onChange={v => update({ highContrast: v })}
-            />
-            <Toggle
-              label="Live terminal preview"
-              value={settings.showTerminalPreview}
-              onChange={v => update({ showTerminalPreview: v })}
-            />
-            <Toggle
-              label="System events"
-              value={settings.showSystemEvents}
-              onChange={v => update({ showSystemEvents: v })}
-            />
           </Section>
         </div>
       )}
@@ -202,57 +169,19 @@ function AccentSwatch({
   )
 }
 
-function Toggle({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: boolean
-  onChange: (v: boolean) => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!value)}
-      className="
-        w-full flex items-center justify-between
-        py-1.5 px-0
-        text-[11px] text-ink-dim hover:text-ink
-        transition-colors duration-120
-      "
-    >
-      <span>{label}</span>
-      <span
-        className={`
-          w-3.5 h-3.5 border
-          transition-colors duration-120
-          ${value ? 'bg-accent border-accent' : 'bg-transparent border-border-hi'}
-        `}
-      >
-        {value && (
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="text-accent-fg">
-            <path d="M3 7.5l2.5 2.5L11 4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        )}
-      </span>
-    </button>
-  )
-}
-
-function SettingsIcon() {
+function EyeIcon() {
   return (
     <svg
-      width="13"
-      height="13"
+      width="14"
+      height="14"
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.4"
       aria-hidden="true"
     >
-      <circle cx="8" cy="8" r="2" />
-      <path d="M12.5 8a4.5 4.5 0 0 0-.07-.8l1.4-1.1-1.4-2.4-1.7.6a4.5 4.5 0 0 0-1.4-.8L9 1.5h-2L6.7 3.5a4.5 4.5 0 0 0-1.4.8l-1.7-.6-1.4 2.4 1.4 1.1a4.5 4.5 0 0 0 0 1.6l-1.4 1.1 1.4 2.4 1.7-.6a4.5 4.5 0 0 0 1.4.8l.3 2h2l.3-2a4.5 4.5 0 0 0 1.4-.8l1.7.6 1.4-2.4-1.4-1.1c.05-.26.07-.53.07-.8z" />
+      <path d="M1.5 8s2.3-4 6.5-4 6.5 4 6.5 4-2.3 4-6.5 4-6.5-4-6.5-4z" />
+      <circle cx="8" cy="8" r="2.2" />
     </svg>
   )
 }

@@ -1,24 +1,19 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect } from 'react'
 
 import { CommandPalette } from './CommandPalette'
-import { CustomRenderingContext } from './CustomRenderingContext'
 import { DebugPanel } from './DebugPanel'
 import { SettingsPage } from './features/settings/ui/SettingsPage'
 import { SpotlightView } from './features/spotlight/ui/SpotlightView'
 import { ReaderView } from './features/reader/ui/ReaderView'
 import { TileTabsModal } from './features/tile-tabs/ui/TileTabsModal'
 import { TileTabsView } from './features/tile-tabs/ui/TileTabsView'
-import {
-  applyTheme,
-  loadSettings,
-  type Settings,
-} from './features/settings/state/settingsBridge'
 import { GitBar } from './GitBar'
-import { ThemePicker } from './feed/ThemePicker'
+import { AppearanceMenu } from './feed/AppearanceMenu'
 import { PathPickerModal } from './tiles/PathPickerModal'
 import { TabBar } from './tiles/TabBar'
 import { TileTree } from './tiles/TileTree'
-import type { TabId } from './tiles/types'
+import { useAppStore } from './state/hooks'
+import { applyTheme } from './state/settings/theme'
 import { useKeybinds } from './tiles/useKeybinds'
 import { useWorkspace } from './tiles/workspaceStore'
 
@@ -35,29 +30,38 @@ import { useWorkspace } from './tiles/workspaceStore'
 // streaming preview, trust modal — lives inside TileLeaf or the store.
 // This file stays short on purpose.
 
-applyTheme(loadSettings())
-
 export default function App() {
-  const [settings, setSettings] = useState<Settings>(loadSettings())
-  const [pathPickerOpen, setPathPickerOpen] = useState(false)
-  const [pathPickerDefault, setPathPickerDefault] = useState('')
-  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
-  const [tileTabsModalOpen, setTileTabsModalOpen] = useState(false)
-  const [tileTabsInitialSelectedIds, setTileTabsInitialSelectedIds] = useState<TabId[]>([])
-  const [settingsPageOpen, setSettingsPageOpen] = useState(false)
-  const [gitBarOpen, setGitBarOpen] = useState(false)
-  const [debugPanelOpen, setDebugPanelOpen] = useState(false)
-  // Feed-side "rich rendering" opt-in. Off by default per user
-  // instruction; flipped via the command palette. Lives up here
-  // (rather than in Feed.tsx) because every feed inside every
-  // tile tree needs to share the flag — provider at App sees
-  // all of them via context.
-  const [customRendering, setCustomRendering] = useState(false)
-  const toggleCustomRendering = useCallback(
-    () => setCustomRendering(prev => !prev),
-    [],
-  )
-  const workspace = useWorkspace()
+  const settings = useAppStore(state => state.settings)
+  const setSettings = useAppStore(state => state.setSettings)
+  const resetSettings = useAppStore(state => state.resetSettings)
+  const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
+  const pathPickerOpen = useAppStore(state => state.pathPickerOpen)
+  const pathPickerDefault = useAppStore(state => state.pathPickerDefault)
+  const commandPaletteOpen = useAppStore(state => state.commandPaletteOpen)
+  const tileTabsModalOpen = useAppStore(state => state.tileTabsModalOpen)
+  const tileTabsInitialSelectedIds = useAppStore(state => state.tileTabsInitialSelectedIds)
+  const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
+  const gitBarOpen = useAppStore(state => state.gitBarOpen)
+  const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
+  const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
+  const openPathPicker = useAppStore(state => state.openPathPicker)
+  const closePathPicker = useAppStore(state => state.closePathPicker)
+  const setPathPickerDefault = useAppStore(state => state.setPathPickerDefault)
+  const openCommandPalette = useAppStore(state => state.openCommandPalette)
+  const closeCommandPalette = useAppStore(state => state.closeCommandPalette)
+  const toggleCommandPalette = useAppStore(state => state.toggleCommandPalette)
+  const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
+  const closeTileTabsModal = useAppStore(state => state.closeTileTabsModal)
+  const openSettingsPage = useAppStore(state => state.openSettingsPage)
+  const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
+  const toggleGitBar = useAppStore(state => state.toggleGitBar)
+  const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
+
+  useEffect(() => {
+    applyTheme(settings)
+  }, [settings])
+
+  const workspace = useWorkspace(dangerousAgentsEnabled)
 
   // Pre-fill the path input with a sensible default when the modal
   // opens: the cwd of the most recently-used session, or main's
@@ -76,8 +80,8 @@ export default function App() {
   // New tab flow: show the path modal. On accept it calls workspace.newTab
   // with the expanded absolute path and closes the modal.
   const onNewTabRequest = useCallback(() => {
-    setPathPickerOpen(true)
-  }, [])
+    openPathPicker()
+  }, [openPathPicker])
 
   // Resume flow: same modal as new tab, but the default value is the
   // currently-focused tab's cwd so the resume list for that cwd is
@@ -91,17 +95,17 @@ export default function App() {
         // the user is standing.
         setPathPickerDefault(defaultCwd)
       }
-      setPathPickerOpen(true)
+      openPathPicker(defaultCwd)
     },
-    [],
+    [openPathPicker, setPathPickerDefault],
   )
 
   const onPathPickerAccept = useCallback(
     async (cwd: string, provider?: 'claude' | 'codex') => {
       await workspace.newTab(cwd, undefined, provider)
-      setPathPickerOpen(false)
+      closePathPicker()
     },
-    [workspace],
+    [closePathPicker, workspace],
   )
 
   const onPathPickerResume = useCallback(
@@ -111,30 +115,22 @@ export default function App() {
       // spawn call so main spawns the selected provider with its
       // provider-native resume command.
       await workspace.newTab(cwd, sessionId, provider)
-      setPathPickerOpen(false)
+      closePathPicker()
     },
-    [workspace],
+    [closePathPicker, workspace],
   )
 
-  const toggleCommandPalette = useCallback(() => {
-    setCommandPaletteOpen(prev => !prev)
-  }, [])
-
   const onTileTabsRequest = useCallback(() => {
-    setTileTabsInitialSelectedIds(
+    openTileTabsModal(
       workspace.tileTabs?.tabIds ?? (workspace.activeTab ? [workspace.activeTab.id] : []),
     )
-    setTileTabsModalOpen(true)
-  }, [workspace.activeTab, workspace.tileTabs])
+  }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
 
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
   const { state, activeTab } = workspace
 
   return (
-    <CustomRenderingContext.Provider
-      value={{ enabled: customRendering, toggle: toggleCustomRendering }}
-    >
     <div className="h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
       {/* Tab bar */}
       <TabBar workspace={workspace} onNewTabRequest={onNewTabRequest} />
@@ -150,7 +146,7 @@ export default function App() {
         "
       >
         <div className="flex items-center gap-2 [-webkit-app-region:no-drag]">
-          <ThemePicker settings={settings} onChange={setSettings} />
+          <AppearanceMenu settings={settings} onChange={setSettings} />
         </div>
       </div>
 
@@ -164,7 +160,14 @@ export default function App() {
       */}
       <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
         <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
-          {workspace.tileTabs ? (
+          {settingsPageOpen ? (
+            <SettingsPage
+              onClose={closeSettingsPage}
+              settings={settings}
+              onChange={setSettings}
+              onReset={resetSettings}
+            />
+          ) : workspace.tileTabs ? (
             <TileTabsView workspace={workspace} />
           ) : activeTab ? (
             // Mode dispatch: ReaderMode beats Spotlight (it's the
@@ -196,7 +199,7 @@ export default function App() {
                 ? workspace.state.sessions[activeTab.focusedSessionId]?.cwd ?? null
                 : null
             }
-            onClose={() => setGitBarOpen(false)}
+            onClose={toggleGitBar}
           />
         )}
 
@@ -205,29 +208,31 @@ export default function App() {
             sessionId={activeTab.focusedSessionId}
             runtime={workspace.getRuntime(activeTab.focusedSessionId)}
             kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
-            onClose={() => setDebugPanelOpen(false)}
+            onClose={toggleDebugPanel}
           />
         )}
       </div>
 
       <CommandPalette
         open={commandPaletteOpen}
-        onClose={() => setCommandPaletteOpen(false)}
+        onClose={closeCommandPalette}
         workspace={workspace}
         onNewTabRequest={onNewTabRequest}
         onResumeRequest={onResumeRequest}
-        toggleGitBar={() => setGitBarOpen(prev => !prev)}
-        toggleDebugPanel={() => setDebugPanelOpen(prev => !prev)}
+        toggleGitBar={toggleGitBar}
+        toggleDebugPanel={toggleDebugPanel}
         onTileTabsRequest={onTileTabsRequest}
-        onSettingsRequest={() => setSettingsPageOpen(true)}
+        onSettingsRequest={openSettingsPage}
         toggleCustomRendering={toggleCustomRendering}
-        customRenderingEnabled={customRendering}
+        customRenderingEnabled={settings.customRendering}
+        dangerousAgentsEnabled={dangerousAgentsEnabled}
+        setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
       />
 
       <PathPickerModal
         open={pathPickerOpen}
         defaultValue={pathPickerDefault}
-        onCancel={() => setPathPickerOpen(false)}
+        onCancel={closePathPicker}
         onAccept={onPathPickerAccept}
         onResume={onPathPickerResume}
       />
@@ -236,19 +241,14 @@ export default function App() {
         open={tileTabsModalOpen}
         tabs={workspace.state.tabs.map(tab => ({ id: tab.id, title: tab.title }))}
         initialSelectedIds={tileTabsInitialSelectedIds}
-        onCancel={() => setTileTabsModalOpen(false)}
+        onCancel={closeTileTabsModal}
         onConfirm={tabIds => {
           workspace.openTileTabs(tabIds)
-          setTileTabsModalOpen(false)
+          closeTileTabsModal()
         }}
       />
 
-      <SettingsPage
-        open={settingsPageOpen}
-        onClose={() => setSettingsPageOpen(false)}
-      />
     </div>
-    </CustomRenderingContext.Provider>
   )
 }
 
