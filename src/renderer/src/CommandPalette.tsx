@@ -42,6 +42,8 @@ type Props = {
   toggleDebugPanel: () => void
   toggleCustomRendering: () => void
   customRenderingEnabled: boolean
+  dangerousAgentsEnabled: boolean
+  setDangerousAgentsEnabled: (enabled: boolean) => void
 }
 
 function fuzzyMatch(text: string, query: string): boolean {
@@ -66,6 +68,8 @@ export function CommandPalette({
   toggleDebugPanel,
   toggleCustomRendering,
   customRenderingEnabled,
+  dangerousAgentsEnabled,
+  setDangerousAgentsEnabled,
 }: Props) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -135,12 +139,14 @@ export function CommandPalette({
         toggleGitBar,
         toggleDebugPanel,
         toggleCustomRendering,
+        setDangerousAgentsEnabled,
         enterResumeMode,
         enterBuriedMode,
         closePalette: onClose,
       },
       flags: {
         customRenderingEnabled,
+        dangerousAgentsEnabled,
       },
     }),
     [
@@ -152,10 +158,12 @@ export function CommandPalette({
       toggleGitBar,
       toggleDebugPanel,
       toggleCustomRendering,
+      setDangerousAgentsEnabled,
       enterResumeMode,
       enterBuriedMode,
       onClose,
       customRenderingEnabled,
+      dangerousAgentsEnabled,
     ],
   )
 

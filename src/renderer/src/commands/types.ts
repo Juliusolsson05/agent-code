@@ -10,12 +10,14 @@ export type CommandContext = {
     toggleGitBar: () => void
     toggleDebugPanel: () => void
     toggleCustomRendering: () => void
+    setDangerousAgentsEnabled: (enabled: boolean) => void
     enterResumeMode: () => void
     enterBuriedMode: () => void
     closePalette: () => void
   }
   flags: {
     customRenderingEnabled: boolean
+    dangerousAgentsEnabled: boolean
   }
 }
 

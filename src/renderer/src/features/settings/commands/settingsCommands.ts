@@ -1,4 +1,5 @@
 import type { CommandDef } from '../../../commands/types'
+import { dangerousCommands } from './dangerousCommands'
 
 export const settingsCommands: CommandDef[] = [
   {
@@ -12,4 +13,5 @@ export const settingsCommands: CommandDef[] = [
       `Toggle Custom Rendering  (${flags.customRenderingEnabled ? 'on' : 'off'})`,
     run: ({ ui }) => ui.toggleCustomRendering(),
   },
+  ...dangerousCommands,
 ]
