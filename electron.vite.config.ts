@@ -10,9 +10,10 @@ import { resolve } from 'path'
 const headlessAlias = {
   'claude-code-headless': resolve(__dirname, 'claude-code-headless/src/index.ts'),
   'codex-headless': resolve(__dirname, 'codex-headless/src/index.ts'),
+  'agent-transcript-parser': resolve(__dirname, 'agent-transcript-parser/src/index.ts'),
 }
 
-const headlessExclude = ['claude-code-headless', 'codex-headless']
+const headlessExclude = ['claude-code-headless', 'codex-headless', 'agent-transcript-parser']
 
 export default defineConfig({
   main: {
