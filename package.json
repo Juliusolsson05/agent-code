@@ -8,6 +8,8 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
+    "proxy-demo-bootstrap": "npm --prefix claude-code-headless run proxy-test-bootstrap",
+    "proxy-demo": "npm --prefix claude-code-headless run build && electron experiments/claude-proxy-stream-app/main.mjs",
     "postinstall": "electron-rebuild -f -w node-pty"
   },
   "dependencies": {

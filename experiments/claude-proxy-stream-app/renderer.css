@@ -1,0 +1,127 @@
+:root {
+  color-scheme: dark;
+  --bg: #111317;
+  --panel: #171b22;
+  --panel-2: #1d232d;
+  --border: #2d3644;
+  --ink: #edf2f7;
+  --muted: #9aabbe;
+  --accent: #8bc5ff;
+  --accent-2: #ffd37d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(139, 197, 255, 0.12), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(255, 211, 125, 0.08), transparent 24%),
+    var(--bg);
+  color: var(--ink);
+  font-family: "SF Mono", "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 1.12fr 0.88fr;
+  gap: 14px;
+  height: 100%;
+  padding: 14px;
+}
+
+.pane {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent), var(--panel);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.3);
+}
+
+.pane-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 16px 18px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255,255,255,0.02);
+}
+
+.pane-header h1 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pane-header p,
+.meta {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+#terminal {
+  flex: 1;
+  min-height: 0;
+  padding: 10px 12px 14px;
+}
+
+.stream-body {
+  display: grid;
+  grid-template-rows: 1fr 260px;
+  gap: 10px;
+  padding: 12px;
+  min-height: 0;
+  height: 100%;
+}
+
+.stream-text,
+.event-log {
+  margin: 0;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  padding: 16px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stream-text {
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.event-log-wrap {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.event-log-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-2);
+}
+
+.event-log {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}

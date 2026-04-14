@@ -14,3 +14,4 @@ temp.txt
 # a developer's local checkout.
 claude-code-src/
 file-dumps/
+.proxy-testing/
