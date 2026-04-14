@@ -44,6 +44,17 @@ import {
   extractAssistantByUuid,
   assistantUuidsWithText,
 } from '../copyAssistant'
+import { useAppStore } from '../state/hooks'
+import {
+  emptyRuntime,
+  type PickerItem,
+  type QueuedMessage,
+  type ReaderModeState,
+  type SessionRuntime,
+  type SlashPickerState,
+  type SpotlightState,
+  type TileTabsState,
+} from './workspaceState'
 
 // Workspace store — single React hook that owns:
 //   - The workspace state (tabs + tile trees + session metadata)
@@ -65,172 +76,6 @@ import {
 // Per-session runtime state (live; NOT persisted to disk)
 // ---------------------------------------------------------------------------
 
-export type PickerItem = {
-  id: string
-  label: string
-  description: string
-  selected: boolean
-}
-
-export type SlashPickerState = {
-  visible: boolean
-  items: PickerItem[]
-}
-
-/**
- * A message currently in CC's internal message queue.
- *
- * When the user types while CC is still generating, CC's
- * messageQueueManager (see claude-code-src/coordinator/messageQueueManager.ts)
- * buffers the prompt in process memory until the active query ends,
- * then dequeues it and starts a new query. The queued message does
- * NOT appear as a `user` transcript entry during this window — it
- * only materializes when CC starts processing it — so without
- * special handling our feed shows nothing for the in-limbo prompt.
- *
- * CC DOES emit structured `type: 'queue-operation'` JSONL entries for
- * every enqueue / dequeue, carrying the full content for enqueues.
- * We consume those and mirror them into this runtime array so the
- * UI can show a live "N pending" strip above the composer. The array
- * is a FIFO — enqueue appends, dequeue shifts the head — so order
- * follows CC's internal ordering without any extra bookkeeping.
- */
-export type QueuedMessage = {
-  /** The prompt text the user typed. */
-  content: string
-  /** CC's timestamp from the queue-operation entry; used as a stable
-   *  React key and for sort-debug if we ever need it. */
-  timestamp: string
-}
-
-export type SessionRuntime = {
-  /** Visible viewport — source of truth for current-state parsers
-   *  (trust dialog, slash picker, activity indicator). */
-  screen: string
-  /** Viewport with bold/italic reconstructed from cell attributes. */
-  screenMarkdown: string
-  /** Wider window (last ~200 rows including scrollback) used by the
-   *  streaming card's extractAssistantInProgress. CC's responses
-   *  often grow taller than the 40-row viewport, scrolling the
-   *  opening `⏺` marker out of view; without this wider snapshot
-   *  the streaming card stayed blank for long replies until the
-   *  JSONL entry landed. */
-  recentScreen: string
-  /** Markdown counterpart of `recentScreen`. */
-  recentScreenMarkdown: string
-  /** Streaming-card baseline captured at submit time. */
-  streamingBaseline: string | null
-  /** Parsed JSONL entries for this session's feed. */
-  entries: Entry[]
-  /** True between "user pressed Enter" and "assistant entry lands in JSONL".
-   *  IMPORTANT: we also hold this flag true while `queuedMessages.length > 0`,
-   *  because an assistant entry landing for turn N doesn't mean CC is idle —
-   *  it might already be dequeueing turn N+1. See the jsonl-entry handler
-   *  in useWorkspace for the exact logic. */
-  awaitingAssistant: boolean
-  /** Messages currently sitting in CC's message queue, in FIFO order.
-   *  Populated from `type: 'queue-operation'` JSONL entries, NOT by
-   *  peeking at the composer input. See QueuedMessage above. */
-  queuedMessages: QueuedMessage[]
-  /** PTY exit code, null if still running. */
-  exited: number | null
-  /** CC's JSONL project dir (for tooltip / debug). */
-  projectDir: string | null
-  /** Slash command picker state parsed in main from the terminal buffer.
-   *  Updated on every screen snapshot. The TileLeaf reacts to
-   *  picker.visible flipping to decide whether to render the picker
-   *  component and whether to route keys through the PTY. */
-  picker: SlashPickerState
-  /** Draft input text for this session's composer. Lives in runtime
-   *  (not component-local useState) so it survives TileLeaf unmount.
-   *
-   *  Why it has to be here and not inside TileLeaf:
-   *    App.tsx only renders the active tab's TileTree — inactive tabs
-   *    are UNMOUNTED, not hidden. When the user switches away from a
-   *    tab mid-draft, the old TileLeaf unmounts and its local state is
-   *    destroyed; switching back remounts a fresh instance with an
-   *    empty input. The user sees their typing vanish.
-   *
-   *  Keying drafts by sessionId also means split panes each get their
-   *  own draft (they have distinct sessionIds), which matches the
-   *  "each pane is its own conversation" mental model. And when a
-   *  session is killed, its runtime is deleted along with everything
-   *  else in it — no draft leaks past session teardown. */
-  draftInput: string
-  /** Activity status forwarded by the provider (Claude's spinner verb
-   *  like "Cogitating…", Codex's bottom-row text like "working… 12s").
-   *  Non-null when the agent is actively working; null when idle.
-   *  Source of truth lives in each provider's headless package and
-   *  arrives via the process-state IPC handler — the renderer no
-   *  longer parses the screen for this. */
-  activityStatus: string | null
-  /** Transient toast message shown above the composer. Single-slot:
-   *  a new toast replaces any in-flight one. Null when nothing to show.
-   *  Auto-cleared by a timeout in showPaneToast — components just read
-   *  it and render when non-null. */
-  paneToast: string | null
-  /** Pending Codex exec approval request, if the model asked to run a
-   *  command that requires user approval. */
-  pendingApproval: {
-    callId: string | null
-    command: string[]
-    workdir: string | null
-    reason?: string | null
-    options?: string[]
-    selectedIndex?: number
-  } | null
-  /** Pending Claude trust dialog, sourced from headless parser events. */
-  pendingTrustDialog: {
-    workspace?: string
-  } | null
-  /** Pending Claude resume-choice prompt parsed from the live screen. */
-  pendingResumePrompt: {
-    sessionAgeText?: string
-    tokenCountText?: string
-    options?: string[]
-    selectedIndex?: number
-  } | null
-  /** Pending Claude compaction status sourced from headless parser events. */
-  pendingCompaction: {
-    phase: 'running' | 'error' | 'done'
-    statusText?: string
-    errorText?: string
-  } | null
-  /** Force the feed to stay pinned to newest output, like tail -f. */
-  tailMode: boolean
-  /**
-   * "Copy Assistant Message" picker state. Null when the picker is
-   * not active. When active, holds the uuid of the currently
-   * highlighted assistant entry. Up/Down move it; Enter copies +
-   * clears; Esc clears.
-   *
-   * Per-runtime so switching sessions naturally drops the picker.
-   */
-  assistantPicker: { selectedUuid: string } | null
-}
-
-const emptyRuntime = (): SessionRuntime => ({
-  screen: '',
-  screenMarkdown: '',
-  recentScreen: '',
-  recentScreenMarkdown: '',
-  streamingBaseline: null,
-  entries: [],
-  awaitingAssistant: false,
-  queuedMessages: [],
-  exited: null,
-  projectDir: null,
-  picker: { visible: false, items: [] },
-  draftInput: '',
-  activityStatus: null,
-  paneToast: null,
-  pendingApproval: null,
-  pendingTrustDialog: null,
-  pendingResumePrompt: null,
-  pendingCompaction: null,
-  tailMode: false,
-  assistantPicker: null,
-})
 
 function isCodexRolloutEntry(entry: Record<string, unknown>): boolean {
   const type = entry.type
@@ -553,6 +398,17 @@ function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   return []
 }
 
+function codexHistoryMarker(entry: Record<string, unknown>): string {
+  const payload = entry.payload as Record<string, unknown> | undefined
+  return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
+}
+
+function claudeHistoryMarker(entry: Record<string, unknown>): string | null {
+  const embedded = extractEmbeddedClaudeProgressEntry(entry)
+  if (embedded?.uuid) return embedded.uuid
+  return typeof entry.uuid === 'string' ? entry.uuid : null
+}
+
 function extractEmbeddedClaudeProgressEntry(
   entry: Record<string, unknown>,
 ): ConversationEntry | null {
@@ -636,38 +492,7 @@ type PersistedWorkspace = {
 
 export type Workspace = ReturnType<typeof useWorkspace>
 
-type SpotlightState = {
-  tabId: TabId
-  focusedSessionId: SessionId
-}
-
-// ReaderMode — like Spotlight, but renders ONLY the most recent
-// assistant message (markdown-only, no tool chrome, no composer).
-// Read-only "zen" view for catching up on what an agent just wrote
-// without the visual noise of a 5-pane workspace. Pills at the top
-// let the user switch which session they're reading.
-//
-// Why a separate state slot rather than a "spotlight mode" enum:
-//   - Spotlight is full-pane interactive; ReaderMode is text-only.
-//     They want different parents in the render tree (ReaderMode
-//     bypasses TileLeaf entirely).
-//   - Composability: opening Reader from inside Spotlight, or vice
-//     versa, is easier when each owns its own boolean — toggling
-//     Reader doesn't have to remember whether to leave you in
-//     Spotlight afterward.
-type ReaderModeState = {
-  tabId: TabId
-  focusedSessionId: SessionId
-}
-
-type TileTabsState = {
-  tabIds: TabId[]
-  focusedTabId: TabId
-  direction: SplitDirection
-  ratios: number[]
-}
-
-export function useWorkspace() {
+export function useWorkspace(dangerousAgentsEnabled = false) {
   // GlobalToast lives one level up in the provider tree (mounted in
   // main.tsx). Reading it here lets close actions surface a brief
   // "Closed — ⌘⇧T (Undo Close)" hint without each caller having to know
@@ -675,25 +500,27 @@ export function useWorkspace() {
   // re-renders don't churn close handlers.
   const { showToast } = useGlobalToast()
 
-  const [state, setState] = useState<WorkspaceState>({
-    tabs: [],
-    activeTabId: '',
-    sessions: {},
-    buried: [],
-  })
+  const state = useAppStore(store => store.workspaceState)
+  const setState = useAppStore(store => store.setWorkspaceState)
 
   // Ref mirror of state so IPC callbacks (which close over stale state)
   // can read the current session metadata (e.g. kind) without causing
   // re-subscriptions on every state change.
   const stateRef = useRef(state)
   stateRef.current = state
+  const dangerousAgentsRef = useRef(dangerousAgentsEnabled)
+  dangerousAgentsRef.current = dangerousAgentsEnabled
 
   // Per-session runtime state. Keyed by sessionId. NOT part of
   // persistent state — runtime rebuilds from IPC events after respawn.
-  const [runtimes, setRuntimes] = useState<Record<SessionId, SessionRuntime>>({})
-  const [spotlight, setSpotlight] = useState<SpotlightState | null>(null)
-  const [tileTabs, setTileTabs] = useState<TileTabsState | null>(null)
-  const [readerMode, setReaderMode] = useState<ReaderModeState | null>(null)
+  const runtimes = useAppStore(store => store.workspaceRuntimes)
+  const setRuntimes = useAppStore(store => store.setWorkspaceRuntimes)
+  const spotlight = useAppStore(store => store.workspaceSpotlight)
+  const setSpotlight = useAppStore(store => store.setWorkspaceSpotlight)
+  const tileTabs = useAppStore(store => store.workspaceTileTabs)
+  const setTileTabs = useAppStore(store => store.setWorkspaceTileTabs)
+  const readerMode = useAppStore(store => store.workspaceReaderMode)
+  const setReaderMode = useAppStore(store => store.setWorkspaceReaderMode)
 
   // Ref mirror of runtimes so the debounced save callback can read
   // current drafts without re-creating the callback on every render.
@@ -884,6 +711,7 @@ export function useWorkspace() {
 
         const payload = entry.payload as Record<string, unknown> | undefined
         const mapped = mapCodexRolloutToFeedEntries(entry)
+        const marker = mapped.length > 0 ? codexHistoryMarker(entry) : null
         const approvalRequest =
           entry.type === 'event_msg' && payload?.type === 'exec_approval_request'
             ? {
@@ -941,6 +769,7 @@ export function useWorkspace() {
             [sessionId]: {
               ...current,
               entries: nextEntries,
+              historyOldestMarker: current.historyOldestMarker ?? marker,
               awaitingAssistant: current.awaitingAssistant,
               // Merge JSONL request with any screen-sourced fields
               // already in flight (reason / options / selectedIndex).
@@ -1097,6 +926,7 @@ export function useWorkspace() {
       const feedEntry =
         extractEmbeddedClaudeProgressEntry(entry as Record<string, unknown>) ??
         (entry as Entry)
+      const marker = claudeHistoryMarker(entry as Record<string, unknown>)
       const uuid = (feedEntry as { uuid?: string }).uuid
       const seen = (seenUuidsRef.current[sessionId] ??= new Set())
       if (uuid) {
@@ -1116,6 +946,7 @@ export function useWorkspace() {
           [sessionId]: {
             ...current,
             entries: nextEntries,
+            historyOldestMarker: current.historyOldestMarker ?? marker,
             awaitingAssistant: current.awaitingAssistant,
             // The compact-summary feed entry IS the completion signal —
             // it's only written after CC finishes the summarization turn.
@@ -1221,6 +1052,7 @@ export function useWorkspace() {
       opts?: {
         resumeSessionId?: string
         kind?: SessionKind
+        dangerousMode?: boolean
         /** Forwarded to the spawn IPC. Used by undo-close to attach
          *  to the same tmux session that backed the closed terminal,
          *  preserving scrollback and any running process. */
@@ -1228,10 +1060,13 @@ export function useWorkspace() {
       },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? 'claude'
+      const dangerousMode =
+        opts?.dangerousMode ?? (kind !== 'terminal' ? dangerousAgentsRef.current : undefined)
       const { sessionId, tmuxName } = await window.api.spawnSession({
         kind,
         cwd,
         resumeSessionId: opts?.resumeSessionId,
+        dangerousMode,
         recoverTmuxName: opts?.recoverTmuxName,
       })
       setState(prev => ({
@@ -1241,10 +1076,23 @@ export function useWorkspace() {
           // Persist tmuxName when main returns one — that's the
           // signal that this terminal got tmux backing and is eligible
           // for cross-restart recovery on next launch.
-          [sessionId]: { cwd, kind, ...(tmuxName ? { tmuxName } : {}) },
+          [sessionId]: {
+            cwd,
+            kind,
+            ...(tmuxName ? { tmuxName } : {}),
+            ...(kind !== 'terminal' && opts?.resumeSessionId
+              ? { providerSessionId: opts.resumeSessionId }
+              : {}),
+          },
         },
       }))
-      setRuntimes(prev => ({ ...prev, [sessionId]: emptyRuntime() }))
+      setRuntimes(prev => ({
+        ...prev,
+        [sessionId]: {
+          ...emptyRuntime(),
+          hasOlderHistory: kind !== 'terminal' && Boolean(opts?.resumeSessionId),
+        },
+      }))
       return sessionId
     },
     [],
@@ -1281,6 +1129,8 @@ export function useWorkspace() {
       const tab = state.tabs.find(t => t.id === state.activeTabId)
       if (!tab) return
       const oldId = tab.focusedSessionId
+      const nextKind = opts?.kind ?? state.sessions[oldId]?.kind ?? 'claude'
+      const oldDraft = latestRuntimesRef.current[oldId]?.draftInput ?? ''
 
       // Kill the old session.
       await window.api.killSession(oldId)
@@ -1294,6 +1144,13 @@ export function useWorkspace() {
 
       // Spawn the replacement.
       const newId = await spawn(cwd, opts)
+      setRuntimes(prev => ({
+        ...prev,
+        [newId]: {
+          ...(prev[newId] ?? emptyRuntime()),
+          draftInput: oldDraft,
+        },
+      }))
 
       // Swap the sessionId in the tree. Walk the tile tree and replace
       // every occurrence of oldId with newId (there should be exactly
@@ -1310,6 +1167,23 @@ export function useWorkspace() {
       setState(prev => {
         const sessions = { ...prev.sessions }
         delete sessions[oldId]
+        // Persist the replacement provider metadata immediately instead of
+        // waiting for the first transcript line to round-trip back from main.
+        // That wait window is usually short, but it is still a real race:
+        // a workspace save or pane action that snapshots SessionMeta in that
+        // gap would see "new session id, but no providerSessionId yet" and
+        // could forget how to resume the pane on the next launch.
+        //
+        // Keeping the requested resumeSessionId here makes replaceSession the
+        // single source of truth for "this pane now points at provider X's
+        // persisted transcript Y", whether the trigger was the resume picker
+        // or the new switch-provider flow.
+        sessions[newId] = {
+          ...(sessions[newId] ?? { cwd, kind: nextKind }),
+          cwd,
+          kind: nextKind,
+          ...(opts?.resumeSessionId ? { providerSessionId: opts.resumeSessionId } : {}),
+        }
         return {
           ...prev,
           tabs: prev.tabs.map(t => {
@@ -1324,8 +1198,130 @@ export function useWorkspace() {
           sessions,
         }
       })
+      return newId
     },
-    [spawn, state.activeTabId, state.tabs],
+    [spawn, state.activeTabId, state.sessions, state.tabs],
+  )
+
+  // ---- Action: reload all live agent sessions ----
+  //
+  // Recreates every Claude/Codex session with the requested dangerous
+  // mode, then remaps visible panes and buried records onto the fresh
+  // session ids. Plain terminal sessions are left untouched.
+  const reloadAgentSessions = useCallback(
+    async (dangerousMode = dangerousAgentsRef.current) => {
+      const current = stateRef.current
+      const agentEntries = Object.entries(current.sessions).filter(([, meta]) => {
+        const kind = meta.kind ?? 'claude'
+        return kind === 'claude' || kind === 'codex'
+      })
+      if (agentEntries.length === 0) return
+
+      const oldRuntimes = latestRuntimesRef.current
+      const idMap = new Map<SessionId, SessionId>()
+      const failedIds = new Set<SessionId>()
+      const freshSessions: Record<SessionId, SessionMeta> = {}
+
+      for (const [oldId, meta] of agentEntries) {
+        try {
+          await window.api.killSession(oldId)
+        } catch {
+          // Kill failures still fall through to respawn — the old
+          // process may already be gone.
+        }
+
+        delete seenUuidsRef.current[oldId]
+        delete latestScreenRef.current[oldId]
+
+        try {
+          const kind: SessionKind = meta.kind ?? 'claude'
+          const { sessionId: newId } = await window.api.spawnSession({
+            kind,
+            cwd: meta.cwd,
+            resumeSessionId: meta.providerSessionId,
+            dangerousMode,
+          })
+          idMap.set(oldId, newId)
+          freshSessions[newId] = { ...meta }
+        } catch {
+          failedIds.add(oldId)
+        }
+      }
+
+      if (idMap.size === 0 && failedIds.size === 0) return
+
+      const remapNode = (node: TileNode): TileNode => {
+        if (node.type === 'leaf') {
+          const mapped = idMap.get(node.sessionId)
+          return mapped ? { type: 'leaf', sessionId: mapped } : node
+        }
+        return { ...node, a: remapNode(node.a), b: remapNode(node.b) }
+      }
+
+      setRuntimes(prev => {
+        const next = { ...prev }
+        for (const [oldId] of agentEntries) delete next[oldId]
+        for (const [oldId, newId] of idMap.entries()) {
+          const restored = emptyRuntime()
+          restored.draftInput = oldRuntimes[oldId]?.draftInput ?? ''
+          restored.hasOlderHistory = Boolean(freshSessions[newId]?.providerSessionId)
+          next[newId] = restored
+        }
+        return next
+      })
+
+      setState(prev => {
+        const nextSessions = { ...prev.sessions }
+        for (const [oldId] of agentEntries) delete nextSessions[oldId]
+        for (const [newId, meta] of Object.entries(freshSessions)) {
+          nextSessions[newId] = meta
+        }
+
+        const nextTabs = prev.tabs
+          .map(tab => {
+            let root = remapNode(tab.root)
+            for (const failedId of failedIds) {
+              root = closeLeaf(root, failedId)
+              if (root === null) break
+            }
+            if (root === null) return null
+            const leaves = collectLeaves(root)
+            if (leaves.length === 0) return null
+            const focusedSessionId = idMap.get(tab.focusedSessionId)
+              ?? (failedIds.has(tab.focusedSessionId) ? leaves[0] : tab.focusedSessionId)
+            return {
+              ...tab,
+              root,
+              focusedSessionId,
+            } satisfies Tab
+          })
+          .filter((tab): tab is Tab => tab !== null)
+
+        const activeTabId = nextTabs.some(tab => tab.id === prev.activeTabId)
+          ? prev.activeTabId
+          : (nextTabs[0]?.id ?? '')
+
+        const nextBuried = prev.buried
+          .filter(entry => !failedIds.has(entry.sessionId))
+          .map(entry => ({
+            ...entry,
+            id: idMap.get(entry.id) ?? entry.id,
+            sessionId: idMap.get(entry.sessionId) ?? entry.sessionId,
+            siblingLeafId: entry.siblingLeafId
+              ? (idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId)
+              : undefined,
+          }))
+
+        return {
+          ...prev,
+          tabs: nextTabs,
+          activeTabId,
+          sessions: nextSessions,
+          buried: nextBuried,
+        }
+      })
+    },
+    [],
   )
 
   // ---- Action: new tab ----
@@ -2175,6 +2171,177 @@ export function useWorkspace() {
     [updateRuntime],
   )
 
+  const switchFocusedProvider = useCallback(async () => {
+    const current = stateRef.current
+    const tab = current.tabs.find(t => t.id === current.activeTabId)
+    if (!tab) return
+
+    const sourceSessionId = tab.focusedSessionId
+    const meta = current.sessions[sourceSessionId]
+    if (!meta) return
+
+    const sourceKind = meta.kind ?? 'claude'
+    if (sourceKind !== 'claude' && sourceKind !== 'codex') {
+      showPaneToast(sourceSessionId, 'Only Claude and Codex panes can switch provider')
+      return
+    }
+    if (!meta.providerSessionId) {
+      showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
+      return
+    }
+
+    try {
+      // The translated target transcript must be created BEFORE we replace the
+      // live pane. If translation fails, the current provider process should
+      // stay untouched and the user should keep their running session instead
+      // of being dropped into a dead pane.
+      const result = await window.api.switchProvider({
+        sourceKind,
+        sourceProviderSessionId: meta.providerSessionId,
+        cwd: meta.cwd,
+      })
+
+      const newSessionId = await replaceSession(meta.cwd, {
+        kind: result.targetKind,
+        resumeSessionId: result.targetProviderSessionId,
+      })
+      if (!newSessionId) return
+
+      showPaneToast(
+        newSessionId,
+        result.targetKind === 'codex' ? 'Switched to Codex' : 'Switched to Claude',
+      )
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message.length > 0
+          ? err.message
+          : 'Provider switch failed'
+      showPaneToast(sourceSessionId, message)
+    }
+  }, [replaceSession, showPaneToast])
+
+  const reloadFocusedAgent = useCallback(async () => {
+    const current = stateRef.current
+    const tab = current.tabs.find(t => t.id === current.activeTabId)
+    if (!tab) return
+
+    const sourceSessionId = tab.focusedSessionId
+    const meta = current.sessions[sourceSessionId]
+    if (!meta) return
+
+    const kind = meta.kind ?? 'claude'
+    if (kind !== 'claude' && kind !== 'codex') {
+      showPaneToast(sourceSessionId, 'Only Claude and Codex panes can reload')
+      return
+    }
+    if (!meta.providerSessionId) {
+      showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
+      return
+    }
+
+    try {
+      const newSessionId = await replaceSession(meta.cwd, {
+        kind,
+        resumeSessionId: meta.providerSessionId,
+      })
+      if (!newSessionId) return
+      showPaneToast(
+        newSessionId,
+        kind === 'codex' ? 'Codex reloaded' : 'Claude reloaded',
+      )
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message.length > 0
+          ? err.message
+          : 'Reload failed'
+      showPaneToast(sourceSessionId, message)
+    }
+  }, [replaceSession, showPaneToast])
+
+  const loadOlderHistory = useCallback(async (sessionId: SessionId) => {
+    const currentState = stateRef.current
+    const meta = currentState.sessions[sessionId]
+    const runtime = latestRuntimesRef.current[sessionId] ?? emptyRuntime()
+    if (!meta) return
+
+    const kind = meta.kind ?? 'claude'
+    if ((kind !== 'claude' && kind !== 'codex') || !meta.providerSessionId) return
+    if (!runtime.hasOlderHistory || runtime.loadingOlderHistory) return
+    if (!runtime.historyOldestMarker) {
+      updateRuntime(sessionId, { hasOlderHistory: false, loadingOlderHistory: false })
+      return
+    }
+
+    updateRuntime(sessionId, { loadingOlderHistory: true })
+
+    try {
+      const chunk = await window.api.loadOlderHistory({
+        kind,
+        cwd: meta.cwd,
+        providerSessionId: meta.providerSessionId,
+        beforeMarker: runtime.historyOldestMarker,
+        limit: 200,
+      })
+
+      const seen = (seenUuidsRef.current[sessionId] ??= new Set())
+      const prepend: Entry[] = []
+      let oldestMarker: string | null = runtime.historyOldestMarker
+
+      for (const rawEntry of chunk.entries) {
+        if (kind === 'codex') {
+          const marker = codexHistoryMarker(rawEntry)
+          const mapped = mapCodexRolloutToFeedEntries(rawEntry)
+          if (mapped.length > 0 && oldestMarker === runtime.historyOldestMarker) {
+            oldestMarker = marker
+          }
+          for (const entry of mapped) {
+            const uuid = (entry as { uuid?: string }).uuid
+            if (uuid && seen.has(uuid)) continue
+            if (uuid) seen.add(uuid)
+            prepend.push(entry)
+          }
+          continue
+        }
+
+        const feedEntry =
+          extractEmbeddedClaudeProgressEntry(rawEntry) ??
+          (rawEntry as Entry)
+        const marker = claudeHistoryMarker(rawEntry)
+        if (!(
+          isConversationEntry(feedEntry) ||
+          isCompactBoundaryEntry(feedEntry) ||
+          isCompactSummaryEntry(feedEntry)
+        )) {
+          continue
+        }
+        if (marker && oldestMarker === runtime.historyOldestMarker) {
+          oldestMarker = marker
+        }
+        const uuid = (feedEntry as { uuid?: string }).uuid
+        if (uuid && seen.has(uuid)) continue
+        if (uuid) seen.add(uuid)
+        prepend.push(feedEntry)
+      }
+
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            entries: prepend.length > 0 ? [...prepend, ...current.entries] : current.entries,
+            historyOldestMarker: oldestMarker ?? current.historyOldestMarker,
+            hasOlderHistory: chunk.hasMore || prepend.length === 0,
+            loadingOlderHistory: false,
+          },
+        }
+      })
+    } catch (err) {
+      console.warn('[history] load older failed', err)
+      updateRuntime(sessionId, { loadingOlderHistory: false })
+    }
+  }, [updateRuntime])
+
   // ---- Copy Assistant picker actions ----
   //
   // pickerEnter      — toggles the picker on/off. On entry, picks
@@ -2433,6 +2600,7 @@ export function useWorkspace() {
           kind,
           cwd: meta.cwd,
           resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
+          dangerousMode: kind !== 'terminal' ? dangerousAgentsRef.current : undefined,
           recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
         })
         idMap.set(oldId, newId)
@@ -2518,12 +2686,17 @@ export function useWorkspace() {
         // Restore draft from the persisted workspace if it exists.
         const draft = persisted.drafts?.[oldId]
         if (draft) rt.draftInput = draft
+        rt.hasOlderHistory = Boolean(freshSessions[newId]?.providerSessionId)
         out[newId] = rt
       }
       // Fill any sessions that weren't in the id map (shouldn't happen
       // but defensive).
       for (const id of Object.keys(freshSessions)) {
-        if (!out[id]) out[id] = emptyRuntime()
+        if (!out[id]) {
+          const rt = emptyRuntime()
+          rt.hasOlderHistory = Boolean(freshSessions[id]?.providerSessionId)
+          out[id] = rt
+        }
       }
       return out
     })
@@ -2798,7 +2971,8 @@ export function useWorkspace() {
   }, [tileTabs, state.tabs])
 
   // ---- Status mode: color-coded pane headers ----
-  const [statusMode, setStatusMode] = useState(false)
+  const statusMode = useAppStore(store => store.workspaceStatusMode)
+  const setStatusMode = useAppStore(store => store.setWorkspaceStatusMode)
   const toggleStatusMode = useCallback(() => {
     setStatusMode(prev => !prev)
   }, [])
@@ -2840,6 +3014,7 @@ export function useWorkspace() {
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
     setDraftInput,
+    loadOlderHistory,
     showPaneToast,
     undoClose,
     undoCloseCount,
@@ -2847,6 +3022,9 @@ export function useWorkspace() {
     hardNormalizeLayout,
     rotateLayout,
     replaceSession,
+    reloadFocusedAgent,
+    switchFocusedProvider,
+    reloadAgentSessions,
     toggleSpotlight,
     setSpotlightSession,
     openTileTabs,
@@ -2938,3 +3116,12 @@ function setRatioBetween(
 void RATIO_DEFAULT
 // Silence for useCallback imports we want explicit.
 export { collectLeaves }
+export type {
+  PickerItem,
+  QueuedMessage,
+  ReaderModeState,
+  SessionRuntime,
+  SlashPickerState,
+  SpotlightState,
+  TileTabsState,
+} from './workspaceState'

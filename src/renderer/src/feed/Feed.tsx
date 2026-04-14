@@ -331,6 +331,9 @@ type Props = {
   workspaceRoot?: string | null
   /** Called on every scroll tick with the current position. */
   onScrollInfo?: (info: ScrollInfo) => void
+  hasOlderHistory?: boolean
+  loadingOlderHistory?: boolean
+  onLoadOlderHistory?: () => Promise<void>
 }
 
 // ---------------------------------------------------------------------------
@@ -427,6 +430,9 @@ function FeedImpl({
   pickerSelectedUuid = null,
   workspaceRoot = null,
   onScrollInfo,
+  hasOlderHistory = false,
+  loadingOlderHistory = false,
+  onLoadOlderHistory,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
@@ -470,6 +476,7 @@ function FeedImpl({
   const stickyBottomRef = useRef(
     scrollPositions.get(sessionId)?.stickyBottom ?? true,
   )
+  const loadingOlderRef = useRef(false)
   // Previous scrollTop, used to distinguish "the user started
   // scrolling upward" from incidental near-bottom jitter. This is
   // load-bearing during active turns: with the old "gap < 48"
@@ -581,10 +588,43 @@ function FeedImpl({
           : 0
         onScrollInfo({ fraction })
       }
+
+      if (
+        el.scrollTop < 160 &&
+        hasOlderHistory &&
+        !loadingOlderHistory &&
+        !loadingOlderRef.current &&
+        !tailMode &&
+        onLoadOlderHistory
+      ) {
+        loadingOlderRef.current = true
+        const beforeHeight = el.scrollHeight
+        const beforeTop = el.scrollTop
+        void onLoadOlderHistory()
+          .then(() => {
+            requestAnimationFrame(() => {
+              const next = scrollerRef.current
+              if (!next) return
+              const delta = next.scrollHeight - beforeHeight
+              next.scrollTop = beforeTop + Math.max(0, delta)
+              lastScrollTopRef.current = next.scrollTop
+            })
+          })
+          .finally(() => {
+            loadingOlderRef.current = false
+          })
+      }
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
-  }, [sessionId, onScrollInfo, tailMode])
+  }, [
+    sessionId,
+    onScrollInfo,
+    tailMode,
+    hasOlderHistory,
+    loadingOlderHistory,
+    onLoadOlderHistory,
+  ])
 
   // Auto-scroll on content changes, but ONLY when sticky. The effect
   // runs on every change that would grow the feed (a new entry) or

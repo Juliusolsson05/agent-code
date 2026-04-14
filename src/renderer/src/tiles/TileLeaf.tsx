@@ -692,8 +692,12 @@ export function TileLeaf({
           activityStatus={runtime.activityStatus}
           tailMode={runtime.tailMode}
           pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
-          showSystemEvents={false}
           onScrollInfo={onScrollInfo}
+          hasOlderHistory={runtime.hasOlderHistory}
+          loadingOlderHistory={runtime.loadingOlderHistory}
+          onLoadOlderHistory={async () => {
+            await workspace.loadOlderHistory(sessionId)
+          }}
         />
       </div>
 
