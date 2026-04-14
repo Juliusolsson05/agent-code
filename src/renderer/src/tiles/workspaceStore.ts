@@ -2674,28 +2674,37 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
       sessions: freshSessions,
       buried: remappedBuried,
     })
-    // Initialize empty runtimes for every session so TileLeaf renders
-    // "thinking…" instead of undefined while the first frame of screen
-    // data arrives.
-    // Initialize runtimes, restoring persisted drafts so in-progress
-    // prompts survive crashes and restarts.
-    setRuntimes(() => {
+    // Initialize runtimes, restoring persisted drafts and preserving
+    // whatever entries the IPC subscriber has ALREADY accumulated for
+    // these sessions during the await'd spawnSession loop above.
+    //
+    // Why the merge-with-prev dance matters: headless's bounded-tail
+    // resume emits transcript entries SYNCHRONOUSLY inside
+    // `session.start()`, so by the time `await window.api.spawnSession`
+    // resolves for each persisted session, the onSessionJsonlEntry
+    // subscriber has already called setRuntimes(prev => ...) with the
+    // bootstrap batch. A full-object replacement here would clobber
+    // every one of those entries and the feed would open empty with
+    // "waiting for Codex…" / "waiting for Claude Code…" on every pane
+    // — exactly the bug this comment is guarding against.
+    setRuntimes(prev => {
       const out: Record<SessionId, SessionRuntime> = {}
       for (const [oldId, newId] of idMap.entries()) {
-        const rt = emptyRuntime()
-        // Restore draft from the persisted workspace if it exists.
+        const existing = prev[newId]
+        const base = existing ?? emptyRuntime()
         const draft = persisted.drafts?.[oldId]
-        if (draft) rt.draftInput = draft
-        rt.hasOlderHistory = Boolean(freshSessions[newId]?.providerSessionId)
-        out[newId] = rt
+        out[newId] = {
+          ...base,
+          ...(draft && !base.draftInput ? { draftInput: draft } : {}),
+          hasOlderHistory: Boolean(freshSessions[newId]?.providerSessionId),
+        }
       }
-      // Fill any sessions that weren't in the id map (shouldn't happen
-      // but defensive).
       for (const id of Object.keys(freshSessions)) {
-        if (!out[id]) {
-          const rt = emptyRuntime()
-          rt.hasOlderHistory = Boolean(freshSessions[id]?.providerSessionId)
-          out[id] = rt
+        if (out[id]) continue
+        const existing = prev[id]
+        out[id] = {
+          ...(existing ?? emptyRuntime()),
+          hasOlderHistory: Boolean(freshSessions[id]?.providerSessionId),
         }
       }
       return out
