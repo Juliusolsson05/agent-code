@@ -27,7 +27,8 @@
     "remark-gfm": "^4.0.1",
     "typescript-language-server": "^4.4.0",
     "vscode-jsonrpc": "^8.2.1",
-    "vscode-languageserver-protocol": "^3.17.5"
+    "vscode-languageserver-protocol": "^3.17.5",
+    "zustand": "^5.0.12"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.6.0",
