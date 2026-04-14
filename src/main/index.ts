@@ -9,6 +9,7 @@ import { LspManager } from './lspManager.js'
 import { TmuxRegistry } from './tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from './tmux/tmuxRecovery.js'
 import { getMainProvider } from '../providers/registry.main.js'
+import { switchProvider } from './providerSwitch/switchProvider.js'
 
 // Main process — thin Electron host over SessionManager.
 //
@@ -75,6 +76,105 @@ function pushTrafficLightInset(): void {
 let manager: SessionManager = null as unknown as SessionManager
 let tmuxRegistry: TmuxRegistry | null = null
 const lspManager = new LspManager()
+
+function extractClaudeHistoryMarker(entry: Record<string, unknown>): string | null {
+  if (typeof entry.uuid === 'string' && entry.uuid.length > 0) return entry.uuid
+  if (entry.type !== 'progress') return null
+  const data = entry.data as Record<string, unknown> | undefined
+  const embedded = data?.message as Record<string, unknown> | undefined
+  return typeof embedded?.uuid === 'string' && embedded.uuid.length > 0
+    ? embedded.uuid
+    : null
+}
+
+function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
+  const payload = entry.payload as Record<string, unknown> | undefined
+  return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
+}
+
+async function findCodexRolloutPathByThreadId(
+  sessionsDir: string,
+  threadId: string,
+): Promise<string | null> {
+  try {
+    const years = await readdir(sessionsDir)
+    for (const year of years.sort().reverse()) {
+      const yearDir = join(sessionsDir, year)
+      const yStat = await stat(yearDir).catch(() => null)
+      if (!yStat?.isDirectory()) continue
+      const months = await readdir(yearDir)
+      for (const month of months.sort().reverse()) {
+        const monthDir = join(yearDir, month)
+        const mStat = await stat(monthDir).catch(() => null)
+        if (!mStat?.isDirectory()) continue
+        const days = await readdir(monthDir)
+        for (const day of days.sort().reverse()) {
+          const dayDir = join(monthDir, day)
+          const dStat = await stat(dayDir).catch(() => null)
+          if (!dStat?.isDirectory()) continue
+          const files = await readdir(dayDir)
+          const match = files.find(f => f.includes(threadId) && f.endsWith('.jsonl'))
+          if (match) return join(dayDir, match)
+        }
+      }
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+async function loadOlderHistoryChunk(params: {
+  kind: 'claude' | 'codex'
+  cwd: string
+  providerSessionId: string
+  beforeMarker: string
+  limit: number
+}): Promise<{ entries: Record<string, unknown>[]; hasMore: boolean }> {
+  const provider = getMainProvider(params.kind)
+  let filePath: string | null = null
+
+  if (params.kind === 'claude') {
+    const projectDir = await provider.getProjectDir(params.cwd)
+    filePath = join(projectDir, `${params.providerSessionId}.jsonl`)
+  } else {
+    const sessionsDir = await provider.getProjectDir(params.cwd)
+    filePath = await findCodexRolloutPathByThreadId(sessionsDir, params.providerSessionId)
+  }
+
+  if (!filePath) return { entries: [], hasMore: false }
+
+  const text = await readFile(filePath, 'utf8').catch(() => null)
+  if (!text) return { entries: [], hasMore: false }
+
+  const parsed = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .map(line => {
+      try {
+        return JSON.parse(line) as Record<string, unknown>
+      } catch {
+        return null
+      }
+    })
+    .filter((entry): entry is Record<string, unknown> => entry !== null)
+
+  const markerOf = params.kind === 'claude'
+    ? extractClaudeHistoryMarker
+    : extractCodexHistoryMarker
+
+  const anchorIndex = parsed.findIndex(entry => markerOf(entry) === params.beforeMarker)
+  const cutoff = anchorIndex === -1 ? parsed.length : anchorIndex
+  const older = parsed.slice(0, cutoff)
+  if (older.length === 0) return { entries: [], hasMore: false }
+
+  const start = Math.max(0, older.length - params.limit)
+  return {
+    entries: older.slice(start),
+    hasMore: start > 0,
+  }
+}
 
 function send(channel: string, ...args: unknown[]): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
@@ -164,6 +264,7 @@ function registerIpc(): void {
         cols?: number
         rows?: number
         resumeSessionId?: string
+        dangerousMode?: boolean
       },
     ) => {
       return await manager.spawn(options)
@@ -198,9 +299,42 @@ function registerIpc(): void {
     },
   )
 
+  ipcMain.handle(
+    'session:load-older-history',
+    async (
+      _evt,
+      params: {
+        kind: 'claude' | 'codex'
+        cwd: string
+        providerSessionId: string
+        beforeMarker: string
+        limit?: number
+      },
+    ) => {
+      return await loadOlderHistoryChunk({
+        ...params,
+        limit: params.limit ?? 200,
+      })
+    },
+  )
+
   ipcMain.handle('session:kill', async (_evt, sessionId: string) => {
     return await manager.kill(sessionId)
   })
+
+  ipcMain.handle(
+    'session:switch-provider',
+    async (
+      _evt,
+      params: {
+        sourceKind: 'claude' | 'codex'
+        sourceProviderSessionId: string
+        cwd: string
+      },
+    ) => {
+      return await switchProvider(params)
+    },
+  )
 
   // --- Terminal attach/replay ---
   //

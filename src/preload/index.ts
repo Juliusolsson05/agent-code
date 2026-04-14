@@ -77,6 +77,10 @@ export type SessionCompactionStateEvent = {
   statusText?: string
   errorText?: string
 }
+export type SessionHistoryChunk = {
+  entries: JsonlEntry[]
+  hasMore: boolean
+}
 export type SessionExitEvent = {
   sessionId: string
   exitCode: number
@@ -134,6 +138,7 @@ const api = {
     cols?: number
     rows?: number
     resumeSessionId?: string
+    dangerousMode?: boolean
     /** Terminal + tmux only: when set AND tmux is available, attach
      *  to this existing tmux session instead of creating a new one.
      *  Used by the workspace reload path to recover persistent
@@ -145,6 +150,22 @@ const api = {
 
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
+
+  /**
+   * Translate the persisted transcript backing a provider session into the
+   * other provider's on-disk format and return the newly created target
+   * provider session id. The renderer uses that id with replaceSession(...)
+   * so the pane stays in place while the backend swaps from Claude<->Codex.
+   */
+  switchProvider: (params: {
+    sourceKind: 'claude' | 'codex'
+    sourceProviderSessionId: string
+    cwd: string
+  }): Promise<{
+    targetKind: 'claude' | 'codex'
+    targetProviderSessionId: string
+    targetFilePath: string
+  }> => ipcRenderer.invoke('session:switch-provider', params),
 
   /**
    * Attach this renderer to a terminal session's live data stream.
@@ -169,6 +190,15 @@ const api = {
     provider: 'claude' | 'codex' = 'claude',
   ): Promise<SessionInfo[]> =>
     ipcRenderer.invoke('session:list-for-cwd', cwd, limit, provider),
+
+  loadOlderHistory: (params: {
+    kind: 'claude' | 'codex'
+    cwd: string
+    providerSessionId: string
+    beforeMarker: string
+    limit?: number
+  }): Promise<SessionHistoryChunk> =>
+    ipcRenderer.invoke('session:load-older-history', params),
 
   // --- Per-session I/O ---
   sendInput: (sessionId: string, data: string): Promise<boolean> =>
