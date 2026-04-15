@@ -124,6 +124,10 @@ export type LspDiagnosticsEvent = {
   diagnostics: LspDiagnostic[]
 }
 
+export type SavedClaudeImage = {
+  path: string
+}
+
 type Unsub = () => void
 
 const lspDiagnosticsSubscribers = new Set<(payload: LspDiagnosticsEvent) => void>()
@@ -362,6 +366,13 @@ const api = {
       }
     | { ok: false; error: string }
   > => ipcRenderer.invoke('fs:listDirectory', rawPath, opts),
+
+  saveClaudeImage: (params: {
+    base64Data: string
+    mediaType: string
+    filename?: string
+  }): Promise<SavedClaudeImage> =>
+    ipcRenderer.invoke('fs:saveClaudeImage', params),
 
   // --- Traffic light inset (macOS) ---
   // Main pushes the right-edge X of the traffic light buttons so the

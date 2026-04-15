@@ -13,6 +13,7 @@ import { TrustDialogModal } from '../../../providers/claude/renderer/TrustDialog
 import { SlashCommandPicker } from '../../../providers/claude/renderer/SlashCommandPicker'
 import type { SessionRuntime, Workspace } from './workspaceStore'
 import type { SessionId, SessionKind } from './types'
+import type { ClaudeDraftImage } from './workspaceState'
 
 // Claude's TUI has its own paste-state machine. Large input and bracketed
 // paste do NOT go straight from "bytes arrived" to "submit immediately" —
@@ -40,9 +41,60 @@ import type { SessionId, SessionKind } from './types'
 //     submit feel laggy on every long paste.
 const CLAUDE_PASTE_THRESHOLD = 800
 const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
+const CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS = 750
 
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error ?? new Error('failed to read file'))
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result)
+      else reject(new Error('file reader returned non-string result'))
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+function parseDataUrl(dataUrl: string): { mediaType: string; base64Data: string } {
+  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl)
+  if (!match) {
+    throw new Error('unsupported image data url')
+  }
+  return {
+    mediaType: match[1] ?? 'image/png',
+    base64Data: match[2] ?? '',
+  }
+}
+
+async function readImagesFromClipboard(): Promise<ClaudeDraftImage[]> {
+  if (!navigator.clipboard?.read) return []
+  const items = await navigator.clipboard.read()
+  const images: ClaudeDraftImage[] = []
+  for (const item of items) {
+    const imageType = item.types.find(type => type.startsWith('image/'))
+    if (!imageType) continue
+    const blob = await item.getType(imageType)
+    const previewUrl = await fileToDataUrl(new File([blob], 'Pasted image', { type: imageType }))
+    const { mediaType, base64Data } = parseDataUrl(previewUrl)
+    images.push({
+      id: crypto.randomUUID(),
+      mediaType,
+      base64Data,
+      previewUrl,
+      filename: 'Pasted image',
+    })
+  }
+  return images
+}
+
+function buildClaudeImagePastePayload(text: string, imagePaths: string[]): string {
+  if (imagePaths.length === 0) return text
+  if (text.trim().length === 0) return imagePaths.join('\n')
+  return `${imagePaths.join('\n')}\n${text}`
 }
 
 // TileLeaf — one pane. A "mini cc-shell" self-contained in a box:
@@ -112,6 +164,7 @@ export function TileLeaf({
   const setInputText = (next: string) => {
     setDraftInput(sessionId, next)
   }
+  const setDraftImages = workspace.setDraftImages
   const provider: 'claude' | 'codex' =
     workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
 
@@ -388,6 +441,60 @@ export function TileLeaf({
     }
   }
 
+  const appendDraftImages = useCallback(
+    (images: ClaudeDraftImage[]) => {
+      if (images.length === 0) return
+      setDraftImages(sessionId, prev => [...prev, ...images])
+    },
+    [sessionId, setDraftImages],
+  )
+
+  const removeDraftImage = useCallback(
+    (imageId: string) => {
+      setDraftImages(sessionId, prev => prev.filter(image => image.id !== imageId))
+    },
+    [sessionId, setDraftImages],
+  )
+
+  const handlePaste = useCallback(
+    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (provider !== 'claude') return
+      const files = Array.from(e.clipboardData.items)
+        .map(item => item.kind === 'file' ? item.getAsFile() : null)
+        .filter((file): file is File => Boolean(file && file.type.startsWith('image/')))
+
+      try {
+        let images: ClaudeDraftImage[] = []
+        if (files.length > 0) {
+          e.preventDefault()
+          images = await Promise.all(
+            files.map(async file => {
+              const previewUrl = await fileToDataUrl(file)
+              const { mediaType, base64Data } = parseDataUrl(previewUrl)
+              return {
+                id: crypto.randomUUID(),
+                mediaType,
+                base64Data,
+                previewUrl,
+                filename: file.name || 'Pasted image',
+              } satisfies ClaudeDraftImage
+            }),
+          )
+        } else {
+          images = await readImagesFromClipboard()
+          if (images.length > 0) {
+            e.preventDefault()
+          }
+        }
+        if (images.length === 0) return
+        appendDraftImages(images)
+      } catch (err) {
+        console.warn('[TileLeaf] image paste failed', err)
+      }
+    },
+    [appendDraftImages, provider],
+  )
+
   const exitSlashMode = () => {
     setSlashMode(false)
     setInputText('')
@@ -486,6 +593,10 @@ export function TileLeaf({
     }
     if (e.key === 'Enter') {
       e.preventDefault()
+      const draftImages = runtime.draftImages
+      if (input.trim().length === 0 && draftImages.length === 0) {
+        return
+      }
       // Capture streaming baseline from the very freshest screen text
       // so the streaming card can detect "this is the old response"
       // reliably. latestScreenRef is mutated synchronously on every
@@ -502,6 +613,7 @@ export function TileLeaf({
       }
 
       try {
+        const hasClaudeImages = provider === 'claude' && draftImages.length > 0
         // Three submit modes live here because the two providers'
         // input stacks are similar but NOT equivalent:
         //
@@ -523,6 +635,23 @@ export function TileLeaf({
 
         if (provider === 'codex') {
           await send(`\x1b[200~${input}\x1b[201~\r`)
+        } else if (hasClaudeImages) {
+          const savedImages = await Promise.all(
+            draftImages.map(image =>
+              window.api.saveClaudeImage({
+                base64Data: image.base64Data,
+                mediaType: image.mediaType,
+                filename: image.filename,
+              }),
+            ),
+          )
+          const payload = buildClaudeImagePastePayload(
+            input,
+            savedImages.map(image => image.path),
+          )
+          await send(`\x1b[200~${payload}\x1b[201~`)
+          await wait(CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS)
+          await send('\r')
         } else if (isClaudePasteLike) {
           // Keep the submit key OUT of the bracketed-paste write and
           // wait past Claude's paste debounce. Sending `\r` in the same
@@ -536,6 +665,9 @@ export function TileLeaf({
           await send(input + '\r')
         }
         setInputText('')
+        if (provider === 'claude' && draftImages.length > 0) {
+          setDraftImages(sessionId, [])
+        }
       } catch (err) {
         // Keep the draft visible if main no longer has a live session for this
         // pane. Clearing the composer on a dropped write makes the failure look
@@ -906,6 +1038,33 @@ export function TileLeaf({
             The chevron is aligned to the top of the box instead of
             vertically-centered because a 10-line prompt looks odd
             with a chevron floating in the middle of nowhere. */}
+        {provider === 'claude' && runtime.draftImages.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {runtime.draftImages.map(image => (
+              <div
+                key={image.id}
+                className="relative w-24 rounded border border-border bg-canvas p-1"
+              >
+                <button
+                  type="button"
+                  className="absolute right-1 top-1 z-10 h-5 w-5 rounded-full bg-surface/90 text-[12px] leading-none text-ink hover:bg-surface"
+                  onClick={() => removeDraftImage(image.id)}
+                  aria-label={`Remove ${image.filename}`}
+                >
+                  ×
+                </button>
+                <img
+                  src={image.previewUrl}
+                  alt={image.filename}
+                  className="h-16 w-full rounded object-cover"
+                />
+                <div className="mt-1 truncate text-[10px] font-code text-muted">
+                  {image.filename}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="relative">
           <div className="absolute left-2 top-[10px] text-accent text-[12px] pointer-events-none select-none">
             ❯
@@ -950,6 +1109,7 @@ export function TileLeaf({
               }
             }}
             onKeyDown={onKeyDown}
+            onPaste={handlePaste}
             onFocus={onFocusRequest}
             placeholder={
               slashMode

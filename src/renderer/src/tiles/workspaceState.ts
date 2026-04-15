@@ -26,6 +26,14 @@ export type QueuedMessage = {
   timestamp: string
 }
 
+export type ClaudeDraftImage = {
+  id: string
+  mediaType: string
+  base64Data: string
+  previewUrl: string
+  filename: string
+}
+
 export type SemanticLiveBlock = {
   blockIndex: number
   kind: string
@@ -142,6 +150,7 @@ export type SessionRuntime = {
   projectDir: string | null
   picker: SlashPickerState
   draftInput: string
+  draftImages: ClaudeDraftImage[]
   activityStatus: string | null
   paneToast: string | null
   pendingApproval: {
@@ -235,6 +244,7 @@ export function emptyRuntime(): SessionRuntime {
     projectDir: null,
     picker: { visible: false, items: [] },
     draftInput: '',
+    draftImages: [],
     activityStatus: null,
     paneToast: null,
     pendingApproval: null,

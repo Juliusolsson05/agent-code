@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron'
-import { dirname, join, resolve } from 'path'
+import { randomUUID } from 'crypto'
+import { dirname, extname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
 import { readdir, readFile, stat, writeFile, mkdir } from 'fs/promises'
 import { homedir } from 'os'
@@ -180,6 +181,26 @@ function send(channel: string, ...args: unknown[]): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, ...args)
   }
+}
+
+function extensionForMediaType(mediaType: string, filename?: string): string {
+  const fromName = extname(filename ?? '').trim().toLowerCase()
+  if (fromName) return fromName
+  switch (mediaType) {
+    case 'image/jpeg':
+      return '.jpg'
+    case 'image/gif':
+      return '.gif'
+    case 'image/webp':
+      return '.webp'
+    case 'image/png':
+    default:
+      return '.png'
+  }
+}
+
+function getClaudeImageCacheDir(): string {
+  return join(app.getPath('temp'), 'cc-shell', 'claude-images')
 }
 
 // Per-session jsonl-entry coalescer.
@@ -564,6 +585,21 @@ function registerIpc(): void {
         if (e.code === 'EACCES') return { ok: false, error: 'permission denied' }
         return { ok: false, error: e.message ?? 'read failed' }
       }
+    },
+  )
+
+  ipcMain.handle(
+    'fs:saveClaudeImage',
+    async (
+      _evt,
+      params: { base64Data: string; mediaType: string; filename?: string },
+    ) => {
+      const cacheDir = getClaudeImageCacheDir()
+      await mkdir(cacheDir, { recursive: true })
+      const ext = extensionForMediaType(params.mediaType, params.filename)
+      const filePath = join(cacheDir, `${randomUUID()}${ext}`)
+      await writeFile(filePath, Buffer.from(params.base64Data, 'base64'))
+      return { path: filePath }
     },
   )
 

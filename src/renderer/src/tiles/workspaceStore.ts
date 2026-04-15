@@ -3246,6 +3246,32 @@ export function useWorkspace(
     [updateRuntime],
   )
 
+  const setDraftImages = useCallback(
+    (
+      sessionId: SessionId,
+      next:
+        | SessionRuntime['draftImages']
+        | ((prev: SessionRuntime['draftImages']) => SessionRuntime['draftImages']),
+    ) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const draftImages =
+          typeof next === 'function'
+            ? next(current.draftImages)
+            : next
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            draftImages,
+          },
+        }
+      })
+      setDraftVersion(v => v + 1)
+    },
+    [],
+  )
+
   // ---- Pane toast: transient feedback above the composer ----
   //
   // Single-slot, auto-dismiss. Calling showPaneToast while a previous
@@ -4157,6 +4183,7 @@ export function useWorkspace(
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
     setDraftInput,
+    setDraftImages,
     loadOlderHistory,
     showPaneToast,
     undoClose,
