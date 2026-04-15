@@ -997,11 +997,26 @@ function foldSemanticEvent(
   //   derived values and the trailing run is a cheap no-op pass that
   //   keeps this block the single place responsible for derived
   //   fields when currentTurn remains live.
+  //
+  //   Codex also emits `tool_started` / `tool_output_delta` /
+  //   `tool_completed` (non-Anthropic tool lifecycle — see the
+  //   `tool_started` / `tool_completed` branches above, which synthesize
+  //   tool_use blocks and stamp resultAt / resultIsError). Those MUST be
+  //   in this allow-list: without them `deriveSemanticTaskSnapshot`
+  //   never sees a new block entering `in_progress`, never sees it
+  //   transition to `completed`/`error`, and `lookups.toolCallsById`,
+  //   `lookups.resolvedToolUseIds`, `task.activeToolNames`, and
+  //   `task.inProgressToolUseIds` go stale until some Anthropic-style
+  //   event happens to retrigger derive. The user-visible symptom was
+  //   Codex tool rows stuck showing "running" forever after completion.
   const DERIVE_EVENT_TYPES = new Set([
     'block_started',
     'tool_input_delta',
     'tool_input_finalized',
     'tool_result',
+    'tool_started',
+    'tool_output_delta',
+    'tool_completed',
   ])
   const finalCurrentTurn = currentTurn
     ? DERIVE_EVENT_TYPES.has(t)
