@@ -5,7 +5,7 @@ import { createSettingsSlice } from './settings/slice'
 import { createUiShellSlice } from './uiShell/slice'
 import { createWorkspaceSlice } from './workspace/slice'
 import type { AppStore } from './types'
-import { DEFAULT_SETTINGS, type Settings } from './settings/types'
+import { DEFAULT_SETTINGS, THEME_MODES, type Settings } from './settings/types'
 
 export const useAppStore = create<AppStore>()(
   devtools(
@@ -17,7 +17,7 @@ export const useAppStore = create<AppStore>()(
       })),
       {
         name: 'cc-shell:app-store',
-        version: 1,
+        version: 2,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
         migrate: persisted => {
@@ -26,7 +26,10 @@ export const useAppStore = create<AppStore>()(
             settings: {
               ...DEFAULT_SETTINGS,
               ...data?.settings,
-              mode: data?.settings?.mode === 'light' ? 'light' : DEFAULT_SETTINGS.mode,
+              mode: THEME_MODES.some(option => option.id === data?.settings?.mode)
+                ? (data?.settings?.mode as Settings['mode'])
+                : DEFAULT_SETTINGS.mode,
+              contrast: data?.settings?.contrast === true,
               accent: data?.settings?.accent ?? DEFAULT_SETTINGS.accent,
               customRendering: data?.settings?.customRendering === true,
               dangerousAgentsEnabled: data?.settings?.dangerousAgentsEnabled === true,

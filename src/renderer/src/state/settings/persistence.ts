@@ -1,4 +1,4 @@
-import { ACCENTS, DEFAULT_SETTINGS, type AccentId, type Settings } from './types'
+import { ACCENTS, DEFAULT_SETTINGS, THEME_MODES, type AccentId, type Settings } from './types'
 
 const LEGACY_STORAGE_KEY = 'cc-shell:settings'
 
@@ -10,7 +10,10 @@ export function loadInitialSettings(): Settings {
     return {
       ...DEFAULT_SETTINGS,
       ...parsed,
-      mode: parsed.mode === 'light' ? 'light' : 'dark',
+      mode: THEME_MODES.some(option => option.id === parsed.mode)
+        ? (parsed.mode as Settings['mode'])
+        : DEFAULT_SETTINGS.mode,
+      contrast: parsed.contrast === true,
       accent: ACCENTS.some(a => a.id === parsed.accent)
         ? (parsed.accent as AccentId)
         : DEFAULT_SETTINGS.accent,

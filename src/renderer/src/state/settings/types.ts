@@ -1,4 +1,27 @@
-export type ThemeMode = 'dark' | 'light'
+export type ThemeMode =
+  | 'dark'
+  | 'dark-dim'
+  | 'dark-tokyonight'
+  | 'light'
+  | 'light-soft'
+
+export type ThemeModeMeta = {
+  id: ThemeMode
+  label: string
+  family: 'dark' | 'light'
+}
+
+export const THEME_MODES: ThemeModeMeta[] = [
+  { id: 'dark', label: 'Dark', family: 'dark' },
+  { id: 'dark-dim', label: 'Gray Dark', family: 'dark' },
+  { id: 'dark-tokyonight', label: 'Tokyonight', family: 'dark' },
+  { id: 'light', label: 'Light', family: 'light' },
+  { id: 'light-soft', label: 'Soft Light', family: 'light' },
+]
+
+export function isDarkThemeMode(mode: ThemeMode): boolean {
+  return THEME_MODES.find(option => option.id === mode)?.family !== 'light'
+}
 
 export type AccentId =
   | 'lime'
@@ -32,6 +55,7 @@ export const ACCENTS: AccentMeta[] = [
 
 export type Settings = {
   mode: ThemeMode
+  contrast: boolean
   accent: AccentId
   customRendering: boolean
   dangerousAgentsEnabled: boolean
@@ -51,6 +75,7 @@ export type Settings = {
 
 export const DEFAULT_SETTINGS: Settings = {
   mode: 'dark',
+  contrast: false,
   accent: 'lime',
   customRendering: false,
   dangerousAgentsEnabled: false,

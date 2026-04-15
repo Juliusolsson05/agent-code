@@ -14,8 +14,8 @@
  *      unless the user explicitly asks to see them. Zero clutter.
  *
  * Theme architecture:
- *   - Two modes: dark (default) and light. Applied via [data-mode=""]
- *     on <html>. Each mode overrides a small set of surface/ink tokens.
+ *   - Theme variants are applied via [data-mode=""] on <html>. Each
+ *     variant overrides the shared surface/ink tokens.
  *   - Accent is a SINGLE color token set dynamically via inline style on
  *     <html> (document.documentElement.style.setProperty). The user
  *     picks from a small palette; every marker, streaming dot, link,
@@ -151,6 +151,77 @@
   --theme-font-code: 'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace;
 }
 
+[data-mode="dark-dim"] {
+  --theme-canvas: #141516;
+  --theme-surface: #1a1c1e;
+  --theme-surface-hi: #232629;
+  --theme-ink: #e7e4de;
+  --theme-ink-dim: #b3afa8;
+  --theme-muted: #706c65;
+  --theme-border: #2b2e31;
+  --theme-border-hi: #3a3f43;
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 14%, transparent);
+  --theme-code-bg: #101113;
+  --theme-code-border: #24282b;
+  --theme-danger: #ff7676;
+  --theme-code-ink: #ece9e2;
+  --theme-code-ink-dim: #b7b2aa;
+  --theme-user-bg: #272a2d;
+  --theme-tool-bg: #1e2124;
+  --theme-diff-add-bg: #12311e;
+  --theme-diff-remove-bg: #37141b;
+  --theme-diff-add-fg: #67e08f;
+  --theme-diff-remove-fg: #ff8a8a;
+}
+
+[data-mode="dark-tokyonight"] {
+  --theme-canvas: #1a1b26;
+  --theme-surface: #1f2335;
+  --theme-surface-hi: #24283b;
+  --theme-ink: #c0caf5;
+  --theme-ink-dim: #9aa5ce;
+  --theme-muted: #6f7aa8;
+  --theme-border: #2f3757;
+  --theme-border-hi: #414868;
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 16%, transparent);
+  --theme-code-bg: #16161e;
+  --theme-code-border: #2b3250;
+  --theme-danger: #f7768e;
+  --theme-code-ink: #c0caf5;
+  --theme-code-ink-dim: #9aa5ce;
+  --theme-user-bg: #2a2f48;
+  --theme-tool-bg: #22263a;
+  --theme-diff-add-bg: #20303b;
+  --theme-diff-remove-bg: #3b2231;
+  --theme-diff-add-fg: #73daca;
+  --theme-diff-remove-fg: #f7768e;
+}
+
+[data-contrast="high"][data-mode="dark"],
+[data-contrast="high"][data-mode="dark-dim"],
+[data-contrast="high"][data-mode="dark-tokyonight"] {
+  --theme-canvas: #000000;
+  --theme-surface: #0b0b0b;
+  --theme-surface-hi: #151515;
+  --theme-ink: #ffffff;
+  --theme-ink-dim: #d7d7d7;
+  --theme-muted: #a7a7a7;
+  --theme-border: #383838;
+  --theme-border-hi: #6a6a6a;
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 22%, transparent);
+  --theme-code-bg: #000000;
+  --theme-code-border: #5a5a5a;
+  --theme-danger: #ff6b6b;
+  --theme-code-ink: #ffffff;
+  --theme-code-ink-dim: #dddddd;
+  --theme-user-bg: #171717;
+  --theme-tool-bg: #101010;
+  --theme-diff-add-bg: #10361f;
+  --theme-diff-remove-bg: #401318;
+  --theme-diff-add-fg: #8cffb4;
+  --theme-diff-remove-fg: #ff9d9d;
+}
+
 /* ---------- Mode: Light ---------- */
 
 [data-mode="light"] {
@@ -195,6 +266,53 @@
   --theme-diff-remove-bg: #2a1015;
   --theme-diff-add-fg: #4ade80;
   --theme-diff-remove-fg: #f87171;
+}
+
+[data-mode="light-soft"] {
+  --theme-canvas: #f4f0e7;
+  --theme-surface: #ebe5d9;
+  --theme-surface-hi: #dfd7c7;
+  --theme-ink: #23211d;
+  --theme-ink-dim: #575148;
+  --theme-muted: #8c8376;
+  --theme-border: #d7cdbb;
+  --theme-border-hi: #bcae97;
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 16%, transparent);
+  --theme-code-bg: #161510;
+  --theme-code-border: #2c2a23;
+  --theme-danger: #a23a3a;
+  --theme-code-ink: #efede7;
+  --theme-code-ink-dim: #bcb5a7;
+  --theme-user-bg: #d4cab6;
+  --theme-tool-bg: #e0d7c7;
+  --theme-diff-add-bg: #13301d;
+  --theme-diff-remove-bg: #33131a;
+  --theme-diff-add-fg: #73e59b;
+  --theme-diff-remove-fg: #f07f7f;
+}
+
+[data-contrast="high"][data-mode="light"],
+[data-contrast="high"][data-mode="light-soft"] {
+  --theme-canvas: #ffffff;
+  --theme-surface: #f4f4f4;
+  --theme-surface-hi: #ebebeb;
+  --theme-ink: #000000;
+  --theme-ink-dim: #252525;
+  --theme-muted: #4e4e4e;
+  --theme-border: #9b9b9b;
+  --theme-border-hi: #5c5c5c;
+  --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 20%, transparent);
+  --theme-code-bg: #0e0e0e;
+  --theme-code-border: #555555;
+  --theme-danger: #9f1919;
+  --theme-code-ink: #ffffff;
+  --theme-code-ink-dim: #e3e3e3;
+  --theme-user-bg: #d9d9d9;
+  --theme-tool-bg: #ececec;
+  --theme-diff-add-bg: #10331e;
+  --theme-diff-remove-bg: #3a1117;
+  --theme-diff-add-fg: #84f2ad;
+  --theme-diff-remove-fg: #ff9696;
 }
 
 /* ---------- Globals ---------- */
@@ -408,6 +526,57 @@ select {
  */
 .prose-theme .hljs {
   background: transparent !important;
+}
+
+[data-mode^='light'] .hljs-comment,
+[data-mode^='light'] .hljs-quote {
+  color: #6a737d;
+  font-style: italic;
+}
+[data-mode^='light'] .hljs-keyword,
+[data-mode^='light'] .hljs-selector-tag,
+[data-mode^='light'] .hljs-literal,
+[data-mode^='light'] .hljs-section,
+[data-mode^='light'] .hljs-link {
+  color: #d73a49;
+}
+[data-mode^='light'] .hljs-string,
+[data-mode^='light'] .hljs-attr,
+[data-mode^='light'] .hljs-symbol,
+[data-mode^='light'] .hljs-bullet,
+[data-mode^='light'] .hljs-addition {
+  color: #032f62;
+}
+[data-mode^='light'] .hljs-title,
+[data-mode^='light'] .hljs-title.function_,
+[data-mode^='light'] .hljs-subst {
+  color: #6f42c1;
+}
+[data-mode^='light'] .hljs-number,
+[data-mode^='light'] .hljs-regexp,
+[data-mode^='light'] .hljs-meta,
+[data-mode^='light'] .hljs-type,
+[data-mode^='light'] .hljs-built_in,
+[data-mode^='light'] .hljs-builtin-name {
+  color: #005cc5;
+}
+[data-mode^='light'] .hljs-variable,
+[data-mode^='light'] .hljs-template-variable,
+[data-mode^='light'] .hljs-selector-id,
+[data-mode^='light'] .hljs-selector-class,
+[data-mode^='light'] .hljs-selector-attr,
+[data-mode^='light'] .hljs-selector-pseudo,
+[data-mode^='light'] .hljs-tag {
+  color: #e36209;
+}
+[data-mode^='light'] .hljs-deletion {
+  color: #b31d28;
+}
+[data-mode^='light'] .hljs-emphasis {
+  font-style: italic;
+}
+[data-mode^='light'] .hljs-strong {
+  font-weight: 600;
 }
 
 /* ---------- Streaming dot pulse ---------- */

@@ -22,8 +22,12 @@ let themeListenerInstalled = false
 
 function currentThemeName(): string {
   const root = document.documentElement
-  if (root.dataset.contrast === 'high') return 'cc-shell-high-contrast'
-  return root.dataset.mode === 'light' ? 'cc-shell-light' : 'cc-shell-dark'
+  if (root.dataset.contrast === 'high') {
+    return root.dataset.mode?.startsWith('light')
+      ? 'cc-shell-high-contrast-light'
+      : 'cc-shell-high-contrast-dark'
+  }
+  return root.dataset.mode?.startsWith('light') ? 'cc-shell-light' : 'cc-shell-dark'
 }
 
 function defineThemes(monaco: typeof Monaco): void {
@@ -54,7 +58,7 @@ function defineThemes(monaco: typeof Monaco): void {
   })
 
   monaco.editor.defineTheme('cc-shell-light', {
-    base: 'vs-dark',
+    base: 'vs',
     inherit: true,
     rules: [],
     colors: {
@@ -71,8 +75,19 @@ function defineThemes(monaco: typeof Monaco): void {
     },
   })
 
-  monaco.editor.defineTheme('cc-shell-high-contrast', {
+  monaco.editor.defineTheme('cc-shell-high-contrast-dark', {
     base: 'hc-black',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': bg,
+      'editor.foreground': fg,
+      'editorCursor.foreground': accent,
+    },
+  })
+
+  monaco.editor.defineTheme('cc-shell-high-contrast-light', {
+    base: 'hc-light',
     inherit: true,
     rules: [],
     colors: {

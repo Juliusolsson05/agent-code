@@ -4,6 +4,8 @@ import {
   ACCENTS,
   type AccentId,
   type Settings,
+  THEME_MODES,
+  isDarkThemeMode,
   type ThemeMode,
 } from '../state/settings/types'
 
@@ -62,19 +64,18 @@ export function AppearanceMenu({ settings, onChange }: Props) {
             bg-surface border border-border-hi
             shadow-[0_16px_48px_rgba(0,0,0,0.4)]
           "
-        >
+          >
           <Section title="mode">
-            <div className="flex">
-              <ModeButton
-                mode="dark"
-                current={settings.mode}
-                onPick={mode => onChange({ mode })}
-              />
-              <ModeButton
-                mode="light"
-                current={settings.mode}
-                onPick={mode => onChange({ mode })}
-              />
+            <div className="grid grid-cols-2 gap-1.5">
+              {THEME_MODES.map(mode => (
+                <ModeButton
+                  key={mode.id}
+                  mode={mode.id}
+                  label={mode.label}
+                  current={settings.mode}
+                  onPick={nextMode => onChange({ mode: nextMode })}
+                />
+              ))}
             </div>
           </Section>
 
@@ -84,13 +85,26 @@ export function AppearanceMenu({ settings, onChange }: Props) {
                 <AccentSwatch
                   key={a.id}
                   id={a.id}
-                  color={settings.mode === 'dark' ? a.dark : a.light}
+                  color={isDarkThemeMode(settings.mode) ? a.dark : a.light}
                   name={a.name}
                   active={settings.accent === a.id}
                   onPick={accent => onChange({ accent })}
                 />
               ))}
             </div>
+            <button
+              type="button"
+              onClick={() => onChange({ contrast: !settings.contrast })}
+              className="mt-3 flex w-full items-center justify-between border border-border px-2.5 py-2 text-left text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+            >
+              <span>High Contrast</span>
+              <span
+                className={`
+                  flex h-3.5 w-3.5 border
+                  ${settings.contrast ? 'bg-accent border-accent' : 'bg-transparent border-border-hi'}
+                `}
+              />
+            </button>
           </Section>
         </div>
       )}
@@ -111,10 +125,12 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function ModeButton({
   mode,
+  label,
   current,
   onPick,
 }: {
   mode: ThemeMode
+  label: string
   current: ThemeMode
   onPick: (m: ThemeMode) => void
 }) {
@@ -134,7 +150,7 @@ function ModeButton({
         }
       `}
     >
-      {mode}
+      {label}
     </button>
   )
 }

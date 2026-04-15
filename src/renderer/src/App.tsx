@@ -176,6 +176,7 @@ export default function App() {
           {settingsPageOpen ? (
             <SettingsPage
               onClose={closeSettingsPage}
+              workspace={workspace}
               settings={settings}
               onChange={setSettings}
               onReset={resetSettings}
