@@ -27,6 +27,3 @@ file-dumps/
 # part of this project.
 agent-transcript-parser/
 
-# Scratch issue tracker used during review sessions. Intentionally
-# local-only; real issues live elsewhere.
-issues.md
