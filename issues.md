@@ -151,7 +151,7 @@ Right now the app already has global keybinds for:
 
 - command palette
 - pane navigation
-- pane resize
+- pane resize (should be resolved)
 - workspace actions
 
 If Vim is added naively, it will fight with:
@@ -892,3 +892,388 @@ Arrow navigation between agents should feel predictable and natural, especially 
 ### Notes
 
 - This is a keyboard UX / interaction-design issue, not just a keybinding existence issue.
+
+## 22. Fix Lazy Loading Properly
+
+- Status: documented only, do not solve yet
+- Area: loading strategy / performance / UI behavior
+
+### Problem
+
+Lazy loading still needs to be fixed properly.
+
+### Why This Matters
+
+If lazy loading behavior is unreliable or incomplete:
+
+- UI loading feels inconsistent
+- performance improvements do not land cleanly
+- loading transitions can become buggy or confusing
+- users may see missing, delayed, or unstable content
+
+### Expected Direction
+
+Lazy loading should behave predictably and correctly across the relevant app surfaces, with clearer loading behavior and fewer edge-case failures.
+
+### Notes
+
+- This is intentionally broad for now and can be refined into more specific lazy-loading issues later if needed.
+
+## 23. Remote Compact Task Fails Because The Codex Responses Proxy Does Not Support `/v1/responses/compact`
+
+- Status: documented only, do not solve yet
+- Area: Codex proxy compatibility / remote compact flow
+
+### Problem
+
+There is a concrete failure when running a remote compact task through the Codex proxy:
+
+```text
+Error running remote compact task: unexpected status 404 Not Found: codex-responses-proxy: unsupported POST /v1/responses/compact, url: http://127.0.0.1:57757/v1/responses/compact
+```
+
+### Actual Behavior
+
+The compact flow attempts to call:
+
+- `POST /v1/responses/compact`
+
+but the Codex responses proxy returns:
+
+- `404 Not Found`
+- `unsupported POST /v1/responses/compact`
+
+### Why This Matters
+
+This means the remote compact flow is not actually supported correctly through the current proxy layer, which breaks a real provider workflow instead of degrading gracefully.
+
+### Expected Direction
+
+Either:
+
+- the proxy should support the compact endpoint properly
+
+or:
+
+- the app should detect that the endpoint is unsupported and handle it explicitly rather than failing with a raw 404 at runtime
+
+### Notes
+
+- Keep the exact error string above easy to grep for future debugging.
+
+## 24. Improve Loading And Thinking Indicators In Rendering
+
+- Status: documented only, do not solve yet
+- Area: rendering UX / live-state communication
+
+### Problem
+
+Loading and thinking indicators in rendering need to be better.
+
+### Why This Matters
+
+If loading/thinking indicators are weak, unclear, or poorly timed:
+
+- the app feels less responsive
+- users cannot tell what the agent is doing
+- live-state transitions become harder to interpret
+- rendering bugs are more noticeable and more confusing
+
+### Expected Direction
+
+Loading and thinking indicators should communicate live state more clearly and feel better integrated into the rendering flow.
+
+### Notes
+
+- This is related to the broader rendering/activity-detection work, but worth tracking explicitly as a user-facing UX issue.
+
+## 25. Build Full Rendering Logging And Debugging Pipelines
+
+- Status: documented only, do not solve yet
+- Area: rendering observability / debugging infrastructure
+
+### Problem
+
+We need full rendering logging and debugging pipelines.
+
+### Why This Matters
+
+Rendering bugs are currently too hard to reason about without stronger observability.
+
+Better logging/debugging infrastructure would make it easier to inspect:
+
+- what state the renderer believed it had
+- what transport/proxy/screen inputs were received
+- how those inputs were folded into render state
+- why a given UI surface chose one rendering path over another
+
+### Expected Direction
+
+The app should have much stronger rendering observability, with enough logging/debug surfaces to trace rendering behavior end to end.
+
+### Notes
+
+- This is an infrastructure/debuggability issue, not just a UI issue.
+- It should help with diagnosing flicker, duplication, stale state, wrong activity indicators, and other rendering bugs already documented above.
+
+## 26. Add A `View Prompts` Command So Users Can See What An Agent Session Is About
+
+- Status: documented only, do not solve yet
+- Area: multi-agent UX / command system
+
+### Problem
+
+When multiple agents are running, it is easy to lose track of what a given agent session is actually about.
+
+### Expected Direction
+
+Add a `View Prompts` command that shows the user prompts for an agent session, so the user can quickly understand the purpose and context of that session.
+
+### Why This Matters
+
+In a multi-agent workflow, prompt history is often the fastest way to understand:
+
+- why the agent exists
+- what task it was given
+- how it differs from other active agents
+
+Without that, multiple sessions can blur together.
+
+### Notes
+
+- This should help users re-orient themselves in multi-agent workflows without digging through the full transcript.
+- It fits naturally as a command/system-level affordance rather than as raw transcript browsing alone.
+
+## 27. Some Rendering Output Is Being Incorrectly Buried Or Obscured, Including ASCII
+
+- Status: documented only, do not solve yet
+- Area: rendering fidelity / content visibility
+
+### Problem
+
+Some rendering output is being buried or obscured when it should be displayed directly.
+
+One concrete example is ASCII output not rendering properly and instead appearing as a black box.
+
+### Expected Behavior
+
+ASCII and similar plain-text output should render visibly and faithfully in the normal output flow.
+
+### Actual Behavior
+
+Certain content is effectively hidden, flattened, or rendered in a way that makes it unreadable.
+
+### Why This Matters
+
+If output like ASCII is not rendered correctly:
+
+- useful content becomes unreadable
+- the renderer is no longer a trustworthy representation of the underlying session output
+- users lose context from outputs that are meant to be seen directly
+
+### Notes
+
+- This is a rendering-fidelity issue, not just a styling issue.
+- ASCII output is one concrete example, but the broader issue is that some content is being visually buried when it should remain legible.
+
+## 28. Main Render Flow Should Stop Bleeding Screen Parsing Into Core Rendering
+
+- Status: documented only, do not solve yet
+- Area: rendering architecture / screen parsing boundaries
+
+### Problem
+
+It is still too weird that screen parsing keeps bleeding into the main render flow.
+
+The main rendering path should not depend on screen parsing for core content rendering.
+
+### Expected Direction
+
+The main render flow should be driven by the proper semantic/transcript/render-state pipeline, not by screen parsing.
+
+Screen parsing should be limited to support surfaces such as:
+
+- command/status support rendering
+- fallback/support cases
+- auxiliary UI that genuinely has no better structured source
+
+### Why This Matters
+
+If screen parsing keeps leaking into the main renderer:
+
+- the architecture stays fragile
+- heuristics keep contaminating core rendering behavior
+- semantic/proxy improvements do not fully pay off
+- rendering bugs become harder to reason about because multiple truth sources stay entangled
+
+### Notes
+
+- This is a hard architecture-boundary issue, not just an implementation detail.
+- The goal is to make screen parsing secondary/supportive, not a hidden co-owner of the main render path.
+
+## 29. Add Pane Index Numbers And Support `Option + Number` Navigation Between Panes
+
+- Status: documented only, do not solve yet
+- Area: pane navigation / keyboard UX
+
+### Problem
+
+We should add index numbers for panes and support `Option + number` navigation between panes.
+
+The pane number should also be shown in the pane header so the mapping is visible.
+
+### Expected Direction
+
+The UI should:
+
+- assign visible index numbers to panes
+- show the pane number in the pane header
+- allow direct keyboard navigation with `Option + number`
+
+### Why This Matters
+
+When many panes are open, directional navigation alone can be slower and less predictable than direct targeting.
+
+Direct numeric navigation would make it easier to:
+
+- jump to a specific pane quickly
+- keep track of pane identity
+- use the app faster in multi-pane workflows
+
+### Notes
+
+- The important requirement is both visible numbering and matching keyboard navigation.
+
+## 30. Audit Performance Across The Whole App And Identify What Needs To Be Resolved
+
+- Status: documented only, do not solve yet
+- Area: performance / profiling / optimization
+
+### Problem
+
+We should do a broad performance audit over the whole app and identify the real performance issues that need to be resolved.
+
+### Expected Direction
+
+This should include identifying and evaluating performance costs across major surfaces such as:
+
+- rendering
+- streaming updates
+- screen parsing
+- semantic folding
+- pane/tab layout behavior
+- editor/code rendering
+- startup/rehydration
+- large-session behavior
+
+### Why This Matters
+
+Without a deliberate performance audit:
+
+- slow paths stay hidden until they become user-visible problems
+- optimizations happen reactively instead of strategically
+- regressions are easier to introduce
+- the app can feel inconsistent depending on session size and workflow shape
+
+### Notes
+
+- This should be driven by real profiling and observation, not by guesswork alone.
+- The goal is to identify concrete bottlenecks and the highest-value things to resolve first.
+
+## 31. Add A Setting For Line Wrapping In Code Rendering Instead Of Always Forcing Horizontal Scroll
+
+- Status: documented only, do not solve yet
+- Area: code rendering / settings / readability
+
+### Problem
+
+In code rendering surfaces such as:
+
+- code blocks
+- read results
+- edit results
+
+we are currently letting long lines take up horizontal scroll space.
+
+This should be controllable through a setting instead of being a fixed behavior.
+
+### Expected Direction
+
+Add a setting that controls whether code-oriented rendering wraps long lines or keeps horizontal scrolling.
+
+### Why This Matters
+
+Different users and workflows want different behavior:
+
+- some want wrapped lines for easier reading
+- some want no wrapping for exact code/layout fidelity
+
+Making this configurable is better than hardcoding one preference for everyone.
+
+### Notes
+
+- This should be treated as a rendering/settings issue, not just a one-off style tweak.
+
+## 32. Add A Developer Mode That Mirrors Active Terminals To Dispatched tmux Sessions
+
+- Status: documented only, do not solve yet
+- Area: developer workflow / terminal orchestration / testing workflow
+
+### Problem
+
+We should add a developer mode where active terminals mirror the dispatched tmux-backed sessions.
+
+The goal is that we can restart/rebuild the app at any time and still keep the underlying active terminal work alive and testable.
+
+This is specifically for internal development, not a general end-user feature.
+
+### Expected Direction
+
+Developer mode should make it possible for active terminal sessions to stay mirrored onto dispatched tmux sessions so development/rebuild cycles do not break the working terminal context.
+
+### Why This Matters
+
+Without this, development and testing workflows are more fragile:
+
+- rebuild/restart can interrupt useful live terminal state
+- testing changes becomes slower
+- active workflows are harder to preserve while iterating
+
+### Notes
+
+- This is specifically about improving the development/testing loop, not just general terminal persistence.
+- This mode should be clearly treated as an internal/developer-only capability.
+- The important property is being able to restart the app while preserving and reconnecting to the active terminal work through tmux-backed dispatch sessions.
+
+## 33. Add Native System Notifications Around Provider Switching So The Active Workflow Knows A Switch Happened
+
+- Status: documented only, do not solve yet
+- Area: provider switching / system notifications / workflow clarity
+
+### Problem
+
+When switching providers, we should surface a clear native system notification that makes it obvious a switch just happened:
+
+- Claude -> Codex
+- Codex -> Claude
+
+### Expected Direction
+
+Provider switching should trigger the system's native notification mechanism so the switch is visible and unambiguous.
+
+The notification should make it clear which provider the app switched from and which provider it switched to.
+
+### Why This Matters
+
+Provider switching changes the active workflow context in a meaningful way.
+
+If that switch is not made explicit enough:
+
+- context can feel blurry
+- the user may lose track of which provider is active
+- the workflow handoff feels less trustworthy
+
+### Notes
+
+- This should use native system notifications rather than only in-app UI messaging.
+- The goal is to make provider handoff explicit and hard to miss.
