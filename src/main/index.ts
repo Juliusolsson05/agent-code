@@ -182,6 +182,64 @@ function send(channel: string, ...args: unknown[]): void {
   }
 }
 
+// Per-session jsonl-entry coalescer.
+//
+// WHY: on a resumed Claude/Codex session, the headless `bootstrapTail`
+// parses the last ~200 lines from the JSONL file synchronously and
+// emits one `jsonl-entry` event per line. Forwarding each as its own
+// IPC `webContents.send` produced ~200 round-trips per pane × N panes
+// on restart — which on the renderer side became 200N React renders,
+// 200N O(N) spreads, and 200N auto-scroll pins. That's the "feels
+// like I'm being scrolled through the whole conversation" bug.
+//
+// Coalescing: we buffer entries per sessionId, schedule ONE
+// setImmediate flush, and deliver the whole burst as a single
+// `session:jsonl-entries` payload. setImmediate (not Promise.resolve
+// or process.nextTick) runs after the current I/O tick finishes, so
+// the whole bootstrapTail loop drains before we schedule a send. Live
+// mid-conversation entries land one per tick and are flushed
+// immediately after — no added latency for the streaming path.
+//
+// Singular `session:jsonl-entry` is intentionally kept alive: any
+// non-bulk consumer (tests, future single-entry subscribers) can
+// still listen, and keeping both channels means this change is
+// strictly additive from the renderer's perspective. The renderer
+// subscribes to BOTH and picks whichever it prefers.
+type PendingJsonlBuffer = {
+  entries: Array<{ entry: import('claude-code-headless').JsonlEntry; file: string }>
+  flushScheduled: boolean
+}
+const jsonlPending = new Map<string, PendingJsonlBuffer>()
+
+function flushJsonlFor(sessionId: string): void {
+  const pending = jsonlPending.get(sessionId)
+  if (!pending || pending.entries.length === 0) return
+  const payload = {
+    sessionId,
+    entries: pending.entries,
+  }
+  pending.entries = []
+  pending.flushScheduled = false
+  send('session:jsonl-entries', payload)
+}
+
+function enqueueJsonl(
+  sessionId: string,
+  entry: import('claude-code-headless').JsonlEntry,
+  file: string,
+): void {
+  let pending = jsonlPending.get(sessionId)
+  if (!pending) {
+    pending = { entries: [], flushScheduled: false }
+    jsonlPending.set(sessionId, pending)
+  }
+  pending.entries.push({ entry, file })
+  if (!pending.flushScheduled) {
+    pending.flushScheduled = true
+    setImmediate(() => flushJsonlFor(sessionId))
+  }
+}
+
 // Wire every manager event to a matching IPC channel. Each payload
 // carries the sessionId so the renderer can route to the right tile.
 //
@@ -194,7 +252,13 @@ function send(channel: string, ...args: unknown[]): void {
 function wireManagerIPC(): void {
   manager.on('started', payload => send('session:started', payload))
   manager.on('screen', payload => send('session:screen', payload))
-  manager.on('jsonl-entry', payload => send('session:jsonl-entry', payload))
+  // Dual-emit: bulk channel for the common case, singular channel
+  // kept for any late-arriving consumer that only wants one event at
+  // a time. Bulk consumer can ignore the singular channel entirely.
+  manager.on('jsonl-entry', payload => {
+    enqueueJsonl(payload.sessionId, payload.entry, payload.file)
+    send('session:jsonl-entry', payload)
+  })
   manager.on('jsonl-error', ({ sessionId, error }) =>
     send('session:jsonl-error', {
       sessionId,
@@ -209,7 +273,14 @@ function wireManagerIPC(): void {
   manager.on('resume-prompt', payload => send('session:resume-prompt', payload))
   manager.on('compaction-state', payload => send('session:compaction-state', payload))
   manager.on('semantic-event', payload => send('session:semantic-event', payload))
-  manager.on('exit', payload => send('session:exit', payload))
+  manager.on('exit', payload => {
+    // Final flush — any entries still buffered from the last
+    // bootstrapTail tick must land before exit so the renderer sees a
+    // consistent final entries list.
+    flushJsonlFor(payload.sessionId)
+    jsonlPending.delete(payload.sessionId)
+    send('session:exit', payload)
+  })
   lspManager.on('diagnostics', payload => send('lsp:diagnostics', payload))
 }
 
