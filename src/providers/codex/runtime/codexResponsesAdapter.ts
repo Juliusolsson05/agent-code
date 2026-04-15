@@ -1,3 +1,4 @@
+import { StringDecoder } from 'string_decoder'
 import type { CodexHeadless } from 'codex-headless'
 import type { ResponsesProxy } from './responsesProxy.js'
 
@@ -48,6 +49,7 @@ import type { ResponsesProxy } from './responsesProxy.js'
 
 type ChunkEvent = {
   kind: 'response-chunk'
+  requestId: string
   path: string
   size: number
   chunk: Buffer
@@ -55,6 +57,7 @@ type ChunkEvent = {
 
 type StartEvent = {
   kind: 'request'
+  requestId: string
   method: string
   path: string
   upstream: string
@@ -62,21 +65,36 @@ type StartEvent = {
 
 type EndEvent = {
   kind: 'response-end'
+  requestId: string
   path: string
   bytes: number
 }
 
-// Per-turn state tracked by the adapter. Keyed by the synthetic
-// "flow id" we mint (path + request start ts) because multiple
-// Responses calls can theoretically overlap during reconnects.
+// Per-turn state tracked by the adapter. Keyed by the proxy's
+// requestId (emitted on every request/response/chunk/end/error event
+// for that specific HTTP call). Path-based keying was the old
+// approach; it silently merged overlapping retries' bytes into
+// whichever flow happened to be most-recent on that path.
 type FlowState = {
   flowId: string
+  // requestId from the proxy. Responses are routed to this flow by
+  // requestId equality, not by path — path is kept only for
+  // observability/logging.
+  requestId: string
   path: string
   // `response.id` from the upstream, used as our semantic turnId.
   // Falls back to the flow id until response.created arrives.
   responseId: string | null
   // Rolling SSE frame buffer — bytes are chunked arbitrarily.
   buffer: string
+  // Incremental UTF-8 decoder. HTTP chunks can split a multi-byte
+  // codepoint at any byte boundary (emoji, CJK, box-drawing all come
+  // back as ≥2 bytes). An eager `Buffer.toString('utf-8')` per chunk
+  // substitutes the split tail with U+FFFD, permanently corrupting
+  // the assistant text. `StringDecoder` holds the trailing partial
+  // bytes until the next chunk arrives and emits only complete
+  // codepoints, so the assistant stream is byte-accurate.
+  decoder: StringDecoder
   // Accumulated assistant text across all output_text.delta events.
   fullText: string
   // Block index for the current assistant message output item, if
@@ -157,9 +175,11 @@ export class CodexResponsesAdapter {
       const flowId = `proxy-${this.nextFlowSeq++}`
       this.flows.set(flowId, {
         flowId,
+        requestId: req.requestId,
         path: req.path,
         responseId: null,
         buffer: '',
+        decoder: new StringDecoder('utf8'),
         fullText: '',
         messageBlockIndex: null,
         blocks: new Map(),
@@ -190,17 +210,34 @@ export class CodexResponsesAdapter {
 
     if (kind === 'response-chunk') {
       const chunkEv = ev as unknown as ChunkEvent
-      const flow = this.findFlowByPath(chunkEv.path)
+      const flow = this.findFlowByRequestId(chunkEv.requestId)
       if (!flow) return
-      flow.buffer += chunkEv.chunk.toString('utf-8')
+      // decoder.write holds any trailing partial multi-byte sequence
+      // until the next chunk arrives — see the FlowState.decoder
+      // comment for why a plain toString('utf-8') corrupts non-ASCII.
+      //
+      // Normalize line endings at the boundary: the SSE spec allows
+      // \r\n or \n line terminators, and some corporate proxies /
+      // TLS-terminating CDNs rewrite the stream with \r\n. The frame
+      // splitter below only looks for \n\n, so we canonicalize here
+      // (dropping bare \r is safe because SSE field payloads never
+      // contain them). Without this, a CRLF upstream emits zero
+      // semantic events for an entire turn because `\n\n` never
+      // appears in the buffer.
+      flow.buffer += flow.decoder.write(chunkEv.chunk).replace(/\r\n/g, '\n').replace(/\r/g, '\n')
       this.drainFrames(flow)
       return
     }
 
     if (kind === 'response-end') {
       const endEv = ev as unknown as EndEvent
-      const flow = this.findFlowByPath(endEv.path)
+      const flow = this.findFlowByRequestId(endEv.requestId)
       if (!flow) return
+      // Flush any bytes the decoder was holding back (i.e. a trailing
+      // partial sequence that never got its continuation). In healthy
+      // streams this is empty; on truncated streams we'd rather see
+      // a stray U+FFFD than silently swallow the tail.
+      flow.buffer += flow.decoder.end()
       // Best-effort flush — upstream may not send a terminator.
       this.drainFrames(flow)
       // If we got this far without seeing response.completed,
@@ -221,8 +258,8 @@ export class CodexResponsesAdapter {
     if (kind === 'response-error' || kind === 'upstream-error') {
       // Treat like an end: seal any open turn so the renderer
       // isn't stuck in "streaming" state, then drop the flow.
-      const errPath = typeof ev.path === 'string' ? ev.path : ''
-      const flow = this.findFlowByPath(errPath)
+      const errReqId = typeof ev.requestId === 'string' ? ev.requestId : ''
+      const flow = this.findFlowByRequestId(errReqId)
       if (!flow) return
       if (flow.turnOpened && flow.responseId) {
         this.headless.semantic.finishTurn({
@@ -236,15 +273,16 @@ export class CodexResponsesAdapter {
     }
   }
 
-  // Most recent flow on a given path wins. SSE replies from the
-  // upstream target the same POST we made, so "most recent" is
-  // always correct.
-  private findFlowByPath(path: string): FlowState | null {
-    let match: FlowState | null = null
+  // Route chunks by requestId. The proxy mints a monotonic requestId
+  // per HTTP call and stamps every request/response/chunk/end/error
+  // event with it, so overlapping retries to the same path never
+  // collide — each retry gets its own requestId and its own flow.
+  private findFlowByRequestId(requestId: string): FlowState | null {
+    if (!requestId) return null
     for (const flow of this.flows.values()) {
-      if (flow.path === path) match = flow
+      if (flow.requestId === requestId) return flow
     }
-    return match
+    return null
   }
 
   // SSE framing: events are separated by blank lines ("\n\n"). A
@@ -266,6 +304,16 @@ export class CodexResponsesAdapter {
     // Collect all `data:` lines (a frame can have multiple, joined
     // by newlines per the SSE spec). Drop `event:`, `id:`, `retry:`
     // — we don't need them.
+    //
+    // WHY silently drop data-less frames instead of logging/upgrading
+    // them: the OpenAI Responses SSE wire always pairs `event: ...`
+    // with a `data: {...}` payload; a frame with only `event:` or
+    // only a comment (`: keepalive`) carries no state we can fold
+    // into the semantic channel. If upstream ever introduces a
+    // data-less signal (e.g. a heartbeat that hints at quota
+    // throttling) we'd want to surface it, but until that exists
+    // dropping them is the right call — anything else just generates
+    // noise in the event log.
     const dataLines: string[] = []
     for (const line of rawFrame.split('\n')) {
       if (line.startsWith('data: ')) dataLines.push(line.slice(6))

@@ -147,14 +147,24 @@ export class CodexSession extends EventEmitter {
       if (typeof v === 'string') cleanEnv[k] = v
     }
 
-    // Spawn the PTY.
-    this.pty = ptySpawn(this.binary, args, {
-      name: 'xterm-256color',
-      cols: this.cols,
-      rows: this.rows,
-      cwd: this.cwd,
-      env: cleanEnv,
-    })
+    // From here on we have a listening proxy (if useProxy was set) but
+    // no PTY, no CodexHeadless, and therefore no exit/stop plumbing.
+    // Any throw between the proxy-create above and the end of start()
+    // leaks the proxy HTTP server — nothing else would ever call
+    // stop() on it. Wrap everything in a try/catch that rolls back.
+    try {
+      // Spawn the PTY.
+      this.pty = ptySpawn(this.binary, args, {
+        name: 'xterm-256color',
+        cols: this.cols,
+        rows: this.rows,
+        cwd: this.cwd,
+        env: cleanEnv,
+      })
+    } catch (err) {
+      await this.rollbackStart()
+      throw err
+    }
 
     // Create CodexHeadless — it attaches to the PTY and does all
     // the headless terminal + parser + transcript work.
@@ -237,7 +247,20 @@ export class CodexSession extends EventEmitter {
 
     // Start the transcript tailer BEFORE we emit started — same
     // ordering as ClaudeSession to avoid missing early entries.
-    const { sessionsDir } = await this.headless.start()
+    //
+    // If headless.start() throws we're in the same leak shape as a
+    // pty-spawn failure: a listening proxy server, a live PTY, and
+    // a partially-constructed CodexHeadless. Roll back all three so
+    // the caller can retry cleanly instead of being told "start
+    // failed" while a port quietly stays bound.
+    let sessionsDir: string
+    try {
+      const res = await this.headless.start()
+      sessionsDir = res.sessionsDir
+    } catch (err) {
+      await this.rollbackStart()
+      throw err
+    }
 
     // Codex activity is derived from its explicit bottom working row,
     // parsed in codex-headless and forwarded here as process-state for
@@ -247,6 +270,24 @@ export class CodexSession extends EventEmitter {
       projectDir: sessionsDir,
       proxyUrl: this.proxyServer?.info.proxyBaseUrl,
     })
+  }
+
+  // Unified cleanup for start() failure paths. Must be safe to call
+  // regardless of how far start() got — each field is guarded with
+  // optional chaining and try/catch so a failure mid-construction
+  // (e.g. proxy up, PTY up, headless half-attached) doesn't cascade
+  // into a second throw that masks the original error.
+  private async rollbackStart(): Promise<void> {
+    try { this.proxyAdapter?.detach() } catch { /* best-effort */ }
+    this.proxyAdapter = null
+    try { await this.proxyServer?.stop() } catch { /* best-effort */ }
+    this.proxyServer = null
+    try { this.pty?.kill() } catch { /* best-effort */ }
+    this.pty = null
+    // Intentionally no headless teardown here: if headless.start()
+    // threw, its internal state is undefined; calling stop() on it
+    // risks a second throw. Let GC collect it.
+    this.headless = null
   }
 
   write(data: string): void {
@@ -270,12 +311,23 @@ export class CodexSession extends EventEmitter {
   }
 
   async stop(): Promise<void> {
-    await this.headless?.stop()
-    // Detach adapter BEFORE stopping the proxy so the listener is
-    // removed cleanly; otherwise the closure keeps a reference to
-    // `this.headless` past teardown (same footgun we hit on the
-    // Claude proxy path — see claudeSession.ts stop()).
-    this.proxyAdapter?.detach()
+    // Teardown order matters. The adapter is a listener on the proxy
+    // that writes into `this.headless.semantic`. If we stop() the
+    // headless first while the proxy is still listening, any trailing
+    // SSE chunk the upstream has already flushed will fire the
+    // listener and mutate a post-stop headless — observable as
+    // "semantic events keep arriving after stop()" in debug logs.
+    //
+    // Correct order:
+    //   1. Detach the adapter so no new mutations reach headless.
+    //   2. Stop the proxy so upstream sockets are torn down (see
+    //      ResponsesProxy.stop() — it force-destroys sockets so we
+    //      don't wait for a long-running SSE turn).
+    //   3. Stop headless, which tears down its transcript tailer
+    //      and semantic reducer cleanly.
+    //   4. Kill the PTY last; headless.stop() may still want to
+    //      drain final output from the terminal stream.
+    try { this.proxyAdapter?.detach() } catch { /* best-effort */ }
     this.proxyAdapter = null
     try {
       await this.proxyServer?.stop()
@@ -286,6 +338,9 @@ export class CodexSession extends EventEmitter {
       )
     }
     this.proxyServer = null
+    try { await this.headless?.stop() } catch (err) {
+      console.warn(`[codexSession] headless.stop() failed:`, err)
+    }
     try { this.pty?.kill() } catch { /* already gone */ }
     this.pty = null
   }

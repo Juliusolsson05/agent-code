@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events'
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'http'
+import type { Socket } from 'net'
 import { Readable } from 'stream'
 import { readFileSync } from 'fs'
 import { homedir } from 'os'
@@ -110,6 +111,24 @@ export class ResponsesProxy extends EventEmitter {
   // stay open for a long time, so the timeout only guards the
   // HEADERS phase (via AbortController + clear on first chunk).
   private readonly upstreamHeadersTimeoutMs = 30_000
+  // Track every open inbound socket so stop() can force them closed.
+  // WHY: node's http.Server#close waits for all connections to finish
+  // before it resolves. A long-running SSE turn holds its socket open
+  // for minutes — without forcing them closed, stop() stalls session
+  // teardown and the app feels frozen on quit/kill. Node 18.2+ has
+  // `server.closeAllConnections()` which would do this for us; we
+  // belt-and-suspenders with our own Set so this keeps working if a
+  // future refactor wraps the server or hosts it elsewhere.
+  private readonly openSockets = new Set<Socket>()
+  // Per-request id counter. Used to tag every request/response/chunk/end/error
+  // event with a stable requestId so downstream consumers (the
+  // CodexResponsesAdapter in particular) can route chunks to their
+  // originating request even when two requests to the same path overlap
+  // — e.g. codex retrying a Responses call while the first one is still
+  // streaming. Path-based routing was the old approach and silently
+  // merged retries' bytes into the later request's flow state. Opaque
+  // monotonic id avoids that and is cheap.
+  private nextRequestSeq = 1
 
   constructor(info: CodexResponsesProxyInfo) {
     super()
@@ -128,6 +147,13 @@ export class ResponsesProxy extends EventEmitter {
       authMode,
     })
     proxy.server = server
+    server.on('connection', socket => {
+      // Record the socket for forced teardown in stop(). `once('close')`
+      // removes it on its own if the client/upstream tears down first,
+      // so the Set stays bounded to live sockets only.
+      proxy.openSockets.add(socket)
+      socket.once('close', () => proxy.openSockets.delete(socket))
+    })
     server.on('request', (req, res) => {
       void proxy.handle(req, res)
     })
@@ -173,6 +199,27 @@ export class ResponsesProxy extends EventEmitter {
     const server = this.server
     this.server = null
     if (!server) return
+    // Rip the rug out from under every in-flight request BEFORE awaiting
+    // close(). Without this step, a live SSE turn keeps its socket open
+    // for as long as upstream keeps streaming (can be minutes), and
+    // server.close() waits until every such socket is idle — so stop()
+    // blocks session teardown indefinitely. Destroying sockets causes
+    // the upstream pipe to error, propagates through the 'response-error'
+    // path, and close() resolves immediately.
+    for (const socket of this.openSockets) {
+      try { socket.destroy() } catch { /* already gone */ }
+    }
+    this.openSockets.clear()
+    // Additionally call closeAllConnections() when available (Node
+    // 18.2+). Belt-and-braces for any socket we somehow missed tracking
+    // (e.g. a keep-alive socket delivered before our 'connection'
+    // handler ran — vanishingly rare but cheap to guard).
+    const maybeCloseAll = (server as Server & {
+      closeAllConnections?: () => void
+    }).closeAllConnections
+    if (typeof maybeCloseAll === 'function') {
+      try { maybeCloseAll.call(server) } catch { /* ignore */ }
+    }
     await new Promise<void>((resolve, reject) => {
       server.close(err => {
         if (err) reject(err)
@@ -217,7 +264,30 @@ export class ResponsesProxy extends EventEmitter {
     res: ServerResponse,
     originalUrl: string,
   ): Promise<void> {
-    const body = await this.readBody(req)
+    const requestId = `req-${this.nextRequestSeq++}`
+    // readBody rejects if the client disconnects mid-upload (rare but
+    // possible on fast Ctrl-C). Originally this await was outside the
+    // try block below, so a disconnect produced no response AND no
+    // 'upstream-error' event — the error bubbled out of
+    // `void proxy.handle()` and got swallowed. Observability loss is
+    // the real damage (the client already went away), so we emit a
+    // tagged event before returning.
+    let body: Buffer
+    try {
+      body = await this.readBody(req)
+    } catch (err) {
+      this.emit('event', {
+        kind: 'request-error',
+        requestId,
+        path: originalUrl,
+        message: err instanceof Error ? err.message : String(err),
+      })
+      try {
+        res.statusCode = 400
+        res.end()
+      } catch { /* client already gone */ }
+      return
+    }
 
     // Upstream URL: <upstream>/responses. Normalize the base so we
     // don't double-slash or accidentally strip a trailing path
@@ -228,6 +298,7 @@ export class ResponsesProxy extends EventEmitter {
 
     this.emit('event', {
       kind: 'request',
+      requestId,
       method: 'POST',
       path: originalUrl,
       upstream,
@@ -252,11 +323,12 @@ export class ResponsesProxy extends EventEmitter {
       // stream for minutes (long SSE turns), which is fine.
       clearTimeout(headersTimer)
 
-      await this.streamUpstreamResponse(req, res, upstreamRes, originalUrl)
+      await this.streamUpstreamResponse(req, res, upstreamRes, originalUrl, requestId)
     } catch (err) {
       clearTimeout(headersTimer)
       this.emit('event', {
         kind: 'upstream-error',
+        requestId,
         path: originalUrl,
         message: err instanceof Error ? err.message : String(err),
       })
@@ -271,12 +343,14 @@ export class ResponsesProxy extends EventEmitter {
     res: ServerResponse,
     originalUrl: string,
   ): Promise<void> {
+    const requestId = `req-${this.nextRequestSeq++}`
     // Preserve the query string so upstream sees client_version.
     const upstream = this.resolveUpstreamPath('models', originalUrl)
     const headers = this.buildForwardedHeaders(req)
 
     this.emit('event', {
       kind: 'request',
+      requestId,
       method: 'GET',
       path: originalUrl,
       upstream,
@@ -291,11 +365,12 @@ export class ResponsesProxy extends EventEmitter {
         signal: abort.signal,
       })
       clearTimeout(headersTimer)
-      await this.streamUpstreamResponse(req, res, upstreamRes, originalUrl)
+      await this.streamUpstreamResponse(req, res, upstreamRes, originalUrl, requestId)
     } catch (err) {
       clearTimeout(headersTimer)
       this.emit('event', {
         kind: 'upstream-error',
+        requestId,
         path: originalUrl,
         message: err instanceof Error ? err.message : String(err),
       })
@@ -346,6 +421,7 @@ export class ResponsesProxy extends EventEmitter {
     res: ServerResponse,
     upstreamRes: Response,
     originalUrl: string,
+    requestId: string,
   ): Promise<void> {
     res.statusCode = upstreamRes.status
     upstreamRes.headers.forEach((value, key) => {
@@ -366,6 +442,7 @@ export class ResponsesProxy extends EventEmitter {
 
     this.emit('event', {
       kind: 'response',
+      requestId,
       path: originalUrl,
       status: upstreamRes.status,
     })
@@ -382,6 +459,7 @@ export class ResponsesProxy extends EventEmitter {
       bytesEstimate += size
       this.emit('event', {
         kind: 'response-chunk',
+        requestId,
         path: originalUrl,
         size,
         // The raw SSE / JSON bytes. Consumers that want structured
@@ -392,6 +470,7 @@ export class ResponsesProxy extends EventEmitter {
     nodeStream.on('end', () => {
       this.emit('event', {
         kind: 'response-end',
+        requestId,
         path: originalUrl,
         bytes: bytesEstimate,
       })
@@ -399,6 +478,7 @@ export class ResponsesProxy extends EventEmitter {
     nodeStream.on('error', err => {
       this.emit('event', {
         kind: 'response-error',
+        requestId,
         path: originalUrl,
         message: err instanceof Error ? err.message : String(err),
       })
