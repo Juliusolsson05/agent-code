@@ -340,6 +340,18 @@ type Props = {
   loadingOlderHistory?: boolean
   onLoadOlderHistory?: () => Promise<void>
   semanticTurn?: SemanticLiveTurn | null
+  /** True while the owning session is replaying a bulk bootstrap
+   *  burst. Feed uses it to suspend auto-scroll pinning and the
+   *  IntersectionObserver-driven lazy mount, avoiding the layout
+   *  cascade that otherwise makes resume feel like "scrolling
+   *  through the whole conversation." */
+  bootstrapping?: boolean
+  /** Incremental tool indices maintained by workspaceStore. Feed
+   *  used to rebuild these via `useMemo([entries])` per render, which
+   *  was O(N) per append and O(N²) per bootstrap burst. Passed in
+   *  now from the runtime — the store grows them at ingest time. */
+  toolUseIndex?: Map<string, ToolUseBlock>
+  toolResultIndex?: Map<string, ToolResultBlock>
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +452,9 @@ function FeedImpl({
   loadingOlderHistory = false,
   onLoadOlderHistory,
   semanticTurn = null,
+  bootstrapping = false,
+  toolUseIndex: toolUseIndexProp,
+  toolResultIndex: toolResultIndexProp,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
@@ -650,13 +665,37 @@ function FeedImpl({
     ? `${semanticTurn.turnId}:${semanticTurn.text.length}:${Object.keys(semanticTurn.blocks).length}`
     : ''
   useEffect(() => {
+    // During a bulk bootstrap burst we skip per-append auto-scroll.
+    // The pin-once-on-transition effect below lands us at the bottom
+    // in a single operation after the burst ends — otherwise every
+    // entry appended during the burst would pin-scroll and wake up
+    // the LazyEntry observer cascade. See docs/superpowers/plans/
+    // 2026-04-15-bootstrap-replay-perf.md.
+    if (bootstrapping) return
     if (!tailMode && !stickyBottomRef.current) return
     // scrollTop = scrollHeight pins to bottom without the smooth-scroll
     // overshoot scrollIntoView sometimes produces. Direct, instant,
     // no animation frames.
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [entries.length, streamingScreen, tailMode, semanticTurnSignal])
+  }, [entries.length, streamingScreen, tailMode, semanticTurnSignal, bootstrapping])
+
+  // Pin-once on the bootstrap → live transition. Runs exactly once per
+  // transition thanks to the previous-value ref: we read the prior
+  // value, compare, pin if we just left bootstrap mode, then store the
+  // new value for next time. No dependency on `entries.length` so the
+  // effect does not fire on subsequent live appends — those go
+  // through the regular auto-scroll effect above.
+  const prevBootstrappingRef = useRef(false)
+  useEffect(() => {
+    if (prevBootstrappingRef.current && !bootstrapping) {
+      const el = scrollerRef.current
+      if (el && (tailMode || stickyBottomRef.current)) {
+        el.scrollTop = el.scrollHeight
+      }
+    }
+    prevBootstrappingRef.current = bootstrapping
+  }, [bootstrapping, tailMode])
 
   // When the picker selection changes, smoothly tween the scroller
   // so the highlighted entry centers in the viewport.
@@ -748,8 +787,17 @@ function FeedImpl({
   // filtered out. The index is cheap to
   // build (single pass) and the resulting Map is handed to result rows
   // via context.
-  const toolUseIndex = useMemo(() => buildToolUseIndex(entries), [entries])
-  const toolResultIndex = useMemo(() => buildToolResultIndex(entries), [entries])
+  // Incremental indices live on the runtime and grow at entry-ingest
+  // time (see workspaceStore.indexEntryIntoMaps). When Feed is mounted
+  // outside the workspace store (tests, future surfaces) the props
+  // are unset and we fall back to building the maps once from
+  // `entries`. The fallback useMemo is unconditional — React's rules
+  // forbid conditional hooks, so we always call it; the `.has(0)`
+  // shortcut keeps cost negligible when the props are present.
+  const fallbackToolUseIndex = useMemo(() => buildToolUseIndex(entries), [entries])
+  const fallbackToolResultIndex = useMemo(() => buildToolResultIndex(entries), [entries])
+  const toolUseIndex = toolUseIndexProp ?? fallbackToolUseIndex
+  const toolResultIndex = toolResultIndexProp ?? fallbackToolResultIndex
 
   const hasSemanticStreaming = semanticTurn !== null
 
@@ -799,7 +847,11 @@ function FeedImpl({
                     : undefined
                 }
               >
-                <LazyEntry eager={eager} scrollerRef={scrollerRef}>
+                <LazyEntry
+                  eager={eager}
+                  suspended={bootstrapping}
+                  scrollerRef={scrollerRef}
+                >
                   <EntryRow entry={e} />
                 </LazyEntry>
               </div>
@@ -1427,10 +1479,17 @@ const EAGER_TAIL = 30
  */
 const LazyEntry = memo(function LazyEntry({
   eager,
+  suspended = false,
   scrollerRef,
   children,
 }: {
   eager: boolean
+  // True while the owning session is in a bootstrap burst. Suspends
+  // observer attachment so 200 placeholders don't all mount at once
+  // during a resume replay. Feed re-enables by flipping this back to
+  // false after the bootstrap debounce clears (see Feed's
+  // prevBootstrappingRef pin-once effect for the scroll pairing).
+  suspended?: boolean
   scrollerRef: React.RefObject<HTMLDivElement | null>
   children: ReactNode
 }) {
@@ -1446,6 +1505,14 @@ const LazyEntry = memo(function LazyEntry({
 
   useEffect(() => {
     if (mounted) return
+    // While the owning session is in a bootstrap burst, don't attach
+    // the observer. Without this guard a resume replay pins to the
+    // bottom and every placeholder within rootMargin flips mounted in
+    // the same render — a cascade that's the actual "scrolling
+    // through the whole conversation" symptom. Once the parent clears
+    // `suspended`, Feed's pin-once effect lands us at the bottom and
+    // normal scroll-triggered mounts take over from there.
+    if (suspended) return
     const el = placeholderRef.current
     if (!el) return
 
@@ -1465,7 +1532,7 @@ const LazyEntry = memo(function LazyEntry({
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [mounted, scrollerRef])
+  }, [mounted, suspended, scrollerRef])
 
   if (!mounted) {
     // Placeholder: a fixed-height div that approximates a typical

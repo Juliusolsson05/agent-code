@@ -4,6 +4,16 @@
 // scrolls up to them, the real content mounts. Once mounted, stays
 // mounted permanently — React.memo's cached render tree survives,
 // avoiding re-parse costs that virtualization (unmount/remount) would cause.
+//
+// `suspended` is set by Feed while the owning session is in a bootstrap
+// burst. The rationale: during bootstrap we are about to land ~200
+// entries at once, and every placeholder within rootMargin of the
+// viewport would mount in the SAME render — which is the lazy-mount
+// cascade that makes restart feel like you're being scrolled through
+// the whole transcript. While suspended, the observer isn't attached
+// and the placeholder stays a 48px stub. When the parent flips the
+// prop back to false, the observer attaches and the normal flow
+// resumes.
 
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react'
 
@@ -14,10 +24,12 @@ export const EAGER_TAIL = 30
 
 export const LazyEntry = memo(function LazyEntry({
   eager,
+  suspended = false,
   scrollerRef,
   children,
 }: {
   eager: boolean
+  suspended?: boolean
   scrollerRef: React.RefObject<HTMLDivElement | null>
   children: ReactNode
 }) {
@@ -32,6 +44,12 @@ export const LazyEntry = memo(function LazyEntry({
 
   useEffect(() => {
     if (mounted) return
+    // Skip observer attachment while the session is in a bootstrap
+    // burst — see component block comment for the cascade rationale.
+    // When `suspended` flips back to false Feed will have pinned to
+    // the bottom once, and normal scroll-triggered lazy mounts
+    // resume from there.
+    if (suspended) return
     const el = placeholderRef.current
     if (!el) return
 
@@ -46,7 +64,7 @@ export const LazyEntry = memo(function LazyEntry({
     )
     observer.observe(el)
     return () => observer.disconnect()
-  }, [mounted, scrollerRef])
+  }, [mounted, suspended, scrollerRef])
 
   if (!mounted) {
     return <div ref={placeholderRef} className="min-h-[48px]" />

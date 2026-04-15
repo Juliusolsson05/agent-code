@@ -750,6 +750,14 @@ export function TileLeaf({
           onLoadOlderHistory={async () => {
             await workspace.loadOlderHistory(sessionId)
           }}
+          // Bootstrap-replay perf wiring — see workspaceStore +
+          // Feed for the WHY. While `bootstrapping` is true Feed
+          // suspends per-append auto-scroll and lazy-mount cascades;
+          // the indices spare Feed from a useMemo rebuild on every
+          // append.
+          bootstrapping={runtime.bootstrapping}
+          toolUseIndex={runtime.toolUseIndex}
+          toolResultIndex={runtime.toolResultIndex}
         />
       </div>
 
