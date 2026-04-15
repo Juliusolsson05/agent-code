@@ -141,7 +141,21 @@ export interface SessionManager {
 // of truth next to ManagerEvents. The event shape is enforced by the
 // assertions inside the forwarder callbacks.
 interface AgentSessionLike {
-  on(event: string, listener: (...args: unknown[]) => void): this
+  // Widen `listener` to `(...args: any[])` specifically so arrow
+  // functions with narrow parameter types (e.g. `(snap: ScreenSnapshot)
+  // => void`) remain assignable without casts at every call site.
+  // A strict `(...args: unknown[]) => void` rejects those because
+  // `unknown` is not narrowable to `ScreenSnapshot` — which is
+  // technically correct but useless here, because the event shape
+  // is the provider's responsibility, not the manager's.
+  //
+  // The loss: TypeScript won't verify the listener argument types
+  // against the provider's actual emit payload. The trade: call-sites
+  // stay readable and we don't leak `as unknown as ...` for every
+  // `.on('screen', snap => ...)` in spawn(). Runtime correctness is
+  // enforced by the provider registry contract above.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  on(event: string, listener: (...args: any[]) => void): this
   write(data: string): void
   resize(cols: number, rows: number): void
   stop(): Promise<void>

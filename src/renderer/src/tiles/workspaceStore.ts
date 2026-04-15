@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
+  isCompactBoundaryEntry,
   isCompactSummaryEntry,
+  isConversationEntry,
   type ConversationEntry,
   type Entry,
+  type ToolResultBlock,
+  type ToolUseBlock,
 } from '../../../shared/types/transcript'
 // Direct file imports — parser files are pure TypeScript, safe for
 // the renderer. Package entry points pull in Node deps (pty, fs).
@@ -1228,6 +1232,37 @@ function codexHistoryMarker(entry: Record<string, unknown>): string {
   return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
 }
 
+// Mutates `toolUseIndex` and `toolResultIndex` in place, folding one
+// feed entry's tool_use / tool_result blocks into the per-session
+// lookup maps. Used by both the bulk jsonl-entries ingest path and
+// the singular one — keeps the indexing logic in one place so Feed
+// never has to rebuild these maps in a useMemo.
+//
+// WHY in-place mutation of a map stored on runtime state:
+//   The map reference doesn't change, only its contents — Feed reads
+//   through context and treats the map as a live lookup rather than
+//   a diffable prop. React.memo of downstream rows is unaffected
+//   (they don't depend on the map's reference identity), and we
+//   avoid allocating a new Map per entry during a bootstrap burst.
+function indexEntryIntoMaps(
+  entry: Entry,
+  toolUseIndex: Map<string, ToolUseBlock>,
+  toolResultIndex: Map<string, ToolResultBlock>,
+): void {
+  if (!isConversationEntry(entry)) return
+  const content = entry.message.content
+  if (!Array.isArray(content)) return
+  for (const b of content) {
+    if (b.type === 'tool_use') {
+      const tu = b as ToolUseBlock
+      toolUseIndex.set(tu.id, tu)
+    } else if (b.type === 'tool_result') {
+      const tr = b as ToolResultBlock
+      toolResultIndex.set(tr.tool_use_id, tr)
+    }
+  }
+}
+
 function claudeHistoryMarker(entry: Record<string, unknown>): string | null {
   const embedded = extractEmbeddedClaudeProgressEntry(entry)
   if (embedded?.uuid) return embedded.uuid
@@ -1377,6 +1412,13 @@ export function useWorkspace(
   // The undoClose action reads it and the command palette peeks at
   // .length to show/hide the command.
   const undoStackRef = useRef(new UndoCloseStack())
+
+  // Per-session setTimeout ids used to debounce the `bootstrapping`
+  // flag back to false after a bulk jsonl-entries burst. Keyed by
+  // sessionId; cleared in the IPC-effect cleanup and in killSession.
+  // Ref (not state) because the timer handle is irrelevant to
+  // rendering — we just need it alive across the hook's ticks.
+  const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
 
   // ---- Helpers ----
 
@@ -1587,6 +1629,13 @@ export function useWorkspace(
             baseEntries = current.entries.slice(0, -1)
           }
           const nextEntries = [...baseEntries, ...mapped]
+          // Grow tool indices incrementally. Same rationale as the
+          // bulk path — Feed no longer rebuilds them via useMemo on
+          // every render. Mutate the existing maps in place so
+          // listener refs stay stable.
+          for (const e of mapped) {
+            indexEntryIntoMaps(e, current.toolUseIndex, current.toolResultIndex)
+          }
           // lastMapped can be undefined when mapped is empty — this
           // happens when only an approvalRequest or approvalResolvedCallId
           // triggered the handler (mapped.length === 0 passes through
@@ -1774,6 +1823,9 @@ export function useWorkspace(
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const nextEntries = [...current.entries, feedEntry]
+        // Grow tool indices incrementally. Same rationale as the bulk
+        // path — see indexEntryIntoMaps comment for the WHY.
+        indexEntryIntoMaps(feedEntry, current.toolUseIndex, current.toolResultIndex)
         // Awaiting state is owned by the headless's spinner-based
         // process-state event — see the matching comment in the
         // codex-rollout handler above for why we no longer flip it on
@@ -1873,10 +1925,112 @@ export function useWorkspace(
       })
     })
 
+    // Bulk jsonl-entry path — main coalesces a bootstrap burst into one
+    // payload of N entries, we fold them in a single setRuntimes, grow
+    // the tool indices incrementally, and set `bootstrapping = true`
+    // for a short window so Feed can suspend per-append auto-scroll
+    // and lazy-mount cascades. See docs/superpowers/plans/2026-04-15-
+    // bootstrap-replay-perf.md for the full rationale. The singular
+    // handler above is still wired (and de-dupes via seenUuidsRef) for
+    // any consumer that sends entries through the non-bulk channel
+    // — harmless overlap.
+    const offEntries = window.api.onSessionJsonlEntries(({ sessionId, entries }) => {
+      if (!entries || entries.length === 0) return
+
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const seen = (seenUuidsRef.current[sessionId] ??= new Set())
+        const appended: Entry[] = []
+        let oldestMarker: string | null = current.historyOldestMarker
+        let pendingCompaction = current.pendingCompaction
+
+        // Reuse the existing map references so downstream consumers
+        // that hold them live (Feed contexts) keep working without a
+        // re-subscribe. The runtime object itself gets a new top-level
+        // reference below so React re-renders.
+        const toolUseIndex = current.toolUseIndex
+        const toolResultIndex = current.toolResultIndex
+
+        for (const { entry: raw } of entries) {
+          if (isCodexRolloutEntry(raw)) {
+            const mapped = mapCodexRolloutToFeedEntries(raw)
+            const marker = mapped.length > 0 ? codexHistoryMarker(raw) : null
+            if (marker && !oldestMarker) oldestMarker = marker
+            for (const e of mapped) {
+              const u = (e as { uuid?: string }).uuid
+              if (u) {
+                if (seen.has(u)) continue
+                seen.add(u)
+              }
+              appended.push(e)
+              indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)
+            }
+            continue
+          }
+
+          const feedEntry =
+            extractEmbeddedClaudeProgressEntry(raw as Record<string, unknown>) ??
+            (raw as Entry)
+          const marker = claudeHistoryMarker(raw as Record<string, unknown>)
+          if (marker && !oldestMarker) oldestMarker = marker
+          const uuid = (feedEntry as { uuid?: string }).uuid
+          if (uuid) {
+            if (seen.has(uuid)) continue
+            seen.add(uuid)
+          }
+          if (
+            !isConversationEntry(feedEntry) &&
+            !isCompactBoundaryEntry(feedEntry) &&
+            !isCompactSummaryEntry(feedEntry)
+          ) {
+            continue
+          }
+          if (isCompactSummaryEntry(feedEntry)) pendingCompaction = null
+          appended.push(feedEntry)
+          indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)
+        }
+
+        if (appended.length === 0) return prev
+
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            entries: [...current.entries, ...appended],
+            historyOldestMarker: oldestMarker,
+            bootstrapping: true,
+            pendingCompaction,
+            toolUseIndex,
+            toolResultIndex,
+          },
+        }
+      })
+
+      // Schedule the bootstrap flip. Each burst resets the debounce
+      // timer — the phase ends after ~150ms of quiet (long enough to
+      // cover a laggy resume replay, short enough that the user doesn't
+      // notice a deferred scroll pin).
+      const existing = bootstrapTimersRef.current.get(sessionId)
+      if (existing) clearTimeout(existing)
+      const timer = setTimeout(() => {
+        bootstrapTimersRef.current.delete(sessionId)
+        setRuntimes(prev => {
+          const current = prev[sessionId]
+          if (!current || !current.bootstrapping) return prev
+          return {
+            ...prev,
+            [sessionId]: { ...current, bootstrapping: false },
+          }
+        })
+      }, 150)
+      bootstrapTimersRef.current.set(sessionId, timer)
+    })
+
     return () => {
       offStarted()
       offScreen()
       offEntry()
+      offEntries()
       offErr()
       offProcessState()
       offSemantic()
@@ -1884,6 +2038,8 @@ export function useWorkspace(
       offResumePrompt()
       offCompactionState()
       offExit()
+      for (const t of bootstrapTimersRef.current.values()) clearTimeout(t)
+      bootstrapTimersRef.current.clear()
     }
   }, [updateRuntime])
 
@@ -1970,6 +2126,15 @@ export function useWorkspace(
     })
     delete seenUuidsRef.current[sessionId]
     delete latestScreenRef.current[sessionId]
+    // If a bootstrap debounce was in flight for this session, cancel
+    // it — the session is gone; firing the deferred bootstrapping→false
+    // flip later would be a no-op against a missing runtime but it's
+    // cleaner to release the timer immediately.
+    const timer = bootstrapTimersRef.current.get(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      bootstrapTimersRef.current.delete(sessionId)
+    }
   }, [])
 
   // ---- Action: replace the focused session in-place ----
