@@ -34,18 +34,39 @@ import { join } from 'path'
 //   explicit OPENAI_API_KEY env var can't authenticate against
 //   chatgpt.com).
 //
-// WHY we accept /v1/responses AND /v1/models AND ws upgrades:
-//   Observed on the wire (see scripts/proxy-harness.mts run):
-//     - Codex tries a WebSocket upgrade at /v1/responses FIRST
-//       with `openai-beta: responses_websockets=2026-02-06`. When
-//       the 404 comes back it falls through to SSE POST. We reject
-//       the upgrade gracefully so the fallback triggers fast.
-//     - After the first turn, Codex issues GET /v1/models?client_version=...
-//       for its model-list refresh. If we 404 it, codex logs a
-//       non-fatal ERROR to stderr. Forwarding it upstream is the
-//       quiet path.
-//   Everything else returns 404 so misconfigured clients don't
-//   silently succeed via some path we didn't mean to support.
+// WHY we transparently forward anything under /v1/:
+//   Codex uses more provider endpoints than just /responses + /models.
+//   Confirmed from upstream source (codex-rs/codex-api/src/endpoint/*
+//   and codex-rs/core/src/client.rs — relative paths like `responses`,
+//   `responses/compact`, `memories/trace_summarize`, `realtime/calls`,
+//   `models` — all joined against the SAME base URL we inject via the
+//   `openai_base_url` override). The earlier allowlist that only
+//   handled /responses + /models silently broke remote compaction
+//   (issues.md #23: "unexpected status 404: unsupported POST
+//   /v1/responses/compact"), memory summarization, and realtime calls.
+//
+//   Strictness vs transparency:
+//     The upstream Rust `responses-api-proxy` is intentionally strict
+//     (POST /v1/responses only) because it runs as root with an
+//     injected $OPENAI_API_KEY — the allowlist prevents unprivileged
+//     misuse. OUR proxy is different: we don't inject auth, we pass
+//     Codex's own Authorization header through untouched. The reason
+//     we exist is observation, not key protection. So the strict
+//     model is wrong for us — a transparent forward under /v1/ keeps
+//     Codex working through CLI updates and feature additions without
+//     us chasing each new endpoint.
+//
+//   Known endpoints are still tagged in debug events (kind: 'request'
+//   carries `endpoint: 'responses/compact'` etc.) so the proxy debug
+//   panel can surface them. Unknown /v1/ paths are forwarded and
+//   tagged `endpoint: 'unknown'` so we notice if Codex adds something
+//   new without having to dig through a 404 postmortem.
+//
+//   WebSocket upgrade handling is unchanged: Codex tries a WS upgrade
+//   at /v1/responses first (`openai-beta: responses_websockets=
+//   2026-02-06`), and we reject it so Codex falls back to SSE POST.
+//   We don't proxy WS; doing so would add complexity with no renderer
+//   upside.
 
 export type CodexResponsesProxyEvents = {
   event: [Record<string, unknown>]
@@ -235,74 +256,104 @@ export class ResponsesProxy extends EventEmitter {
     // Strip query string for path matching (models call includes ?client_version=…).
     const pathOnly = url.split('?', 1)[0] ?? url
 
-    // Responses API — the hot path. Accept both `/v1/responses` (our
-    // default proxyBaseUrl includes /v1) and `/responses` (if a
-    // consumer ever overrides to a base without /v1). Codex always
-    // appends `responses` to whatever base_url it's told, so both
-    // shapes appear in practice depending on the override.
-    if (method === 'POST' && (pathOnly === '/v1/responses' || pathOnly === '/responses')) {
-      await this.forwardResponses(req, res, url)
+    // Relative path against the real upstream base. We advertise
+    // `http://127.0.0.1:PORT/v1` as the proxy base, so Codex requests
+    // always arrive with a `/v1/` prefix. Strip that prefix before
+    // joining against the upstream base — `new URL(relative, base)`
+    // then does the right thing whether the upstream carries `/v1`
+    // (apikey mode → https://api.openai.com/v1) or not (chatgpt mode
+    // → https://chatgpt.com/backend-api/codex).
+    //
+    // We still accept bare `/responses`, `/models` shapes because a
+    // consumer could theoretically override to a base without `/v1`.
+    // That path was intentional in the old allowlist and is cheap to
+    // preserve here.
+    const relative = relativeUpstreamPath(pathOnly)
+    if (!relative) {
+      res.statusCode = 404
+      res.setHeader('content-type', 'text/plain; charset=utf-8')
+      res.end(`codex-responses-proxy: unsupported ${method} ${pathOnly}\n`)
+      this.emit('event', { kind: 'rejected', method, path: pathOnly })
       return
     }
 
-    // Models refresh. Codex hits this after the first turn; if we
-    // 404 it codex logs a scary ERROR. Forward with the original
-    // query string so upstream sees client_version=…
-    if (method === 'GET' && pathOnly === '/v1/models') {
-      await this.forwardModels(req, res, url)
-      return
-    }
-
-    res.statusCode = 404
-    res.setHeader('content-type', 'text/plain; charset=utf-8')
-    res.end(`codex-responses-proxy: unsupported ${method} ${pathOnly}\n`)
-    this.emit('event', { kind: 'rejected', method, path: pathOnly })
+    await this.forwardRequest(req, res, {
+      method,
+      originalUrl: url,
+      pathOnly,
+      relative,
+    })
   }
 
-  private async forwardResponses(
+  /**
+   * Generic forwarder: read body (for methods that have one), forward
+   * to the upstream at `{upstreamBase}/{relative}{?query}`, stream the
+   * response back. Works for both SSE (`/responses`) and unary JSON
+   * (`/responses/compact`, `/memories/trace_summarize`, `/models`)
+   * because `Readable.fromWeb(upstreamRes.body).pipe(res)` preserves
+   * the upstream content-type — piping bytes is format-agnostic.
+   *
+   * WHY we tag a `kind` on known endpoints:
+   *   The debug panel needs to surface "this was a compact call" vs
+   *   "this was the hot responses stream" without re-parsing the URL.
+   *   Unknown /v1/ paths get `endpoint: 'unknown'` so we notice new
+   *   Codex endpoints before they cause a 404 postmortem.
+   */
+  private async forwardRequest(
     req: IncomingMessage,
     res: ServerResponse,
-    originalUrl: string,
+    params: {
+      method: string
+      originalUrl: string
+      pathOnly: string
+      relative: string
+    },
   ): Promise<void> {
+    const { method, originalUrl, pathOnly, relative } = params
     const requestId = `req-${this.nextRequestSeq++}`
-    // readBody rejects if the client disconnects mid-upload (rare but
-    // possible on fast Ctrl-C). Originally this await was outside the
-    // try block below, so a disconnect produced no response AND no
-    // 'upstream-error' event — the error bubbled out of
-    // `void proxy.handle()` and got swallowed. Observability loss is
-    // the real damage (the client already went away), so we emit a
-    // tagged event before returning.
-    let body: Buffer
-    try {
-      body = await this.readBody(req)
-    } catch (err) {
-      this.emit('event', {
-        kind: 'request-error',
-        requestId,
-        path: originalUrl,
-        message: err instanceof Error ? err.message : String(err),
-      })
+    const endpoint = classifyEndpoint(pathOnly)
+
+    // Read the request body for methods that have one. GET/HEAD never
+    // carry a body; POST/PUT/PATCH/DELETE might. We read unconditionally
+    // for non-GET/HEAD because the upstream Codex uses POST for every
+    // non-model endpoint today and letting the buffer complete keeps
+    // the streaming forward logic simple.
+    const hasBody = method !== 'GET' && method !== 'HEAD'
+    let body: Buffer | undefined
+    if (hasBody) {
       try {
-        res.statusCode = 400
-        res.end()
-      } catch { /* client already gone */ }
-      return
+        body = await this.readBody(req)
+      } catch (err) {
+        // readBody rejects if the client disconnects mid-upload (rare
+        // but possible on fast Ctrl-C). Emit a tagged event so the
+        // disconnect is visible — observability loss is the real
+        // damage here, since the client already went away.
+        this.emit('event', {
+          kind: 'request-error',
+          requestId,
+          endpoint,
+          path: originalUrl,
+          message: err instanceof Error ? err.message : String(err),
+        })
+        try {
+          res.statusCode = 400
+          res.end()
+        } catch { /* client already gone */ }
+        return
+      }
     }
 
-    // Upstream URL: <upstream>/responses. Normalize the base so we
-    // don't double-slash or accidentally strip a trailing path
-    // segment with `new URL(relative, base)`.
-    const upstream = this.resolveUpstreamPath('responses', originalUrl)
-
+    const upstream = this.resolveUpstreamPath(relative, originalUrl)
     const headers = this.buildForwardedHeaders(req)
 
     this.emit('event', {
       kind: 'request',
       requestId,
-      method: 'POST',
+      endpoint,
+      method,
       path: originalUrl,
       upstream,
-      bytes: body.length,
+      bytes: body?.length,
     })
 
     const abort = new AbortController()
@@ -310,13 +361,13 @@ export class ResponsesProxy extends EventEmitter {
 
     try {
       const upstreamRes = await fetch(upstream, {
-        method: 'POST',
+        method,
         headers,
         // Node's undici runtime accepts Buffer/Uint8Array fine, but
         // the BodyInit typing is from DOM lib and too narrow. Cast
         // with one comment: `body` is always a raw Buffer read from
-        // the inbound request.
-        body: body as unknown as BodyInit,
+        // the inbound request (absent for GET/HEAD).
+        body: body ? (body as unknown as BodyInit) : undefined,
         signal: abort.signal,
       })
       // Headers received — stop the abort timer. The body may still
@@ -329,53 +380,13 @@ export class ResponsesProxy extends EventEmitter {
       this.emit('event', {
         kind: 'upstream-error',
         requestId,
+        endpoint,
         path: originalUrl,
         message: err instanceof Error ? err.message : String(err),
       })
       res.statusCode = 502
       res.setHeader('content-type', 'text/plain; charset=utf-8')
       res.end(err instanceof Error ? err.message : String(err))
-    }
-  }
-
-  private async forwardModels(
-    req: IncomingMessage,
-    res: ServerResponse,
-    originalUrl: string,
-  ): Promise<void> {
-    const requestId = `req-${this.nextRequestSeq++}`
-    // Preserve the query string so upstream sees client_version.
-    const upstream = this.resolveUpstreamPath('models', originalUrl)
-    const headers = this.buildForwardedHeaders(req)
-
-    this.emit('event', {
-      kind: 'request',
-      requestId,
-      method: 'GET',
-      path: originalUrl,
-      upstream,
-    })
-
-    const abort = new AbortController()
-    const headersTimer = setTimeout(() => abort.abort(), this.upstreamHeadersTimeoutMs)
-    try {
-      const upstreamRes = await fetch(upstream, {
-        method: 'GET',
-        headers,
-        signal: abort.signal,
-      })
-      clearTimeout(headersTimer)
-      await this.streamUpstreamResponse(req, res, upstreamRes, originalUrl, requestId)
-    } catch (err) {
-      clearTimeout(headersTimer)
-      this.emit('event', {
-        kind: 'upstream-error',
-        requestId,
-        path: originalUrl,
-        message: err instanceof Error ? err.message : String(err),
-      })
-      res.statusCode = 502
-      res.end()
     }
   }
 
@@ -497,4 +508,58 @@ export class ResponsesProxy extends EventEmitter {
       req.on('error', reject)
     })
   }
+}
+
+// ---------------------------------------------------------------------------
+// Path classification helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Translate an inbound proxy path into the relative path we should
+ * append to the upstream base URL. Returns null for paths we refuse
+ * to forward at all (root probes, /favicon, etc.).
+ *
+ * Examples:
+ *   /v1/responses               → responses
+ *   /v1/responses/compact       → responses/compact
+ *   /v1/memories/trace_summarize→ memories/trace_summarize
+ *   /v1/realtime/calls          → realtime/calls
+ *   /v1/models                  → models
+ *   /responses                  → responses   (no-/v1 base override)
+ *   /                           → null        (not a Codex API path)
+ */
+function relativeUpstreamPath(pathOnly: string): string | null {
+  if (!pathOnly || pathOnly === '/' || pathOnly === '/v1' || pathOnly === '/v1/') {
+    return null
+  }
+  // Prefer /v1/ stripping when present — our advertised proxy base
+  // always includes /v1, so Codex requests carry it.
+  if (pathOnly.startsWith('/v1/')) {
+    const relative = pathOnly.slice(4)
+    return relative.length > 0 ? relative : null
+  }
+  // Fallback for bare shapes (consumer overrode base without /v1).
+  if (pathOnly.startsWith('/')) {
+    const relative = pathOnly.slice(1)
+    return relative.length > 0 ? relative : null
+  }
+  return null
+}
+
+/**
+ * Tag known Codex endpoints for structured debug events. Pure string
+ * matching — kept in sync with codex-rs/codex-api/src/endpoint/* by
+ * source, not by wire-probing, so adding an entry here when Codex
+ * introduces a new endpoint is a one-liner.
+ *
+ * `unknown` is the catch-all for /v1/ paths we still forward but
+ * haven't explicitly labelled; it's a debug-panel hint, not a reject.
+ */
+function classifyEndpoint(pathOnly: string): string {
+  if (pathOnly.endsWith('/responses/compact')) return 'responses/compact'
+  if (pathOnly.endsWith('/responses')) return 'responses'
+  if (pathOnly.endsWith('/memories/trace_summarize')) return 'memories/trace_summarize'
+  if (pathOnly.endsWith('/realtime/calls')) return 'realtime/calls'
+  if (pathOnly.endsWith('/models')) return 'models'
+  return 'unknown'
 }
