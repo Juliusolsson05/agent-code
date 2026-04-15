@@ -52,6 +52,17 @@ type NewTabRequester = () => Promise<void> | void
 type ResumeRequester = (defaultCwd: string) => Promise<void> | void
 type CommandPaletteToggle = () => void
 
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  const el = target instanceof HTMLElement ? target : null
+  if (!el) return false
+  if (el instanceof HTMLTextAreaElement) return true
+  if (el instanceof HTMLInputElement) {
+    const type = el.type.toLowerCase()
+    return type !== 'checkbox' && type !== 'radio' && type !== 'button' && type !== 'submit'
+  }
+  return el.isContentEditable
+}
+
 export function useKeybinds(
   workspace: Workspace,
   onNewTabRequest: NewTabRequester,
@@ -390,6 +401,12 @@ export function useKeybinds(
           workspace.resizeFocused(-0.05)
           return
         }
+      }
+
+      if (!cmd && !alt && !shift && k === 'End' && !isTextEditingTarget(e.target)) {
+        e.preventDefault()
+        workspace.scrollFocusedToLatest()
+        return
       }
     }
 

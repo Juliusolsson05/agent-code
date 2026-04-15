@@ -181,33 +181,26 @@ export default function App() {
               onChange={setSettings}
               onReset={resetSettings}
             />
+          ) : activeTab && workspace.readerMode && workspace.readerMode.tabId === activeTab.id ? (
+            <ReaderView workspace={workspace} />
+          ) : activeTab && workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
+            <SpotlightView workspace={workspace} />
           ) : workspace.tileTabs ? (
             <TileTabsView workspace={workspace} />
           ) : activeTab ? (
-            // Mode dispatch: ReaderMode beats Spotlight (it's the
-            // narrower, more focused view); Spotlight beats the
-            // default tree. Each is mutually exclusive — entering
-            // any of them clears the others (see toggleReaderMode /
-            // toggleSpotlight in workspaceStore).
-            workspace.readerMode && workspace.readerMode.tabId === activeTab.id ? (
-              <ReaderView workspace={workspace} />
-            ) : workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
-              <SpotlightView workspace={workspace} />
-            ) : (
-              <div className="relative h-full min-h-0 min-w-0">
-                <TileTree
-                  tabId={activeTab.id}
-                  node={activeTab.root}
-                  focusedSessionId={activeTab.focusedSessionId}
-                  workspace={workspace}
-                />
-                <NewAgentPlacementOverlay
-                  open={newAgentPlacementOpen}
-                  workspace={workspace}
-                  onClose={closeNewAgentPlacement}
-                />
-              </div>
-            )
+            <div className="relative h-full min-h-0 min-w-0">
+              <TileTree
+                tabId={activeTab.id}
+                node={activeTab.root}
+                focusedSessionId={activeTab.focusedSessionId}
+                workspace={workspace}
+              />
+              <NewAgentPlacementOverlay
+                open={newAgentPlacementOpen}
+                workspace={workspace}
+                onClose={closeNewAgentPlacement}
+              />
+            </div>
           ) : (
             <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
           )}

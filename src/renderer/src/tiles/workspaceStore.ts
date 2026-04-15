@@ -38,6 +38,7 @@ import {
   splitLeaf,
   wrapRootWithLeaf,
 } from './treeOps'
+import { findBestRemainingFocus } from './geometry'
 import {
   UndoCloseStack,
   findParentSplitInfo,
@@ -115,6 +116,29 @@ function entryTextContent(entry: Entry): string | null {
     })
     .filter((text): text is string => text !== null)
   return texts.length > 0 ? texts.join('\n') : null
+}
+
+function sessionSpawnErrorMessage(
+  kind: SessionKind,
+  err: unknown,
+  useProxy: boolean,
+): string {
+  const raw =
+    err instanceof Error && err.message.length > 0
+      ? err.message
+      : String(err || `Failed to start ${kind}`)
+  if (
+    kind === 'claude' &&
+    useProxy &&
+    (
+      raw.includes('Timed out waiting for mitmproxy') ||
+      raw.includes('Unable to locate mitm') ||
+      raw.includes('mitmdump')
+    )
+  ) {
+    return 'Claude proxy startup failed. Disable Proxy Streaming in settings or restart the app after rebuilding.'
+  }
+  return raw
 }
 
 function isOptimisticCodexUserEntry(entry: Entry | undefined): boolean {
@@ -1340,6 +1364,7 @@ type PersistedWorkspace = {
   activeTabId: TabId
   sessions: Record<SessionId, SessionMeta>
   buried?: BuriedPaneRecord[]
+  tileTabs?: TileTabsState | null
   /** Draft input text per session, keyed by sessionId. Persisted so
    *  in-progress prompts survive app crashes and restarts. Only
    *  non-empty drafts are saved to keep the file small. */
@@ -1391,6 +1416,8 @@ export function useWorkspace(
   const setSpotlight = useAppStore(store => store.setWorkspaceSpotlight)
   const tileTabs = useAppStore(store => store.workspaceTileTabs)
   const setTileTabs = useAppStore(store => store.setWorkspaceTileTabs)
+  const latestTileTabsRef = useRef(tileTabs)
+  latestTileTabsRef.current = tileTabs
   const readerMode = useAppStore(store => store.workspaceReaderMode)
   const setReaderMode = useAppStore(store => store.setWorkspaceReaderMode)
 
@@ -1447,6 +1474,23 @@ export function useWorkspace(
         [sessionId]: {
           ...current,
           tailMode: !current.tailMode,
+        },
+      }
+    })
+  }, [])
+
+  const scrollFocusedToLatest = useCallback(() => {
+    const snap = stateRef.current
+    const tab = snap.tabs.find(t => t.id === snap.activeTabId)
+    const sessionId = tab?.focusedSessionId
+    if (!sessionId) return
+    setRuntimes(prev => {
+      const current = prev[sessionId] ?? emptyRuntime()
+      return {
+        ...prev,
+        [sessionId]: {
+          ...current,
+          scrollToLatestRequest: current.scrollToLatestRequest + 1,
         },
       }
     })
@@ -1986,14 +2030,22 @@ export function useWorkspace(
       // Claude uses MITM proxy streaming, Codex uses a local Responses
       // proxy via `openai_base_url`.
       const useProxy = kind !== 'terminal' ? useProxyStreamingRef.current : undefined
-      const { sessionId, tmuxName } = await window.api.spawnSession({
-        kind,
-        cwd,
-        resumeSessionId: opts?.resumeSessionId,
-        dangerousMode,
-        useProxy,
-        recoverTmuxName: opts?.recoverTmuxName,
-      })
+      let sessionId: SessionId
+      let tmuxName: string | undefined
+      try {
+        const result = await window.api.spawnSession({
+          kind,
+          cwd,
+          resumeSessionId: opts?.resumeSessionId,
+          dangerousMode,
+          useProxy,
+          recoverTmuxName: opts?.recoverTmuxName,
+        })
+        sessionId = result.sessionId
+        tmuxName = result.tmuxName
+      } catch (err) {
+        throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
+      }
       setState(prev => ({
         ...prev,
         sessions: {
@@ -2065,18 +2117,6 @@ export function useWorkspace(
       const oldId = tab.focusedSessionId
       const nextKind = opts?.kind ?? state.sessions[oldId]?.kind ?? 'claude'
       const oldDraft = latestRuntimesRef.current[oldId]?.draftInput ?? ''
-
-      // Kill the old session.
-      await window.api.killSession(oldId)
-      setRuntimes(prev => {
-        const next = { ...prev }
-        delete next[oldId]
-        return next
-      })
-      delete seenUuidsRef.current[oldId]
-      delete latestScreenRef.current[oldId]
-
-      // Spawn the replacement.
       const newId = await spawn(cwd, opts)
       setRuntimes(prev => ({
         ...prev,
@@ -2085,6 +2125,15 @@ export function useWorkspace(
           draftInput: oldDraft,
         },
       }))
+
+      await window.api.killSession(oldId)
+      setRuntimes(prev => {
+        const next = { ...prev }
+        delete next[oldId]
+        return next
+      })
+      delete seenUuidsRef.current[oldId]
+      delete latestScreenRef.current[oldId]
 
       // Swap the sessionId in the tree. Walk the tile tree and replace
       // every occurrence of oldId with newId (there should be exactly
@@ -2266,7 +2315,17 @@ export function useWorkspace(
   // CC session rather than starting a fresh one.
   const newTab = useCallback(
     async (cwd: string, resumeSessionId?: string, kind?: SessionKind) => {
-      const sessionId = await spawn(cwd, { resumeSessionId, kind })
+      let sessionId: SessionId
+      try {
+        sessionId = await spawn(cwd, { resumeSessionId, kind })
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Failed to create session',
+        )
+        throw err
+      }
       const tabId = crypto.randomUUID()
       const title = titleFromCwd(cwd)
       setState(prev => {
@@ -2284,7 +2343,7 @@ export function useWorkspace(
       })
       return { tabId, sessionId }
     },
-    [spawn],
+    [showToast, spawn],
   )
 
   // ---- Action: close tab ----
@@ -2349,7 +2408,17 @@ export function useWorkspace(
       const parentCwd = state.sessions[parentSessionId]?.cwd
       if (!parentCwd) return
 
-      const newSessionId = await spawn(parentCwd, { kind })
+      let newSessionId: SessionId
+      try {
+        newSessionId = await spawn(parentCwd, { kind })
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Failed to split pane',
+        )
+        return
+      }
 
       setState(prev => ({
         ...prev,
@@ -2363,7 +2432,7 @@ export function useWorkspace(
         }),
       }))
     },
-    [spawn, state.activeTabId, state.sessions, state.tabs],
+    [showToast, spawn, state.activeTabId, state.sessions, state.tabs],
   )
 
   const startNewAgentPlacement = useCallback(() => {
@@ -2380,7 +2449,17 @@ export function useWorkspace(
       const cwd = state.sessions[anchorSessionId]?.cwd
       if (!cwd) return
 
-      const newSessionId = await spawn(cwd, { kind })
+      let newSessionId: SessionId
+      try {
+        newSessionId = await spawn(cwd, { kind })
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Failed to create pane',
+        )
+        return
+      }
       setState(prev => ({
         ...prev,
         tabs: prev.tabs.map(currentTab => {
@@ -2409,7 +2488,7 @@ export function useWorkspace(
       }))
       closeNewAgentPlacement()
     },
-    [closeNewAgentPlacement, setState, spawn, state.activeTabId, state.sessions, state.tabs],
+    [closeNewAgentPlacement, setState, showToast, spawn, state.activeTabId, state.sessions, state.tabs],
   )
 
   // ---- Action: close the focused pane ----
@@ -2500,8 +2579,9 @@ export function useWorkspace(
         }
       }
 
-      // Pick a new focused session — prefer the first leaf in the tree.
-      const nextFocused = collectLeaves(nextRoot)[0]
+      const nextFocused =
+        findBestRemainingFocus(currentTab.root, nextRoot, targetId) ??
+        collectLeaves(nextRoot)[0]
       tabs[tabIdx] = {
         ...currentTab,
         root: nextRoot,
@@ -2592,7 +2672,9 @@ export function useWorkspace(
         }
       }
 
-      const nextFocused = collectLeaves(nextRoot)[0]
+      const nextFocused =
+        findBestRemainingFocus(currentTab.root, nextRoot, targetId) ??
+        collectLeaves(nextRoot)[0]
       tabs[tabIdx] = {
         ...currentTab,
         root: nextRoot,
@@ -2860,7 +2942,6 @@ export function useWorkspace(
     const current = stateRef.current
     const activeTab = current.tabs.find(t => t.id === current.activeTabId)
     if (!activeTab) return
-    setTileTabs(null)
     setSpotlight(prev => {
       if (prev?.tabId === activeTab.id) return null
       return {
@@ -2882,15 +2963,13 @@ export function useWorkspace(
 
   // ReaderMode toggle. Mirrors toggleSpotlight: enters with the
   // active tab's currently-focused session, exits if already on for
-  // the active tab. Closes Spotlight and tile-tabs on entry so the
-  // three "fullscreen" modes remain mutually exclusive — leaving
-  // them stacked would create rendering ambiguity in App.tsx.
+  // the active tab. Closes Spotlight on entry; tile-tabs are preserved
+  // in state and suppressed by App.tsx render precedence.
   const toggleReaderMode = useCallback(() => {
     const current = stateRef.current
     const activeTab = current.tabs.find(t => t.id === current.activeTabId)
     if (!activeTab) return
     setSpotlight(null)
-    setTileTabs(null)
     setReaderMode(prev => {
       if (prev?.tabId === activeTab.id) return null
       return {
@@ -3482,6 +3561,7 @@ export function useWorkspace(
       activeTabId: s.activeTabId,
       sessions: s.sessions,
       buried: s.buried,
+      tileTabs: latestTileTabsRef.current,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
     const json = JSON.stringify({ workspace: persisted }, null, 2)
@@ -3539,7 +3619,11 @@ export function useWorkspace(
       if (!json) {
         // Fresh install — create one default tab.
         const cwd = await window.api.defaultCwd()
-        await newTab(cwd)
+        try {
+          await newTab(cwd)
+        } catch (err) {
+          console.warn('[workspace] initial session spawn failed:', err)
+        }
         return
       }
       try {
@@ -3554,7 +3638,11 @@ export function useWorkspace(
         // eslint-disable-next-line no-console
         console.warn('[workspace] load failed, starting fresh:', err)
         const cwd = await window.api.defaultCwd()
-        await newTab(cwd)
+        try {
+          await newTab(cwd)
+        } catch (spawnErr) {
+          console.warn('[workspace] fallback session spawn failed:', spawnErr)
+        }
       }
     })()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -3600,11 +3688,24 @@ export function useWorkspace(
       return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
     }
 
+    const sanitizeRemappedNode = (n: TileNode): TileNode | null => {
+      if (n.type === 'leaf') {
+        return freshSessions[n.sessionId] != null ? n : null
+      }
+      const a = sanitizeRemappedNode(n.a)
+      const b = sanitizeRemappedNode(n.b)
+      if (!a && !b) return null
+      if (!a) return b
+      if (!b) return a
+      return { ...n, a, b }
+    }
+
     const buildRemappedTabs = (): Tab[] =>
       persisted.tabs
         .map(t => {
-          const remappedRoot = remapNode(t.root)
-          const leaves = collectLeaves(remappedRoot).filter(leaf => freshSessions[leaf] != null)
+          const remappedRoot = sanitizeRemappedNode(remapNode(t.root))
+          if (!remappedRoot) return null
+          const leaves = collectLeaves(remappedRoot)
           if (leaves.length === 0) return null
           const focused = idMap.get(t.focusedSessionId) ?? leaves[0]
           return {
@@ -3632,12 +3733,26 @@ export function useWorkspace(
         })
         .filter((entry): entry is BuriedPaneRecord => entry !== null)
 
+    const buildRemappedTileTabs = (tabs: Tab[]): TileTabsState | null => {
+      const persistedTileTabs = persisted.tileTabs
+      if (!persistedTileTabs) return null
+      const validTabIds = persistedTileTabs.tabIds.filter(id =>
+        tabs.some(tab => tab.id === id),
+      )
+      return sanitizeTileTabsState({
+        ...persistedTileTabs,
+        tabIds: validTabIds,
+      })
+    }
+
     const commitRehydratedState = () => {
       const newTabs = buildRemappedTabs()
       if (newTabs.length === 0) return false
 
-      const activeTabId =
-        newTabs.find(t => t.id === persisted.activeTabId)?.id ?? newTabs[0].id
+      const restoredTileTabs = buildRemappedTileTabs(newTabs)
+      const activeTabId = restoredTileTabs?.focusedTabId
+        ?? newTabs.find(t => t.id === persisted.activeTabId)?.id
+        ?? newTabs[0].id
 
       setState({
         tabs: newTabs,
@@ -3645,6 +3760,7 @@ export function useWorkspace(
         sessions: { ...freshSessions },
         buried: buildRemappedBuried(),
       })
+      setTileTabs(restoredTileTabs)
       // WHY commit runtimes incrementally during rehydrate:
       //
       // Boot used to await every respawn before publishing *any* restored
@@ -3723,7 +3839,7 @@ export function useWorkspace(
       const cwd = await window.api.defaultCwd()
       await newTab(cwd)
     }
-  }, [newTab])
+  }, [newTab, setTileTabs])
 
   // ---- Action: undo close ----
   //
@@ -3958,38 +4074,27 @@ export function useWorkspace(
 
   useEffect(() => {
     if (!tileTabs) return
-    const validTabIds = tileTabs.tabIds.filter(id => state.tabs.some(t => t.id === id))
-    if (validTabIds.length < 2) {
+    const nextTileTabs = sanitizeTileTabsState(tileTabs)
+    if (!nextTileTabs) {
       setTileTabs(null)
       return
     }
-    const focusedTabId = validTabIds.includes(tileTabs.focusedTabId)
-      ? tileTabs.focusedTabId
-      : validTabIds[0]
-    if (
-      validTabIds.length !== tileTabs.tabIds.length ||
-      focusedTabId !== tileTabs.focusedTabId
-    ) {
-      setTileTabs({
-        ...tileTabs,
-        tabIds: validTabIds,
-        focusedTabId,
-        ratios:
-          tileTabs.ratios.length === validTabIds.length
-            ? normalizeRatios(tileTabs.ratios)
-            : equalRatios(validTabIds.length),
-      })
+    const validTabIds = nextTileTabs.tabIds.filter(id => state.tabs.some(t => t.id === id))
+    const sanitized = sanitizeTileTabsState({
+      ...nextTileTabs,
+      tabIds: validTabIds,
+    })
+    if (!sanitized) {
+      setTileTabs(null)
       return
     }
-    const normalizedRatios =
-      tileTabs.ratios.length === validTabIds.length
-        ? normalizeRatios(tileTabs.ratios)
-        : equalRatios(validTabIds.length)
-    if (!ratiosEqual(normalizedRatios, tileTabs.ratios)) {
-      setTileTabs({
-        ...tileTabs,
-        ratios: normalizedRatios,
-      })
+    if (
+      sanitized.tabIds.length !== tileTabs.tabIds.length ||
+      sanitized.focusedTabId !== tileTabs.focusedTabId ||
+      sanitized.direction !== tileTabs.direction ||
+      !ratiosEqual(sanitized.ratios, tileTabs.ratios)
+    ) {
+      setTileTabs(sanitized)
     }
   }, [tileTabs, state.tabs])
 
@@ -4060,6 +4165,7 @@ export function useWorkspace(
     resizeFocusedTiledTab,
     resizeTiledTabByIndex,
     toggleTailMode,
+    scrollFocusedToLatest,
     pickerEnter,
     pickerMove,
     pickerConfirm,
@@ -4079,6 +4185,24 @@ function titleFromCwd(cwd: string): string {
 function equalRatios(count: number): number[] {
   if (count <= 0) return []
   return Array.from({ length: count }, () => 1 / count)
+}
+
+function sanitizeTileTabsState(tileTabs: TileTabsState): TileTabsState | null {
+  if (tileTabs.tabIds.length < 2) return null
+  const tabIds = Array.from(new Set(tileTabs.tabIds))
+  if (tabIds.length < 2) return null
+  const focusedTabId = tabIds.includes(tileTabs.focusedTabId)
+    ? tileTabs.focusedTabId
+    : tabIds[0]
+  const ratios = tileTabs.ratios.length === tabIds.length
+    ? normalizeRatios(tileTabs.ratios)
+    : equalRatios(tabIds.length)
+  return {
+    ...tileTabs,
+    tabIds,
+    focusedTabId,
+    ratios,
+  }
 }
 
 function normalizeRatios(ratios: number[]): number[] {

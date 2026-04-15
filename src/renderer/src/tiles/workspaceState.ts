@@ -187,6 +187,7 @@ export type SessionRuntime = {
   toolUseIndex: Map<string, ToolUseBlock>
   toolResultIndex: Map<string, ToolResultBlock>
   tailMode: boolean
+  scrollToLatestRequest: number
   assistantPicker: { selectedUuid: string } | null
   semantic: SemanticRuntimeState
 }
@@ -247,6 +248,7 @@ export function emptyRuntime(): SessionRuntime {
     toolUseIndex: new Map(),
     toolResultIndex: new Map(),
     tailMode: false,
+    scrollToLatestRequest: 0,
     assistantPicker: null,
     semantic: emptySemanticRuntime(),
   }

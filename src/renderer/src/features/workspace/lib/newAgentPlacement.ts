@@ -1,11 +1,5 @@
+import { buildLeafGeometries, sliceRect, type Rect } from '../../../tiles/geometry'
 import type { SessionId, SplitDirection, TileNode } from '../../../tiles/types'
-
-export type Rect = {
-  x: number
-  y: number
-  width: number
-  height: number
-}
 
 export type PlacementTarget =
   | {
@@ -28,11 +22,6 @@ export type PlacementTarget =
       scope: 'global'
     }
 
-type LeafGeometry = {
-  sessionId: SessionId
-  rect: Rect
-}
-
 type Center = {
   x: number
   y: number
@@ -43,73 +32,6 @@ function centerOf(rect: Rect): Center {
     x: rect.x + rect.width / 2,
     y: rect.y + rect.height / 2,
   }
-}
-
-function sliceRect(
-  rect: Rect,
-  direction: SplitDirection,
-  side: 'a' | 'b',
-): Rect {
-  if (direction === 'vertical') {
-    const width = rect.width / 2
-    return {
-      x: side === 'a' ? rect.x : rect.x + width,
-      y: rect.y,
-      width,
-      height: rect.height,
-    }
-  }
-
-  const height = rect.height / 2
-  return {
-    x: rect.x,
-    y: side === 'a' ? rect.y : rect.y + height,
-    width: rect.width,
-    height,
-  }
-}
-
-export function buildLeafGeometries(
-  node: TileNode,
-  bounds: Rect,
-): LeafGeometry[] {
-  if (node.type === 'leaf') {
-    return [{ sessionId: node.sessionId, rect: bounds }]
-  }
-
-  if (node.direction === 'vertical') {
-    const leftWidth = bounds.width * node.ratio
-    return [
-      ...buildLeafGeometries(node.a, {
-        x: bounds.x,
-        y: bounds.y,
-        width: leftWidth,
-        height: bounds.height,
-      }),
-      ...buildLeafGeometries(node.b, {
-        x: bounds.x + leftWidth,
-        y: bounds.y,
-        width: bounds.width - leftWidth,
-        height: bounds.height,
-      }),
-    ]
-  }
-
-  const topHeight = bounds.height * node.ratio
-  return [
-    ...buildLeafGeometries(node.a, {
-      x: bounds.x,
-      y: bounds.y,
-      width: bounds.width,
-      height: topHeight,
-    }),
-    ...buildLeafGeometries(node.b, {
-      x: bounds.x,
-      y: bounds.y + topHeight,
-      width: bounds.width,
-      height: bounds.height - topHeight,
-    }),
-  ]
 }
 
 export function buildPlacementTargets(

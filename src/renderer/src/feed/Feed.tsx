@@ -346,6 +346,7 @@ type Props = {
    *  cascade that otherwise makes resume feel like "scrolling
    *  through the whole conversation." */
   bootstrapping?: boolean
+  scrollToLatestRequest?: number
   /** Incremental tool indices maintained by workspaceStore. Feed
    *  used to rebuild these via `useMemo([entries])` per render, which
    *  was O(N) per append and O(N²) per bootstrap burst. Passed in
@@ -453,6 +454,7 @@ function FeedImpl({
   onLoadOlderHistory,
   semanticTurn = null,
   bootstrapping = false,
+  scrollToLatestRequest = 0,
   toolUseIndex: toolUseIndexProp,
   toolResultIndex: toolResultIndexProp,
 }: Props) {
@@ -763,6 +765,24 @@ function FeedImpl({
       }
     }
   }, [pickerSelectedUuid])
+
+  useEffect(() => {
+    if (scrollToLatestRequest === 0) return
+    const el = scrollerRef.current
+    if (!el) return
+    if (scrollAnimFrameRef.current !== null) {
+      cancelAnimationFrame(scrollAnimFrameRef.current)
+      scrollAnimFrameRef.current = null
+    }
+    el.scrollTop = el.scrollHeight
+    stickyBottomRef.current = true
+    lastScrollTopRef.current = el.scrollTop
+    scrollPositions.set(sessionId, {
+      scrollTop: el.scrollTop,
+      stickyBottom: true,
+    })
+    if (onScrollInfo) onScrollInfo({ fraction: 0 })
+  }, [onScrollInfo, scrollToLatestRequest, sessionId])
 
   // Visible entries skip system/meta noise by default. isMeta entries are
   // CC's system-injected user-role

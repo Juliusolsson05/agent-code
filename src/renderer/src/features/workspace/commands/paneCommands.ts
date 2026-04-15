@@ -102,6 +102,20 @@ export const paneCommands: CommandDef[] = [
     },
   },
   {
+    id: 'jump-latest-message',
+    title: 'Jump To Latest Message',
+    shortcut: 'End',
+    when: ({ workspace }) => {
+      const tab = workspace.activeTab
+      if (!tab) return false
+      const kind = workspace.state.sessions[tab.focusedSessionId]?.kind ?? 'claude'
+      return kind !== 'terminal'
+    },
+    run: ({ workspace }) => {
+      workspace.scrollFocusedToLatest()
+    },
+  },
+  {
     id: 'copy-last-assistant',
     title: 'Copy Last Response',
     run: ({ workspace }) => {

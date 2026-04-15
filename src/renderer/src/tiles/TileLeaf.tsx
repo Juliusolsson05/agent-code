@@ -112,6 +112,8 @@ export function TileLeaf({
   const setInputText = (next: string) => {
     setDraftInput(sessionId, next)
   }
+  const provider: 'claude' | 'codex' =
+    workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
 
   // Auto-grow the composer textarea to fit its content. We keep a single
   // line by default, but as the user types (or pastes) a long prompt the
@@ -721,7 +723,7 @@ export function TileLeaf({
       <div className="flex-1 min-h-0">
         <Feed
           sessionId={sessionId}
-          provider={(workspace.state.sessions[sessionId]?.kind === 'codex') ? 'codex' : 'claude'}
+          provider={provider}
           workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
           entries={runtime.entries}
           // Feed the WIDER `recentScreen` to the streaming extractor.
@@ -756,6 +758,7 @@ export function TileLeaf({
           // the indices spare Feed from a useMemo rebuild on every
           // append.
           bootstrapping={runtime.bootstrapping}
+          scrollToLatestRequest={runtime.scrollToLatestRequest}
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
         />
