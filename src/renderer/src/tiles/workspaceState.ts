@@ -3,7 +3,11 @@ import type {
   SplitDirection,
   TabId,
 } from './types'
-import type { Entry } from '../../../shared/types/transcript'
+import type {
+  Entry,
+  ToolResultBlock,
+  ToolUseBlock,
+} from '../../../shared/types/transcript'
 
 export type PickerItem = {
   id: string
@@ -165,6 +169,23 @@ export type SessionRuntime = {
   historyOldestMarker: string | null
   hasOlderHistory: boolean
   loadingOlderHistory: boolean
+  // True while a bulk bootstrap burst is being delivered — set when
+  // the first batched jsonl-entries event lands, cleared after a
+  // short quiet window. Feed suspends auto-scroll and lazy-mount
+  // cascades while this is true; a single pin-to-bottom runs on the
+  // transition back to false. WHY a boolean: a one-shot phase is
+  // simpler than a counter because we don't need to track overlapping
+  // bursts — setImmediate on main guarantees one flush per tick.
+  bootstrapping: boolean
+  // Incremental tool_use/tool_result indices, keyed by tool_use_id.
+  // Maintained at entry-ingest time so Feed doesn't rebuild them via
+  // useMemo([entries]) on every append — that used to be O(N²) during
+  // bootstrap (200 entries × O(N) rebuild per render × 200 renders).
+  // Maps are mutated in place; the runtime object reference changes
+  // each append, which is fine because Feed reads the maps by
+  // reference through context, not by shallow compare.
+  toolUseIndex: Map<string, ToolUseBlock>
+  toolResultIndex: Map<string, ToolResultBlock>
   tailMode: boolean
   assistantPicker: { selectedUuid: string } | null
   semantic: SemanticRuntimeState
@@ -222,6 +243,9 @@ export function emptyRuntime(): SessionRuntime {
     historyOldestMarker: null,
     hasOlderHistory: false,
     loadingOlderHistory: false,
+    bootstrapping: false,
+    toolUseIndex: new Map(),
+    toolResultIndex: new Map(),
     tailMode: false,
     assistantPicker: null,
     semantic: emptySemanticRuntime(),
