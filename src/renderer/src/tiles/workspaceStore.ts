@@ -1569,287 +1569,31 @@ export function useWorkspace(
       },
     )
 
-    const offEntry = window.api.onSessionJsonlEntry(({ sessionId, entry }) => {
-      if (isCodexRolloutEntry(entry)) {
-        const codexId = extractCodexProviderSessionId(entry)
-        if (codexId) {
-          setState(prev => {
-            const meta = prev.sessions[sessionId]
-            if (!meta) return prev
-            if (meta.providerSessionId === codexId) return prev
-            if (meta.providerSessionId) return prev
-            return {
-              ...prev,
-              sessions: {
-                ...prev.sessions,
-                [sessionId]: { ...meta, providerSessionId: codexId },
-              },
-            }
-          })
-        }
-
-        const payload = entry.payload as Record<string, unknown> | undefined
-        const mapped = mapCodexRolloutToFeedEntries(entry)
-        const marker = mapped.length > 0 ? codexHistoryMarker(entry) : null
-        const approvalRequest =
-          entry.type === 'event_msg' && payload?.type === 'exec_approval_request'
-            ? {
-                callId: typeof payload.call_id === 'string' ? payload.call_id : null,
-                command: Array.isArray(payload.command)
-                  ? payload.command.filter(
-                      (part): part is string => typeof part === 'string',
-                    )
-                  : [],
-                workdir: typeof payload.workdir === 'string' ? payload.workdir : null,
-              }
-            : null
-        const approvalResolvedCallId =
-          entry.type === 'event_msg' &&
-          payload?.type === 'exec_command_end' &&
-          typeof payload.call_id === 'string'
-            ? payload.call_id
-            : null
-        if (mapped.length === 0 && !approvalRequest && !approvalResolvedCallId) return
-
-        setRuntimes(prev => {
-          const current = prev[sessionId] ?? emptyRuntime()
-          let baseEntries = current.entries
-          const firstMapped = mapped[0]
-          const lastExisting = current.entries[current.entries.length - 1]
-          // Codex can sit on the raw-terminal path for a while before the
-          // rollout file attaches. We inject an optimistic local user row at
-          // submit time so the pane doesn't look dead, then drop it once the
-          // real rollout user message lands. Match on adjacent text only —
-          // conservative reconciliation is better than deleting real history.
-          if (
-            firstMapped?.type === 'user' &&
-            isOptimisticCodexUserEntry(lastExisting) &&
-            entryTextContent(lastExisting) === entryTextContent(firstMapped)
-          ) {
-            baseEntries = current.entries.slice(0, -1)
-          }
-          const nextEntries = [...baseEntries, ...mapped]
-          // Grow tool indices incrementally. Same rationale as the
-          // bulk path — Feed no longer rebuilds them via useMemo on
-          // every render. Mutate the existing maps in place so
-          // listener refs stay stable.
-          for (const e of mapped) {
-            indexEntryIntoMaps(e, current.toolUseIndex, current.toolResultIndex)
-          }
-          // lastMapped can be undefined when mapped is empty — this
-          // happens when only an approvalRequest or approvalResolvedCallId
-          // triggered the handler (mapped.length === 0 passes through
-          // the guard above). Guard with ?. to avoid crashing on
-          // undefined.type.
-          // Awaiting state is owned exclusively by the headless's
-          // spinner-based process-state event. We used to flip it to
-          // false here when an assistant entry arrived, but CC writes
-          // assistant chunks MID-TURN (between tool cycles in a
-          // multi-tool reply) while the spinner is still on screen —
-          // and that flip caused the indicator to flash idle for the
-          // ~500ms gap before the next spinner snapshot reasserted
-          // active. The user reported this as "marks idle for a half
-          // second between messages." Trust the headless signal.
-          return {
-            ...prev,
-            [sessionId]: {
-              ...current,
-              entries: nextEntries,
-              historyOldestMarker: current.historyOldestMarker ?? marker,
-              awaitingAssistant: current.awaitingAssistant,
-              // Merge JSONL request with any screen-sourced fields
-              // already in flight (reason / options / selectedIndex).
-              // See the screen handler above for the dual-source rule.
-              pendingApproval: approvalRequest
-                ? {
-                    ...approvalRequest,
-                    reason: current.pendingApproval?.reason,
-                    options: current.pendingApproval?.options,
-                    selectedIndex: current.pendingApproval?.selectedIndex,
-                  }
-                : approvalResolvedCallId &&
-                    current.pendingApproval?.callId === approvalResolvedCallId
-                  ? null
-                  : current.pendingApproval,
-            },
-          }
-        })
-        return
-      }
-
-      // ---------------------------------------------------------------
-      // queue-operation entries are CC's internal message-queue
-      // bookkeeping. See claude-code-src/utils/messageQueueManager.ts
-      // for the emit sites. The operation field takes one of THREE
-      // values, which I learned the hard way after the first pass of
-      // this handler only knew about two:
-      //
-      //   'enqueue'  — append to the queue. Carries `content: string`.
-      //   'dequeue'  — pop for processing. No content field.
-      //   'remove'   — explicit removal by reference (via the remove()
-      //                function in messageQueueManager). No content.
-      //                Used for cancellations and bulk drains.
-      //
-      // Previously we only handled enqueue + dequeue. Any `remove` op
-      // was silently dropped, so the queued list grew unbounded — on
-      // session resume we'd replay every historical enqueue, never
-      // balance them against the matching removes, and the pending-
-      // queue strip would show phantom backlog from hours ago. The
-      // user noticed this when they resumed a session and saw seven
-      // of their own past prompts rendered as "queued".
-      //
-      // Both 'dequeue' and 'remove' just mean "the queue got smaller";
-      // we don't care WHICH slot shrank since the rendering only
-      // shows a FIFO preview. So we collapse them into a single
-      // "shrink from head" op. This gives us a correct net queue
-      // depth after full JSONL replay, which is what we show.
-      //
-      // We DON'T push these entries into `entries` — they'd render as
-      // noise in the feed — and we DO keep `awaitingAssistant` true
-      // whenever the queue is non-empty.
-      // ---------------------------------------------------------------
-      const entryType = (entry as { type?: string }).type
-      if (entryType === 'queue-operation') {
-        const op = entry as {
-          operation?: 'enqueue' | 'dequeue' | 'remove'
-          content?: string
-          timestamp?: string
-        }
-        setRuntimes(prev => {
-          const current = prev[sessionId] ?? emptyRuntime()
-          let nextQueue = current.queuedMessages
-          if (op.operation === 'enqueue' && typeof op.content === 'string') {
-            const ts = op.timestamp ?? String(Date.now())
-            // Dedup by (timestamp + content) so a re-tail of the same
-            // JSONL doesn't double-add. In the normal live case
-            // timestamps are monotonically unique so this is a no-op;
-            // in the re-subscribe case (reload, hot-reload during dev)
-            // it's what keeps the backlog from duplicating.
-            const already = current.queuedMessages.some(
-              q => q.timestamp === ts && q.content === op.content,
-            )
-            if (!already) {
-              nextQueue = [
-                ...current.queuedMessages,
-                { content: op.content, timestamp: ts },
-              ]
-            }
-          } else if (
-            op.operation === 'dequeue' ||
-            op.operation === 'remove'
-          ) {
-            // Collapse both shrink ops into "drop head". This is
-            // FIFO-correct for dequeue (which always pops highest
-            // priority → on a simple one-priority queue that's the
-            // head) and approximately-correct for remove (which can
-            // target an arbitrary slot but we don't have the identity
-            // info to do better). The visible list might show a
-            // slightly-wrong preview for a frame or two when CC
-            // cancels a mid-queue item, but the total depth stays
-            // right, which is what the rendering actually needs.
-            nextQueue = current.queuedMessages.slice(1)
-          }
-          return {
-            ...prev,
-            [sessionId]: {
-              ...current,
-              queuedMessages: nextQueue,
-              // Force the streaming flag on whenever the queue has
-              // items so the streaming card doesn't disappear between
-              // turns while CC is draining queued work.
-              awaitingAssistant:
-                nextQueue.length > 0 ? true : current.awaitingAssistant,
-            },
-          }
-        })
-        return
-      }
-
-      // Capture CC's own session UUID from the first entry that
-      // carries one, and persist it into SessionMeta.providerSessionId so
-      // the next app launch can pass --resume <uuid> to spawnSession
-      // and get the same conversation back. Without this, every
-      // reload is a fresh blank session — the tile tree survives
-      // but the Claude context dies.
-      //
-      // Every JSONL entry CC writes includes its own `sessionId`
-      // field (see src/core/types/transcript.ts and the CC source
-      // at claude-code-src/utils/sessionStorage.ts). We take the
-      // FIRST one we see per cc-shell session and never overwrite,
-      // because (a) it's stable for the lifetime of the CC process
-      // and (b) updating it on every entry would produce a
-      // persistence storm.
-      //
-      // The check is a second setState call on `state` (not a
-      // merge into the `setRuntimes` call below) because sessions
-      // live in the persisted workspace state, not the live
-      // runtime. The debounced save effect (useEffect on [state])
-      // picks it up automatically and flushes to workspace.json.
-      const ccId = (entry as { sessionId?: string }).sessionId
-      if (typeof ccId === 'string' && ccId.length > 0) {
-        setState(prev => {
-          const meta = prev.sessions[sessionId]
-          if (!meta) return prev
-          if (meta.providerSessionId === ccId) return prev
-          // Guard: once captured, never overwrite. A resumed session
-          // that receives fresh entries tagged with the same
-          // providerSessionId is a no-op (first branch catches it); a
-          // resumed session that somehow receives entries with a
-          // DIFFERENT sessionId would indicate a bug upstream, and
-          // we'd rather keep the original value than track the
-          // mutation.
-          if (meta.providerSessionId) return prev
-          return {
-            ...prev,
-            sessions: {
-              ...prev.sessions,
-              [sessionId]: { ...meta, providerSessionId: ccId },
-            },
-          }
-        })
-      }
-
-      const feedEntry =
-        extractEmbeddedClaudeProgressEntry(entry as Record<string, unknown>) ??
-        (entry as Entry)
-      const marker = claudeHistoryMarker(entry as Record<string, unknown>)
-      const uuid = (feedEntry as { uuid?: string }).uuid
-      const seen = (seenUuidsRef.current[sessionId] ??= new Set())
-      if (uuid) {
-        if (seen.has(uuid)) return
-        seen.add(uuid)
-      }
-
-      setRuntimes(prev => {
-        const current = prev[sessionId] ?? emptyRuntime()
-        const nextEntries = [...current.entries, feedEntry]
-        // Grow tool indices incrementally. Same rationale as the bulk
-        // path — see indexEntryIntoMaps comment for the WHY.
-        indexEntryIntoMaps(feedEntry, current.toolUseIndex, current.toolResultIndex)
-        // Awaiting state is owned by the headless's spinner-based
-        // process-state event — see the matching comment in the
-        // codex-rollout handler above for why we no longer flip it on
-        // assistant JSONL entries.
-        return {
-          ...prev,
-          [sessionId]: {
-            ...current,
-            entries: nextEntries,
-            historyOldestMarker: current.historyOldestMarker ?? marker,
-            awaitingAssistant: current.awaitingAssistant,
-            // The compact-summary feed entry IS the completion signal —
-            // it's only written after CC finishes the summarization turn.
-            // We previously gated this on `phase === 'done'` but nothing
-            // ever wrote that phase, so the banner stuck until a manual
-            // dismiss. Clearing unconditionally on the summary entry is
-            // the intended behavior.
-            pendingCompaction: isCompactSummaryEntry(feedEntry)
-              ? null
-              : current.pendingCompaction,
-          },
-        }
-      })
-    })
+    // The singular session:jsonl-entry IPC handler used to live here.
+    // It owned: codex providerSessionId capture, codex approval
+    // request/resolve, claude queue-operation bookkeeping, claude
+    // providerSessionId capture, pendingCompaction clearing, and the
+    // entry append itself.
+    //
+    // It caused the bootstrap-replay cascade. On a resume Claude /
+    // Codex emits ~200 jsonl-entry events synchronously; main used to
+    // dual-emit those as 200 separate session:jsonl-entry IPC sends
+    // PLUS one coalesced session:jsonl-entries burst. The 200 singular
+    // messages always reached the renderer first (they were enqueued
+    // first), and the singular handler did 200 separate setRuntimes
+    // calls — one full re-render per entry, plus the auto-scroll pin
+    // and lazy-mount cascade per entry. By the time the bulk message
+    // arrived, every uuid was already in seenUuidsRef and the bulk
+    // path no-op'd — the bootstrapping flag never asserted.
+    //
+    // The fix: drop the singular IPC emit on main entirely (see
+    // wireManagerIPC); make the bulk handler below own every
+    // side-effect that used to live here. Live single entries arrive
+    // as 1-element bursts with ~1ms setImmediate latency.
+    //
+    // If you need to re-introduce a single-entry consumer, route it
+    // through the bulk channel as a 1-element burst. Do NOT add a
+    // second IPC channel that races the bulk one.
 
     const offErr = window.api.onSessionJsonlError(({ sessionId, message }) => {
       // eslint-disable-next-line no-console
@@ -1925,24 +1669,84 @@ export function useWorkspace(
       })
     })
 
-    // Bulk jsonl-entry path — main coalesces a bootstrap burst into one
-    // payload of N entries, we fold them in a single setRuntimes, grow
-    // the tool indices incrementally, and set `bootstrapping = true`
-    // for a short window so Feed can suspend per-append auto-scroll
-    // and lazy-mount cascades. See docs/superpowers/plans/2026-04-15-
-    // bootstrap-replay-perf.md for the full rationale. The singular
-    // handler above is still wired (and de-dupes via seenUuidsRef) for
-    // any consumer that sends entries through the non-bulk channel
-    // — harmless overlap.
+    // Bulk jsonl-entry path — the ONLY entry handler now that main
+    // no longer dual-emits singular events. Folds a whole burst in
+    // one setRuntimes + at most one setState, grows the tool indices
+    // incrementally, and sets `bootstrapping = true` for the duration
+    // so Feed can suspend per-append auto-scroll + lazy-mount
+    // cascades. See the deleted-handler comment higher in this file
+    // and docs/superpowers/plans/2026-04-15-bootstrap-replay-perf.md
+    // for the full rationale.
+    //
+    // Side-effects absorbed from the old singular handler:
+    //   1. Codex providerSessionId capture (from session_meta).
+    //   2. Codex approval request / resolve (per entry).
+    //   3. Claude queue-operation bookkeeping (per entry).
+    //   4. Claude providerSessionId capture (from any entry's sessionId).
+    //   5. pendingCompaction clearing on compact summary entries.
+    //   6. Optimistic-Codex-user reconciliation against the head row.
     const offEntries = window.api.onSessionJsonlEntries(({ sessionId, entries }) => {
       if (!entries || entries.length === 0) return
 
+      // Two passes per burst:
+      //   A — accumulate workspace-state captures (providerSessionId).
+      //       Apply via ONE setState if anything changed.
+      //   B — accumulate runtime mutations (entries, queue, approval,
+      //       compaction). Apply via ONE setRuntimes.
+      // Splitting them keeps workspace.json in sync with new
+      // providerSessionId on the same tick the entries land, without
+      // doing N setState calls during a 200-entry burst.
+
+      // ---- Pass A: workspace-state captures ----
+      let capturedClaudeId: string | null = null
+      let capturedCodexId: string | null = null
+      for (const { entry: raw } of entries) {
+        if (isCodexRolloutEntry(raw)) {
+          if (!capturedCodexId) {
+            const id = extractCodexProviderSessionId(raw)
+            if (id) capturedCodexId = id
+          }
+          continue
+        }
+        if (!capturedClaudeId) {
+          const ccId = (raw as { sessionId?: string }).sessionId
+          if (typeof ccId === 'string' && ccId.length > 0) {
+            capturedClaudeId = ccId
+          }
+        }
+      }
+      if (capturedClaudeId || capturedCodexId) {
+        setState(prev => {
+          const meta = prev.sessions[sessionId]
+          if (!meta) return prev
+          if (meta.providerSessionId) return prev
+          const id = capturedClaudeId ?? capturedCodexId
+          if (!id) return prev
+          return {
+            ...prev,
+            sessions: {
+              ...prev.sessions,
+              [sessionId]: { ...meta, providerSessionId: id },
+            },
+          }
+        })
+      }
+
+      // ---- Pass B: runtime mutations ----
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const seen = (seenUuidsRef.current[sessionId] ??= new Set())
         const appended: Entry[] = []
         let oldestMarker: string | null = current.historyOldestMarker
         let pendingCompaction = current.pendingCompaction
+        let pendingApproval = current.pendingApproval
+        let queuedMessages = current.queuedMessages
+        let awaitingAssistant = current.awaitingAssistant
+        // Set when a Codex user entry mapped from rollout matches the
+        // optimistic head row already in current.entries. We can only
+        // resolve it after the loop because the optimistic row could
+        // also live in `appended` if we're processing multiple bursts.
+        let dropOptimisticHead = false
 
         // Reuse the existing map references so downstream consumers
         // that hold them live (Feed contexts) keep working without a
@@ -1952,10 +1756,62 @@ export function useWorkspace(
         const toolResultIndex = current.toolResultIndex
 
         for (const { entry: raw } of entries) {
+          // ---- Codex rollout branch ----
           if (isCodexRolloutEntry(raw)) {
+            const payload = raw.payload as Record<string, unknown> | undefined
             const mapped = mapCodexRolloutToFeedEntries(raw)
             const marker = mapped.length > 0 ? codexHistoryMarker(raw) : null
             if (marker && !oldestMarker) oldestMarker = marker
+
+            // Codex exec_approval_request opens an approval pane;
+            // exec_command_end with the same call_id closes it.
+            if (raw.type === 'event_msg' && payload?.type === 'exec_approval_request') {
+              pendingApproval = {
+                callId: typeof payload.call_id === 'string' ? payload.call_id : null,
+                command: Array.isArray(payload.command)
+                  ? payload.command.filter(
+                      (part): part is string => typeof part === 'string',
+                    )
+                  : [],
+                workdir: typeof payload.workdir === 'string' ? payload.workdir : null,
+                reason: pendingApproval?.reason,
+                options: pendingApproval?.options,
+                selectedIndex: pendingApproval?.selectedIndex,
+              }
+            } else if (
+              raw.type === 'event_msg' &&
+              payload?.type === 'exec_command_end' &&
+              typeof payload.call_id === 'string' &&
+              pendingApproval?.callId === payload.call_id
+            ) {
+              pendingApproval = null
+            }
+
+            // Optimistic-user reconciliation. Match the first mapped
+            // user entry against either the last entry we've already
+            // accumulated in this burst, or — if nothing is appended
+            // yet — the tail of current.entries.
+            const firstMapped = mapped[0]
+            if (firstMapped?.type === 'user') {
+              if (appended.length > 0) {
+                const lastAppended = appended[appended.length - 1]
+                if (
+                  isOptimisticCodexUserEntry(lastAppended) &&
+                  entryTextContent(lastAppended) === entryTextContent(firstMapped)
+                ) {
+                  appended.pop()
+                }
+              } else {
+                const lastExisting = current.entries[current.entries.length - 1]
+                if (
+                  isOptimisticCodexUserEntry(lastExisting) &&
+                  entryTextContent(lastExisting) === entryTextContent(firstMapped)
+                ) {
+                  dropOptimisticHead = true
+                }
+              }
+            }
+
             for (const e of mapped) {
               const u = (e as { uuid?: string }).uuid
               if (u) {
@@ -1968,6 +1824,42 @@ export function useWorkspace(
             continue
           }
 
+          // ---- Claude queue-operation branch ----
+          // queue-operation entries are CC's internal message-queue
+          // bookkeeping (see claude-code-src/utils/messageQueueManager.ts
+          // for the emit sites). 'enqueue' / 'dequeue' / 'remove' —
+          // the latter two are collapsed into "drop head" because we
+          // don't have identity info to do better. Not pushed into
+          // `entries` (would render as feed noise).
+          const entryType = (raw as { type?: string }).type
+          if (entryType === 'queue-operation') {
+            const op = raw as {
+              operation?: 'enqueue' | 'dequeue' | 'remove'
+              content?: string
+              timestamp?: string
+            }
+            if (op.operation === 'enqueue' && typeof op.content === 'string') {
+              const ts = op.timestamp ?? String(Date.now())
+              const already = queuedMessages.some(
+                q => q.timestamp === ts && q.content === op.content,
+              )
+              if (!already) {
+                queuedMessages = [
+                  ...queuedMessages,
+                  { content: op.content, timestamp: ts },
+                ]
+              }
+            } else if (op.operation === 'dequeue' || op.operation === 'remove') {
+              queuedMessages = queuedMessages.slice(1)
+            }
+            // Force the streaming flag on whenever the queue has items
+            // so the streaming card doesn't disappear between turns
+            // while CC is draining queued work.
+            if (queuedMessages.length > 0) awaitingAssistant = true
+            continue
+          }
+
+          // ---- Claude conversation entry branch ----
           const feedEntry =
             extractEmbeddedClaudeProgressEntry(raw as Record<string, unknown>) ??
             (raw as Entry)
@@ -1990,16 +1882,35 @@ export function useWorkspace(
           indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)
         }
 
-        if (appended.length === 0) return prev
+        const baseEntries = dropOptimisticHead
+          ? current.entries.slice(0, -1)
+          : current.entries
+
+        // Bail only when literally nothing changed. Approval, queue,
+        // and compaction transitions can fire on bursts that don't
+        // append any feed entries at all.
+        const noChange =
+          appended.length === 0 &&
+          !dropOptimisticHead &&
+          pendingCompaction === current.pendingCompaction &&
+          pendingApproval === current.pendingApproval &&
+          queuedMessages === current.queuedMessages &&
+          awaitingAssistant === current.awaitingAssistant
+        if (noChange) return prev
 
         return {
           ...prev,
           [sessionId]: {
             ...current,
-            entries: [...current.entries, ...appended],
+            entries: appended.length > 0 || dropOptimisticHead
+              ? [...baseEntries, ...appended]
+              : current.entries,
             historyOldestMarker: oldestMarker,
             bootstrapping: true,
             pendingCompaction,
+            pendingApproval,
+            queuedMessages,
+            awaitingAssistant,
             toolUseIndex,
             toolResultIndex,
           },
@@ -2029,7 +1940,8 @@ export function useWorkspace(
     return () => {
       offStarted()
       offScreen()
-      offEntry()
+      // No singular offEntry() — see the deleted-handler comment
+      // earlier in this effect. The bulk path is the only one.
       offEntries()
       offErr()
       offProcessState()

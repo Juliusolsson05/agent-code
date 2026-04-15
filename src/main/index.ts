@@ -252,12 +252,23 @@ function enqueueJsonl(
 function wireManagerIPC(): void {
   manager.on('started', payload => send('session:started', payload))
   manager.on('screen', payload => send('session:screen', payload))
-  // Dual-emit: bulk channel for the common case, singular channel
-  // kept for any late-arriving consumer that only wants one event at
-  // a time. Bulk consumer can ignore the singular channel entirely.
+  // Bulk-only forwarding. We used to dual-emit (singular +
+  // coalesced) for "backward compatibility," but the singular IPC
+  // queue beat the coalescer to the renderer on every burst —
+  // 200 singular messages got processed first, the renderer's
+  // singular handler did 200 separate setRuntimes calls, and by
+  // the time the bulk message arrived the seenUuidsRef dedupe made
+  // it a no-op. The user-visible result was the exact "scroll
+  // through the whole conversation, takes 5 seconds" symptom we
+  // were trying to fix.
+  //
+  // Now: every entry goes through enqueueJsonl. Live single
+  // entries become 1-element bulk messages with ~1ms latency from
+  // setImmediate — imperceptible. Bootstrap bursts coalesce into
+  // one bulk delivery. The renderer subscribes ONLY to the bulk
+  // channel.
   manager.on('jsonl-entry', payload => {
     enqueueJsonl(payload.sessionId, payload.entry, payload.file)
-    send('session:jsonl-entry', payload)
   })
   manager.on('jsonl-error', ({ sessionId, error }) =>
     send('session:jsonl-error', {
