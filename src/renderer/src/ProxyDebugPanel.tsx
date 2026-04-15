@@ -32,7 +32,16 @@ import { emptySemanticRuntime } from './tiles/workspaceState'
 // on the log array — keep them consistent if either changes.
 const LOG_CAP = 200
 
-const EMPTY_STATE = emptySemanticRuntime()
+// Frozen sentinel for sessions that have never emitted a semantic
+// event. It's shared across every pane that reads `.semantic` fall-back,
+// so any accidental mutation (e.g. a reducer that pushes into
+// `state.log` in place) would corrupt state for every session at once.
+// Object.freeze is a cheap tripwire: a mis-use throws in dev rather
+// than silently poisoning other panes. We intentionally freeze SHALLOWLY
+// — the nested arrays/objects are already logically immutable in this
+// codebase (foldSemanticEvent always returns fresh references), so a
+// deep freeze is overkill and would pay a visible cost on the hot path.
+const EMPTY_STATE = Object.freeze(emptySemanticRuntime())
 
 
 // ---------------------------------------------------------------------------
@@ -142,7 +151,13 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
           <Section title={`blocks (${blocks.length})`}>
             {blocks.map(block => (
               <div
-                key={block.blockIndex}
+                // Composite key: blockIndex alone would collide if two
+                // sources (rollout + proxy) both minted blocks for the
+                // same index into the same turn, or across
+                // turn-transitions where block indices restart at 0.
+                // Adding toolUseId (when present) and kind gives us
+                // a stable-but-unique identity that React can reconcile.
+                key={`${block.blockIndex}:${block.kind}:${block.toolUseId ?? 'x'}`}
                 className="bg-[#111] border border-[#222] px-2 py-1 mb-1"
               >
                 <div className="flex items-center gap-2 mb-0.5 text-ink-dim">

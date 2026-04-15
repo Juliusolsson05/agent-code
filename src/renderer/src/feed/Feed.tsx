@@ -638,6 +638,17 @@ function FeedImpl({
   // move the streaming tail (a new streamingScreen snapshot). If the
   // user is scrolled up, we skip — they're reading earlier content
   // and we don't want to yank them back.
+  //
+  // Semantic streaming (the proxy-driven live turn) also grows the
+  // bottom of the feed without touching `streamingScreen` or
+  // `entries`. Include a cheap fingerprint of the current semantic
+  // turn (its text length plus the count of blocks) so the effect
+  // re-runs when semantic deltas land — otherwise a Codex/proxy
+  // session that never populates the legacy screen snapshot won't
+  // follow the tail even when the user is at the bottom.
+  const semanticTurnSignal = semanticTurn
+    ? `${semanticTurn.turnId}:${semanticTurn.text.length}:${Object.keys(semanticTurn.blocks).length}`
+    : ''
   useEffect(() => {
     if (!tailMode && !stickyBottomRef.current) return
     // scrollTop = scrollHeight pins to bottom without the smooth-scroll
@@ -645,7 +656,7 @@ function FeedImpl({
     // no animation frames.
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [entries.length, streamingScreen, tailMode])
+  }, [entries.length, streamingScreen, tailMode, semanticTurnSignal])
 
   // When the picker selection changes, smoothly tween the scroller
   // so the highlighted entry centers in the viewport.

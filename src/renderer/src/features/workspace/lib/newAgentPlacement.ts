@@ -212,20 +212,28 @@ export function buildPlacementTargets(
 }
 
 function dedupeTargets(targets: PlacementTarget[]): PlacementTarget[] {
+  // WHY dedupe by target id, not rounded rect:
+  //
+  // The older version keyed dedupe on Math.round(rect.*) so two
+  // logically different placements that happened to round to the same
+  // integer rectangle collapsed into one. That was real on small
+  // panes with fractional split ratios (e.g. a 401px-wide pane split
+  // 50/50 produces two targets whose rounded rects both start at the
+  // same x because the integer-halving is the same). The id already
+  // encodes kind+scope+target+side, which is the actual identity we
+  // care about; dropping the rounding collision trap also drops the
+  // silent "which sibling wins?" non-determinism.
+  //
+  // We still keep a dedupe pass (rather than trusting callers) because
+  // wrap-root and split-leaf can generate the same id in edge cases
+  // where the anchor IS the root leaf and "left of focused pane" is
+  // visually equivalent to "new left column". Same-id targets are
+  // genuinely redundant and the first one wins.
   const seen = new Set<string>()
   const out: PlacementTarget[] = []
   for (const target of targets) {
-    const key = [
-      target.kind,
-      target.direction,
-      target.side,
-      Math.round(target.rect.x),
-      Math.round(target.rect.y),
-      Math.round(target.rect.width),
-      Math.round(target.rect.height),
-    ].join(':')
-    if (seen.has(key)) continue
-    seen.add(key)
+    if (seen.has(target.id)) continue
+    seen.add(target.id)
     out.push(target)
   }
   return out

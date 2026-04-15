@@ -149,11 +149,26 @@ export function closeLeaf(
 }
 
 /**
- * Find the split that contains `sessionId` (directly or transitively)
- * and update its ratio by `delta`. Returns a new tree.
+ * Find the innermost split that contains `sessionId` and grow the
+ * focused pane by `delta` (shrink if delta is negative). Returns a new
+ * tree.
  *
- * Used for `alt-=` / `alt--` resize keybinds — the user grows or
- * shrinks the split that the focused pane sits inside.
+ * Used for the axis-less `alt-=` / `alt--` resize keybinds — the user
+ * just wants the focused pane bigger or smaller, regardless of which
+ * direction the parent split runs. This is NOT the same primitive as
+ * `resizeInDirection`:
+ *   - `adjustNearestSplitRatio(delta)` is "bigger/smaller me" —
+ *     delta is relative to the focused pane, so its sign is
+ *     inverted for panes on the `b` side of their parent split
+ *     (because the split ratio is the `a` fraction).
+ *   - `resizeInDirection(direction, delta)` is "move the divider in
+ *     this physical direction" — delta is anchored to the arrow, not
+ *     to which side of the split the focused pane is on.
+ *
+ * Both coexist on purpose. Keep them separate; don't fold this into
+ * `resizeInDirection` — the axis-less form is the simpler UX for
+ * "just make me bigger" without the user having to think about which
+ * arrow key to hit.
  */
 export function adjustNearestSplitRatio(
   node: TileNode,

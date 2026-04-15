@@ -27,6 +27,15 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
   const [selectedKind, setSelectedKind] = useState<SessionKind | null>(null)
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null)
   const [bounds, setBounds] = useState({ width: 0, height: 0 })
+  // One-shot latch around commitNewAgentPlacement. The commit is async
+  // (spawns a session, awaits an IPC round-trip, then calls
+  // closeNewAgentPlacement()). Until the close fires, this overlay
+  // keeps its `open` prop true and its keydown listener registered —
+  // so a user that hits Enter twice in quick succession would fire
+  // commit twice, spawning a second unwanted agent. A ref (not state)
+  // because the latch needs to gate the synchronous keydown handler
+  // path, not trigger a re-render.
+  const committingRef = useRef(false)
 
   const activeTab = workspace.activeTab
   const anchorSessionId = activeTab?.focusedSessionId ?? null
@@ -36,6 +45,10 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
     setSelectedIndex(0)
     setSelectedKind(null)
     setSelectedTargetId(null)
+    // Reset the commit latch whenever the overlay re-opens. Otherwise
+    // a user could open → commit → close → reopen and the second
+    // session would be suppressed.
+    committingRef.current = false
   }, [open])
 
   useEffect(() => {
@@ -150,6 +163,15 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
       }
       if (event.key === 'Enter' && placementTarget) {
         event.preventDefault()
+        // Latch against double-commit. commitNewAgentPlacement is a
+        // multi-step async: spawn() → setState → closeNewAgentPlacement.
+        // The overlay stays mounted/open until close fires, so a rapid
+        // second Enter would commit again and spawn a second session
+        // the user didn't ask for. Skipping here keeps the first commit
+        // the authoritative one; the reset in the `open` effect clears
+        // the latch the next time the overlay opens.
+        if (committingRef.current) return
+        committingRef.current = true
         void workspace.commitNewAgentPlacement(selectedKind, placementTarget)
       }
     }
