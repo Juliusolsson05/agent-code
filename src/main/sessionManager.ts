@@ -120,13 +120,42 @@ export interface SessionManager {
   ): boolean
 }
 
+// Narrow structural contract every agent session (claude, codex)
+// must satisfy. Defined here (not imported from a provider) so the
+// manager stays provider-agnostic: any future runtime we wire up
+// through the provider registry has to expose exactly this surface.
+//
+// WHY we don't import the full ClaudeSession / CodexSession types:
+//   - Importing concrete types couples the manager to every provider
+//     and flips the dependency arrow — the manager is supposed to
+//     orchestrate providers, not depend on their internals.
+//   - The previous code cast `session` to `EventEmitter`, which
+//     worked at runtime but left .write / .resize / .stop completely
+//     unchecked. A provider that dropped one of those methods would
+//     only fail in production. This interface closes that hole.
+//
+// The `on` method widens to EventEmitter's string-keyed signature on
+// purpose: the manager subscribes to a fixed set of event names
+// ('started', 'pty-data', 'screen', …) and each provider emits the
+// same set, but encoding that set here would create a second source
+// of truth next to ManagerEvents. The event shape is enforced by the
+// assertions inside the forwarder callbacks.
+interface AgentSessionLike {
+  on(event: string, listener: (...args: unknown[]) => void): this
+  write(data: string): void
+  resize(cols: number, rows: number): void
+  stop(): Promise<void>
+  start(): Promise<void>
+  removeAllListeners?(event?: string): this
+}
+
 // Internal registry shape: we store the concrete instance plus its
 // kind so kill/write/resize can dispatch without sniffing the object.
 // The registry holds concrete session instances. Agent sessions
 // (claude, codex) are created via the provider registry; terminal
 // sessions are handled directly.
 type RegistryEntry =
-  | { kind: 'claude' | 'codex'; session: unknown }
+  | { kind: 'claude' | 'codex'; session: AgentSessionLike }
   | { kind: 'terminal'; session: TerminalSession; tmuxName: string | null }
 
 // Rolling buffer cap for terminal replay. 256 KB is enough to hold
@@ -199,6 +228,16 @@ export class SessionManager extends EventEmitter {
     // cross-provider breakage when editing one provider's spawn logic.
     if (kind === 'claude' || kind === 'codex') {
       const provider = getMainProvider(kind)
+      // `session` here structurally conforms to AgentSessionLike —
+      // every provider that registers through the registry is
+      // contracted to expose start/stop/write/resize + the standard
+      // 'started'/'pty-data'/'screen'/'jsonl-entry'/'jsonl-error'/
+      // 'process-state'/'trust-dialog'/'resume-prompt'/
+      // 'compaction-state'/'semantic-event'/'exit' events. We use
+      // `as unknown as` so a provider-specific type that ALSO has
+      // those methods (like ClaudeSession) passes the cast without
+      // TS trying to verify structural equivalence on a wide
+      // EventEmitter.on signature.
       const session = provider.createSession({
         cwd: options.cwd,
         cols: options.cols ?? 120,
@@ -211,7 +250,7 @@ export class SessionManager extends EventEmitter {
         // mitmproxy path; Codex uses a local Responses proxy via
         // `openai_base_url`.
         useProxy: options.useProxy,
-      }) as import('events').EventEmitter
+      }) as unknown as AgentSessionLike
 
       session.on('started', ({ projectDir }: { projectDir: string }) =>
         this.emit('started', { sessionId, kind, projectDir }),
@@ -256,7 +295,19 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessions.set(sessionId, { kind, session })
-      await (session as unknown as { start(): Promise<void> }).start()
+      try {
+        await session.start()
+      } catch (err) {
+        // Same shape as the terminal path below: start() failure must
+        // not leave a dead entry in the registry. The listeners we
+        // attached above will never fire again (the session didn't
+        // start), so removing the registry row is enough to let GC
+        // collect the whole graph. We do NOT call removeAllListeners
+        // on `session` because the wrapper already owns its own
+        // EventEmitter — nothing outside the registry subscribed.
+        this.sessions.delete(sessionId)
+        throw err
+      }
       return { sessionId }
     }
 
@@ -319,7 +370,24 @@ export class SessionManager extends EventEmitter {
       const prev = this.terminalBuffers.get(sessionId) ?? ''
       let next = prev + data
       if (next.length > TERMINAL_BUFFER_CAP) {
-        next = next.slice(next.length - TERMINAL_BUFFER_CAP)
+        // Naive slice by string length can split a UTF-16 surrogate
+        // pair — emoji and most CJK chars in JS strings are stored
+        // as a (high-surrogate, low-surrogate) pair that occupies
+        // two `.length` code units. If TERMINAL_BUFFER_CAP lands
+        // between the two, the replay starts with an orphaned low
+        // surrogate, which xterm renders as U+FFFD or garbage.
+        //
+        // Detect a low surrogate at the slice boundary and advance
+        // one code unit so we drop the whole rune instead of
+        // keeping its tail. This loses one character at the oldest
+        // edge of the scrollback — imperceptible vs the visible
+        // corruption the naive path produces.
+        let startIdx = next.length - TERMINAL_BUFFER_CAP
+        const firstCode = next.charCodeAt(startIdx)
+        if (firstCode >= 0xdc00 && firstCode <= 0xdfff) {
+          startIdx += 1
+        }
+        next = next.slice(startIdx)
       }
       this.terminalBuffers.set(sessionId, next)
       // Only broadcast live events AFTER the renderer has attached.
@@ -339,7 +407,22 @@ export class SessionManager extends EventEmitter {
     })
 
     this.sessions.set(sessionId, { kind: 'terminal', session, tmuxName: tmuxSessionName })
-    await session.start()
+    try {
+      await session.start()
+    } catch (err) {
+      // start() can fail if the PTY refuses to spawn or (on the tmux
+      // path) the tmux server dies between createSession and attach.
+      // Without cleanup here, the terminalBuffers entry we set up
+      // pre-start stays forever (no 'exit' event will fire for a
+      // session that never started), and the registry row points at
+      // a half-dead TerminalSession that callers might still try to
+      // write()/resize()/kill(). Roll back everything we added in
+      // THIS spawn so the caller can retry from a clean slate.
+      this.sessions.delete(sessionId)
+      this.terminalBuffers.delete(sessionId)
+      this.terminalAttached.delete(sessionId)
+      throw err
+    }
     return { sessionId, tmuxName: tmuxSessionName ?? undefined }
   }
 
@@ -367,7 +450,26 @@ export class SessionManager extends EventEmitter {
    */
   attachTerminal(sessionId: string): string {
     const entry = this.sessions.get(sessionId)
-    if (!entry || entry.kind !== 'terminal') return ''
+    if (!entry) {
+      // Caller is asking to attach to a session that's already gone.
+      // Silent empty-string is fine here; any TerminalLeaf that mounts
+      // for a dead session will simply see an empty xterm.
+      return ''
+    }
+    if (entry.kind !== 'terminal') {
+      // Kind mismatch is a routing bug — a Claude or Codex pane's
+      // leaf is wiring itself into the terminal-data pipeline. Keep
+      // returning '' (don't crash the renderer over an assumption
+      // mismatch) but warn loudly so the caller sees it in the main
+      // process log instead of silently losing data. Without this
+      // warn, a regression that sent a terminal attach call to the
+      // wrong pane would look like "nothing renders" with no trace.
+      console.warn(
+        `[SessionManager] attachTerminal called on non-terminal session`,
+        { sessionId, kind: entry.kind },
+      )
+      return ''
+    }
     const buffer = this.terminalBuffers.get(sessionId) ?? ''
     // Flip the attach flag in the SAME synchronous block as reading
     // the buffer. JavaScript is single-threaded and event emission
@@ -407,6 +509,36 @@ export class SessionManager extends EventEmitter {
     const entry = this.sessions.get(sessionId)
     if (!entry) return false
     await entry.session.stop()
+    // Belt-and-suspenders listener cleanup.
+    //
+    // The spawn() path attaches ~10 listeners to the underlying
+    // session EventEmitter (started / pty-data / screen / jsonl-entry
+    // / …). Those listeners are removed naturally when `exit` fires
+    // and we `this.sessions.delete(sessionId)` — the EventEmitter
+    // becomes unreachable and gets GC'd.
+    //
+    // But if a provider's stop() resolves WITHOUT ever emitting
+    // 'exit' (observed on some Codex error paths and in any future
+    // runtime that's sloppy about the contract), the session object
+    // is still alive, still referenced by closures inside those
+    // listeners, and holds open all its internal state — effectively
+    // a slow memory leak that accumulates across session churn.
+    //
+    // removeAllListeners() on the session object breaks the closure
+    // graph, and we do it unconditionally so the leak class is
+    // impossible regardless of which provider emits exit and which
+    // doesn't. Safe even if exit later fires: the registry has
+    // already deleted the entry, so the exit handler's
+    // `this.sessions.delete` is a no-op.
+    // Both AgentSessionLike and TerminalSession (an EventEmitter
+    // subclass) expose removeAllListeners — typed as optional on the
+    // agent interface because we don't want to mandate it contractually,
+    // just use it when present.
+    try {
+      const maybe = (entry.session as { removeAllListeners?: () => void })
+        .removeAllListeners
+      maybe?.call(entry.session)
+    } catch { /* best-effort */ }
     // For tmux-backed terminals, stop() detaches the client but
     // intentionally leaves the tmux session alive so undo-close can
     // re-attach to it (scrollback intact, environment intact, any
