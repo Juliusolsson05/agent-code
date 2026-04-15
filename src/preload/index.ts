@@ -54,6 +54,14 @@ export type SessionJsonlEntryEvent = {
   entry: JsonlEntry
   file: string
 }
+// Bulk variant used by main during bootstrap bursts. Payload is an
+// array of {entry, file} tuples for a single session — the renderer
+// folds them in one setState instead of paying one render per entry.
+// See main/index.ts jsonl coalescer for the WHY.
+export type SessionJsonlEntriesEvent = {
+  sessionId: string
+  entries: Array<{ entry: JsonlEntry; file: string }>
+}
 export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 /** Raw PTY output for a terminal session — destined for xterm.js. */
 export type SessionTerminalDataEvent = { sessionId: string; data: string }
@@ -236,6 +244,11 @@ const api = {
 
   onSessionJsonlEntry: (cb: (e: SessionJsonlEntryEvent) => void): Unsub =>
     subscribe('session:jsonl-entry', cb),
+  // Bulk: the whole burst from one bootstrap flush, or a single live
+  // entry wrapped in a 1-element array. Renderer can treat them
+  // identically. See main/index.ts for why the bulk channel exists.
+  onSessionJsonlEntries: (cb: (e: SessionJsonlEntriesEvent) => void): Unsub =>
+    subscribe('session:jsonl-entries', cb),
 
   onSessionJsonlError: (cb: (e: SessionJsonlErrorEvent) => void): Unsub =>
     subscribe('session:jsonl-error', cb),
