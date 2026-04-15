@@ -126,6 +126,26 @@ export type LspDiagnosticsEvent = {
 
 type Unsub = () => void
 
+const lspDiagnosticsSubscribers = new Set<(payload: LspDiagnosticsEvent) => void>()
+let lspDiagnosticsListenerInstalled = false
+
+function subscribeLspDiagnostics(cb: (payload: LspDiagnosticsEvent) => void): Unsub {
+  lspDiagnosticsSubscribers.add(cb)
+
+  if (!lspDiagnosticsListenerInstalled) {
+    lspDiagnosticsListenerInstalled = true
+    ipcRenderer.on('lsp:diagnostics', (_evt: unknown, payload: LspDiagnosticsEvent) => {
+      for (const subscriber of lspDiagnosticsSubscribers) {
+        subscriber(payload)
+      }
+    })
+  }
+
+  return () => {
+    lspDiagnosticsSubscribers.delete(cb)
+  }
+}
+
 /**
  * Helper to register an IPC listener and return an unsubscriber that
  * detaches it. Keeps the api surface below tidy.
@@ -309,7 +329,7 @@ const api = {
     ipcRenderer.invoke('lsp:get-semantic-tokens', clientUri),
 
   onLspDiagnostics: (cb: (e: LspDiagnosticsEvent) => void): Unsub =>
-    subscribe('lsp:diagnostics', cb),
+    subscribeLspDiagnostics(cb),
 
   // --- Workspace persistence ---
   // Main just does the disk I/O. The renderer decides the JSON shape.
