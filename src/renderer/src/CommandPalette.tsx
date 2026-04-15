@@ -25,6 +25,7 @@ type BuriedPaneInfo = {
   id: string
   label: string
   description: string
+  note?: string
   buriedAt: number
 }
 
@@ -40,6 +41,7 @@ type Props = {
   onSettingsRequest: () => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
+  toggleProxyDebugPanel: () => void
   toggleCustomRendering: () => void
   customRenderingEnabled: boolean
   dangerousAgentsEnabled: boolean
@@ -66,6 +68,7 @@ export function CommandPalette({
   onSettingsRequest,
   toggleGitBar,
   toggleDebugPanel,
+  toggleProxyDebugPanel,
   toggleCustomRendering,
   customRenderingEnabled,
   dangerousAgentsEnabled,
@@ -116,6 +119,7 @@ export function CommandPalette({
             id: entry.id,
             label: `${kind} · ${cwdBase}`,
             description: `${entry.sourceTabTitle} · ${cwd}`,
+            note: entry.note,
             buriedAt: entry.buriedAt,
           }
         }),
@@ -138,6 +142,7 @@ export function CommandPalette({
         openSettings: onSettingsRequest,
         toggleGitBar,
         toggleDebugPanel,
+        toggleProxyDebugPanel,
         toggleCustomRendering,
         setDangerousAgentsEnabled,
         enterResumeMode,
@@ -157,6 +162,7 @@ export function CommandPalette({
       onSettingsRequest,
       toggleGitBar,
       toggleDebugPanel,
+      toggleProxyDebugPanel,
       toggleCustomRendering,
       setDangerousAgentsEnabled,
       enterResumeMode,
@@ -186,7 +192,9 @@ export function CommandPalette({
       if (!query.trim()) return buried
       return buried.filter(
         item =>
-          fuzzyMatch(item.label, query) || fuzzyMatch(item.description, query),
+          fuzzyMatch(item.label, query) ||
+          fuzzyMatch(item.description, query) ||
+          fuzzyMatch(item.note ?? '', query),
       )
     }
     if (!query.trim()) return commands
@@ -440,6 +448,11 @@ export function CommandPalette({
                   onClick={() => executeBuried(item)}
                 >
                   <div className="text-[12px] truncate">{item.label}</div>
+                  {item.note && (
+                    <div className="text-[11px] text-ink mt-0.5 truncate">
+                      {item.note}
+                    </div>
+                  )}
                   <div className="text-[10px] text-muted mt-0.5 truncate">
                     {item.description}
                   </div>

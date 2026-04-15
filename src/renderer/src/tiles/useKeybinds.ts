@@ -60,6 +60,10 @@ export function useKeybinds(
 ): void {
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
+  const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
+  const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
+  const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
+  const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
 
   useEffect(() => {
     let pendingTiledResizeIndex: number | null = null
@@ -69,6 +73,14 @@ export function useKeybinds(
       const alt = e.altKey
       const shift = e.shiftKey
       const k = e.key
+
+      if (newAgentPlacementOpen) {
+        if (k === 'Escape') {
+          e.preventDefault()
+          closeNewAgentPlacement()
+        }
+        return
+      }
 
       // --- CMD: command palette ---
       if (cmd && shift && k.toLowerCase() === 'p' && !alt) {
@@ -134,6 +146,12 @@ export function useKeybinds(
       if (k === 'Escape' && settingsPageOpen) {
         e.preventDefault()
         closeSettingsPage()
+        return
+      }
+
+      if (k === 'Escape' && buryPromptSessionId) {
+        e.preventDefault()
+        closeBuryPrompt()
         return
       }
 
@@ -396,9 +414,13 @@ export function useKeybinds(
     }
   }, [
     closeSettingsPage,
+    closeBuryPrompt,
+    closeNewAgentPlacement,
     onCommandPalette,
     onNewTabRequest,
     onResumeRequest,
+    buryPromptSessionId,
+    newAgentPlacementOpen,
     settingsPageOpen,
     workspace,
   ])

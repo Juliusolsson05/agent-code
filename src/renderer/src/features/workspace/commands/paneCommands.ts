@@ -3,6 +3,13 @@ import type { CommandDef } from '../../../commands/types'
 
 export const paneCommands: CommandDef[] = [
   {
+    id: 'new-agent',
+    title: 'New Agent…',
+    keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'terminal'],
+    when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
+    run: ({ workspace }) => workspace.startNewAgentPlacement(),
+  },
+  {
     id: 'split-vertical',
     title: 'Split Pane Right',
     shortcut: '⌥D',
@@ -23,7 +30,7 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'bury-pane',
     title: 'Bury Pane',
-    run: ({ workspace }) => workspace.buryFocused(),
+    run: ({ workspace }) => workspace.requestBuryFocused(),
   },
   {
     id: 'terminal-horizontal',

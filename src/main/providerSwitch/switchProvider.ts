@@ -36,7 +36,17 @@ async function switchClaudeToCodex(
     request.sourceProviderSessionId,
   )
   const sourceEntries = await readJsonlFile<ClaudeEntry>(sourceFilePath)
-  const translated = toCodex(sourceEntries, { lossy: false })
+  // `dropClaudeBootstrap` strips Claude's self-injected system-reminder
+  // burst (tool list, MCP instructions, skill/todo reminders) before the
+  // rollout reaches Codex. Without it, the very first lines the resumed
+  // Codex agent sees are a giant commentary block the user never wrote,
+  // which pollutes the conversation and Codex's title/listing heuristics.
+  // Round-trip fidelity isn't a goal on provider-switch — the user has
+  // already committed to living inside Codex from here on.
+  const translated = toCodex(sourceEntries, {
+    lossy: false,
+    dropClaudeBootstrap: true,
+  })
   const targetProviderSessionId = getCodexSessionId(translated)
   const targetFilePath = await writeCodexRolloutFile(translated)
 

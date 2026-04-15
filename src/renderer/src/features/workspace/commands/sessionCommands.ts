@@ -49,4 +49,10 @@ export const sessionCommands: CommandDef[] = [
     title: 'Toggle Debug Panel',
     run: ({ ui }) => ui.toggleDebugPanel(),
   },
+  {
+    id: 'toggle-proxy-debug-panel',
+    title: 'Toggle Proxy Debug Panel',
+    keywords: ['proxy', 'sse', 'stream', 'semantic', 'anthropic', 'debug'],
+    run: ({ ui }) => ui.toggleProxyDebugPanel(),
+  },
 ]

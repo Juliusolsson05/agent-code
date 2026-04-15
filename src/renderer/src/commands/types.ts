@@ -9,6 +9,7 @@ export type CommandContext = {
     openSettings: () => void
     toggleGitBar: () => void
     toggleDebugPanel: () => void
+    toggleProxyDebugPanel: () => void
     toggleCustomRendering: () => void
     setDangerousAgentsEnabled: (enabled: boolean) => void
     enterResumeMode: () => void

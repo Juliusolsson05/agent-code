@@ -14,6 +14,37 @@ import { SlashCommandPicker } from '../../../providers/claude/renderer/SlashComm
 import type { SessionRuntime, Workspace } from './workspaceStore'
 import type { SessionId, SessionKind } from './types'
 
+// Claude's TUI has its own paste-state machine. Large input and bracketed
+// paste do NOT go straight from "bytes arrived" to "submit immediately" —
+// Claude first buffers the paste, may collapse it into a `[Pasted text #N]`
+// placeholder in the visible composer, and only later expands it back out
+// during submit. If we send the paste payload AND the trailing Enter in the
+// same PTY write, that Enter can land while Claude still considers the paste
+// "in flight". The result is the exact user-facing bug we saw:
+//
+//   1. the pasted prompt appears in Claude's composer,
+//   2. Claude flips into a "working" looking state,
+//   3. but no real turn starts,
+//   4. and the NEXT Enter finally submits the already-buffered prompt.
+//
+// We fix this at the shell boundary instead of forking Claude's paste logic:
+// for Claude only, any prompt that is likely to be treated as a paste gets
+// delivered in TWO phases — first the payload, then (after Claude's own paste
+// debounce window has elapsed) the submit key. This keeps us aligned with
+// Claude's existing placeholder/expansion model instead of fighting it.
+//
+// Why these numbers:
+//   - 800 chars matches Claude's current PASTE_THRESHOLD upstream.
+//   - 125ms is slightly above Claude's 100ms paste completion timeout.
+//     Going lower risks reintroducing the race; going much higher makes
+//     submit feel laggy on every long paste.
+const CLAUDE_PASTE_THRESHOLD = 800
+const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 // TileLeaf — one pane. A "mini cc-shell" self-contained in a box:
 //   header strip (project dir + status)
 //   Feed (structured JSONL + streaming preview)
@@ -468,32 +499,37 @@ export function TileLeaf({
         workspace.addOptimisticCodexUserEntry(sessionId, input)
       }
 
-      // Multi-line prompts (user hit Shift+Enter one or more times
-      // before committing): wrap the body in bracketed paste so CC's
-      // TUI treats the embedded \n characters as *literal newlines in
-      // the input buffer* instead of as submission events. Without the
-      // envelope, the first \n commits and the rest of the prompt is
-      // silently dropped or sent as a second message. The trailing \r
-      // sits OUTSIDE the paste block — that's what tells CC "now
-      // actually submit what I just pasted."
-      //
-      // For single-line prompts we keep the old path (no paste
-      // envelope) so nothing changes for the 99% case and we don't
-      // risk confusing CC's paste handler with zero-newline payloads.
       try {
-        // Codex enables bracketed paste mode (\x1b[?2004h). When we
-        // send text + \r as one chunk, the PTY sees it as a paste
-        // event and the \r gets absorbed as a literal character
-        // instead of triggering submit. Fix: ALWAYS use bracketed
-        // paste for Codex, even for single-line prompts. The paste
-        // brackets tell Codex "this is user text", and the trailing
-        // \r outside the brackets is the submit action.
+        // Three submit modes live here because the two providers'
+        // input stacks are similar but NOT equivalent:
         //
-        // Claude also enables bracketed paste but handles the
-        // text+\r-in-one-chunk case correctly, so we only force
-        // the paste envelope for Codex.
-        if (input.includes('\n') || provider === 'codex') {
+        //   1. Codex: always bracketed-paste, always trailing Enter
+        //      outside the paste block, both in one write. This is the
+        //      path that fixed Codex swallowing `\r` as pasted text.
+        //
+        //   2. Claude, normal text: raw text + `\r` in one write. Fast
+        //      path for the overwhelmingly common case.
+        //
+        //   3. Claude, paste-like text (multiline OR long enough to hit
+        //      Claude's own paste path): bracketed paste first, THEN a
+        //      delayed `\r` in a second write. This is the critical fix
+        //      for the "first Enter populates the prompt but does not
+        //      actually submit; second Enter finally sends it" bug.
+        const isClaudePasteLike =
+          provider === 'claude' &&
+          (input.includes('\n') || input.length > CLAUDE_PASTE_THRESHOLD)
+
+        if (provider === 'codex') {
           await send(`\x1b[200~${input}\x1b[201~\r`)
+        } else if (isClaudePasteLike) {
+          // Keep the submit key OUT of the bracketed-paste write and
+          // wait past Claude's paste debounce. Sending `\r` in the same
+          // PTY chunk races Claude's paste accumulator and can leave the
+          // prompt sitting in the composer until a later keypress nudges
+          // it through the normal submit path.
+          await send(`\x1b[200~${input}\x1b[201~`)
+          await wait(CLAUDE_PASTE_SUBMIT_DELAY_MS)
+          await send('\r')
         } else {
           await send(input + '\r')
         }
@@ -639,6 +675,10 @@ export function TileLeaf({
   }
 
   const running = runtime.exited === null
+  const isSessionLive =
+    runtime.semantic.currentTurn !== null ||
+    runtime.activityStatus !== null ||
+    runtime.awaitingAssistant
 
   return (
     <div
@@ -649,6 +689,13 @@ export function TileLeaf({
       `}
       onMouseDown={onFocusRequest}
     >
+      {/*
+        WHY the pane header does not key purely off `awaitingAssistant` anymore:
+        after moving live rendering toward the semantic stream, that legacy flag
+        became only one of several "agent is still busy" signals. Semantic turns
+        and explicit activity status are both stronger indicators than the old
+        submit lifecycle, especially for tool-heavy or background-agent work.
+      */}
       {/* Pane header: compact status strip.
           In status mode, working panes paint with the theme accent;
           idle/exited panes get no fill — the absence of color is the
@@ -657,7 +704,7 @@ export function TileLeaf({
           green/red, but red read as "error" for merely idle panes. */}
       <div className={`flex items-center justify-between px-3 border-b border-border text-[10px] font-code select-none ${
         workspace.statusMode
-          ? runtime.awaitingAssistant
+          ? isSessionLive
             ? 'bg-accent text-accent-fg'
             : 'bg-surface text-muted'
           : 'bg-surface text-muted'
@@ -684,12 +731,17 @@ export function TileLeaf({
           // streaming card stay blank for any reply taller than the
           // viewport. `recentScreen` covers ~200 rows of scrollback,
           // enough to keep the marker visible for typical responses.
-          streamingScreen={runtime.awaitingAssistant ? runtime.recentScreen : null}
+          // Screen parsing remains supported as fallback, but we widen the gate
+          // beyond `awaitingAssistant` so the old path still has a chance to show
+          // live text when semantic events are missing yet the session is
+          // obviously active.
+          streamingScreen={isSessionLive ? runtime.recentScreen : null}
           streamingScreenMarkdown={
-            runtime.awaitingAssistant ? runtime.recentScreenMarkdown : null
+            isSessionLive ? runtime.recentScreenMarkdown : null
           }
           streamingBaseline={runtime.streamingBaseline}
           activityStatus={runtime.activityStatus}
+          semanticTurn={runtime.semantic.currentTurn}
           tailMode={runtime.tailMode}
           pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
           onScrollInfo={onScrollInfo}

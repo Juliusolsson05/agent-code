@@ -1,6 +1,6 @@
 import type { Settings } from './settings/types'
 import type { UiShellState } from './uiShell/types'
-import type { TabId } from '../tiles/types'
+import type { SessionId, TabId } from '../tiles/types'
 import type { WorkspaceState } from '../tiles/types'
 import type {
   ReaderModeState,
@@ -27,8 +27,13 @@ export type UiShellSlice = UiShellState & {
   closeTileTabsModal: () => void
   openSettingsPage: () => void
   closeSettingsPage: () => void
+  openBuryPrompt: (sessionId: SessionId) => void
+  closeBuryPrompt: () => void
+  openNewAgentPlacement: () => void
+  closeNewAgentPlacement: () => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
+  toggleProxyDebugPanel: () => void
 }
 
 export type WorkspaceSlice = {

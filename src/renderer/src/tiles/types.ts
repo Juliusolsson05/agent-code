@@ -126,6 +126,8 @@ export type BuriedPaneRecord = {
   side?: 'a' | 'b'
   /** Anchor leaf from the surviving sibling subtree, if any. */
   siblingLeafId?: SessionId
+  /** Optional user note captured when the pane was buried. */
+  note?: string
 }
 
 export type WorkspaceState = {

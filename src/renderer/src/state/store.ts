@@ -30,6 +30,7 @@ export const useAppStore = create<AppStore>()(
               accent: data?.settings?.accent ?? DEFAULT_SETTINGS.accent,
               customRendering: data?.settings?.customRendering === true,
               dangerousAgentsEnabled: data?.settings?.dangerousAgentsEnabled === true,
+              useProxyStreaming: data?.settings?.useProxyStreaming === true,
             },
           } as Partial<AppStore>
         },

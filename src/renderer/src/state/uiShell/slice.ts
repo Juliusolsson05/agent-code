@@ -14,8 +14,11 @@ export const createUiShellSlice: StateCreator<
   tileTabsModalOpen: false,
   tileTabsInitialSelectedIds: [],
   settingsPageOpen: false,
+  buryPromptSessionId: null,
+  newAgentPlacementOpen: false,
   gitBarOpen: false,
   debugPanelOpen: false,
+  proxyDebugPanelOpen: false,
 
   openCommandPalette: () =>
     set({ commandPaletteOpen: true }, false, 'uiShell/openCommandPalette'),
@@ -47,8 +50,24 @@ export const createUiShellSlice: StateCreator<
   closeSettingsPage: () =>
     set({ settingsPageOpen: false }, false, 'uiShell/closeSettingsPage'),
 
+  openBuryPrompt: sessionId =>
+    set({ buryPromptSessionId: sessionId }, false, 'uiShell/openBuryPrompt'),
+  closeBuryPrompt: () =>
+    set({ buryPromptSessionId: null }, false, 'uiShell/closeBuryPrompt'),
+
+  openNewAgentPlacement: () =>
+    set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),
+  closeNewAgentPlacement: () =>
+    set({ newAgentPlacementOpen: false }, false, 'uiShell/closeNewAgentPlacement'),
+
   toggleGitBar: () =>
     set(state => ({ gitBarOpen: !state.gitBarOpen }), false, 'uiShell/toggleGitBar'),
   toggleDebugPanel: () =>
     set(state => ({ debugPanelOpen: !state.debugPanelOpen }), false, 'uiShell/toggleDebugPanel'),
+  toggleProxyDebugPanel: () =>
+    set(
+      state => ({ proxyDebugPanelOpen: !state.proxyDebugPanelOpen }),
+      false,
+      'uiShell/toggleProxyDebugPanel',
+    ),
 })

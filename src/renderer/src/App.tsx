@@ -2,11 +2,14 @@ import { useCallback, useEffect } from 'react'
 
 import { CommandPalette } from './CommandPalette'
 import { DebugPanel } from './DebugPanel'
+import { ProxyDebugPanel } from './ProxyDebugPanel'
 import { SettingsPage } from './features/settings/ui/SettingsPage'
 import { SpotlightView } from './features/spotlight/ui/SpotlightView'
 import { ReaderView } from './features/reader/ui/ReaderView'
 import { TileTabsModal } from './features/tile-tabs/ui/TileTabsModal'
 import { TileTabsView } from './features/tile-tabs/ui/TileTabsView'
+import { BuryPanePrompt } from './features/workspace/ui/BuryPanePrompt'
+import { NewAgentPlacementOverlay } from './features/workspace/ui/NewAgentPlacementOverlay'
 import { GitBar } from './GitBar'
 import { AppearanceMenu } from './feed/AppearanceMenu'
 import { PathPickerModal } from './tiles/PathPickerModal'
@@ -41,9 +44,13 @@ export default function App() {
   const tileTabsModalOpen = useAppStore(state => state.tileTabsModalOpen)
   const tileTabsInitialSelectedIds = useAppStore(state => state.tileTabsInitialSelectedIds)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
+  const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
+  const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
+  const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
+  const useProxyStreaming = settings.useProxyStreaming
   const openPathPicker = useAppStore(state => state.openPathPicker)
   const closePathPicker = useAppStore(state => state.closePathPicker)
   const setPathPickerDefault = useAppStore(state => state.setPathPickerDefault)
@@ -54,14 +61,17 @@ export default function App() {
   const closeTileTabsModal = useAppStore(state => state.closeTileTabsModal)
   const openSettingsPage = useAppStore(state => state.openSettingsPage)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
+  const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
+  const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
+  const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
 
   useEffect(() => {
     applyTheme(settings)
   }, [settings])
 
-  const workspace = useWorkspace(dangerousAgentsEnabled)
+  const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming)
 
   // Pre-fill the path input with a sensible default when the modal
   // opens: the cwd of the most recently-used session, or main's
@@ -129,6 +139,9 @@ export default function App() {
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
   const { state, activeTab } = workspace
+  const buriedPromptMeta = buryPromptSessionId
+    ? workspace.state.sessions[buryPromptSessionId] ?? null
+    : null
 
   return (
     <div className="h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
@@ -180,12 +193,19 @@ export default function App() {
             ) : workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
               <SpotlightView workspace={workspace} />
             ) : (
-              <TileTree
-                tabId={activeTab.id}
-                node={activeTab.root}
-                focusedSessionId={activeTab.focusedSessionId}
-                workspace={workspace}
-              />
+              <div className="relative h-full min-h-0 min-w-0">
+                <TileTree
+                  tabId={activeTab.id}
+                  node={activeTab.root}
+                  focusedSessionId={activeTab.focusedSessionId}
+                  workspace={workspace}
+                />
+                <NewAgentPlacementOverlay
+                  open={newAgentPlacementOpen}
+                  workspace={workspace}
+                  onClose={closeNewAgentPlacement}
+                />
+              </div>
             )
           ) : (
             <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
@@ -211,6 +231,14 @@ export default function App() {
             onClose={toggleDebugPanel}
           />
         )}
+
+        {proxyDebugPanelOpen && activeTab && (
+          <ProxyDebugPanel
+            sessionId={activeTab.focusedSessionId}
+            kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
+            onClose={toggleProxyDebugPanel}
+          />
+        )}
       </div>
 
       <CommandPalette
@@ -221,6 +249,7 @@ export default function App() {
         onResumeRequest={onResumeRequest}
         toggleGitBar={toggleGitBar}
         toggleDebugPanel={toggleDebugPanel}
+        toggleProxyDebugPanel={toggleProxyDebugPanel}
         onTileTabsRequest={onTileTabsRequest}
         onSettingsRequest={openSettingsPage}
         toggleCustomRendering={toggleCustomRendering}
@@ -245,6 +274,21 @@ export default function App() {
         onConfirm={tabIds => {
           workspace.openTileTabs(tabIds)
           closeTileTabsModal()
+        }}
+      />
+
+      <BuryPanePrompt
+        open={buryPromptSessionId !== null && buriedPromptMeta !== null}
+        title={
+          buriedPromptMeta
+            ? `${buriedPromptMeta.kind ?? 'claude'} · ${buriedPromptMeta.cwd.split('/').filter(Boolean).pop() ?? buriedPromptMeta.cwd}`
+            : ''
+        }
+        description={buriedPromptMeta?.cwd ?? ''}
+        onCancel={closeBuryPrompt}
+        onConfirm={note => {
+          if (!buryPromptSessionId) return
+          workspace.buryFocused(note, buryPromptSessionId)
         }}
       />
 
