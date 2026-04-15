@@ -53,6 +53,12 @@ export function SettingsPage({ onClose, settings, onChange, onReset }: Props) {
               value={settings.dangerousAgentsEnabled}
               onChange={value => onChange({ dangerousAgentsEnabled: value })}
             />
+            <Toggle
+              label="Proxy-streamed semantic rendering (Claude)"
+              hint="Spawn each Claude session through a local mitmproxy and render the ReaderView from decrypted Anthropic stream events instead of screen-scraping. Requires mitmproxy installed (run `npm run proxy-demo-bootstrap`). Experimental."
+              value={settings.useProxyStreaming}
+              onChange={value => onChange({ useProxyStreaming: value })}
+            />
           </Section>
 
           <Section

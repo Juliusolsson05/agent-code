@@ -16,6 +16,16 @@ export type SessionOptions = {
   snapshotIntervalMs?: number
   resumeSessionId?: string
   dangerousMode?: boolean
+  /** Stable cc-shell session id assigned by SessionManager. Provider
+   *  runtimes can use this for app-owned artifact storage paths
+   *  without coupling themselves to the manager implementation. */
+  shellSessionId?: string
+  /** Opt-in mitmproxy-backed transport capture. Currently only the
+   *  Claude provider honors this — Codex ignores it. Declared here
+   *  (rather than cast inline at the spawn site) so the contract is
+   *  visible to every provider and TypeScript doesn't silently lose
+   *  the field the next time the spawn shape changes. */
+  useProxy?: boolean
 }
 
 export type SessionInfo = {

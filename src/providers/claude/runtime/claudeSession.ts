@@ -4,10 +4,14 @@ import { spawn as ptySpawn } from 'node-pty'
 import type { SlashPickerState } from '../../../preload/index.js'
 import {
   ClaudeCodeHeadless,
+  createProxyServer,
+  spawnClaudeWithProxy,
   terminalToMarkdown,
   type CompactionState,
   type JsonlEntry,
+  type ProxyServer,
   type ResumePromptState,
+  type SemanticEvent,
   type TrustDialogState,
 } from 'claude-code-headless'
 
@@ -23,6 +27,19 @@ export type ClaudeSessionOptions = {
   snapshotIntervalMs?: number
   resumeSessionId?: string
   dangerousMode?: boolean
+  shellSessionId?: string
+  /** Enable proxy-driven semantic streaming. When true, the session
+   *  spawns a per-session mitmproxy runtime, launches Claude through
+   *  it with CA trust injected, and feeds decrypted transport events
+   *  into ClaudeCodeHeadless's proxy adapter. The renderer receives
+   *  `semantic-event` messages in addition to the existing screen /
+   *  jsonl / process-state signals.
+   *
+   *  When false (default), session behaves exactly as before: screen
+   *  parsing is the semantic source and no mitmproxy process is
+   *  spawned. This keeps the default user path zero-dependency on
+   *  mitmproxy while letting opted-in users get the richer stream. */
+  useProxy?: boolean
 }
 
 export type ScreenSnapshot = {
@@ -36,7 +53,7 @@ export type ScreenSnapshot = {
 }
 
 export type ClaudeSessionEvents = {
-  started: [{ projectDir: string }]
+  started: [{ projectDir: string; proxyUrl?: string }]
   'pty-data': [string]
   screen: [ScreenSnapshot]
   'jsonl-entry': [JsonlEntry, string]
@@ -48,6 +65,18 @@ export type ClaudeSessionEvents = {
   'trust-dialog': [TrustDialogState]
   'resume-prompt': [ResumePromptState]
   'compaction-state': [CompactionState]
+  /** New. The flat union of semantic-channel events (see
+   *  claude-code-headless EVENT_SPEC.md). Forwarded verbatim so the
+   *  renderer can treat it as the authoritative live-turn stream —
+   *  block_started / text_delta / thinking_delta / tool_input_delta
+   *  / tool_input_finalized / block_completed / turn_stopped /
+   *  usage_updated / api_error / stream_error / flow_*.
+   *
+   *  Fires only when `options.useProxy` is true. When proxy is off,
+   *  screen-driven `turn_delta` events fire instead (same channel,
+   *  just sourced from the extractor) — consumers that subscribe to
+   *  this event get the best available live signal either way. */
+  'semantic-event': [SemanticEvent]
   exit: [{ exitCode: number; signal?: number }]
 }
 
@@ -69,6 +98,11 @@ export interface ClaudeSession {
 export class ClaudeSession extends EventEmitter {
   private headless: ClaudeCodeHeadless | null = null
   private pty: ReturnType<typeof ptySpawn> | null = null
+  private proxyServer: ProxyServer | null = null
+  // Held so stop() can detach the listener explicitly. Letting the
+  // proxy shutdown path drop the emitter isn't enough — the closure
+  // captures `this.headless` and delays GC of the session object.
+  private proxyEventHandler: ((ev: unknown) => void) | null = null
   private picker: SlashPickerState = { visible: false, items: [] }
   private exited = false
 
@@ -80,6 +114,8 @@ export class ClaudeSession extends EventEmitter {
   private readonly snapshotIntervalMs: number
   private readonly resumeSessionId: string | null
   private readonly dangerousMode: boolean
+  private readonly useProxy: boolean
+  private readonly shellSessionId: string | null
 
   constructor(options: ClaudeSessionOptions = {}) {
     super()
@@ -90,6 +126,8 @@ export class ClaudeSession extends EventEmitter {
     this.resumeSessionId = options.resumeSessionId ?? null
     this.dangerousMode = options.dangerousMode === true
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
+    this.useProxy = options.useProxy === true
+    this.shellSessionId = options.shellSessionId ?? null
 
     const env: Record<string, string | undefined> = {}
     for (const [k, v] of Object.entries(process.env)) {
@@ -115,13 +153,78 @@ export class ClaudeSession extends EventEmitter {
       if (typeof v === 'string') cleanEnv[k] = v
     }
 
-    this.pty = ptySpawn(this.binary, args, {
-      name: 'xterm-256color',
-      cols: this.cols,
-      rows: this.rows,
-      cwd: this.cwd,
-      env: cleanEnv,
-    })
+    // Two spawn paths:
+    //   useProxy=false → plain node-pty spawn, screen-driven semantics.
+    //   useProxy=true  → start per-session mitmproxy, inject HTTPS_PROXY
+    //                    + NODE_EXTRA_CA_CERTS via spawnClaudeWithProxy,
+    //                    route transport events into the adapter.
+    //
+    // Resume args are preserved on the proxy branch by passing them
+    // through node-pty's argv to spawnClaudeWithProxy. The helper
+    // currently always spawns with empty argv, so we reach around it
+    // when we need --resume or --dangerously-skip-permissions.
+    if (this.useProxy) {
+      // WHY proxy runtime storage must not live under `cwd`:
+      //
+      // Passing the workspace cwd into createProxyServer made the proxy layer
+      // create timestamped runtime directories in whatever project the user had
+      // open. That polluted repos with `proxy-events.jsonl`, mitmproxy CA
+      // state, and other runtime artifacts. We instead give the proxy helper
+      // enough identity to write under cc-shell's hidden app state directory,
+      // while still naming folders so humans can correlate them back to the
+      // shell session / resumed conversation.
+      const proxy = await createProxyServer({
+        cwd: this.cwd,
+        sessionKey: this.resumeSessionId
+          ? `resume-${this.resumeSessionId}`
+          : (this.shellSessionId ? `shell-${this.shellSessionId}` : undefined),
+      })
+      await proxy.start()
+      this.proxyServer = proxy
+
+      if (args.length === 0) {
+        // Fast path: no extra args, use the helper as-is.
+        this.pty = spawnClaudeWithProxy({
+          cwd: this.cwd,
+          binary: this.binary,
+          cols: this.cols,
+          rows: this.rows,
+          proxyUrl: proxy.info.proxyUrl,
+          caCertPath: proxy.info.caCertPath,
+        })
+      } else {
+        // Slower path: mirror spawnClaudeWithProxy's env setup but
+        // pass our extra argv (--resume / --dangerously-skip-perms).
+        // Kept inline rather than generalising the helper so the
+        // helper's contract stays narrow and testable.
+        const proxyEnv: Record<string, string> = { ...cleanEnv }
+        proxyEnv.HTTPS_PROXY = proxy.info.proxyUrl
+        proxyEnv.https_proxy = proxy.info.proxyUrl
+        proxyEnv.HTTP_PROXY = proxy.info.proxyUrl
+        proxyEnv.http_proxy = proxy.info.proxyUrl
+        proxyEnv.NODE_EXTRA_CA_CERTS = proxy.info.caCertPath
+        proxyEnv.SSL_CERT_FILE = proxy.info.caCertPath
+        proxyEnv.REQUESTS_CA_BUNDLE = proxy.info.caCertPath
+        proxyEnv.CURL_CA_BUNDLE = proxy.info.caCertPath
+        proxyEnv.NO_PROXY = 'localhost,127.0.0.1,::1'
+        proxyEnv.no_proxy = proxyEnv.NO_PROXY
+        this.pty = ptySpawn(this.binary, args, {
+          name: 'xterm-256color',
+          cols: this.cols,
+          rows: this.rows,
+          cwd: this.cwd,
+          env: proxyEnv,
+        })
+      }
+    } else {
+      this.pty = ptySpawn(this.binary, args, {
+        name: 'xterm-256color',
+        cols: this.cols,
+        rows: this.rows,
+        cwd: this.cwd,
+        env: cleanEnv,
+      })
+    }
 
     this.headless = new ClaudeCodeHeadless({
       pty: this.pty,
@@ -130,7 +233,33 @@ export class ClaudeSession extends EventEmitter {
       rows: this.rows,
       snapshotIntervalMs: this.snapshotIntervalMs,
       resumeSessionId: this.resumeSessionId ?? undefined,
+      // Enabling proxy on the headless instance is what flips the
+      // semantic source of truth from screen to proxy inside
+      // ClaudeCodeHeadless. Even without this, subscribing to
+      // semantic events would still yield screen-sourced deltas
+      // (source='screen', confidence='fallback') — but consumers
+      // that opted into proxy specifically want the richer stream.
+      proxy: this.useProxy ? {} : undefined,
     })
+
+    // Pipe proxy transport events into the adapter. Only fires when
+    // useProxy was set; `this.proxyServer` is otherwise null. We
+    // subscribe AFTER constructing headless so the adapter exists
+    // before any chunk arrives. The handler reference is held on
+    // `this.proxyEventHandler` so stop() can detach it — otherwise
+    // the EventEmitter keeps a reference to the closure (which closes
+    // over `this.headless`) even after teardown, preventing GC of
+    // the session object until the proxy process itself is collected.
+    if (this.proxyServer) {
+      this.proxyEventHandler = ev => {
+        this.headless?.handleProxyTransportEvent(
+          ev as Parameters<
+            NonNullable<typeof this.headless>['handleProxyTransportEvent']
+          >[0],
+        )
+      }
+      this.proxyServer.on('event', this.proxyEventHandler)
+    }
 
     this.pty.onData((data: string) => this.emit('pty-data', data))
 
@@ -181,8 +310,20 @@ export class ClaudeSession extends EventEmitter {
       this.emit('exit', { exitCode, signal })
     })
 
+    // Semantic channel forwarder. We subscribe to the aggregated
+    // 'event' emitter rather than each individual event name so the
+    // session wrapper doesn't need to track the exact surface of the
+    // semantic channel — any new event type we add upstream flows
+    // through automatically.
+    this.headless.semantic.on('event', (ev: SemanticEvent) => {
+      this.emit('semantic-event', ev)
+    })
+
     const { projectDir } = await this.headless.start()
-    this.emit('started', { projectDir })
+    this.emit('started', {
+      projectDir,
+      proxyUrl: this.proxyServer?.info.proxyUrl,
+    })
   }
 
   write(data: string): void {
@@ -209,5 +350,31 @@ export class ClaudeSession extends EventEmitter {
     await this.headless?.stop()
     try { this.pty?.kill() } catch { /* already gone */ }
     this.pty = null
+    // Tear down the proxy runtime after the headless adapter has been
+    // disposed. Order matters: `headless.stop()` calls
+    // `adapter.dispose()` which frees per-flow state; stopping the
+    // proxy first would leak chunk events into a live adapter during
+    // the mitmdump shutdown window.
+    if (this.proxyServer) {
+      if (this.proxyEventHandler) {
+        this.proxyServer.off('event', this.proxyEventHandler)
+        this.proxyEventHandler = null
+      }
+      try {
+        await this.proxyServer.stop()
+      } catch (err) {
+        // Best-effort shutdown, but not silent: if mitmdump hangs on
+        // exit or the runtime dir can't be cleaned, a leaked proxy
+        // process will keep the port bound and the next session spawn
+        // will fail with an opaque bind error. Logging here is the
+        // only breadcrumb that links that failure back to a prior
+        // session's teardown.
+        console.warn(
+          `[claudeSession] proxy.stop() failed for session ${this.shellSessionId ?? '<unknown>'}:`,
+          err,
+        )
+      }
+      this.proxyServer = null
+    }
   }
 }

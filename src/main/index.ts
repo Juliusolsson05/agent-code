@@ -208,6 +208,7 @@ function wireManagerIPC(): void {
   manager.on('trust-dialog', payload => send('session:trust-dialog', payload))
   manager.on('resume-prompt', payload => send('session:resume-prompt', payload))
   manager.on('compaction-state', payload => send('session:compaction-state', payload))
+  manager.on('semantic-event', payload => send('session:semantic-event', payload))
   manager.on('exit', payload => send('session:exit', payload))
   lspManager.on('diagnostics', payload => send('lsp:diagnostics', payload))
 }
@@ -265,6 +266,7 @@ function registerIpc(): void {
         rows?: number
         resumeSessionId?: string
         dangerousMode?: boolean
+        useProxy?: boolean
       },
     ) => {
       return await manager.spawn(options)

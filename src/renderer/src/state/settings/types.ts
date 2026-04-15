@@ -35,6 +35,18 @@ export type Settings = {
   accent: AccentId
   customRendering: boolean
   dangerousAgentsEnabled: boolean
+  /** When true, Claude sessions are spawned through a per-session
+   *  mitmproxy that decrypts Anthropic `/v1/messages` SSE in real
+   *  time and feeds structured per-block semantic events to the
+   *  ReaderView. When false (default), screen parsing remains the
+   *  semantic source and no proxy process is spawned.
+   *
+   *  Opt-in because it requires mitmproxy installed locally (the
+   *  user must run `npm run proxy-demo-bootstrap` once) and because
+   *  the feature is still experimental. Toggle is per-Claude-session
+   *  at spawn time — flipping it mid-session has no effect; the next
+   *  new session picks up the new value. */
+  useProxyStreaming: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -42,4 +54,5 @@ export const DEFAULT_SETTINGS: Settings = {
   accent: 'lime',
   customRendering: false,
   dangerousAgentsEnabled: false,
+  useProxyStreaming: false,
 }

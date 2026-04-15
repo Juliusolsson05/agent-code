@@ -5,6 +5,7 @@ import type { SlashPickerState } from '../../../preload/index.js'
 import {
   CodexHeadless,
   type CodexRolloutLine,
+  type SemanticEvent,
 } from 'codex-headless'
 
 // CodexSession — thin wrapper that spawns the `codex` binary in a PTY
@@ -56,6 +57,7 @@ export type CodexSessionEvents = {
   // falls back to Claude's detectActivity which doesn't recognize
   // Codex's bottom Working row and shows a generic "thinking…".
   'process-state': [{ active: boolean; status?: string }]
+  'semantic-event': [SemanticEvent]
   // Trust dialog visibility — fires on EVERY transition (open + close).
   // Matches the shape Claude already emits so SessionManager's
   // provider-agnostic forwarder picks it up without changes.
@@ -199,6 +201,10 @@ export class CodexSession extends EventEmitter {
 
     this.headless.on('rollout-error', err => {
       this.emit('jsonl-error', err)
+    })
+
+    this.headless.semantic.on('event', (ev: SemanticEvent) => {
+      this.emit('semantic-event', ev)
     })
 
     this.headless.on('exit', ({ exitCode, signal }) => {

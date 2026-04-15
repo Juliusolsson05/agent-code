@@ -77,6 +77,19 @@ export type SessionCompactionStateEvent = {
   statusText?: string
   errorText?: string
 }
+
+/** Per-block semantic stream from Claude's proxy adapter (or screen
+ *  fallback when proxy is off). `event` is a `SemanticEvent` from
+ *  claude-code-headless — discriminated by `event.type` (text_delta /
+ *  thinking_delta / tool_input_delta / tool_input_finalized /
+ *  block_started / block_completed / turn_started / turn_stopped /
+ *  turn_delta / turn_completed / usage_updated / api_error /
+ *  stream_error / flow_selected / flow_ignored / source_changed /
+ *  tool_result / signature). We keep `event` as unknown at the
+ *  preload layer so this bridge doesn't need to pin a version of the
+ *  semantic schema — the renderer imports the type from
+ *  claude-code-headless and narrows on `event.type`. */
+export type SessionSemanticEvent = { sessionId: string; event: unknown }
 export type SessionHistoryChunk = {
   entries: JsonlEntry[]
   hasMore: boolean
@@ -139,6 +152,13 @@ const api = {
     rows?: number
     resumeSessionId?: string
     dangerousMode?: boolean
+    /** Claude only. Opt into proxy-driven semantic streaming. When
+     *  true, the session spawns a per-session mitmproxy, streams
+     *  decrypted Anthropic events through it, and the renderer gets
+     *  per-block semantic events via `onSessionSemanticEvent`. Needs
+     *  mitmproxy installed (see claude-code-headless/PROXY_STREAMING.md).
+     *  Default false — session behavior is unchanged. */
+    useProxy?: boolean
     /** Terminal + tmux only: when set AND tmux is available, attach
      *  to this existing tmux session instead of creating a new one.
      *  Used by the workspace reload path to recover persistent
@@ -237,6 +257,14 @@ const api = {
 
   onSessionCompactionState: (cb: (e: SessionCompactionStateEvent) => void): Unsub =>
     subscribe('session:compaction-state', cb),
+
+  /** Subscribe to Claude's semantic event stream. Fires for every
+   *  SemanticEvent emitted by the adapter — the renderer narrows by
+   *  `event.type` and dispatches to the right UI primitive. Called
+   *  once at app mount; dispatch by sessionId inside the callback
+   *  rather than subscribing per-session. */
+  onSessionSemanticEvent: (cb: (e: SessionSemanticEvent) => void): Unsub =>
+    subscribe('session:semantic-event', cb),
 
   onSessionExit: (cb: (e: SessionExitEvent) => void): Unsub =>
     subscribe('session:exit', cb),

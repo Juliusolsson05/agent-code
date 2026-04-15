@@ -16,6 +16,7 @@ export function loadInitialSettings(): Settings {
         : DEFAULT_SETTINGS.accent,
       customRendering: parsed.customRendering === true,
       dangerousAgentsEnabled: parsed.dangerousAgentsEnabled === true,
+      useProxyStreaming: parsed.useProxyStreaming === true,
     }
   } catch {
     return DEFAULT_SETTINGS

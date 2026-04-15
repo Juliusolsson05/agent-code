@@ -58,6 +58,14 @@ export type ManagerEvents = {
   }]
   /** Emitted only by terminal sessions — raw PTY output for xterm.js. */
   'terminal-data': [{ sessionId: string; data: string }]
+  /** Emitted only by Claude sessions. Proxy-driven per-block semantic
+   *  stream (or screen-fallback turn-level deltas when the session
+   *  was spawned without `useProxy`). Payload is a discriminated
+   *  union from claude-code-headless — see EVENT_SPEC.md and the
+   *  `SemanticEvent` type there. Forwarded as `unknown` at this layer
+   *  because the manager is deliberately provider-agnostic; the
+   *  renderer narrows by `ev.type`. */
+  'semantic-event': [{ sessionId: string; event: unknown }]
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
 }
 
@@ -73,6 +81,14 @@ export type SpawnOptions = {
   resumeSessionId?: string
   /** Agent sessions only: opt into provider-specific dangerous mode. */
   dangerousMode?: boolean
+  /** Claude only: opt into proxy-driven semantic streaming. Default
+   *  false — screen parsing stays the semantic source and no
+   *  mitmproxy process is spawned. When true, ClaudeSession spawns a
+   *  per-session mitmproxy, launches Claude through it with CA trust
+   *  injected, and the renderer gets per-block semantic events via
+   *  `session:semantic-event`. Ignored for Codex and terminal
+   *  sessions. */
+  useProxy?: boolean
   /** Terminal + tmux only: when set AND tmux is available, attach to
    *  this existing tmux session instead of creating a new one. Used
    *  by the workspace reload path to recover persistent terminals
@@ -190,6 +206,13 @@ export class SessionManager extends EventEmitter {
         snapshotIntervalMs: 16,
         resumeSessionId: options.resumeSessionId,
         dangerousMode: options.dangerousMode,
+        shellSessionId: sessionId,
+        // Only Claude honors useProxy today; Codex's provider
+        // passthrough will ignore it. The field lives on the shared
+        // SessionOptions contract (see shared/types/session.ts) so no
+        // cast is needed — both providers' createSession signatures
+        // already accept it.
+        useProxy: options.useProxy,
       }) as import('events').EventEmitter
 
       session.on('started', ({ projectDir }: { projectDir: string }) =>
@@ -226,6 +249,9 @@ export class SessionManager extends EventEmitter {
         statusText?: string
         errorText?: string
       }) => this.emit('compaction-state', { sessionId, ...state }))
+      session.on('semantic-event', (event: unknown) =>
+        this.emit('semantic-event', { sessionId, event }),
+      )
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
         this.emit('exit', { sessionId, exitCode, signal })
         this.sessions.delete(sessionId)
