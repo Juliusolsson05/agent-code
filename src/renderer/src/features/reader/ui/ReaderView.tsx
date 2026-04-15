@@ -1,11 +1,11 @@
-import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { CodeBlock } from '../../../code/CodeBlock'
 import { CodeRenderContext } from '../../../feed/Feed'
 import { extractAssistantInProgress } from '../../../../../shared/parsers/extractAssistant'
-import { extractLastAssistantText } from '../../../copyAssistant'
+import { assistantUuidsWithText, extractAssistantByUuid } from '../../../copyAssistant'
 import { collectLeaves } from '../../../tiles/treeOps'
 import type { SessionId, Workspace } from '../../../tiles/workspaceStore'
 
@@ -76,6 +76,12 @@ const MARKDOWN_COMPONENTS: import('react-markdown').Options['components'] = {
   code: MarkdownCode,
 }
 
+type ReaderAssistantMessage = {
+  id: string
+  text: string
+  live: boolean
+}
+
 type Props = {
   workspace: Workspace
 }
@@ -94,51 +100,7 @@ export function ReaderView({ workspace }: Props) {
 
   return (
     <div className="h-full min-h-0 min-w-0 flex flex-col bg-canvas">
-      <ReaderHeader
-        workspace={workspace}
-        sessionIds={sessionIds}
-        focusedSessionId={focusedSessionId}
-      />
       <ReaderBody workspace={workspace} sessionId={focusedSessionId} />
-    </div>
-  )
-}
-
-function ReaderHeader({
-  workspace,
-  sessionIds,
-  focusedSessionId,
-}: {
-  workspace: Workspace
-  sessionIds: SessionId[]
-  focusedSessionId: SessionId
-}) {
-  return (
-    <div className="flex-shrink-0 border-b border-border bg-surface px-2 py-1">
-      <div className="flex items-center gap-1 overflow-x-auto">
-        <span className="px-2 text-[10px] uppercase tracking-wider text-muted select-none">
-          Reader
-        </span>
-        {sessionIds.map(sessionId => {
-          const meta = workspace.state.sessions[sessionId]
-          const label = meta?.title || shortLabel(meta?.cwd ?? sessionId)
-          const active = sessionId === focusedSessionId
-          return (
-            <button
-              key={sessionId}
-              type="button"
-              onClick={() => workspace.setReaderModeSession(sessionId)}
-              className={`px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
-                active
-                  ? 'bg-accent text-accent-fg border-accent'
-                  : 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
-              }`}
-            >
-              {label}
-            </button>
-          )
-        })}
-      </div>
     </div>
   )
 }
@@ -154,26 +116,131 @@ function ReaderBody({
   const meta = workspace.state.sessions[sessionId]
   const provider = (meta?.kind === 'codex') ? 'codex' : 'claude'
   const workspaceRoot = meta?.cwd ?? null
+  const reader = workspace.readerMode
+  const activeTab = workspace.activeTab
+  const sessionIds = useMemo(() => (
+    activeTab ? collectLeaves(activeTab.root) : [sessionId]
+  ), [activeTab, sessionId])
+  const focusedSessionId = reader && sessionIds.includes(reader.focusedSessionId)
+    ? reader.focusedSessionId
+    : sessionIds[0] ?? sessionId
 
-  // Live text resolver.
-  //
-  //   - While the assistant is actively typing (`awaitingAssistant`)
-  //     and the streaming extractor returns something, show that —
-  //     it updates ~60Hz and matches what the user sees in the feed.
-  //   - Otherwise, show the most recent COMPLETED assistant message
-  //     from the JSONL-backed entries list. This is the fallback for
-  //     idle sessions and the source-of-truth once the turn finishes.
-  //
-  // Computing both each render is cheap; the bigger render cost is
-  // ReactMarkdown (code blocks especially), so we memo the chosen
-  // text and only re-parse when it actually changes.
-  const text = useMemo<string | null>(() => {
-    if (runtime.awaitingAssistant && runtime.recentScreen) {
-      const live = extractAssistantInProgress(runtime.recentScreen, provider)
-      if (live && live.trim()) return live
+  // Semantic-channel live text for this session. Preferred over the
+  // screen extractor: when proxy is on this is decrypted Anthropic
+  // text and arrives as markdown-ready prose; when proxy is off the
+  // channel STILL fires (source='screen'), so we get screen text
+  // without calling the extractor directly. Returns null when no
+  // turn is currently streaming.
+  const semanticLive = runtime.semantic.currentTurn
+  const hasLiveActivity =
+    semanticLive !== null ||
+    runtime.activityStatus !== null ||
+    runtime.awaitingAssistant
+
+  const messages = useMemo<ReaderAssistantMessage[]>(() => {
+    const historical = assistantUuidsWithText(runtime.entries)
+      .map(uuid => {
+        const text = extractAssistantByUuid(runtime.entries, uuid)
+        if (!text) return null
+        return { id: uuid, text, live: false }
+      })
+      .filter((message): message is ReaderAssistantMessage => message !== null)
+
+    if (hasLiveActivity) {
+      // Prefer the semantic channel; fall back to the direct screen
+      // extractor when no semantic event has arrived yet. The screen
+      // fallback catches the edge case where a session was spawned
+      // through an older code path that doesn't emit semantic events
+      // yet — shouldn't happen in production but keeps the reader
+      // from going blank during migrations.
+      const semanticText = semanticLive?.text?.trim() ?? ''
+      const live = semanticText
+        || (runtime.recentScreen
+          ? extractAssistantInProgress(runtime.recentScreen, provider)?.trim() ?? ''
+          : '')
+      if (live) {
+        const newest = historical[historical.length - 1]
+        if (!newest || newest.text !== live) {
+          historical.push({ id: '__live__', text: live, live: true })
+        }
+      }
     }
-    return extractLastAssistantText(runtime.entries, provider)
-  }, [runtime.awaitingAssistant, runtime.recentScreen, runtime.entries, provider])
+
+    return historical
+  }, [
+    hasLiveActivity,
+    runtime.entries,
+    runtime.recentScreen,
+    semanticLive?.text,
+    provider,
+  ])
+
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null)
+  const selectedMessageIdRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    selectedMessageIdRef.current = selectedMessageId
+  }, [selectedMessageId])
+
+  useEffect(() => {
+    setSelectedMessageId(messages[messages.length - 1]?.id ?? null)
+  }, [sessionId])
+
+  useEffect(() => {
+    const previous = selectedMessageIdRef.current
+    if (messages.length === 0) {
+      setSelectedMessageId(null)
+      return
+    }
+    if (!previous) {
+      setSelectedMessageId(messages[messages.length - 1]!.id)
+      return
+    }
+    if (messages.some(message => message.id === previous)) return
+    // Whatever we were pointing at (a real uuid that's gone, or the
+    // transient '__live__' sentinel whose text was just archived
+    // into a historical entry) — snap to the newest message. These
+    // two cases used to be split, but they both land here.
+    setSelectedMessageId(messages[messages.length - 1]!.id)
+  }, [messages])
+
+  const selectedIndex = useMemo(() => {
+    if (messages.length === 0) return -1
+    if (!selectedMessageId) return messages.length - 1
+    const index = messages.findIndex(message => message.id === selectedMessageId)
+    return index >= 0 ? index : messages.length - 1
+  }, [messages, selectedMessageId])
+
+  const selectedMessage = selectedIndex >= 0 ? messages[selectedIndex] : null
+  const canSelectOlder = selectedIndex > 0
+  const canSelectNewer = selectedIndex >= 0 && selectedIndex < messages.length - 1
+  const text = selectedMessage?.text ?? null
+
+  // WHY selection is read through refs inside the keydown handler
+  // instead of closing over `messages`/`selectedIndex` directly:
+  //   messages recomputes on every semantic text delta (a new
+  //   `__live__` entry is pushed per frame). Closing over
+  //   `selectOlder`/`selectNewer` callbacks in the effect below
+  //   would then re-register the document listener on every delta —
+  //   not a crash, but a lot of `addEventListener`/`removeEventListener`
+  //   churn during streaming. Reading from refs lets the effect
+  //   mount-once and still see the latest selection.
+  const messagesRef = useRef(messages)
+  messagesRef.current = messages
+  const selectedIndexRef = useRef(selectedIndex)
+  selectedIndexRef.current = selectedIndex
+
+  const selectOlder = useCallback(() => {
+    const idx = selectedIndexRef.current
+    if (idx <= 0) return
+    setSelectedMessageId(messagesRef.current[idx - 1]!.id)
+  }, [])
+  const selectNewer = useCallback(() => {
+    const idx = selectedIndexRef.current
+    const list = messagesRef.current
+    if (idx < 0 || idx >= list.length - 1) return
+    setSelectedMessageId(list[idx + 1]!.id)
+  }, [])
 
   // Auto-scroll to bottom while content grows during streaming. Only
   // pin to the bottom if the user hasn't manually scrolled away — same
@@ -183,16 +250,46 @@ function ReaderBody({
   const [stickToBottom, setStickToBottom] = useState(true)
   const lastScrollTopRef = useRef(0)
   useEffect(() => {
-    if (!stickToBottom) return
+    if (!stickToBottom || !selectedMessage?.live) return
     const el = scrollerRef.current
     if (!el) return
     el.scrollTop = el.scrollHeight
     lastScrollTopRef.current = el.scrollTop
-  }, [text, stickToBottom])
+  }, [selectedMessage?.live, text, stickToBottom])
+
+  useEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    el.scrollTop = 0
+    lastScrollTopRef.current = 0
+    setStickToBottom(Boolean(selectedMessage?.live))
+  }, [selectedMessageId, sessionId, selectedMessage?.live])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        selectOlder()
+        return
+      }
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        selectNewer()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [selectNewer, selectOlder])
 
   const onScroll = () => {
     const el = scrollerRef.current
     if (!el) return
+    if (!selectedMessage?.live) {
+      lastScrollTopRef.current = el.scrollTop
+      return
+    }
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
     const scrollingUp = el.scrollTop < lastScrollTopRef.current
     // 32px threshold — lets the user scroll up by a small amount
@@ -212,6 +309,17 @@ function ReaderBody({
 
   return (
     <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
+      <ReaderHeader
+        workspace={workspace}
+        sessionIds={sessionIds}
+        focusedSessionId={focusedSessionId}
+        messageCount={messages.length}
+        selectedIndex={selectedIndex}
+        canSelectOlder={canSelectOlder}
+        canSelectNewer={canSelectNewer}
+        onSelectOlder={selectOlder}
+        onSelectNewer={selectNewer}
+      />
       <div
         ref={scrollerRef}
         onScroll={onScroll}
@@ -237,6 +345,94 @@ function ReaderBody({
         </article>
       </div>
     </CodeRenderContext.Provider>
+  )
+}
+
+function ReaderHeader({
+  workspace,
+  sessionIds,
+  focusedSessionId,
+  messageCount,
+  selectedIndex,
+  canSelectOlder,
+  canSelectNewer,
+  onSelectOlder,
+  onSelectNewer,
+}: {
+  workspace: Workspace
+  sessionIds: SessionId[]
+  focusedSessionId: SessionId
+  messageCount: number
+  selectedIndex: number
+  canSelectOlder: boolean
+  canSelectNewer: boolean
+  onSelectOlder: () => void
+  onSelectNewer: () => void
+}) {
+  const position = selectedIndex >= 0 ? `${selectedIndex + 1} / ${messageCount}` : '0 / 0'
+
+  return (
+    <div className="flex-shrink-0 border-b border-border bg-surface px-2 py-1">
+      <div className="flex items-center gap-2">
+        <span className="px-2 text-[10px] uppercase tracking-wider text-muted select-none">
+          Reader
+        </span>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onSelectOlder}
+            disabled={!canSelectOlder}
+            className={`px-2 py-1 text-[11px] font-code border ${
+              canSelectOlder
+                ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
+                : 'bg-canvas text-muted border-border opacity-50 cursor-default'
+            }`}
+            aria-label="Show older assistant message"
+          >
+            ↑ Older
+          </button>
+          <button
+            type="button"
+            onClick={onSelectNewer}
+            disabled={!canSelectNewer}
+            className={`px-2 py-1 text-[11px] font-code border ${
+              canSelectNewer
+                ? 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
+                : 'bg-canvas text-muted border-border opacity-50 cursor-default'
+            }`}
+            aria-label="Show newer assistant message"
+          >
+            ↓ Newer
+          </button>
+          <span className="px-2 text-[10px] font-code uppercase tracking-wider text-muted select-none">
+            {position}
+          </span>
+        </div>
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <div className="flex items-center gap-1">
+            {sessionIds.map(sessionId => {
+              const meta = workspace.state.sessions[sessionId]
+              const label = meta?.title || shortLabel(meta?.cwd ?? sessionId)
+              const active = sessionId === focusedSessionId
+              return (
+                <button
+                  key={sessionId}
+                  type="button"
+                  onClick={() => workspace.setReaderModeSession(sessionId)}
+                  className={`px-2 py-1 text-[11px] font-code border whitespace-nowrap ${
+                    active
+                      ? 'bg-accent text-accent-fg border-accent'
+                      : 'bg-canvas text-ink-dim border-border hover:border-border-hi hover:text-ink'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
