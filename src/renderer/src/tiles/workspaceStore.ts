@@ -2391,9 +2391,21 @@ export function useWorkspace(
             : prev.activeTabId
         return { ...prev, tabs, activeTabId, sessions }
       })
+      setTileTabs(prev => {
+        if (!prev) return prev
+        const sanitized = sanitizeTileTabsState({
+          ...prev,
+          tabIds: prev.tabIds.filter(id => id !== tabId),
+          focusedTabId: prev.focusedTabId === tabId
+            ? (prev.tabIds.find(id => id !== tabId) ?? prev.focusedTabId)
+            : prev.focusedTabId,
+        })
+        return sanitized
+      })
       setSpotlight(prev => (prev?.tabId === tabId ? null : prev))
+      setReaderMode(prev => (prev?.tabId === tabId ? null : prev))
     },
-    [state.tabs, state.sessions],
+    [setReaderMode, setTileTabs, state.tabs, state.sessions],
   )
 
   // ---- Action: split the focused pane ----
