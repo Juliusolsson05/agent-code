@@ -5,8 +5,10 @@ import type { SlashPickerState } from '../../../preload/index.js'
 import {
   CodexHeadless,
   type CodexRolloutLine,
-  type SemanticEvent,
+  type CodexSemanticEvent,
 } from 'codex-headless'
+import { ResponsesProxy } from './responsesProxy.js'
+import { CodexResponsesAdapter } from './codexResponsesAdapter.js'
 
 // CodexSession — thin wrapper that spawns the `codex` binary in a PTY
 // and delegates all screen parsing, transcript tailing, trust dialog
@@ -31,6 +33,7 @@ export type CodexSessionOptions = {
   snapshotIntervalMs?: number
   resumeSessionId?: string
   dangerousMode?: boolean
+  useProxy?: boolean
 }
 
 export type CodexScreenSnapshot = {
@@ -46,7 +49,7 @@ export type CodexScreenSnapshot = {
 }
 
 export type CodexSessionEvents = {
-  started: [{ projectDir: string }]
+  started: [{ projectDir: string; proxyUrl?: string }]
   'pty-data': [string]
   screen: [CodexScreenSnapshot]
   'jsonl-entry': [CodexRolloutLine, string]
@@ -57,7 +60,7 @@ export type CodexSessionEvents = {
   // falls back to Claude's detectActivity which doesn't recognize
   // Codex's bottom Working row and shows a generic "thinking…".
   'process-state': [{ active: boolean; status?: string }]
-  'semantic-event': [SemanticEvent]
+  'semantic-event': [CodexSemanticEvent]
   // Trust dialog visibility — fires on EVERY transition (open + close).
   // Matches the shape Claude already emits so SessionManager's
   // provider-agnostic forwarder picks it up without changes.
@@ -93,6 +96,9 @@ export class CodexSession extends EventEmitter {
   private readonly snapshotIntervalMs: number
   private readonly resumeSessionId: string | null
   private readonly dangerousMode: boolean
+  private readonly useProxy: boolean
+  private proxyServer: ResponsesProxy | null = null
+  private proxyAdapter: CodexResponsesAdapter | null = null
 
   constructor(options: CodexSessionOptions = {}) {
     super()
@@ -102,6 +108,7 @@ export class CodexSession extends EventEmitter {
     this.binary = options.binary ?? 'codex'
     this.resumeSessionId = options.resumeSessionId ?? null
     this.dangerousMode = options.dangerousMode === true
+    this.useProxy = options.useProxy === true
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
 
     // Build env: start from process.env so PATH, HOME, API keys
@@ -127,6 +134,11 @@ export class CodexSession extends EventEmitter {
     }
     if (this.resumeSessionId) {
       args.push('resume', this.resumeSessionId)
+    }
+    if (this.useProxy) {
+      const proxy = await ResponsesProxy.create()
+      this.proxyServer = proxy
+      args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
     }
 
     // Filter undefined env entries — node-pty expects strings only.
@@ -203,9 +215,20 @@ export class CodexSession extends EventEmitter {
       this.emit('jsonl-error', err)
     })
 
-    this.headless.semantic.on('event', (ev: SemanticEvent) => {
+    this.headless.semantic.on('event', (ev: CodexSemanticEvent) => {
       this.emit('semantic-event', ev)
     })
+
+    if (this.proxyServer) {
+      // The adapter parses OpenAI Responses SSE and publishes to the
+      // same SemanticChannel the rollout reducer writes to. When both
+      // sources overlap, the channel emits `source_changed` so the
+      // renderer can see which source is driving the live text. The
+      // proxy wins the first-chunk race; rollout later reconciles
+      // with the authoritative text at task_complete.
+      this.proxyAdapter = new CodexResponsesAdapter(this.proxyServer, this.headless)
+      this.proxyAdapter.attach()
+    }
 
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
@@ -220,7 +243,10 @@ export class CodexSession extends EventEmitter {
     // parsed in codex-headless and forwarded here as process-state for
     // app-level compatibility.
 
-    this.emit('started', { projectDir: sessionsDir })
+    this.emit('started', {
+      projectDir: sessionsDir,
+      proxyUrl: this.proxyServer?.info.proxyBaseUrl,
+    })
   }
 
   write(data: string): void {
@@ -245,6 +271,21 @@ export class CodexSession extends EventEmitter {
 
   async stop(): Promise<void> {
     await this.headless?.stop()
+    // Detach adapter BEFORE stopping the proxy so the listener is
+    // removed cleanly; otherwise the closure keeps a reference to
+    // `this.headless` past teardown (same footgun we hit on the
+    // Claude proxy path — see claudeSession.ts stop()).
+    this.proxyAdapter?.detach()
+    this.proxyAdapter = null
+    try {
+      await this.proxyServer?.stop()
+    } catch (err) {
+      console.warn(
+        `[codexSession] proxy.stop() failed:`,
+        err,
+      )
+    }
+    this.proxyServer = null
     try { this.pty?.kill() } catch { /* already gone */ }
     this.pty = null
   }

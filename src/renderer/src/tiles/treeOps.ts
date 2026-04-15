@@ -61,6 +61,28 @@ export function splitLeaf(
 }
 
 /**
+ * Wrap the whole existing layout in a new split and place a new leaf on one
+ * side of it. Used by layout-aware insertion flows where the user wants a new
+ * top/bottom row or left/right column for the entire tab, not just beside the
+ * currently focused pane.
+ */
+export function wrapRootWithLeaf(
+  node: TileNode,
+  direction: SplitDirection,
+  side: 'a' | 'b',
+  newSessionId: SessionId,
+): TileNode {
+  const newLeaf: TileNode = { type: 'leaf', sessionId: newSessionId }
+  return {
+    type: 'split',
+    direction,
+    ratio: RATIO_DEFAULT,
+    a: side === 'a' ? newLeaf : node,
+    b: side === 'b' ? newLeaf : node,
+  }
+}
+
+/**
  * Insert a new leaf beside an existing one with explicit geometry.
  * Used by revive flows that want to preserve an older split ratio/side
  * as closely as possible instead of always creating a default 50/50

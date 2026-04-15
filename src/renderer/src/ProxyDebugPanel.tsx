@@ -2,26 +2,21 @@ import { useMemo } from 'react'
 import { useAppStore } from './state/hooks'
 import { emptySemanticRuntime } from './tiles/workspaceState'
 
-// ProxyDebugPanel — live inspector for the proxy-driven semantic
-// stream. Toggled via "Toggle Proxy Debug Panel" in the command
-// palette. Shows the SSE flow as it arrives:
+// ProxyDebugPanel — live inspector for the semantic stream and any
+// provider transport attribution that survives into the shared runtime.
+// Toggled via "Toggle Proxy Debug Panel" in the command palette.
 //
-//   - Active flow: which `/v1/messages` flow the attribution policy
-//     elected as the visible assistant turn (first-chunk promotion).
-//   - Ignored flows: concurrent or non-streaming flows that got
-//     demoted. Useful for catching title-generation hijacks.
-//   - Current turn: turnId (the real Anthropic message id),
-//     cumulative text, stop_reason if seen.
-//   - Block state: per-content-block accumulator for text / thinking
-//     / tool_use — surfaces the structure Claude Code's rendering
-//     engine sees, without any screen-scraping heuristic.
+//   - For Claude, flows show proxy attribution over `/v1/messages`.
+//   - For Codex, flows may be empty; the panel still exposes the
+//     folded semantic turn/block/tool state from rollout + proxy-backed
+//     transport where available.
+//   - Current turn: cumulative text + stop reason if seen.
+//   - Block state: per-content-block accumulator for text / thinking /
+//     tool_use.
 //   - Usage: input/output tokens + cache counters from
 //     `usage_updated`.
 //   - Event tail: last N raw SemanticEvent lines for copy-paste
 //     into a debugger.
-//
-// The panel is provider-scoped to Claude. On Codex sessions it just
-// renders a disabled-state hint.
 //
 // WHY this panel has NO local reducer:
 //   It used to maintain its own parallel reducer over SemanticEvent,
@@ -79,7 +74,7 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
         text-[9px] text-red-400 uppercase tracking-wider
         select-none flex-shrink-0
       ">
-        <span>proxy debug — sse flow</span>
+        <span>proxy debug — {kind} semantic stream</span>
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -92,15 +87,11 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-3">
-        {kind !== 'claude' && (
-          <Section title="unavailable">
-            <Pre>Proxy streaming is Claude-only. Focus a Claude session to see SSE flow.</Pre>
-          </Section>
-        )}
-
         {/* Flow attribution */}
         <Section title={`flows seen (${sortedFlows.length})`}>
-          {sortedFlows.length === 0 && <Pre>no proxy flows yet</Pre>}
+          {sortedFlows.length === 0 && (
+            <Pre>{kind === 'codex' ? 'no provider flow attribution recorded' : 'no proxy flows yet'}</Pre>
+          )}
           {sortedFlows.map(flow => (
             <div
               key={flow.flowId}

@@ -1235,7 +1235,7 @@ const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
       block.toolName === 'TodoWrite'
         ? parseSemanticTodos(block.parsedInput)
         : []
-    const hasResult = block.resultAt != null
+    const hasResult = block.resultAt != null || block.resultContent != null
     return (
       <MarkerRow marker="⏺">
         <div>

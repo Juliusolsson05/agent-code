@@ -207,11 +207,9 @@ export class SessionManager extends EventEmitter {
         resumeSessionId: options.resumeSessionId,
         dangerousMode: options.dangerousMode,
         shellSessionId: sessionId,
-        // Only Claude honors useProxy today; Codex's provider
-        // passthrough will ignore it. The field lives on the shared
-        // SessionOptions contract (see shared/types/session.ts) so no
-        // cast is needed — both providers' createSession signatures
-        // already accept it.
+        // Agent providers both accept `useProxy`. Claude uses the
+        // mitmproxy path; Codex uses a local Responses proxy via
+        // `openai_base_url`.
         useProxy: options.useProxy,
       }) as import('events').EventEmitter
 

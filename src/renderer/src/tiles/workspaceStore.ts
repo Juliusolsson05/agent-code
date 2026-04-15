@@ -32,6 +32,7 @@ import {
   resizeInDirection,
   rotateTree,
   splitLeaf,
+  wrapRootWithLeaf,
 } from './treeOps'
 import {
   UndoCloseStack,
@@ -426,6 +427,12 @@ function summarizeSemanticEvent(ev: Record<string, unknown>): string {
       return `signature idx=${ev.blockIndex}`
     case 'tool_result':
       return `tool_result ${trimSemanticId(ev.toolUseId)} ${ev.isError ? '[error]' : ''}`
+    case 'tool_started':
+      return `tool_started ${trimSemanticId(ev.callId)} ${String(ev.label ?? ev.tool ?? '')}`.trim()
+    case 'tool_output_delta':
+      return `tool_output_delta ${trimSemanticId(ev.callId)} +${String(ev.textDelta ?? '').length}`
+    case 'tool_completed':
+      return `tool_completed ${trimSemanticId(ev.callId)} exit=${String(ev.exitCode ?? '-')}`
     default:
       return t
   }
@@ -823,6 +830,108 @@ function foldSemanticEvent(
         } else {
           currentTurn = nextTurn
         }
+      }
+      break
+    }
+    case 'tool_started': {
+      const callId = typeof ev.callId === 'string' ? ev.callId : null
+      if (!callId) break
+      const turnId =
+        typeof ev.turnId === 'string'
+          ? ev.turnId
+          : currentTurn?.turnId ?? `codex-${now}`
+      if (!currentTurn || currentTurn.turnId !== turnId) {
+        currentTurn = {
+          turnId,
+          text: '',
+          source: typeof ev.source === 'string' ? ev.source : null,
+          blocks: {},
+          blockOrder: [],
+          stopReason: null,
+          usage: null,
+          task: emptySemanticTaskSnapshot(),
+          lookups: emptySemanticLookupSnapshot(),
+          startedAt: now,
+          endedAt: null,
+        }
+      }
+      const existing = Object.values(currentTurn.blocks).find(block => block.toolUseId === callId)
+      if (existing) break
+      const numericIndices = Object.keys(currentTurn.blocks)
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value))
+      const nextIndex =
+        numericIndices.length > 0 ? Math.max(...numericIndices) + 1 : 0
+      const label = typeof ev.label === 'string' ? ev.label : ''
+      const toolKind = ev.tool === 'mcp' ? 'mcp_tool_use' : 'tool_use'
+      const toolName =
+        ev.tool === 'exec'
+          ? 'exec_command'
+          : ev.tool === 'mcp'
+            ? label || 'mcp'
+            : label || (typeof ev.tool === 'string' ? ev.tool : 'tool')
+      currentTurn = {
+        ...currentTurn,
+        source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
+        blocks: {
+          ...currentTurn.blocks,
+          [nextIndex]: {
+            blockIndex: nextIndex,
+            kind: toolKind,
+            toolName,
+            toolUseId: callId,
+            text: '',
+            thinking: '',
+            inputJson: label,
+          },
+        },
+        blockOrder: [...currentTurn.blockOrder, nextIndex],
+      }
+      break
+    }
+    case 'tool_output_delta': {
+      if (!currentTurn) break
+      const callId = typeof ev.callId === 'string' ? ev.callId : null
+      if (!callId) break
+      const match = Object.entries(currentTurn.blocks).find(([, block]) => block.toolUseId === callId)
+      if (!match) break
+      const idx = Number(match[0])
+      const block = match[1]
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            resultContent:
+              typeof ev.textDelta === 'string'
+                ? (block.resultContent ?? '') + ev.textDelta
+                : block.resultContent,
+          },
+        },
+      }
+      break
+    }
+    case 'tool_completed': {
+      if (!currentTurn) break
+      const callId = typeof ev.callId === 'string' ? ev.callId : null
+      if (!callId) break
+      const match = Object.entries(currentTurn.blocks).find(([, block]) => block.toolUseId === callId)
+      if (!match) break
+      const idx = Number(match[0])
+      const block = match[1]
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            resultContent: block.resultContent ?? '',
+            resultIsError:
+              typeof ev.exitCode === 'number' ? ev.exitCode !== 0 : block.resultIsError,
+            resultAt: now,
+          },
+        },
       }
       break
     }
@@ -1790,10 +1899,10 @@ export function useWorkspace(
       const kind: SessionKind = opts?.kind ?? 'claude'
       const dangerousMode =
         opts?.dangerousMode ?? (kind !== 'terminal' ? dangerousAgentsRef.current : undefined)
-      // Proxy streaming is Claude-only and opt-in per the app
-      // setting. Codex + terminal sessions ignore it — passing the
-      // flag is harmless but we keep it gated on kind for clarity.
-      const useProxy = kind === 'claude' ? useProxyStreamingRef.current : undefined
+      // Agent providers both accept `useProxy`; terminals ignore it.
+      // Claude uses MITM proxy streaming, Codex uses a local Responses
+      // proxy via `openai_base_url`.
+      const useProxy = kind !== 'terminal' ? useProxyStreamingRef.current : undefined
       const { sessionId, tmuxName } = await window.api.spawnSession({
         kind,
         cwd,
@@ -1973,7 +2082,7 @@ export function useWorkspace(
             cwd: meta.cwd,
             resumeSessionId: meta.providerSessionId,
             dangerousMode,
-            useProxy: kind === 'claude' ? useProxyStreamingRef.current : undefined,
+            useProxy: kind !== 'terminal' ? useProxyStreamingRef.current : undefined,
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = { ...meta }
@@ -2186,14 +2295,22 @@ export function useWorkspace(
           if (currentTab.id !== prev.activeTabId) return currentTab
           return {
             ...currentTab,
-            root: insertBesideLeaf(
-              currentTab.root,
-              target.targetSessionId,
-              target.direction,
-              RATIO_DEFAULT,
-              target.side,
-              newSessionId,
-            ),
+            root:
+              target.kind === 'wrap-root'
+                ? wrapRootWithLeaf(
+                    currentTab.root,
+                    target.direction,
+                    target.side,
+                    newSessionId,
+                  )
+                : insertBesideLeaf(
+                    currentTab.root,
+                    target.targetSessionId,
+                    target.direction,
+                    RATIO_DEFAULT,
+                    target.side,
+                    newSessionId,
+                  ),
             focusedSessionId: newSessionId,
           }
         }),
@@ -3489,7 +3606,7 @@ export function useWorkspace(
             cwd: meta.cwd,
             resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
             dangerousMode: kind !== 'terminal' ? dangerousAgentsRef.current : undefined,
-            useProxy: kind === 'claude' ? useProxyStreamingRef.current : undefined,
+            useProxy: kind !== 'terminal' ? useProxyStreamingRef.current : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
           })
           idMap.set(oldId, newId)
