@@ -46,15 +46,20 @@ import {
 } from '../copyAssistant'
 import { useAppStore } from '../state/hooks'
 import {
+  emptySemanticRuntime,
   emptyRuntime,
+  parseSemanticTodos,
   type PickerItem,
   type QueuedMessage,
   type ReaderModeState,
+  type SemanticRuntimeState,
+  type SemanticLiveTurn,
   type SessionRuntime,
   type SlashPickerState,
   type SpotlightState,
   type TileTabsState,
 } from './workspaceState'
+import type { PlacementTarget } from '../features/workspace/lib/newAgentPlacement'
 
 // Workspace store — single React hook that owns:
 //   - The workspace state (tabs + tile trees + session metadata)
@@ -214,6 +219,702 @@ function codexToolResultEntry(
       role: 'user',
       content: [resultBlock],
     },
+  }
+}
+
+const SEMANTIC_LOG_CAP = 200
+const SEMANTIC_HISTORY_CAP = 20
+const SEMANTIC_ERROR_CAP = 20
+
+function semanticToIndex(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null
+}
+
+function trimSemanticId(v: unknown): string {
+  const s = typeof v === 'string' ? v : ''
+  return s.length > 14 ? s.slice(0, 14) + '…' : s
+}
+
+function flattenSemanticUsage(
+  u: Record<string, unknown>,
+): Record<string, number | string | undefined> {
+  const out: Record<string, number | string | undefined> = {}
+  for (const [k, v] of Object.entries(u)) {
+    if (typeof v === 'number' || typeof v === 'string') out[k] = v
+    else if (v && typeof v === 'object') {
+      for (const [ck, cv] of Object.entries(v as Record<string, unknown>)) {
+        if (typeof cv === 'number' || typeof cv === 'string') {
+          out[`${k}.${ck}`] = cv
+        }
+      }
+    }
+  }
+  return out
+}
+
+function semanticHistoryRow(
+  turn: SemanticLiveTurn,
+): Pick<SemanticLiveTurn, 'turnId' | 'text' | 'stopReason' | 'startedAt' | 'endedAt'> {
+  return {
+    turnId: turn.turnId,
+    text: turn.text,
+    stopReason: turn.stopReason,
+    startedAt: turn.startedAt,
+    endedAt: turn.endedAt,
+  }
+}
+
+function hasPendingSemanticTools(turn: SemanticLiveTurn): boolean {
+  return Object.values(turn.blocks).some(block => {
+    if (
+      block.kind !== 'tool_use' &&
+      block.kind !== 'server_tool_use' &&
+      block.kind !== 'mcp_tool_use'
+    ) {
+      return false
+    }
+    return block.toolUseId != null && block.resultAt == null
+  })
+}
+
+function emptySemanticTaskSnapshot() {
+  return {
+    todos: [],
+    doneCount: 0,
+    totalCount: 0,
+    inProgressToolUseIds: [] as string[],
+    activeToolNames: [] as string[],
+  }
+}
+
+function emptySemanticLookupSnapshot(): SemanticLiveTurn['lookups'] {
+  return {
+    toolCallsById: {},
+    toolUseIdsInOrder: [],
+    resolvedToolUseIds: [],
+    erroredToolUseIds: [],
+  }
+}
+
+function deriveSemanticTaskSnapshot(
+  blocks: Record<number, SemanticLiveTurn['blocks'][number]>,
+): {
+  task: SemanticLiveTurn['task']
+  lookups: SemanticLiveTurn['lookups']
+} {
+  const inProgressToolUseIds: string[] = []
+  const activeToolNames: string[] = []
+  const resolvedToolUseIds: string[] = []
+  const erroredToolUseIds: string[] = []
+  const toolUseIdsInOrder: string[] = []
+  const toolCallsById: SemanticLiveTurn['lookups']['toolCallsById'] = {}
+  let todos = emptySemanticTaskSnapshot().todos
+
+  // WHY derive a lookup snapshot here instead of teaching Feed to scan blocks
+  // every render:
+  //
+  // Upstream Claude does not let render components rediscover tool state from
+  // raw transcript rows. It builds a relationship layer first
+  // (`toolUseByToolUseID`, `toolResultByToolUseID`, `resolvedToolUseIDs`,
+  // sibling sets, progress maps) and then renders from that. This smaller
+  // semantic lookup snapshot is the same idea for cc-shell's live turn: keep
+  // the expensive / correctness-sensitive "which tool is still live, which one
+  // errored, which tools were siblings in this turn?" logic in the shared
+  // reducer so every surface reads the same answer.
+  const orderedBlocks = Object.values(blocks).sort((a, b) => a.blockIndex - b.blockIndex)
+  for (const block of orderedBlocks) {
+    if (
+      block.kind !== 'tool_use' &&
+      block.kind !== 'server_tool_use' &&
+      block.kind !== 'mcp_tool_use'
+    ) {
+      continue
+    }
+    const hasResult = block.resultAt != null
+    if (block.toolUseId && !hasResult) {
+      inProgressToolUseIds.push(block.toolUseId)
+      if (block.toolName) activeToolNames.push(block.toolName)
+    }
+    if (block.toolUseId) {
+      toolUseIdsInOrder.push(block.toolUseId)
+      if (hasResult) {
+        resolvedToolUseIds.push(block.toolUseId)
+        if (block.resultIsError) erroredToolUseIds.push(block.toolUseId)
+      }
+      toolCallsById[block.toolUseId] = {
+        toolUseId: block.toolUseId,
+        blockIndex: block.blockIndex,
+        kind: block.kind,
+        toolName: block.toolName ?? null,
+        status: block.resultIsError
+          ? 'error'
+          : hasResult
+            ? 'completed'
+            : 'in_progress',
+        inputJson: block.inputJson ?? '',
+        resultContent: block.resultContent ?? null,
+      }
+    }
+    if (block.toolName === 'TodoWrite' && block.parsedInput) {
+      todos = parseSemanticTodos(block.parsedInput)
+    }
+  }
+
+  const dedupedToolNames = [...new Set(activeToolNames)]
+  const doneCount = todos.filter(todo => todo.status === 'completed').length
+  return {
+    task: {
+      todos,
+      doneCount,
+      totalCount: todos.length,
+      inProgressToolUseIds,
+      activeToolNames: dedupedToolNames,
+    },
+    lookups: {
+      toolCallsById,
+      toolUseIdsInOrder,
+      resolvedToolUseIds,
+      erroredToolUseIds,
+    },
+  }
+}
+
+function summarizeSemanticEvent(ev: Record<string, unknown>): string {
+  const t = String(ev.type ?? '')
+  switch (t) {
+    case 'turn_started':
+      return `turn_started ${trimSemanticId(ev.turnId)} (${ev.source ?? '?'})`
+    case 'turn_delta': {
+      const ft = typeof ev.fullText === 'string' ? ev.fullText : ''
+      return `turn_delta len=${ft.length}`
+    }
+    case 'text_delta':
+      return `text_delta idx=${ev.blockIndex} +${String(ev.textDelta ?? '').length}`
+    case 'thinking_delta':
+      return `thinking_delta idx=${ev.blockIndex} +${String(ev.thinkingDelta ?? '').length}`
+    case 'connector_text_delta':
+      return `connector_text_delta idx=${ev.blockIndex} +${String(ev.connectorTextDelta ?? '').length}`
+    case 'citations_delta':
+      return `citations_delta idx=${ev.blockIndex}`
+    case 'tool_input_delta':
+      return `tool_input_delta idx=${ev.blockIndex} ${ev.toolName ?? '?'}`
+    case 'tool_input_finalized':
+      return `tool_input_finalized idx=${ev.blockIndex} ${ev.toolName ?? '?'} ${ev.parsed ? '[ok]' : '[bad]'}`
+    case 'block_started':
+      return `block_started idx=${ev.blockIndex} ${ev.kind}${ev.toolName ? ` (${ev.toolName})` : ''}`
+    case 'block_completed':
+      return `block_completed idx=${ev.blockIndex} ${ev.kind}`
+    case 'turn_stopped':
+      return `turn_stopped ${ev.stopReason ?? '?'}`
+    case 'turn_completed':
+      return 'turn_completed'
+    case 'usage_updated': {
+      const u = ev.usage as Record<string, unknown> | undefined
+      return `usage in=${u?.input_tokens ?? '?'} out=${u?.output_tokens ?? '?'}`
+    }
+    case 'flow_selected':
+      return `flow_selected ${ev.flowId} — ${ev.reason}`
+    case 'flow_ignored':
+      return `flow_ignored ${ev.flowId} — ${ev.reason}`
+    case 'api_error':
+      return `api_error ${ev.errorType ?? ''} — ${String(ev.message ?? '').slice(0, 60)}`
+    case 'stream_error':
+      return `stream_error ${ev.errorType ?? ''} — ${String(ev.message ?? '').slice(0, 60)}`
+    case 'source_changed':
+      return `source_changed ${ev.previousSource ?? '?'} → ${ev.source ?? '?'}`
+    case 'signature':
+      return `signature idx=${ev.blockIndex}`
+    case 'tool_result':
+      return `tool_result ${trimSemanticId(ev.toolUseId)} ${ev.isError ? '[error]' : ''}`
+    default:
+      return t
+  }
+}
+
+function foldSemanticEvent(
+  state: SemanticRuntimeState,
+  ev: Record<string, unknown>,
+): SemanticRuntimeState {
+  // WHY centralize semantic folding here instead of letting Feed,
+  // ReaderView, and the proxy debug UI each subscribe separately:
+  //
+  // The old architecture created three subtly different truths about the same
+  // live turn. Feed still derived structure from screen scraping, Reader kept a
+  // local semantic turn, and the debug panel had yet another reducer. That
+  // split is exactly how we ended up under-using the proxy stream: every UI
+  // surface only consumed the subset it happened to care about.
+  //
+  // The invariant now is "one session => one semantic reducer". Every semantic
+  // event, including late tool_result and connector/citation deltas, must flow
+  // through this fold before any UI reads it. If a future surface wants live
+  // model structure, it should select from `runtime.semantic`, not open its own
+  // transport subscription.
+  const now = Date.now()
+  const summary = summarizeSemanticEvent(ev)
+  const logEntry = {
+    id: state.nextLogId,
+    type: String(ev.type ?? '?'),
+    ts: now,
+    summary,
+    raw: ev,
+  }
+  const log = [...state.log, logEntry]
+  if (log.length > SEMANTIC_LOG_CAP) {
+    log.splice(0, log.length - SEMANTIC_LOG_CAP)
+  }
+
+  const t = String(ev.type ?? '')
+  let flows = state.flows
+  let currentTurn = state.currentTurn
+  let history = state.history
+  let errors = state.errors
+
+  switch (t) {
+    case 'flow_selected': {
+      const flowId = String(ev.flowId ?? '')
+      const prev = flows[flowId]
+      flows = {
+        ...flows,
+        [flowId]: {
+          flowId,
+          attribution: 'active',
+          reason: String(ev.reason ?? ''),
+          turnId: typeof ev.turnId === 'string' ? ev.turnId : null,
+          firstSeen: prev?.firstSeen ?? now,
+          lastSeen: now,
+          bytesEstimate: prev?.bytesEstimate ?? 0,
+          chunkCount: prev?.chunkCount ?? 0,
+        },
+      }
+      break
+    }
+    case 'flow_ignored': {
+      const flowId = String(ev.flowId ?? '')
+      const prev = flows[flowId]
+      flows = {
+        ...flows,
+        [flowId]: {
+          flowId,
+          attribution: 'ignored',
+          reason: String(ev.reason ?? ''),
+          turnId: typeof ev.turnId === 'string' ? ev.turnId : null,
+          firstSeen: prev?.firstSeen ?? now,
+          lastSeen: now,
+          bytesEstimate: prev?.bytesEstimate ?? 0,
+          chunkCount: prev?.chunkCount ?? 0,
+        },
+      }
+      break
+    }
+    case 'turn_started': {
+      const turnId = String(ev.turnId ?? '')
+      if (!turnId) break
+      if (currentTurn && currentTurn.turnId !== turnId) {
+        history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
+      }
+      currentTurn = {
+        turnId,
+        text: '',
+        source: typeof ev.source === 'string' ? ev.source : null,
+        blocks: {},
+        blockOrder: [],
+        stopReason: null,
+        usage: null,
+        task: emptySemanticTaskSnapshot(),
+        lookups: emptySemanticLookupSnapshot(),
+        startedAt: now,
+        endedAt: null,
+      }
+      break
+    }
+    case 'source_changed': {
+      if (!currentTurn) break
+      currentTurn = {
+        ...currentTurn,
+        source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
+      }
+      break
+    }
+    case 'turn_delta': {
+      const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
+      if (!turnId) break
+      if (!currentTurn || currentTurn.turnId !== turnId) {
+        currentTurn = {
+          turnId,
+          text: '',
+          source: typeof ev.source === 'string' ? ev.source : null,
+          blocks: {},
+          blockOrder: [],
+          stopReason: null,
+          usage: null,
+          task: emptySemanticTaskSnapshot(),
+          lookups: emptySemanticLookupSnapshot(),
+          startedAt: now,
+          endedAt: null,
+        }
+      }
+      currentTurn = {
+        ...currentTurn,
+        text: typeof ev.fullText === 'string' ? ev.fullText : currentTurn.text,
+        source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
+      }
+      break
+    }
+    case 'block_started': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            blockIndex: idx,
+            kind: String(ev.kind ?? 'other'),
+            toolName: typeof ev.toolName === 'string' ? ev.toolName : undefined,
+            toolUseId: typeof ev.toolUseId === 'string' ? ev.toolUseId : undefined,
+            text: '',
+            thinking: '',
+            inputJson: '',
+          },
+        },
+        blockOrder: currentTurn.blockOrder.includes(idx)
+          ? currentTurn.blockOrder
+          : [...currentTurn.blockOrder, idx],
+      }
+      // Task/lookups derivation intentionally skipped here. The
+      // trailing `finalCurrentTurn` computation at the bottom of
+      // this reducer unconditionally re-derives from
+      // `currentTurn.blocks`, so doing it inline would just be dead
+      // work overwritten on the same event. The tool_result branch
+      // DOES need its own inline derive because that branch can
+      // push the turn to history and set currentTurn=null, skipping
+      // the trailing computation.
+      break
+    }
+    case 'text_delta': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      const block = currentTurn.blocks[idx]
+      if (!block) break
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            text:
+              typeof ev.textSoFar === 'string'
+                ? ev.textSoFar
+                : (block.text ?? '') + String(ev.textDelta ?? ''),
+          },
+        },
+      }
+      break
+    }
+    case 'connector_text_delta': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      const block = currentTurn.blocks[idx]
+      if (!block) break
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            text:
+              typeof ev.connectorTextSoFar === 'string'
+                ? ev.connectorTextSoFar
+                : (block.text ?? '') + String(ev.connectorTextDelta ?? ''),
+          },
+        },
+      }
+      break
+    }
+    case 'thinking_delta': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      const block = currentTurn.blocks[idx]
+      if (!block) break
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            thinking:
+              typeof ev.thinkingSoFar === 'string'
+                ? ev.thinkingSoFar
+                : (block.thinking ?? '') + String(ev.thinkingDelta ?? ''),
+          },
+        },
+      }
+      break
+    }
+    case 'citations_delta': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      const block = currentTurn.blocks[idx]
+      if (!block) break
+      const citations = Array.isArray(ev.citationsSoFar)
+        ? [...ev.citationsSoFar]
+        : [...(block.citations ?? []), ev.citationsDelta]
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            citations,
+          },
+        },
+      }
+      break
+    }
+    case 'signature': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      const block = currentTurn.blocks[idx]
+      if (!block) break
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            signature: typeof ev.signature === 'string' ? ev.signature : block.signature,
+          },
+        },
+      }
+      break
+    }
+    case 'tool_input_delta': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      const block = currentTurn.blocks[idx]
+      if (!block) break
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            inputJson:
+              typeof ev.inputJsonSoFar === 'string'
+                ? ev.inputJsonSoFar
+                : (block.inputJson ?? '') + String(ev.partialJson ?? ''),
+            toolName: block.toolName ?? (typeof ev.toolName === 'string' ? ev.toolName : undefined),
+            toolUseId: block.toolUseId ?? (typeof ev.toolUseId === 'string' ? ev.toolUseId : undefined),
+          },
+        },
+      }
+      break
+    }
+    case 'tool_input_finalized': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      const block = currentTurn.blocks[idx]
+      if (!block) break
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            inputJson: typeof ev.inputJson === 'string' ? ev.inputJson : block.inputJson,
+            inputJsonValid: Boolean(ev.parsed),
+            parsedInput:
+              ev.parsed && typeof ev.parsed === 'object'
+                ? ev.parsed as Record<string, unknown>
+                : block.parsedInput,
+            parseError:
+              typeof ev.parseError === 'string' ? ev.parseError : block.parseError,
+            finalized: true,
+          },
+        },
+      }
+      break
+    }
+    case 'block_completed': {
+      if (!currentTurn) break
+      const idx = semanticToIndex(ev.blockIndex)
+      if (idx === null) break
+      const block = currentTurn.blocks[idx]
+      if (!block) break
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            kind: typeof ev.kind === 'string' ? ev.kind : block.kind,
+            text: typeof ev.text === 'string' ? ev.text : block.text,
+            signature: typeof ev.signature === 'string' ? ev.signature : block.signature,
+            toolName: typeof ev.toolName === 'string' ? ev.toolName : block.toolName,
+            toolUseId: typeof ev.toolUseId === 'string' ? ev.toolUseId : block.toolUseId,
+            inputJson: typeof ev.inputJson === 'string' ? ev.inputJson : block.inputJson,
+            inputJsonValid:
+              ev.parsed === undefined ? block.inputJsonValid : Boolean(ev.parsed),
+            parsedInput:
+              ev.parsed && typeof ev.parsed === 'object'
+                ? ev.parsed as Record<string, unknown>
+                : block.parsedInput,
+            parseError:
+              typeof ev.parseError === 'string' ? ev.parseError : block.parseError,
+            finalized: true,
+            citations:
+              ev.raw && typeof ev.raw === 'object' && Array.isArray((ev.raw as { citations?: unknown[] }).citations)
+                ? [...((ev.raw as { citations: unknown[] }).citations)]
+                : block.citations,
+          },
+        },
+      }
+      break
+    }
+    case 'tool_result': {
+      // WHY attach results onto the originating tool block instead of creating a
+      // fresh pseudo-entry here:
+      //
+      // The semantic stream's job is to preserve the model's live structure. A
+      // tool result is not a new assistant block; it is the resolution of a
+      // previous tool_use. Storing it on the tool block keeps the renderer's
+      // pairing logic trivial and avoids inventing extra ordering rules in the
+      // store. If we later build a richer agent/task panel, it can still derive
+      // timeline rows from this normalized shape.
+      if (!currentTurn || typeof ev.toolUseId !== 'string') break
+      if (typeof ev.turnId === 'string' && ev.turnId !== currentTurn.turnId) break
+      const match = Object.entries(currentTurn.blocks).find(([, block]) => block.toolUseId === ev.toolUseId)
+      if (!match) break
+      const idx = Number(match[0])
+      const block = match[1]
+      currentTurn = {
+        ...currentTurn,
+        blocks: {
+          ...currentTurn.blocks,
+          [idx]: {
+            ...block,
+            resultContent: typeof ev.content === 'string' ? ev.content : block.resultContent,
+            resultIsError: ev.isError === true,
+            resultAt: now,
+          },
+        },
+      }
+      {
+        const derived = deriveSemanticTaskSnapshot(currentTurn.blocks)
+        const nextTurn = {
+          ...currentTurn,
+          task: derived.task,
+          lookups: derived.lookups,
+        }
+        if (nextTurn.endedAt != null && !hasPendingSemanticTools(nextTurn)) {
+          history = [
+            ...history,
+            semanticHistoryRow(nextTurn),
+          ].slice(-SEMANTIC_HISTORY_CAP)
+          currentTurn = null
+        } else {
+          currentTurn = nextTurn
+        }
+      }
+      break
+    }
+    case 'usage_updated': {
+      if (!currentTurn) break
+      const usage = ev.usage as Record<string, unknown> | undefined
+      if (!usage) break
+      currentTurn = { ...currentTurn, usage: flattenSemanticUsage(usage) }
+      break
+    }
+    case 'turn_stopped': {
+      if (!currentTurn) break
+      currentTurn = {
+        ...currentTurn,
+        stopReason: typeof ev.stopReason === 'string' ? ev.stopReason : null,
+        endedAt: now,
+      }
+      break
+    }
+    case 'turn_completed': {
+      if (!currentTurn) break
+      const completedTurn = { ...currentTurn, endedAt: currentTurn.endedAt ?? now }
+      if (hasPendingSemanticTools(completedTurn)) {
+        currentTurn = completedTurn
+      } else {
+        history = [
+          ...history,
+          semanticHistoryRow(completedTurn),
+        ].slice(-SEMANTIC_HISTORY_CAP)
+        currentTurn = null
+      }
+      break
+    }
+    case 'api_error':
+    case 'stream_error': {
+      errors = [
+        ...errors,
+        {
+          ts: now,
+          kind: t,
+          message: String(ev.message ?? '(no message)'),
+        },
+      ].slice(-SEMANTIC_ERROR_CAP)
+      break
+    }
+  }
+
+  // WHY the trailing derive is conditional on event type:
+  //   `deriveSemanticTaskSnapshot` is O(n_blocks) and rebuilds
+  //   `toolCallsById` from scratch. At streaming peak we get many
+  //   text_delta / thinking_delta / signature events per second that
+  //   ONLY mutate fields the derivation doesn't read (block.text,
+  //   block.thinking, block.signature). Running the derive on those
+  //   events is pure waste. Events in the allow-list below are the
+  //   only ones that can change what derive sees — block lifecycle,
+  //   tool input (goes into inputJson), finalized parse (TodoWrite
+  //   parsedInput), or completed `turn_completed` where the result
+  //   is pushed to history even if currentTurn survives this tick.
+  //
+  //   block_started and tool_result already derive inline, so for
+  //   them the trailing run is a second computation — intentional
+  //   here, because their inline branch leaves currentTurn with the
+  //   derived values and the trailing run is a cheap no-op pass that
+  //   keeps this block the single place responsible for derived
+  //   fields when currentTurn remains live.
+  const DERIVE_EVENT_TYPES = new Set([
+    'block_started',
+    'tool_input_delta',
+    'tool_input_finalized',
+    'tool_result',
+  ])
+  const finalCurrentTurn = currentTurn
+    ? DERIVE_EVENT_TYPES.has(t)
+      ? (() => {
+          const derived = deriveSemanticTaskSnapshot(currentTurn.blocks)
+          return {
+            ...currentTurn,
+            task: derived.task,
+            lookups: derived.lookups,
+          }
+        })()
+      : currentTurn
+    : null
+
+  return {
+    ...state,
+    flows,
+    currentTurn: finalCurrentTurn,
+    history,
+    errors,
+    log,
+    nextLogId: state.nextLogId + 1,
   }
 }
 
@@ -492,13 +1193,20 @@ type PersistedWorkspace = {
 
 export type Workspace = ReturnType<typeof useWorkspace>
 
-export function useWorkspace(dangerousAgentsEnabled = false) {
+export function useWorkspace(
+  dangerousAgentsEnabled = false,
+  useProxyStreaming = false,
+) {
   // GlobalToast lives one level up in the provider tree (mounted in
   // main.tsx). Reading it here lets close actions surface a brief
   // "Closed — ⌘⇧T (Undo Close)" hint without each caller having to know
   // about the toast system. The hook returns a stable callback so
   // re-renders don't churn close handlers.
   const { showToast } = useGlobalToast()
+  const openBuryPrompt = useAppStore(store => store.openBuryPrompt)
+  const closeBuryPrompt = useAppStore(store => store.closeBuryPrompt)
+  const openNewAgentPlacement = useAppStore(store => store.openNewAgentPlacement)
+  const closeNewAgentPlacement = useAppStore(store => store.closeNewAgentPlacement)
 
   const state = useAppStore(store => store.workspaceState)
   const setState = useAppStore(store => store.setWorkspaceState)
@@ -510,6 +1218,11 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
   stateRef.current = state
   const dangerousAgentsRef = useRef(dangerousAgentsEnabled)
   dangerousAgentsRef.current = dangerousAgentsEnabled
+  // Ref-mirrored so the spawn callbacks below read the live value
+  // without having to subscribe per-call (same pattern as
+  // dangerousAgentsRef above).
+  const useProxyStreamingRef = useRef(useProxyStreaming)
+  useProxyStreamingRef.current = useProxyStreaming
 
   // Per-session runtime state. Keyed by sessionId. NOT part of
   // persistent state — runtime rebuilds from IPC events after respawn.
@@ -987,6 +1700,20 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
       })
     })
 
+    const offSemantic = window.api.onSessionSemanticEvent(({ sessionId, event }) => {
+      const semanticEvent = event as Record<string, unknown>
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            semantic: foldSemanticEvent(current.semantic, semanticEvent),
+          },
+        }
+      })
+    })
+
     const offTrustDialog = window.api.onSessionTrustDialog(({ sessionId, visible, workspace }) => {
       updateRuntime(sessionId, {
         pendingTrustDialog: visible ? { workspace } : null,
@@ -1028,6 +1755,7 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
       offEntry()
       offErr()
       offProcessState()
+      offSemantic()
       offTrustDialog()
       offResumePrompt()
       offCompactionState()
@@ -1062,11 +1790,16 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
       const kind: SessionKind = opts?.kind ?? 'claude'
       const dangerousMode =
         opts?.dangerousMode ?? (kind !== 'terminal' ? dangerousAgentsRef.current : undefined)
+      // Proxy streaming is Claude-only and opt-in per the app
+      // setting. Codex + terminal sessions ignore it — passing the
+      // flag is harmless but we keep it gated on kind for clarity.
+      const useProxy = kind === 'claude' ? useProxyStreamingRef.current : undefined
       const { sessionId, tmuxName } = await window.api.spawnSession({
         kind,
         cwd,
         resumeSessionId: opts?.resumeSessionId,
         dangerousMode,
+        useProxy,
         recoverTmuxName: opts?.recoverTmuxName,
       })
       setState(prev => ({
@@ -1240,6 +1973,7 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
             cwd: meta.cwd,
             resumeSessionId: meta.providerSessionId,
             dangerousMode,
+            useProxy: kind === 'claude' ? useProxyStreamingRef.current : undefined,
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = { ...meta }
@@ -1431,6 +2165,44 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
     [spawn, state.activeTabId, state.sessions, state.tabs],
   )
 
+  const startNewAgentPlacement = useCallback(() => {
+    const tab = state.tabs.find(t => t.id === state.activeTabId)
+    if (!tab) return
+    openNewAgentPlacement()
+  }, [openNewAgentPlacement, state.activeTabId, state.tabs])
+
+  const commitNewAgentPlacement = useCallback(
+    async (kind: SessionKind, target: PlacementTarget) => {
+      const tab = state.tabs.find(t => t.id === state.activeTabId)
+      if (!tab) return
+      const anchorSessionId = tab.focusedSessionId
+      const cwd = state.sessions[anchorSessionId]?.cwd
+      if (!cwd) return
+
+      const newSessionId = await spawn(cwd, { kind })
+      setState(prev => ({
+        ...prev,
+        tabs: prev.tabs.map(currentTab => {
+          if (currentTab.id !== prev.activeTabId) return currentTab
+          return {
+            ...currentTab,
+            root: insertBesideLeaf(
+              currentTab.root,
+              target.targetSessionId,
+              target.direction,
+              RATIO_DEFAULT,
+              target.side,
+              newSessionId,
+            ),
+            focusedSessionId: newSessionId,
+          }
+        }),
+      }))
+      closeNewAgentPlacement()
+    },
+    [closeNewAgentPlacement, setState, spawn, state.activeTabId, state.sessions, state.tabs],
+  )
+
   // ---- Action: close the focused pane ----
   //
   // Removes the leaf from the tree and kills its session. If the tree
@@ -1537,28 +2309,46 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
   // Removes the focused pane from the visible layout without killing
   // the underlying session. The session keeps running in the
   // background and remains eligible for revive.
-  const buryFocused = useCallback(() => {
-    const tab = state.tabs.find(t => t.id === state.activeTabId)
+  const requestBuryFocused = useCallback(() => {
+    const tab = stateRef.current.tabs.find(t => t.id === stateRef.current.activeTabId)
     if (!tab) return
+    openBuryPrompt(tab.focusedSessionId)
+  }, [openBuryPrompt])
 
-    const targetId = tab.focusedSessionId
-    const sessionMeta = state.sessions[targetId]
+  const buryFocused = useCallback((note?: string, targetSessionId?: SessionId) => {
+    // The bury prompt is modal on a specific session, not a specific
+    // tab. It can outlive a tab switch: user opens the prompt on
+    // pane X in tab A, switches to tab B, then hits Enter. Earlier
+    // we resolved `tab` via `state.activeTabId`, which meant that
+    // confirm-after-switch mutated tab B's tree even though targetId
+    // still pointed at pane X in tab A. Resolve the owning tab from
+    // the target session instead.
+    const snapshot = stateRef.current
+    const activeTab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+    const targetId = targetSessionId ?? activeTab?.focusedSessionId
+    if (!targetId) return
+
+    const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
+    if (!owningTab) return
+
+    const sessionMeta = snapshot.sessions[targetId]
     if (!sessionMeta) return
 
-    const parentInfo = findParentSplitInfo(tab.root, targetId)
-    const tabIndex = state.tabs.findIndex(t => t.id === tab.id)
+    const parentInfo = findParentSplitInfo(owningTab.root, targetId)
+    const tabIndex = snapshot.tabs.findIndex(t => t.id === owningTab.id)
     const buriedRecord: BuriedPaneRecord = {
       id: targetId,
       sessionId: targetId,
       sessionMeta,
       buriedAt: Date.now(),
-      sourceTabId: tab.id,
-      sourceTabTitle: tab.title,
+      sourceTabId: owningTab.id,
+      sourceTabTitle: owningTab.title,
       sourceTabIndex: tabIndex,
       direction: parentInfo?.direction,
       ratio: parentInfo?.ratio,
       side: parentInfo?.side,
       siblingLeafId: parentInfo?.siblingLeafId,
+      note: note?.trim() ? note.trim() : undefined,
     }
 
     const kindLabel = sessionMeta.kind ?? 'claude'
@@ -1567,17 +2357,25 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
 
     setState(prev => {
       const tabs = [...prev.tabs]
-      const tabIdx = tabs.findIndex(t => t.id === prev.activeTabId)
+      const tabIdx = tabs.findIndex(t => t.id === owningTab.id)
+      // Tab may have been closed between prompt-open and confirm.
+      // Treat that as a no-op rather than mutating an unrelated tab.
       if (tabIdx === -1) return prev
 
       const currentTab = tabs[tabIdx]
       const nextRoot = closeLeaf(currentTab.root, targetId)
       if (nextRoot === null) {
         const remaining = tabs.filter((_, i) => i !== tabIdx)
+        // Only retarget activeTabId if we just removed the active
+        // tab. Burying a pane in a background tab must not yank the
+        // user out of the tab they're currently looking at.
+        const nextActiveTabId = prev.activeTabId === owningTab.id
+          ? (remaining[Math.max(0, tabIdx - 1)]?.id ?? '')
+          : prev.activeTabId
         return {
           ...prev,
           tabs: remaining,
-          activeTabId: remaining[Math.max(0, tabIdx - 1)]?.id ?? '',
+          activeTabId: nextActiveTabId,
           buried: [
             ...prev.buried.filter(entry => entry.sessionId !== targetId),
             buriedRecord,
@@ -1600,8 +2398,9 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
         ],
       }
     })
-    setSpotlight(prev => (prev?.tabId === tab.id ? null : prev))
-  }, [showToast, state.activeTabId, state.sessions, state.tabs])
+    setSpotlight(prev => (prev?.tabId === owningTab.id ? null : prev))
+    closeBuryPrompt()
+  }, [closeBuryPrompt, showToast])
 
   // ---- Action: revive buried pane ----
   //
@@ -2577,47 +3376,10 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
    *   - File locked by another process (rare) → same as above.
    *   - Spawn itself throws (IPC failure) → caught below and logged;
    *     the pane is simply missing from the rehydrated tree.
-   */
+  */
   const rehydrate = useCallback(async (persisted: PersistedWorkspace) => {
     const idMap = new Map<SessionId, SessionId>()
     const freshSessions: Record<SessionId, SessionMeta> = {}
-
-    // Spawn sessions in the order they appear in persisted.sessions.
-    //
-    // Each session carries its own `kind` (absent = 'claude' for
-    // backwards compatibility with pre-terminal workspace.json
-    // blobs). Terminal sessions don't have a transcript so the
-    // resumeSessionId is silently ignored for them on the main
-    // side — respawning just starts a fresh shell in the same cwd.
-    for (const [oldId, meta] of Object.entries(persisted.sessions)) {
-      try {
-        const kind: SessionKind = meta.kind ?? 'claude'
-        // For terminal sessions with a persisted tmuxName, pass it as
-        // recoverTmuxName so main re-attaches the alive tmux session
-        // (or falls back to fresh spawn if it died). Agents ignore
-        // recoverTmuxName at the main side; safe to omit for them.
-        const { sessionId: newId, tmuxName: nextTmuxName } = await window.api.spawnSession({
-          kind,
-          cwd: meta.cwd,
-          resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
-          dangerousMode: kind !== 'terminal' ? dangerousAgentsRef.current : undefined,
-          recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
-        })
-        idMap.set(oldId, newId)
-        // Carry the full meta forward — kind + providerSessionId +
-        // tmuxName — so the next save cycle doesn't drop these and
-        // cause the session to degrade on the NEXT reload. tmuxName
-        // is replaced with whatever main reported (recovered name
-        // when alive, fresh name when respawned).
-        freshSessions[newId] = {
-          ...meta,
-          ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
-        }
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn(`[workspace] failed to respawn ${meta.cwd}:`, err)
-      }
-    }
 
     const remapNode = (n: TileNode): TileNode => {
       if (n.type === 'leaf') {
@@ -2629,86 +3391,129 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
       return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
     }
 
-    const newTabs: Tab[] = persisted.tabs
-      .map(t => {
-        const remappedRoot = remapNode(t.root)
-        const leaves = collectLeaves(remappedRoot)
-        if (leaves.length === 0) return null
-        const focused = idMap.get(t.focusedSessionId) ?? leaves[0]
-        return {
-          id: t.id,
-          title: t.title,
-          root: remappedRoot,
-          focusedSessionId: focused,
-        } satisfies Tab
-      })
-      .filter((t): t is Tab => t !== null)
+    const buildRemappedTabs = (): Tab[] =>
+      persisted.tabs
+        .map(t => {
+          const remappedRoot = remapNode(t.root)
+          const leaves = collectLeaves(remappedRoot).filter(leaf => freshSessions[leaf] != null)
+          if (leaves.length === 0) return null
+          const focused = idMap.get(t.focusedSessionId) ?? leaves[0]
+          return {
+            id: t.id,
+            title: t.title,
+            root: remappedRoot,
+            focusedSessionId: focused,
+          } satisfies Tab
+        })
+        .filter((t): t is Tab => t !== null)
 
-    if (newTabs.length === 0) {
-      const cwd = await window.api.defaultCwd()
-      await newTab(cwd)
-      return
+    const buildRemappedBuried = (): BuriedPaneRecord[] =>
+      (persisted.buried ?? [])
+        .map(entry => {
+          const mappedSessionId = idMap.get(entry.sessionId)
+          if (!mappedSessionId) return null
+          return {
+            ...entry,
+            id: mappedSessionId,
+            sessionId: mappedSessionId,
+            siblingLeafId: entry.siblingLeafId
+              ? (idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId)
+              : undefined,
+          } satisfies BuriedPaneRecord
+        })
+        .filter((entry): entry is BuriedPaneRecord => entry !== null)
+
+    const commitRehydratedState = () => {
+      const newTabs = buildRemappedTabs()
+      if (newTabs.length === 0) return false
+
+      const activeTabId =
+        newTabs.find(t => t.id === persisted.activeTabId)?.id ?? newTabs[0].id
+
+      setState({
+        tabs: newTabs,
+        activeTabId,
+        sessions: { ...freshSessions },
+        buried: buildRemappedBuried(),
+      })
+      // WHY commit runtimes incrementally during rehydrate:
+      //
+      // Boot used to await every respawn before publishing *any* restored
+      // tabs. One slow / wedged session kept `tabs: []`, so after restart the
+      // user only saw the `+` button even though workspace.json contained a
+      // full layout. We now publish whatever subset has already rehydrated so
+      // the shell surfaces real tabs immediately and fills in the remaining
+      // panes as their sessions come back.
+      //
+      // We still merge with prev because resume-side transcript events can
+      // arrive synchronously inside `session.start()` before spawnSession()
+      // resolves. Replacing the runtime object here would clobber those early
+      // entries and make restored panes open blank.
+      setRuntimes(prev => {
+        const out: Record<SessionId, SessionRuntime> = {}
+        for (const [oldId, newId] of idMap.entries()) {
+          const existing = prev[newId]
+          const base = existing ?? emptyRuntime()
+          const draft = persisted.drafts?.[oldId]
+          out[newId] = {
+            ...base,
+            ...(draft && !base.draftInput ? { draftInput: draft } : {}),
+            hasOlderHistory: Boolean(freshSessions[newId]?.providerSessionId),
+          }
+        }
+        for (const id of Object.keys(freshSessions)) {
+          if (out[id]) continue
+          const existing = prev[id]
+          out[id] = {
+            ...(existing ?? emptyRuntime()),
+            hasOlderHistory: Boolean(freshSessions[id]?.providerSessionId),
+          }
+        }
+        return out
+      })
+      return true
     }
 
-    const activeTabId =
-      newTabs.find(t => t.id === persisted.activeTabId)?.id ?? newTabs[0].id
-
-    const remappedBuried = (persisted.buried ?? [])
-      .map(entry => {
-        const mappedSessionId = idMap.get(entry.sessionId)
-        if (!mappedSessionId) return null
-        return {
-          ...entry,
-          id: mappedSessionId,
-          sessionId: mappedSessionId,
-          siblingLeafId: entry.siblingLeafId
-            ? (idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId)
-            : undefined,
-        } satisfies BuriedPaneRecord
-      })
-      .filter((entry): entry is BuriedPaneRecord => entry !== null)
-
-    setState({
-      tabs: newTabs,
-      activeTabId,
-      sessions: freshSessions,
-      buried: remappedBuried,
-    })
-    // Initialize runtimes, restoring persisted drafts and preserving
-    // whatever entries the IPC subscriber has ALREADY accumulated for
-    // these sessions during the await'd spawnSession loop above.
-    //
-    // Why the merge-with-prev dance matters: headless's bounded-tail
-    // resume emits transcript entries SYNCHRONOUSLY inside
-    // `session.start()`, so by the time `await window.api.spawnSession`
-    // resolves for each persisted session, the onSessionJsonlEntry
-    // subscriber has already called setRuntimes(prev => ...) with the
-    // bootstrap batch. A full-object replacement here would clobber
-    // every one of those entries and the feed would open empty with
-    // "waiting for Codex…" / "waiting for Claude Code…" on every pane
-    // — exactly the bug this comment is guarding against.
-    setRuntimes(prev => {
-      const out: Record<SessionId, SessionRuntime> = {}
-      for (const [oldId, newId] of idMap.entries()) {
-        const existing = prev[newId]
-        const base = existing ?? emptyRuntime()
-        const draft = persisted.drafts?.[oldId]
-        out[newId] = {
-          ...base,
-          ...(draft && !base.draftInput ? { draftInput: draft } : {}),
-          hasOlderHistory: Boolean(freshSessions[newId]?.providerSessionId),
+    // Spawn all sessions concurrently instead of serially. A single slow
+    // respawn must not block the entire tab strip from coming back.
+    await Promise.all(
+      Object.entries(persisted.sessions).map(async ([oldId, meta]) => {
+        try {
+          const kind: SessionKind = meta.kind ?? 'claude'
+          // For terminal sessions with a persisted tmuxName, pass it as
+          // recoverTmuxName so main re-attaches the alive tmux session
+          // (or falls back to fresh spawn if it died). Agents ignore
+          // recoverTmuxName at the main side; safe to omit for them.
+          const { sessionId: newId, tmuxName: nextTmuxName } = await window.api.spawnSession({
+            kind,
+            cwd: meta.cwd,
+            resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
+            dangerousMode: kind !== 'terminal' ? dangerousAgentsRef.current : undefined,
+            useProxy: kind === 'claude' ? useProxyStreamingRef.current : undefined,
+            recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+          })
+          idMap.set(oldId, newId)
+          // Carry the full meta forward — kind + providerSessionId +
+          // tmuxName — so the next save cycle doesn't drop these and
+          // cause the session to degrade on the NEXT reload. tmuxName
+          // is replaced with whatever main reported (recovered name
+          // when alive, fresh name when respawned).
+          freshSessions[newId] = {
+            ...meta,
+            ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
+          }
+          commitRehydratedState()
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(`[workspace] failed to respawn ${meta.cwd}:`, err)
         }
-      }
-      for (const id of Object.keys(freshSessions)) {
-        if (out[id]) continue
-        const existing = prev[id]
-        out[id] = {
-          ...(existing ?? emptyRuntime()),
-          hasOlderHistory: Boolean(freshSessions[id]?.providerSessionId),
-        }
-      }
-      return out
-    })
+      }),
+    )
+
+    if (!commitRehydratedState()) {
+      const cwd = await window.api.defaultCwd()
+      await newTab(cwd)
+    }
   }, [newTab])
 
   // ---- Action: undo close ----
@@ -3005,7 +3810,10 @@ export function useWorkspace(dangerousAgentsEnabled = false) {
     spawn,
     killSession,
     splitFocused,
+    startNewAgentPlacement,
+    commitNewAgentPlacement,
     closeFocused,
+    requestBuryFocused,
     buryFocused,
     reviveBuried,
     focusSession,

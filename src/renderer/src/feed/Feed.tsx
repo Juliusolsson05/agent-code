@@ -39,6 +39,11 @@ import { CodeBlock } from '../code/CodeBlock'
 import { detectGitIntent } from '../../../shared/git/gitDetect'
 import { GitCardRow } from '../git/GitRows'
 import { useAppStore } from '../state/hooks'
+import {
+  parseSemanticTodos,
+  type SemanticLiveTurn,
+  type SemanticTodoItem,
+} from '../tiles/workspaceState'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.
@@ -334,6 +339,7 @@ type Props = {
   hasOlderHistory?: boolean
   loadingOlderHistory?: boolean
   onLoadOlderHistory?: () => Promise<void>
+  semanticTurn?: SemanticLiveTurn | null
 }
 
 // ---------------------------------------------------------------------------
@@ -433,6 +439,7 @@ function FeedImpl({
   hasOlderHistory = false,
   loadingOlderHistory = false,
   onLoadOlderHistory,
+  semanticTurn = null,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
@@ -733,7 +740,9 @@ function FeedImpl({
   const toolUseIndex = useMemo(() => buildToolUseIndex(entries), [entries])
   const toolResultIndex = useMemo(() => buildToolResultIndex(entries), [entries])
 
-  if (visible.length === 0 && !streamingScreen) {
+  const hasSemanticStreaming = semanticTurn !== null
+
+  if (visible.length === 0 && !streamingScreen && !hasSemanticStreaming) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="text-muted text-[12px]">
@@ -785,21 +794,23 @@ function FeedImpl({
               </div>
             )
           })}
-          {streamingScreen != null && (
+          {semanticTurn != null ? (
+            <SemanticStreamingTurn turn={semanticTurn} />
+          ) : streamingScreen != null ? (
             <StreamingRow
               screen={streamingScreen}
               screenMarkdown={streamingScreenMarkdown ?? streamingScreen}
               baseline={streamingBaseline ?? null}
               activityStatus={activityStatus ?? null}
             />
-          )}
+          ) : null}
           {/* Activity indicator: shown when CC is working but the
               streaming row isn't active yet (e.g. the very start of a
               turn before awaitingAssistant flips, or during tool
               execution between JSONL entries). The streaming row
               handles its own "thinking…" state internally, so we only
               render this when the streaming row is absent. */}
-          {streamingScreen == null && activityStatus && (
+          {semanticTurn == null && streamingScreen == null && activityStatus && (
             <ActivityIndicator status={activityStatus} />
           )}
           <div ref={endRef} />
@@ -811,6 +822,549 @@ function FeedImpl({
     </ProviderContext.Provider>
   )
 }
+
+function countFenceMarkers(text: string): number {
+  const matches = text.match(/```/g)
+  return matches ? matches.length : 0
+}
+
+function splitStreamingCodeFence(text: string): {
+  prose: string
+  code: string
+  language: string | null
+} | null {
+  const lastFence = text.lastIndexOf('```')
+  if (lastFence === -1) return null
+  if (countFenceMarkers(text) % 2 === 0) return null
+
+  const openingLine = text.slice(lastFence).split('\n', 1)[0] ?? ''
+  const language = openingLine.slice(3).trim() || null
+  const code = text.slice(lastFence + openingLine.length)
+    .replace(/^\n/, '')
+  return {
+    prose: text.slice(0, lastFence).trimEnd(),
+    code,
+    language,
+  }
+}
+
+type SemanticRenderUnit =
+  | {
+      type: 'block'
+      block: SemanticLiveTurn['blocks'][number]
+      toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
+    }
+  | {
+      type: 'collapsed_activity'
+      count: number
+      searchCount: number
+      readCount: number
+      listCount: number
+      bashCount: number
+      latestHint: string | null
+      blockIndices: number[]
+      isRunning: boolean
+    }
+
+// Bash classifier helpers.
+//
+// WHY anchored to command position, not plain \b:
+//   Earlier version used /\b(ls|tree|du)\b/ — that matched inside
+//   argv, so `pipx install tree-sitter` classified as "list" and
+//   `sudo ls` or `cat foo-tree.txt` matched too. We only want to
+//   fire when the name is the *program being invoked*, i.e. at the
+//   start of the command or at a pipeline/boundary separator
+//   (`;`, `|`, `||`, `&&`), optionally preceded by env-var
+//   assignments (`FOO=bar`) or `sudo`.
+//
+// The regex below captures: (start | separator) (env-var prefix?)
+// (sudo?) (one of the names) (followed by end or whitespace).
+// `git grep` is handled as its own leading-position pattern.
+const COMMAND_START = /(?:^|[;|&]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?:sudo\s+)?/i
+
+function atCommandPosition(command: string, names: readonly string[]): boolean {
+  const alternation = names.map(n => n.replace(/\s+/g, '\\s+')).join('|')
+  const re = new RegExp(`${COMMAND_START.source}(?:${alternation})(?=\\s|$)`, 'i')
+  return re.test(command)
+}
+
+function looksLikeSearchCommand(command: string): boolean {
+  return atCommandPosition(command, ['rg', 'grep', 'find', 'fd', 'ag', 'ack', 'git grep'])
+}
+
+function looksLikeReadCommand(command: string): boolean {
+  return atCommandPosition(command, ['cat', 'less', 'more', 'head', 'tail', 'sed', 'awk', 'wc'])
+}
+
+function looksLikeListCommand(command: string): boolean {
+  return atCommandPosition(command, ['ls', 'tree', 'du'])
+}
+
+function classifySemanticToolActivity(block: SemanticLiveTurn['blocks'][number]): {
+  collapsible: boolean
+  category: 'search' | 'read' | 'list' | 'bash' | null
+  hint: string | null
+} {
+  const toolName = block.toolName ?? ''
+  const parsed = block.parsedInput ?? {}
+  const pathLike =
+    typeof parsed.file_path === 'string'
+      ? parsed.file_path
+      : typeof parsed.path === 'string'
+        ? parsed.path
+        : null
+
+  if (toolName === 'Glob' || toolName === 'Grep') {
+    const pattern =
+      typeof parsed.pattern === 'string'
+        ? parsed.pattern
+        : typeof parsed.glob === 'string'
+          ? parsed.glob
+          : null
+    return {
+      collapsible: true,
+      category: 'search',
+      hint: pattern ? `"${pattern}"` : pathLike,
+    }
+  }
+
+  if (toolName === 'Read' || toolName === 'FileRead') {
+    return {
+      collapsible: true,
+      category: 'read',
+      hint: pathLike,
+    }
+  }
+
+  if (toolName === 'Bash') {
+    const command =
+      typeof parsed.command === 'string'
+        ? parsed.command.trim()
+        : null
+    if (!command) return { collapsible: false, category: null, hint: null }
+    if (looksLikeListCommand(command)) {
+      return { collapsible: true, category: 'list', hint: command }
+    }
+    if (looksLikeSearchCommand(command)) {
+      return { collapsible: true, category: 'search', hint: command }
+    }
+    if (looksLikeReadCommand(command)) {
+      return { collapsible: true, category: 'read', hint: command }
+    }
+    return { collapsible: true, category: 'bash', hint: command }
+  }
+
+  return { collapsible: false, category: null, hint: null }
+}
+
+function buildSemanticRenderUnits(turn: SemanticLiveTurn): SemanticRenderUnit[] {
+  const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
+  const units: SemanticRenderUnit[] = []
+  let pending: Extract<SemanticRenderUnit, { type: 'collapsed_activity' }> | null = null
+
+  const flush = () => {
+    if (!pending) return
+    units.push(pending)
+    pending = null
+  }
+
+  // WHY add a derived render-unit pass before painting semantic blocks:
+  //
+  // Claude Code does not render raw transcript/tool rows directly for noisy
+  // low-signal activity. It groups read/search/tool churn into summary units
+  // first, then the UI renders those summaries. cc-shell is not at full parity
+  // yet, but even this narrow pass moves us away from "one semantic block =
+  // one visual row" and toward the same safer architecture.
+  for (const block of blocks) {
+    const toolState = block.toolUseId
+      ? turn.lookups.toolCallsById[block.toolUseId] ?? null
+      : null
+    const activity = classifySemanticToolActivity(block)
+    const isCollapsibleTool =
+      (block.kind === 'tool_use' ||
+        block.kind === 'server_tool_use' ||
+        block.kind === 'mcp_tool_use') &&
+      activity.collapsible &&
+      activity.category !== null
+
+    if (!isCollapsibleTool) {
+      flush()
+      units.push({ type: 'block', block, toolState })
+      continue
+    }
+
+    if (!pending) {
+      pending = {
+        type: 'collapsed_activity',
+        count: 0,
+        searchCount: 0,
+        readCount: 0,
+        listCount: 0,
+        bashCount: 0,
+        latestHint: null,
+        blockIndices: [],
+        isRunning: false,
+      }
+    }
+
+    pending.count += 1
+    pending.blockIndices.push(block.blockIndex)
+    pending.latestHint = activity.hint ?? pending.latestHint
+    if (toolState?.status === 'in_progress') pending.isRunning = true
+
+    if (activity.category === 'search') pending.searchCount += 1
+    else if (activity.category === 'read') pending.readCount += 1
+    else if (activity.category === 'list') pending.listCount += 1
+    else if (activity.category === 'bash') pending.bashCount += 1
+  }
+
+  flush()
+  return units
+}
+
+const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
+  turn,
+}: {
+  turn: SemanticLiveTurn
+}) {
+  // WHY render the semantic turn block-by-block instead of just dumping
+  // `turn.text` through markdown:
+  //
+  // The proxy stream already tells us where text, thinking, tool_use,
+  // connector_text, and tool results begin and end. If we collapse all of that
+  // back into one markdown blob, we recreate the exact failure mode that made
+  // screen parsing brittle: code fences, todo lists, tool boundaries, and agent
+  // progress all become heuristics again. The whole point of the semantic path
+  // is to stop inferring structure from terminal paint when upstream already
+  // gave us the structure directly.
+  const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
+  const units = buildSemanticRenderUnits(turn)
+  const hasBlocks = blocks.length > 0
+
+  if (!hasBlocks) {
+    return (
+      <MarkerRow marker="⏺">
+        {turn.text ? <StreamingProse text={turn.text} /> : null}
+      </MarkerRow>
+    )
+  }
+
+  return (
+    <>
+      <SemanticTaskSummary turn={turn} />
+      {units.map(unit => (
+        unit.type === 'collapsed_activity' ? (
+          <SemanticCollapsedActivityRow
+            key={`collapsed:${unit.blockIndices.join(',')}`}
+            unit={unit}
+          />
+        ) : (
+          <SemanticLiveBlockRow
+            key={unit.block.blockIndex}
+            block={unit.block}
+            toolState={unit.toolState}
+          />
+        )
+      ))}
+      <SemanticTurnFooter turn={turn} />
+    </>
+  )
+})
+
+const SemanticCollapsedActivityRow = memo(function SemanticCollapsedActivityRow({
+  unit,
+}: {
+  unit: Extract<SemanticRenderUnit, { type: 'collapsed_activity' }>
+}) {
+  const parts: string[] = []
+  if (unit.searchCount > 0) parts.push(`${unit.searchCount} search${unit.searchCount === 1 ? '' : 'es'}`)
+  if (unit.readCount > 0) parts.push(`${unit.readCount} read${unit.readCount === 1 ? '' : 's'}`)
+  if (unit.listCount > 0) parts.push(`${unit.listCount} list${unit.listCount === 1 ? '' : 's'}`)
+  if (unit.bashCount > 0) parts.push(`${unit.bashCount} bash`)
+  const summary = parts.length > 0 ? parts.join(', ') : `${unit.count} tool calls`
+
+  return (
+    <MarkerRow marker={unit.isRunning ? '·' : '⎿'} tone="muted">
+      <div className="flex flex-col gap-1">
+        <div className="text-[12px] uppercase tracking-wider text-muted">
+          {unit.isRunning ? 'working:' : 'worked:'} {summary}
+        </div>
+        {unit.latestHint ? (
+          <div className="font-code text-[12px] leading-[1.5] text-ink-dim break-all">
+            {unit.latestHint}
+          </div>
+        ) : null}
+      </div>
+    </MarkerRow>
+  )
+})
+
+const SemanticTaskSummary = memo(function SemanticTaskSummary({
+  turn,
+}: {
+  turn: SemanticLiveTurn
+}) {
+  const hasTodos = turn.task.totalCount > 0
+  const activeTools = turn.task.activeToolNames
+  const completedTools = turn.lookups.resolvedToolUseIds.length
+  const erroredTools = turn.lookups.erroredToolUseIds.length
+  if (!hasTodos && activeTools.length === 0 && completedTools === 0) return null
+
+  // WHY keep a compact task summary above the raw blocks:
+  //
+  // Upstream Claude renders task/agent progress from dedicated task state, not
+  // by hoping the user can mentally reconstruct it from scattered tool rows.
+  // cc-shell is not at full upstream parity yet, but exposing the derived task
+  // snapshot here gives the feed one stable place to surface "what is the
+  // session working on right now?" without re-parsing markdown or screen text.
+  return (
+    <MarkerRow marker="·" tone="muted">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] uppercase tracking-wider text-muted">
+        {hasTodos ? (
+          <span>
+            todos: {turn.task.doneCount}/{turn.task.totalCount}
+          </span>
+        ) : null}
+        {activeTools.length > 0 ? (
+          <span>
+            active: {activeTools.slice(0, 3).join(', ')}
+            {activeTools.length > 3 ? ` +${activeTools.length - 3}` : ''}
+          </span>
+        ) : null}
+        {completedTools > 0 ? (
+          <span>
+            tools: {completedTools} done
+            {erroredTools > 0 ? `, ${erroredTools} failed` : ''}
+          </span>
+        ) : null}
+      </div>
+    </MarkerRow>
+  )
+})
+
+const SemanticTodoList = memo(function SemanticTodoList({
+  todos,
+}: {
+  todos: SemanticTodoItem[]
+}) {
+  const done = todos.filter(todo => todo.status === 'completed').length
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-baseline justify-between text-[13px] leading-[1.65]">
+        <span className="text-accent font-semibold">TodoWrite</span>
+        <span className="text-muted text-[11px] tabular-nums">
+          {done} / {todos.length} done
+        </span>
+      </div>
+      {todos.length === 0 ? (
+        <div className="text-muted text-[12px] italic">(empty list)</div>
+      ) : (
+        <ul className="flex flex-col gap-0.5 list-none m-0 p-0">
+          {todos.map((todo, index) => {
+            const glyph =
+              todo.status === 'completed'
+                ? '☑'
+                : todo.status === 'in_progress'
+                  ? '◐'
+                  : '☐'
+            const glyphCls =
+              todo.status === 'pending' ? 'text-muted' : 'text-accent'
+            const textCls =
+              todo.status === 'completed'
+                ? 'text-muted line-through'
+                : todo.status === 'in_progress'
+                  ? 'text-ink'
+                  : 'text-ink-dim'
+            const label =
+              todo.status === 'in_progress' && todo.activeForm
+                ? todo.activeForm
+                : todo.content
+            return (
+              <li key={index} className="flex items-start gap-2 text-[13px] leading-[1.55]">
+                <span
+                  className={`${glyphCls} select-none flex-shrink-0 w-4 tabular-nums`}
+                  aria-hidden="true"
+                >
+                  {glyph}
+                </span>
+                <span className={`${textCls} flex-1 min-w-0 break-words`}>
+                  {label}
+                </span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
+  )
+})
+
+const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
+  block,
+  toolState,
+}: {
+  block: SemanticLiveTurn['blocks'][number]
+  toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
+}) {
+  if (block.kind === 'thinking') {
+    return (
+      <MarkerRow marker="⏺" tone="muted">
+        <details className="text-muted text-[12px]" open>
+          <summary className="select-none">thinking</summary>
+          <pre className="mt-1.5 whitespace-pre-wrap break-words text-ink-dim text-[11.5px] leading-relaxed opacity-80">
+            {block.thinking || '(empty)'}
+          </pre>
+        </details>
+      </MarkerRow>
+    )
+  }
+
+  if (
+    block.kind === 'tool_use' ||
+    block.kind === 'server_tool_use' ||
+    block.kind === 'mcp_tool_use'
+  ) {
+    // WHY keep tool results nested under the tool row:
+    //
+    // Claude's transcript wire format splits tool_use and tool_result across
+    // assistant/user turns, but from a reading standpoint they are one unit of
+    // work. Nesting the result here preserves that mental model during live
+    // streaming and avoids another round of "find the matching tool later in the
+    // feed" bookkeeping.
+    const todos =
+      block.toolName === 'TodoWrite'
+        ? parseSemanticTodos(block.parsedInput)
+        : []
+    const hasResult = block.resultAt != null
+    return (
+      <MarkerRow marker="⏺">
+        <div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+            <span className="text-accent font-semibold">
+              {block.toolName ?? block.kind}
+            </span>
+            {toolState ? (
+              <span
+                className={
+                  toolState.status === 'error'
+                    ? 'text-danger text-[11px] uppercase tracking-wider'
+                    : 'text-muted text-[11px] uppercase tracking-wider'
+                }
+              >
+                {toolState.status === 'in_progress'
+                  ? 'running'
+                  : toolState.status === 'error'
+                    ? 'failed'
+                    : 'done'}
+              </span>
+            ) : null}
+          </div>
+          {block.toolName === 'TodoWrite' ? (
+            <SemanticTodoList todos={todos} />
+          ) : (
+            <MarkerRow marker="⎿" tone="muted">
+              <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
+                {block.inputJson || '(waiting for input…)'}
+              </pre>
+            </MarkerRow>
+          )}
+          {block.parseError ? (
+            <MarkerRow marker="⎿" tone="muted">
+              <div className="text-danger text-[12px] leading-[1.55]">
+                invalid tool input: {block.parseError}
+              </div>
+            </MarkerRow>
+          ) : null}
+          {hasResult ? (
+            <MarkerRow marker="⎿" tone="muted">
+              <pre
+                className={`
+                  font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
+                  max-h-[360px] overflow-auto
+                  ${block.resultIsError ? 'text-danger' : 'text-ink-dim'}
+                `}
+              >
+                {block.resultContent || '(empty result)'}
+              </pre>
+            </MarkerRow>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  const text = block.text ?? ''
+  const fence = text ? splitStreamingCodeFence(text) : null
+  if (fence) {
+    return (
+      <MarkerRow marker="⏺">
+        <div className="flex flex-col gap-2">
+          {fence.prose ? <StreamingProse text={fence.prose} /> : null}
+          <CodeBlock
+            code={fence.code}
+            language={fence.language}
+            codeId={`live:${block.blockIndex}:${fence.language ?? 'plain'}`}
+            engine="monaco"
+            allowAutoDetect={!fence.language}
+          />
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  if (block.citations && block.citations.length > 0) {
+    return (
+      <MarkerRow marker="⏺">
+        <div className="flex flex-col gap-2">
+          {text ? <StreamingProse text={text} /> : null}
+          <div className="text-muted text-[11px] uppercase tracking-wider">
+            {block.citations.length} citation{block.citations.length === 1 ? '' : 's'}
+          </div>
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  return (
+    <MarkerRow marker="⏺">
+      <StreamingProse text={text} />
+    </MarkerRow>
+  )
+})
+
+const SemanticTurnFooter = memo(function SemanticTurnFooter({
+  turn,
+}: {
+  turn: SemanticLiveTurn
+}) {
+  const usage = turn.usage
+  const outputTokens =
+    typeof usage?.output_tokens === 'number'
+      ? usage.output_tokens
+      : typeof usage?.['usage.output_tokens'] === 'number'
+        ? usage['usage.output_tokens']
+        : null
+  const inputTokens =
+    typeof usage?.input_tokens === 'number'
+      ? usage.input_tokens
+      : typeof usage?.['usage.input_tokens'] === 'number'
+        ? usage['usage.input_tokens']
+        : null
+  const hasUsage = inputTokens !== null || outputTokens !== null
+  const hasStop = turn.stopReason != null
+
+  if (!hasUsage && !hasStop) return null
+
+  return (
+    <MarkerRow marker="·" tone="muted">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] uppercase tracking-wider text-muted">
+        {hasStop ? <span>stop: {turn.stopReason}</span> : null}
+        {inputTokens !== null ? <span>in: {inputTokens}</span> : null}
+        {outputTokens !== null ? <span>out: {outputTokens}</span> : null}
+      </div>
+    </MarkerRow>
+  )
+})
 
 // ---------------------------------------------------------------------------
 // Lazy entry mounting — the key to rendering fat conversations.
@@ -1551,7 +2105,9 @@ function StreamingRow({
   // the same rows), so a 1:1 index mapping is correct.
   const currentProvider = useContext(ProviderContext)
   const plainExtract = extractAssistantInProgress(screen, currentProvider)
-  const isStale = baseline != null && plainExtract === baseline
+  const isStale =
+    baseline != null &&
+    isStaleStreamingExtract(plainExtract, baseline, currentProvider)
   const show = plainExtract && !isStale
 
   // Map the assistant block to markdown lines. We find where the
@@ -1616,6 +2172,54 @@ function StreamingRow({
       )}
     </MarkerRow>
   )
+}
+
+function normalizeStreamingExtractForCompare(text: string): string {
+  return text
+    .split('\n')
+    .map(line => line.trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function sharedPrefixLength(a: string, b: string): number {
+  const end = Math.min(a.length, b.length)
+  let i = 0
+  while (i < end && a[i] === b[i]) i += 1
+  return i
+}
+
+function isStaleStreamingExtract(
+  extract: string,
+  baseline: string,
+  provider: AgentProvider,
+): boolean {
+  const next = normalizeStreamingExtractForCompare(extract)
+  const prev = normalizeStreamingExtractForCompare(baseline)
+  if (!next || !prev) return false
+  if (next === prev) return true
+
+  // Codex leaves the previous assistant block visible on screen for a
+  // short window after submit, before any new assistant text replaces
+  // it. In long threads the extracted block can shift slightly across
+  // consecutive snapshots (blank-line collapse, a clipped tail/head as
+  // the viewport recenters, etc.), so exact equality is too brittle:
+  // we would briefly re-render the old answer under the new prompt.
+  //
+  // Treat "near-identical prefix + containment" as stale for Codex only.
+  // This keeps Claude's stricter behavior unchanged and only broadens
+  // suppression in the provider where the stale-preview bug actually
+  // happens.
+  if (provider !== 'codex') return false
+
+  const shorter = next.length <= prev.length ? next : prev
+  const longer = next.length <= prev.length ? prev : next
+  if (shorter.length < 24) return false
+  if (!longer.includes(shorter)) return false
+
+  const prefix = sharedPrefixLength(next, prev)
+  return prefix / shorter.length >= 0.9
 }
 
 /* ---------- Activity indicator (standalone, outside streaming row) ---------- */
