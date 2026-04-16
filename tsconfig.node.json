@@ -26,6 +26,7 @@
     "src/core/**/*",
     "src/shared/**/*",
     "src/providers/**/*",
+    "testing/**/*",
     "agent-transcript-parser/src/**/*",
     "claude-code-headless/src/**/*",
     "codex-headless/src/**/*"

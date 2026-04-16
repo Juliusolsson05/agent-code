@@ -23,6 +23,7 @@
     "src/shared/types/**/*",
     "src/shared/parsers/**/*",
     "src/providers/*/parsers/**/*",
-    "src/providers/*/renderer/**/*"
+    "src/providers/*/renderer/**/*",
+    "testing/**/*"
   ]
 }
