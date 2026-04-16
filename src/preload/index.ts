@@ -243,6 +243,14 @@ const api = {
   ): Promise<SessionInfo[]> =>
     ipcRenderer.invoke('session:list-for-cwd', cwd, limit, provider),
 
+  /** Global session listing for the rendering-debug harness. Returns
+   *  every known Claude + Codex session tagged with provider, sorted
+   *  by lastModified desc. */
+  listAllSessions: (
+    limit?: number,
+  ): Promise<Array<SessionInfo & { provider: 'claude' | 'codex' }>> =>
+    ipcRenderer.invoke('session:list-all', limit),
+
   loadOlderHistory: (params: {
     kind: 'claude' | 'codex'
     cwd: string

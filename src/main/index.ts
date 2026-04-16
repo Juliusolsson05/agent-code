@@ -11,6 +11,8 @@ import { TmuxRegistry } from './tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from './tmux/tmuxRecovery.js'
 import { getMainProvider } from '../providers/registry.main.js'
 import { switchProvider } from './providerSwitch/switchProvider.js'
+import { listAllClaudeSessions } from '../providers/claude/runtime/sessionList.js'
+import { listCodexSessions } from '../providers/codex/runtime/sessionList.js'
 
 // Main process — thin Electron host over SessionManager.
 //
@@ -399,6 +401,36 @@ function registerIpc(): void {
         // Don't let a listing error brick the modal — return empty.
         // eslint-disable-next-line no-console
         console.warn('[session:list-for-cwd] failed:', err)
+        return []
+      }
+    },
+  )
+
+  // --- Global session listing (used by the rendering-debug harness) ---
+  //
+  // Returns every known Claude + Codex session across all project
+  // dirs, newest first, tagged with provider. The main app routes
+  // through `session:list-for-cwd` because it filters by the focused
+  // pane's cwd; the harness needs a global list because it has no
+  // notion of "current cwd".
+  ipcMain.handle(
+    'session:list-all',
+    async (_evt, limit?: number) => {
+      const cap = typeof limit === 'number' && limit > 0 ? limit : 200
+      try {
+        const [claude, codex] = await Promise.all([
+          listAllClaudeSessions({ limit: cap }).catch(() => []),
+          listCodexSessions({ limit: cap }).catch(() => []),
+        ])
+        const tagged = [
+          ...claude.map(s => ({ ...s, provider: 'claude' as const })),
+          ...codex.map(s => ({ ...s, provider: 'codex' as const })),
+        ]
+        tagged.sort((a, b) => b.lastModified - a.lastModified)
+        return tagged.slice(0, cap)
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[session:list-all] failed:', err)
         return []
       }
     },

@@ -1,7 +1,7 @@
 import { readdir, stat, open } from 'fs/promises'
 import { basename, join } from 'path'
 
-import { getProjectDirForCwd } from '../../../shared/runtime/projectDir.js'
+import { getProjectDirForCwd, getProjectsDir } from '../../../shared/runtime/projectDir.js'
 
 // Session lister — reimplements the minimal subset of CC's
 // utils/listSessionsImpl.ts needed to power the cc-shell resume UI.
@@ -242,6 +242,70 @@ export async function listSessionsForCwd(
   )
 
   // Sort newest first so we can early-exit once we've filled `limit`.
+  candidates.sort((a, b) => b.mtime - a.mtime)
+
+  const sessions: SessionInfo[] = []
+  for (const c of candidates) {
+    if (sessions.length >= limit) break
+    const info = await parseSession(c)
+    if (info) sessions.push(info)
+  }
+  return sessions
+}
+
+/**
+ * List every Claude session across every project directory cc-shell
+ * has ever recorded. Intended for the rendering-debug harness where
+ * we want to pick any past session regardless of cwd. Walks
+ * `~/.claude/projects/*` once, stats every `*.jsonl`, sorts by
+ * mtime desc, parses the first `limit` of them.
+ */
+export async function listAllClaudeSessions(
+  options: ListSessionsOptions = {},
+): Promise<SessionInfo[]> {
+  const limit = options.limit ?? 200
+  const projectsDir = getProjectsDir()
+
+  let projectNames: string[]
+  try {
+    projectNames = await readdir(projectsDir)
+  } catch {
+    return []
+  }
+
+  type Candidate = { sessionId: string; filePath: string; mtime: number }
+  const candidates: Candidate[] = []
+
+  await Promise.all(
+    projectNames.map(async projectName => {
+      const projectDir = join(projectsDir, projectName)
+      let entries: string[]
+      try {
+        entries = await readdir(projectDir)
+      } catch {
+        return
+      }
+      await Promise.all(
+        entries.map(async name => {
+          if (!name.endsWith('.jsonl')) return
+          const sessionId = name.slice(0, -'.jsonl'.length)
+          if (!UUID_RE.test(sessionId)) return
+          const filePath = join(projectDir, name)
+          try {
+            const s = await stat(filePath)
+            candidates.push({
+              sessionId,
+              filePath,
+              mtime: s.mtime.getTime(),
+            })
+          } catch {
+            // file vanished — ignore
+          }
+        }),
+      )
+    }),
+  )
+
   candidates.sort((a, b) => b.mtime - a.mtime)
 
   const sessions: SessionInfo[] = []

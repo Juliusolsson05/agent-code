@@ -23,6 +23,8 @@ export default defineConfig({
     build: {
       outDir: resolve(__dirname, 'out/main'),
       rollupOptions: {
+        // Dedicated harness main — no tmux, no workspace, no LSP, no
+        // switch-provider. See testing/rendering/main.ts for the WHY.
         input: resolve(__dirname, 'main.ts'),
       },
     },
@@ -33,7 +35,7 @@ export default defineConfig({
     build: {
       outDir: resolve(__dirname, 'out/preload'),
       rollupOptions: {
-        input: resolve(__dirname, 'preload.ts'),
+        input: resolve(repoRoot, 'src/preload/index.ts'),
       },
     },
   },

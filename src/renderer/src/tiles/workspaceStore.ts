@@ -466,7 +466,7 @@ function summarizeSemanticEvent(ev: Record<string, unknown>): string {
   }
 }
 
-function foldSemanticEvent(
+export function foldSemanticEvent(
   state: SemanticRuntimeState,
   ev: Record<string, unknown>,
 ): SemanticRuntimeState {
@@ -1139,7 +1139,7 @@ function codexCompactSummaryEntry(
   }
 }
 
-function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
+export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   const uuid =
     `${String(entry.timestamp ?? Date.now())}:${String((entry.payload as Record<string, unknown> | undefined)?.id ?? (entry.payload as Record<string, unknown> | undefined)?.call_id ?? (entry.payload as Record<string, unknown> | undefined)?.type ?? entry.type)}`
   const timestamp =
@@ -1336,7 +1336,7 @@ function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   return []
 }
 
-function codexHistoryMarker(entry: Record<string, unknown>): string {
+export function codexHistoryMarker(entry: Record<string, unknown>): string {
   const payload = entry.payload as Record<string, unknown> | undefined
   return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
 }
@@ -1372,13 +1372,13 @@ function indexEntryIntoMaps(
   }
 }
 
-function claudeHistoryMarker(entry: Record<string, unknown>): string | null {
+export function claudeHistoryMarker(entry: Record<string, unknown>): string | null {
   const embedded = extractEmbeddedClaudeProgressEntry(entry)
   if (embedded?.uuid) return embedded.uuid
   return typeof entry.uuid === 'string' ? entry.uuid : null
 }
 
-function extractEmbeddedClaudeProgressEntry(
+export function extractEmbeddedClaudeProgressEntry(
   entry: Record<string, unknown>,
 ): ConversationEntry | null {
   if (entry.type !== 'progress') return null
