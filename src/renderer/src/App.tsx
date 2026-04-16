@@ -10,6 +10,7 @@ import { TileTabsModal } from './features/tile-tabs/ui/TileTabsModal'
 import { TileTabsView } from './features/tile-tabs/ui/TileTabsView'
 import { BuryPanePrompt } from './features/workspace/ui/BuryPanePrompt'
 import { NewAgentPlacementOverlay } from './features/workspace/ui/NewAgentPlacementOverlay'
+import { ViewPromptsModal } from './features/workspace/ui/ViewPromptsModal'
 import { GitBar } from './GitBar'
 import { AppearanceMenu } from './feed/AppearanceMenu'
 import { PathPickerModal } from './tiles/PathPickerModal'
@@ -45,6 +46,7 @@ export default function App() {
   const tileTabsInitialSelectedIds = useAppStore(state => state.tileTabsInitialSelectedIds)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
+  const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
@@ -62,6 +64,8 @@ export default function App() {
   const openSettingsPage = useAppStore(state => state.openSettingsPage)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
+  const openViewPrompts = useAppStore(state => state.openViewPrompts)
+  const closeViewPrompts = useAppStore(state => state.closeViewPrompts)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
@@ -246,6 +250,7 @@ export default function App() {
         toggleProxyDebugPanel={toggleProxyDebugPanel}
         onTileTabsRequest={onTileTabsRequest}
         onSettingsRequest={openSettingsPage}
+        openViewPrompts={openViewPrompts}
         toggleCustomRendering={toggleCustomRendering}
         customRenderingEnabled={settings.customRendering}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
@@ -284,6 +289,13 @@ export default function App() {
           if (!buryPromptSessionId) return
           workspace.buryFocused(note, buryPromptSessionId)
         }}
+      />
+
+      <ViewPromptsModal
+        open={viewPromptsSessionId !== null}
+        sessionId={viewPromptsSessionId}
+        workspace={workspace}
+        onClose={closeViewPrompts}
       />
 
     </div>

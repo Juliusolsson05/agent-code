@@ -8,6 +8,7 @@ export type UiShellState = {
   tileTabsInitialSelectedIds: TabId[]
   settingsPageOpen: boolean
   buryPromptSessionId: SessionId | null
+  viewPromptsSessionId: SessionId | null
   newAgentPlacementOpen: boolean
   gitBarOpen: boolean
   debugPanelOpen: boolean

@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
-import {
-  isCompactSummaryEntry,
-  isConversationEntry,
-} from '../../../shared/types/transcript'
 import { CodexApprovalModal } from '../../../providers/codex/renderer/CodexApprovalModal'
 import { ResumePromptModal } from '../../../providers/claude/renderer/ResumePromptModal'
 import { Feed } from '../feed/Feed'
 import type { ScrollInfo } from '../feed/Feed'
 import { TrustDialogModal } from '../../../providers/claude/renderer/TrustDialogModal'
 import { SlashCommandPicker } from '../../../providers/claude/renderer/SlashCommandPicker'
+import { extractLatestUserPrompts } from '../features/workspace/lib/latestUserPrompts'
 import type { SessionRuntime, Workspace } from './workspaceStore'
 import type { SessionId, SessionKind } from './types'
 import type { ClaudeDraftImage } from './workspaceState'
@@ -279,58 +276,7 @@ export function TileLeaf({
   // entries reference so normal re-renders don't rebuild the list.
   const sessionKind = workspace.state.sessions[sessionId]?.kind
   const history = useMemo(() => {
-    const out: string[] = []
-    for (const entry of runtime.entries) {
-      if (!isConversationEntry(entry)) continue
-      if (entry.message.role !== 'user') continue
-      if (isCompactSummaryEntry(entry)) continue
-
-      // Per-provider synthetic-entry filter.
-      //
-      // Claude path — uses `permissionMode` as the positive signal
-      // because CC's user-role slot is shared with isMeta hints,
-      // error responses, and local-command markers. See the long
-      // comment above for the full survey.
-      //
-      // Codex path — `permissionMode` is a CC-only field, so the
-      // Claude filter would (and previously did) reject every Codex
-      // prompt and leave Up doing nothing. Codex's user-role slot
-      // is well-behaved: real prompts arrive as a normalized
-      // `{type:'text'}` content block via `response_item` mapping
-      // (workspaceStore.ts:442), while tool results are a
-      // `{type:'tool_result'}` block. Selecting on "has at least one
-      // text block" naturally accepts the former and rejects the
-      // latter without needing a Codex-specific positive flag.
-      const meta = entry as unknown as {
-        permissionMode?: string
-        isMeta?: boolean
-      }
-      if (meta.isMeta === true) continue
-      if (sessionKind !== 'codex' && meta.permissionMode === undefined) continue
-
-      const content = entry.message.content
-      let text = ''
-      if (typeof content === 'string') {
-        text = content
-      } else if (Array.isArray(content)) {
-        const firstText = content.find(
-          (b): b is { type: 'text'; text: string } =>
-            (b as { type?: string }).type === 'text' &&
-            typeof (b as { text?: unknown }).text === 'string',
-        )
-        if (firstText) text = firstText.text
-      }
-      text = text.trim()
-      if (!text) continue
-      // Tertiary defense: tag-shaped payloads are always synthetic.
-      if (text.startsWith('<')) continue
-      // Collapse adjacent duplicates.
-      if (out.length > 0 && out[out.length - 1] === text) continue
-      out.push(text)
-    }
-    // Reverse so index 0 is the newest prompt — Up steps backward in
-    // time starting from the most recent one.
-    return out.reverse()
+    return extractLatestUserPrompts(runtime.entries, sessionKind).map(prompt => prompt.text)
   }, [runtime.entries, sessionKind])
 
   // Helper: are we currently in history-cycling mode? Multiple key

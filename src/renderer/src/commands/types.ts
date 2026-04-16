@@ -7,6 +7,7 @@ export type CommandContext = {
     openResumePicker: (defaultCwd: string) => void
     openTileTabs: () => void
     openSettings: () => void
+    openViewPrompts: (sessionId: string) => void
     toggleGitBar: () => void
     toggleDebugPanel: () => void
     toggleProxyDebugPanel: () => void

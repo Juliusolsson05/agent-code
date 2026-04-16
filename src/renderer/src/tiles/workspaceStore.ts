@@ -1070,6 +1070,75 @@ function foldSemanticEvent(
   }
 }
 
+function codexConversationEntryFromMessageItem(
+  uuid: string,
+  timestamp: string | undefined,
+  payload: Record<string, unknown>,
+): Entry | null {
+  if (
+    payload.type !== 'message' ||
+    (payload.role !== 'user' && payload.role !== 'assistant')
+  ) {
+    return null
+  }
+
+  const role = payload.role
+  const content = Array.isArray(payload.content)
+    ? payload.content
+        .map(block => {
+          const item = block as Record<string, unknown>
+          const text = typeof item.text === 'string' ? item.text : null
+          if (!text) return null
+          if (item.type === 'input_text' || item.type === 'output_text') {
+            return { type: 'text' as const, text }
+          }
+          return null
+        })
+        .filter((block): block is { type: 'text'; text: string } => block !== null)
+    : []
+
+  if (content.length === 0) return null
+  return {
+    type: role,
+    uuid,
+    parentUuid: null,
+    timestamp,
+    message: { role, content },
+  }
+}
+
+function codexCompactBoundaryEntry(
+  uuid: string,
+  payload: Record<string, unknown>,
+): Entry {
+  return {
+    type: 'system',
+    subtype: 'compact_boundary',
+    content: 'Conversation compacted',
+    uuid,
+    compactMetadata: payload,
+  }
+}
+
+function codexCompactSummaryEntry(
+  uuid: string,
+  timestamp: string | undefined,
+  text: string,
+): Entry {
+  return {
+    type: 'user',
+    uuid,
+    parentUuid: null,
+    timestamp,
+    isCompactSummary: true,
+    isVisibleInTranscriptOnly: true,
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text }],
+    },
+  }
+}
+
 function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   const uuid =
     `${String(entry.timestamp ?? Date.now())}:${String((entry.payload as Record<string, unknown> | undefined)?.id ?? (entry.payload as Record<string, unknown> | undefined)?.call_id ?? (entry.payload as Record<string, unknown> | undefined)?.type ?? entry.type)}`
@@ -1080,6 +1149,24 @@ function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   if (!payload || typeof payload.type !== 'string') return []
 
   if (entry.type === 'event_msg') {
+    const atp = entry._atp as { origin?: string; source?: Record<string, unknown> } | undefined
+    if (
+      payload.type === 'user_message' &&
+      atp?.origin === 'claude' &&
+      atp.source?.isCompactSummary === true
+    ) {
+      const sourceMessage = atp.source.message as { content?: unknown } | undefined
+      const sourceText =
+        typeof sourceMessage?.content === 'string'
+          ? sourceMessage.content
+          : typeof payload.message === 'string'
+            ? payload.message
+            : ''
+      return sourceText
+        ? [codexCompactSummaryEntry(`${uuid}:compact-summary`, timestamp, sourceText)]
+        : []
+    }
+
     if (payload.type === 'exec_approval_request') {
       const command = Array.isArray(payload.command)
         ? payload.command.filter((part): part is string => typeof part === 'string')
@@ -1155,38 +1242,36 @@ function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
     return []
   }
 
+  if (entry.type === 'compacted') {
+    const out: Entry[] = [
+      codexCompactBoundaryEntry(`${uuid}:compact-boundary`, payload),
+    ]
+
+    const message = typeof payload.message === 'string' ? payload.message.trim() : ''
+    if (message) {
+      out.push(codexCompactSummaryEntry(`${uuid}:compact-summary`, timestamp, message))
+    }
+
+    const replacementHistory = Array.isArray(payload.replacement_history)
+      ? payload.replacement_history
+      : []
+    for (let i = 0; i < replacementHistory.length; i += 1) {
+      const item = replacementHistory[i] as Record<string, unknown>
+      const mapped = codexConversationEntryFromMessageItem(
+        `${uuid}:replacement:${i}`,
+        timestamp,
+        item,
+      )
+      if (mapped) out.push(mapped)
+    }
+
+    return out
+  }
+
   if (entry.type !== 'response_item') return []
 
-  if (
-    payload.type === 'message' &&
-    (payload.role === 'user' || payload.role === 'assistant')
-  ) {
-    const role = payload.role
-    const content = Array.isArray(payload.content)
-      ? payload.content
-          .map(block => {
-            const item = block as Record<string, unknown>
-            const text = typeof item.text === 'string' ? item.text : null
-            if (!text) return null
-            if (item.type === 'input_text' || item.type === 'output_text') {
-              return { type: 'text' as const, text }
-            }
-            return null
-          })
-          .filter((block): block is { type: 'text'; text: string } => block !== null)
-      : []
-
-    if (content.length === 0) return []
-    return [
-      {
-        type: role,
-        uuid,
-        parentUuid: null,
-        timestamp,
-        message: { role, content },
-      },
-    ]
-  }
+  const conversationEntry = codexConversationEntryFromMessageItem(uuid, timestamp, payload)
+  if (conversationEntry) return [conversationEntry]
 
   if (
     payload.type === 'custom_tool_call' &&

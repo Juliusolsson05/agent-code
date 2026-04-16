@@ -15,6 +15,7 @@ export const createUiShellSlice: StateCreator<
   tileTabsInitialSelectedIds: [],
   settingsPageOpen: false,
   buryPromptSessionId: null,
+  viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
   gitBarOpen: false,
   debugPanelOpen: false,
@@ -54,6 +55,11 @@ export const createUiShellSlice: StateCreator<
     set({ buryPromptSessionId: sessionId }, false, 'uiShell/openBuryPrompt'),
   closeBuryPrompt: () =>
     set({ buryPromptSessionId: null }, false, 'uiShell/closeBuryPrompt'),
+
+  openViewPrompts: sessionId =>
+    set({ viewPromptsSessionId: sessionId }, false, 'uiShell/openViewPrompts'),
+  closeViewPrompts: () =>
+    set({ viewPromptsSessionId: null }, false, 'uiShell/closeViewPrompts'),
 
   openNewAgentPlacement: () =>
     set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),

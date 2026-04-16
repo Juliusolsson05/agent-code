@@ -2,6 +2,23 @@ import type { CommandDef } from '../../../commands/types'
 
 export const sessionCommands: CommandDef[] = [
   {
+    id: 'view-prompts',
+    title: 'View Prompts',
+    keywords: ['prompts', 'history', 'user', 'modal', 'session', 'context'],
+    when: ({ workspace }) => {
+      const tab = workspace.activeTab
+      if (!tab) return false
+      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: ({ workspace, ui }) => {
+      const tab = workspace.activeTab
+      if (!tab) return
+      ui.openViewPrompts(tab.focusedSessionId)
+    },
+  },
+  {
     id: 'reload-agent',
     title: ({ workspace }) => {
       const tab = workspace.activeTab

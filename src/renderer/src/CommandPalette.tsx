@@ -39,6 +39,7 @@ type Props = {
   onResumeRequest: (defaultCwd: string) => void
   onTileTabsRequest: () => void
   onSettingsRequest: () => void
+  openViewPrompts: (sessionId: string) => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
   toggleProxyDebugPanel: () => void
@@ -66,6 +67,7 @@ export function CommandPalette({
   onResumeRequest,
   onTileTabsRequest,
   onSettingsRequest,
+  openViewPrompts,
   toggleGitBar,
   toggleDebugPanel,
   toggleProxyDebugPanel,
@@ -140,6 +142,7 @@ export function CommandPalette({
         openResumePicker: onResumeRequest,
         openTileTabs: onTileTabsRequest,
         openSettings: onSettingsRequest,
+        openViewPrompts,
         toggleGitBar,
         toggleDebugPanel,
         toggleProxyDebugPanel,
@@ -160,6 +163,7 @@ export function CommandPalette({
       onResumeRequest,
       onTileTabsRequest,
       onSettingsRequest,
+      openViewPrompts,
       toggleGitBar,
       toggleDebugPanel,
       toggleProxyDebugPanel,
