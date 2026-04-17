@@ -66,7 +66,23 @@ function FileToolHeader({
     <div className="text-[13px] leading-[1.65] flex items-baseline min-w-0" title={filePath || undefined}>
       <span className="text-accent font-semibold flex-shrink-0">{name}</span>
       {display && (
-        <span className="text-ink-dim ml-2 font-code text-[12px] truncate min-w-0">
+        // Left-side truncation so the filename stays visible when the
+        // pane is narrow. `text-overflow: ellipsis` only drops from the
+        // end of the text in the *writing direction*, so we flip the
+        // container to RTL and re-align to the left: overflow now
+        // collapses the leading `src/renderer/src/...` portion while
+        // the trailing `Feed.tsx` — the part the user actually wants
+        // to see — always remains on-screen.
+        //
+        // Caveat: RTL direction can reorder neutral characters (e.g.
+        // `/`, `.`) at the very start or end of the string. File
+        // paths are strong-LTR runs of ASCII letters with neutrals
+        // only between them, so in practice they render correctly
+        // without extra bidi isolates.
+        <span
+          className="text-ink-dim ml-2 font-code text-[12px] truncate min-w-0"
+          style={{ direction: 'rtl', textAlign: 'left' }}
+        >
           {display}
         </span>
       )}
@@ -128,38 +144,52 @@ function DiffSlab({
   )
   return (
     <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
-      {lines.map((l, i) => {
-        const bg =
-          l.kind === '+'
-            ? 'bg-diff-add-bg'
-            : l.kind === '-'
-              ? 'bg-diff-remove-bg'
-              : ''
-        const fg =
-          l.kind === '+'
-            ? 'text-diff-add-fg'
-            : l.kind === '-'
-              ? 'text-diff-remove-fg'
-              : 'text-code-ink-dim'
-        const bodyTone = l.kind === 'ctx' ? 'text-code-ink-dim' : 'text-code-ink'
-        return (
-          <div
-            key={i}
-            className={`${bg} flex items-start px-3 whitespace-pre`}
-          >
-            <span
-              className={`${fg} select-none w-4 flex-shrink-0 tabular-nums`}
-              aria-hidden="true"
+      {/* Sizer wrapper — makes the block containing the lines as wide
+          as the widest line (`w-max`) AND at least as wide as the
+          viewport (`min-w-full`). Without this, each line div is
+          block-level inside an overflow-x-auto parent, so its width
+          collapses to the parent's *content-box* width (= the visible
+          pane). When the user scrolled horizontally past the viewport,
+          the `bg-diff-add-bg` / `bg-diff-remove-bg` paint stopped at
+          the line div's right edge — the tint disappeared beyond the
+          viewport even though the text continued. The sizer now forces
+          every line div to stretch across the full scrollable width,
+          so the +/- tint covers the whole line no matter how far right
+          you scroll. */}
+      <div className="w-max min-w-full">
+        {lines.map((l, i) => {
+          const bg =
+            l.kind === '+'
+              ? 'bg-diff-add-bg'
+              : l.kind === '-'
+                ? 'bg-diff-remove-bg'
+                : ''
+          const fg =
+            l.kind === '+'
+              ? 'text-diff-add-fg'
+              : l.kind === '-'
+                ? 'text-diff-remove-fg'
+                : 'text-code-ink-dim'
+          const bodyTone = l.kind === 'ctx' ? 'text-code-ink-dim' : 'text-code-ink'
+          return (
+            <div
+              key={i}
+              className={`${bg} flex items-start px-3 whitespace-pre`}
             >
-              {l.kind === 'ctx' ? ' ' : l.kind}
-            </span>
-            <span
-              className={`${bodyTone} diff-line-code hljs flex-1 min-w-0 break-all`}
-              dangerouslySetInnerHTML={{ __html: renderedLines[i] ?? '\u200b' }}
-            />
-          </div>
-        )
-      })}
+              <span
+                className={`${fg} select-none w-4 flex-shrink-0 tabular-nums`}
+                aria-hidden="true"
+              >
+                {l.kind === 'ctx' ? ' ' : l.kind}
+              </span>
+              <span
+                className={`${bodyTone} diff-line-code hljs flex-1 min-w-0 break-all`}
+                dangerouslySetInnerHTML={{ __html: renderedLines[i] ?? '\u200b' }}
+              />
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
