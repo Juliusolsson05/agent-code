@@ -14,6 +14,7 @@ import hljs from 'highlight.js'
 
 import { normalizeCodeLanguage } from '../../../../shared/code/language'
 import { diffLines, type DiffLine } from '../../../../shared/parsers/lineDiff'
+import { formatToolFilePath } from '../../../../shared/paths/displayPath'
 import type { ToolUseBlock } from '../../../../shared/types/transcript'
 import { CodeBlock } from '../../../../renderer/src/code/CodeBlock'
 import { CodeRenderContext, MarkerRow } from '../../../../renderer/src/feed/Feed'
@@ -35,14 +36,21 @@ function editInput(
   }
 }
 
-/** Short filename extracted from an absolute path. */
-function basenameOf(path: string): string {
-  if (!path) return ''
-  const parts = path.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? path
-}
-
-/** Header row for file-tool blocks: "⏺ Edit  <filename>" */
+/** Header row for file-tool blocks: "⏺ Edit  <path>"
+ *
+ * WHY we show a workspace-relative path instead of the basename:
+ * agents hand us absolute paths, and a repo can easily have a dozen
+ * files called `index.tsx`; the basename alone is ambiguous. We pull
+ * `workspaceRoot` from CodeRenderContext (= the session cwd) and
+ * render the path relative to it. Paths outside the workspace stay
+ * absolute so the user notices edits to tempfiles, dotfiles, or
+ * files in another project. See shared/paths/displayPath.ts for the
+ * formatting rule.
+ *
+ * The `title` attribute still carries the raw filePath so hover
+ * always reveals the unambiguous absolute location regardless of
+ * which form we render.
+ */
 function FileToolHeader({
   name,
   filePath,
@@ -52,14 +60,17 @@ function FileToolHeader({
   filePath: string
   extra?: string
 }) {
-  const short = basenameOf(filePath)
+  const { workspaceRoot } = useContext(CodeRenderContext)
+  const display = formatToolFilePath(filePath, workspaceRoot)
   return (
-    <div className="text-[13px] leading-[1.65]" title={filePath || undefined}>
-      <span className="text-accent font-semibold">{name}</span>
-      {short && (
-        <span className="text-ink-dim ml-2 font-code text-[12px]">{short}</span>
+    <div className="text-[13px] leading-[1.65] flex items-baseline min-w-0" title={filePath || undefined}>
+      <span className="text-accent font-semibold flex-shrink-0">{name}</span>
+      {display && (
+        <span className="text-ink-dim ml-2 font-code text-[12px] truncate min-w-0">
+          {display}
+        </span>
       )}
-      {extra && <span className="text-muted ml-2 text-[11px]">{extra}</span>}
+      {extra && <span className="text-muted ml-2 text-[11px] flex-shrink-0">{extra}</span>}
     </div>
   )
 }

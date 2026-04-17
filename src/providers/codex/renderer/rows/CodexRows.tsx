@@ -2,6 +2,7 @@ import { memo, useContext } from 'react'
 
 import { CodeBlock } from '../../../../renderer/src/code/CodeBlock'
 import { CodeRenderContext, MarkerRow } from '../../../../renderer/src/feed/Feed'
+import { formatToolFilePath } from '../../../../shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '../../../../shared/types/transcript'
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -161,8 +162,14 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
               const diff = typeof rec?.unified_diff === 'string' ? rec.unified_diff : ''
               return (
                 <div key={filePath} className="flex flex-col gap-1">
-                  <div className="text-[12px] text-ink-dim font-code break-all">
-                    {filePath}
+                  <div
+                    className="text-[12px] text-ink-dim font-code break-all"
+                    // Raw absolute path stays in the tooltip so hover
+                    // always reveals the unambiguous location, even
+                    // when the body shows the workspace-relative form.
+                    title={filePath}
+                  >
+                    {formatToolFilePath(filePath, codeContext.workspaceRoot)}
                   </div>
                   {diff ? (
                     <CodeBlock
