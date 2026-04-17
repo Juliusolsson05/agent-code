@@ -207,8 +207,21 @@ function MarkdownCode({
     return <code>{children}</code>
   }
 
-  // Fenced/indented code block → full CodeBlock with highlighting.
-  // allowAutoDetect for unlabeled blocks restores the old
+  // Fenced/indented code block inside prose → static highlight.js.
+  // NOT Monaco — Monaco is heavyweight (async loader, canvas
+  // renderer, explicit layout) and a single assistant turn often
+  // contains several fenced blocks. When many Monaco editors mount
+  // into narrow flex cells before the parent layout has resolved,
+  // they initialise at width=0, paint nothing, and `automaticLayout`
+  // does not always recover on the follow-up resize — the block
+  // ends up as the dark `--theme-code-bg` background with no
+  // visible text (the "black block" bug). Monaco stays reserved for
+  // surfaces where an editor actually pays off: Read / Grep tool
+  // results, where LSP and scrollable syntax highlighting matter.
+  // Prose blocks are "here's a shell command"; static is the right
+  // fit.
+  //
+  // `allowAutoDetect` on unlabeled fences restores the old
   // rehype-highlight detect:true behavior.
   return (
     <CodeBlock
@@ -216,7 +229,7 @@ function MarkdownCode({
       language={language}
       workspaceRoot={workspaceRoot}
       codeId={`${sessionId}:${text.slice(0, 24)}`}
-      engine="monaco"
+      engine="static"
       allowAutoDetect={!language}
     />
   )

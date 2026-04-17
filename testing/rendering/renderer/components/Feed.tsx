@@ -207,8 +207,21 @@ function MarkdownCode({
     return <code>{children}</code>
   }
 
-  // Fenced/indented code block → full CodeBlock with highlighting.
-  // allowAutoDetect for unlabeled blocks restores the old
+  // Fenced/indented code block inside prose → static highlight.js.
+  // NOT Monaco — Monaco is heavyweight (async loader, canvas
+  // renderer, explicit layout) and a single assistant turn often
+  // contains several fenced blocks. When many Monaco editors mount
+  // into narrow flex cells before the parent layout has resolved,
+  // they initialise at width=0, paint nothing, and `automaticLayout`
+  // does not always recover on the follow-up resize — the block
+  // ends up as the dark `--theme-code-bg` background with no
+  // visible text (the "black block" bug). Monaco stays reserved for
+  // surfaces where an editor actually pays off: Read / Grep tool
+  // results, where LSP and scrollable syntax highlighting matter.
+  // Prose blocks are "here's a shell command"; static is the right
+  // fit.
+  //
+  // `allowAutoDetect` on unlabeled fences restores the old
   // rehype-highlight detect:true behavior.
   return (
     <CodeBlock
@@ -216,7 +229,7 @@ function MarkdownCode({
       language={language}
       workspaceRoot={workspaceRoot}
       codeId={`${sessionId}:${text.slice(0, 24)}`}
-      engine="monaco"
+      engine="static"
       allowAutoDetect={!language}
     />
   )
@@ -1287,14 +1300,26 @@ const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
 }) {
   if (block.kind === 'thinking') {
+    // Live thinking — this is the ONLY time the plaintext is
+    // available. Anthropic strips `thinking` on the final message
+    // (only the signature ciphertext persists to disk), so once the
+    // turn ends this block's text is gone. Matches claude-code's
+    // AssistantThinkingMessage with `isTranscriptMode=true` — dim
+    // italic markdown, always open, no <details> wrapper. The "…"
+    // suffix only appears while the turn is still streaming; a
+    // parent <SemanticTurnFooter> / stop-reason indicates when
+    // it's done.
+    const text = block.thinking ?? ''
     return (
       <MarkerRow marker="⏺" tone="muted">
-        <details className="text-muted text-[12px]" open>
-          <summary className="select-none">thinking</summary>
-          <pre className="mt-1.5 whitespace-pre-wrap break-words text-ink-dim text-[11.5px] leading-relaxed opacity-80">
-            {block.thinking || '(empty)'}
-          </pre>
-        </details>
+        <div className="italic text-muted text-[12px] opacity-80">
+          <div className="mb-1">∴ Thinking{text ? '' : '…'}</div>
+          {text ? (
+            <div className="text-ink-dim opacity-90 not-italic">
+              <StreamingProse text={text} />
+            </div>
+          ) : null}
+        </div>
       </MarkerRow>
     )
   }
@@ -1805,19 +1830,45 @@ const Block = memo(function Block({
       )
       return role === 'user' ? <UserBand>{row}</UserBand> : row
     }
-    case 'thinking':
-      // Thinking is usually noise — dim + collapsed behind a disclosure,
-      // with the ⏺ marker so it sits in the assistant column rhythm.
+    case 'thinking': {
+      // Anthropic's extended-thinking feature ships completed blocks
+      // with `thinking: ""` and a long `signature` ciphertext — the
+      // plaintext is only available during the live turn via
+      // `thinking_delta` SSE events; it is NOT persisted to disk.
+      // The old `<details>thinking</details>` disclosure always
+      // opened to an empty `<pre>`, which looked like a renderer
+      // bug (the user clicked, got nothing, and assumed we dropped
+      // the text). Mirror claude-code's `AssistantThinkingMessage`
+      // placeholder instead: a single dim italic `∴ Thinking` row,
+      // no clickable disclosure when there's nothing to reveal.
+      // Live thinking text is rendered by <SemanticStreamingTurn>
+      // (reads semanticTurn.blocks[i].thinking), not here.
+      const text = (block as { thinking?: string }).thinking ?? ''
+      if (!text) {
+        return (
+          <MarkerRow marker="⏺" tone="muted">
+            <span className="italic text-muted text-[12px] opacity-70">
+              ∴ Thinking
+            </span>
+          </MarkerRow>
+        )
+      }
+      // Non-empty thinking plaintext on a completed block is rare
+      // (older sessions, non-Opus-4 models, synthetic entries). Keep
+      // the expandable surface for those.
       return (
         <MarkerRow marker="⏺" tone="muted">
           <details className="text-muted text-[12px]">
-            <summary className="cursor-pointer select-none">thinking</summary>
-            <pre className="mt-1.5 whitespace-pre-wrap break-words text-ink-dim text-[11.5px] leading-relaxed opacity-80">
-              {(block as { thinking: string }).thinking}
-            </pre>
+            <summary className="cursor-pointer select-none italic">
+              ∴ Thinking
+            </summary>
+            <div className="mt-1.5 text-ink-dim opacity-80">
+              <TextProse text={text} />
+            </div>
           </details>
         </MarkerRow>
       )
+    }
     case 'tool_use': {
       // Dispatch tool_use blocks to provider-specific row renderers.
       // Claude has rich renderers for Edit/MultiEdit/Write/TodoWrite;
@@ -1954,17 +2005,56 @@ const StreamingProse = memo(function StreamingProse({
 
 /* ---------- Tool use: "⏺ Bash  ⎿ $ command" ---------- */
 
+// Bash-command display cap, mirroring claude-code's Ink UI:
+//   claude-code-src/full/tools/BashTool/UI.tsx
+//     const MAX_COMMAND_DISPLAY_LINES = 2
+//     const MAX_COMMAND_DISPLAY_CHARS = 160
+// Long / multiline invocations truncate with a trailing `…`. The
+// whole command is still available via the raw JSONL panel in the
+// harness and via the transcript on disk, so the collapse is purely
+// cosmetic — the feed stays dense.
+const MAX_COMMAND_DISPLAY_LINES = 2
+const MAX_COMMAND_DISPLAY_CHARS = 160
+
+function truncateBashCommand(cmd: string): { text: string; truncated: boolean } {
+  const lines = cmd.split('\n')
+  const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
+  const needsCharTruncation = cmd.length > MAX_COMMAND_DISPLAY_CHARS
+  if (!needsLineTruncation && !needsCharTruncation) {
+    return { text: cmd, truncated: false }
+  }
+  let truncated = cmd
+  if (needsLineTruncation) {
+    truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n')
+  }
+  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
+    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS)
+  }
+  return { text: truncated.trimEnd() + '…', truncated: true }
+}
+
 const ToolUseRow = memo(function ToolUseRow({ block }: { block: ToolUseBlock }) {
   // Extract the command / description for Bash-like tools. For tools
   // without a `command` field we fall back to stringified input.
   const input = block.input as Record<string, unknown> | undefined
-  const headline = typeof input?.command === 'string'
+  const rawHeadline = typeof input?.command === 'string'
     ? input.command
     : typeof input?.description === 'string'
       ? input.description
       : typeof input?.path === 'string'
         ? input.path
         : null
+
+  // Bash commands get the same 2-line / 160-char cap claude-code's
+  // Ink UI enforces. `description` and `path` headlines are already
+  // one-liner-ish so we only truncate when this is a command.
+  const headline = (() => {
+    if (!rawHeadline) return null
+    if (block.name === 'Bash' && typeof input?.command === 'string') {
+      return truncateBashCommand(input.command).text
+    }
+    return rawHeadline
+  })()
 
   return (
     <MarkerRow marker="⏺">
@@ -2043,12 +2133,21 @@ const ToolResultRow = memo(function ToolResultRow({
     return null
   }
 
-  // Read tool result: strip the line-number prefix and render as a
-  // code slab with LSP highlighting. CC's Read emits lines like
-  // "42\tactual code here" — we strip the prefix and pass the file
-  // path so CodeBlock can infer the language and use Monaco/LSP.
+  // Read tool result — show a one-line summary only, not the file
+  // contents. Mirrors claude-code-src/full/tools/FileReadTool/UI.tsx
+  // renderToolResultMessage which renders "Read <N> lines" /
+  // "Read image (size)" / "Read <N> cells" with height={1} and
+  // NEVER echoes the file bytes into the feed. The user already
+  // knows what file was read (it's on the tool-use row); dumping
+  // its full contents below is pure noise.
+  //
+  // A click-to-expand <details> keeps the raw content one interaction
+  // away so the harness is still useful for debugging Read-result
+  // parsing regressions. Syntax highlighting happens inside the
+  // CodeBlock only when expanded.
   if (sourceTool === 'Read' && !isError) {
     const stripped = stripLineNumberPrefix(trimmed)
+    const numLines = stripped ? stripped.split('\n').length : 0
     const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
       | Record<string, unknown>
       | undefined
@@ -2059,62 +2158,79 @@ const ToolResultRow = memo(function ToolResultRow({
           ? sourceInput.path
           : null
     return (
-      <ToolBand>
-        <MarkerRow marker="⎿" tone="muted">
-          <CodeBlock
-            code={stripped}
-            path={filePath}
-            workspaceRoot={codeContext.workspaceRoot}
-            codeId={`read:${block.tool_use_id}`}
-            engine="monaco"
-            allowAutoDetect
-          />
-        </MarkerRow>
-      </ToolBand>
+      <MarkerRow marker="⎿" tone="muted">
+        <details className="text-[12px] leading-[1.55] text-ink-dim">
+          <summary className="cursor-pointer select-none">
+            Read <span className="text-ink font-semibold">{numLines}</span>{' '}
+            {numLines === 1 ? 'line' : 'lines'}
+          </summary>
+          <div className="mt-2">
+            <CodeBlock
+              code={stripped}
+              path={filePath}
+              workspaceRoot={codeContext.workspaceRoot}
+              codeId={`read:${block.tool_use_id}`}
+              engine="monaco"
+              allowAutoDetect
+            />
+          </div>
+        </details>
+      </MarkerRow>
     )
   }
 
-  // Grep tool result: render with CodeBlock so results get syntax
-  // highlighting based on the file pattern / path. Grep output is
-  // already formatted text but benefits from language-aware coloring.
-  if (sourceTool === 'Grep' && !isError) {
-    const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
-      | Record<string, unknown>
-      | undefined
-    const filePath =
-      typeof sourceInput?.path === 'string'
-        ? sourceInput.path
-        : null
-    return (
-      <ToolBand>
-        <MarkerRow marker="⎿" tone="muted">
-          <CodeBlock
-            code={trimmed}
-            path={filePath}
-            workspaceRoot={codeContext.workspaceRoot}
-            codeId={`grep:${block.tool_use_id}`}
-            engine="monaco"
-            allowAutoDetect
-          />
-        </MarkerRow>
-      </ToolBand>
-    )
-  }
+  // Everything else — Bash, Grep, Glob, LS, tool errors — truncates
+  // to the first few lines and offers a click-to-expand for the
+  // rest. Mirrors claude-code's OutputLine / renderTruncatedContent
+  // (MAX_LINES_TO_SHOW = 3). The collapsed view keeps the feed dense
+  // so a long `find .` or a noisy test runner doesn't push the
+  // assistant's next message below the fold.
+  return <TruncatedOutputRow content={trimmed} isError={isError} />
+})
 
+// Hoisted outside the memo'd row so each use doesn't recreate the
+// component; matches MAX_LINES_TO_SHOW in claude-code-src.
+const RESULT_MAX_LINES = 3
+
+function TruncatedOutputRow({
+  content,
+  isError,
+}: {
+  content: string
+  isError: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = content.length === 0 ? [] : content.split('\n')
+  const needsTruncation = lines.length > RESULT_MAX_LINES
+  const shown = expanded || !needsTruncation
+    ? content
+    : lines.slice(0, RESULT_MAX_LINES).join('\n')
+  const hiddenCount = needsTruncation ? lines.length - RESULT_MAX_LINES : 0
   return (
-    <MarkerRow marker="⎿" tone={isError ? 'muted' : 'muted'}>
+    <MarkerRow marker="⎿" tone="muted">
       <pre
         className={`
           font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-          max-h-[360px] overflow-auto
+          ${expanded ? 'max-h-[360px] overflow-auto' : ''}
           ${isError ? 'text-danger' : 'text-ink-dim'}
         `}
       >
-        {trimmed}
+        {shown}
       </pre>
+      {needsTruncation && (
+        <button
+          type="button"
+          onClick={() => setExpanded(e => !e)}
+          className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
+        >
+          {expanded
+            ? 'collapse'
+            : `… +${hiddenCount} ${hiddenCount === 1 ? 'line' : 'lines'} (click to expand)`}
+        </button>
+      )}
     </MarkerRow>
   )
-})
+}
 
 /**
  * CC's Read tool emits one line per source line, prefixed with the
