@@ -9,7 +9,7 @@
 import { spawn } from 'node:child_process'
 import { createWriteStream, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { ResponsesProxy } from '../src/providers/codex/runtime/responsesProxy.js'
+import { ResponsesProxy } from 'codex-headless'
 
 const prompt = process.argv[2] ?? 'reply with exactly the word PONG'
 const ts = new Date().toISOString().replace(/[:.]/g, '-')

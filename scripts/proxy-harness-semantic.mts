@@ -10,8 +10,7 @@
 
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
-import { ResponsesProxy } from '../src/providers/codex/runtime/responsesProxy.js'
-import { CodexResponsesAdapter } from '../src/providers/codex/runtime/codexResponsesAdapter.js'
+import { ResponsesProxy, CodexResponsesAdapter } from 'codex-headless'
 
 const prompt = process.argv[2] ?? 'reply with exactly the word PONG'
 

@@ -4,11 +4,11 @@ import { spawn as ptySpawn } from 'node-pty'
 import type { SlashPickerState } from '../../../preload/index.js'
 import {
   CodexHeadless,
+  CodexResponsesAdapter,
+  ResponsesProxy,
   type CodexRolloutLine,
   type CodexSemanticEvent,
 } from 'codex-headless'
-import { ResponsesProxy } from './responsesProxy.js'
-import { CodexResponsesAdapter } from './codexResponsesAdapter.js'
 
 // CodexSession — thin wrapper that spawns the `codex` binary in a PTY
 // and delegates all screen parsing, transcript tailing, trust dialog
