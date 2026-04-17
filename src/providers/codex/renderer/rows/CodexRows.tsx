@@ -1,4 +1,4 @@
-import { memo, useContext } from 'react'
+import { memo, useContext, useMemo, useState } from 'react'
 
 import { CodeBlock } from '../../../../renderer/src/code/CodeBlock'
 import { CodeRenderContext, MarkerRow } from '../../../../renderer/src/feed/Feed'
@@ -58,6 +58,26 @@ function headlineForTool(block: ToolUseBlock): string | null {
   return null
 }
 
+const MAX_COMMAND_DISPLAY_LINES = 2
+const MAX_COMMAND_DISPLAY_CHARS = 160
+const RESULT_MAX_LINES = 3
+
+function truncateCommand(text: string): string {
+  const lines = text.split('\n')
+  const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
+  const needsCharTruncation = text.length > MAX_COMMAND_DISPLAY_CHARS
+  if (!needsLineTruncation && !needsCharTruncation) return text
+
+  let truncated = text
+  if (needsLineTruncation) {
+    truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n')
+  }
+  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
+    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS)
+  }
+  return truncated.trimEnd() + '…'
+}
+
 function detectDiff(text: string): boolean {
   return text.startsWith('diff --git ') || text.startsWith('@@ ')
 }
@@ -74,12 +94,124 @@ function parsedPath(parsed: Record<string, unknown> | null): string | null {
   return null
 }
 
+function countNonEmptyLines(text: string): number {
+  if (!text.trim()) return 0
+  return text.split('\n').length
+}
+
+function summaryLabelForCommandResult(
+  parsedType: string | null,
+  lineCount: number,
+  path: string | null,
+  workspaceRoot: string | null,
+): string {
+  const displayPath = path ? formatToolFilePath(path, workspaceRoot) : null
+  if (parsedType === 'read') {
+    const noun = lineCount === 1 ? 'line' : 'lines'
+    return displayPath
+      ? `Read ${lineCount} ${noun} from ${displayPath}`
+      : `Read ${lineCount} ${noun}`
+  }
+  if (parsedType === 'search') {
+    const noun = lineCount === 1 ? 'line' : 'lines'
+    return displayPath
+      ? `Search results: ${lineCount} ${noun} in ${displayPath}`
+      : `Search results: ${lineCount} ${noun}`
+  }
+  return displayPath ?? 'Result'
+}
+
+function ExpandableCodeResult({
+  summary,
+  code,
+  path,
+  workspaceRoot,
+  codeId,
+  language,
+}: {
+  summary: string
+  code: string
+  path?: string | null
+  workspaceRoot?: string | null
+  codeId: string
+  language?: string | null
+}) {
+  return (
+    <MarkerRow marker="⎿" tone="muted">
+      <details className="text-[12px] leading-[1.55] text-ink-dim">
+        <summary className="cursor-pointer select-none">
+          {summary}
+        </summary>
+        <div className="mt-2">
+          <CodeBlock
+            code={code}
+            path={path}
+            language={language}
+            workspaceRoot={workspaceRoot}
+            codeId={codeId}
+            engine="monaco"
+            allowAutoDetect={!language}
+          />
+        </div>
+      </details>
+    </MarkerRow>
+  )
+}
+
+function TruncatedOutputRow({
+  content,
+  isError,
+}: {
+  content: string
+  isError: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = content.length === 0 ? [] : content.split('\n')
+  const needsTruncation = lines.length > RESULT_MAX_LINES
+  const shown = expanded || !needsTruncation
+    ? content
+    : lines.slice(0, RESULT_MAX_LINES).join('\n')
+  const hiddenCount = needsTruncation ? lines.length - RESULT_MAX_LINES : 0
+
+  return (
+    <MarkerRow marker="⎿" tone="muted">
+      <div className="min-w-0">
+        <pre
+          className={`
+            font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
+            ${expanded ? 'max-h-[360px] overflow-auto' : ''}
+            ${isError ? 'text-danger' : 'text-ink-dim'}
+          `}
+        >
+          {shown || '(no output)'}
+        </pre>
+        {needsTruncation && (
+          <button
+            type="button"
+            onClick={() => setExpanded(prev => !prev)}
+            className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
+          >
+            {expanded
+              ? 'collapse'
+              : `… +${hiddenCount} ${hiddenCount === 1 ? 'line' : 'lines'} (click to expand)`}
+          </button>
+        )}
+      </div>
+    </MarkerRow>
+  )
+}
+
 export const CodexToolRow = memo(function CodexToolRow({
   block,
 }: {
   block: ToolUseBlock
 }) {
-  const headline = headlineForTool(block)
+  const headline = useMemo(() => {
+    const raw = headlineForTool(block)
+    if (!raw) return null
+    if (block.name === 'exec_command') return truncateCommand(raw)
+    return raw
+  }, [block])
 
   return (
     <MarkerRow marker="⏺">
@@ -122,17 +254,21 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
       path &&
       text
     ) {
+      const lineCount = countNonEmptyLines(text)
+      const summary = summaryLabelForCommandResult(
+        parsedType,
+        lineCount,
+        path,
+        codeContext.workspaceRoot,
+      )
       return (
-        <MarkerRow marker="⎿" tone="muted">
-          <CodeBlock
-            code={text}
-            path={path}
-            workspaceRoot={codeContext.workspaceRoot}
-            codeId={`codex-${parsedType}:${block.tool_use_id}`}
-            engine="monaco"
-            allowAutoDetect
-          />
-        </MarkerRow>
+        <ExpandableCodeResult
+          summary={summary}
+          code={text}
+          path={path}
+          workspaceRoot={codeContext.workspaceRoot}
+          codeId={`codex-${parsedType}:${block.tool_use_id}`}
+        />
       )
     }
 
@@ -198,34 +334,5 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
 
   if (!text && !isError) return null
 
-  // Route through CodeBlock for consistent rendering with Claude —
-  // gives syntax highlighting, Monaco when available, and the same
-  // visual treatment as Claude's tool result rows.
-  if (!isError && text) {
-    return (
-      <MarkerRow marker="⎿" tone="muted">
-        <CodeBlock
-          code={text}
-          workspaceRoot={codeContext.workspaceRoot}
-          codeId={`codex-result:${block.tool_use_id}`}
-          engine="monaco"
-          allowAutoDetect
-        />
-      </MarkerRow>
-    )
-  }
-
-  return (
-    <MarkerRow marker="⎿" tone="muted">
-      <pre
-        className={`
-          font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-          max-h-[360px] overflow-auto
-          ${isError ? 'text-danger' : 'text-ink-dim'}
-        `}
-      >
-        {text || '(no output)'}
-      </pre>
-    </MarkerRow>
-  )
+  return <TruncatedOutputRow content={text} isError={isError} />
 })
