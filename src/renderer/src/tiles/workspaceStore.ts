@@ -58,6 +58,7 @@ import {
   type PickerItem,
   type QueuedMessage,
   type ReaderModeState,
+  type SemanticLiveBlock,
   type SemanticRuntimeState,
   type SemanticLiveTurn,
   type SessionRuntime,
@@ -599,6 +600,17 @@ export function foldSemanticEvent(
       if (!currentTurn) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
+      // Codex emits `callId` where Claude emits `toolUseId`. Both feed
+      // the same downstream tool-result pairing logic — populate
+      // whichever the upstream sent, and mirror into the other so
+      // existing consumers (e.g. the tool_result match in this file
+      // at the toolUseId path) work regardless of source provider.
+      const callId = typeof ev.callId === 'string' ? ev.callId : undefined
+      const toolUseId = typeof ev.toolUseId === 'string' ? ev.toolUseId : callId
+      const messagePhase =
+        ev.messagePhase === 'commentary' || ev.messagePhase === 'final_answer'
+          ? (ev.messagePhase as 'commentary' | 'final_answer')
+          : undefined
       currentTurn = {
         ...currentTurn,
         blocks: {
@@ -607,7 +619,11 @@ export function foldSemanticEvent(
             blockIndex: idx,
             kind: String(ev.kind ?? 'other'),
             toolName: typeof ev.toolName === 'string' ? ev.toolName : undefined,
-            toolUseId: typeof ev.toolUseId === 'string' ? ev.toolUseId : undefined,
+            toolUseId,
+            callId,
+            itemId: typeof ev.itemId === 'string' ? ev.itemId : undefined,
+            messagePhase,
+            status: typeof ev.status === 'string' ? ev.status : undefined,
             text: '',
             thinking: '',
             inputJson: '',
@@ -784,6 +800,25 @@ export function foldSemanticEvent(
       if (idx === null) break
       const block = currentTurn.blocks[idx]
       if (!block) break
+      // Codex sends typed fields for each ResponseItem variant; Claude
+      // sends `parsed` for tool input. Merge both shapes here so the
+      // renderer doesn't have to branch on provider. `parsed` (Claude)
+      // and `parsedArguments` (Codex) populate the same `parsedInput`
+      // slot; `inputJson` (Claude) and `argumentsJson` (Codex) populate
+      // the same `inputJson` slot.
+      const parsedObj =
+        ev.parsed && typeof ev.parsed === 'object'
+          ? (ev.parsed as Record<string, unknown>)
+          : ev.parsedArguments && typeof ev.parsedArguments === 'object'
+            ? (ev.parsedArguments as Record<string, unknown>)
+            : block.parsedInput
+      const argsRaw =
+        typeof ev.inputJson === 'string'
+          ? ev.inputJson
+          : typeof ev.argumentsJson === 'string'
+            ? ev.argumentsJson
+            : block.inputJson
+      const callId = typeof ev.callId === 'string' ? ev.callId : block.callId
       currentTurn = {
         ...currentTurn,
         blocks: {
@@ -794,21 +829,48 @@ export function foldSemanticEvent(
             text: typeof ev.text === 'string' ? ev.text : block.text,
             signature: typeof ev.signature === 'string' ? ev.signature : block.signature,
             toolName: typeof ev.toolName === 'string' ? ev.toolName : block.toolName,
-            toolUseId: typeof ev.toolUseId === 'string' ? ev.toolUseId : block.toolUseId,
-            inputJson: typeof ev.inputJson === 'string' ? ev.inputJson : block.inputJson,
+            toolUseId:
+              typeof ev.toolUseId === 'string'
+                ? ev.toolUseId
+                : (callId ?? block.toolUseId),
+            callId,
+            inputJson: argsRaw,
+            argumentsJson:
+              typeof ev.argumentsJson === 'string' ? ev.argumentsJson : block.argumentsJson,
             inputJsonValid:
-              ev.parsed === undefined ? block.inputJsonValid : Boolean(ev.parsed),
-            parsedInput:
-              ev.parsed && typeof ev.parsed === 'object'
-                ? ev.parsed as Record<string, unknown>
-                : block.parsedInput,
+              parsedObj === block.parsedInput ? block.inputJsonValid : Boolean(parsedObj),
+            parsedInput: parsedObj,
             parseError:
               typeof ev.parseError === 'string' ? ev.parseError : block.parseError,
+            status: typeof ev.status === 'string' ? ev.status : block.status,
             finalized: true,
             citations:
               ev.raw && typeof ev.raw === 'object' && Array.isArray((ev.raw as { citations?: unknown[] }).citations)
                 ? [...((ev.raw as { citations: unknown[] }).citations)]
                 : block.citations,
+            // Codex-specific typed variant payloads. Forward as-is;
+            // the renderer picks the right one based on `kind`.
+            output: ev.output !== undefined ? ev.output : block.output,
+            webSearchAction:
+              ev.webSearchAction && typeof ev.webSearchAction === 'object'
+                ? (ev.webSearchAction as SemanticLiveBlock['webSearchAction'])
+                : block.webSearchAction,
+            imageGeneration:
+              ev.imageGeneration && typeof ev.imageGeneration === 'object'
+                ? (ev.imageGeneration as SemanticLiveBlock['imageGeneration'])
+                : block.imageGeneration,
+            localShellCall:
+              ev.localShellCall && typeof ev.localShellCall === 'object'
+                ? (ev.localShellCall as SemanticLiveBlock['localShellCall'])
+                : block.localShellCall,
+            reasoningSummary:
+              typeof ev.reasoningSummary === 'string'
+                ? ev.reasoningSummary
+                : block.reasoningSummary,
+            reasoningText:
+              typeof ev.reasoningText === 'string'
+                ? ev.reasoningText
+                : block.reasoningText,
           },
         },
       }

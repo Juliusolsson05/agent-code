@@ -1298,18 +1298,27 @@ const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   block: SemanticLiveTurn['blocks'][number]
   toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
 }) {
-  if (block.kind === 'thinking') {
-    // Live thinking — this is the ONLY time the plaintext is
-    // available. Anthropic strips `thinking` on the final message
-    // before persisting (only the signature ciphertext survives), so
-    // once the turn ends this block's text is gone for good. Mirrors
-    // claude-code's AssistantThinkingMessage with
+  if (block.kind === 'thinking' || block.kind === 'reasoning') {
+    // Live thinking — for Claude this is the ONLY time the plaintext is
+    // available (`thinking` is stripped on the final message before
+    // persisting; only signature ciphertext survives). For Codex the
+    // `reasoning` block works similarly — plaintext deltas stream
+    // during the turn (and may be empty when ChatGPT's reasoning is
+    // delivered encrypted via the `encrypted_content` field, which
+    // the renderer can't decrypt without the decryption key).
+    //
+    // Mirrors claude-code's AssistantThinkingMessage with
     // `isTranscriptMode=true` — dim italic markdown, always open, no
     // <details> wrapper. The "…" suffix is visual feedback while
-    // deltas are still arriving. The old `(empty)` literal was a
-    // symptom of rendering before any delta landed; drop the row
-    // entirely in that case.
-    const text = block.thinking ?? ''
+    // deltas are still arriving. For Codex, `reasoningSummary` on a
+    // completed block is an alternate source of the digest text; we
+    // fall through to `thinking` first because per-delta accumulation
+    // has the most current state.
+    const text =
+      block.thinking ||
+      block.reasoningSummary ||
+      block.reasoningText ||
+      ''
     return (
       <MarkerRow marker="⏺" tone="muted">
         <div className="italic text-muted text-[12px] opacity-80">
@@ -1318,6 +1327,161 @@ const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
             <div className="text-ink-dim opacity-90 not-italic">
               <StreamingProse text={text} />
             </div>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  // Codex-specific variants — minimal first-class rendering so tool
+  // calls, searches, shell commands, and image generations show up
+  // live from the proxy stream instead of waiting for rollout to
+  // catch up. Each variant shows what it IS (tool name / command /
+  // query / status) without trying to reinvent the full rollout-
+  // rendered card; rollout's reducer writes the canonical final
+  // version to the feed, and these live rows fill in the "right now"
+  // gap. Ordered from highest-frequency (function_call) to lowest.
+
+  if (block.kind === 'function_call' || block.kind === 'custom_tool_call') {
+    const label = block.toolName ?? block.kind
+    const argsText =
+      block.argumentsJson ?? block.inputJson ?? '(no arguments yet)'
+    const statusBadge = block.status
+      ? block.status.replace(/_/g, ' ')
+      : block.finalized
+        ? 'done'
+        : 'running'
+    return (
+      <MarkerRow marker="⏺">
+        <div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+            <span className="text-accent font-semibold">{label}</span>
+            <span className="text-muted text-[11px] uppercase tracking-wider">
+              {statusBadge}
+            </span>
+          </div>
+          <MarkerRow marker="⎿" tone="muted">
+            <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
+              {argsText || '(waiting for input…)'}
+            </pre>
+          </MarkerRow>
+          {block.parseError ? (
+            <MarkerRow marker="⎿" tone="muted">
+              <div className="text-danger text-[12px] leading-[1.55]">
+                invalid tool input: {block.parseError}
+              </div>
+            </MarkerRow>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  if (
+    block.kind === 'function_call_output' ||
+    block.kind === 'custom_tool_call_output' ||
+    block.kind === 'tool_search_output'
+  ) {
+    // Output blocks land as separate output_items on the SSE wire
+    // (the function_call emits one item, the function_call_output
+    // emits another — paired only by call_id). Render as a
+    // standalone output row; downstream Feed rendering can associate
+    // it with the call via the shared callId if the renderer wants to.
+    const raw = block.output
+    const outputText =
+      typeof raw === 'string'
+        ? raw
+        : raw === undefined
+          ? '(no output)'
+          : JSON.stringify(raw, null, 2)
+    return (
+      <MarkerRow marker="⎿" tone="muted">
+        <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 max-h-[360px] overflow-auto">
+          {outputText}
+        </pre>
+      </MarkerRow>
+    )
+  }
+
+  if (block.kind === 'web_search_call') {
+    const action = block.webSearchAction
+    const label =
+      action?.kind === 'search'
+        ? `Search: ${action.query ?? action.queries?.join(', ') ?? '…'}`
+        : action?.kind === 'open_page'
+          ? `Open: ${action.url ?? '?'}`
+          : action?.kind === 'find_in_page'
+            ? `Find "${action.pattern ?? '?'}" in ${action.url ?? '?'}`
+            : 'Web search'
+    return (
+      <MarkerRow marker="⏺">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+          <span className="text-accent font-semibold">🌐 {label}</span>
+          {block.status ? (
+            <span className="text-muted text-[11px] uppercase tracking-wider">
+              {block.status.replace(/_/g, ' ')}
+            </span>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  if (block.kind === 'image_generation_call') {
+    const img = block.imageGeneration
+    return (
+      <MarkerRow marker="⏺">
+        <div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+            <span className="text-accent font-semibold">🖼 Image generation</span>
+            <span className="text-muted text-[11px] uppercase tracking-wider">
+              {img?.status ?? block.status ?? 'running'}
+            </span>
+          </div>
+          {img?.revisedPrompt ? (
+            <MarkerRow marker="⎿" tone="muted">
+              <div className="text-ink-dim text-[12px] leading-[1.55] italic">
+                {img.revisedPrompt}
+              </div>
+            </MarkerRow>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  if (block.kind === 'local_shell_call') {
+    const shell = block.localShellCall
+    const command = shell?.command.join(' ') ?? '(no command)'
+    return (
+      <MarkerRow marker="⏺">
+        <div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+            <span className="text-accent font-semibold">$ Shell</span>
+            <span className="text-muted text-[11px] uppercase tracking-wider">
+              {shell?.status ?? block.status ?? 'running'}
+            </span>
+          </div>
+          <MarkerRow marker="⎿" tone="muted">
+            <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
+              {command}
+            </pre>
+          </MarkerRow>
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  if (block.kind === 'tool_search_call') {
+    const label = block.toolName ?? 'Tool search'
+    return (
+      <MarkerRow marker="⏺">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+          <span className="text-accent font-semibold">🔎 {label}</span>
+          {block.status ? (
+            <span className="text-muted text-[11px] uppercase tracking-wider">
+              {block.status.replace(/_/g, ' ')}
+            </span>
           ) : null}
         </div>
       </MarkerRow>
