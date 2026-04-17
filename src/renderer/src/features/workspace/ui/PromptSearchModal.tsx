@@ -99,6 +99,18 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
+  // Scope results to the ACTIVE TAB's focused pane cwd. Searching
+  // across every workspace on disk surfaces sessions from unrelated
+  // projects that the user can't meaningfully use from the current
+  // tab (resuming a session recorded in /foo while the pane is
+  // rooted in /bar leaves the model looking at the wrong
+  // filesystem). When there's no active tab — fresh app launch —
+  // fall back to null which means "all sessions".
+  const activeCwd =
+    workspace.activeTab
+      ? (workspace.state.sessions[workspace.activeTab.focusedSessionId]?.cwd ?? null)
+      : null
+
   // Reset state each time the modal opens — we want a fresh list
   // and a cleared query. Fetching fires unconditionally; the index
   // cache inside main makes this cheap when the data hasn't changed.
@@ -109,7 +121,11 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
     setError(null)
     setLoading(true)
     window.api
-      .listRecentSessionsWithPrompts({ limit: 10, promptsPerSession: 4, cwd: null })
+      .listRecentSessionsWithPrompts({
+        limit: 10,
+        promptsPerSession: 4,
+        cwd: activeCwd,
+      })
       .then(rows => {
         setSessions(rows)
         setLoading(false)
@@ -120,7 +136,7 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
       })
     // Focus the input shortly after open so typing lands in it.
     requestAnimationFrame(() => inputRef.current?.focus())
-  }, [open])
+  }, [open, activeCwd])
 
   // Debounced search effect. Re-runs whenever `query` changes; the
   // trailing cleanup cancels a pending IPC call if the user keeps
@@ -136,12 +152,12 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
             query: trimmed,
             limit: 20,
             promptsPerSession: 8,
-            cwd: null,
+            cwd: activeCwd,
           })
         : window.api.listRecentSessionsWithPrompts({
             limit: 10,
             promptsPerSession: 4,
-            cwd: null,
+            cwd: activeCwd,
           })
       promise
         .then(rows => {
