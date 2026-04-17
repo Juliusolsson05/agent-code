@@ -2498,7 +2498,15 @@ export function useWorkspace(
   // Spawns a new session in the parent pane's cwd, inserts a new leaf
   // under a fresh split node, makes the new pane focused.
   const splitFocused = useCallback(
-    async (direction: SplitDirection, kind: SessionKind = 'claude') => {
+    async (
+      direction: SplitDirection,
+      kind: SessionKind = 'claude',
+      /** Resume this provider session id in the new pane instead of
+       *  starting fresh. Used by the duplicate-agent flow so the
+       *  clone opens as a sibling pane of the source, not as a new
+       *  tab (which would hide the source behind a tab switch). */
+      resumeSessionId?: string,
+    ) => {
       const tab = state.tabs.find(t => t.id === state.activeTabId)
       if (!tab) return
       const parentSessionId = tab.focusedSessionId
@@ -2507,7 +2515,7 @@ export function useWorkspace(
 
       let newSessionId: SessionId
       try {
-        newSessionId = await spawn(parentCwd, { kind })
+        newSessionId = await spawn(parentCwd, { kind, resumeSessionId })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0

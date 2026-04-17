@@ -11,6 +11,7 @@ import { TmuxRegistry } from './tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from './tmux/tmuxRecovery.js'
 import { getMainProvider } from '../providers/registry.main.js'
 import { switchProvider } from './providerSwitch/switchProvider.js'
+import { duplicateSession } from './providerSwitch/duplicateSession.js'
 import { listAllClaudeSessions } from '../providers/claude/runtime/sessionList.js'
 import { listCodexSessions } from '../providers/codex/runtime/sessionList.js'
 
@@ -470,6 +471,20 @@ function registerIpc(): void {
       },
     ) => {
       return await switchProvider(params)
+    },
+  )
+
+  ipcMain.handle(
+    'session:duplicate',
+    async (
+      _evt,
+      params: {
+        provider: 'claude' | 'codex'
+        sourceProviderSessionId: string
+        cwd: string
+      },
+    ) => {
+      return await duplicateSession(params)
     },
   )
 

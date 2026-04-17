@@ -220,6 +220,28 @@ const api = {
   }> => ipcRenderer.invoke('session:switch-provider', params),
 
   /**
+   * Duplicate a provider session on disk. Reads the source transcript,
+   * clones it with a fresh session id (and fresh timestamp for
+   * Codex), writes the clone next to the original, and returns the
+   * new id. The renderer then passes that id to `spawnSession` /
+   * `newTab` with `resumeSessionId: newProviderSessionId` to bring
+   * the duplicate online as an independent conversation.
+   *
+   * Idempotent wrt the source file — the source is untouched. Live
+   * sessions can be duplicated; the clone is a point-in-time
+   * snapshot (later appends to the live source do not land in it).
+   */
+  duplicateSession: (params: {
+    provider: 'claude' | 'codex'
+    sourceProviderSessionId: string
+    cwd: string
+  }): Promise<{
+    provider: 'claude' | 'codex'
+    newProviderSessionId: string
+    newFilePath: string
+  }> => ipcRenderer.invoke('session:duplicate', params),
+
+  /**
    * Attach this renderer to a terminal session's live data stream.
    * Returns the full buffered output so far — every byte the shell
    * has written since spawn. Main flips the session's attached flag

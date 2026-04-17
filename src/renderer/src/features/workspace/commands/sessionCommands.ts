@@ -38,6 +38,48 @@ export const sessionCommands: CommandDef[] = [
     run: ({ workspace }) => void workspace.reloadFocusedAgent(),
   },
   {
+    id: 'duplicate-agent',
+    title: 'Duplicate Agent',
+    keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
+    when: ({ workspace }) => {
+      // Needs a focused agent session that has a providerSessionId
+      // — without that id there's nothing on disk to duplicate.
+      const tab = workspace.activeTab
+      if (!tab) return false
+      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const kind = meta?.kind ?? 'claude'
+      return (
+        (kind === 'claude' || kind === 'codex') &&
+        Boolean(meta?.providerSessionId)
+      )
+    },
+    run: async ({ workspace, ui }) => {
+      const tab = workspace.activeTab
+      if (!tab) return
+      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const kind = meta?.kind ?? 'claude'
+      if (!meta?.providerSessionId) return
+      try {
+        const { newProviderSessionId } = await window.api.duplicateSession({
+          provider: kind,
+          sourceProviderSessionId: meta.providerSessionId,
+          cwd: meta.cwd,
+        })
+        ui.closePalette()
+        // Open the clone as a SIBLING pane (vertical split) of the
+        // source. Using `workspace.newTab` would push the clone into
+        // a new tab and hide the source behind a tab switch — not
+        // what "duplicate" should do. Using `splitFocused` places
+        // both side-by-side so the user can see and interact with
+        // them at once.
+        await workspace.splitFocused('vertical', kind, newProviderSessionId)
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[duplicate-agent] failed', err)
+      }
+    },
+  },
+  {
     id: 'switch-provider',
     title: ({ workspace }) => {
       const tab = workspace.activeTab
