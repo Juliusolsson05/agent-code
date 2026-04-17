@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, shell } from 'electron'
 import { randomUUID } from 'crypto'
 import { dirname, extname, join, resolve } from 'path'
 import { fileURLToPath } from 'url'
-import { readdir, readFile, stat, writeFile, mkdir } from 'fs/promises'
+import { readdir, readFile, stat, writeFile, mkdir, rm } from 'fs/promises'
 import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
@@ -80,6 +80,13 @@ function pushTrafficLightInset(): void {
 let manager: SessionManager = null as unknown as SessionManager
 let tmuxRegistry: TmuxRegistry | null = null
 const lspManager = new LspManager()
+const SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+])
+const MAX_CLAUDE_IMAGE_BYTES = 5 * 1024 * 1024
 
 function extractClaudeHistoryMarker(entry: Record<string, unknown>): string | null {
   if (typeof entry.uuid === 'string' && entry.uuid.length > 0) return entry.uuid
@@ -187,8 +194,6 @@ function send(channel: string, ...args: unknown[]): void {
 }
 
 function extensionForMediaType(mediaType: string, filename?: string): string {
-  const fromName = extname(filename ?? '').trim().toLowerCase()
-  if (fromName) return fromName
   switch (mediaType) {
     case 'image/jpeg':
       return '.jpg'
@@ -197,13 +202,29 @@ function extensionForMediaType(mediaType: string, filename?: string): string {
     case 'image/webp':
       return '.webp'
     case 'image/png':
-    default:
       return '.png'
   }
+  const fromName = extname(filename ?? '').trim().toLowerCase()
+  return fromName || '.png'
+}
+
+function isSupportedClaudeImageMediaType(mediaType: string): boolean {
+  return SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES.has(mediaType.toLowerCase())
+}
+
+function estimateBase64DecodedBytes(base64Data: string): number {
+  const normalized = base64Data.trim()
+  if (normalized.length === 0) return 0
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0
+  return Math.floor((normalized.length * 3) / 4) - padding
 }
 
 function getClaudeImageCacheDir(): string {
   return join(app.getPath('temp'), 'cc-shell', 'claude-images')
+}
+
+async function cleanupClaudeImageCacheDir(): Promise<void> {
+  await rm(getClaudeImageCacheDir(), { recursive: true, force: true })
 }
 
 // Per-session jsonl-entry coalescer.
@@ -641,6 +662,12 @@ function registerIpc(): void {
       _evt,
       params: { base64Data: string; mediaType: string; filename?: string },
     ) => {
+      if (!isSupportedClaudeImageMediaType(params.mediaType)) {
+        throw new Error(`unsupported Claude image media type: ${params.mediaType}`)
+      }
+      if (estimateBase64DecodedBytes(params.base64Data) > MAX_CLAUDE_IMAGE_BYTES) {
+        throw new Error('Claude image exceeds 5 MB limit')
+      }
       const cacheDir = getClaudeImageCacheDir()
       await mkdir(cacheDir, { recursive: true })
       const ext = extensionForMediaType(params.mediaType, params.filename)
@@ -951,6 +978,9 @@ function registerIpc(): void {
 // ---------- App lifecycle ----------
 
 app.whenReady().then(async () => {
+  await cleanupClaudeImageCacheDir().catch(err => {
+    console.warn('[images] failed to clean Claude image cache:', err)
+  })
   // Tmux availability is checked once at startup. The cost is a
   // child-process roundtrip on `tmux -V` — cheap enough to await
   // before any IPC is wired. Result is cached on the registry; call

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
 import { CodexApprovalModal } from '../../../providers/codex/renderer/CodexApprovalModal'
 import { ResumePromptModal } from '../../../providers/claude/renderer/ResumePromptModal'
+import { useGlobalToast } from '../GlobalToast'
 import { Feed } from '../feed/Feed'
 import type { ScrollInfo } from '../feed/Feed'
 import { TrustDialogModal } from '../../../providers/claude/renderer/TrustDialogModal'
@@ -39,6 +40,22 @@ import type { ClaudeDraftImage } from './workspaceState'
 const CLAUDE_PASTE_THRESHOLD = 800
 const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
 const CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS = 750
+const MAX_CLAUDE_IMAGE_BYTES = 5 * 1024 * 1024
+const SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+])
+const SUPPORTED_CLAUDE_IMAGE_FORMATS_TEXT = 'PNG, JPEG, GIF, WebP'
+
+function isSupportedClaudeImageMediaType(mediaType: string): boolean {
+  return SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES.has(mediaType.toLowerCase())
+}
+
+function exceedsClaudeImageSizeLimit(image: ClaudeDraftImage): boolean {
+  return estimateBase64DecodedBytes(image.base64Data) > MAX_CLAUDE_IMAGE_BYTES
+}
 
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -67,6 +84,56 @@ function parseDataUrl(dataUrl: string): { mediaType: string; base64Data: string 
   }
 }
 
+function estimateBase64DecodedBytes(base64Data: string): number {
+  const normalized = base64Data.trim()
+  if (normalized.length === 0) return 0
+  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0
+  return Math.floor((normalized.length * 3) / 4) - padding
+}
+
+function parseImagesFromHtml(html: string): ClaudeDraftImage[] {
+  if (!html.trim()) return []
+  // Some browsers copy web images as an HTML fragment containing an
+  // embedded data URL rather than exposing a File in clipboardData.
+  // We only parse this into a detached Document and read `img.src` —
+  // the HTML is never injected into the live DOM.
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const images: ClaudeDraftImage[] = []
+  for (const img of Array.from(doc.images)) {
+    const src = img.getAttribute('src')?.trim() ?? ''
+    if (!src.startsWith('data:image/')) continue
+    try {
+      const { mediaType, base64Data } = parseDataUrl(src)
+      images.push({
+        id: crypto.randomUUID(),
+        mediaType,
+        base64Data,
+        previewUrl: src,
+        filename: img.getAttribute('alt')?.trim() || 'Pasted image',
+      })
+    } catch {
+      // Ignore malformed HTML image sources and keep scanning.
+    }
+  }
+  return images
+}
+
+async function filesToDraftImages(files: File[]): Promise<ClaudeDraftImage[]> {
+  return Promise.all(
+    files.map(async file => {
+      const previewUrl = await fileToDataUrl(file)
+      const { mediaType, base64Data } = parseDataUrl(previewUrl)
+      return {
+        id: crypto.randomUUID(),
+        mediaType,
+        base64Data,
+        previewUrl,
+        filename: file.name || 'Pasted image',
+      } satisfies ClaudeDraftImage
+    }),
+  )
+}
+
 async function readImagesFromClipboard(): Promise<ClaudeDraftImage[]> {
   if (!navigator.clipboard?.read) return []
   const items = await navigator.clipboard.read()
@@ -92,6 +159,41 @@ function buildClaudeImagePastePayload(text: string, imagePaths: string[]): strin
   if (imagePaths.length === 0) return text
   if (text.trim().length === 0) return imagePaths.join('\n')
   return `${imagePaths.join('\n')}\n${text}`
+}
+
+async function sendBracketedPaste(
+  send: (data: string) => Promise<void>,
+  payload: string,
+): Promise<void> {
+  await send(`\x1b[200~${payload}\x1b[201~`)
+}
+
+async function sendBracketedPasteThenSubmit(
+  send: (data: string) => Promise<void>,
+  payload: string,
+  delayMs = 0,
+): Promise<void> {
+  if (delayMs <= 0) {
+    await send(`\x1b[200~${payload}\x1b[201~\r`)
+    return
+  }
+  await sendBracketedPaste(send, payload)
+  await wait(delayMs)
+  await send('\r')
+}
+
+async function sendClaudeDraftText(
+  send: (data: string) => Promise<void>,
+  text: string,
+): Promise<void> {
+  if (text.length === 0) return
+  const isPasteLike = text.includes('\n') || text.length > CLAUDE_PASTE_THRESHOLD
+  if (isPasteLike) {
+    await sendBracketedPaste(send, text)
+    await wait(CLAUDE_PASTE_SUBMIT_DELAY_MS)
+    return
+  }
+  await send(text)
 }
 
 // TileLeaf — one pane. A "mini cc-shell" self-contained in a box:
@@ -141,6 +243,7 @@ export function TileLeaf({
   workspace,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const { showToast } = useGlobalToast()
   // Destructure the stable useCallback setter so effect deps don't
   // spuriously invalidate on every parent render. workspace itself
   // is a fresh object literal each render, but its methods are
@@ -405,40 +508,54 @@ export function TileLeaf({
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
       if (provider !== 'claude') return
-      const files = Array.from(e.clipboardData.items)
-        .map(item => item.kind === 'file' ? item.getAsFile() : null)
-        .filter((file): file is File => Boolean(file && file.type.startsWith('image/')))
 
       try {
-        let images: ClaudeDraftImage[] = []
-        if (files.length > 0) {
+        const itemFiles = Array.from(e.clipboardData.items)
+          .map(item => item.type.startsWith('image/') ? item.getAsFile() : null)
+          .filter((file): file is File => Boolean(file && file.type.startsWith('image/')))
+        const htmlImages = parseImagesFromHtml(e.clipboardData.getData('text/html'))
+
+        let images: ClaudeDraftImage[] = htmlImages
+        if (itemFiles.length > 0) {
           e.preventDefault()
-          images = await Promise.all(
-            files.map(async file => {
-              const previewUrl = await fileToDataUrl(file)
-              const { mediaType, base64Data } = parseDataUrl(previewUrl)
-              return {
-                id: crypto.randomUUID(),
-                mediaType,
-                base64Data,
-                previewUrl,
-                filename: file.name || 'Pasted image',
-              } satisfies ClaudeDraftImage
-            }),
-          )
-        } else {
+          const fileImages = await filesToDraftImages(itemFiles)
+          const existing = new Set(images.map(image => image.previewUrl))
+          images = [
+            ...images,
+            ...fileImages.filter(image => !existing.has(image.previewUrl)),
+          ]
+        } else if (images.length === 0) {
           images = await readImagesFromClipboard()
           if (images.length > 0) {
             e.preventDefault()
           }
+        } else {
+          e.preventDefault()
         }
         if (images.length === 0) return
+        const unsupported = images.find(
+          image => !isSupportedClaudeImageMediaType(image.mediaType),
+        )
+        if (unsupported) {
+          showToast(
+            `Unsupported image format: ${unsupported.mediaType}. Claude supports ${SUPPORTED_CLAUDE_IMAGE_FORMATS_TEXT}.`,
+          )
+          return
+        }
+        const oversized = images.find(exceedsClaudeImageSizeLimit)
+        if (oversized) {
+          showToast(
+            `Image is too large. Claude supports pasted images up to 5 MB.`,
+          )
+          return
+        }
         appendDraftImages(images)
       } catch (err) {
         console.warn('[TileLeaf] image paste failed', err)
+        showToast('Image paste failed.')
       }
     },
-    [appendDraftImages, provider],
+    [appendDraftImages, provider, showToast],
   )
 
   const exitSlashMode = () => {
@@ -580,7 +697,7 @@ export function TileLeaf({
           (input.includes('\n') || input.length > CLAUDE_PASTE_THRESHOLD)
 
         if (provider === 'codex') {
-          await send(`\x1b[200~${input}\x1b[201~\r`)
+          await sendBracketedPasteThenSubmit(send, input)
         } else if (hasClaudeImages) {
           const savedImages = await Promise.all(
             draftImages.map(image =>
@@ -591,22 +708,26 @@ export function TileLeaf({
               }),
             ),
           )
-          const payload = buildClaudeImagePastePayload(
-            input,
-            savedImages.map(image => image.path),
-          )
-          await send(`\x1b[200~${payload}\x1b[201~`)
-          await wait(CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS)
-          await send('\r')
+          const imagePaths = savedImages.map(image => image.path)
+          if (input.length > 0) {
+            await sendClaudeDraftText(send, input)
+            // Claude collapses the following path paste into image pills.
+            // If the user's prompt ends in a non-whitespace character,
+            // inject one separator so the final prompt text does not run
+            // directly into the first `[Image #N]` placeholder.
+            if (!/\s$/.test(input)) {
+              await send(' ')
+            }
+          }
+          const payload = buildClaudeImagePastePayload('', imagePaths)
+          await sendBracketedPasteThenSubmit(send, payload, CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS)
         } else if (isClaudePasteLike) {
           // Keep the submit key OUT of the bracketed-paste write and
           // wait past Claude's paste debounce. Sending `\r` in the same
           // PTY chunk races Claude's paste accumulator and can leave the
           // prompt sitting in the composer until a later keypress nudges
           // it through the normal submit path.
-          await send(`\x1b[200~${input}\x1b[201~`)
-          await wait(CLAUDE_PASTE_SUBMIT_DELAY_MS)
-          await send('\r')
+          await sendBracketedPasteThenSubmit(send, input, CLAUDE_PASTE_SUBMIT_DELAY_MS)
         } else {
           await send(input + '\r')
         }

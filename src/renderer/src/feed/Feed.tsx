@@ -1847,6 +1847,51 @@ function UserBand({ children }: { children: React.ReactNode }) {
   )
 }
 
+function imageDataUrl(block: ContentBlock): string | null {
+  const source = (block as { source?: unknown }).source
+  if (!source || typeof source !== 'object') return null
+  const rec = source as Record<string, unknown>
+  if (rec.type !== 'base64') return null
+  const mediaType = typeof rec.media_type === 'string' ? rec.media_type : 'image/png'
+  const data = typeof rec.data === 'string' ? rec.data : null
+  if (!data) return null
+  return `data:${mediaType};base64,${data}`
+}
+
+const ImageBlockRow = memo(function ImageBlockRow({
+  block,
+  role,
+}: {
+  block: ContentBlock
+  role: 'user' | 'assistant'
+}) {
+  const src = imageDataUrl(block)
+  const mediaType =
+    typeof (block as { source?: { media_type?: unknown } }).source?.media_type === 'string'
+      ? (block as { source: { media_type: string } }).source.media_type
+      : 'image'
+  const alt = role === 'user' ? 'Pasted image' : 'Image'
+  const row = (
+    <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
+      <div>
+        {src ? (
+          <img
+            src={src}
+            alt={alt}
+            title={mediaType}
+            className="max-h-[28rem] max-w-full rounded border border-border object-contain bg-surface"
+          />
+        ) : (
+          <div className="text-muted text-[11px] uppercase tracking-wider">
+            image
+          </div>
+        )}
+      </div>
+    </MarkerRow>
+  )
+  return role === 'user' ? <UserBand>{row}</UserBand> : row
+})
+
 const CompactBoundaryRow = memo(function CompactBoundaryRow() {
   return (
     <MarkerRow marker="·" tone="muted">
@@ -2033,6 +2078,9 @@ const Block = memo(function Block({
           </details>
         </MarkerRow>
       )
+    }
+    case 'image': {
+      return <ImageBlockRow block={block} role={role} />
     }
     case 'tool_use': {
       // Dispatch tool_use blocks to provider-specific row renderers.
