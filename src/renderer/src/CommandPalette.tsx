@@ -47,6 +47,9 @@ type Props = {
   toggleCustomRendering: () => void
   customRenderingEnabled: boolean
   dangerousAgentsEnabled: boolean
+  gitBarOpen: boolean
+  debugPanelOpen: boolean
+  proxyDebugPanelOpen: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
 }
 
@@ -76,6 +79,9 @@ export function CommandPalette({
   toggleCustomRendering,
   customRenderingEnabled,
   dangerousAgentsEnabled,
+  gitBarOpen,
+  debugPanelOpen,
+  proxyDebugPanelOpen,
   setDangerousAgentsEnabled,
 }: Props) {
   const [query, setQuery] = useState('')
@@ -158,6 +164,9 @@ export function CommandPalette({
       flags: {
         customRenderingEnabled,
         dangerousAgentsEnabled,
+        gitBarOpen,
+        debugPanelOpen,
+        proxyDebugPanelOpen,
       },
     }),
     [
@@ -178,6 +187,9 @@ export function CommandPalette({
       onClose,
       customRenderingEnabled,
       dangerousAgentsEnabled,
+      gitBarOpen,
+      debugPanelOpen,
+      proxyDebugPanelOpen,
     ],
   )
 
@@ -388,9 +400,24 @@ export function CommandPalette({
                   onMouseEnter={() => setSelectedIndex(i)}
                   onClick={() => executeCommand(command)}
                 >
-                  <span>{command.title}</span>
+                  <div className="min-w-0 flex items-center gap-2">
+                    <span>{command.title}</span>
+                    {command.state && (
+                      <span
+                        className={
+                          command.state.tone === 'danger'
+                            ? 'rounded border border-red-600/40 bg-red-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-red-300'
+                            : command.state.tone === 'accent'
+                              ? 'rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
+                              : 'rounded border border-border bg-surface-hi px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
+                        }
+                      >
+                        {command.state.label}
+                      </span>
+                    )}
+                  </div>
                   {command.shortcut && (
-                    <span className="text-[11px] text-muted">{command.shortcut}</span>
+                    <span className="ml-3 flex-shrink-0 text-[11px] text-muted">{command.shortcut}</span>
                   )}
                 </div>
               ))

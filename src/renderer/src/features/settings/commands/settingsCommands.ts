@@ -9,8 +9,11 @@ export const settingsCommands: CommandDef[] = [
   },
   {
     id: 'toggle-custom-rendering',
-    title: ({ flags }) =>
-      `Toggle Custom Rendering  (${flags.customRenderingEnabled ? 'on' : 'off'})`,
+    title: 'Custom Rendering',
+    getState: ({ flags }) => ({
+      label: flags.customRenderingEnabled ? 'On' : 'Off',
+      tone: flags.customRenderingEnabled ? 'accent' : 'neutral',
+    }),
     run: ({ ui }) => ui.toggleCustomRendering(),
   },
   ...dangerousCommands,

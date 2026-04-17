@@ -56,7 +56,7 @@ export function TileTabsModal({
     >
       <div className="w-[540px] max-w-[calc(100vw-64px)] bg-surface border border-border-hi p-6 max-h-[80vh] flex flex-col">
         <div className="text-[13px] font-semibold text-ink mb-2 flex-shrink-0">
-          Tile Tabs
+          Tiled Tabs
         </div>
         <div className="text-[11px] text-muted mb-4 flex-shrink-0">
           Select two or more tabs to show side by side.
@@ -101,7 +101,7 @@ export function TileTabsModal({
             disabled={selected.length < 2}
             className="px-4 py-1.5 text-[12px] bg-accent text-accent-fg border border-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Tile Tabs
+            Open Tiled Tabs
           </button>
         </div>
       </div>

@@ -2,14 +2,18 @@ import type { CommandDef } from '../../../commands/types'
 
 export const tileTabsCommands: CommandDef[] = [
   {
-    id: 'tile-tabs',
-    title: 'Tile Tabs',
-    run: ({ ui }) => ui.openTileTabs(),
-  },
-  {
-    id: 'exit-tiled-tabs',
-    title: 'Exit Tiled Tabs',
-    when: ({ workspace }) => workspace.tileTabs !== null,
-    run: ({ workspace }) => workspace.closeTileTabs(),
+    id: 'tiled-tabs',
+    title: 'Tiled Tabs',
+    getState: ({ workspace }) => ({
+      label: workspace.tileTabs ? 'On' : 'Off',
+      tone: workspace.tileTabs ? 'accent' : 'neutral',
+    }),
+    run: ({ workspace, ui }) => {
+      if (workspace.tileTabs) {
+        workspace.closeTileTabs()
+        return
+      }
+      ui.openTileTabs()
+    },
   },
 ]

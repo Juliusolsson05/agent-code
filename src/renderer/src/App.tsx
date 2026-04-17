@@ -259,6 +259,9 @@ export default function App() {
         toggleCustomRendering={toggleCustomRendering}
         customRenderingEnabled={settings.customRendering}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
+        gitBarOpen={gitBarOpen}
+        debugPanelOpen={debugPanelOpen}
+        proxyDebugPanelOpen={proxyDebugPanelOpen}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
       />
 

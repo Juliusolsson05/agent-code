@@ -1,5 +1,10 @@
 import type { Workspace } from '../tiles/workspaceStore'
 
+export type CommandState = {
+  label: string
+  tone?: 'neutral' | 'accent' | 'danger'
+}
+
 export type CommandContext = {
   workspace: Workspace
   ui: {
@@ -21,6 +26,9 @@ export type CommandContext = {
   flags: {
     customRenderingEnabled: boolean
     dangerousAgentsEnabled: boolean
+    gitBarOpen: boolean
+    debugPanelOpen: boolean
+    proxyDebugPanelOpen: boolean
   }
 }
 
@@ -30,6 +38,7 @@ export type CommandDef = {
   shortcut?: string
   keywords?: string[]
   when?: (ctx: CommandContext) => boolean
+  getState?: (ctx: CommandContext) => CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
 }
 
@@ -38,5 +47,6 @@ export type ResolvedCommand = {
   title: string
   shortcut?: string
   keywords: string[]
+  state: CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
 }

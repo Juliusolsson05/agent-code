@@ -94,7 +94,17 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'toggle-tail',
-    title: 'Toggle Tail',
+    title: 'Tail',
+    getState: ({ workspace }) => {
+      const tab = workspace.activeTab
+      const tailMode = tab
+        ? workspace.getRuntime(tab.focusedSessionId).tailMode
+        : false
+      return {
+        label: tailMode ? 'On' : 'Off',
+        tone: tailMode ? 'accent' : 'neutral',
+      }
+    },
     run: ({ workspace }) => {
       const tab = workspace.activeTab
       if (!tab) return
@@ -103,7 +113,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'jump-latest-message',
-    title: 'Jump To Latest Message',
+    title: 'Jump to Latest Message',
     shortcut: 'End',
     when: ({ workspace }) => {
       const tab = workspace.activeTab

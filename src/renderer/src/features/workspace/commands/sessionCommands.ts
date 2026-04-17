@@ -45,14 +45,17 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'reload-agent',
-    title: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return 'Reload Agent'
-      const meta = workspace.state.sessions[tab.focusedSessionId]
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'codex' ? 'Reload Codex Agent' : 'Reload Claude Agent'
-    },
+    title: 'Reload Agent',
     keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'reconnect'],
+    getState: ({ workspace }) => {
+      const tab = workspace.activeTab
+      const meta = tab ? workspace.state.sessions[tab.focusedSessionId] : null
+      const kind = meta?.kind ?? 'claude'
+      return {
+        label: kind === 'codex' ? 'Codex' : 'Claude',
+        tone: 'neutral',
+      }
+    },
     when: ({ workspace }) => {
       const tab = workspace.activeTab
       if (!tab) return false
@@ -106,14 +109,17 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'switch-provider',
-    title: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return 'Switch Provider'
-      const meta = workspace.state.sessions[tab.focusedSessionId]
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'codex' ? 'Switch To Claude' : 'Switch To Codex'
-    },
+    title: 'Switch Provider',
     keywords: ['provider', 'switch', 'claude', 'codex', 'translate'],
+    getState: ({ workspace }) => {
+      const tab = workspace.activeTab
+      const meta = tab ? workspace.state.sessions[tab.focusedSessionId] : null
+      const kind = meta?.kind ?? 'claude'
+      return {
+        label: kind === 'codex' ? 'Codex' : 'Claude',
+        tone: 'neutral',
+      }
+    },
     when: ({ workspace }) => {
       const tab = workspace.activeTab
       if (!tab) return false
@@ -125,18 +131,30 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-git-bar',
-    title: 'Toggle Git Bar',
+    title: 'Git Bar',
+    getState: ({ flags }) => ({
+      label: flags.gitBarOpen ? 'On' : 'Off',
+      tone: flags.gitBarOpen ? 'accent' : 'neutral',
+    }),
     run: ({ ui }) => ui.toggleGitBar(),
   },
   {
     id: 'toggle-debug-panel',
-    title: 'Toggle Debug Panel',
+    title: 'Debug Panel',
+    getState: ({ flags }) => ({
+      label: flags.debugPanelOpen ? 'On' : 'Off',
+      tone: flags.debugPanelOpen ? 'accent' : 'neutral',
+    }),
     run: ({ ui }) => ui.toggleDebugPanel(),
   },
   {
     id: 'toggle-proxy-debug-panel',
-    title: 'Toggle Proxy Debug Panel',
+    title: 'Proxy Debug Panel',
     keywords: ['proxy', 'sse', 'stream', 'semantic', 'anthropic', 'debug'],
+    getState: ({ flags }) => ({
+      label: flags.proxyDebugPanelOpen ? 'On' : 'Off',
+      tone: flags.proxyDebugPanelOpen ? 'accent' : 'neutral',
+    }),
     run: ({ ui }) => ui.toggleProxyDebugPanel(),
   },
 ]

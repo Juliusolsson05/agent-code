@@ -18,7 +18,11 @@ export const layoutCommands: CommandDef[] = [
   },
   {
     id: 'toggle-status-mode',
-    title: 'Toggle Status Mode',
+    title: 'Status Mode',
+    getState: ({ workspace }) => ({
+      label: workspace.statusMode ? 'On' : 'Off',
+      tone: workspace.statusMode ? 'accent' : 'neutral',
+    }),
     run: ({ workspace }) => workspace.toggleStatusMode(),
   },
 ]

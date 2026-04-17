@@ -3,7 +3,11 @@ import type { CommandDef } from '../../../commands/types'
 export const spotlightCommands: CommandDef[] = [
   {
     id: 'toggle-spotlight',
-    title: 'Toggle Spotlight',
+    title: 'Spotlight',
+    getState: ({ workspace }) => ({
+      label: workspace.spotlight ? 'On' : 'Off',
+      tone: workspace.spotlight ? 'accent' : 'neutral',
+    }),
     run: ({ workspace }) => workspace.toggleSpotlight(),
   },
 ]
