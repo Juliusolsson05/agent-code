@@ -804,22 +804,14 @@ export function TileLeaf({
           provider={provider}
           workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
           entries={runtime.entries}
-          // Feed the WIDER `recentScreen` to the streaming extractor.
-          // The extractor walks bottom-up looking for the `⏺` marker;
-          // CC's longer responses scroll the marker out of the 40-row
-          // viewport, so passing `screen` (viewport only) made the
-          // streaming card stay blank for any reply taller than the
-          // viewport. `recentScreen` covers ~200 rows of scrollback,
-          // enough to keep the marker visible for typical responses.
-          // Screen parsing remains supported as fallback, but we widen the gate
-          // beyond `awaitingAssistant` so the old path still has a chance to show
-          // live text when semantic events are missing yet the session is
-          // obviously active.
-          streamingScreen={isSessionLive ? runtime.recentScreen : null}
-          streamingScreenMarkdown={
-            isSessionLive ? runtime.recentScreenMarkdown : null
-          }
-          streamingBaseline={runtime.streamingBaseline}
+          // Live text renders ONLY from the semantic channel. The
+          // former `streamingScreen` / `streamingScreenMarkdown` /
+          // `streamingBaseline` props are gone — Feed no longer
+          // parses the TUI buffer at render time. Screen-derived
+          // live text now arrives via the semantic channel tagged
+          // `source: 'screen'`, published by the headless packages
+          // with a baseline gate that prevents the previous turn's
+          // text from leaking into the new turn's first delta.
           activityStatus={runtime.activityStatus}
           semanticTurn={runtime.semantic.currentTurn}
           tailMode={runtime.tailMode}

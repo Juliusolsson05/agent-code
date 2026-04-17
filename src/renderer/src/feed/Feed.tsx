@@ -13,7 +13,6 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 
-import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
 import {
   EditRow,
   MultiEditRow,
@@ -313,17 +312,10 @@ type Props = {
   /** Which provider's row renderers to use. Default 'claude'. */
   provider?: AgentProvider
   entries: Entry[]
-  /** Plain-text screen snapshot. Used for baseline comparison. */
-  streamingScreen?: string | null
-  /** Same screen with bold/italic cell attributes reconstructed as
-   *  markdown. Used for the actual streaming card render. */
-  streamingScreenMarkdown?: string | null
-  streamingBaseline?: string | null
-  /** Activity status detected from the screen buffer. Non-null when
-   *  CC is actively working — carries the spinner verb text (e.g.
-   *  "Cogitating…"). Used to show a working indicator at the bottom
-   *  of the feed and to enrich the "thinking…" fallback in the
-   *  streaming row with the actual verb CC is displaying. */
+  /** Spinner verb text from the headless package ("Cogitating…").
+   *  Rendered below the feed when no semantic turn is mounted so
+   *  the user sees the agent is working even if no live text is
+   *  flowing yet. */
   activityStatus?: string | null
   tailMode?: boolean
   /**
@@ -441,9 +433,6 @@ function FeedImpl({
   sessionId,
   provider = 'claude',
   entries,
-  streamingScreen,
-  streamingScreenMarkdown,
-  streamingBaseline,
   activityStatus,
   tailMode = false,
   pickerSelectedUuid = null,
@@ -680,7 +669,7 @@ function FeedImpl({
     // no animation frames.
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [entries.length, streamingScreen, tailMode, semanticTurnSignal, bootstrapping])
+  }, [entries.length, tailMode, semanticTurnSignal, bootstrapping])
 
   // Pin-once on the bootstrap → live transition. Runs exactly once per
   // transition thanks to the previous-value ref: we read the prior
@@ -821,7 +810,7 @@ function FeedImpl({
 
   const hasSemanticStreaming = semanticTurn !== null
 
-  if (visible.length === 0 && !streamingScreen && !hasSemanticStreaming) {
+  if (visible.length === 0 && !hasSemanticStreaming) {
     return (
       <div className="h-full flex items-center justify-center">
         <div className="text-muted text-[12px]">
@@ -877,23 +866,30 @@ function FeedImpl({
               </div>
             )
           })}
-          {semanticTurn != null ? (
+          {/* ONE owner rule for live assistant text.
+           *
+           * Live text renders exclusively from the semantic channel
+           * (claude-code-headless / codex-headless). The render-time
+           * regex extractor over the raw TUI screen (`<StreamingRow>`)
+           * was removed because it was a second producer for the same
+           * feed slot — the structural cause of:
+           *   - double-render on resume (EntryRow + StreamingRow both
+           *     showing the last assistant message),
+           *   - stale previous-turn text rendered under the new user
+           *     message for ~seconds after submit.
+           *
+           * Non-proxy sessions still get live streaming: the headless
+           * packages publish screen-derived semantic deltas (labelled
+           * `source: 'screen'`) on the same channel, gated by a
+           * baseline so they don't emit the previous turn's buffered
+           * text as the first delta of a new turn. */}
+          {semanticTurn != null && (
             <SemanticStreamingTurn turn={semanticTurn} />
-          ) : streamingScreen != null ? (
-            <StreamingRow
-              screen={streamingScreen}
-              screenMarkdown={streamingScreenMarkdown ?? streamingScreen}
-              baseline={streamingBaseline ?? null}
-              activityStatus={activityStatus ?? null}
-            />
-          ) : null}
-          {/* Activity indicator: shown when CC is working but the
-              streaming row isn't active yet (e.g. the very start of a
-              turn before awaitingAssistant flips, or during tool
-              execution between JSONL entries). The streaming row
-              handles its own "thinking…" state internally, so we only
-              render this when the streaming row is absent. */}
-          {semanticTurn == null && streamingScreen == null && activityStatus && (
+          )}
+          {/* Activity indicator — shown when the agent is working but
+              no semantic turn is mounted (tool execution between
+              turns, very start before the first semantic event). */}
+          {semanticTurn == null && activityStatus && (
             <ActivityIndicator status={activityStatus} />
           )}
           <div ref={endRef} />
@@ -2137,18 +2133,6 @@ function stripLineNumberPrefix(text: string): string {
     .join('\n')
 }
 
-function stripStreamingMarker(line: string, provider: AgentProvider): string {
-  // Provider-specific because the streaming preview is assembled in two
-  // stages: parse structure from the plain screen, then pull the same line
-  // range out of the markdown reconstruction. If the marker stripper only
-  // knows Claude's `⏺`, Codex lines won't line up and the markdown path can
-  // re-introduce prompt/status chrome even when the plain parser was right.
-  if (provider === 'codex') {
-    return line.replace(/^\s*(\*{1,3})?[•◦](\*{1,3})?\s?/, '')
-  }
-  return line.replace(/^\s*(\*{1,3})?⏺(\*{1,3})?\s?/, '')
-}
-
 /* ---------- System row (hidden by default; shown when toggled on) ---------- */
 
 const SystemRow = memo(function SystemRow({ entry }: { entry: Entry }) {
@@ -2176,149 +2160,23 @@ function attachmentLabel(entry: Entry): string {
   return 'attachment'
 }
 
-/* ---------- Streaming row (transient preview) ---------- */
-
-function StreamingRow({
-  screen,
-  screenMarkdown,
-  baseline,
-  activityStatus,
-}: {
-  screen: string
-  screenMarkdown: string
-  baseline: string | null
-  activityStatus: string | null
-}) {
-  // ALL structural detection runs on PLAIN text — the parsers look for
-  // `⏺`, `⎿`, spinner glyphs etc. which are literal characters in the
-  // plain snapshot. In the markdown snapshot, `terminalToMarkdown()`
-  // wraps bold cells in `**…**`, so `⏺` becomes `**⏺**` and none of
-  // the regexes match. Running the parser on markdown was the bug that
-  // caused streaming to show "thinking…" forever even while CC was
-  // actively outputting text.
-  //
-  // Instead we extract from PLAIN, then use the line indices to grab
-  // the corresponding lines from the markdown snapshot. The line count
-  // is identical between plain and markdown (terminalToMarkdown walks
-  // the same rows), so a 1:1 index mapping is correct.
-  const currentProvider = useContext(ProviderContext)
-  const plainExtract = extractAssistantInProgress(screen, currentProvider)
-  const isStale =
-    baseline != null &&
-    isStaleStreamingExtract(plainExtract, baseline, currentProvider)
-  const show = plainExtract && !isStale
-
-  // Map the assistant block to markdown lines. We find where the
-  // extracted block sits in the chrome-stripped plain text, then pull
-  // the same line range from the markdown version. Both snapshots
-  // have the same number of lines (one per terminal row), so we can
-  // index directly.
-  let display = ''
-  if (show) {
-    const plainLines = screen.split('\n')
-    const mdLines = screenMarkdown.split('\n')
-    const extractLines = plainExtract.split('\n')
-
-    // Find the first extracted line in the plain screen. Walk backward
-    // since the assistant block is near the bottom.
-    const firstExtractLine = extractLines[0]?.replace(/[ \t]+$/, '') ?? ''
-    let startIdx = -1
-    for (let i = plainLines.length - 1; i >= 0; i--) {
-      const plain = plainLines[i]?.replace(/[ \t]+$/, '') ?? ''
-      // The extracted text has the `⏺ ` marker stripped, so compare
-      // against the plain line with the marker also stripped.
-      const stripped = stripStreamingMarker(plain, currentProvider)
-      if (stripped === firstExtractLine || plain === firstExtractLine) {
-        startIdx = i
-        break
-      }
-    }
-
-    if (startIdx >= 0 && startIdx + extractLines.length <= mdLines.length) {
-      // Pull the corresponding markdown lines and strip the marker
-      // + continuation indent the same way extractAssistantInProgress
-      // does for the plain version.
-      const mdBlock = mdLines
-        .slice(startIdx, startIdx + extractLines.length)
-        .map((l, i) => {
-          let cleaned = l.replace(/[ \t]+$/, '')
-          if (i === 0) {
-            // Strip the marker (possibly wrapped in bold: **⏺** or **⏺ **)
-            cleaned = stripStreamingMarker(cleaned, currentProvider)
-          } else {
-            // Strip 2-char continuation indent (same as the plain parser)
-            if (cleaned.startsWith('  ')) cleaned = cleaned.slice(2)
-          }
-          return cleaned
-        })
-      display = mdBlock.join('\n').replace(/\n{3,}/g, '\n\n')
-    } else {
-      // Fallback: use plain text if we couldn't map indices.
-      display = plainExtract
-    }
-  }
-
-  return (
-    <MarkerRow marker="⏺">
-      {display ? (
-        <StreamingProse text={display} />
-      ) : (
-        <div className="flex items-center gap-2 text-muted text-[12px] py-0.5">
-          <span className="streaming-dot inline-block w-1.5 h-1.5 rounded-full bg-accent" />
-          <span>{activityStatus ?? 'thinking…'}</span>
-        </div>
-      )}
-    </MarkerRow>
-  )
-}
-
-function normalizeStreamingExtractForCompare(text: string): string {
-  return text
-    .split('\n')
-    .map(line => line.trimEnd())
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-}
-
-function sharedPrefixLength(a: string, b: string): number {
-  const end = Math.min(a.length, b.length)
-  let i = 0
-  while (i < end && a[i] === b[i]) i += 1
-  return i
-}
-
-function isStaleStreamingExtract(
-  extract: string,
-  baseline: string,
-  provider: AgentProvider,
-): boolean {
-  const next = normalizeStreamingExtractForCompare(extract)
-  const prev = normalizeStreamingExtractForCompare(baseline)
-  if (!next || !prev) return false
-  if (next === prev) return true
-
-  // Codex leaves the previous assistant block visible on screen for a
-  // short window after submit, before any new assistant text replaces
-  // it. In long threads the extracted block can shift slightly across
-  // consecutive snapshots (blank-line collapse, a clipped tail/head as
-  // the viewport recenters, etc.), so exact equality is too brittle:
-  // we would briefly re-render the old answer under the new prompt.
-  //
-  // Treat "near-identical prefix + containment" as stale for Codex only.
-  // This keeps Claude's stricter behavior unchanged and only broadens
-  // suppression in the provider where the stale-preview bug actually
-  // happens.
-  if (provider !== 'codex') return false
-
-  const shorter = next.length <= prev.length ? next : prev
-  const longer = next.length <= prev.length ? prev : next
-  if (shorter.length < 24) return false
-  if (!longer.includes(shorter)) return false
-
-  const prefix = sharedPrefixLength(next, prev)
-  return prefix / shorter.length >= 0.9
-}
+/* ---------- Streaming row — REMOVED ----------
+ *
+ * The render-time regex extractor over the raw TUI screen used to
+ * live here (`StreamingRow` + `isStaleStreamingExtract` helpers).
+ * Its removal is the structural fix for the "double-render last
+ * message on resume" and "previous assistant text rendered below
+ * new user prompt after submit" bugs.
+ *
+ * Rationale: two producers were competing for the same feed slot —
+ * `<EntryRow>` (authoritative, from JSONL) and `<StreamingRow>`
+ * (inferred, regex over raw TUI). Dropping the screen scraper leaves
+ * exactly one owner for live text: `<SemanticStreamingTurn>`, fed by
+ * the headless packages' semantic channel. Screen-derived live text
+ * still works — the packages publish it as semantic deltas tagged
+ * `source: 'screen'`, gated by a baseline so they can't leak the
+ * previous turn's buffered bytes as the first delta of a new turn.
+ */
 
 /* ---------- Activity indicator (standalone, outside streaming row) ---------- */
 

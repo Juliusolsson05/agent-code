@@ -997,16 +997,13 @@ function DebugSession({
               sessionId={session.sessionId}
               provider={session.provider}
               entries={entries}
-              // semanticTurn → Feed renders the proper
-              // SemanticStreamingTurn driven by parsed proxy events.
-              // When null, Feed falls back to the screen-scraping
-              // StreamingRow, which is also gated below by isLive.
+              // One owner for live text. semanticTurn is the only
+              // source of live assistant text — the vendored Feed no
+              // longer accepts `streamingScreen` props. If semantic
+              // events aren't flowing (proxy off, non-proxy Codex
+              // without screen deltas), the feed stays quiet until
+              // the JSONL entry lands. See README → "What we fix".
               semanticTurn={semanticTurn}
-              streamingScreen={isLive ? screen.recent || null : null}
-              streamingScreenMarkdown={
-                isLive ? screen.recentMarkdown || null : null
-              }
-              streamingBaseline={streamingBaseline}
               activityStatus={activityStatus}
               tailMode={false}
               workspaceRoot={session.cwd}
