@@ -349,6 +349,20 @@ select {
 .prose-theme > *:first-child { margin-top: 0; }
 .prose-theme > *:last-child { margin-bottom: 0; }
 
+/*
+ * Unbreakable tokens (e.g. "session:spawn/kill/input/resize/list-all"
+ * or long URLs with no whitespace) overflow the column because CSS's
+ * default `overflow-wrap: normal` only breaks at spaces. Pasted
+ * compact-summary prose and user prompts routinely contain such
+ * tokens. `anywhere` lets the browser break mid-token only when the
+ * line would otherwise overflow — natural breakpoints (spaces,
+ * hyphens) are still preferred. Applied at the .prose-theme scope so
+ * every text child inherits it (p, li, td, blockquote, headings).
+ */
+.prose-theme {
+  overflow-wrap: anywhere;
+}
+
 .prose-theme p {
   margin: 0 0 10px;
   line-height: 1.65;
