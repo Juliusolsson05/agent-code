@@ -98,6 +98,35 @@ export type SessionCompactionStateEvent = {
  *  semantic schema — the renderer imports the type from
  *  claude-code-headless and narrows on `event.type`. */
 export type SessionSemanticEvent = { sessionId: string; event: unknown }
+
+// --- Session prompt index ---------------------------------------------------
+//
+// Shape returned by the Search Conversation Prompts modal's IPC
+// endpoints. Mirrors src/main/sessionIndex.ts's public exports one-to-
+// one; re-declared here because preload/main/renderer are built under
+// different tsconfig contexts and we don't share runtime types across
+// them by import.
+//
+// A single entry carries enough metadata for the modal to render a
+// row (provider icon, summary, relative time) and show the most
+// recent user prompts for visual recognition. `matchCount` is only
+// meaningful on search results — zero on the default listing.
+
+export type SessionIndexPrompt = {
+  text: string
+  ts: number | null
+}
+
+export type SessionIndexEntry = {
+  providerSessionId: string
+  kind: 'claude' | 'codex'
+  cwd: string
+  lastModified: number
+  summary: string
+  recentUserPrompts: SessionIndexPrompt[]
+  matchCount: number
+}
+
 export type SessionHistoryChunk = {
   entries: JsonlEntry[]
   hasMore: boolean
@@ -240,6 +269,38 @@ const api = {
     newProviderSessionId: string
     newFilePath: string
   }> => ipcRenderer.invoke('session:duplicate', params),
+
+  /**
+   * List the most-recently-active sessions with their last few user
+   * prompts attached. Powers the Search Conversation Prompts modal's
+   * default (empty-query) view. Results sorted by lastModified desc.
+   *
+   * cwd === null means "all workspaces"; pass a cwd string to restrict
+   * to sessions recorded in that cwd. Defaults: limit=10,
+   * promptsPerSession=4.
+   */
+  listRecentSessionsWithPrompts: (options: {
+    limit?: number
+    promptsPerSession?: number
+    cwd?: string | null
+  } = {}): Promise<SessionIndexEntry[]> =>
+    ipcRenderer.invoke('sessions:list-recent-with-prompts', options),
+
+  /**
+   * Search every session's user prompts for `query` (substring match,
+   * case-insensitive). Ranks by match-quality × recency. Returns
+   * sessions with their matched prompts prioritised, followed by
+   * context prompts from the same session.
+   *
+   * Empty query degrades to listRecentSessionsWithPrompts.
+   */
+  searchSessionPrompts: (options: {
+    query: string
+    limit?: number
+    promptsPerSession?: number
+    cwd?: string | null
+  }): Promise<SessionIndexEntry[]> =>
+    ipcRenderer.invoke('sessions:search-prompts', options),
 
   /**
    * Attach this renderer to a terminal session's live data stream.

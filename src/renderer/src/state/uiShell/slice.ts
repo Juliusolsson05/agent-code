@@ -20,6 +20,7 @@ export const createUiShellSlice: StateCreator<
   gitBarOpen: false,
   debugPanelOpen: false,
   proxyDebugPanelOpen: false,
+  promptSearchOpen: false,
 
   openCommandPalette: () =>
     set({ commandPaletteOpen: true }, false, 'uiShell/openCommandPalette'),
@@ -76,4 +77,9 @@ export const createUiShellSlice: StateCreator<
       false,
       'uiShell/toggleProxyDebugPanel',
     ),
+
+  openPromptSearch: () =>
+    set({ promptSearchOpen: true }, false, 'uiShell/openPromptSearch'),
+  closePromptSearch: () =>
+    set({ promptSearchOpen: false }, false, 'uiShell/closePromptSearch'),
 })

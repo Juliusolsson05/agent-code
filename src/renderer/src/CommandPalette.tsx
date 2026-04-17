@@ -40,6 +40,7 @@ type Props = {
   onTileTabsRequest: () => void
   onSettingsRequest: () => void
   openViewPrompts: (sessionId: string) => void
+  openPromptSearch: () => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
   toggleProxyDebugPanel: () => void
@@ -68,6 +69,7 @@ export function CommandPalette({
   onTileTabsRequest,
   onSettingsRequest,
   openViewPrompts,
+  openPromptSearch,
   toggleGitBar,
   toggleDebugPanel,
   toggleProxyDebugPanel,
@@ -143,6 +145,7 @@ export function CommandPalette({
         openTileTabs: onTileTabsRequest,
         openSettings: onSettingsRequest,
         openViewPrompts,
+        openPromptSearch,
         toggleGitBar,
         toggleDebugPanel,
         toggleProxyDebugPanel,
@@ -164,6 +167,7 @@ export function CommandPalette({
       onTileTabsRequest,
       onSettingsRequest,
       openViewPrompts,
+      openPromptSearch,
       toggleGitBar,
       toggleDebugPanel,
       toggleProxyDebugPanel,

@@ -19,4 +19,9 @@ export type UiShellState = {
    *  with `useProxy` on, since the panel is driven by semantic events
    *  from the proxy adapter. */
   proxyDebugPanelOpen: boolean
+  /** When true, the Search Conversation Prompts modal is open. Lives
+   *  on the uiShell slice (not the workspace slice) because it's
+   *  a cross-session concern: the modal reads prompts from ALL
+   *  sessions on disk, not just those currently mounted. */
+  promptSearchOpen: boolean
 }

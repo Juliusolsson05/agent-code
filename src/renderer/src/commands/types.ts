@@ -8,6 +8,7 @@ export type CommandContext = {
     openTileTabs: () => void
     openSettings: () => void
     openViewPrompts: (sessionId: string) => void
+    openPromptSearch: () => void
     toggleGitBar: () => void
     toggleDebugPanel: () => void
     toggleProxyDebugPanel: () => void

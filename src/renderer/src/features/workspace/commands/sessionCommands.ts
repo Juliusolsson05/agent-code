@@ -19,6 +19,31 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Cross-session prompt search — session names are useless for
+    // finding a conversation, so this command opens a modal that
+    // ranks every session on disk by its user-prompt text instead.
+    // Always available; doesn't depend on a focused session because
+    // the whole point is to find a session when you don't know which
+    // pane to focus first.
+    id: 'search-conversation-prompts',
+    title: 'Search Conversation Prompts',
+    keywords: [
+      'search',
+      'prompt',
+      'prompts',
+      'conversation',
+      'find',
+      'session',
+      'sessions',
+      'recent',
+      'history',
+    ],
+    run: ({ ui }) => {
+      ui.openPromptSearch()
+      ui.closePalette()
+    },
+  },
+  {
     id: 'reload-agent',
     title: ({ workspace }) => {
       const tab = workspace.activeTab

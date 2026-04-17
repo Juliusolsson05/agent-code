@@ -10,6 +10,7 @@ import { TileTabsModal } from './features/tile-tabs/ui/TileTabsModal'
 import { TileTabsView } from './features/tile-tabs/ui/TileTabsView'
 import { BuryPanePrompt } from './features/workspace/ui/BuryPanePrompt'
 import { NewAgentPlacementOverlay } from './features/workspace/ui/NewAgentPlacementOverlay'
+import { PromptSearchModal } from './features/workspace/ui/PromptSearchModal'
 import { ViewPromptsModal } from './features/workspace/ui/ViewPromptsModal'
 import { GitBar } from './GitBar'
 import { AppearanceMenu } from './feed/AppearanceMenu'
@@ -70,6 +71,9 @@ export default function App() {
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
+  const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
+  const openPromptSearch = useAppStore(state => state.openPromptSearch)
+  const closePromptSearch = useAppStore(state => state.closePromptSearch)
 
   useEffect(() => {
     applyTheme(settings)
@@ -251,6 +255,7 @@ export default function App() {
         onTileTabsRequest={onTileTabsRequest}
         onSettingsRequest={openSettingsPage}
         openViewPrompts={openViewPrompts}
+        openPromptSearch={openPromptSearch}
         toggleCustomRendering={toggleCustomRendering}
         customRenderingEnabled={settings.customRendering}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
@@ -296,6 +301,12 @@ export default function App() {
         sessionId={viewPromptsSessionId}
         workspace={workspace}
         onClose={closeViewPrompts}
+      />
+
+      <PromptSearchModal
+        open={promptSearchOpen}
+        workspace={workspace}
+        onClose={closePromptSearch}
       />
 
     </div>
