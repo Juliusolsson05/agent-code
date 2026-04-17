@@ -97,6 +97,11 @@ type SearchOptions = {
 type CacheEntry = {
   mtime: number
   prompts: SessionIndexPrompt[]
+  /** Cwd captured during the same JSONL pass that extracted prompts.
+   *  Cheap — we're reading every line anyway — and avoids a second
+   *  file read. Falls back to '' when no entry in the file carried
+   *  a cwd field; the caller then tries a directory-name reverse. */
+  cwd: string
 }
 
 /** Keyed by provider session id. Codex session ids are globally
@@ -256,31 +261,37 @@ async function extractPromptsFromFile(
   kind: 'claude' | 'codex',
   sessionId: string,
   file: string,
-): Promise<SessionIndexPrompt[]> {
+): Promise<{ prompts: SessionIndexPrompt[]; cwd: string }> {
   const cached = promptCache.get(cacheKey(kind, sessionId))
   let mtime: number
   try {
     const st = await stat(file)
     mtime = st.mtime.getTime()
   } catch {
-    return []
+    return { prompts: [], cwd: '' }
   }
-  if (cached && cached.mtime === mtime) return cached.prompts
+  if (cached && cached.mtime === mtime) {
+    return { prompts: cached.prompts, cwd: cached.cwd }
+  }
 
   let text: string
   try {
     text = await readFile(file, 'utf-8')
   } catch {
-    return []
+    return { prompts: [], cwd: '' }
   }
 
-  const prompts =
+  const parsed =
     kind === 'claude'
-      ? extractClaudePrompts(text)
-      : extractCodexPrompts(text)
+      ? extractClaudePromptsAndCwd(text)
+      : extractCodexPromptsAndCwd(text)
 
-  promptCache.set(cacheKey(kind, sessionId), { mtime, prompts })
-  return prompts
+  promptCache.set(cacheKey(kind, sessionId), {
+    mtime,
+    prompts: parsed.prompts,
+    cwd: parsed.cwd,
+  })
+  return parsed
 }
 
 /** Parse Claude JSONL and extract user prompts. Mirrors the filtering
@@ -294,8 +305,11 @@ async function extractPromptsFromFile(
  *   - dedupe adjacent duplicates (CC occasionally double-records)
  *
  *  Returns newest-first. */
-function extractClaudePrompts(jsonl: string): SessionIndexPrompt[] {
+function extractClaudePromptsAndCwd(
+  jsonl: string,
+): { prompts: SessionIndexPrompt[]; cwd: string } {
   const chronological: SessionIndexPrompt[] = []
+  let cwd = ''
   const lines = jsonl.split('\n')
   for (const line of lines) {
     if (!line.trim()) continue
@@ -305,6 +319,18 @@ function extractClaudePrompts(jsonl: string): SessionIndexPrompt[] {
     } catch {
       continue
     }
+
+    // Capture cwd from the first entry that carries one. Claude
+    // stamps cwd on conversation entries (user / assistant) but NOT
+    // on permission-mode or hook_success attachment entries — and
+    // the first few real entries can be pushed past the top of the
+    // file by huge hook_success injections (multi-KB of skill
+    // bootstrap content). Scanning the full file is the only
+    // reliable way to find cwd for those sessions.
+    if (!cwd && typeof obj.cwd === 'string' && obj.cwd.length > 0) {
+      cwd = obj.cwd as string
+    }
+
     const type = typeof obj.type === 'string' ? obj.type : ''
     if (type !== 'user') continue
 
@@ -335,7 +361,7 @@ function extractClaudePrompts(jsonl: string): SessionIndexPrompt[] {
       ts: Number.isFinite(ts) ? ts : null,
     })
   }
-  return chronological.reverse()
+  return { prompts: chronological.reverse(), cwd }
 }
 
 function extractClaudeUserText(content: unknown): string {
@@ -357,8 +383,11 @@ function extractClaudeUserText(content: unknown): string {
  *  event_msg entries as a belt-and-braces fallback for older rollouts.
  *
  *  Returns newest-first. */
-function extractCodexPrompts(jsonl: string): SessionIndexPrompt[] {
+function extractCodexPromptsAndCwd(
+  jsonl: string,
+): { prompts: SessionIndexPrompt[]; cwd: string } {
   const chronological: SessionIndexPrompt[] = []
+  let cwd = ''
   const lines = jsonl.split('\n')
   for (const line of lines) {
     if (!line.trim()) continue
@@ -367,6 +396,19 @@ function extractCodexPrompts(jsonl: string): SessionIndexPrompt[] {
       obj = JSON.parse(line) as Record<string, unknown>
     } catch {
       continue
+    }
+
+    // Codex puts cwd on the session_meta entry (first rollout line)
+    // at `payload.cwd`. Older schemas sometimes stored it at the
+    // top level. Grab whichever shape we find first and stop looking.
+    if (!cwd) {
+      const topCwd = obj.cwd
+      if (typeof topCwd === 'string' && topCwd.length > 0) cwd = topCwd
+      else {
+        const metaPayload = obj.payload as Record<string, unknown> | undefined
+        const payloadCwd = metaPayload?.cwd
+        if (typeof payloadCwd === 'string' && payloadCwd.length > 0) cwd = payloadCwd
+      }
     }
 
     let text = ''
@@ -414,7 +456,7 @@ function extractCodexPrompts(jsonl: string): SessionIndexPrompt[] {
 
     chronological.push({ text, ts })
   }
-  return chronological.reverse()
+  return { prompts: chronological.reverse(), cwd }
 }
 
 function flattenCodexContent(content: unknown): string {
@@ -435,40 +477,35 @@ function flattenCodexContent(content: unknown): string {
 }
 
 // ---------------------------------------------------------------------------
-// Cwd resolution (Claude)
+// Cwd fallback (Claude) — reverse the project-directory name
 // ---------------------------------------------------------------------------
 
-/** Claude's listSessionsForCwd populates `cwd` for us. For the
- *  all-sessions discovery path we need to read a small HEAD of the
- *  file to pull the cwd out of the first entry. Keep the read minimal
- *  (4 KB is plenty for the first metadata line). */
-async function resolveClaudeCwd(file: string): Promise<string> {
+/** Claude sanitizes cwd into the project directory name by replacing
+ *  every non-alphanumeric character with `-`. That transform is lossy
+ *  (`/Users/x/my-app` and `/Users/x/my/app` both sanitize to
+ *  `-Users-x-my-app`), so we can't perfectly reverse it. But for the
+ *  common case where the cwd has no real dashes in its path segments,
+ *  replacing `-` with `/` gets us back to a plausible absolute path.
+ *  Used only as a fallback when the JSONL scan didn't find a cwd
+ *  field — handy for sessions whose first few entries are oversized
+ *  injected hooks that crowded the metadata out of the first N KB.
+ *
+ *  We additionally stat() the reversed path: if it doesn't exist,
+ *  we return '' so the caller surfaces the "no cwd" error rather
+ *  than resuming under a made-up directory that would confuse the
+ *  model about which files are available. */
+async function claudeCwdFromProjectDir(file: string): Promise<string> {
+  // file looks like: .../.claude/projects/-Users-x-y/abc.jsonl
+  const dirname = file.slice(0, file.lastIndexOf('/'))
+  const projectDirName = dirname.slice(dirname.lastIndexOf('/') + 1)
+  if (!projectDirName.startsWith('-')) return ''
+  const reversed = projectDirName.replace(/-/g, '/')
   try {
-    const head = await readFile(file, { encoding: 'utf-8', flag: 'r' }).then(
-      s => s.slice(0, 4096),
-    )
-    const m = head.match(/"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/)
-    if (m) {
-      return m[1]
-        .replace(/\\"/g, '"')
-        .replace(/\\\\/g, '\\')
-    }
+    const st = await stat(reversed)
+    if (st.isDirectory()) return reversed
   } catch {
-    // fall through
-  }
-  return ''
-}
-
-/** Codex session_meta lives on the first rollout line. We read a
- *  small HEAD and regex-extract cwd — same technique as sessionList. */
-async function resolveCodexCwd(file: string): Promise<string> {
-  try {
-    const text = await readFile(file, 'utf-8')
-    const firstLine = text.slice(0, text.indexOf('\n', 0) + 1 || 4096)
-    const m = firstLine.match(/"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/)
-    if (m) return m[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\')
-  } catch {
-    // fall through
+    // Directory doesn't exist — lossy reverse guessed wrong, or the
+    // original cwd was deleted. Either way, don't return a stale path.
   }
   return ''
 }
@@ -529,16 +566,27 @@ export async function listRecentSessionsWithPrompts(
   const results: SessionIndexEntry[] = []
   for (const c of candidates) {
     if (results.length >= limit) break
-    const prompts = await extractPromptsFromFile(c.kind, c.providerSessionId, c.file)
-    // Sessions with no user prompts are still useful in the list —
-    // they show the provider + time even without recognisable text.
-    // Keep them but put them behind sessions that have at least one
-    // prompt. Cheap post-filter: prioritize non-empty first, filler
-    // second.
-    const resolvedCwd = c.cwd || (c.kind === 'claude'
-      ? await resolveClaudeCwd(c.file)
-      : await resolveCodexCwd(c.file))
-    // Apply cwd filter now if requested and we couldn't earlier.
+    const { prompts, cwd: parsedCwd } = await extractPromptsFromFile(
+      c.kind,
+      c.providerSessionId,
+      c.file,
+    )
+    // Cwd precedence:
+    //   1. Whatever the discoverer already knew (e.g. listSessionsForCwd
+    //      populated it when cwd scope was restricted).
+    //   2. The cwd parsed from the full JSONL (picks up sessions whose
+    //      first few entries are pushed past any fixed head window by
+    //      oversized hook_success injections).
+    //   3. For Claude only: reverse the project-directory name as a
+    //      best-effort fallback — correct when the cwd has no real
+    //      dashes in its path segments.
+    //   4. Empty string — UI surfaces a "no cwd recorded" error
+    //      rather than resuming under a guess.
+    let resolvedCwd = c.cwd || parsedCwd
+    if (!resolvedCwd && c.kind === 'claude') {
+      resolvedCwd = await claudeCwdFromProjectDir(c.file)
+    }
+    // Apply cwd filter now if requested.
     if (cwd && resolvedCwd && resolvedCwd !== cwd) continue
     results.push({
       providerSessionId: c.providerSessionId,
@@ -600,7 +648,11 @@ export async function searchSessionPrompts(
   }> = []
 
   for (const c of candidates) {
-    const prompts = await extractPromptsFromFile(c.kind, c.providerSessionId, c.file)
+    const { prompts, cwd: parsedCwd } = await extractPromptsFromFile(
+      c.kind,
+      c.providerSessionId,
+      c.file,
+    )
     // Score = best match among prompts × recency boost.
     let bestMatch = 0
     let matchCount = 0
@@ -634,9 +686,10 @@ export async function searchSessionPrompts(
     const recency = 1 / (1 + daysSince)
     const score = bestMatch * (1 + recency)
 
-    const resolvedCwd = c.cwd || (c.kind === 'claude'
-      ? await resolveClaudeCwd(c.file)
-      : await resolveCodexCwd(c.file))
+    let resolvedCwd = c.cwd || parsedCwd
+    if (!resolvedCwd && c.kind === 'claude') {
+      resolvedCwd = await claudeCwdFromProjectDir(c.file)
+    }
     if (cwd && resolvedCwd && resolvedCwd !== cwd) continue
 
     // Show matched prompts first, then fill from non-matched for
