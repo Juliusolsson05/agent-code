@@ -1953,17 +1953,54 @@ const StreamingProse = memo(function StreamingProse({
 
 /* ---------- Tool use: "⏺ Bash  ⎿ $ command" ---------- */
 
+// Bash-command display cap, mirroring claude-code's Ink UI:
+//   claude-code-src/full/tools/BashTool/UI.tsx
+//     const MAX_COMMAND_DISPLAY_LINES = 2
+//     const MAX_COMMAND_DISPLAY_CHARS = 160
+// Long / multiline invocations truncate with a trailing `…`. The
+// whole command remains in the transcript; the collapse is purely
+// a density choice so a 20-line heredoc doesn't push the next
+// assistant message below the fold.
+const MAX_COMMAND_DISPLAY_LINES = 2
+const MAX_COMMAND_DISPLAY_CHARS = 160
+
+function truncateBashCommand(cmd: string): string {
+  const lines = cmd.split('\n')
+  const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
+  const needsCharTruncation = cmd.length > MAX_COMMAND_DISPLAY_CHARS
+  if (!needsLineTruncation && !needsCharTruncation) return cmd
+  let truncated = cmd
+  if (needsLineTruncation) {
+    truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n')
+  }
+  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
+    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS)
+  }
+  return truncated.trimEnd() + '…'
+}
+
 const ToolUseRow = memo(function ToolUseRow({ block }: { block: ToolUseBlock }) {
   // Extract the command / description for Bash-like tools. For tools
   // without a `command` field we fall back to stringified input.
   const input = block.input as Record<string, unknown> | undefined
-  const headline = typeof input?.command === 'string'
+  const rawHeadline = typeof input?.command === 'string'
     ? input.command
     : typeof input?.description === 'string'
       ? input.description
       : typeof input?.path === 'string'
         ? input.path
         : null
+
+  // Bash commands get the 2-line / 160-char cap claude-code's Ink UI
+  // enforces. `description` and `path` headlines are already one-line-
+  // ish so we only truncate when the headline came from `command`.
+  const headline = (() => {
+    if (!rawHeadline) return null
+    if (block.name === 'Bash' && typeof input?.command === 'string') {
+      return truncateBashCommand(input.command)
+    }
+    return rawHeadline
+  })()
 
   return (
     <MarkerRow marker="⏺">
@@ -2042,12 +2079,21 @@ const ToolResultRow = memo(function ToolResultRow({
     return null
   }
 
-  // Read tool result: strip the line-number prefix and render as a
-  // code slab with LSP highlighting. CC's Read emits lines like
-  // "42\tactual code here" — we strip the prefix and pass the file
-  // path so CodeBlock can infer the language and use Monaco/LSP.
+  // Read tool result — show a one-line summary only, not the file
+  // contents. Mirrors claude-code-src/full/tools/FileReadTool/UI.tsx
+  // `renderToolResultMessage` which renders "Read <N> lines" at
+  // height={1} and never echoes the file bytes into the feed. The
+  // user already knows which file was read (it's on the tool-use
+  // row); dumping its contents below pushes the next assistant
+  // message off-screen for no gain.
+  //
+  // A click-to-expand <details> keeps the raw content one
+  // interaction away for when you actually need it (debugging,
+  // code review). Syntax highlighting happens inside CodeBlock
+  // only when expanded.
   if (sourceTool === 'Read' && !isError) {
     const stripped = stripLineNumberPrefix(trimmed)
+    const numLines = stripped ? stripped.split('\n').length : 0
     const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
       | Record<string, unknown>
       | undefined
@@ -2058,18 +2104,24 @@ const ToolResultRow = memo(function ToolResultRow({
           ? sourceInput.path
           : null
     return (
-      <ToolBand>
-        <MarkerRow marker="⎿" tone="muted">
-          <CodeBlock
-            code={stripped}
-            path={filePath}
-            workspaceRoot={codeContext.workspaceRoot}
-            codeId={`read:${block.tool_use_id}`}
-            engine="monaco"
-            allowAutoDetect
-          />
-        </MarkerRow>
-      </ToolBand>
+      <MarkerRow marker="⎿" tone="muted">
+        <details className="text-[12px] leading-[1.55] text-ink-dim">
+          <summary className="cursor-pointer select-none">
+            Read <span className="text-ink font-semibold">{numLines}</span>{' '}
+            {numLines === 1 ? 'line' : 'lines'}
+          </summary>
+          <div className="mt-2">
+            <CodeBlock
+              code={stripped}
+              path={filePath}
+              workspaceRoot={codeContext.workspaceRoot}
+              codeId={`read:${block.tool_use_id}`}
+              engine="monaco"
+              allowAutoDetect
+            />
+          </div>
+        </details>
+      </MarkerRow>
     )
   }
 
@@ -2100,20 +2152,57 @@ const ToolResultRow = memo(function ToolResultRow({
     )
   }
 
+  // Everything else — Bash, Glob, LS, tool errors — truncates to the
+  // first few lines and offers a click-to-expand for the rest. Mirrors
+  // claude-code's OutputLine + renderTruncatedContent (MAX_LINES_TO_SHOW
+  // = 3). The collapsed view keeps the feed dense so a long `find .`
+  // or noisy test run doesn't push the assistant's next message off.
+  return <TruncatedOutputRow content={trimmed} isError={isError} />
+})
+
+// MAX_LINES_TO_SHOW in claude-code-src. Hoisted so the memo'd row
+// component doesn't re-create the constant every render.
+const RESULT_MAX_LINES = 3
+
+function TruncatedOutputRow({
+  content,
+  isError,
+}: {
+  content: string
+  isError: boolean
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const lines = content.length === 0 ? [] : content.split('\n')
+  const needsTruncation = lines.length > RESULT_MAX_LINES
+  const shown = expanded || !needsTruncation
+    ? content
+    : lines.slice(0, RESULT_MAX_LINES).join('\n')
+  const hiddenCount = needsTruncation ? lines.length - RESULT_MAX_LINES : 0
   return (
-    <MarkerRow marker="⎿" tone={isError ? 'muted' : 'muted'}>
+    <MarkerRow marker="⎿" tone="muted">
       <pre
         className={`
           font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-          max-h-[360px] overflow-auto
+          ${expanded ? 'max-h-[360px] overflow-auto' : ''}
           ${isError ? 'text-danger' : 'text-ink-dim'}
         `}
       >
-        {trimmed}
+        {shown}
       </pre>
+      {needsTruncation && (
+        <button
+          type="button"
+          onClick={() => setExpanded(e => !e)}
+          className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
+        >
+          {expanded
+            ? 'collapse'
+            : `… +${hiddenCount} ${hiddenCount === 1 ? 'line' : 'lines'} (click to expand)`}
+        </button>
+      )}
     </MarkerRow>
   )
-})
+}
 
 /**
  * CC's Read tool emits one line per source line, prefixed with the
