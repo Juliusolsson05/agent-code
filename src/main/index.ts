@@ -739,37 +739,143 @@ function registerIpc(): void {
       const { promisify } = await import('util')
       const exec = promisify(execFile)
 
-      // git diff --numstat gives us per-file +/- counts.
-      // Includes both staged and unstaged changes.
-      const { stdout: diffStat } = await exec(
-        'git', ['diff', 'HEAD', '--numstat'],
-        { cwd, timeout: 5000 },
-      )
+      // Centralized git runner. Returns stdout; swallows errors and
+      // returns '' so callers can treat "no output" as a valid signal
+      // (e.g. clean worktree, missing HEAD, missing submodule checkout).
+      // Failing loudly here would cascade a single bad command into an
+      // overall { ok: false }, losing the rest of the data we CAN compute.
+      const git = async (gitCwd: string, args: string[]): Promise<string> => {
+        try {
+          const { stdout } = await exec('git', args, { cwd: gitCwd, timeout: 5000 })
+          return stdout
+        } catch {
+          return ''
+        }
+      }
 
-      const files: Array<{
-        file: string
-        additions: number
-        deletions: number
-      }> = []
+      // numstat → [ { file, additions, deletions } ]. Binary files emit
+      // '-' for both counts; we coerce those to 0.
+      const parseNumstat = (text: string): Array<{ file: string; additions: number; deletions: number }> => {
+        const out: Array<{ file: string; additions: number; deletions: number }> = []
+        for (const line of text.trim().split('\n')) {
+          if (!line) continue
+          const [a, d, f] = line.split('\t')
+          if (!f) continue
+          out.push({
+            file: f,
+            additions: a === '-' ? 0 : parseInt(a, 10) || 0,
+            deletions: d === '-' ? 0 : parseInt(d, 10) || 0,
+          })
+        }
+        return out
+      }
 
-      for (const line of diffStat.trim().split('\n')) {
-        if (!line) continue
-        const [add, del, file] = line.split('\t')
-        if (!file) continue
-        files.push({
-          file,
-          // Binary files show '-' for both counts.
-          additions: add === '-' ? 0 : parseInt(add, 10) || 0,
-          deletions: del === '-' ? 0 : parseInt(del, 10) || 0,
+      // Parent repo — branch is the cheap "is this a git repo at all"
+      // probe; if it returns empty we bail to { ok: false } instead of
+      // returning a half-filled shape.
+      const branchOut = await git(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'])
+      if (!branchOut.trim()) throw new Error('not a git repo')
+
+      const diffStat = await git(cwd, ['diff', 'HEAD', '--numstat'])
+      const logOut = await git(cwd, ['log', '--oneline', '--format=%h\t%s\t%an\t%cr', '-5'])
+
+      // ---- Submodule enumeration ------------------------------------------
+      //
+      // WHY this exists: `git diff HEAD --numstat` in the parent shows a
+      // modified submodule path as a +1/-1 gitlink line — that's the SHA
+      // pointer change, not the actual code diff. For GitBar to be useful
+      // when working across submodules we need to walk into each one and
+      // compute:
+      //   - bumped: parent-registered SHA differs from submodule HEAD
+      //       diff range = registered..HEAD
+      //   - dirty: uncommitted edits inside the submodule
+      //       diff = HEAD (worktree)
+      //   - both: parent bumped AND submodule has extra dirty edits
+      //       diff = registered (comparing against worktree, which spans
+      //              both the committed range and the dirty on-top)
+      //
+      // A clean submodule (registered == HEAD, no dirty content) is
+      // skipped entirely so repos that have submodules but haven't
+      // touched them this session don't add noise to the bar.
+      type SubmoduleInfo = {
+        path: string
+        state: 'dirty' | 'bumped' | 'both'
+        files: Array<{ file: string; additions: number; deletions: number }>
+        range?: { from: string; to: string }
+      }
+      const submodules: SubmoduleInfo[] = []
+      const submodulePaths: string[] = []
+
+      // .gitmodules is the source of truth for which paths ARE
+      // submodules — `git submodule` the CLI needs the working tree
+      // checked out but `git config -f .gitmodules` just reads the file,
+      // which is enough for us. Gate on stat() first so we don't spawn
+      // a subprocess for repos with no submodules at all.
+      try {
+        await stat(join(cwd, '.gitmodules'))
+        const cfgOut = await git(cwd, [
+          'config', '-f', '.gitmodules',
+          '--get-regexp', '^submodule\\..*\\.path$',
+        ])
+        for (const line of cfgOut.split('\n')) {
+          // Output line: "submodule.<name>.path <relative-path>"
+          const m = /^submodule\.[^\s]+\.path\s+(.+)$/.exec(line)
+          if (m) submodulePaths.push(m[1].trim())
+        }
+      } catch {
+        // no .gitmodules → no submodules → leave list empty
+      }
+
+      for (const subPath of submodulePaths) {
+        const subAbs = join(cwd, subPath)
+
+        // Parent-registered SHA. ls-tree line format:
+        //   160000 commit <sha>\t<subPath>
+        // If HEAD has no entry (fresh submodule not yet committed to
+        // parent) we still classify by dirty-ness alone.
+        const lsTree = await git(cwd, ['ls-tree', 'HEAD', subPath])
+        const lsMatch = /\bcommit\s+([0-9a-f]{7,40})\b/.exec(lsTree)
+        const registered = lsMatch ? lsMatch[1] : null
+
+        const currentHead = (await git(subAbs, ['rev-parse', 'HEAD'])).trim()
+        if (!currentHead) continue // not checked out → nothing to show
+
+        const isBumped = !!registered && registered !== currentHead
+        const statusOut = await git(subAbs, ['status', '--porcelain'])
+        const isDirty = statusOut.trim().length > 0
+        if (!isBumped && !isDirty) continue
+
+        // Choose the diff argv based on state. The git semantics:
+        //   diff <sha>           → compare <sha> to worktree
+        //   diff <a>..<b>        → compare two commits, worktree ignored
+        //   diff HEAD            → compare HEAD to worktree
+        // "both" uses `diff <registered>` (single arg, no range) so the
+        // worktree's dirty-on-top-of-new-commits is captured in one call.
+        const diffArgs: string[] = isBumped && isDirty
+          ? ['diff', registered!, '--numstat']
+          : isBumped
+            ? ['diff', `${registered}..HEAD`, '--numstat']
+            : ['diff', 'HEAD', '--numstat']
+        const files = parseNumstat(await git(subAbs, diffArgs))
+
+        const state: SubmoduleInfo['state'] = isBumped && isDirty
+          ? 'both' : isBumped ? 'bumped' : 'dirty'
+
+        submodules.push({
+          path: subPath,
+          state,
+          files,
+          range: isBumped && registered
+            ? { from: registered.slice(0, 7), to: currentHead.slice(0, 7) }
+            : undefined,
         })
       }
 
-      // Latest 5 commits: hash, subject, author, relative date.
-      const { stdout: logOut } = await exec(
-        'git',
-        ['log', '--oneline', '--format=%h\t%s\t%an\t%cr', '-5'],
-        { cwd, timeout: 5000 },
-      )
+      // Parent file list: drop gitlink lines for the submodule paths we
+      // just surfaced in detail — showing them twice (once as "+1 -1 on
+      // <path>" and once as a full submodule section) is redundant.
+      const submoduleSet = new Set(submodulePaths)
+      const files = parseNumstat(diffStat).filter(f => !submoduleSet.has(f.file))
 
       const commits: Array<{
         hash: string
@@ -777,7 +883,6 @@ function registerIpc(): void {
         author: string
         relativeDate: string
       }> = []
-
       for (const line of logOut.trim().split('\n')) {
         if (!line) continue
         const [hash, subject, author, relativeDate] = line.split('\t')
@@ -790,17 +895,15 @@ function registerIpc(): void {
         })
       }
 
-      // Current branch name.
-      const { stdout: branchOut } = await exec(
-        'git', ['rev-parse', '--abbrev-ref', 'HEAD'],
-        { cwd, timeout: 5000 },
-      )
-
       return {
         ok: true as const,
         branch: branchOut.trim(),
         files,
         commits,
+        // Undefined instead of [] when there are no changed submodules
+        // so the renderer can cheaply gate on `data.submodules?.length`
+        // without drawing an empty section heading.
+        submodules: submodules.length > 0 ? submodules : undefined,
       }
     } catch {
       return { ok: false as const }

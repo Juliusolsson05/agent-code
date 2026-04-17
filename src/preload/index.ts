@@ -422,6 +422,15 @@ const api = {
           author: string
           relativeDate: string
         }>
+        // Submodules with either a bumped pointer, dirty content, or
+        // both. Main filters submodule gitlink entries out of `files`
+        // so the paths shown here never duplicate parent rows.
+        submodules?: Array<{
+          path: string
+          state: 'dirty' | 'bumped' | 'both'
+          files: Array<{ file: string; additions: number; deletions: number }>
+          range?: { from: string; to: string }
+        }>
       }
     | { ok: false }
   > => ipcRenderer.invoke('git:status', cwd),
