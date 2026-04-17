@@ -1286,14 +1286,27 @@ const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
 }) {
   if (block.kind === 'thinking') {
+    // Live thinking — this is the ONLY time the plaintext is
+    // available. Anthropic strips `thinking` on the final message
+    // before persisting (only the signature ciphertext survives), so
+    // once the turn ends this block's text is gone for good. Mirrors
+    // claude-code's AssistantThinkingMessage with
+    // `isTranscriptMode=true` — dim italic markdown, always open, no
+    // <details> wrapper. The "…" suffix is visual feedback while
+    // deltas are still arriving. The old `(empty)` literal was a
+    // symptom of rendering before any delta landed; drop the row
+    // entirely in that case.
+    const text = block.thinking ?? ''
     return (
       <MarkerRow marker="⏺" tone="muted">
-        <details className="text-muted text-[12px]" open>
-          <summary className="select-none">thinking</summary>
-          <pre className="mt-1.5 whitespace-pre-wrap break-words text-ink-dim text-[11.5px] leading-relaxed opacity-80">
-            {block.thinking || '(empty)'}
-          </pre>
-        </details>
+        <div className="italic text-muted text-[12px] opacity-80">
+          <div className="mb-1">∴ Thinking{text ? '' : '…'}</div>
+          {text ? (
+            <div className="text-ink-dim opacity-90 not-italic">
+              <StreamingProse text={text} />
+            </div>
+          ) : null}
+        </div>
       </MarkerRow>
     )
   }
@@ -1804,19 +1817,46 @@ const Block = memo(function Block({
       )
       return role === 'user' ? <UserBand>{row}</UserBand> : row
     }
-    case 'thinking':
-      // Thinking is usually noise — dim + collapsed behind a disclosure,
-      // with the ⏺ marker so it sits in the assistant column rhythm.
+    case 'thinking': {
+      // Anthropic's extended-thinking feature ships completed blocks
+      // with `thinking: ""` and a long `signature` ciphertext — the
+      // plaintext is only available during the live turn via
+      // `thinking_delta` SSE events, never persisted to disk. The old
+      // `<details>thinking</details>` disclosure always opened to an
+      // empty `<pre>`, which looked like a renderer bug (click →
+      // nothing → user assumes we dropped the text).
+      //
+      // Mirror claude-code's AssistantThinkingMessage collapsed
+      // variant: a single dim italic `∴ Thinking` row with no
+      // clickable disclosure when there's nothing to reveal. Live
+      // thinking text is rendered by SemanticLiveBlockRow (reads
+      // semanticTurn.blocks[i].thinking), not here.
+      const text = (block as { thinking?: string }).thinking ?? ''
+      if (!text) {
+        return (
+          <MarkerRow marker="⏺" tone="muted">
+            <span className="italic text-muted text-[12px] opacity-70">
+              ∴ Thinking
+            </span>
+          </MarkerRow>
+        )
+      }
+      // Non-empty thinking plaintext on a completed block is rare
+      // (older sessions, non-Opus-4 models, synthetic entries). Keep
+      // the expandable surface for those.
       return (
         <MarkerRow marker="⏺" tone="muted">
           <details className="text-muted text-[12px]">
-            <summary className="cursor-pointer select-none">thinking</summary>
-            <pre className="mt-1.5 whitespace-pre-wrap break-words text-ink-dim text-[11.5px] leading-relaxed opacity-80">
-              {(block as { thinking: string }).thinking}
-            </pre>
+            <summary className="cursor-pointer select-none italic">
+              ∴ Thinking
+            </summary>
+            <div className="mt-1.5 text-ink-dim opacity-80">
+              <TextProse text={text} />
+            </div>
           </details>
         </MarkerRow>
       )
+    }
     case 'tool_use': {
       // Dispatch tool_use blocks to provider-specific row renderers.
       // Claude has rich renderers for Edit/MultiEdit/Write/TodoWrite;
