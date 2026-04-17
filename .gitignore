@@ -22,8 +22,4 @@ file-dumps/
 # decrypted Anthropic transport events — MUST NOT be committed.
 2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*Z/
 
-# Sibling transcript-parser checkout. Vendored scratch space with its
-# own node_modules/dist — kept next to cc-shell for convenience, not
-# part of this project.
-agent-transcript-parser/
 

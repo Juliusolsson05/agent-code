@@ -7,3 +7,6 @@
 [submodule "codex-headless"]
 	path = codex-headless
 	url = https://github.com/Juliusolsson05/codex-headless.git
+[submodule "agent-transcript-parser"]
+	path = agent-transcript-parser
+	url = git@github-personal:Juliusolsson05/agent-transcript-parser.git
