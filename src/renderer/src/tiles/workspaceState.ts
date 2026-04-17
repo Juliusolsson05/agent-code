@@ -205,6 +205,9 @@ export type SemanticRuntimeState = {
   nextLogId: number
 }
 
+export type SessionStatus = 'idle' | 'running' | 'exited'
+export type SessionStatusSource = 'none' | 'submit' | 'process' | 'semantic' | 'exit'
+
 export type SessionRuntime = {
   screen: string
   screenMarkdown: string
@@ -266,6 +269,9 @@ export type SessionRuntime = {
   tailMode: boolean
   scrollToLatestRequest: number
   assistantPicker: { selectedUuid: string } | null
+  processActive: boolean
+  sessionStatus: SessionStatus
+  sessionStatusSource: SessionStatusSource
   semantic: SemanticRuntimeState
 }
 
@@ -328,6 +334,9 @@ export function emptyRuntime(): SessionRuntime {
     tailMode: false,
     scrollToLatestRequest: 0,
     assistantPicker: null,
+    processActive: false,
+    sessionStatus: 'idle',
+    sessionStatusSource: 'none',
     semantic: emptySemanticRuntime(),
   }
 }

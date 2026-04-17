@@ -59,9 +59,11 @@ import {
   type QueuedMessage,
   type ReaderModeState,
   type SemanticLiveBlock,
-  type SemanticRuntimeState,
   type SemanticLiveTurn,
+  type SemanticRuntimeState,
   type SessionRuntime,
+  type SessionStatus,
+  type SessionStatusSource,
   type SlashPickerState,
   type SpotlightState,
   type TileTabsState,
@@ -294,6 +296,36 @@ function semanticHistoryRow(
   }
 }
 
+function isSemanticTurnRunning(turn: SemanticLiveTurn | null): boolean {
+  return turn !== null && turn.endedAt === null
+}
+
+function deriveSessionStatus(runtime: SessionRuntime): {
+  sessionStatus: SessionStatus
+  sessionStatusSource: SessionStatusSource
+} {
+  if (runtime.exited !== null) {
+    return { sessionStatus: 'exited', sessionStatusSource: 'exit' }
+  }
+  if (isSemanticTurnRunning(runtime.semantic.currentTurn)) {
+    return { sessionStatus: 'running', sessionStatusSource: 'semantic' }
+  }
+  if (runtime.processActive) {
+    return { sessionStatus: 'running', sessionStatusSource: 'process' }
+  }
+  if (runtime.awaitingAssistant) {
+    return { sessionStatus: 'running', sessionStatusSource: 'submit' }
+  }
+  return { sessionStatus: 'idle', sessionStatusSource: 'none' }
+}
+
+function withDerivedSessionStatus(runtime: SessionRuntime): SessionRuntime {
+  return {
+    ...runtime,
+    ...deriveSessionStatus(runtime),
+  }
+}
+
 function hasPendingSemanticTools(turn: SemanticLiveTurn): boolean {
   return Object.values(turn.blocks).some(block => {
     if (
@@ -470,6 +502,7 @@ function summarizeSemanticEvent(ev: Record<string, unknown>): string {
 export function foldSemanticEvent(
   state: SemanticRuntimeState,
   ev: Record<string, unknown>,
+  sessionKind: SessionKind,
 ): SemanticRuntimeState {
   // WHY centralize semantic folding here instead of letting Feed,
   // ReaderView, and the proxy debug UI each subscribe separately:
@@ -545,22 +578,64 @@ export function foldSemanticEvent(
     case 'turn_started': {
       const turnId = String(ev.turnId ?? '')
       if (!turnId) break
-      if (currentTurn && currentTurn.turnId !== turnId) {
+      // Provider-gated turn ownership.
+      //
+      // Codex (strict): mismatched turnIds are DROPPED because they
+      // come from racing producers (proxy flow + screen fallback, or
+      // two concurrent proxy flows). Replacing currentTurn on their
+      // say-so wipes the block map the live renderer is already
+      // showing — the 0/1/0/1 flicker documented in
+      // docs/superpowers/plans/2026-04-17-codex-semantic-flicker-fix.md.
+      //
+      // Claude (auto-replace): archive the stuck turn and open the
+      // new one. Claude legitimately keeps currentTurn alive across
+      // turn boundaries while a cross-turn tool_result is pending
+      // (turn_completed below retains the turn when
+      // hasPendingSemanticTools is true). The NEXT assistant turn's
+      // message_start carries a fresh msg_id that mismatches the
+      // pinned turnId; dropping it would silently hide every
+      // subsequent Claude turn. This restores the reducer's pre-flicker-fix
+      // behavior for Claude only. See
+      // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
+      //
+      // Same-turnId refresh (re-entry / source promotion) is
+      // identical for both providers.
+      if (!currentTurn) {
+        currentTurn = {
+          turnId,
+          text: '',
+          source: typeof ev.source === 'string' ? ev.source : null,
+          blocks: {},
+          blockOrder: [],
+          stopReason: null,
+          usage: null,
+          task: emptySemanticTaskSnapshot(),
+          lookups: emptySemanticLookupSnapshot(),
+          startedAt: now,
+          endedAt: null,
+        }
+      } else if (currentTurn.turnId === turnId) {
+        currentTurn = {
+          ...currentTurn,
+          source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
+        }
+      } else if (sessionKind === 'claude') {
         history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
+        currentTurn = {
+          turnId,
+          text: '',
+          source: typeof ev.source === 'string' ? ev.source : null,
+          blocks: {},
+          blockOrder: [],
+          stopReason: null,
+          usage: null,
+          task: emptySemanticTaskSnapshot(),
+          lookups: emptySemanticLookupSnapshot(),
+          startedAt: now,
+          endedAt: null,
+        }
       }
-      currentTurn = {
-        turnId,
-        text: '',
-        source: typeof ev.source === 'string' ? ev.source : null,
-        blocks: {},
-        blockOrder: [],
-        stopReason: null,
-        usage: null,
-        task: emptySemanticTaskSnapshot(),
-        lookups: emptySemanticLookupSnapshot(),
-        startedAt: now,
-        endedAt: null,
-      }
+      // Codex: mismatched turnId falls through — drop the event.
       break
     }
     case 'source_changed': {
@@ -574,7 +649,15 @@ export function foldSemanticEvent(
     case 'turn_delta': {
       const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
       if (!turnId) break
-      if (!currentTurn || currentTurn.turnId !== turnId) {
+      // Soft-open allowed when there's no currentTurn (e.g. Codex's
+      // rollout agent_message_delta can arrive before task_started).
+      //
+      // On turnId mismatch:
+      //   - Claude: archive the pinned old turn and open a new one.
+      //     Same rationale as the turn_started branch above.
+      //   - Codex: drop. Racing producers must not mutate a
+      //     currentTurn that doesn't belong to them (flicker defense).
+      if (!currentTurn) {
         currentTurn = {
           turnId,
           text: '',
@@ -587,6 +670,25 @@ export function foldSemanticEvent(
           lookups: emptySemanticLookupSnapshot(),
           startedAt: now,
           endedAt: null,
+        }
+      } else if (currentTurn.turnId !== turnId) {
+        if (sessionKind === 'claude') {
+          history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
+          currentTurn = {
+            turnId,
+            text: '',
+            source: typeof ev.source === 'string' ? ev.source : null,
+            blocks: {},
+            blockOrder: [],
+            stopReason: null,
+            usage: null,
+            task: emptySemanticTaskSnapshot(),
+            lookups: emptySemanticLookupSnapshot(),
+            startedAt: now,
+            endedAt: null,
+          }
+        } else {
+          break
         }
       }
       currentTurn = {
@@ -930,7 +1032,14 @@ export function foldSemanticEvent(
         typeof ev.turnId === 'string'
           ? ev.turnId
           : currentTurn?.turnId ?? `codex-${now}`
-      if (!currentTurn || currentTurn.turnId !== turnId) {
+      // Provider-gated turn ownership (see turn_started for full
+      // rationale). Codex drops on mismatch (flicker defense);
+      // Claude archives and replaces (self-heals the stuck-pending-tool
+      // case). tool_started is Codex-only in practice today, but
+      // gating by provider keeps the policy consistent with the other
+      // two branches and avoids a subtle divergence for future
+      // Claude-side emitters.
+      if (!currentTurn) {
         currentTurn = {
           turnId,
           text: '',
@@ -943,6 +1052,25 @@ export function foldSemanticEvent(
           lookups: emptySemanticLookupSnapshot(),
           startedAt: now,
           endedAt: null,
+        }
+      } else if (currentTurn.turnId !== turnId) {
+        if (sessionKind === 'claude') {
+          history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
+          currentTurn = {
+            turnId,
+            text: '',
+            source: typeof ev.source === 'string' ? ev.source : null,
+            blocks: {},
+            blockOrder: [],
+            stopReason: null,
+            usage: null,
+            task: emptySemanticTaskSnapshot(),
+            lookups: emptySemanticLookupSnapshot(),
+            startedAt: now,
+            endedAt: null,
+          }
+        } else {
+          break
         }
       }
       const existing = Object.values(currentTurn.blocks).find(block => block.toolUseId === callId)
@@ -1600,7 +1728,10 @@ export function useWorkspace(
     (sessionId: SessionId, patch: Partial<SessionRuntime>) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
-        return { ...prev, [sessionId]: { ...current, ...patch } }
+        return {
+          ...prev,
+          [sessionId]: withDerivedSessionStatus({ ...current, ...patch }),
+        }
       })
     },
     [],
@@ -1792,7 +1923,22 @@ export function useWorkspace(
     })
 
     const offExit = window.api.onSessionExit(({ sessionId, exitCode }) => {
-      updateRuntime(sessionId, { exited: exitCode })
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const next = withDerivedSessionStatus({
+          ...current,
+          exited: exitCode,
+          awaitingAssistant: false,
+          queuedMessages: [],
+          activityStatus: null,
+          processActive: false,
+          semantic: {
+            ...current.semantic,
+            currentTurn: null,
+          },
+        })
+        return { ...prev, [sessionId]: next }
+      })
     })
 
     // Provider-emitted activity state. Both providers now derive this
@@ -1805,9 +1951,15 @@ export function useWorkspace(
     // is Claude-specific). On idle transitions, status is undefined
     // and we clear activityStatus too.
     const offProcessState = window.api.onSessionProcessState(({ sessionId, active, status }) => {
-      updateRuntime(sessionId, {
-        awaitingAssistant: active,
-        activityStatus: active ? (status ?? null) : null,
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const next = withDerivedSessionStatus({
+          ...current,
+          processActive: active,
+          activityStatus: active ? (status ?? null) : null,
+          awaitingAssistant: false,
+        })
+        return { ...prev, [sessionId]: next }
       })
     })
 
@@ -1815,12 +1967,28 @@ export function useWorkspace(
       const semanticEvent = event as Record<string, unknown>
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
+        // WHY `?? 'claude'` default: Claude is the pre-fix behavior
+        // (auto-replace / self-heal on turnId mismatch). Falling back to
+        // the looser behavior during a teardown-race where the session
+        // meta is momentarily absent avoids silently dropping events
+        // we'd actually want to keep. See
+        // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
+        const sessionKind = stateRef.current.sessions[sessionId]?.kind ?? 'claude'
+        const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind)
+        const eventType = typeof semanticEvent.type === 'string' ? semanticEvent.type : ''
+        const clearOptimisticAwaiting =
+          isSemanticTurnRunning(nextSemantic.currentTurn) ||
+          eventType === 'turn_completed' ||
+          eventType === 'turn_stopped' ||
+          eventType === 'api_error' ||
+          eventType === 'stream_error'
         return {
           ...prev,
-          [sessionId]: {
+          [sessionId]: withDerivedSessionStatus({
             ...current,
-            semantic: foldSemanticEvent(current.semantic, semanticEvent),
-          },
+            awaitingAssistant: clearOptimisticAwaiting ? false : current.awaitingAssistant,
+            semantic: nextSemantic,
+          }),
         }
       })
     })
@@ -2091,7 +2259,7 @@ export function useWorkspace(
 
         return {
           ...prev,
-          [sessionId]: {
+          [sessionId]: withDerivedSessionStatus({
             ...current,
             entries: appended.length > 0 || dropOptimisticHead
               ? [...baseEntries, ...appended]
@@ -2104,7 +2272,7 @@ export function useWorkspace(
             awaitingAssistant,
             toolUseIndex,
             toolResultIndex,
-          },
+          }),
         }
       })
 
