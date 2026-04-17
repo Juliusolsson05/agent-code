@@ -71,6 +71,9 @@ export function DebugPanel({ sessionId, runtime, kind, onClose }: Props) {
           <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
             <Flag label="sessionId" value={sessionId.slice(0, 12)} />
             <Flag label="kind" value={kind} />
+            <Flag label="sessionStatus" value={runtime.sessionStatus} />
+            <Flag label="statusSource" value={runtime.sessionStatusSource} />
+            <Flag label="processActive" on={runtime.processActive} />
             <Flag label="awaitingAssistant" on={runtime.awaitingAssistant} />
             <Flag label="exited" value={runtime.exited === null ? 'running' : String(runtime.exited)} />
             <Flag label="activityStatus" value={runtime.activityStatus ?? '(idle)'} />

@@ -132,10 +132,7 @@ function ReaderBody({
   // without calling the extractor directly. Returns null when no
   // turn is currently streaming.
   const semanticLive = runtime.semantic.currentTurn
-  const hasLiveActivity =
-    semanticLive !== null ||
-    runtime.activityStatus !== null ||
-    runtime.awaitingAssistant
+  const hasLiveActivity = runtime.sessionStatus === 'running'
 
   const messages = useMemo<ReaderAssistantMessage[]>(() => {
     const historical = assistantUuidsWithText(runtime.entries)

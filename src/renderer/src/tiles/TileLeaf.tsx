@@ -876,10 +876,7 @@ export function TileLeaf({
   }
 
   const running = runtime.exited === null
-  const isSessionLive =
-    runtime.semantic.currentTurn !== null ||
-    runtime.activityStatus !== null ||
-    runtime.awaitingAssistant
+  const isSessionLive = runtime.sessionStatus === 'running'
 
   return (
     <div
@@ -890,13 +887,6 @@ export function TileLeaf({
       `}
       onMouseDown={onFocusRequest}
     >
-      {/*
-        WHY the pane header does not key purely off `awaitingAssistant` anymore:
-        after moving live rendering toward the semantic stream, that legacy flag
-        became only one of several "agent is still busy" signals. Semantic turns
-        and explicit activity status are both stronger indicators than the old
-        submit lifecycle, especially for tool-heavy or background-agent work.
-      */}
       {/* Pane header: compact status strip.
           In status mode, working panes paint with the theme accent;
           idle/exited panes get no fill — the absence of color is the
@@ -934,6 +924,16 @@ export function TileLeaf({
           // with a baseline gate that prevents the previous turn's
           // text from leaking into the new turn's first delta.
           activityStatus={runtime.activityStatus}
+          // WHY unconditionally forward currentTurn instead of gating on
+          // sessionStatus: the gate used to null-blank the live view
+          // whenever sessionStatus briefly derived to 'idle' — which
+          // happens legitimately for Claude when a turn completes with
+          // pending tool_result (currentTurn.endedAt is set, so
+          // isSemanticTurnRunning returns false). The downstream
+          // consumer already treats null as "nothing live"; passing
+          // the ref unconditionally lets it render whatever actually
+          // exists. See
+          // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
           semanticTurn={runtime.semantic.currentTurn}
           tailMode={runtime.tailMode}
           pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}

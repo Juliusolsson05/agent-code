@@ -60,27 +60,9 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
           // runtimes. Pure derivation — no extra state needed.
           const sessionIds = collectSessionIds(tab.root)
           const total = sessionIds.length
-          // WHY not rely on `awaitingAssistant` alone here:
-          //
-          // That flag is the legacy submit→response lifecycle from the screen
-          // scraping era. After the semantic stream landed we learned it can
-          // drop earlier than the richer live state, especially around tool
-          // phases and background-agent work. Upstream Claude task/status UI is
-          // driven by explicit task/progress state, not by "did we recently hit
-          // Enter?". For cc-shell the closest equivalent is:
-          //   semantic current turn present OR activity spinner present OR
-          //   legacy awaitingAssistant still true.
-          //
-          // Keeping all three here makes the tab badge a better proxy for
-          // "this tab still has active agent work" while preserving old-path
-          // behavior when semantic streaming is absent.
           const alive = sessionIds.filter(id => {
             const rt = runtimes[id]
-            return (
-              rt?.semantic.currentTurn != null ||
-              rt?.activityStatus != null ||
-              rt?.awaitingAssistant === true
-            )
+            return rt?.sessionStatus === 'running'
           }).length
           const allDone = alive === 0
 
