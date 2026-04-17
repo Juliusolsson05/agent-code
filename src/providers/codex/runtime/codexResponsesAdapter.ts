@@ -410,10 +410,12 @@ export class CodexResponsesAdapter {
         const response = parsed.response as Record<string, unknown> | undefined
         const usage = response?.usage as Record<string, unknown> | undefined
         if (usage) {
-          this.headless.semantic.publishUsageUpdated({
+          this.publishRawEvent({
+            type: 'usage_updated',
             turnId: flow.responseId,
             usage: flattenUsage(usage),
             source: 'proxy',
+            ts: Date.now(),
           })
         }
         this.headless.semantic.finishTurn({

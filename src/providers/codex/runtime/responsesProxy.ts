@@ -128,10 +128,15 @@ function defaultUpstreamFor(authMode: CodexAuthMode): string {
 export class ResponsesProxy extends EventEmitter {
   private server: Server | null = null
   readonly info: CodexResponsesProxyInfo
-  // Fetch timeout for a single upstream request. SSE streams can
-  // stay open for a long time, so the timeout only guards the
-  // HEADERS phase (via AbortController + clear on first chunk).
-  private readonly upstreamHeadersTimeoutMs = 30_000
+  // Header timeout for the hot SSE `/responses` path. We still want a
+  // relatively tight guard here because a live turn normally starts
+  // streaming quickly, and a dead upstream should fail fast.
+  private readonly streamingHeadersTimeoutMs = 30_000
+  // Unary JSON endpoints like `/responses/compact` do not stream and
+  // can legitimately take much longer before sending response headers.
+  // Using the SSE timeout here turns slow-but-valid compaction into a
+  // synthetic local 502 ("This operation was aborted").
+  private readonly unaryHeadersTimeoutMs = 5 * 60_000
   // Track every open inbound socket so stop() can force them closed.
   // WHY: node's http.Server#close waits for all connections to finish
   // before it resolves. A long-running SSE turn holds its socket open
@@ -345,6 +350,7 @@ export class ResponsesProxy extends EventEmitter {
 
     const upstream = this.resolveUpstreamPath(relative, originalUrl)
     const headers = this.buildForwardedHeaders(req)
+    const headersTimeoutMs = this.headersTimeoutMsFor(endpoint)
 
     this.emit('event', {
       kind: 'request',
@@ -357,7 +363,21 @@ export class ResponsesProxy extends EventEmitter {
     })
 
     const abort = new AbortController()
-    const headersTimer = setTimeout(() => abort.abort(), this.upstreamHeadersTimeoutMs)
+    const headersTimer = setTimeout(() => {
+      abort.abort(new Error(
+        `upstream headers timeout after ${headersTimeoutMs}ms for ${endpoint}`,
+      ))
+    }, headersTimeoutMs)
+    const onClientGone = (): void => {
+      // If the local client has already disconnected there is no point
+      // in finishing the upstream fetch, and surfacing a synthetic 502
+      // back to a dead socket only muddies the real failure mode.
+      if (req.destroyed || res.destroyed) {
+        abort.abort(new Error(`downstream client disconnected during ${endpoint}`))
+      }
+    }
+    req.once('aborted', onClientGone)
+    res.once('close', onClientGone)
 
     try {
       const upstreamRes = await fetch(upstream, {
@@ -373,10 +393,14 @@ export class ResponsesProxy extends EventEmitter {
       // Headers received — stop the abort timer. The body may still
       // stream for minutes (long SSE turns), which is fine.
       clearTimeout(headersTimer)
+      req.off('aborted', onClientGone)
+      res.off('close', onClientGone)
 
       await this.streamUpstreamResponse(req, res, upstreamRes, originalUrl, requestId)
     } catch (err) {
       clearTimeout(headersTimer)
+      req.off('aborted', onClientGone)
+      res.off('close', onClientGone)
       this.emit('event', {
         kind: 'upstream-error',
         requestId,
@@ -384,6 +408,9 @@ export class ResponsesProxy extends EventEmitter {
         path: originalUrl,
         message: err instanceof Error ? err.message : String(err),
       })
+      if (req.destroyed || res.destroyed) {
+        return
+      }
       res.statusCode = 502
       res.setHeader('content-type', 'text/plain; charset=utf-8')
       res.end(err instanceof Error ? err.message : String(err))
@@ -507,6 +534,11 @@ export class ResponsesProxy extends EventEmitter {
       req.on('end', () => resolve(Buffer.concat(chunks)))
       req.on('error', reject)
     })
+  }
+
+  private headersTimeoutMsFor(endpoint: string): number {
+    if (endpoint === 'responses') return this.streamingHeadersTimeoutMs
+    return this.unaryHeadersTimeoutMs
   }
 }
 
