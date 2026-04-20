@@ -918,15 +918,18 @@ export function TileLeaf({
           sessionId={sessionId}
           provider={provider}
           workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
-          // Merged upstream + ghost feed. When the ghost map is empty
-          // (no live turn, or no un-reconciled ghosts), this returns
-          // the exact same `runtime.entries` reference so Feed's memo
-          // path is unchanged. When ghosts are active, the merged list
-          // drops superseded ghosts, keeps orphans, and appends live
-          // ones after the committed tail — see
-          // `agent-transcript-parser/docs/ghost.md` for the primitive
-          // and `src/renderer/src/tiles/ghosts.ts` for the bridge.
-          entries={selectMergedEntries(runtime)}
+          // Merged upstream + ghost feed. Split ownership: the live
+          // turn's ghosts are EXCLUDED from the merge (the live view
+          // component below is the sole owner of the current turn);
+          // earlier turns' orphaned or still-unreconciled ghosts fall
+          // through. The `currentTurnId` argument is what encodes that
+          // split — see `./mergedEntries.ts` for the filter and
+          // docs/superpowers/plans/2026-04-20-rendering-fixes.md
+          // Task 5 for the WHY.
+          entries={selectMergedEntries(
+            runtime,
+            runtime.semantic.currentTurn?.turnId ?? null,
+          )}
           // Live text renders ONLY from the semantic channel. The
           // former `streamingScreen` / `streamingScreenMarkdown` /
           // `streamingBaseline` props are gone — Feed no longer
@@ -945,22 +948,17 @@ export function TileLeaf({
           streamPhasePendingToolName={runtime.streamPhasePendingToolName}
           streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
           turnStartedAt={runtime.turnStartedAt}
-          // WHY unconditionally forward currentTurn instead of gating on
-          // sessionStatus: the gate used to null-blank the live view
-          // whenever sessionStatus briefly derived to 'idle' — which
-          // happens legitimately for Claude when a turn completes with
-          // pending tool_result (currentTurn.endedAt is set, so
-          // isSemanticTurnRunning returns false). The downstream
-          // consumer already treats null as "nothing live"; passing
-          // the ref unconditionally lets it render whatever actually
-          // exists. See
+          // Live-turn ownership: SemanticStreamingTurn renders the
+          // current turn end-to-end. Earlier un-reconciled ghosts
+          // are now filtered OUT of the merged feed (see the
+          // `currentTurnId` argument to selectMergedEntries above),
+          // so there is no double-render risk — the two surfaces
+          // own different time slices. `shouldShowSemanticStreaming`
+          // collapses to "is there a current turn?" as a result.
+          // See
+          // docs/superpowers/plans/2026-04-20-rendering-fixes.md
+          // Task 5 and
           // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
-          // Ghost bridge: when the current turn has any un-reconciled
-          // ghost entries in the merged list, those render the live
-          // view and we suppress the legacy SemanticStreamingTurn to
-          // prevent duplicate output. Turns with zero translatable
-          // ghost blocks still fall through to the legacy path. See
-          // `./mergedEntries.ts` for the predicate and the WHY.
           semanticTurn={
             shouldShowSemanticStreaming(runtime)
               ? runtime.semantic.currentTurn

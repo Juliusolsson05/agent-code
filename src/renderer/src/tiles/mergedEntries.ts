@@ -16,7 +16,7 @@
 // atp doc). This file adds nothing to the merge rules; it only
 // chooses atp's default options and threads the runtime's state.
 
-import { mergeWithUpstream } from 'agent-transcript-parser/ghost'
+import { mergeWithUpstream, type GhostEntry } from 'agent-transcript-parser/ghost'
 
 import type { Entry } from '../../../shared/types/transcript'
 import type { SessionRuntime } from './workspaceState'
@@ -44,16 +44,35 @@ import type { SessionRuntime } from './workspaceState'
  * "memoization path is unchanged" promise in the old docstring was
  * only theoretical.
  */
-export function selectMergedEntries(runtime: SessionRuntime): Entry[] {
+export function selectMergedEntries(
+  runtime: SessionRuntime,
+  currentTurnId: string | null,
+): Entry[] {
   const { ghosts, entries } = runtime
   if (ghosts.size === 0) return entries
+
+  // Split ownership: the LIVE turn (runtime.semantic.currentTurn) is
+  // drawn by SemanticStreamingTurn; earlier turns' orphaned or
+  // still-unreconciled ghosts belong to the merged feed. Filtering
+  // current-turn ghosts out of the merge is what removes the null-
+  // flip that the feed-debug log showed at id:131 — the old
+  // `shouldShowSemanticStreaming` hid the entire live view the
+  // moment any un-superseded ghost for the current turn existed,
+  // and a tool_use block's ghost fires before its upstream commit
+  // every single turn. See
+  // docs/superpowers/plans/2026-04-20-rendering-fixes.md Task 5.
   let anyVisibleGhost = false
+  let needsFilter = false
   for (const ghost of ghosts.values()) {
     if (ghost._atp.supersededBy !== undefined) continue
+    if (currentTurnId !== null && ghost._atp.turnId === currentTurnId) {
+      needsFilter = true
+      continue
+    }
     anyVisibleGhost = true
-    break
   }
   if (!anyVisibleGhost) return entries
+
   // `trustSupersededFlag` is load-bearing for cc-shell: the renderer
   // only ever holds a RECENT TAIL of `runtime.entries` (resume brings
   // the last ~200 committed entries; older history pages on demand),
@@ -61,40 +80,37 @@ export function selectMergedEntries(runtime: SessionRuntime): Entry[] {
   // the loaded slice. Without the flag, atp's default behaviour is
   // "if I can't see the target, show the ghost" — which on resume
   // resurfaces every ghost that already got reconciled in a prior
-  // session. See atp's ghost.ts MergeOptions docstring for the full
-  // rationale.
-  return mergeWithUpstream(entries, ghosts, { trustSupersededFlag: true }) as Entry[]
+  // session. See atp's ghost.ts MergeOptions docstring.
+  if (!needsFilter) {
+    return mergeWithUpstream(entries, ghosts, { trustSupersededFlag: true }) as Entry[]
+  }
+  const filtered = new Map<string, GhostEntry>()
+  for (const [uuid, ghost] of ghosts) {
+    if (currentTurnId !== null && ghost._atp.turnId === currentTurnId) continue
+    filtered.set(uuid, ghost)
+  }
+  return mergeWithUpstream(entries, filtered, { trustSupersededFlag: true }) as Entry[]
 }
 
 /**
- * Decide whether Feed should still render the live
- * `SemanticStreamingTurn` component for the current turn, or whether
- * ghost entries are already covering it.
+ * Whether Feed should render the live `SemanticStreamingTurn`
+ * component. True iff there is a current turn — the merged feed
+ * selector (`selectMergedEntries`) filters out the current turn's
+ * ghosts, so SemanticStreamingTurn has exclusive ownership of the
+ * live view and there is no duplicate-render risk.
  *
- * WHY both paths still exist at Phase 1:
+ * WHY the old predicate was wrong:
+ *   It returned false the moment any un-superseded ghost for the
+ *   current turn existed — which happens on every block transition,
+ *   because tool_use ghosts are minted BEFORE their upstream entry
+ *   commits. The live view flicker/null-flip at id:131 in the
+ *   2026-04-20 rendering-fixes evidence log was that gate tripping.
  *
- *   Ghost entries render through Feed's normal `EntryRow` dispatch —
- *   same `text` / `tool_use` / `thinking` renderers as committed
- *   entries. That's correct for most cases, but it loses the
- *   fine-grained live typography that `SemanticStreamingTurn` adds
- *   (remark-breaks for partial text, live work-indicator for empty
- *   thinking, streaming-fence detection). Rather than rip all that
- *   out in one go, we let ghosts take over the turn ONLY when they
- *   have any un-reconciled entry for it. Turns that happen to have
- *   zero translatable blocks (e.g. a turn whose only block is an
- *   encrypted reasoning that `blocksFromSemantic` drops) still get
- *   the legacy live render.
- *
- *   Phase 3 deletes `SemanticStreamingTurn` entirely; this function
- *   goes away with it.
+ *   Phase 3 of the original headless redesign will delete
+ *   SemanticStreamingTurn entirely and render everything through
+ *   ghosts + the merged feed. Until then, single-ownership via
+ *   `selectMergedEntries(..., currentTurnId)` is the surgical fix.
  */
 export function shouldShowSemanticStreaming(runtime: SessionRuntime): boolean {
-  const turn = runtime.semantic.currentTurn
-  if (!turn) return false
-  for (const ghost of runtime.ghosts.values()) {
-    if (ghost._atp.turnId !== turn.turnId) continue
-    if (ghost._atp.supersededBy !== undefined) continue
-    return false
-  }
-  return true
+  return runtime.semantic.currentTurn !== null
 }
