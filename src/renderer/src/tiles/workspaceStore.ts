@@ -2796,9 +2796,30 @@ export function useWorkspace(
             // same uuid exists in-memory (rare; would mean a live
             // event beat the bootstrap read), prefer the in-memory
             // one because it's strictly fresher.
-            const merged = new Map(current.ghosts)
+            let merged = new Map(current.ghosts)
             for (const [uuid, ghost] of bootstrapped) {
               if (!merged.has(uuid)) merged.set(uuid, ghost)
+            }
+            // Reconcile against whatever JSONL entries already landed
+            // during the initial bootstrap burst. Without this, ghosts
+            // for turns that already have committed entries in
+            // `current.entries` would stay un-superseded forever:
+            // the live JSONL ingest already ran `reconcileUpstream`
+            // against the PREVIOUS (empty) ghost map and found no
+            // matches; now that the real ghosts are landing, nothing
+            // re-checks the already-ingested entries. This pass fixes
+            // the "crashed mid-turn, resumed with an orphan ghost
+            // that actually got committed" case. See Task 7 of the
+            // 2026-04-20 rendering-fixes plan.
+            for (const entry of current.entries) {
+              merged = reconcileUpstream(entry, merged)
+            }
+            // Persist any supersedes we just produced so the next
+            // resume reads the ghosts already in their reconciled
+            // state. `ghostsToPersist` diffs by updatedAt so it only
+            // emits ghosts whose state actually changed in this pass.
+            for (const ghost of ghostsToPersist(current.ghosts, merged)) {
+              window.api.ghostAppend(sessionId, ghost)
             }
             return {
               ...prev,
