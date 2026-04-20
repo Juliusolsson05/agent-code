@@ -54,7 +54,16 @@ export function selectMergedEntries(runtime: SessionRuntime): Entry[] {
     break
   }
   if (!anyVisibleGhost) return entries
-  return mergeWithUpstream(entries, ghosts) as Entry[]
+  // `trustSupersededFlag` is load-bearing for cc-shell: the renderer
+  // only ever holds a RECENT TAIL of `runtime.entries` (resume brings
+  // the last ~200 committed entries; older history pages on demand),
+  // so the target uuid of a ghost's `supersededBy` is often out of
+  // the loaded slice. Without the flag, atp's default behaviour is
+  // "if I can't see the target, show the ghost" — which on resume
+  // resurfaces every ghost that already got reconciled in a prior
+  // session. See atp's ghost.ts MergeOptions docstring for the full
+  // rationale.
+  return mergeWithUpstream(entries, ghosts, { trustSupersededFlag: true }) as Entry[]
 }
 
 /**

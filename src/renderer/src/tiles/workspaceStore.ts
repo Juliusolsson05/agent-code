@@ -75,7 +75,13 @@ import {
   ghostsToPersist,
   reconcileUpstream,
 } from './ghosts'
-import { reduceGhostLog } from 'agent-transcript-parser/ghost'
+// Bootstrap uses the sans-superseded reducer because cc-shell only
+// ever wants the provisional-and-still-live ghost set on resume —
+// forensic "rendered X but upstream confirmed Y" rows are surfaced
+// (if ever) through a dedicated UI, not the feed. Pairs with the
+// `trustSupersededFlag` merge option in `./mergedEntries.ts`. See
+// atp/src/ghost.ts for the full contract.
+import { reduceGhostLogSansSuperseded as reduceGhostLog } from 'agent-transcript-parser/ghost'
 import type { PlacementTarget } from '../features/workspace/lib/newAgentPlacement'
 
 // Workspace store — single React hook that owns:
