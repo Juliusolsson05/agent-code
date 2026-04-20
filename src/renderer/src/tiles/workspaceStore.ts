@@ -1406,6 +1406,37 @@ function codexCompactSummaryEntry(
   }
 }
 
+/**
+ * Extract the Codex rollout's per-turn response id from a
+ * `turn_context` side-channel entry. Returns null for any other
+ * entry type. Call sites that iterate a rollout stream use this to
+ * keep a rolling "current turn id" that subsequent `response_item`
+ * entries get stamped with via `stampCodexTurnId`.
+ *
+ * WHY: Codex rollout doesn't put `turn_id` on per-item entries —
+ * only on `task_started`/`turn_started` and `turn_context`. Without
+ * tracking it here the ghost reconciler in `reconcileUpstream` has
+ * nothing to match Codex assistant-text ghosts against (they don't
+ * carry `message.id`, don't carry `tool_use_id`).
+ */
+export function codexTurnIdFromRollout(entry: Record<string, unknown>): string | null {
+  if (entry.type !== 'turn_context') return null
+  const payload = entry.payload as Record<string, unknown> | undefined
+  return typeof payload?.turn_id === 'string' ? (payload.turn_id as string) : null
+}
+
+/**
+ * Stamp a mapped Codex feed entry with the rollout turn id so the
+ * ghost reconciler can supersede by turn id. The field is added as
+ * a cc-shell-local extension to the shared `Entry` type via cast —
+ * consumers that don't care about it ignore it, and
+ * `reconcileUpstream` reads it defensively.
+ */
+function stampCodexTurnId(entry: Entry, turnId: string | null): Entry {
+  if (turnId === null) return entry
+  return { ...entry, codexTurnId: turnId } as Entry
+}
+
 export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
   const uuid =
     `${String(entry.timestamp ?? Date.now())}:${String((entry.payload as Record<string, unknown> | undefined)?.id ?? (entry.payload as Record<string, unknown> | undefined)?.call_id ?? (entry.payload as Record<string, unknown> | undefined)?.type ?? entry.type)}`
@@ -2392,11 +2423,21 @@ export function useWorkspace(
         const toolUseIndex = current.toolUseIndex
         const toolResultIndex = current.toolResultIndex
 
+        // Rolling Codex turn id — updated when a `turn_context`
+        // rollout entry arrives, then stamped onto every mapped
+        // response_item in the same turn. Feeds reconcileUpstream's
+        // Codex supersede branch. See codexTurnIdFromRollout for
+        // the extraction rule and reconcileUpstream for the match.
+        let codexCurrentTurnId: string | null = null
+
         for (const { entry: raw } of entries) {
           // ---- Codex rollout branch ----
           if (isCodexRolloutEntry(raw)) {
             const payload = raw.payload as Record<string, unknown> | undefined
-            const mapped = mapCodexRolloutToFeedEntries(raw)
+            const turnContextId = codexTurnIdFromRollout(raw)
+            if (turnContextId !== null) codexCurrentTurnId = turnContextId
+            const mappedRaw = mapCodexRolloutToFeedEntries(raw)
+            const mapped = mappedRaw.map(e => stampCodexTurnId(e, codexCurrentTurnId))
             const marker = mapped.length > 0 ? codexHistoryMarker(raw) : null
             if (marker && !oldestMarker) oldestMarker = marker
 
@@ -4276,11 +4317,19 @@ export function useWorkspace(
       const seen = (seenUuidsRef.current[sessionId] ??= new Set())
       const prepend: Entry[] = []
       let oldestMarker: string | null = runtime.historyOldestMarker
+      // Same rolling Codex turn id as the live JSONL ingest path —
+      // loadOlderHistory walks the rollout stream linearly too, so a
+      // `turn_context` marker seen during pagination still stamps the
+      // response_items that come after it. See codexTurnIdFromRollout.
+      let codexPaginationTurnId: string | null = null
 
       for (const rawEntry of chunk.entries) {
         if (kind === 'codex') {
           const marker = codexHistoryMarker(rawEntry)
-          const mapped = mapCodexRolloutToFeedEntries(rawEntry)
+          const turnContextId = codexTurnIdFromRollout(rawEntry)
+          if (turnContextId !== null) codexPaginationTurnId = turnContextId
+          const mappedRaw = mapCodexRolloutToFeedEntries(rawEntry)
+          const mapped = mappedRaw.map(e => stampCodexTurnId(e, codexPaginationTurnId))
           if (mapped.length > 0 && oldestMarker === runtime.historyOldestMarker) {
             oldestMarker = marker
           }

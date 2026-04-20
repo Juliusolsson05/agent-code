@@ -412,77 +412,25 @@ function debugLabelForEntry(entry: Entry): string {
   return entry.type
 }
 
-function textFromConversationEntry(entry: ConversationEntry): string {
-  const content = entry.message.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .map(block => {
-      const item = block as ContentBlock & { text?: string }
-      return item.type === 'text' && typeof item.text === 'string' ? item.text : ''
-    })
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-function normalizeRenderableText(text: string): string {
-  return text.replace(/\s+/g, ' ').trim()
-}
-
-function shouldSuppressSemanticTurnForCommittedTail(
-  provider: AgentProvider,
-  semanticTurn: SemanticLiveTurn | null,
-  visibleEntries: Entry[],
-): boolean {
-  // WHY this Codex-only suppression exists:
-  //
-  // Feed currently renders two independent surfaces:
-  //   1. committed transcript entries (`visible`)
-  //   2. the live semantic tail (`semanticTurn`)
-  //
-  // That's normally what we want: committed history stays visible while
-  // the in-flight turn paints below it. The bug is Codex's rollout path.
-  // Rollout can publish a final assistant `turn.text` onto the live
-  // semantic turn BEFORE the committed assistant entry has fully sealed
-  // the live owner on the renderer side. In that overlap window we get:
-  //
-  //   - committed assistant entry already visible
-  //   - rollout semantic turn still mounted
-  //   - same assistant sentence painted twice
-  //
-  // The pane debug log for session
-  // `3916142b-1472-4f4b-8589-ce52a47aef94` showed exactly that pattern:
-  // one committed assistant row plus one still-live `semantic:*` rollout
-  // row. This was NOT "same JSONL row appended twice"; it was two owners
-  // rendering the same text at once.
-  //
-  // We keep the suppression intentionally narrow:
-  //   - Codex only
-  //   - rollout source only
-  //   - exact normalized text match against the latest visible assistant row
-  //
-  // We do NOT suppress Claude here, and we do NOT broadly dedupe semantic
-  // rows against transcript history, because live semantic rows still carry
-  // real value for tool activity, commentary, and non-identical in-flight
-  // text. This helper is a guardrail for one proven duplicate class until
-  // the larger "single owner for visible assistant text" redesign is done.
-  if (provider !== 'codex' || semanticTurn == null) return false
-  if (semanticTurn.source !== 'rollout') return false
-
-  const liveText = normalizeRenderableText(semanticTurn.text ?? '')
-  if (!liveText) return false
-
-  for (let i = visibleEntries.length - 1; i >= 0; i -= 1) {
-    const entry = visibleEntries[i]
-    if (!isConversationEntry(entry)) continue
-    if (entry.message.role !== 'assistant') continue
-    const committedText = normalizeRenderableText(textFromConversationEntry(entry))
-    if (!committedText) continue
-    return committedText === liveText
-  }
-
-  return false
-}
+// 2026-04-20: shouldSuppressSemanticTurnForCommittedTail and its two
+// helpers (textFromConversationEntry, normalizeRenderableText) were
+// deleted here. They were a narrow guardrail for one proven duplicate
+// class on Codex: committed assistant entry + rollout-sourced live
+// semantic turn painting the same sentence twice during the gap
+// between rollout publishing `turn.text` and committed sealing the
+// live owner.
+//
+// That duplicate class is now prevented at its source. The ghost
+// reducer (`reconcileUpstream` in src/renderer/src/tiles/ghosts.ts)
+// supersedes Codex text ghosts by rollout response id once the
+// rollout mapper stamps `codexTurnId` on committed entries
+// (src/renderer/src/tiles/workspaceStore.ts::codexTurnIdFromRollout
+// + stampCodexTurnId). The live view and the merged feed are split
+// by turn ownership (src/renderer/src/tiles/mergedEntries.ts), so
+// there is no longer any path by which the same assistant text can
+// reach both surfaces at once.
+//
+// See docs/superpowers/plans/2026-04-20-rendering-fixes.md Task 6.
 
 // ---------------------------------------------------------------------------
 // Per-session scroll position memory.
@@ -975,11 +923,12 @@ function FeedImpl({
     [visibleDecisions],
   )
 
-  const suppressSemanticTurn = useMemo(
-    () => shouldSuppressSemanticTurnForCommittedTail(provider, semanticTurn, visible),
-    [provider, semanticTurn, visible],
-  )
-  const renderedSemanticTurn = suppressSemanticTurn ? null : semanticTurn
+  // Live view is owned 1:1 by `semanticTurn` now — the old Codex-only
+  // suppression helper (`shouldSuppressSemanticTurnForCommittedTail`)
+  // was deleted in 2026-04-20 because the ghost reducer handles the
+  // duplicate-render class at its source. See Feed.tsx history and
+  // docs/superpowers/plans/2026-04-20-rendering-fixes.md Task 6.
+  const renderedSemanticTurn = semanticTurn
 
   // Index EVERY tool_use block (not just the visible set) so tool_result
   // lookups still resolve even when some synthetic entries have been
@@ -1089,12 +1038,11 @@ function FeedImpl({
         entryCount: entries.length,
         visibleEntryCount: visible.length,
         semanticTurnId: semanticTurn?.turnId ?? null,
-        semanticSuppressed: suppressSemanticTurn,
         streamPhase,
       },
     })
     previousRenderedRowsRef.current = renderedRows
-  }, [entries.length, onDebugLog, renderedRows, semanticTurn?.turnId, streamPhase, suppressSemanticTurn, visible.length, visibleDecisions])
+  }, [entries.length, onDebugLog, renderedRows, semanticTurn?.turnId, streamPhase, visible.length, visibleDecisions])
 
   if (visible.length === 0 && !hasSemanticStreaming) {
     return (
