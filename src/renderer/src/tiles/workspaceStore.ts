@@ -596,18 +596,6 @@ export function foldSemanticEvent(
   // model structure, it should select from `runtime.semantic`, not open its own
   // transport subscription.
   const now = Date.now()
-  const summary = summarizeSemanticEvent(ev)
-  const logEntry = {
-    id: state.nextLogId,
-    type: String(ev.type ?? '?'),
-    ts: now,
-    summary,
-    raw: ev,
-  }
-  const log = [...state.log, logEntry]
-  if (log.length > SEMANTIC_LOG_CAP) {
-    log.splice(0, log.length - SEMANTIC_LOG_CAP)
-  }
 
   const t = String(ev.type ?? '')
   let flows = state.flows
@@ -1325,6 +1313,43 @@ export function foldSemanticEvent(
         })()
       : currentTurn
     : null
+
+  // No-op short-circuit: every event used to allocate a new log array
+  // and bump nextLogId at the top of the function, which meant the
+  // returned state was never === state, even for events that changed
+  // nothing (tool_result without a matching turn, usage_updated with
+  // unchanged usage, etc.). That fired setRuntimes + the whole
+  // reactive chain on every dead event — eight of them at bootstrap
+  // alone per the 2026-04-20 evidence log.
+  //
+  // Reference equality on flows/currentTurn/history/errors is the
+  // correct signal here because every branch that mutates those
+  // fields rebinds the local to a new reference. If all four locals
+  // still point at state.* AND finalCurrentTurn is identically
+  // currentTurn (the derive skipped), this event was a no-op and we
+  // return state unchanged. The log append for the event is skipped
+  // too — dead events don't belong in the debug log either.
+  if (
+    flows === state.flows &&
+    finalCurrentTurn === state.currentTurn &&
+    history === state.history &&
+    errors === state.errors
+  ) {
+    return state
+  }
+
+  const summary = summarizeSemanticEvent(ev)
+  const logEntry = {
+    id: state.nextLogId,
+    type: String(ev.type ?? '?'),
+    ts: now,
+    summary,
+    raw: ev,
+  }
+  const log = [...state.log, logEntry]
+  if (log.length > SEMANTIC_LOG_CAP) {
+    log.splice(0, log.length - SEMANTIC_LOG_CAP)
+  }
 
   return {
     ...state,
@@ -2271,6 +2296,30 @@ export function useWorkspace(
         // `./ghosts.ts` `ghostsToPersist` for why this diff is safe.
         for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
           window.api.ghostAppend(sessionId, ghost)
+        }
+
+        // Full no-op short-circuit. foldSemanticEvent now returns
+        // `state` unchanged for events that didn't mutate semantic
+        // state; the ghost and phase paths are reference-stable after
+        // the 2026-04-20 fixes. If all six signals agree this event
+        // changed nothing and we're not clearing an optimistic wait,
+        // bail out before appendFeedDebugLog to avoid the SEM log
+        // noise bootstrap tool_results produced in the evidence
+        // timeline (id:1-8). See 2026-04-20 rendering-fixes Task 8.
+        const semanticUnchanged = nextSemantic === current.semantic
+        const phaseUnchanged =
+          streamPhase === current.streamPhase &&
+          streamPhasePendingToolName === current.streamPhasePendingToolName &&
+          streamPhasePendingToolUseId === current.streamPhasePendingToolUseId &&
+          turnStartedAt === current.turnStartedAt &&
+          phaseChangedAt === current.phaseChangedAt &&
+          submittedAt === current.submittedAt
+        const ghostsUnchanged = nextGhosts === current.ghosts
+        const awaitingUnchanged = clearOptimisticAwaiting
+          ? current.awaitingAssistant === false
+          : true
+        if (semanticUnchanged && phaseUnchanged && ghostsUnchanged && awaitingUnchanged) {
+          return prev
         }
 
         const nextCurrent = withDerivedSessionStatus(
