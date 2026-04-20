@@ -232,15 +232,24 @@ export function ghostsFromSemanticTurn(
   sessionId: string,
   prev: ReadonlyMap<string, GhostEntry>,
 ): Map<string, GhostEntry> {
-  const next = new Map(prev)
-  if (!turn) return next
+  // WHY lazy clone: this runs on every semantic reducer tick,
+  // including no-op ticks (usage_updated, redundant block_started).
+  // The pre-fix version always allocated `new Map(prev)` at the top,
+  // which made `nextGhosts !== current.ghosts` always true downstream,
+  // forcing a setRuntimes cascade that busted every useMemo([entries])
+  // in Feed via selectMergedEntries. Clone ONLY when we actually have
+  // a mutation to land; most ticks return `prev` unchanged and Feed's
+  // memoization stays intact.
+  if (!turn) return prev as Map<string, GhostEntry>
+
+  let next: Map<string, GhostEntry> | null = null
 
   for (const block of Object.values(turn.blocks)) {
     const content = blocksFromSemantic(block)
     if (content.length === 0) continue
 
     const uuid = ghostUuid(turn.turnId, block.blockIndex)
-    const existing = next.get(uuid)
+    const existing = prev.get(uuid)
 
     // Once a ghost has been superseded, leave it alone — the
     // authoritative record is in play and further live updates are
@@ -249,6 +258,7 @@ export function ghostsFromSemanticTurn(
     if (existing?._atp.supersededBy !== undefined) continue
 
     if (!existing) {
+      if (next === null) next = new Map(prev)
       next.set(
         uuid,
         createGhost({
@@ -269,10 +279,11 @@ export function ghostsFromSemanticTurn(
     // callers use that identity to skip re-renders.
     if (sameClaudeContent(existing.message?.content, content)) continue
 
+    if (next === null) next = new Map(prev)
     next.set(uuid, updateGhost(existing, content))
   }
 
-  return next
+  return next ?? (prev as Map<string, GhostEntry>)
 }
 
 function sameClaudeContent(
@@ -338,15 +349,31 @@ export function reconcileUpstream(
   entry: Entry,
   prev: ReadonlyMap<string, GhostEntry>,
 ): Map<string, GhostEntry> {
-  if (!isConversationEntry(entry)) return new Map(prev)
-  if (prev.size === 0) return new Map(prev)
+  // Reference-stable no-ops: non-conversation entries and empty maps
+  // return `prev` unchanged. Cloning here (the previous implementation
+  // always returned `new Map(prev)`) made the JSONL ingest path
+  // trigger a ghost-equality bust even when no supersede happened,
+  // fighting the `ghostsChanged = nextGhosts !== current.ghosts`
+  // short-circuit in the store.
+  if (!isConversationEntry(entry)) return prev as Map<string, GhostEntry>
+  if (prev.size === 0) return prev as Map<string, GhostEntry>
 
-  const next = new Map(prev)
   const realUuid = entry.uuid ?? null
+  if (!realUuid) return prev as Map<string, GhostEntry>
+
   const message = entry.message
   const messageId =
     typeof (message as { id?: string }).id === 'string'
       ? (message as { id: string }).id
+      : null
+  // Codex rollout-sourced entries don't carry message.id (the Codex
+  // response id lives elsewhere on the rollout payload). Plumbing it
+  // through the mapper to this matcher is Task 6 of the rendering-
+  // fixes plan; the field is read defensively here so the match path
+  // lights up the moment `mapCodexRolloutToFeedEntries` stamps it.
+  const codexTurnId =
+    typeof (entry as { codexTurnId?: string }).codexTurnId === 'string'
+      ? (entry as { codexTurnId: string }).codexTurnId
       : null
 
   // Gather tool_use ids carried by this upstream entry — used for
@@ -361,13 +388,21 @@ export function reconcileUpstream(
     }
   }
 
-  for (const [uuid, ghost] of next) {
+  let next: Map<string, GhostEntry> | null = null
+  for (const [uuid, ghost] of prev) {
     if (ghost._atp.supersededBy !== undefined) continue
 
     let match = false
 
     // Claude match by message.id → turnId equality.
     if (messageId && ghost._atp.turnId === messageId) match = true
+
+    // Codex match by response id → turnId equality. Ghosts are minted
+    // with `turnId = responseId` when the live source is Codex rollout,
+    // so a committed entry carrying the same responseId supersedes
+    // every ghost for that turn in one shot — matching the Claude
+    // message.id contract.
+    if (!match && codexTurnId && ghost._atp.turnId === codexTurnId) match = true
 
     // Shared: tool_use id equality. Works for both providers; wins
     // over message-id in ambiguous cases (the ghost knows the exact
@@ -384,12 +419,12 @@ export function reconcileUpstream(
     }
 
     if (!match) continue
-    if (!realUuid) continue
 
+    if (next === null) next = new Map(prev)
     next.set(uuid, supersedeGhost(ghost, realUuid))
   }
 
-  return next
+  return next ?? (prev as Map<string, GhostEntry>)
 }
 
 // -----------------------------------------------------------------------------
