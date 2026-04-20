@@ -40,6 +40,25 @@ export function ViewPromptsModal({
     return extractLatestUserPrompts(runtime.entries, meta.kind, PROMPT_LIMIT)
   }, [meta, runtime])
 
+  // The feed only bootstraps the recent tail of a resumed session.
+  // If the user opens "View Prompts" on a long conversation, the
+  // in-memory runtime may initially contain only the last couple of
+  // prompts even though many older prompts exist on disk. While the
+  // modal is open, keep paging older history until we've collected a
+  // reasonable prompt set or the provider says there's nothing left.
+  useEffect(() => {
+    if (!open || !sessionId || !runtime) return
+    if (prompts.length >= PROMPT_LIMIT) return
+    if (!runtime.hasOlderHistory || runtime.loadingOlderHistory) return
+    void workspace.loadOlderHistory(sessionId)
+  }, [
+    open,
+    prompts.length,
+    runtime,
+    sessionId,
+    workspace,
+  ])
+
   useEffect(() => {
     if (!open) return
     requestAnimationFrame(() => scrollerRef.current?.focus())
@@ -99,7 +118,9 @@ export function ViewPromptsModal({
 
         <div className="border-t border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-[11px] text-muted">
-            Showing the latest {Math.min(PROMPT_LIMIT, prompts.length)} prompts
+            {runtime.loadingOlderHistory && prompts.length < PROMPT_LIMIT
+              ? 'Loading older prompts…'
+              : `Showing the latest ${Math.min(PROMPT_LIMIT, prompts.length)} prompts`}
           </div>
           <button
             type="button"
