@@ -27,14 +27,34 @@ import type { SessionRuntime } from './workspaceState'
  * block).
  *
  * Reference stability:
- *   - if `runtime.ghosts` is empty, returns `runtime.entries` as-is
- *     (same reference), so memoized consumers never re-render.
- *   - otherwise returns a fresh array. Feed's memoization already
- *     works correctly against array identity for the in-flight tail.
+ *   - if `runtime.ghosts` is empty OR every ghost in the map has
+ *     been superseded, returns `runtime.entries` as-is. That short-
+ *     circuit is what keeps Feed's useMemo([entries]) chain from
+ *     thrashing once the live turn is done and all ghosts have
+ *     handed off to the committed JSONL entries.
+ *   - otherwise returns a fresh array from mergeWithUpstream. Feed's
+ *     memos recompute, which is correct: there is at least one
+ *     provisional ghost visible and the list is genuinely different
+ *     from `runtime.entries`.
+ *
+ * WHY not always call mergeWithUpstream: the previous implementation
+ * did, and even when `trailing` ended up empty, the return was still
+ * `[...upstream, ...[]]` — a fresh array reference. Downstream memos
+ * keyed on entries identity recomputed on every tick, so the
+ * "memoization path is unchanged" promise in the old docstring was
+ * only theoretical.
  */
 export function selectMergedEntries(runtime: SessionRuntime): Entry[] {
-  if (runtime.ghosts.size === 0) return runtime.entries
-  return mergeWithUpstream(runtime.entries, runtime.ghosts) as Entry[]
+  const { ghosts, entries } = runtime
+  if (ghosts.size === 0) return entries
+  let anyVisibleGhost = false
+  for (const ghost of ghosts.values()) {
+    if (ghost._atp.supersededBy !== undefined) continue
+    anyVisibleGhost = true
+    break
+  }
+  if (!anyVisibleGhost) return entries
+  return mergeWithUpstream(entries, ghosts) as Entry[]
 }
 
 /**
