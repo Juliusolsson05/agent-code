@@ -7,6 +7,11 @@ import { homedir } from 'os'
 
 import { SessionManager } from './sessionManager.js'
 import { LspManager } from './lspManager.js'
+import {
+  GhostJournalRegistry,
+  readGhostLog,
+} from './ghostJournal.js'
+import type { GhostEntry } from 'agent-transcript-parser'
 import { TmuxRegistry } from './tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from './tmux/tmuxRecovery.js'
 import { getMainProvider } from '../providers/registry.main.js'
@@ -36,6 +41,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 // per-platform userData logic and the file is tiny).
 const STATE_DIR = join(homedir(), '.config', 'cc-shell')
 const STATE_FILE = join(STATE_DIR, 'workspace.json')
+const FEED_DEBUG_DIR = join(STATE_DIR, 'feed-debug')
 
 let mainWindow: BrowserWindow | null = null
 
@@ -78,8 +84,48 @@ function pushTrafficLightInset(): void {
 // load-bearing: every other module-scope reference is inside
 // callbacks that fire after the assignment.
 let manager: SessionManager = null as unknown as SessionManager
+const feedDebugWriteQueues = new Map<string, Promise<void>>()
+
+type FeedDebugPersistEntry = {
+  id: number
+  ts: number
+  tMs: number
+  layer: 'STATE' | 'JSONL' | 'SEM' | 'RENDER'
+  kind: string
+  summary: string
+  data?: unknown
+}
+
+function sanitizeSessionIdForPath(sessionId: string): string {
+  return sessionId.replace(/[^a-zA-Z0-9._-]/g, '_')
+}
+
+function queueFeedDebugAppend(
+  sessionId: string,
+  entries: FeedDebugPersistEntry[],
+): Promise<void> {
+  const previous = feedDebugWriteQueues.get(sessionId) ?? Promise.resolve()
+  const next = previous
+    .catch(() => {})
+    .then(async () => {
+      if (entries.length === 0) return
+      await mkdir(FEED_DEBUG_DIR, { recursive: true })
+      const filePath = join(FEED_DEBUG_DIR, `${sanitizeSessionIdForPath(sessionId)}.jsonl`)
+      const text = entries
+        .map(entry => JSON.stringify({ sessionId, ...entry }))
+        .join('\n') + '\n'
+      await writeFile(filePath, text, { encoding: 'utf8', flag: 'a' })
+    })
+  feedDebugWriteQueues.set(sessionId, next)
+  return next
+}
 let tmuxRegistry: TmuxRegistry | null = null
 const lspManager = new LspManager()
+// Ghost log writer — one queue per session. Writes are batched at
+// 100 ms and persisted under `<userData>/ghost-logs/<sessionId>.ghost.jsonl`.
+// See `./ghostJournal.ts` for the full rationale; see
+// `src/renderer/src/tiles/ghosts.ts` for the renderer side.
+const ghostJournals = new GhostJournalRegistry()
 const SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -677,6 +723,19 @@ function registerIpc(): void {
     },
   )
 
+  ipcMain.handle(
+    'debug:append-feed-log',
+    async (
+      _evt,
+      params: { sessionId: string; entries: FeedDebugPersistEntry[] },
+    ) => {
+      if (!params?.sessionId || !Array.isArray(params.entries) || params.entries.length === 0) {
+        return
+      }
+      await queueFeedDebugAppend(params.sessionId, params.entries)
+    },
+  )
+
   // --- Path expansion + validation ---
   // Replaces the native folder picker. Renderer shows a text input
   // modal where the user types a path; we expand `~`, resolve to an
@@ -796,6 +855,28 @@ function registerIpc(): void {
   // Runs git commands in a given cwd and returns structured data.
   // All commands are read-only — no mutations. Errors return empty
   // results so the UI degrades gracefully for non-git directories.
+
+  // --- Ghost journal ---
+  //
+  // Renderer calls `ghost:append` with each freshly-produced GhostEntry;
+  // we enqueue it for the 100 ms batched drain. `ghost:read` is used
+  // on session mount to replay previously-persisted ghosts so the
+  // merged view comes back immediately after a reload.
+  //
+  // The entry is already a plain JSON object by the time it arrives
+  // here — atp primitives ran in the renderer. Main is a mail clerk.
+  ipcMain.handle(
+    'ghost:append',
+    (_evt, sessionId: string, ghost: GhostEntry) => {
+      ghostJournals.get(sessionId).append(ghost)
+    },
+  )
+
+  ipcMain.handle(
+    'ghost:read',
+    (_evt, sessionId: string): Promise<GhostEntry[]> =>
+      readGhostLog(sessionId),
+  )
 
   ipcMain.handle('git:status', async (_evt, cwd: string) => {
     try {
@@ -1055,4 +1136,9 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   void manager.killAll()
   void lspManager.dispose()
+  // Flush pending ghost writes. Fire-and-forget is fine — Electron's
+  // quit path gives us a tick before teardown. 100 ms queue depth is
+  // worst-case; in practice drains are empty at quit time because
+  // streaming is idle.
+  void ghostJournals.flushAll()
 })

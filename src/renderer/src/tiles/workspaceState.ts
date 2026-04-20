@@ -8,6 +8,7 @@ import type {
   ToolResultBlock,
   ToolUseBlock,
 } from '../../../shared/types/transcript'
+import type { GhostEntry } from 'agent-transcript-parser/ghost'
 
 export type PickerItem = {
   id: string
@@ -196,6 +197,18 @@ export type SemanticErrorEntry = {
   message: string
 }
 
+export type FeedDebugLayer = 'STATE' | 'JSONL' | 'SEM' | 'RENDER' | 'GHOST'
+
+export type FeedDebugEntry = {
+  id: number
+  ts: number
+  tMs: number
+  layer: FeedDebugLayer
+  kind: string
+  summary: string
+  data?: unknown
+}
+
 export type SemanticRuntimeState = {
   currentTurn: SemanticLiveTurn | null
   history: Array<Pick<SemanticLiveTurn, 'turnId' | 'text' | 'stopReason' | 'startedAt' | 'endedAt'>>
@@ -207,6 +220,23 @@ export type SemanticRuntimeState = {
 
 export type SessionStatus = 'idle' | 'running' | 'exited'
 export type SessionStatusSource = 'none' | 'submit' | 'process' | 'semantic' | 'exit'
+
+/** In-feed "what is the agent doing" phase. Mirrors the upstream
+ *  Claude Code `streamMode` vocabulary so the WorkIndicator reads a
+ *  single field regardless of provider. Derived in the headless
+ *  package (ClaudeProxyAdapter / CodexResponsesAdapter) from SSE
+ *  events; the renderer never re-derives. See
+ *  `docs/superpowers/plans/2026-04-18-thinking-phase-in-headless.md`
+ *  for the full derivation table. */
+export type StreamPhase =
+  | 'idle'
+  | 'submitting'
+  | 'requesting'
+  | 'thinking'
+  | 'responding'
+  | 'tool-input'
+  | 'tool-use'
+  | 'awaiting-tool'
 
 export type SessionRuntime = {
   screen: string
@@ -273,6 +303,53 @@ export type SessionRuntime = {
   sessionStatus: SessionStatus
   sessionStatusSource: SessionStatusSource
   semantic: SemanticRuntimeState
+  /** Current in-feed stream phase. Set by the `stream_phase` reducer
+   *  case from SemanticStreamPhaseEvent; additionally set by the
+   *  optimistic-submit path ('submitting') and by tool_result arrival
+   *  (clears pending tool if it matches). The WorkIndicator is the
+   *  only consumer today; everything else reads the existing
+   *  sessionStatus. */
+  streamPhase: StreamPhase
+  /** Tool name for phases that carry one (tool-input / tool-use /
+   *  awaiting-tool). null otherwise. */
+  streamPhasePendingToolName: string | null
+  /** Tool use id for pending-tool phases. Matched against incoming
+   *  tool_result events to transition out of `awaiting-tool`. */
+  streamPhasePendingToolUseId: string | null
+  /** Wall-clock timestamp of the current turn's first non-idle phase.
+   *  Reset to null when phase returns to idle. WorkIndicator's
+   *  elapsed-time counter derives from this. */
+  turnStartedAt: number | null
+  /** Wall-clock timestamp of the last phase transition. Separate from
+   *  turnStartedAt so the UI can show per-phase elapsed (e.g.
+   *  "Thinking · 3s" vs "Calling Read · 8s" within the same turn). */
+  phaseChangedAt: number | null
+  /** Wall-clock timestamp the user hit submit. Set by the optimistic-
+   *  submit path (setStreamingBaseline) so 'submitting' has a start
+   *  time before the adapter's first 'requesting' event arrives. */
+  submittedAt: number | null
+  /** Pane-focused feed/render debug stream. This is not raw transport
+   *  logging — it tracks the operations that changed what the pane
+   *  actually shows, plus the resolved visible-row list emitted by
+   *  Feed. */
+  feedDebugLog: FeedDebugEntry[]
+  feedDebugNextId: number
+  feedDebugEpochMs: number | null
+  /** Ghost-record state keyed by ghost uuid (`g-<turnId>-<blockIndex>`).
+   *
+   *  Ghosts are provisional ClaudeEntry records emitted from the
+   *  live semantic reducer to paper over the gap between a
+   *  provider's streaming events and its durable JSONL write. See
+   *  `./ghosts.ts` for the reducer and
+   *  `agent-transcript-parser/docs/ghost.md` for the underlying
+   *  primitive.
+   *
+   *  The Map is opaque to most code — Feed reads merged entries via
+   *  the selector `selectMergedEntries`, and only the ghost reducer
+   *  functions mutate this field. The in-memory shape is the only
+   *  source of truth for Phase 1; Phase 2 adds disk persistence in
+   *  `src/main/ghostJournal.ts` for crash recovery. */
+  ghosts: Map<string, GhostEntry>
 }
 
 export function emptySemanticRuntime(): SemanticRuntimeState {
@@ -338,6 +415,16 @@ export function emptyRuntime(): SessionRuntime {
     sessionStatus: 'idle',
     sessionStatusSource: 'none',
     semantic: emptySemanticRuntime(),
+    streamPhase: 'idle',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+    turnStartedAt: null,
+    phaseChangedAt: null,
+    submittedAt: null,
+    feedDebugLog: [],
+    feedDebugNextId: 1,
+    feedDebugEpochMs: null,
+    ghosts: new Map(),
   }
 }
 

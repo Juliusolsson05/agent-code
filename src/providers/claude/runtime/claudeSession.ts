@@ -319,6 +319,52 @@ export class ClaudeSession extends EventEmitter {
       this.emit('semantic-event', ev)
     })
 
+    // Committed tool_result bridge.
+    //
+    // As of the 2026-04-18 headless redesign, tool_result events no
+    // longer fire on `this.headless.semantic` — they land on
+    // `this.headless.committed` instead, because a committed
+    // transcript entry should not mutate the live semantic turn (see
+    // the CommittedToolResultEvent docstring for full rationale).
+    //
+    // The RENDERER's reducer still consumes tool_result via the
+    // existing `semantic-event` IPC path, keying on `toolUseId` to
+    // pair results with their originating tool_use block. Migrating
+    // the reducer to the committed channel is phase 6 work
+    // (2026-04-18-headless-live-turn-redesign.md Task 13-14). For
+    // phase 3 we keep the renderer contract identical by re-emitting
+    // committed tool_result events over the semantic-event bus with
+    // the shape the reducer expects.
+    //
+    // WHY re-emit instead of adding a second IPC channel now:
+    //
+    //   * Phase 3's goal is to stop mutating live semantic state at
+    //     the HEADLESS boundary. Moving the publish off
+    //     `this.headless.semantic` achieves that regardless of how we
+    //     ship it to the renderer.
+    //
+    //   * A new IPC channel + renderer subscription is renderer
+    //     cleanup, scheduled for phase 6. Doing it inline would bleed
+    //     phases together and risk regressing the reducer's tool
+    //     pairing mid-cleanup.
+    //
+    //   * The bridge is explicitly marked `source: 'jsonl'` /
+    //     `confidence: 'high'` so debug tooling can still see "this
+    //     came from a committed entry, not from a live SSE delta".
+    this.headless.committed.on('tool_result', ev => {
+      const bridged: SemanticEvent = {
+        type: 'tool_result',
+        turnId: ev.turnId,
+        toolUseId: ev.toolUseId,
+        content: ev.content,
+        isError: ev.isError,
+        source: 'jsonl',
+        confidence: 'high',
+        ts: ev.ts,
+      }
+      this.emit('semantic-event', bridged)
+    })
+
     const { projectDir } = await this.headless.start()
     this.emit('started', {
       projectDir,

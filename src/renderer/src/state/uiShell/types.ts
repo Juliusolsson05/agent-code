@@ -12,6 +12,7 @@ export type UiShellState = {
   newAgentPlacementOpen: boolean
   gitBarOpen: boolean
   debugPanelOpen: boolean
+  feedDebugPanelOpen: boolean
   /** When true, the right-hand Proxy Debug Panel is mounted. Shows
    *  the live SSE flow for the focused Claude session: flow
    *  attribution, per-turn/per-block state, text deltas, stop reason,
@@ -24,4 +25,10 @@ export type UiShellState = {
    *  a cross-session concern: the modal reads prompts from ALL
    *  sessions on disk, not just those currently mounted. */
   promptSearchOpen: boolean
+  /** When true, the Agent Activity modal is open. Lists every
+   *  visible agent/terminal session grouped by tab with last-
+   *  activity timestamps so the user can triage and close unused
+   *  panes during a long session. Derived from existing transcript
+   *  data — no separate tracking store. */
+  agentActivityOpen: boolean
 }

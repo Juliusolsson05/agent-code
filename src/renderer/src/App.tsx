@@ -2,12 +2,14 @@ import { useCallback, useEffect } from 'react'
 
 import { CommandPalette } from './CommandPalette'
 import { DebugPanel } from './DebugPanel'
+import { FeedDebugPanel } from './FeedDebugPanel'
 import { ProxyDebugPanel } from './ProxyDebugPanel'
 import { SettingsPage } from './features/settings/ui/SettingsPage'
 import { SpotlightView } from './features/spotlight/ui/SpotlightView'
 import { ReaderView } from './features/reader/ui/ReaderView'
 import { TileTabsModal } from './features/tile-tabs/ui/TileTabsModal'
 import { TileTabsView } from './features/tile-tabs/ui/TileTabsView'
+import { AgentActivityModal } from './features/workspace/ui/AgentActivityModal'
 import { BuryPanePrompt } from './features/workspace/ui/BuryPanePrompt'
 import { NewAgentPlacementOverlay } from './features/workspace/ui/NewAgentPlacementOverlay'
 import { PromptSearchModal } from './features/workspace/ui/PromptSearchModal'
@@ -51,6 +53,7 @@ export default function App() {
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
+  const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const useProxyStreaming = settings.useProxyStreaming
@@ -70,10 +73,14 @@ export default function App() {
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
+  const toggleFeedDebugPanel = useAppStore(state => state.toggleFeedDebugPanel)
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
   const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
   const closePromptSearch = useAppStore(state => state.closePromptSearch)
+  const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
+  const openAgentActivity = useAppStore(state => state.openAgentActivity)
+  const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
 
   useEffect(() => {
     applyTheme(settings)
@@ -234,6 +241,15 @@ export default function App() {
           />
         )}
 
+        {feedDebugPanelOpen && activeTab && (
+          <FeedDebugPanel
+            sessionId={activeTab.focusedSessionId}
+            runtime={workspace.getRuntime(activeTab.focusedSessionId)}
+            kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
+            onClose={toggleFeedDebugPanel}
+          />
+        )}
+
         {proxyDebugPanelOpen && activeTab && (
           <ProxyDebugPanel
             sessionId={activeTab.focusedSessionId}
@@ -251,16 +267,19 @@ export default function App() {
         onResumeRequest={onResumeRequest}
         toggleGitBar={toggleGitBar}
         toggleDebugPanel={toggleDebugPanel}
+        toggleFeedDebugPanel={toggleFeedDebugPanel}
         toggleProxyDebugPanel={toggleProxyDebugPanel}
         onTileTabsRequest={onTileTabsRequest}
         onSettingsRequest={openSettingsPage}
         openViewPrompts={openViewPrompts}
         openPromptSearch={openPromptSearch}
+        openAgentActivity={openAgentActivity}
         toggleCustomRendering={toggleCustomRendering}
         customRenderingEnabled={settings.customRendering}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
         gitBarOpen={gitBarOpen}
         debugPanelOpen={debugPanelOpen}
+        feedDebugPanelOpen={feedDebugPanelOpen}
         proxyDebugPanelOpen={proxyDebugPanelOpen}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
       />
@@ -310,6 +329,12 @@ export default function App() {
         open={promptSearchOpen}
         workspace={workspace}
         onClose={closePromptSearch}
+      />
+
+      <AgentActivityModal
+        open={agentActivityOpen}
+        workspace={workspace}
+        onClose={closeAgentActivity}
       />
 
     </div>

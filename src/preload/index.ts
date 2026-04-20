@@ -157,6 +157,16 @@ export type SavedClaudeImage = {
   path: string
 }
 
+export type FeedDebugPersistEntry = {
+  id: number
+  ts: number
+  tMs: number
+  layer: 'STATE' | 'JSONL' | 'SEM' | 'RENDER'
+  kind: string
+  summary: string
+  data?: unknown
+}
+
 type Unsub = () => void
 
 const lspDiagnosticsSubscribers = new Set<(payload: LspDiagnosticsEvent) => void>()
@@ -465,6 +475,12 @@ const api = {
   }): Promise<SavedClaudeImage> =>
     ipcRenderer.invoke('fs:saveClaudeImage', params),
 
+  appendFeedDebugLog: (params: {
+    sessionId: string
+    entries: FeedDebugPersistEntry[]
+  }): Promise<void> =>
+    ipcRenderer.invoke('debug:append-feed-log', params),
+
   // --- Traffic light inset (macOS) ---
   // Main pushes the right-edge X of the traffic light buttons so the
   // tab bar can pad itself dynamically. Zoom-safe, scale-safe.
@@ -495,6 +511,19 @@ const api = {
       }
     | { ok: false }
   > => ipcRenderer.invoke('git:status', cwd),
+
+  // --- Ghost journal ---
+  //
+  // One file per session under <userData>/ghost-logs. Writes are
+  // fire-and-forget at the renderer level; the main-side queue
+  // drains every 100 ms. Reads replay the full log so atp's
+  // `reduceGhostLog` can fold it into current state on mount. The
+  // ghost value crosses IPC as plain JSON — no atp runtime in main.
+  ghostAppend: (sessionId: string, ghost: unknown): void => {
+    void ipcRenderer.invoke('ghost:append', sessionId, ghost)
+  },
+  ghostRead: (sessionId: string): Promise<unknown[]> =>
+    ipcRenderer.invoke('ghost:read', sessionId),
 }
 
 contextBridge.exposeInMainWorld('api', api)

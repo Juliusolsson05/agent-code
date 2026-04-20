@@ -35,9 +35,12 @@ export type UiShellSlice = UiShellState & {
   closeNewAgentPlacement: () => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
+  toggleFeedDebugPanel: () => void
   toggleProxyDebugPanel: () => void
   openPromptSearch: () => void
   closePromptSearch: () => void
+  openAgentActivity: () => void
+  closeAgentActivity: () => void
 }
 
 export type WorkspaceSlice = {

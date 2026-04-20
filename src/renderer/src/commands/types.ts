@@ -14,8 +14,10 @@ export type CommandContext = {
     openSettings: () => void
     openViewPrompts: (sessionId: string) => void
     openPromptSearch: () => void
+    openAgentActivity: () => void
     toggleGitBar: () => void
     toggleDebugPanel: () => void
+    toggleFeedDebugPanel: () => void
     toggleProxyDebugPanel: () => void
     toggleCustomRendering: () => void
     setDangerousAgentsEnabled: (enabled: boolean) => void
@@ -28,6 +30,7 @@ export type CommandContext = {
     dangerousAgentsEnabled: boolean
     gitBarOpen: boolean
     debugPanelOpen: boolean
+    feedDebugPanelOpen: boolean
     proxyDebugPanelOpen: boolean
   }
 }

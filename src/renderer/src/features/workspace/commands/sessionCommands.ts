@@ -19,6 +19,33 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Agent Activity — overview of every visible pane/session
+    // grouped by tab, sorted by last activity. Primary use case is
+    // triaging a long working session: scan which agents have gone
+    // idle, close or bury the ones you're done with without having
+    // to click through each tab. Always available — the modal
+    // derives "last active" from existing transcript data, so it
+    // needs nothing to be focused.
+    id: 'open-agent-activity',
+    title: 'Agent Activity…',
+    keywords: [
+      'agent',
+      'activity',
+      'panes',
+      'sessions',
+      'last',
+      'active',
+      'cleanup',
+      'close',
+      'idle',
+      'overview',
+    ],
+    run: ({ ui }) => {
+      ui.openAgentActivity()
+      ui.closePalette()
+    },
+  },
+  {
     // Cross-session prompt search — session names are useless for
     // finding a conversation, so this command opens a modal that
     // ranks every session on disk by its user-prompt text instead.
@@ -146,6 +173,16 @@ export const sessionCommands: CommandDef[] = [
       tone: flags.debugPanelOpen ? 'accent' : 'neutral',
     }),
     run: ({ ui }) => ui.toggleDebugPanel(),
+  },
+  {
+    id: 'toggle-feed-debug-panel',
+    title: 'Open Debug Logs',
+    keywords: ['debug', 'logs', 'feed', 'render', 'rows', 'timeline', 'panel'],
+    getState: ({ flags }) => ({
+      label: flags.feedDebugPanelOpen ? 'On' : 'Off',
+      tone: flags.feedDebugPanelOpen ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleFeedDebugPanel(),
   },
   {
     id: 'toggle-proxy-debug-panel',

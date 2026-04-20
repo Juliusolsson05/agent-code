@@ -19,8 +19,10 @@ export const createUiShellSlice: StateCreator<
   newAgentPlacementOpen: false,
   gitBarOpen: false,
   debugPanelOpen: false,
+  feedDebugPanelOpen: false,
   proxyDebugPanelOpen: false,
   promptSearchOpen: false,
+  agentActivityOpen: false,
 
   openCommandPalette: () =>
     set({ commandPaletteOpen: true }, false, 'uiShell/openCommandPalette'),
@@ -71,6 +73,12 @@ export const createUiShellSlice: StateCreator<
     set(state => ({ gitBarOpen: !state.gitBarOpen }), false, 'uiShell/toggleGitBar'),
   toggleDebugPanel: () =>
     set(state => ({ debugPanelOpen: !state.debugPanelOpen }), false, 'uiShell/toggleDebugPanel'),
+  toggleFeedDebugPanel: () =>
+    set(
+      state => ({ feedDebugPanelOpen: !state.feedDebugPanelOpen }),
+      false,
+      'uiShell/toggleFeedDebugPanel',
+    ),
   toggleProxyDebugPanel: () =>
     set(
       state => ({ proxyDebugPanelOpen: !state.proxyDebugPanelOpen }),
@@ -82,4 +90,9 @@ export const createUiShellSlice: StateCreator<
     set({ promptSearchOpen: true }, false, 'uiShell/openPromptSearch'),
   closePromptSearch: () =>
     set({ promptSearchOpen: false }, false, 'uiShell/closePromptSearch'),
+
+  openAgentActivity: () =>
+    set({ agentActivityOpen: true }, false, 'uiShell/openAgentActivity'),
+  closeAgentActivity: () =>
+    set({ agentActivityOpen: false }, false, 'uiShell/closeAgentActivity'),
 })

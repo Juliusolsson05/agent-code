@@ -603,6 +603,23 @@ select {
   animation: cc-pulse 1.3s ease-in-out infinite;
 }
 
+/* ---------- WorkIndicator dot pulse ---------- */
+/* Tighter cycle (900ms vs 1.3s for the legacy streaming dot) because
+   this indicator stays on for the ENTIRE turn; we want the motion to
+   read as "continuously working", not "transmitting a chunk". Same
+   easing curve so the two animations don't clash when both are on
+   screen during the rollout from the old to the new indicator.
+   prefers-reduced-motion users: animation is suppressed by the
+   `animate ? 'work-indicator-dot' : ''` gate at the component level
+   so there's no global CSS override needed here. */
+@keyframes cc-work-pulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.9); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+.work-indicator-dot {
+  animation: cc-work-pulse 900ms ease-in-out infinite;
+}
+
 /* ---------- Modal animations ---------- */
 @keyframes cc-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes cc-pop {

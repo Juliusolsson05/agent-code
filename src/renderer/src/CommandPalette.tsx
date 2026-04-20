@@ -41,14 +41,17 @@ type Props = {
   onSettingsRequest: () => void
   openViewPrompts: (sessionId: string) => void
   openPromptSearch: () => void
+  openAgentActivity: () => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
+  toggleFeedDebugPanel: () => void
   toggleProxyDebugPanel: () => void
   toggleCustomRendering: () => void
   customRenderingEnabled: boolean
   dangerousAgentsEnabled: boolean
   gitBarOpen: boolean
   debugPanelOpen: boolean
+  feedDebugPanelOpen: boolean
   proxyDebugPanelOpen: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
 }
@@ -73,14 +76,17 @@ export function CommandPalette({
   onSettingsRequest,
   openViewPrompts,
   openPromptSearch,
+  openAgentActivity,
   toggleGitBar,
   toggleDebugPanel,
+  toggleFeedDebugPanel,
   toggleProxyDebugPanel,
   toggleCustomRendering,
   customRenderingEnabled,
   dangerousAgentsEnabled,
   gitBarOpen,
   debugPanelOpen,
+  feedDebugPanelOpen,
   proxyDebugPanelOpen,
   setDangerousAgentsEnabled,
 }: Props) {
@@ -152,8 +158,10 @@ export function CommandPalette({
         openSettings: onSettingsRequest,
         openViewPrompts,
         openPromptSearch,
+        openAgentActivity,
         toggleGitBar,
         toggleDebugPanel,
+        toggleFeedDebugPanel,
         toggleProxyDebugPanel,
         toggleCustomRendering,
         setDangerousAgentsEnabled,
@@ -166,6 +174,7 @@ export function CommandPalette({
         dangerousAgentsEnabled,
         gitBarOpen,
         debugPanelOpen,
+        feedDebugPanelOpen,
         proxyDebugPanelOpen,
       },
     }),
@@ -177,8 +186,10 @@ export function CommandPalette({
       onSettingsRequest,
       openViewPrompts,
       openPromptSearch,
+      openAgentActivity,
       toggleGitBar,
       toggleDebugPanel,
+      toggleFeedDebugPanel,
       toggleProxyDebugPanel,
       toggleCustomRendering,
       setDangerousAgentsEnabled,
@@ -189,6 +200,7 @@ export function CommandPalette({
       dangerousAgentsEnabled,
       gitBarOpen,
       debugPanelOpen,
+      feedDebugPanelOpen,
       proxyDebugPanelOpen,
     ],
   )

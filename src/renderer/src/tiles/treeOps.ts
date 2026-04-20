@@ -205,65 +205,17 @@ export function adjustNearestSplitRatio(
 }
 
 /**
- * Geometric neighbor lookup — given a focused session and a direction
- * (left/right/up/down), return the sessionId of the pane the user would
- * expect to land on.
+ * Navigation neighbor lookup moved to geometry.ts::findDirectionalNeighbor
+ * on 2026-04-20. The tree-walking version here always landed on the
+ * leftmost/topmost leaf of the target subtree (via `firstLeaf`), which
+ * was wrong whenever the user's source column didn't align with the
+ * `.a`-side spine of the target subtree — e.g. moving ↑ from bottom-
+ * right of a 2×3 grid landed on top-LEFT instead of top-right.
  *
- * Algorithm: walk up the tree until we find a split whose direction
- * matches the move (vertical for left/right, horizontal for up/down)
- * AND we're on the "wrong side" (i.e., moving right means we need to
- * currently be in the `a` side of a vertical split). Then descend into
- * the opposite side, always picking the pane closest to the original
- * via a simple heuristic: first leaf we hit. Good enough for binary
- * trees; tmux uses the same strategy.
- *
- * Returns null if there's no neighbor in that direction (edge of tab).
+ * Geometry-based selection is strictly more correct and doesn't care
+ * how the tree happens to be shaped, so the tree-walk and its helpers
+ * (`buildPath`, `firstLeaf`) are deleted rather than left as dead code.
  */
-export function findNeighbor(
-  root: TileNode,
-  focusedSessionId: SessionId,
-  direction: 'left' | 'right' | 'up' | 'down',
-): SessionId | null {
-  // First, build a path from root to the focused leaf so we can walk
-  // back up. Each path entry records which child (`a` or `b`) we
-  // descended into.
-  const path: Array<{ node: TileNode & { type: 'split' }; side: 'a' | 'b' }> = []
-  const found = buildPath(root, focusedSessionId, path)
-  if (!found) return null
-
-  const wantDirection: SplitDirection =
-    direction === 'left' || direction === 'right' ? 'vertical' : 'horizontal'
-  const wantSide: 'a' | 'b' =
-    direction === 'right' || direction === 'down' ? 'a' : 'b'
-  // When moving right/down we want to be currently in side `a`, so we
-  // can jump to `b`. Moving left/up we want to be currently in side `b`.
-
-  // Walk back up the path looking for a matching split.
-  for (let i = path.length - 1; i >= 0; i--) {
-    const { node, side } = path[i]
-    if (node.direction !== wantDirection) continue
-    if (side !== wantSide) continue
-    // Found one. Descend into the opposite side and return its first leaf.
-    const target = side === 'a' ? node.b : node.a
-    return firstLeaf(target)
-  }
-  return null
-}
-
-function buildPath(
-  node: TileNode,
-  target: SessionId,
-  path: Array<{ node: TileNode & { type: 'split' }; side: 'a' | 'b' }>,
-): boolean {
-  if (node.type === 'leaf') return node.sessionId === target
-  path.push({ node, side: 'a' })
-  if (buildPath(node.a, target, path)) return true
-  path.pop()
-  path.push({ node, side: 'b' })
-  if (buildPath(node.b, target, path)) return true
-  path.pop()
-  return false
-}
 
 /**
  * Build a path from root to leaf as an array of side choices
@@ -405,16 +357,6 @@ export function resizeInDirection(
   }
 
   return root
-}
-
-/**
- * Return the sessionId of the first leaf found by a depth-first walk
- * into side `a`. Used by `findNeighbor` to pick a concrete landing pane
- * after deciding which subtree we're jumping into.
- */
-export function firstLeaf(node: TileNode): SessionId {
-  if (node.type === 'leaf') return node.sessionId
-  return firstLeaf(node.a)
 }
 
 /**

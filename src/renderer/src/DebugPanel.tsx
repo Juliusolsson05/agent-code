@@ -77,6 +77,19 @@ export function DebugPanel({ sessionId, runtime, kind, onClose }: Props) {
             <Flag label="awaitingAssistant" on={runtime.awaitingAssistant} />
             <Flag label="exited" value={runtime.exited === null ? 'running' : String(runtime.exited)} />
             <Flag label="activityStatus" value={runtime.activityStatus ?? '(idle)'} />
+            <Flag label="streamPhase" value={runtime.streamPhase} />
+            <Flag
+              label="pendingTool"
+              value={runtime.streamPhasePendingToolName ?? '(none)'}
+            />
+            <Flag
+              label="turnStartedAt"
+              value={
+                runtime.turnStartedAt === null
+                  ? '(none)'
+                  : `${((Date.now() - runtime.turnStartedAt) / 1000).toFixed(1)}s ago`
+              }
+            />
             <Flag label="picker.visible" on={runtime.picker.visible} />
             <Flag label="entries" value={String(runtime.entries.length)} />
             <Flag label="queuedMsgs" value={String(runtime.queuedMessages.length)} />

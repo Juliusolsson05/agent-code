@@ -42,7 +42,10 @@ import {
   parseSemanticTodos,
   type SemanticLiveTurn,
   type SemanticTodoItem,
+  type StreamPhase,
 } from '../tiles/workspaceState'
+import { WorkIndicator } from './WorkIndicator'
+import { toolHintFromTurn } from './workIndicatorHints'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.
@@ -326,10 +329,15 @@ type Props = {
   provider?: AgentProvider
   entries: Entry[]
   /** Spinner verb text from the headless package ("Cogitating…").
-   *  Rendered below the feed when no semantic turn is mounted so
-   *  the user sees the agent is working even if no live text is
-   *  flowing yet. */
+   *  Kept for DebugPanel visibility; no longer drives feed rendering
+   *  now that `streamPhase` owns the working indicator. */
   activityStatus?: string | null
+  /** Adapter-derived stream phase — drives the in-feed WorkIndicator.
+   *  See SessionRuntime.streamPhase for the contract. */
+  streamPhase?: StreamPhase
+  streamPhasePendingToolName?: string | null
+  streamPhasePendingToolUseId?: string | null
+  turnStartedAt?: number | null
   tailMode?: boolean
   /**
    * UUID of the assistant entry currently highlighted by the
@@ -358,6 +366,122 @@ type Props = {
    *  now from the runtime — the store grows them at ingest time. */
   toolUseIndex?: Map<string, ToolUseBlock>
   toolResultIndex?: Map<string, ToolResultBlock>
+  onDebugLog?: (entry: {
+    layer: 'RENDER'
+    kind: string
+    summary: string
+    data?: unknown
+  }) => void
+}
+
+type VisibleDecision = {
+  key: string
+  entry: Entry
+  visible: boolean
+  reason:
+    | 'compact_boundary'
+    | 'compact_summary'
+    | 'conversation'
+    | 'not_conversation'
+    | 'meta_filtered'
+}
+
+type DebugVisibleRow = {
+  key: string
+  slot: 'entry' | 'semantic' | 'work' | 'empty'
+  label: string
+}
+
+function debugKeyForEntry(entry: Entry, index: number): string {
+  const uuid = (entry as Entry).uuid
+  return uuid ?? `${entry.type}:${index}`
+}
+
+function debugLabelForEntry(entry: Entry): string {
+  if (entry.type === 'user' || entry.type === 'assistant') {
+    const message = (entry as ConversationEntry).message
+    const content = Array.isArray(message.content) ? message.content : []
+    const first = content[0] as Record<string, unknown> | undefined
+    if (first?.type === 'text' && typeof first.text === 'string') {
+      return `${entry.type}: ${first.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`
+    }
+    if (typeof first?.type === 'string') {
+      return `${entry.type}: ${String(first.type)}`
+    }
+  }
+  return entry.type
+}
+
+function textFromConversationEntry(entry: ConversationEntry): string {
+  const content = entry.message.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(block => {
+      const item = block as ContentBlock & { text?: string }
+      return item.type === 'text' && typeof item.text === 'string' ? item.text : ''
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function normalizeRenderableText(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+function shouldSuppressSemanticTurnForCommittedTail(
+  provider: AgentProvider,
+  semanticTurn: SemanticLiveTurn | null,
+  visibleEntries: Entry[],
+): boolean {
+  // WHY this Codex-only suppression exists:
+  //
+  // Feed currently renders two independent surfaces:
+  //   1. committed transcript entries (`visible`)
+  //   2. the live semantic tail (`semanticTurn`)
+  //
+  // That's normally what we want: committed history stays visible while
+  // the in-flight turn paints below it. The bug is Codex's rollout path.
+  // Rollout can publish a final assistant `turn.text` onto the live
+  // semantic turn BEFORE the committed assistant entry has fully sealed
+  // the live owner on the renderer side. In that overlap window we get:
+  //
+  //   - committed assistant entry already visible
+  //   - rollout semantic turn still mounted
+  //   - same assistant sentence painted twice
+  //
+  // The pane debug log for session
+  // `3916142b-1472-4f4b-8589-ce52a47aef94` showed exactly that pattern:
+  // one committed assistant row plus one still-live `semantic:*` rollout
+  // row. This was NOT "same JSONL row appended twice"; it was two owners
+  // rendering the same text at once.
+  //
+  // We keep the suppression intentionally narrow:
+  //   - Codex only
+  //   - rollout source only
+  //   - exact normalized text match against the latest visible assistant row
+  //
+  // We do NOT suppress Claude here, and we do NOT broadly dedupe semantic
+  // rows against transcript history, because live semantic rows still carry
+  // real value for tool activity, commentary, and non-identical in-flight
+  // text. This helper is a guardrail for one proven duplicate class until
+  // the larger "single owner for visible assistant text" redesign is done.
+  if (provider !== 'codex' || semanticTurn == null) return false
+  if (semanticTurn.source !== 'rollout') return false
+
+  const liveText = normalizeRenderableText(semanticTurn.text ?? '')
+  if (!liveText) return false
+
+  for (let i = visibleEntries.length - 1; i >= 0; i -= 1) {
+    const entry = visibleEntries[i]
+    if (!isConversationEntry(entry)) continue
+    if (entry.message.role !== 'assistant') continue
+    const committedText = normalizeRenderableText(textFromConversationEntry(entry))
+    if (!committedText) continue
+    return committedText === liveText
+  }
+
+  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -447,6 +571,10 @@ function FeedImpl({
   provider = 'claude',
   entries,
   activityStatus,
+  streamPhase = 'idle',
+  streamPhasePendingToolName = null,
+  streamPhasePendingToolUseId = null,
+  turnStartedAt = null,
   tailMode = false,
   pickerSelectedUuid = null,
   workspaceRoot = null,
@@ -459,6 +587,7 @@ function FeedImpl({
   scrollToLatestRequest = 0,
   toolUseIndex: toolUseIndexProp,
   toolResultIndex: toolResultIndexProp,
+  onDebugLog,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
   // sticky-bottom logic below can own its own scroll listener without
@@ -796,13 +925,61 @@ function FeedImpl({
   // completion notification would render as a full UserBand in the
   // feed with raw <task-notification> XML visible — exactly the bug
   // the user reported.
-  const visible = entries.filter(e => {
-    if (isCompactBoundaryEntry(e)) return true
-    if (isCompactSummaryEntry(e)) return true
-    if (!isConversationEntry(e)) return false
-    if ((e as unknown as { isMeta?: boolean }).isMeta === true) return false
-    return true
-  })
+  const visibleDecisions = useMemo<VisibleDecision[]>(
+    () =>
+      entries.map((entry, index) => {
+        if (isCompactBoundaryEntry(entry)) {
+          return {
+            key: debugKeyForEntry(entry, index),
+            entry,
+            visible: true,
+            reason: 'compact_boundary',
+          }
+        }
+        if (isCompactSummaryEntry(entry)) {
+          return {
+            key: debugKeyForEntry(entry, index),
+            entry,
+            visible: true,
+            reason: 'compact_summary',
+          }
+        }
+        if (!isConversationEntry(entry)) {
+          return {
+            key: debugKeyForEntry(entry, index),
+            entry,
+            visible: false,
+            reason: 'not_conversation',
+          }
+        }
+        if ((entry as unknown as { isMeta?: boolean }).isMeta === true) {
+          return {
+            key: debugKeyForEntry(entry, index),
+            entry,
+            visible: false,
+            reason: 'meta_filtered',
+          }
+        }
+        return {
+          key: debugKeyForEntry(entry, index),
+          entry,
+          visible: true,
+          reason: 'conversation',
+        }
+      }),
+    [entries],
+  )
+
+  const visible = useMemo(
+    () => visibleDecisions.filter(item => item.visible).map(item => item.entry),
+    [visibleDecisions],
+  )
+
+  const suppressSemanticTurn = useMemo(
+    () => shouldSuppressSemanticTurnForCommittedTail(provider, semanticTurn, visible),
+    [provider, semanticTurn, visible],
+  )
+  const renderedSemanticTurn = suppressSemanticTurn ? null : semanticTurn
 
   // Index EVERY tool_use block (not just the visible set) so tool_result
   // lookups still resolve even when some synthetic entries have been
@@ -821,7 +998,103 @@ function FeedImpl({
   const toolUseIndex = toolUseIndexProp ?? fallbackToolUseIndex
   const toolResultIndex = toolResultIndexProp ?? fallbackToolResultIndex
 
-  const hasSemanticStreaming = semanticTurn !== null
+  const hasSemanticStreaming = renderedSemanticTurn !== null
+  const shouldShowWorkIndicator = streamPhase !== 'idle'
+
+  const renderedRows = useMemo<DebugVisibleRow[]>(() => {
+    if (visible.length === 0 && !hasSemanticStreaming) {
+      return [{
+        key: 'empty',
+        slot: 'empty',
+        label: provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…',
+      }]
+    }
+    const rows: DebugVisibleRow[] = visibleDecisions
+      .filter(item => item.visible)
+      .map(item => ({
+        key: `entry:${item.key}`,
+        slot: 'entry',
+        label: debugLabelForEntry(item.entry),
+      }))
+    if (renderedSemanticTurn != null) {
+      rows.push({
+        key: `semantic:${renderedSemanticTurn.turnId}`,
+        slot: 'semantic',
+        label: `semantic turn ${renderedSemanticTurn.turnId.slice(0, 12)} · ${renderedSemanticTurn.source ?? 'unknown'}`,
+      })
+    }
+    if (shouldShowWorkIndicator) {
+      rows.push({
+        key: `work:${streamPhase}:${streamPhasePendingToolUseId ?? 'none'}`,
+        slot: 'work',
+        label:
+          streamPhasePendingToolName && (
+            streamPhase === 'tool-input' ||
+            streamPhase === 'tool-use' ||
+            streamPhase === 'awaiting-tool'
+          )
+            ? `work ${streamPhase} · ${streamPhasePendingToolName}`
+            : `work ${streamPhase}`,
+      })
+    }
+    return rows
+  }, [
+    hasSemanticStreaming,
+    provider,
+    renderedSemanticTurn,
+    shouldShowWorkIndicator,
+    streamPhase,
+    streamPhasePendingToolName,
+    streamPhasePendingToolUseId,
+    visible.length,
+    visibleDecisions,
+  ])
+
+  const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
+
+  useEffect(() => {
+    if (!onDebugLog) return
+    const previous = previousRenderedRowsRef.current
+    const prevKeys = new Set(previous?.map(row => row.key) ?? [])
+    const nextKeys = new Set(renderedRows.map(row => row.key))
+    const added = renderedRows.filter(row => !prevKeys.has(row.key))
+    const removed = (previous ?? []).filter(row => !nextKeys.has(row.key))
+    const hidden = visibleDecisions
+      .filter(item => !item.visible)
+      .slice(-12)
+      .map(item => ({
+        key: item.key,
+        label: debugLabelForEntry(item.entry),
+        reason: item.reason,
+      }))
+    const changed =
+      previous === null ||
+      added.length > 0 ||
+      removed.length > 0 ||
+      previous.length !== renderedRows.length ||
+      previous.some((row, index) => row.key !== renderedRows[index]?.key)
+    if (!changed) return
+    onDebugLog({
+      layer: 'RENDER',
+      kind: 'visible_rows',
+      summary:
+        previous === null
+          ? `initial rows ${renderedRows.length}`
+          : `rows ${previous.length} -> ${renderedRows.length} (+${added.length} -${removed.length})`,
+      data: {
+        rows: renderedRows,
+        added,
+        removed,
+        hidden,
+        entryCount: entries.length,
+        visibleEntryCount: visible.length,
+        semanticTurnId: semanticTurn?.turnId ?? null,
+        semanticSuppressed: suppressSemanticTurn,
+        streamPhase,
+      },
+    })
+    previousRenderedRowsRef.current = renderedRows
+  }, [entries.length, onDebugLog, renderedRows, semanticTurn?.turnId, streamPhase, suppressSemanticTurn, visible.length, visibleDecisions])
 
   if (visible.length === 0 && !hasSemanticStreaming) {
     return (
@@ -896,15 +1169,26 @@ function FeedImpl({
            * `source: 'screen'`) on the same channel, gated by a
            * baseline so they don't emit the previous turn's buffered
            * text as the first delta of a new turn. */}
-          {semanticTurn != null && (
-            <SemanticStreamingTurn turn={semanticTurn} />
+          {renderedSemanticTurn != null && (
+            <SemanticStreamingTurn turn={renderedSemanticTurn} />
           )}
-          {/* Activity indicator — shown when the agent is working but
-              no semantic turn is mounted (tool execution between
-              turns, very start before the first semantic event). */}
-          {semanticTurn == null && activityStatus && (
-            <ActivityIndicator status={activityStatus} />
-          )}
+          {/* WorkIndicator — the single in-feed "agent is working"
+              affordance. Driven by `streamPhase`, NOT gated on whether
+              a semantic turn is mounted. That gate was the old
+              ActivityIndicator's core bug: the indicator vanished the
+              moment `SemanticStreamingTurn` mounted, leaving a blind
+              spot during tool execution. With phase as the driver, the
+              indicator stays visible through every phase transition —
+              submitting → requesting → thinking → tool-input →
+              awaiting-tool → requesting (next turn) → … — and only
+              disappears on terminal `idle`. See
+              docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md. */}
+          <WorkIndicator
+            phase={streamPhase}
+            turnStartedAt={turnStartedAt}
+            toolName={streamPhasePendingToolName}
+            toolHint={toolHintFromTurn(renderedSemanticTurn, streamPhasePendingToolUseId)}
+          />
           <div ref={endRef} />
         </div>
       </div>
@@ -1143,7 +1427,16 @@ const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
 
   return (
     <>
-      <SemanticTaskSummary turn={turn} />
+      {/* SemanticTaskSummary was removed 2026-04-18.
+       *
+       * The old chrome row printed `todos: X/Y · active: Bash, Grep ·
+       * tools: 3 done`. It competed with WorkIndicator for "is the
+       * agent working" attention without answering that question —
+       * todos render via the TodoWrite tool's own SemanticLiveBlockRow,
+       * active-tool names are visible in the tool rows themselves, and
+       * done-count is not useful chat content.
+       *
+       * See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md. */}
       {units.map(unit => (
         unit.type === 'collapsed_activity' ? (
           <SemanticCollapsedActivityRow
@@ -1158,7 +1451,14 @@ const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
           />
         )
       ))}
-      <SemanticTurnFooter turn={turn} />
+      {/* SemanticTurnFooter was removed 2026-04-18.
+       *
+       * It printed `stop: tool_use · in: 1234 · out: 567` — diagnostic
+       * chatter that lives in DebugPanel now. If we ever want a
+       * per-turn receipt card in the chat it belongs as its own
+       * surface, not as a tail on every turn.
+       *
+       * See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md. */}
     </>
   )
 })
@@ -1168,6 +1468,14 @@ const SemanticCollapsedActivityRow = memo(function SemanticCollapsedActivityRow(
 }: {
   unit: Extract<SemanticRenderUnit, { type: 'collapsed_activity' }>
 }) {
+  // Running-ness is the WorkIndicator's job now. When the group is
+  // still accumulating we render nothing and let the indicator below
+  // carry the "agent is working" signal. Only the `worked:` variant
+  // stays — it's a genuinely useful history compaction of a finished
+  // batch of reads/searches. See
+  // docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
+  if (unit.isRunning) return null
+
   const parts: string[] = []
   if (unit.searchCount > 0) parts.push(`${unit.searchCount} search${unit.searchCount === 1 ? '' : 'es'}`)
   if (unit.readCount > 0) parts.push(`${unit.readCount} read${unit.readCount === 1 ? '' : 's'}`)
@@ -1176,10 +1484,10 @@ const SemanticCollapsedActivityRow = memo(function SemanticCollapsedActivityRow(
   const summary = parts.length > 0 ? parts.join(', ') : `${unit.count} tool calls`
 
   return (
-    <MarkerRow marker={unit.isRunning ? '·' : '⎿'} tone="muted">
+    <MarkerRow marker="⎿" tone="muted">
       <div className="flex flex-col gap-1">
         <div className="text-[12px] uppercase tracking-wider text-muted">
-          {unit.isRunning ? 'working:' : 'worked:'} {summary}
+          worked: {summary}
         </div>
         {unit.latestHint ? (
           <div className="font-code text-[12px] leading-[1.5] text-ink-dim break-all">
@@ -1302,33 +1610,39 @@ const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // Live thinking — for Claude this is the ONLY time the plaintext is
     // available (`thinking` is stripped on the final message before
     // persisting; only signature ciphertext survives). For Codex the
-    // `reasoning` block works similarly — plaintext deltas stream
-    // during the turn (and may be empty when ChatGPT's reasoning is
-    // delivered encrypted via the `encrypted_content` field, which
-    // the renderer can't decrypt without the decryption key).
+    // `reasoning` block works similarly, and plaintext is frequently
+    // empty because ChatGPT delivers reasoning encrypted.
     //
-    // Mirrors claude-code's AssistantThinkingMessage with
-    // `isTranscriptMode=true` — dim italic markdown, always open, no
-    // <details> wrapper. The "…" suffix is visual feedback while
-    // deltas are still arriving. For Codex, `reasoningSummary` on a
-    // completed block is an alternate source of the digest text; we
-    // fall through to `thinking` first because per-delta accumulation
-    // has the most current state.
+    // Design (2026-04-18 rework):
+    //   - Empty thinking → render NOTHING. The WorkIndicator at the
+    //     foot of the feed already shows "Thinking · Ns" with a
+    //     pulsing dot, so the old static `∴ Thinking…` row was
+    //     redundant noise that actively looked "hung" when encrypted.
+    //   - Non-empty thinking → collapsed `<details>` (closed by
+    //     default). Users who want to read reasoning click to expand;
+    //     nobody sees a flood of italic prose they didn't ask for.
+    //
+    // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
     const text =
       block.thinking ||
       block.reasoningSummary ||
       block.reasoningText ||
       ''
+    if (!text) return null
+    const isStreaming = !block.finalized
     return (
       <MarkerRow marker="⏺" tone="muted">
-        <div className="italic text-muted text-[12px] opacity-80">
-          <div className="mb-1">∴ Thinking{text ? '' : '…'}</div>
-          {text ? (
-            <div className="text-ink-dim opacity-90 not-italic">
-              <StreamingProse text={text} />
-            </div>
-          ) : null}
-        </div>
+        <details className="italic text-muted text-[12px] opacity-80">
+          <summary className="cursor-pointer select-none">
+            ∴ Thinking{isStreaming ? '…' : ''}
+            <span className="ml-2 not-italic text-ink-dim opacity-70">
+              (click to expand)
+            </span>
+          </summary>
+          <div className="mt-2 text-ink-dim opacity-90 not-italic">
+            <StreamingProse text={text} />
+          </div>
+        </details>
       </MarkerRow>
     )
   }
@@ -2040,37 +2354,29 @@ const Block = memo(function Block({
       return role === 'user' ? <UserBand>{row}</UserBand> : row
     }
     case 'thinking': {
-      // Anthropic's extended-thinking feature ships completed blocks
-      // with `thinking: ""` and a long `signature` ciphertext — the
-      // plaintext is only available during the live turn via
-      // `thinking_delta` SSE events, never persisted to disk. The old
-      // `<details>thinking</details>` disclosure always opened to an
-      // empty `<pre>`, which looked like a renderer bug (click →
-      // nothing → user assumes we dropped the text).
+      // Persisted thinking block. Anthropic strips the plaintext from
+      // the final message (only `signature` ciphertext survives), so
+      // text is ALMOST ALWAYS empty in committed transcripts. Old
+      // behaviour was to render a placeholder `∴ Thinking` row; now
+      // we render nothing and let the WorkIndicator (while live) and
+      // the absence of content (after the fact) speak for themselves.
       //
-      // Mirror claude-code's AssistantThinkingMessage collapsed
-      // variant: a single dim italic `∴ Thinking` row with no
-      // clickable disclosure when there's nothing to reveal. Live
-      // thinking text is rendered by SemanticLiveBlockRow (reads
-      // semanticTurn.blocks[i].thinking), not here.
-      const text = (block as { thinking?: string }).thinking ?? ''
-      if (!text) {
-        return (
-          <MarkerRow marker="⏺" tone="muted">
-            <span className="italic text-muted text-[12px] opacity-70">
-              ∴ Thinking
-            </span>
-          </MarkerRow>
-        )
-      }
-      // Non-empty thinking plaintext on a completed block is rare
+      // Non-empty thinking on a committed block does still exist
       // (older sessions, non-Opus-4 models, synthetic entries). Keep
-      // the expandable surface for those.
+      // the expandable surface for those — aligned with the live
+      // branch above, `<details>` closed by default.
+      //
+      // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
+      const text = (block as { thinking?: string }).thinking ?? ''
+      if (!text) return null
       return (
         <MarkerRow marker="⏺" tone="muted">
           <details className="text-muted text-[12px]">
             <summary className="cursor-pointer select-none italic">
               ∴ Thinking
+              <span className="ml-2 not-italic text-ink-dim opacity-70">
+                (click to expand)
+              </span>
             </summary>
             <div className="mt-1.5 text-ink-dim opacity-80">
               <TextProse text={text} />
@@ -2532,22 +2838,22 @@ function attachmentLabel(entry: Entry): string {
  * previous turn's buffered bytes as the first delta of a new turn.
  */
 
-/* ---------- Activity indicator (standalone, outside streaming row) ---------- */
-
-// Shown at the bottom of the feed when CC is working but the streaming
-// row isn't active (awaitingAssistant is false). Covers tool execution,
-// the gap at the very start of a turn, and any state where the spinner
-// is visible on CC's screen but we haven't flipped into streaming mode
-// yet. Uses the same marker + hanging indent layout as everything else
-// in the feed for visual consistency.
-
-function ActivityIndicator({ status }: { status: string }) {
-  return (
-    <MarkerRow marker="⏺">
-      <div className="flex items-center gap-2 text-muted text-[12px] py-0.5">
-        <span className="streaming-dot inline-block w-1.5 h-1.5 rounded-full bg-accent" />
-        <span>{status}</span>
-      </div>
-    </MarkerRow>
-  )
-}
+/* ---------- Activity indicator REMOVED — replaced by <WorkIndicator> ----------
+ *
+ * The local `ActivityIndicator` function used to live here. It was the
+ * "agent is working" pulse-dot + verb row, rendered at the foot of the
+ * feed and gated on `semanticTurn == null`. That gate was the bug: the
+ * indicator vanished the moment a semantic turn mounted, leaving a
+ * visual blind spot during tool execution and the mid-turn gaps
+ * between blocks.
+ *
+ * The replacement is `<WorkIndicator>` in `./WorkIndicator.tsx`, driven
+ * by the adapter-derived `runtime.streamPhase` field instead of the
+ * TUI spinner verb. See
+ * docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md and
+ * docs/superpowers/plans/2026-04-18-thinking-phase-in-headless.md.
+ *
+ * The duplicate component at `src/shared/ui/ActivityIndicator.tsx` is
+ * also being removed in the same pass; it was dead code (exported but
+ * never imported).
+ */

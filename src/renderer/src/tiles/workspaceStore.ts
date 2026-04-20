@@ -30,7 +30,6 @@ import {
   closeLeaf,
   collectLeaves,
   equalizeRatios,
-  findNeighbor,
   insertBesideLeaf,
   normalizeTree,
   resizeInDirection,
@@ -38,7 +37,7 @@ import {
   splitLeaf,
   wrapRootWithLeaf,
 } from './treeOps'
-import { findBestRemainingFocus } from './geometry'
+import { findBestRemainingFocus, findDirectionalNeighbor } from './geometry'
 import {
   UndoCloseStack,
   findParentSplitInfo,
@@ -55,6 +54,8 @@ import {
   emptySemanticRuntime,
   emptyRuntime,
   parseSemanticTodos,
+  type FeedDebugEntry,
+  type FeedDebugLayer,
   type PickerItem,
   type QueuedMessage,
   type ReaderModeState,
@@ -65,9 +66,16 @@ import {
   type SessionStatus,
   type SessionStatusSource,
   type SlashPickerState,
+  type StreamPhase,
   type SpotlightState,
   type TileTabsState,
 } from './workspaceState'
+import {
+  ghostsFromSemanticTurn,
+  ghostsToPersist,
+  reconcileUpstream,
+} from './ghosts'
+import { reduceGhostLog } from 'agent-transcript-parser/ghost'
 import type { PlacementTarget } from '../features/workspace/lib/newAgentPlacement'
 
 // Workspace store — single React hook that owns:
@@ -89,6 +97,69 @@ import type { PlacementTarget } from '../features/workspace/lib/newAgentPlacemen
 // ---------------------------------------------------------------------------
 // Per-session runtime state (live; NOT persisted to disk)
 // ---------------------------------------------------------------------------
+
+const FEED_DEBUG_LOG_CAP = 500
+
+type FeedDebugInput = {
+  layer: FeedDebugLayer
+  kind: string
+  summary: string
+  data?: unknown
+}
+
+function appendFeedDebugLog(
+  current: SessionRuntime,
+  input: FeedDebugInput,
+): SessionRuntime {
+  const ts = Date.now()
+  const epoch = current.feedDebugEpochMs ?? ts
+  const nextEntry: FeedDebugEntry = {
+    id: current.feedDebugNextId,
+    ts,
+    tMs: ts - epoch,
+    layer: input.layer,
+    kind: input.kind,
+    summary: input.summary,
+    data: input.data,
+  }
+  const nextLog =
+    current.feedDebugLog.length >= FEED_DEBUG_LOG_CAP
+      ? [...current.feedDebugLog.slice(current.feedDebugLog.length - FEED_DEBUG_LOG_CAP + 1), nextEntry]
+      : [...current.feedDebugLog, nextEntry]
+  return {
+    ...current,
+    feedDebugEpochMs: epoch,
+    feedDebugNextId: current.feedDebugNextId + 1,
+    feedDebugLog: nextLog,
+  }
+}
+
+function summarizeSemanticEventForDebug(event: Record<string, unknown>): string {
+  const type = typeof event.type === 'string' ? event.type : 'unknown'
+  const turnId = typeof event.turnId === 'string' ? event.turnId : null
+  const source = typeof event.source === 'string' ? event.source : null
+  const toolName = typeof event.toolName === 'string' ? event.toolName : null
+  const blockIndex =
+    typeof event.blockIndex === 'number' ? event.blockIndex : null
+  const stopReason =
+    typeof event.stopReason === 'string' ? event.stopReason : null
+  const parts = [type]
+  if (source) parts.push(`src=${source}`)
+  if (turnId) parts.push(`turn=${turnId.slice(0, 10)}`)
+  if (blockIndex !== null) parts.push(`block=${blockIndex}`)
+  if (toolName) parts.push(`tool=${toolName}`)
+  if (stopReason) parts.push(`stop=${stopReason}`)
+  return parts.join(' ')
+}
+
+function summarizeEntryForDebug(entry: Entry): string {
+  const text = entryTextContent(entry)
+  if (text) {
+    const compact = text.replace(/\s+/g, ' ').trim()
+    return `${entry.type}: ${compact.slice(0, 96)}`
+  }
+  return entry.type
+}
 
 
 function isCodexRolloutEntry(entry: Record<string, unknown>): boolean {
@@ -1700,6 +1771,7 @@ export function useWorkspace(
   // current drafts without re-creating the callback on every render.
   const latestRuntimesRef = useRef(runtimes)
   latestRuntimesRef.current = runtimes
+  const persistedFeedDebugIdRef = useRef<Record<SessionId, number>>({})
 
   // Seen uuids per session, for JSONL dedup. Refs because we never
   // render against them — they're bookkeeping.
@@ -1731,6 +1803,21 @@ export function useWorkspace(
         return {
           ...prev,
           [sessionId]: withDerivedSessionStatus({ ...current, ...patch }),
+        }
+      })
+    },
+    [],
+  )
+
+  const appendFeedDebug = useCallback(
+    (sessionId: SessionId, input: FeedDebugInput) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const next = appendFeedDebugLog(current, input)
+        if (next === current) return prev
+        return {
+          ...prev,
+          [sessionId]: next,
         }
       })
     },
@@ -1781,6 +1868,12 @@ export function useWorkspace(
   useEffect(() => {
     const offStarted = window.api.onSessionStarted(({ sessionId, projectDir }) => {
       updateRuntime(sessionId, { projectDir })
+      appendFeedDebug(sessionId, {
+        layer: 'STATE',
+        kind: 'session_started',
+        summary: `session started${projectDir ? ` · ${projectDir}` : ''}`,
+        data: { projectDir },
+      })
     })
 
     const offScreen = window.api.onSessionScreen(
@@ -1818,6 +1911,11 @@ export function useWorkspace(
           ) {
             return prev
           }
+          const changed: string[] = []
+          if (current.screen !== plain) changed.push('screen')
+          if (current.recentScreen !== recent) changed.push('recent')
+          if (current.screenMarkdown !== markdown) changed.push('markdown')
+          if (!pickerEqual(current.picker, picker)) changed.push('picker')
           // Detect Codex approval overlay from the screen. Only runs
           // for codex sessions — Claude has its own trust dialog path.
           //
@@ -1869,9 +1967,8 @@ export function useWorkspace(
               ? current.pendingApproval
               : null
 
-          return {
-            ...prev,
-            [sessionId]: {
+          const nextCurrent = appendFeedDebugLog(
+            {
               ...current,
               screen: plain,
               screenMarkdown: markdown,
@@ -1886,6 +1983,22 @@ export function useWorkspace(
               // frame, racing the process-state writer.
               pendingApproval: nextApproval,
             },
+            {
+              layer: 'STATE',
+              kind: 'screen_update',
+              summary: `screen update · ${changed.join(', ')}`,
+              data: {
+                changed,
+                pickerVisible: picker.visible,
+                pickerCount: picker.items.length,
+                approvalOpen: nextApproval !== null,
+                recentLength: recent.length,
+              },
+            },
+          )
+          return {
+            ...prev,
+            [sessionId]: nextCurrent,
           }
         })
       },
@@ -1925,18 +2038,38 @@ export function useWorkspace(
     const offExit = window.api.onSessionExit(({ sessionId, exitCode }) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
-        const next = withDerivedSessionStatus({
-          ...current,
-          exited: exitCode,
-          awaitingAssistant: false,
-          queuedMessages: [],
-          activityStatus: null,
-          processActive: false,
-          semantic: {
-            ...current.semantic,
-            currentTurn: null,
-          },
-        })
+        const next = withDerivedSessionStatus(
+          appendFeedDebugLog(
+            {
+              ...current,
+              exited: exitCode,
+              awaitingAssistant: false,
+              queuedMessages: [],
+              activityStatus: null,
+              processActive: false,
+              // Clear phase on exit. The WorkIndicator renders nothing for
+              // `idle`; letting a pre-exit phase linger would leave the
+              // in-feed indicator saying e.g. "Awaiting Bash" on a dead
+              // session. Matching the existing activityStatus null.
+              streamPhase: 'idle',
+              streamPhasePendingToolName: null,
+              streamPhasePendingToolUseId: null,
+              turnStartedAt: null,
+              phaseChangedAt: null,
+              submittedAt: null,
+              semantic: {
+                ...current.semantic,
+                currentTurn: null,
+              },
+            },
+            {
+              layer: 'STATE',
+              kind: 'session_exit',
+              summary: `session exited code=${exitCode}`,
+              data: { exitCode },
+            },
+          ),
+        )
         return { ...prev, [sessionId]: next }
       })
     })
@@ -1953,12 +2086,24 @@ export function useWorkspace(
     const offProcessState = window.api.onSessionProcessState(({ sessionId, active, status }) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
-        const next = withDerivedSessionStatus({
-          ...current,
-          processActive: active,
-          activityStatus: active ? (status ?? null) : null,
-          awaitingAssistant: false,
-        })
+        const next = withDerivedSessionStatus(
+          appendFeedDebugLog(
+            {
+              ...current,
+              processActive: active,
+              activityStatus: active ? (status ?? null) : null,
+              awaitingAssistant: false,
+            },
+            {
+              layer: 'STATE',
+              kind: 'process_state',
+              summary: active
+                ? `process active${status ? ` · ${status}` : ''}`
+                : 'process idle',
+              data: { active, status: status ?? null },
+            },
+          ),
+        )
         return { ...prev, [sessionId]: next }
       })
     })
@@ -1982,13 +2127,140 @@ export function useWorkspace(
           eventType === 'turn_stopped' ||
           eventType === 'api_error' ||
           eventType === 'stream_error'
+
+        // stream_phase — in-feed indicator state. Overrides the
+        // optimistic `submitting` pseudo-phase once the adapter's
+        // first real event lands. Handled inline here (not inside
+        // foldSemanticEvent) because the field lives on SessionRuntime,
+        // not SemanticRuntimeState; the fold would be a layering
+        // violation.
+        let streamPhase = current.streamPhase
+        let streamPhasePendingToolName = current.streamPhasePendingToolName
+        let streamPhasePendingToolUseId = current.streamPhasePendingToolUseId
+        let turnStartedAt = current.turnStartedAt
+        let phaseChangedAt = current.phaseChangedAt
+        let submittedAt = current.submittedAt
+
+        if (eventType === 'stream_phase') {
+          const rawPhase =
+            typeof semanticEvent.phase === 'string' ? semanticEvent.phase : 'idle'
+          const nextPhase = rawPhase as StreamPhase
+          if (nextPhase !== streamPhase) {
+            const now = Date.now()
+            streamPhase = nextPhase
+            streamPhasePendingToolName =
+              typeof semanticEvent.toolName === 'string'
+                ? (semanticEvent.toolName as string)
+                : null
+            streamPhasePendingToolUseId =
+              typeof semanticEvent.toolUseId === 'string'
+                ? (semanticEvent.toolUseId as string)
+                : null
+            phaseChangedAt = now
+            if (nextPhase === 'idle') {
+              turnStartedAt = null
+              submittedAt = null
+            } else if (turnStartedAt === null) {
+              // First non-idle phase of this turn — stamp the start
+              // time. If the optimistic-submit path already stamped
+              // `submittedAt`, prefer it over `now` so the elapsed
+              // counter includes the gap between submit and first
+              // adapter event.
+              turnStartedAt = submittedAt ?? now
+            }
+          } else if (
+            // Re-assign pending tool info even on same-phase re-emit
+            // (turnId upgrade: null → real id is the classic case).
+            streamPhase !== 'idle'
+          ) {
+            streamPhasePendingToolName =
+              typeof semanticEvent.toolName === 'string'
+                ? (semanticEvent.toolName as string)
+                : streamPhasePendingToolName
+            streamPhasePendingToolUseId =
+              typeof semanticEvent.toolUseId === 'string'
+                ? (semanticEvent.toolUseId as string)
+                : streamPhasePendingToolUseId
+          }
+        } else if (eventType === 'tool_result') {
+          // Tool result arrived. If it matches the pending tool we're
+          // `awaiting-tool` on, move to a neutral 'requesting' phase
+          // so the indicator doesn't sit amber after the tool returned.
+          // The adapter's next stream_phase event (from the next
+          // assistant flow's message_start) will overwrite; this is
+          // the gap-filler.
+          const resultToolUseId =
+            typeof semanticEvent.toolUseId === 'string'
+              ? (semanticEvent.toolUseId as string)
+              : null
+          if (
+            streamPhase === 'awaiting-tool' &&
+            resultToolUseId !== null &&
+            resultToolUseId === streamPhasePendingToolUseId
+          ) {
+            streamPhase = 'requesting'
+            streamPhasePendingToolName = null
+            streamPhasePendingToolUseId = null
+            phaseChangedAt = Date.now()
+          }
+        }
+
+        // Ghost bridge — refresh the provisional ghost map from the
+        // new semantic turn. This runs on every semantic tick;
+        // `ghostsFromSemanticTurn` is idempotent and reference-stable
+        // so no-op ticks (e.g. usage_updated events) do not churn the
+        // map.
+        //
+        // WHY here and not inside `foldSemanticEvent`:
+        //   foldSemanticEvent is intentionally agnostic to
+        //   SessionRuntime — it reduces the SemanticRuntimeState
+        //   sub-slice and knows nothing about sessionId or the outer
+        //   runtime. The ghost map lives on SessionRuntime because
+        //   it needs to survive across semantic history archival
+        //   (when `currentTurn` flips to null) and because Phase 2
+        //   will persist it to disk with session-scoped file names.
+        //   Calling the ghost reducer at this outer boundary keeps
+        //   the layering clean.
+        const nextGhosts = ghostsFromSemanticTurn(
+          nextSemantic.currentTurn,
+          sessionId,
+          current.ghosts,
+        )
+
+        // Persist each changed ghost to disk (append-only JSONL under
+        // <userData>/ghost-logs). Fire-and-forget from the renderer;
+        // the main-side queue drains every 100 ms. See
+        // `src/main/ghostJournal.ts` for the writer and
+        // `./ghosts.ts` `ghostsToPersist` for why this diff is safe.
+        for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
+          window.api.ghostAppend(sessionId, ghost)
+        }
+
+        const nextCurrent = withDerivedSessionStatus(
+          appendFeedDebugLog(
+            {
+              ...current,
+              awaitingAssistant: clearOptimisticAwaiting ? false : current.awaitingAssistant,
+              semantic: nextSemantic,
+              streamPhase,
+              streamPhasePendingToolName,
+              streamPhasePendingToolUseId,
+              turnStartedAt,
+              phaseChangedAt,
+              submittedAt,
+              ghosts: nextGhosts,
+            },
+            {
+              layer: 'SEM',
+              kind: eventType || 'semantic',
+              summary: summarizeSemanticEventForDebug(semanticEvent),
+              data: semanticEvent,
+            },
+          ),
+        )
         return {
           ...prev,
-          [sessionId]: withDerivedSessionStatus({
-            ...current,
-            awaitingAssistant: clearOptimisticAwaiting ? false : current.awaitingAssistant,
-            semantic: nextSemantic,
-          }),
+          [sessionId]: nextCurrent,
         }
       })
     })
@@ -2245,34 +2517,92 @@ export function useWorkspace(
           ? current.entries.slice(0, -1)
           : current.entries
 
+        // Ghost reconciliation — when authoritative entries land,
+        // supersede any live ghost whose `(turnId, blockIndex)` they
+        // replace. Runs per appended entry so ghost→real handoff is
+        // synchronous with the entry becoming visible; the ghost
+        // drops out of the merged view in the same render as the
+        // real entry appears.
+        //
+        // `reconcileUpstream` is a no-op when there are no ghosts,
+        // and returns the same-size Map when no ghost matched, so
+        // this is cheap in the common case. Non-conversation entries
+        // (system, compact_boundary) pass through untouched.
+        let nextGhosts = current.ghosts
+        for (const entry of appended) {
+          nextGhosts = reconcileUpstream(entry, nextGhosts)
+        }
+
+        // Persist supersede records. When an upstream entry matched a
+        // ghost, `reconcileUpstream` produced a new ghost snapshot
+        // with `supersededBy` set; appending that to disk is how
+        // crash-recovered state knows "this ghost is no longer live."
+        for (const ghost of ghostsToPersist(current.ghosts, nextGhosts)) {
+          window.api.ghostAppend(sessionId, ghost)
+        }
+
         // Bail only when literally nothing changed. Approval, queue,
         // and compaction transitions can fire on bursts that don't
         // append any feed entries at all.
+        // Include ghost reference equality in the no-change check:
+        // reconcileUpstream preserves the same Map reference when no
+        // ghost matched, so this only fires setRuntimes when ghosts
+        // actually changed. Matches the treatment of queuedMessages
+        // and the rest of this guard.
+        const ghostsChanged = nextGhosts !== current.ghosts
         const noChange =
           appended.length === 0 &&
           !dropOptimisticHead &&
           pendingCompaction === current.pendingCompaction &&
           pendingApproval === current.pendingApproval &&
           queuedMessages === current.queuedMessages &&
-          awaitingAssistant === current.awaitingAssistant
+          awaitingAssistant === current.awaitingAssistant &&
+          !ghostsChanged
         if (noChange) return prev
 
+        const nextRuntime = withDerivedSessionStatus(
+          appendFeedDebugLog(
+            {
+              ...current,
+              entries: appended.length > 0 || dropOptimisticHead
+                ? [...baseEntries, ...appended]
+                : current.entries,
+              historyOldestMarker: oldestMarker,
+              bootstrapping: true,
+              pendingCompaction,
+              pendingApproval,
+              queuedMessages,
+              awaitingAssistant,
+              toolUseIndex,
+              toolResultIndex,
+              ghosts: nextGhosts,
+            },
+            {
+              layer: 'JSONL',
+              kind: 'jsonl_entries',
+              summary:
+                appended.length > 0 || dropOptimisticHead
+                  ? `entries +${appended.length}${dropOptimisticHead ? ' · reconciled optimistic user' : ''}`
+                  : 'jsonl side-effects only',
+              data: {
+                burstSize: entries.length,
+                appendedCount: appended.length,
+                droppedOptimisticHead: dropOptimisticHead,
+                appended: appended.slice(-8).map(summarizeEntryForDebug),
+                queuedMessages: queuedMessages.length,
+                pendingApproval: pendingApproval
+                  ? {
+                      callId: pendingApproval.callId,
+                      command: pendingApproval.command,
+                    }
+                  : null,
+              },
+            },
+          ),
+        )
         return {
           ...prev,
-          [sessionId]: withDerivedSessionStatus({
-            ...current,
-            entries: appended.length > 0 || dropOptimisticHead
-              ? [...baseEntries, ...appended]
-              : current.entries,
-            historyOldestMarker: oldestMarker,
-            bootstrapping: true,
-            pendingCompaction,
-            pendingApproval,
-            queuedMessages,
-            awaitingAssistant,
-            toolUseIndex,
-            toolResultIndex,
-          }),
+          [sessionId]: nextRuntime,
         }
       })
 
@@ -2289,7 +2619,14 @@ export function useWorkspace(
           if (!current || !current.bootstrapping) return prev
           return {
             ...prev,
-            [sessionId]: { ...current, bootstrapping: false },
+            [sessionId]: appendFeedDebugLog(
+              { ...current, bootstrapping: false },
+              {
+                layer: 'STATE',
+                kind: 'bootstrap_complete',
+                summary: 'bootstrap replay quiet window elapsed',
+              },
+            ),
           }
         })
       }, 150)
@@ -2385,6 +2722,50 @@ export function useWorkspace(
           hasOlderHistory: kind !== 'terminal' && Boolean(opts?.resumeSessionId),
         },
       }))
+
+      // Ghost log bootstrap — fire-and-forget, no await. If a prior
+      // run of cc-shell persisted ghosts for this sessionId, replay
+      // them through the atp reducer and merge into the runtime's
+      // ghost map. The renderer then sees the same merged feed after
+      // reload as it saw before. A missing file is not an error.
+      //
+      // WHY behind a setTimeout 0: spawnSession above set the fresh
+      // runtime via setRuntimes(prev => ...) — that update is queued
+      // and will land on the next tick. Reading the ghost log and
+      // applying it synchronously would run against the PREVIOUS
+      // runtime snapshot and its setRuntimes would clobber the
+      // fresh empty runtime. Deferring by one tick lets the empty
+      // runtime land first, then the bootstrap merge runs on top.
+      setTimeout(() => {
+        void window.api.ghostRead(sessionId).then(rawEntries => {
+          if (!rawEntries || rawEntries.length === 0) return
+          const bootstrapped = reduceGhostLog(rawEntries as never[])
+          if (bootstrapped.size === 0) return
+          setRuntimes(prev => {
+            const current = prev[sessionId]
+            if (!current) return prev
+            // Merge — disk ghosts only fill slots the runtime hasn't
+            // already produced in this session. If a ghost for the
+            // same uuid exists in-memory (rare; would mean a live
+            // event beat the bootstrap read), prefer the in-memory
+            // one because it's strictly fresher.
+            const merged = new Map(current.ghosts)
+            for (const [uuid, ghost] of bootstrapped) {
+              if (!merged.has(uuid)) merged.set(uuid, ghost)
+            }
+            return {
+              ...prev,
+              [sessionId]: { ...current, ghosts: merged },
+            }
+          })
+        }).catch(err => {
+          // Ghost bootstrap failures are non-fatal — the session
+          // still works, we just lose crash-recovered provisional
+          // state. Log and move on.
+          console.warn('[ghost] bootstrap read failed:', err)
+        })
+      }, 0)
+
       return sessionId
     },
     [],
@@ -2928,6 +3309,111 @@ export function useWorkspace(
     })
   }, [state.activeTabId, state.tabs, state.sessions])
 
+  // ---- Action: close an ARBITRARY session by id ----
+  //
+  // Mirrors closeFocused but operates on a caller-specified session
+  // instead of the active tab's focused pane. Exists so UI surfaces
+  // that list multiple panes at once (e.g. the Agent Activity modal)
+  // can close stale sessions without first having to focus-then-
+  // close, which would jank the visible layout for every close and
+  // race with React's batched setState (closeFocused reads from the
+  // useCallback-captured `state`, so a focus update and a close in
+  // the same tick sees stale state).
+  //
+  // Uses stateRef.current for the same reason buryFocused does: the
+  // caller's action isn't bound to whatever happens to be active.
+  const closeSession = useCallback(async (targetId: SessionId) => {
+    const snapshot = stateRef.current
+    const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
+    if (!owningTab) return
+    const sessionMeta = snapshot.sessions[targetId]
+
+    // Same two-case undo capture as closeFocused: pane-in-split vs.
+    // last-pane-in-tab. Keeps ⌘⇧T working for modal-driven closes.
+    const parentInfo = findParentSplitInfo(owningTab.root, targetId)
+    if (parentInfo && sessionMeta) {
+      undoStackRef.current.push({
+        type: 'pane',
+        closedAt: Date.now(),
+        tabId: owningTab.id,
+        sessionMeta,
+        direction: parentInfo.direction,
+        ratio: parentInfo.ratio,
+        side: parentInfo.side,
+        siblingLeafId: parentInfo.siblingLeafId,
+      })
+      const kindLabel = sessionMeta.kind ?? 'claude'
+      const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
+      showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T (Undo Close)`)
+    } else if (!parentInfo && sessionMeta) {
+      const tabIdx = snapshot.tabs.findIndex(t => t.id === owningTab.id)
+      const allMetas: Record<SessionId, SessionMeta> = {}
+      for (const leafId of collectLeaves(owningTab.root)) {
+        if (snapshot.sessions[leafId]) allMetas[leafId] = snapshot.sessions[leafId]
+      }
+      undoStackRef.current.push({
+        type: 'tab',
+        closedAt: Date.now(),
+        tab: { ...owningTab },
+        tabIndex: tabIdx,
+        sessionMetas: allMetas,
+      })
+      showToast(`Closed “${owningTab.title}” — ⌘⇧T (Undo Close)`)
+    }
+
+    await window.api.killSession(targetId)
+
+    setRuntimes(prev => {
+      const next = { ...prev }
+      delete next[targetId]
+      return next
+    })
+    delete seenUuidsRef.current[targetId]
+    delete latestScreenRef.current[targetId]
+
+    setState(prev => {
+      const tabs = [...prev.tabs]
+      const tabIdx = tabs.findIndex(t => t.id === owningTab.id)
+      // Tab may have been closed between modal-open and confirm.
+      // Treat that as a no-op — the row will disappear on next
+      // render anyway via the "visible sessions" selector.
+      if (tabIdx === -1) return prev
+      const currentTab = tabs[tabIdx]
+      const nextRoot = closeLeaf(currentTab.root, targetId)
+
+      if (nextRoot === null) {
+        const remaining = tabs.filter((_, i) => i !== tabIdx)
+        const sessions = { ...prev.sessions }
+        delete sessions[targetId]
+        // Only retarget activeTabId if we just removed the active
+        // tab. Closing a pane in a BACKGROUND tab from the modal
+        // must not yank the user out of the tab they see when the
+        // modal closes.
+        const nextActiveTabId = prev.activeTabId === owningTab.id
+          ? (remaining[Math.max(0, tabIdx - 1)]?.id ?? '')
+          : prev.activeTabId
+        return {
+          ...prev,
+          tabs: remaining,
+          activeTabId: nextActiveTabId,
+          sessions,
+        }
+      }
+
+      const nextFocused =
+        findBestRemainingFocus(currentTab.root, nextRoot, targetId) ??
+        collectLeaves(nextRoot)[0]
+      tabs[tabIdx] = {
+        ...currentTab,
+        root: nextRoot,
+        focusedSessionId: nextFocused,
+      }
+      const sessions = { ...prev.sessions }
+      delete sessions[targetId]
+      return { ...prev, tabs, sessions }
+    })
+  }, [showToast])
+
   // ---- Action: bury focused pane ----
   //
   // Removes the focused pane from the visible layout without killing
@@ -3193,7 +3679,7 @@ export function useWorkspace(
     (direction: 'left' | 'right' | 'up' | 'down') => {
       const tab = state.tabs.find(t => t.id === state.activeTabId)
       if (!tab) return
-      const next = findNeighbor(tab.root, tab.focusedSessionId, direction)
+      const next = findDirectionalNeighbor(tab.root, tab.focusedSessionId, direction)
       if (next) focusSession(next)
     },
     [focusSession, state.activeTabId, state.tabs],
@@ -3493,9 +3979,43 @@ export function useWorkspace(
   // ---- Update streaming baseline for a session (called from TileLeaf on submit) ----
   const setStreamingBaseline = useCallback(
     (sessionId: SessionId, baseline: string | null) => {
-      updateRuntime(sessionId, { streamingBaseline: baseline, awaitingAssistant: true })
+      // Pair the baseline write with a synthetic `submitting` phase
+      // and a `submittedAt` timestamp. This covers the gap between
+      // the user pressing Enter and the adapter's first `requesting`
+      // event landing (can be 100-500ms on a cold proxy). Without it
+      // the in-feed WorkIndicator would render nothing during that
+      // window, making the app look unresponsive to the submit.
+      // The adapter's first stream_phase event will transition
+      // phase → 'requesting' and reuse `submittedAt` as turnStartedAt.
+      const now = Date.now()
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const next = withDerivedSessionStatus(
+          appendFeedDebugLog(
+            {
+              ...current,
+              streamingBaseline: baseline,
+              awaitingAssistant: true,
+              streamPhase: 'submitting',
+              submittedAt: now,
+              phaseChangedAt: now,
+              turnStartedAt: now,
+            },
+            {
+              layer: 'STATE',
+              kind: 'submit',
+              summary: baseline ? 'submit started with baseline' : 'submit started',
+              data: { hasBaseline: baseline !== null, baselineLength: baseline?.length ?? 0 },
+            },
+          ),
+        )
+        return {
+          ...prev,
+          [sessionId]: next,
+        }
+      })
     },
-    [updateRuntime],
+    [],
   )
 
   // Codex live rendering is TUI-first, with rollout JSON as a later source
@@ -3523,10 +4043,18 @@ export function useWorkspace(
       }
       return {
         ...prev,
-        [sessionId]: {
-          ...current,
-          entries: [...current.entries, optimistic],
-        },
+        [sessionId]: appendFeedDebugLog(
+          {
+            ...current,
+            entries: [...current.entries, optimistic],
+          },
+          {
+            layer: 'STATE',
+            kind: 'optimistic_user_add',
+            summary: `optimistic user row added · ${trimmed.slice(0, 80)}`,
+            data: { text: trimmed },
+          },
+        ),
       }
     })
   }, [])
@@ -3543,10 +4071,18 @@ export function useWorkspace(
       }
       return {
         ...prev,
-        [sessionId]: {
-          ...current,
-          entries: current.entries.slice(0, -1),
-        },
+        [sessionId]: appendFeedDebugLog(
+          {
+            ...current,
+            entries: current.entries.slice(0, -1),
+          },
+          {
+            layer: 'STATE',
+            kind: 'optimistic_user_remove',
+            summary: `optimistic user row removed · ${trimmed.slice(0, 80)}`,
+            data: { text: trimmed },
+          },
+        ),
       }
     })
   }, [])
@@ -3789,6 +4325,33 @@ export function useWorkspace(
       updateRuntime(sessionId, { loadingOlderHistory: false })
     }
   }, [updateRuntime])
+
+  useEffect(() => {
+    for (const [sessionId, runtime] of Object.entries(runtimes)) {
+      if (runtime.feedDebugLog.length === 0) continue
+      const lastPersistedId = persistedFeedDebugIdRef.current[sessionId] ?? 0
+      const pending = runtime.feedDebugLog.filter(entry => entry.id > lastPersistedId)
+      if (pending.length === 0) continue
+      persistedFeedDebugIdRef.current[sessionId] = pending[pending.length - 1]?.id ?? lastPersistedId
+      void window.api
+        .appendFeedDebugLog({
+          sessionId,
+          entries: pending.map(entry => ({
+            id: entry.id,
+            ts: entry.ts,
+            tMs: entry.tMs,
+            layer: entry.layer,
+            kind: entry.kind,
+            summary: entry.summary,
+            data: entry.data,
+          })),
+        })
+        .catch(err => {
+          // eslint-disable-next-line no-console
+          console.warn(`[feed-debug ${sessionId.slice(0, 8)}] append failed`, err)
+        })
+    }
+  }, [runtimes])
 
   // ---- Copy Assistant picker actions ----
   //
@@ -4488,6 +5051,7 @@ export function useWorkspace(
     startNewAgentPlacement,
     commitNewAgentPlacement,
     closeFocused,
+    closeSession,
     requestBuryFocused,
     buryFocused,
     reviveBuried,
@@ -4503,6 +5067,7 @@ export function useWorkspace(
     setSplitRatio,
     setSplitRatioInTab,
     setStreamingBaseline,
+    appendFeedDebug,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
     setDraftInput,

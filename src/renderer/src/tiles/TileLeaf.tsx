@@ -10,6 +10,10 @@ import { TrustDialogModal } from '../../../providers/claude/renderer/TrustDialog
 import { SlashCommandPicker } from '../../../providers/claude/renderer/SlashCommandPicker'
 import { extractLatestUserPrompts } from '../features/workspace/lib/latestUserPrompts'
 import type { SessionRuntime, Workspace } from './workspaceStore'
+import {
+  selectMergedEntries,
+  shouldShowSemanticStreaming,
+} from './mergedEntries'
 import type { SessionId, SessionKind } from './types'
 import type { ClaudeDraftImage } from './workspaceState'
 
@@ -914,7 +918,15 @@ export function TileLeaf({
           sessionId={sessionId}
           provider={provider}
           workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
-          entries={runtime.entries}
+          // Merged upstream + ghost feed. When the ghost map is empty
+          // (no live turn, or no un-reconciled ghosts), this returns
+          // the exact same `runtime.entries` reference so Feed's memo
+          // path is unchanged. When ghosts are active, the merged list
+          // drops superseded ghosts, keeps orphans, and appends live
+          // ones after the committed tail — see
+          // `agent-transcript-parser/docs/ghost.md` for the primitive
+          // and `src/renderer/src/tiles/ghosts.ts` for the bridge.
+          entries={selectMergedEntries(runtime)}
           // Live text renders ONLY from the semantic channel. The
           // former `streamingScreen` / `streamingScreenMarkdown` /
           // `streamingBaseline` props are gone — Feed no longer
@@ -924,6 +936,15 @@ export function TileLeaf({
           // with a baseline gate that prevents the previous turn's
           // text from leaking into the new turn's first delta.
           activityStatus={runtime.activityStatus}
+          // Adapter-derived stream phase — drives the in-feed
+          // WorkIndicator. The renderer never re-derives; it just
+          // displays whatever phase the headless package published.
+          // See 2026-04-18-thinking-phase-in-headless.md for the
+          // derivation contract.
+          streamPhase={runtime.streamPhase}
+          streamPhasePendingToolName={runtime.streamPhasePendingToolName}
+          streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
+          turnStartedAt={runtime.turnStartedAt}
           // WHY unconditionally forward currentTurn instead of gating on
           // sessionStatus: the gate used to null-blank the live view
           // whenever sessionStatus briefly derived to 'idle' — which
@@ -934,7 +955,17 @@ export function TileLeaf({
           // the ref unconditionally lets it render whatever actually
           // exists. See
           // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
-          semanticTurn={runtime.semantic.currentTurn}
+          // Ghost bridge: when the current turn has any un-reconciled
+          // ghost entries in the merged list, those render the live
+          // view and we suppress the legacy SemanticStreamingTurn to
+          // prevent duplicate output. Turns with zero translatable
+          // ghost blocks still fall through to the legacy path. See
+          // `./mergedEntries.ts` for the predicate and the WHY.
+          semanticTurn={
+            shouldShowSemanticStreaming(runtime)
+              ? runtime.semantic.currentTurn
+              : null
+          }
           tailMode={runtime.tailMode}
           pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
           onScrollInfo={onScrollInfo}
@@ -952,6 +983,7 @@ export function TileLeaf({
           scrollToLatestRequest={runtime.scrollToLatestRequest}
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
+          onDebugLog={entry => workspace.appendFeedDebug(sessionId, entry)}
         />
       </div>
 
