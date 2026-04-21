@@ -2029,35 +2029,50 @@ export function useWorkspace(
               ? current.pendingApproval
               : null
 
-          const nextCurrent = appendFeedDebugLog(
-            {
-              ...current,
-              screen: plain,
-              screenMarkdown: markdown,
-              recentScreen: recent,
-              recentScreenMarkdown: recentMarkdown,
-              picker,
-              // activityStatus is owned by the process-state IPC handler
-              // below — it carries the provider-correct verb (Claude's
-              // spinner verb, Codex's bottom-row text). Recomputing it
-              // here from `detectActivity(plain)` was Claude-specific
-              // and would overwrite Codex's status with null on every
-              // frame, racing the process-state writer.
-              pendingApproval: nextApproval,
-            },
-            {
-              layer: 'STATE',
-              kind: 'screen_update',
-              summary: `screen update · ${changed.join(', ')}`,
-              data: {
-                changed,
-                pickerVisible: picker.visible,
-                pickerCount: picker.items.length,
-                approvalOpen: nextApproval !== null,
-                recentLength: recent.length,
-              },
-            },
-          )
+          // Screen frames can differ only by transient TUI chrome
+          // (cursor blink, spinner tick, timestamp) while the visible
+          // transcript is unchanged. We still commit the latest strings
+          // so DebugPanel/ReaderView stay faithful, but skip the debug-log
+          // append for this shape of frame to keep feed-debug readable.
+          const chromeTickOnly =
+            changed.every(k => k === 'screen' || k === 'recent' || k === 'markdown') &&
+            changed.length > 0 &&
+            recent.length === current.recentScreen.length &&
+            pickerEqual(current.picker, picker) &&
+            nextApproval === current.pendingApproval
+
+          const nextBody = {
+            ...current,
+            screen: plain,
+            screenMarkdown: markdown,
+            recentScreen: recent,
+            recentScreenMarkdown: recentMarkdown,
+            picker,
+            // activityStatus is owned by the process-state IPC handler
+            // below — it carries the provider-correct verb (Claude's
+            // spinner verb, Codex's bottom-row text). Recomputing it
+            // here from `detectActivity(plain)` was Claude-specific
+            // and would overwrite Codex's status with null on every
+            // frame, racing the process-state writer.
+            pendingApproval: nextApproval,
+          }
+          const nextCurrent = chromeTickOnly
+            ? nextBody
+            : appendFeedDebugLog(
+                nextBody,
+                {
+                  layer: 'STATE',
+                  kind: 'screen_update',
+                  summary: `screen update · ${changed.join(', ')}`,
+                  data: {
+                    changed,
+                    pickerVisible: picker.visible,
+                    pickerCount: picker.items.length,
+                    approvalOpen: nextApproval !== null,
+                    recentLength: recent.length,
+                  },
+                },
+              )
           return {
             ...prev,
             [sessionId]: nextCurrent,
