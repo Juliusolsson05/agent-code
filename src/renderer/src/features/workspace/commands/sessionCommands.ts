@@ -194,4 +194,18 @@ export const sessionCommands: CommandDef[] = [
     }),
     run: ({ ui }) => ui.toggleProxyDebugPanel(),
   },
+  {
+    id: 'toggle-html-debug-panel',
+    title: 'HTML Debug Panel',
+    // Wide keyword net so fuzzy search hits this from likely queries:
+    // "html", "dom", "outerhtml", "markup", "inspect", "copy pane".
+    // The feature is niche enough that users won't remember its exact
+    // title, but they'll remember what they want to do with it.
+    keywords: ['html', 'dom', 'outerhtml', 'markup', 'inspect', 'copy', 'pane', 'render', 'debug'],
+    getState: ({ flags }) => ({
+      label: flags.htmlDebugPanelOpen ? 'On' : 'Off',
+      tone: flags.htmlDebugPanelOpen ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleHtmlDebugPanel(),
+  },
 ]

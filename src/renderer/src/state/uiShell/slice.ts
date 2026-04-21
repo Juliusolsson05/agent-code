@@ -21,6 +21,7 @@ export const createUiShellSlice: StateCreator<
   debugPanelOpen: false,
   feedDebugPanelOpen: false,
   proxyDebugPanelOpen: false,
+  htmlDebugPanelOpen: false,
   promptSearchOpen: false,
   agentActivityOpen: false,
 
@@ -84,6 +85,12 @@ export const createUiShellSlice: StateCreator<
       state => ({ proxyDebugPanelOpen: !state.proxyDebugPanelOpen }),
       false,
       'uiShell/toggleProxyDebugPanel',
+    ),
+  toggleHtmlDebugPanel: () =>
+    set(
+      state => ({ htmlDebugPanelOpen: !state.htmlDebugPanelOpen }),
+      false,
+      'uiShell/toggleHtmlDebugPanel',
     ),
 
   openPromptSearch: () =>

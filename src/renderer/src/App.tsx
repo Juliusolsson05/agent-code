@@ -3,6 +3,7 @@ import { useCallback, useEffect } from 'react'
 import { CommandPalette } from './CommandPalette'
 import { DebugPanel } from './DebugPanel'
 import { FeedDebugPanel } from './FeedDebugPanel'
+import { HtmlDebugPanel } from './HtmlDebugPanel'
 import { ProxyDebugPanel } from './ProxyDebugPanel'
 import { SettingsPage } from './features/settings/ui/SettingsPage'
 import { SpotlightView } from './features/spotlight/ui/SpotlightView'
@@ -55,6 +56,7 @@ export default function App() {
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
   const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
+  const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const useProxyStreaming = settings.useProxyStreaming
   const openPathPicker = useAppStore(state => state.openPathPicker)
@@ -75,6 +77,7 @@ export default function App() {
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
   const toggleFeedDebugPanel = useAppStore(state => state.toggleFeedDebugPanel)
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
+  const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
   const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
   const closePromptSearch = useAppStore(state => state.closePromptSearch)
@@ -257,6 +260,14 @@ export default function App() {
             onClose={toggleProxyDebugPanel}
           />
         )}
+
+        {htmlDebugPanelOpen && activeTab && (
+          <HtmlDebugPanel
+            sessionId={activeTab.focusedSessionId}
+            kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
+            onClose={toggleHtmlDebugPanel}
+          />
+        )}
       </div>
 
       <CommandPalette
@@ -269,6 +280,7 @@ export default function App() {
         toggleDebugPanel={toggleDebugPanel}
         toggleFeedDebugPanel={toggleFeedDebugPanel}
         toggleProxyDebugPanel={toggleProxyDebugPanel}
+        toggleHtmlDebugPanel={toggleHtmlDebugPanel}
         onTileTabsRequest={onTileTabsRequest}
         onSettingsRequest={openSettingsPage}
         openViewPrompts={openViewPrompts}
@@ -281,6 +293,7 @@ export default function App() {
         debugPanelOpen={debugPanelOpen}
         feedDebugPanelOpen={feedDebugPanelOpen}
         proxyDebugPanelOpen={proxyDebugPanelOpen}
+        htmlDebugPanelOpen={htmlDebugPanelOpen}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
       />
 

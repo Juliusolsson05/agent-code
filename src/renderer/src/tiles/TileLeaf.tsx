@@ -883,7 +883,16 @@ export function TileLeaf({
   const isSessionLive = runtime.sessionStatus === 'running'
 
   return (
+    // data-pane-id: stable DOM hook so DOM-targeting debug tools
+    // (HtmlDebugPanel in particular) can locate this pane's root via
+    // document.querySelector(`[data-pane-id="${sessionId}"]`) without
+    // needing a ref forwarded out of this component. The existing
+    // debug panels are stateless about the DOM and read from runtime
+    // props instead, so a data attribute keeps that boundary intact.
+    // Session UUIDs are unique across the app, so there's no collision
+    // risk with multiple panes mounted simultaneously.
     <div
+      data-pane-id={sessionId}
       className={`
         flex flex-col h-full min-h-0 min-w-0
         border ${focused ? 'border-accent' : 'border-border'}

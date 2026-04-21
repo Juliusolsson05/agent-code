@@ -20,6 +20,14 @@ export type UiShellState = {
    *  with `useProxy` on, since the panel is driven by semantic events
    *  from the proxy adapter. */
   proxyDebugPanelOpen: boolean
+  /** When true, the HTML Debug Panel is mounted. Captures `outerHTML`
+   *  of the focused pane (located via the `data-pane-id` attribute on
+   *  the TileLeaf root) so the user can copy the exact DOM React
+   *  produced — useful for rendering debugging / pasting layouts into
+   *  an LLM. Snapshot-based, not live; refresh button re-captures.
+   *  Lives on the uiShell slice alongside the other three debug panels
+   *  and follows the same toggle pattern. */
+  htmlDebugPanelOpen: boolean
   /** When true, the Search Conversation Prompts modal is open. Lives
    *  on the uiShell slice (not the workspace slice) because it's
    *  a cross-session concern: the modal reads prompts from ALL
