@@ -374,9 +374,14 @@ export class ClaudeSession extends EventEmitter {
       // After readyForLiveBridge flips, tool_results that arrive
       // during live turns flow through unchanged.
       if (!this.readyForLiveBridge) return
+      // `ev.turnId` is the committed parent entry uuid, not the live
+      // semantic turn id (`msg_…`). Forwarding it causes
+      // foldSemanticEvent's strict turnId guard to drop the event before
+      // the toolUseId match can run, leaving the live turn pinned and the
+      // assistant text rendered twice. Omit it here and let the renderer
+      // pair by toolUseId.
       const bridged: SemanticEvent = {
         type: 'tool_result',
-        turnId: ev.turnId,
         toolUseId: ev.toolUseId,
         content: ev.content,
         isError: ev.isError,
