@@ -1366,9 +1366,26 @@ const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   const hasBlocks = blocks.length > 0
 
   if (!hasBlocks) {
+    // WHY collapse to null instead of rendering an empty MarkerRow:
+    //
+    // For Codex the rollout stream does not emit per-block events, so
+    // `turn.blocks` stays empty and this branch owns the entire live
+    // view. `turn.text` is cleared to '' by the Codex adapter the
+    // moment a `response_item` commits the current assistant message,
+    // because the committed `:message` entry in the feed then owns
+    // display of that text. During that transient — and between two
+    // messages in the same Codex turn more broadly — there is
+    // genuinely nothing the ghost should paint. An empty MarkerRow
+    // would still render a solitary ⏺ bullet under the committed row,
+    // which reads as a second speaker to the user.
+    //
+    // Returning null is correct because WorkIndicator below the feed
+    // carries the "agent is working" signal on its own. See
+    // docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
+    if (!turn.text) return null
     return (
       <MarkerRow marker="⏺">
-        {turn.text ? <StreamingProse text={turn.text} /> : null}
+        <StreamingProse text={turn.text} />
       </MarkerRow>
     )
   }
