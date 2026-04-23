@@ -11,7 +11,7 @@ import type { RendererProviderConfig } from '../shared/types/providerConfig'
 // no DOM). Direct imports keep the renderer bundle browser-safe.
 import { extractAssistantInProgress as claudeExtract } from '../shared/parsers/claudeScreen'
 import { extractCodexAssistantInProgress as codexExtract } from '../shared/parsers/codexScreen'
-import { TileLeaf } from '../renderer/src/tiles/TileLeaf'
+import { TileLeaf } from '../renderer/src/workspace/tile-tree/TileLeaf'
 import type { TileLeafProps } from '../shared/types/providerConfig'
 
 const claudeRenderer: RendererProviderConfig = {

@@ -18,13 +18,13 @@ import { RewindToPromptModal } from './features/workspace/ui/RewindToPromptModal
 import { ViewPromptsModal } from './features/workspace/ui/ViewPromptsModal'
 import { GitBar } from './features/git/ui/GitBar'
 import { AppearanceMenu } from './feed/AppearanceMenu'
-import { PathPickerModal } from './tiles/PathPickerModal'
-import { TabBar } from './tiles/TabBar'
-import { TileTree } from './tiles/TileTree'
+import { PathPickerModal } from './workspace/PathPickerModal'
+import { TabBar } from './workspace/tile-tree/TabBar'
+import { TileTree } from './workspace/tile-tree/TileTree'
 import { useAppStore } from './state/hooks'
 import { applyTheme } from './state/settings/theme'
-import { useKeybinds } from './tiles/useKeybinds'
-import { useWorkspace } from './tiles/workspaceStore'
+import { useKeybinds } from './workspace/tile-tree/useKeybinds'
+import { useWorkspace } from './workspace/workspaceStore'
 
 // App — thin shell around the workspace hook.
 //

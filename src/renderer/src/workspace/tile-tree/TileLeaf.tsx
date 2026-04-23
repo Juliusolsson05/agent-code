@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { extractAssistantInProgress } from '../../../shared/parsers/extractAssistant'
-import { CodexApprovalModal } from '../../../providers/codex/renderer/CodexApprovalModal'
-import { ResumePromptModal } from '../../../providers/claude/renderer/ResumePromptModal'
-import { useGlobalToast } from '../ui/GlobalToast'
-import { Feed } from '../feed/Feed'
-import type { ScrollInfo } from '../feed/Feed'
-import { TrustDialogModal } from '../../../providers/claude/renderer/TrustDialogModal'
-import { SlashCommandPicker } from '../../../providers/claude/renderer/SlashCommandPicker'
-import { extractLatestUserPrompts } from '../features/workspace/lib/latestUserPrompts'
-import type { SessionRuntime, Workspace } from './workspaceStore'
+import { extractAssistantInProgress } from '../../../../shared/parsers/extractAssistant'
+import { CodexApprovalModal } from '../../../../providers/codex/renderer/CodexApprovalModal'
+import { ResumePromptModal } from '../../../../providers/claude/renderer/ResumePromptModal'
+import { useGlobalToast } from '../../ui/GlobalToast'
+import { Feed } from '../../feed/Feed'
+import type { ScrollInfo } from '../../feed/Feed'
+import { TrustDialogModal } from '../../../../providers/claude/renderer/TrustDialogModal'
+import { SlashCommandPicker } from '../../../../providers/claude/renderer/SlashCommandPicker'
+import { extractLatestUserPrompts } from '../../features/workspace/lib/latestUserPrompts'
+import type { SessionRuntime, Workspace } from '../workspaceStore'
 import {
   selectMergedEntries,
   shouldShowSemanticStreaming,
-} from './mergedEntries'
-import type { SessionId, SessionKind } from './types'
-import type { ClaudeDraftImage } from './workspaceState'
+} from '../mergedEntries'
+import type { SessionId, SessionKind } from '../types'
+import type { ClaudeDraftImage } from '../workspaceState'
 
 // Claude's TUI has its own paste-state machine. Large input and bracketed
 // paste do NOT go straight from "bytes arrived" to "submit immediately" —

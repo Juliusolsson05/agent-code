@@ -8,7 +8,7 @@ import { extractCodexAssistantInProgress } from './parsers/streamingScreen'
 
 // For now, re-use the shared TileLeaf which already handles Codex.
 // When we create a Codex-specific TileLeaf, this import changes.
-import { TileLeaf } from '../../renderer/src/tiles/TileLeaf'
+import { TileLeaf } from '../../renderer/src/workspace/tile-tree/TileLeaf'
 
 export const codexConfig: ProviderConfig = {
   id: 'codex',

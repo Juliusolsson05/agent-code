@@ -27,11 +27,11 @@ import {
   ghostsToPersist,
   orphanStale,
   reconcileUpstream,
-} from '../../src/renderer/src/tiles/ghosts.js'
+} from '../../src/renderer/src/workspace/ghosts.js'
 import type {
   SemanticLiveTurn,
   SemanticLiveBlock,
-} from '../../src/renderer/src/tiles/workspaceState.js'
+} from '../../src/renderer/src/workspace/workspaceState.js'
 import type { Entry } from '../../src/shared/types/transcript.js'
 
 let failed = 0

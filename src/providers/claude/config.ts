@@ -14,7 +14,7 @@ import { extractAssistantInProgress } from './parsers/streamingScreen'
 // For now, re-use the shared TileLeaf which already handles Claude.
 // When we create a Claude-specific TileLeaf, this import changes to
 // point at ./renderer/TileLeaf instead.
-import { TileLeaf } from '../../renderer/src/tiles/TileLeaf'
+import { TileLeaf } from '../../renderer/src/workspace/tile-tree/TileLeaf'
 
 export const claudeConfig: ProviderConfig = {
   id: 'claude',

@@ -6,8 +6,8 @@ import { CodeBlock } from '../../../code/CodeBlock'
 import { CodeRenderContext } from '../../../feed/Feed'
 import { extractAssistantInProgress } from '../../../../../shared/parsers/extractAssistant'
 import { assistantUuidsWithText, extractAssistantByUuid } from '../../../lib/copyAssistant'
-import { collectLeaves } from '../../../tiles/treeOps'
-import type { SessionId, Workspace } from '../../../tiles/workspaceStore'
+import { collectLeaves } from '../../../workspace/tile-tree/treeOps'
+import type { SessionId, Workspace } from '../../../workspace/workspaceStore'
 
 // ReaderView — single-message read mode for a focused session.
 //

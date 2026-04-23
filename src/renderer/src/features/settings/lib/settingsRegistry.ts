@@ -5,7 +5,7 @@ import {
   type Settings,
   type ThemeMode,
 } from '../../../state/settings/types'
-import type { Workspace } from '../../../tiles/workspaceStore'
+import type { Workspace } from '../../../workspace/workspaceStore'
 import { SETTING_CATEGORIES, type SettingCategoryId } from './settingsCategories'
 
 export type SettingActionContext = {

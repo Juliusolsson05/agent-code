@@ -3,7 +3,7 @@ import {
   isConversationEntry,
   type Entry,
 } from '../../../../../shared/types/transcript'
-import type { SessionKind } from '../../../tiles/types'
+import type { SessionKind } from '../../../workspace/types'
 
 export type LatestUserPrompt = {
   text: string

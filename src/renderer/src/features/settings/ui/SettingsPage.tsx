@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 
 import type { Settings } from '../../../state/settings/types'
-import type { Workspace } from '../../../tiles/workspaceStore'
+import type { Workspace } from '../../../workspace/workspaceStore'
 import { SETTING_CATEGORIES, type SettingCategoryId } from '../lib/settingsCategories'
 import { getSettingsRegistry, matchesSettingQuery } from '../lib/settingsRegistry'
 import { SettingsList } from './SettingsList'

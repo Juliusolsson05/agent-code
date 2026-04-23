@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { SessionIndexEntry, SessionIndexPrompt } from '../../../../../preload'
-import type { Workspace } from '../../../tiles/workspaceStore'
+import type { Workspace } from '../../../workspace/workspaceStore'
 
 // PromptSearchModal — cross-session prompt search.
 //

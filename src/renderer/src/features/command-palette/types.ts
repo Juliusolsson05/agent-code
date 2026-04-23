@@ -1,4 +1,4 @@
-import type { Workspace } from '../../tiles/workspaceStore'
+import type { Workspace } from '../../workspace/workspaceStore'
 
 export type CommandState = {
   label: string

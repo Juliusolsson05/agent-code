@@ -2,8 +2,8 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
-import type { SessionId } from './types'
-import type { Workspace } from './workspaceStore'
+import type { SessionId } from '../types'
+import type { Workspace } from '../workspaceStore'
 
 // TerminalLeaf — one pane that hosts a plain shell session.
 //

@@ -36,8 +36,8 @@ import {
   rotateTree,
   splitLeaf,
   wrapRootWithLeaf,
-} from './treeOps'
-import { findBestRemainingFocus, findDirectionalNeighbor } from './geometry'
+} from './tile-tree/treeOps'
+import { findBestRemainingFocus, findDirectionalNeighbor } from './tile-tree/geometry'
 import {
   UndoCloseStack,
   findParentSplitInfo,

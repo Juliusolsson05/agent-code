@@ -1,7 +1,7 @@
 // Disk writer for ghost entries.
 //
 // Ghost entries are minted, updated, superseded, and orphaned in the
-// renderer (via agent-transcript-parser + `src/renderer/src/tiles/ghosts.ts`).
+// renderer (via agent-transcript-parser + `src/renderer/src/workspace/ghosts.ts`).
 // This file handles the durable side: append each produced ghost to
 // a cc-shell-owned JSONL file so the live view survives a crash, a
 // window reload, or an Electron restart.

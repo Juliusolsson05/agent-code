@@ -16,7 +16,7 @@ import {
   type SessionId,
   type SplitDirection,
   type TileNode,
-} from './types'
+} from '../types'
 
 /**
  * Walk a tree and return every leaf's sessionId in depth-first order.

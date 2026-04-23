@@ -42,7 +42,7 @@ import {
   parseSemanticTodos,
   type SemanticLiveTurn,
   type SemanticTodoItem,
-} from '../../../../src/renderer/src/tiles/workspaceState'
+} from '../../../../src/renderer/src/workspace/workspaceState'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.

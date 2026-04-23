@@ -43,7 +43,7 @@ import {
   type SemanticLiveTurn,
   type SemanticTodoItem,
   type StreamPhase,
-} from '../tiles/workspaceState'
+} from '../workspace/workspaceState'
 import { WorkIndicator } from './WorkIndicator'
 import { toolHintFromTurn } from './workIndicatorHints'
 
@@ -421,12 +421,12 @@ function debugLabelForEntry(entry: Entry): string {
 // live owner.
 //
 // That duplicate class is now prevented at its source. The ghost
-// reducer (`reconcileUpstream` in src/renderer/src/tiles/ghosts.ts)
+// reducer (`reconcileUpstream` in src/renderer/src/workspace/ghosts.ts)
 // supersedes Codex text ghosts by rollout response id once the
 // rollout mapper stamps `codexTurnId` on committed entries
-// (src/renderer/src/tiles/workspaceStore.ts::codexTurnIdFromRollout
+// (src/renderer/src/workspace/workspaceStore.ts::codexTurnIdFromRollout
 // + stampCodexTurnId). The live view and the merged feed are split
-// by turn ownership (src/renderer/src/tiles/mergedEntries.ts), so
+// by turn ownership (src/renderer/src/workspace/mergedEntries.ts), so
 // there is no longer any path by which the same assistant text can
 // reach both surfaces at once.
 //

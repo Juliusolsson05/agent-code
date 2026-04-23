@@ -9,7 +9,7 @@
 // visual tests trivial and keeps the component memo-friendly (it only
 // re-renders when the hint string changes, not on every block delta).
 
-import type { SemanticLiveBlock, SemanticLiveTurn } from '../tiles/workspaceState'
+import type { SemanticLiveBlock, SemanticLiveTurn } from '../workspace/workspaceState'
 
 /** Pull a short, single-line hint for the pending tool call. When the
  *  tool's parsed input is available (finalised JSON from

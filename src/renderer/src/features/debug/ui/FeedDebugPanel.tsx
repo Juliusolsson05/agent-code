@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { FeedDebugEntry, FeedDebugLayer, SessionRuntime } from '../../../tiles/workspaceState'
+import type { FeedDebugEntry, FeedDebugLayer, SessionRuntime } from '../../../workspace/workspaceState'
 
 type Props = {
   sessionId: string

@@ -1,6 +1,6 @@
-import { renderWorkspaceLeaf } from '../../../tiles/TileTree'
-import { collectLeaves } from '../../../tiles/treeOps'
-import type { Workspace } from '../../../tiles/workspaceStore'
+import { renderWorkspaceLeaf } from '../../../workspace/tile-tree/TileTree'
+import { collectLeaves } from '../../../workspace/tile-tree/treeOps'
+import type { Workspace } from '../../../workspace/workspaceStore'
 
 type Props = {
   workspace: Workspace

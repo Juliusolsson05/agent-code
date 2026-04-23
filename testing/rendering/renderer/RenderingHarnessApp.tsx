@@ -13,12 +13,12 @@ import {
   extractEmbeddedClaudeProgressEntry,
   foldSemanticEvent,
   mapCodexRolloutToFeedEntries,
-} from '../../../src/renderer/src/tiles/workspaceStore'
+} from '../../../src/renderer/src/workspace/workspaceStore'
 import {
   emptySemanticRuntime,
   type SemanticLiveTurn,
   type SemanticRuntimeState,
-} from '../../../src/renderer/src/tiles/workspaceState'
+} from '../../../src/renderer/src/workspace/workspaceState'
 import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
