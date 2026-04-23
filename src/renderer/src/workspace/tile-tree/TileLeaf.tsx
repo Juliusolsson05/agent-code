@@ -14,191 +14,32 @@ import {
   selectMergedEntries,
   shouldShowSemanticStreaming,
 } from '@renderer/workspace/mergedEntries'
-import type { SessionId, SessionKind } from '@renderer/workspace/types'
+import type { SessionId } from '@renderer/workspace/types'
 import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
+import {
+  CLAUDE_PASTE_THRESHOLD,
+  CLAUDE_PASTE_SUBMIT_DELAY_MS,
+  CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS,
+  buildClaudeImagePastePayload,
+  sendBracketedPasteThenSubmit,
+  sendClaudeDraftText,
+} from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
+import {
+  SUPPORTED_CLAUDE_IMAGE_FORMATS_TEXT,
+  exceedsClaudeImageSizeLimit,
+  filesToDraftImages,
+  isSupportedClaudeImageMediaType,
+  parseImagesFromHtml,
+  readImagesFromClipboard,
+} from '@renderer/workspace/tile-tree/TileLeaf/claudeImages'
+import { providerLabel, shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 
-// Claude's TUI has its own paste-state machine. Large input and bracketed
-// paste do NOT go straight from "bytes arrived" to "submit immediately" —
-// Claude first buffers the paste, may collapse it into a `[Pasted text #N]`
-// placeholder in the visible composer, and only later expands it back out
-// during submit. If we send the paste payload AND the trailing Enter in the
-// same PTY write, that Enter can land while Claude still considers the paste
-// "in flight". The result is the exact user-facing bug we saw:
-//
-//   1. the pasted prompt appears in Claude's composer,
-//   2. Claude flips into a "working" looking state,
-//   3. but no real turn starts,
-//   4. and the NEXT Enter finally submits the already-buffered prompt.
-//
-// We fix this at the shell boundary instead of forking Claude's paste logic:
-// for Claude only, any prompt that is likely to be treated as a paste gets
-// delivered in TWO phases — first the payload, then (after Claude's own paste
-// debounce window has elapsed) the submit key. This keeps us aligned with
-// Claude's existing placeholder/expansion model instead of fighting it.
-//
-// Why these numbers:
-//   - 800 chars matches Claude's current PASTE_THRESHOLD upstream.
-//   - 125ms is slightly above Claude's 100ms paste completion timeout.
-//     Going lower risks reintroducing the race; going much higher makes
-//     submit feel laggy on every long paste.
-const CLAUDE_PASTE_THRESHOLD = 800
-const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
-const CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS = 750
-const MAX_CLAUDE_IMAGE_BYTES = 5 * 1024 * 1024
-const SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-])
-const SUPPORTED_CLAUDE_IMAGE_FORMATS_TEXT = 'PNG, JPEG, GIF, WebP'
-
-function isSupportedClaudeImageMediaType(mediaType: string): boolean {
-  return SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES.has(mediaType.toLowerCase())
-}
-
-function exceedsClaudeImageSizeLimit(image: ClaudeDraftImage): boolean {
-  return estimateBase64DecodedBytes(image.base64Data) > MAX_CLAUDE_IMAGE_BYTES
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(reader.error ?? new Error('failed to read file'))
-    reader.onload = () => {
-      if (typeof reader.result === 'string') resolve(reader.result)
-      else reject(new Error('file reader returned non-string result'))
-    }
-    reader.readAsDataURL(file)
-  })
-}
-
-function parseDataUrl(dataUrl: string): { mediaType: string; base64Data: string } {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl)
-  if (!match) {
-    throw new Error('unsupported image data url')
-  }
-  return {
-    mediaType: match[1] ?? 'image/png',
-    base64Data: match[2] ?? '',
-  }
-}
-
-function estimateBase64DecodedBytes(base64Data: string): number {
-  const normalized = base64Data.trim()
-  if (normalized.length === 0) return 0
-  const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0
-  return Math.floor((normalized.length * 3) / 4) - padding
-}
-
-function parseImagesFromHtml(html: string): ClaudeDraftImage[] {
-  if (!html.trim()) return []
-  // Some browsers copy web images as an HTML fragment containing an
-  // embedded data URL rather than exposing a File in clipboardData.
-  // We only parse this into a detached Document and read `img.src` —
-  // the HTML is never injected into the live DOM.
-  const doc = new DOMParser().parseFromString(html, 'text/html')
-  const images: ClaudeDraftImage[] = []
-  for (const img of Array.from(doc.images)) {
-    const src = img.getAttribute('src')?.trim() ?? ''
-    if (!src.startsWith('data:image/')) continue
-    try {
-      const { mediaType, base64Data } = parseDataUrl(src)
-      images.push({
-        id: crypto.randomUUID(),
-        mediaType,
-        base64Data,
-        previewUrl: src,
-        filename: img.getAttribute('alt')?.trim() || 'Pasted image',
-      })
-    } catch {
-      // Ignore malformed HTML image sources and keep scanning.
-    }
-  }
-  return images
-}
-
-async function filesToDraftImages(files: File[]): Promise<ClaudeDraftImage[]> {
-  return Promise.all(
-    files.map(async file => {
-      const previewUrl = await fileToDataUrl(file)
-      const { mediaType, base64Data } = parseDataUrl(previewUrl)
-      return {
-        id: crypto.randomUUID(),
-        mediaType,
-        base64Data,
-        previewUrl,
-        filename: file.name || 'Pasted image',
-      } satisfies ClaudeDraftImage
-    }),
-  )
-}
-
-async function readImagesFromClipboard(): Promise<ClaudeDraftImage[]> {
-  if (!navigator.clipboard?.read) return []
-  const items = await navigator.clipboard.read()
-  const images: ClaudeDraftImage[] = []
-  for (const item of items) {
-    const imageType = item.types.find(type => type.startsWith('image/'))
-    if (!imageType) continue
-    const blob = await item.getType(imageType)
-    const previewUrl = await fileToDataUrl(new File([blob], 'Pasted image', { type: imageType }))
-    const { mediaType, base64Data } = parseDataUrl(previewUrl)
-    images.push({
-      id: crypto.randomUUID(),
-      mediaType,
-      base64Data,
-      previewUrl,
-      filename: 'Pasted image',
-    })
-  }
-  return images
-}
-
-function buildClaudeImagePastePayload(text: string, imagePaths: string[]): string {
-  if (imagePaths.length === 0) return text
-  if (text.trim().length === 0) return imagePaths.join('\n')
-  return `${imagePaths.join('\n')}\n${text}`
-}
-
-async function sendBracketedPaste(
-  send: (data: string) => Promise<void>,
-  payload: string,
-): Promise<void> {
-  await send(`\x1b[200~${payload}\x1b[201~`)
-}
-
-async function sendBracketedPasteThenSubmit(
-  send: (data: string) => Promise<void>,
-  payload: string,
-  delayMs = 0,
-): Promise<void> {
-  if (delayMs <= 0) {
-    await send(`\x1b[200~${payload}\x1b[201~\r`)
-    return
-  }
-  await sendBracketedPaste(send, payload)
-  await wait(delayMs)
-  await send('\r')
-}
-
-async function sendClaudeDraftText(
-  send: (data: string) => Promise<void>,
-  text: string,
-): Promise<void> {
-  if (text.length === 0) return
-  const isPasteLike = text.includes('\n') || text.length > CLAUDE_PASTE_THRESHOLD
-  if (isPasteLike) {
-    await sendBracketedPaste(send, text)
-    await wait(CLAUDE_PASTE_SUBMIT_DELAY_MS)
-    return
-  }
-  await send(text)
-}
+// Claude paste-state-machine constants + helpers moved to
+// ./TileLeaf/claudePaste.ts. Image helpers moved to
+// ./TileLeaf/claudeImages.ts. Label helpers moved to
+// ./TileLeaf/labels.ts. See those files for the full rationale on
+// the paste debounce, the image size/format gates, and the pane
+// header shortening.
 
 // TileLeaf — one pane. A "mini cc-shell" self-contained in a box:
 //   header strip (project dir + status)
@@ -1229,21 +1070,4 @@ export function TileLeaf({
   )
 }
 
-function shortenCwd(cwd: string | null): string {
-  if (!cwd) return '—'
-  const parts = cwd.split('/').filter(Boolean)
-  if (parts.length <= 2) return '/' + parts.join('/')
-  return '…/' + parts.slice(-2).join('/')
-}
-
-function providerLabel(kind: SessionKind | undefined): string {
-  switch (kind) {
-    case 'codex':
-      return 'Codex'
-    case 'terminal':
-      return 'Terminal'
-    case 'claude':
-    default:
-      return 'Claude Code'
-  }
-}
+// shortenCwd + providerLabel moved to ./TileLeaf/labels.ts.
