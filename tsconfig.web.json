@@ -31,5 +31,16 @@
     "src/providers/*/parsers/**/*",
     "src/providers/*/renderer/**/*",
     "testing/**/*"
+  ],
+  // Project reference: tell tsc to resolve preload imports via node's
+  // emitted declarations, not by walking the source tree. Without
+  // this, `src/preload/index.d.ts` traces `./index` → `index.ts` →
+  // `./api/*.ts` and the web project errors TS6307 because the
+  // api/*.ts files aren't in this project's include list. The
+  // reference makes `tsc -b` build tsconfig.node.json first, drop
+  // its declarations in `.tsc-out/node/`, and have this web project
+  // consume those instead of chasing source files out of scope.
+  "references": [
+    { "path": "./tsconfig.node.json" }
   ]
 }
