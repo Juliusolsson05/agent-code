@@ -30,9 +30,9 @@
 import { memo, useMemo, useState } from 'react'
 import hljs from 'highlight.js'
 
-import { MarkerRow } from '../feed/Feed'
-import { normalizeCodeLanguage } from '../../../shared/code/language'
-import type { GitIntent } from '../../../shared/git/gitDetect'
+import { MarkerRow } from '../../../feed/Feed'
+import { normalizeCodeLanguage } from '../../../../../shared/code/language'
+import type { GitIntent } from '../../../../../shared/git/gitDetect'
 import {
   parseGitCommit,
   parseGitLog,
@@ -42,7 +42,7 @@ import {
   stripAnsi,
   type GitDiffFile,
   type GitDiffLine,
-} from '../../../shared/git/gitParse'
+} from '../../../../../shared/git/gitParse'
 
 // ---------------------------------------------------------------------------
 // Shared chrome

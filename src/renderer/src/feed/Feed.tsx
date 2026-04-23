@@ -36,7 +36,7 @@ import {
 } from '../../../shared/types/transcript'
 import { CodeBlock } from '../code/CodeBlock'
 import { detectGitIntent } from '../../../shared/git/gitDetect'
-import { GitCardRow } from '../git/GitRows'
+import { GitCardRow } from '../features/git/ui/GitRows'
 import { useAppStore } from '../state/hooks'
 import {
   parseSemanticTodos,

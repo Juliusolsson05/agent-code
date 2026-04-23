@@ -1,4 +1,4 @@
-import type { CommandDef } from '../../../commands/types'
+import type { CommandDef } from '../../command-palette/types'
 import { dangerousCommands } from './dangerousCommands'
 
 export const settingsCommands: CommandDef[] = [

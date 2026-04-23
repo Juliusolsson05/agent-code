@@ -17,7 +17,7 @@
 // We walk the entries array backward so the first match is the most
 // recent assistant turn. Returns null if no assistant text is found.
 
-import type { Entry } from '../../shared/types/transcript'
+import type { Entry } from '../../../shared/types/transcript'
 
 export function extractLastAssistantText(
   entries: readonly Entry[],
@@ -59,4 +59,4 @@ function extractClaude(entries: readonly Entry[]): string | null {
 export {
   extractAssistantByUuid,
   assistantUuidsWithText,
-} from './features/copy-assistant/lib/extractAssistantByUuid'
+} from '../features/copy-assistant/lib/extractAssistantByUuid'

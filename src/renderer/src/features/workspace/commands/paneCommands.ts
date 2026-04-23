@@ -1,5 +1,5 @@
-import { extractLastAssistantText } from '../../../copyAssistant'
-import type { CommandDef } from '../../../commands/types'
+import { extractLastAssistantText } from '../../../lib/copyAssistant'
+import type { CommandDef } from '../../command-palette/types'
 
 export const paneCommands: CommandDef[] = [
   {

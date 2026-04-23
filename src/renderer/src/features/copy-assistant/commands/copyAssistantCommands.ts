@@ -1,4 +1,4 @@
-import type { CommandDef } from '../../../commands/types'
+import type { CommandDef } from '../../command-palette/types'
 
 // "Copy Assistant Message" — opens the picker on the focused pane.
 // All navigation (Up/Down/Enter/Esc) is handled by useKeybinds when

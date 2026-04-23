@@ -1,4 +1,4 @@
-import type { CommandDef } from '../../../commands/types'
+import type { CommandDef } from '../../command-palette/types'
 
 export const sessionCommands: CommandDef[] = [
   {

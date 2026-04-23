@@ -44,11 +44,11 @@ import {
   reinsertPane,
   type ClosedEntry,
 } from '../lib/undoClose'
-import { useGlobalToast } from '../GlobalToast'
+import { useGlobalToast } from '../ui/GlobalToast'
 import {
   extractAssistantByUuid,
   assistantUuidsWithText,
-} from '../copyAssistant'
+} from '../lib/copyAssistant'
 import { useAppStore } from '../state/hooks'
 import {
   emptySemanticRuntime,
