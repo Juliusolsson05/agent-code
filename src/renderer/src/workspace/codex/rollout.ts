@@ -36,6 +36,24 @@ import {
 // ghost reconciler has nothing to match Codex assistant-text ghosts
 // against (they don't carry `message.id`, don't carry `tool_use_id`).
 
+// Codex injects an `<environment_context>` synthetic user message on
+// the first turn of every conversation (cwd, shell, timezone, date
+// metadata for the model). It surfaces on the rollout as a regular
+// user-role message with an `input_text` content block, so the
+// normal mapper would turn it into a user bubble in the feed.
+//
+// That's pure noise for the user — the shim is there for the model,
+// not the human. Drop at the mapper so it never enters runtime.entries
+// at all; downstream surfaces (visibleDecisions, debug logs, copy-
+// assistant picker) don't have to know about it.
+//
+// Prefix match against the outer `<environment_context>` tag. Match
+// permissively (trim leading whitespace) so variations across Codex
+// versions still catch.
+function isCodexEnvironmentContextText(text: string): boolean {
+  return /^\s*<environment_context\b/.test(text)
+}
+
 function codexConversationEntryFromMessageItem(
   uuid: string,
   timestamp: string | undefined,
@@ -49,14 +67,26 @@ function codexConversationEntryFromMessageItem(
   }
 
   const role = payload.role
+  // Extend the block filter so it keeps both `input_text` /
+  // `output_text` (which store their payload under `.text`) and
+  // `refusal` (which stores it under `.refusal` — see
+  // packages/codex-headless/src/transcript/TranscriptTypes.ts:108
+  // for the protocol shape). The old filter only accepted `.text`,
+  // so committed refusals silently dropped from the feed even
+  // though the live semantic renderer painted them.
   const content = Array.isArray(payload.content)
     ? payload.content
         .map(block => {
           const item = block as Record<string, unknown>
-          const text = typeof item.text === 'string' ? item.text : null
-          if (!text) return null
           if (item.type === 'input_text' || item.type === 'output_text') {
-            return { type: 'text' as const, text }
+            const text = typeof item.text === 'string' ? item.text : null
+            return text ? { type: 'text' as const, text } : null
+          }
+          if (item.type === 'refusal') {
+            const refusal = typeof item.refusal === 'string' ? item.refusal : null
+            return refusal
+              ? { type: 'text' as const, text: `(refused) ${refusal}` }
+              : null
           }
           return null
         })
@@ -64,6 +94,19 @@ function codexConversationEntryFromMessageItem(
     : []
 
   if (content.length === 0) return null
+
+  // Environment-context shim filter. Only drops if the message's
+  // ENTIRE content is one env-context block; a real user prompt
+  // that happens to mention `<environment_context>` as a quoted
+  // phrase still passes.
+  if (
+    role === 'user' &&
+    content.length === 1 &&
+    isCodexEnvironmentContextText(content[0].text)
+  ) {
+    return null
+  }
+
   return {
     type: role,
     uuid,
@@ -330,7 +373,130 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
     ]
   }
 
+  // Codex response_item kinds that used to fall through to `return []`
+  // even though `SemanticLiveBlockRow` has explicit live UI for each.
+  // Without committed counterparts these blocks vanish the moment the
+  // turn seals (the semantic turn unmounts) and are gone entirely on
+  // a session reload. Minimum-viable mapping: synthesize Claude-shaped
+  // tool_use / tool_result entries so the existing `CodexToolRow` /
+  // `CodexToolResultRow` dispatcher paints a row. The headlines may
+  // not match the live BlockRow UI exactly (web_search emoji, image
+  // generation chip, shell command prefix) — consider a dedicated
+  // `CodexSpecialToolRow` in a follow-up — but the block no longer
+  // disappears on commit, and the data still round-trips through disk
+  // so a reload sees the same row.
+
+  if (payload.type === 'web_search_call') {
+    const callId =
+      typeof payload.id === 'string' ? payload.id : `web_search:${uuid}`
+    const action = asRecord(payload.action)
+    const query =
+      typeof action?.query === 'string' ? action.query as string : null
+    const url =
+      typeof action?.url === 'string' ? action.url as string : null
+    const kind =
+      typeof action?.type === 'string' ? action.type as string : 'search'
+    // `description` is the field headlineForTool falls back to when
+    // the tool has no `command` / `path` / `arguments`. Pack a
+    // human-readable label so CodexToolRow shows something useful.
+    const description =
+      kind === 'search' && query
+        ? `Search: ${query}`
+        : kind === 'open_page' && url
+          ? `Open: ${url}`
+          : kind === 'find_in_page' && url
+            ? `Find in: ${url}`
+            : 'Web search'
+    return [
+      codexToolUseEntry(uuid, timestamp, callId, 'web_search', {
+        description,
+        query,
+        url,
+        kind,
+        status: typeof payload.status === 'string' ? payload.status : null,
+      }),
+    ]
+  }
+
+  if (payload.type === 'image_generation_call') {
+    const callId =
+      typeof payload.id === 'string' ? payload.id : `image_gen:${uuid}`
+    const revisedPrompt =
+      typeof payload.revised_prompt === 'string'
+        ? payload.revised_prompt as string
+        : null
+    const status =
+      typeof payload.status === 'string' ? payload.status as string : 'unknown'
+    return [
+      codexToolUseEntry(uuid, timestamp, callId, 'image_generation', {
+        description: revisedPrompt
+          ? `Image: ${revisedPrompt}`
+          : `Image generation (${status})`,
+        status,
+        revisedPrompt,
+      }),
+    ]
+  }
+
+  if (payload.type === 'local_shell_call' && typeof payload.call_id === 'string') {
+    // Local shell items have their argv under `action.command` in the
+    // OpenAI protocol. Flatten to a single command string so
+    // headlineForTool's `command` branch catches it.
+    const action = asRecord(payload.action)
+    const cmdArr = Array.isArray(action?.command) ? action!.command : []
+    const command = cmdArr
+      .filter((part): part is string => typeof part === 'string')
+      .join(' ')
+    const workdir =
+      typeof action?.working_directory === 'string'
+        ? action!.working_directory as string
+        : null
+    const status =
+      typeof payload.status === 'string' ? payload.status as string : 'unknown'
+    return [
+      codexToolUseEntry(uuid, timestamp, payload.call_id, 'local_shell', {
+        command: command || '(no command)',
+        cwd: workdir,
+        status,
+      }),
+    ]
+  }
+
+  if (payload.type === 'tool_search_call') {
+    const callId =
+      typeof payload.id === 'string' ? payload.id : `tool_search:${uuid}`
+    const status =
+      typeof payload.status === 'string' ? payload.status as string : 'unknown'
+    return [
+      codexToolUseEntry(uuid, timestamp, callId, 'tool_search', {
+        description: `Tool search (${status})`,
+        status,
+      }),
+    ]
+  }
+
+  if (payload.type === 'tool_search_output' && typeof payload.call_id === 'string') {
+    const output = codexOutputText(payload.output)
+    if (!output.trim()) return []
+    return [
+      codexToolResultEntry(
+        uuid,
+        timestamp,
+        payload.call_id,
+        output,
+        false,
+        { kind: 'tool_search_output' },
+      ),
+    ]
+  }
+
   return []
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
 }
 
 /** Build the history marker for a Codex rollout entry. The format is
