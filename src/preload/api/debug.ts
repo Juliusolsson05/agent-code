@@ -1,12 +1,20 @@
 import { ipcRenderer } from 'electron'
 
-import type { FeedDebugPersistEntry } from '@preload/api/types.js'
+import type {
+  FeedDebugPersistEntry,
+  SaveDebugBundleParams,
+  SaveDebugBundleResult,
+} from '@preload/api/types.js'
 
-// Feed-debug log shipper.
+// Debug IPC surface.
 //
-// The renderer accumulates entries in runtime state and flushes
-// batches here on a timer (see workspaceStore's persistFeedDebugLog
-// effect). Main serializes per-session and appends to JSONL.
+// appendFeedDebugLog — streaming flush of FeedDebugPanel entries
+// (called on a timer by useFeedDebugPersist). Main serializes
+// per-session and appends to the per-session JSONL.
+//
+// saveDebugBundle — one-shot snapshot invoked by the "Save Debug
+// Logs" palette command. Renderer assembles the file list; main
+// writes a timestamped folder and returns its absolute path.
 
 export const debugApi = {
   appendFeedDebugLog: (params: {
@@ -14,4 +22,7 @@ export const debugApi = {
     entries: FeedDebugPersistEntry[]
   }): Promise<void> =>
     ipcRenderer.invoke('debug:append-feed-log', params),
+
+  saveDebugBundle: (params: SaveDebugBundleParams): Promise<SaveDebugBundleResult> =>
+    ipcRenderer.invoke('debug:save-bundle', params),
 }

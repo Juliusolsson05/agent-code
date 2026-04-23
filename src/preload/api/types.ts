@@ -172,6 +172,23 @@ export type FeedDebugPersistEntry = {
   data?: unknown
 }
 
+// Debug bundle — opaque file list shipped from renderer to main.
+// See main/storage/debugBundle.ts for the layout rationale. Types
+// are duplicated here (not imported) because preload/main/renderer
+// build under different tsconfig contexts, same convention as
+// SessionIndexEntry above.
+export type DebugBundleFile = {
+  name: string
+  content: string
+}
+export type SaveDebugBundleParams = {
+  sessionId: string
+  files: DebugBundleFile[]
+}
+export type SaveDebugBundleResult = {
+  bundlePath: string
+}
+
 export type SessionInfo = {
   sessionId: string
   summary: string

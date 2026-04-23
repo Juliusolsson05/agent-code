@@ -1,0 +1,123 @@
+import { mkdir, writeFile } from 'fs/promises'
+import { join } from 'path'
+
+import { DEBUG_BUNDLE_DIR } from '@main/storage/paths.js'
+
+// Debug-bundle writer.
+//
+// The renderer assembles the bundle (it has every diagnostic source:
+// runtime.semantic, runtime.feedDebugLog, the DOM outerHTML, and can
+// run sanitizeHtml locally) and ships the pre-serialized files here
+// in a single IPC call. Main owns filesystem layout + atomicity and
+// returns the absolute bundle path so the renderer can surface it.
+//
+// Why the renderer assembles vs. main assembling:
+//   The data lives in three different places in the renderer
+//   (workspace runtime store, the live DOM, sanitizeHtml in
+//   @renderer/lib). Forwarding all of that through IPC in structured
+//   form would recreate those representations in main just to
+//   stringify them back out. Shipping the already-stringified files
+//   is one round-trip, no schema duplication, and keeps main a thin
+//   byte-mover — same discipline as workspace.json (see paths.ts).
+//
+// Why per-invocation folders instead of a single shared dir:
+//   A bundle is a coherent snapshot — all files were captured at the
+//   same instant from the same pane. Mixing multiple invocations
+//   into one folder would make it ambiguous which proxy-semantic.json
+//   goes with which feed-debug.jsonl. Timestamped folders also double
+//   as a history: the user can compare "before / after" bundles
+//   without manual renaming.
+
+export type DebugBundleFile = {
+  /** Filename relative to the bundle folder. Validated: no path
+   *  separators allowed — the renderer only ships leaf names. */
+  name: string
+  /** Text content. Binary files are not supported because none of
+   *  the debug surfaces produce binary data today (HTML capture is
+   *  a DOM string, everything else is JSON/JSONL). */
+  content: string
+}
+
+export type SaveDebugBundleParams = {
+  /** Session id the bundle is for. Used only to build the folder
+   *  name — the payload itself already encodes what session it
+   *  came from inside manifest.json. */
+  sessionId: string
+  /** Opaque files list. Main does not look inside `content`. */
+  files: DebugBundleFile[]
+}
+
+export type SaveDebugBundleResult = {
+  /** Absolute path of the created bundle folder. Returned so the
+   *  renderer can show it in a toast and copy to clipboard. */
+  bundlePath: string
+}
+
+// Same regex as sanitizeSessionIdForPath in feedDebugLog.ts —
+// deliberately narrow to prevent path traversal via a malformed
+// session id and to keep folder names portable across macOS/Windows.
+function sanitizeForPath(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '_')
+}
+
+// Bundle folder naming: `<ISO-like timestamp>-<sessionShort>`.
+//
+// Why colon-free ISO: macOS tolerates ':' in file names but many
+// tools (and Windows) don't, and the user WILL be copy-pasting this
+// path into a terminal. `2026-04-23T14-32-07` reads unambiguously
+// as a date+time and sorts lexicographically.
+//
+// Why include the 8-char session id: if the user saves two bundles
+// from two different panes in the same second, bare timestamp would
+// collide. Short prefix keeps the folder name readable while
+// disambiguating.
+function buildBundleFolderName(sessionId: string, now: Date): string {
+  const iso = now.toISOString()
+  // `2026-04-23T14:32:07.842Z` → `2026-04-23T14-32-07`
+  const stamp = iso.replace(/\..+$/, '').replace(/:/g, '-')
+  const short = sanitizeForPath(sessionId.slice(0, 8))
+  return `${stamp}-${short}`
+}
+
+// Validate that a file name is a plain leaf and doesn't try to
+// escape the bundle folder. The renderer is in-process and trusted,
+// but the discipline costs one line and makes future refactors
+// (e.g. surfacing this IPC to a plugin) safe by default.
+function isSafeFileName(name: string): boolean {
+  if (!name || name.length > 255) return false
+  if (name.includes('/') || name.includes('\\')) return false
+  if (name === '.' || name === '..') return false
+  return true
+}
+
+export async function saveDebugBundle(
+  params: SaveDebugBundleParams,
+): Promise<SaveDebugBundleResult> {
+  if (!params?.sessionId || !Array.isArray(params.files) || params.files.length === 0) {
+    throw new Error('saveDebugBundle: missing sessionId or empty files list')
+  }
+  for (const file of params.files) {
+    if (!isSafeFileName(file.name)) {
+      throw new Error(`saveDebugBundle: unsafe file name: ${JSON.stringify(file.name)}`)
+    }
+  }
+
+  const bundleFolderName = buildBundleFolderName(params.sessionId, new Date())
+  const bundlePath = join(DEBUG_BUNDLE_DIR, bundleFolderName)
+
+  // mkdir recursive handles both the DEBUG_BUNDLE_DIR root (first
+  // invocation ever) and the new per-bundle folder in one call.
+  await mkdir(bundlePath, { recursive: true })
+
+  // Sequential writes. Could parallelize with Promise.all but bundles
+  // are small (a few files, typically < 1MB total) and a serial loop
+  // keeps error messages unambiguous — a failure names the file that
+  // actually failed, not an aggregate rejection that's harder to act
+  // on when debugging cc-shell itself (which is the whole point of
+  // this feature).
+  for (const file of params.files) {
+    await writeFile(join(bundlePath, file.name), file.content, 'utf8')
+  }
+
+  return { bundlePath }
+}
