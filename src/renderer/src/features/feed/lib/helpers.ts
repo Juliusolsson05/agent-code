@@ -84,22 +84,45 @@ export function toolResultText(block: ToolResultBlock): string {
   return ''
 }
 
-/** Truncate long bash commands for the tool-band header. We keep the
- *  first line and cut after ~160 chars; the full command is still
- *  available in the expanded view. Matches Claude Code's own
- *  truncation style so the UI feels consistent across surfaces. */
+// Max lines + chars for the inline bash command display. The two
+// caps cut different failure modes: very long single-line pipelines
+// (the char cap) and multi-line heredocs (the line cap). Matches
+// Claude Code's own TUI truncation so the hover preview feels
+// consistent across surfaces.
+const MAX_COMMAND_DISPLAY_LINES = 2
+const MAX_COMMAND_DISPLAY_CHARS = 160
+
+/** Truncate a bash command string for the tool-band header. Applies
+ *  the LINES cap first, then the CHARS cap against whatever's left,
+ *  and suffixes `…` if anything was dropped. Keeping both caps means
+ *  a heredoc collapses to its first two lines AND a one-liner hex
+ *  dump is truncated mid-line — both happen often enough in practice
+ *  that one cap alone isn't enough. */
 export function truncateBashCommand(cmd: string): string {
-  const firstLine = cmd.split('\n', 1)[0] ?? cmd
-  if (firstLine.length <= 160) return firstLine
-  return firstLine.slice(0, 160) + '…'
+  const lines = cmd.split('\n')
+  const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
+  const needsCharTruncation = cmd.length > MAX_COMMAND_DISPLAY_CHARS
+  if (!needsLineTruncation && !needsCharTruncation) return cmd
+  let truncated = cmd
+  if (needsLineTruncation) {
+    truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n')
+  }
+  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
+    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS)
+  }
+  return truncated.trimEnd() + '…'
 }
 
-/** Strip the leading "nnn→" line-number markers Claude emits in Read
- *  tool results. Used before we hand the content to a code renderer
- *  that does its own line numbering — the markers would otherwise
- *  double up. */
+/** Strip the "<digits>\t" prefix from every line so the user sees
+ *  the raw source. If a line doesn't match the pattern we keep it
+ *  verbatim — defensive against future format tweaks. Used before
+ *  we hand Read-tool content to a code renderer that does its own
+ *  line numbering; otherwise the markers would double up. */
 export function stripLineNumberPrefix(text: string): string {
-  return text.replace(/^\s*\d+→/gm, '')
+  return text
+    .split('\n')
+    .map(line => line.replace(/^\s*\d+\t/, ''))
+    .join('\n')
 }
 
 /** Build a stable React key for an Entry + its index. Prefers the
@@ -167,57 +190,82 @@ export function splitStreamingCodeFence(text: string): {
 // ---------------------------------------------------------------------------
 
 /** Produce a data: URL for an image content block. Returns null if
- *  the block isn't an image or its source fields aren't set. */
+ *  the source is missing or not a base64 payload. Gates on
+ *  `source.type === 'base64'` because Anthropic's spec allows both
+ *  "base64" (inline data) and "url" shapes; only the base64 shape
+ *  has the `data` field we need to embed. mediaType defaults to
+ *  'image/png' when the block omits it — that's the most common
+ *  case for CC-pasted screenshots. */
 export function imageDataUrl(block: ContentBlock): string | null {
-  if (block.type !== 'image') return null
-  const src = (block as unknown as { source?: Record<string, unknown> }).source
-  if (!src) return null
-  const mediaType = typeof src.media_type === 'string' ? src.media_type : null
-  const data = typeof src.data === 'string' ? src.data : null
-  if (!mediaType || !data) return null
+  const source = (block as { source?: unknown }).source
+  if (!source || typeof source !== 'object') return null
+  const rec = source as Record<string, unknown>
+  if (rec.type !== 'base64') return null
+  const mediaType = typeof rec.media_type === 'string' ? rec.media_type : 'image/png'
+  const data = typeof rec.data === 'string' ? rec.data : null
+  if (!data) return null
   return `data:${mediaType};base64,${data}`
 }
 
-/** Extract the human text of a compact-summary entry. Both the
- *  conversation-entry shape (content array) and the raw-string shape
- *  (older schema) are supported. */
+/** Extract the human text of a compact-summary entry. Both `text`
+ *  and `thinking` blocks contribute — summaries often start with a
+ *  thinking block that captures the planning step before the final
+ *  text. We join with a blank line between blocks so the two
+ *  render as separate paragraphs. */
 export function compactSummaryText(entry: CompactSummaryEntry): string {
-  const message = entry.message
-  if (!message) return ''
-  if (typeof message.content === 'string') return message.content
-  if (Array.isArray(message.content)) {
-    return message.content
-      .map(block => {
-        const item = block as Record<string, unknown>
-        return item.type === 'text' && typeof item.text === 'string'
-          ? (item.text as string)
-          : ''
-      })
-      .join('\n')
-      .trim()
-  }
-  return ''
+  const content = entry.message.content
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map(block => {
+      const item = block as ContentBlock & { text?: string; thinking?: string }
+      if (item.type === 'text' && typeof item.text === 'string') return item.text
+      if (item.type === 'thinking' && typeof item.thinking === 'string') return item.thinking
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n\n')
 }
 
-/** Truncate the compact-summary body for the inline preview. */
+/** Truncate the compact-summary body for the inline preview. Two
+ *  caps run in order:
+ *
+ *    1. Line cap (>24): collapse to the first 24 lines. Summaries
+ *       can legitimately be long with a tight line budget — a wall
+ *       of 200 one-word lines is still >2400 chars but reads as
+ *       "too long" long before the char cap fires.
+ *    2. Char cap (>2400): truncate the already-line-capped text at
+ *       2400 chars, trimming trailing whitespace.
+ *
+ *  Either truncation appends `\n\n[summary truncated]` as an inline
+ *  signal. The full summary is always available on the expanded
+ *  compact boundary. */
 export function truncateCompactSummary(text: string): string {
-  if (text.length <= 400) return text
-  return text.slice(0, 400).trimEnd() + '…'
+  const lines = text.split('\n')
+  if (lines.length > 24) {
+    return `${lines.slice(0, 24).join('\n')}\n\n[summary truncated]`
+  }
+  if (text.length > 2400) {
+    return `${text.slice(0, 2400).trimEnd()}\n\n[summary truncated]`
+  }
+  return text
 }
 
-/** Label attachment-type entries for the system row (file-history-
- *  snapshot, hook-attachment, etc.). */
+/** Label attachment-type entries for the system row. Handles three
+ *  shapes:
+ *    - hook attachments: `a.hookEvent` drives the label (prefer
+ *      `hookName` if present, else the event name).
+ *    - typed attachments: `a.type` directly.
+ *    - fallback: literal "attachment".
+ *
+ *  The hook label uses a "hook: <name>" prefix because the system
+ *  row is a one-line summary and the event name alone ("PreToolUse")
+ *  is opaque — prefixing makes it obvious this came from a hook. */
 export function attachmentLabel(entry: Entry): string {
-  const att = (entry as unknown as { attachment?: Record<string, unknown> }).attachment
-  if (!att) return 'attachment'
-  const kind = typeof att.type === 'string' ? att.type : 'attachment'
-  const path =
-    typeof att.path === 'string'
-      ? att.path
-      : typeof att.target === 'string'
-        ? att.target
-        : null
-  return path ? `${kind} · ${path}` : kind
+  const a = (entry as { attachment?: Record<string, unknown> }).attachment ?? {}
+  if (a.hookEvent) return `hook: ${(a.hookName as string) ?? (a.hookEvent as string)}`
+  if (a.type) return `attachment: ${a.type as string}`
+  return 'attachment'
 }
 
 // ---------------------------------------------------------------------------

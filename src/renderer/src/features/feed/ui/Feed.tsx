@@ -1,5 +1,4 @@
 import {
-  createContext,
   memo,
   useContext,
   useEffect,
@@ -10,8 +9,6 @@ import {
   type ReactNode,
 } from 'react'
 import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks'
 
 import {
   EditRow,
@@ -47,6 +44,43 @@ import {
 import { WorkIndicator } from '../WorkIndicator'
 import { toolHintFromTurn } from '../workIndicatorHints'
 import { MarkerRow } from './MarkerRow'
+import {
+  ProviderContext,
+  ToolUseIndexContext,
+  ToolResultIndexContext,
+  CodeRenderContext,
+} from '../context'
+import {
+  type AgentProvider,
+  type ScrollInfo,
+  type VisibleDecision,
+  type DebugVisibleRow,
+} from '../types'
+import { scrollPositions } from '../scroll'
+import { COMPLETED_REMARK, STREAMING_REMARK } from '../lib/remark-plugins'
+import {
+  buildToolUseIndex,
+  buildToolResultIndex,
+  extractToolCommand,
+  toolResultText,
+  truncateBashCommand,
+  stripLineNumberPrefix,
+  debugKeyForEntry,
+  debugLabelForEntry,
+  countFenceMarkers,
+  splitStreamingCodeFence,
+  imageDataUrl,
+  compactSummaryText,
+  truncateCompactSummary,
+  attachmentLabel,
+  classifySemanticToolActivity,
+} from '../lib/helpers'
+
+// Re-export — many external callers import these types from Feed
+// directly rather than reaching into ../types/../context. Keep the
+// alias stable until the sweep is over.
+export type { AgentProvider, ScrollInfo } from '../types'
+export { CodeRenderContext } from '../context'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.
@@ -74,77 +108,11 @@ import { MarkerRow } from './MarkerRow'
 // creep back under the marker. Standard hanging-indent pattern.
 // -----------------------------------------------------------------------------
 
-// Plugin sets are defined at module scope because react-markdown v10 caches
-// parse results keyed on plugin identity — passing fresh array literals on
-// every parent render busts the cache and costs real frames.
-//
-// The two sets differ in ONE plugin:
-//
-//   COMPLETED_REMARK: just `remark-gfm`. Completed assistant text from the
-//   JSONL is real markdown source with proper paragraph breaks, so
-//   standard markdown rules apply.
-//
-//   STREAMING_REMARK: `remark-gfm` + `remark-breaks`. The streaming source
-//   is CC's screen buffer — plain text stripped of ANSI. CC's Ink already
-//   converted markdown syntax (** _ ` ```) to terminal attributes and
-//   discarded the characters by the time it hits our buffer, so there's
-//   no real markdown to parse. But single newlines are load-bearing in
-//   the streaming text (each line is a genuine line, not a soft wrap),
-//   and standard markdown collapses single newlines into soft wraps that
-//   flow together as one paragraph. `remark-breaks` turns each hard
-//   newline into a <br>, preserving the visual line layout. Without it,
-//   a multi-line response like "There are 19 entries:\n  body.txt\n
-//   claude-501\n…" would collapse into one blob.
-//
-// Rendering streaming through react-markdown instead of a raw <pre> also
-// makes the typography match completed messages exactly: same font, size,
-// line-height, paragraph rhythm. When the JSONL entry lands and the
-// structured version takes over, the visual jump is minimal — just
-// richer formatting on top of the same base layout.
-const COMPLETED_REMARK = [remarkGfm]
-const STREAMING_REMARK = [remarkGfm, remarkBreaks]
-// -----------------------------------------------------------------------------
-// Tool-use index: a map from tool_use_id → ToolUseBlock, built once per
-// render pass over the entire feed. Used by ToolResultRow to look up
-// "what tool produced this result" so it can pick a richer renderer for
-// known tools (Read → syntax-highlighted code; Bash → plain pre; …).
-//
-// Why a side channel instead of pairing at the ConversationRow level:
-//   tool_use blocks live in an ASSISTANT entry and tool_result blocks
-//   live in the NEXT USER entry. ConversationRow only sees one entry at
-//   a time, so it can't pair them structurally without reaching across
-//   entries. We build the index at Feed level (where we DO have every
-//   entry) and hand it to result rows via context so the memoed row
-//   components don't need a new prop.
-//
-// Memo behavior: the map reference changes whenever `entries` changes,
-// which invalidates useContext consumers. That's fine — rows that care
-// about the map already re-render when entries grow, and rows that
-// don't call useContext are unaffected. We do NOT include the map in
-// row memo keys; equality on the map itself would be expensive and the
-// interesting work (markdown parsing) is cached inside TextProse by
-// text string, so repeat renders are cheap.
-// -----------------------------------------------------------------------------
-
-const ProviderContext = createContext<AgentProvider>('claude')
-const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new Map())
-// Reverse of ToolUseIndexContext — lets the tool_use dispatcher peek
-// at the paired result block, so a single combined widget can render
-// both sides (command + output) on one row. Needed for the git
-// widgets: the result content lives on a later entry but the widget
-// wants it available when the tool_use row mounts. When the result
-// hasn't arrived yet the map returns undefined and the widget renders
-// a "running…" placeholder; on the next entry wave it re-renders
-// with the real output.
-const ToolResultIndexContext =
-  createContext<Map<string, ToolResultBlock>>(new Map())
-export const CodeRenderContext = createContext<{
-  sessionId: string
-  workspaceRoot: string | null
-}>({
-  sessionId: '',
-  workspaceRoot: null,
-})
+// COMPLETED_REMARK / STREAMING_REMARK moved to ../lib/remark-plugins.ts
+// ProviderContext + ToolUseIndexContext + ToolResultIndexContext +
+// CodeRenderContext moved to ../context.tsx — see those files for
+// the full rationale. Feed.tsx re-exports CodeRenderContext above
+// to keep external import paths stable.
 
 /**
  * Custom <pre> renderer: strips the default <pre> wrapper and lets
@@ -244,82 +212,10 @@ const MARKDOWN_COMPONENTS: import('react-markdown').Options['components'] = {
   code: MarkdownCode,
 }
 
-function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
-  const map = new Map<string, ToolUseBlock>()
-  for (const e of entries) {
-    if (!isConversationEntry(e)) continue
-    const content = e.message.content
-    if (!Array.isArray(content)) continue
-    for (const b of content) {
-      if (b.type === 'tool_use') {
-        const tu = b as ToolUseBlock
-        map.set(tu.id, tu)
-      }
-    }
-  }
-  return map
-}
-
-/**
- * Reverse index: tool_use_id -> the paired tool_result block. Built
- * alongside the forward index but scoped separately so the two maps
- * can be memoized independently. Agents sometimes emit a result
- * without a preceding use (rare — synthetic error paths), those get
- * indexed by their own tool_use_id regardless.
- */
-function buildToolResultIndex(entries: Entry[]): Map<string, ToolResultBlock> {
-  const map = new Map<string, ToolResultBlock>()
-  for (const e of entries) {
-    if (!isConversationEntry(e)) continue
-    const content = e.message.content
-    if (!Array.isArray(content)) continue
-    for (const b of content) {
-      if (b.type === 'tool_result') {
-        const tr = b as ToolResultBlock
-        map.set(tr.tool_use_id, tr)
-      }
-    }
-  }
-  return map
-}
-
-/** Extract the command string from a Bash / exec_command tool_use
- *  block, normalizing across providers. Claude passes the command
- *  as `input.command: string`. Codex passes `input.cmd` which may
- *  be a string OR a pre-split array (for the actual argv form). */
-function extractToolCommand(block: ToolUseBlock): string | null {
-  const input = block.input as Record<string, unknown> | undefined
-  if (!input) return null
-  if (typeof input.command === 'string') return input.command
-  if (typeof input.cmd === 'string') return input.cmd
-  if (Array.isArray(input.cmd)) return input.cmd.filter(s => typeof s === 'string').join(' ')
-  return null
-}
-
-/** Flatten a tool_result's content to a plain string — both providers
- *  use either a string or an array of `{type:'text',text:string}`. */
-function toolResultText(block: ToolResultBlock): string {
-  if (typeof block.content === 'string') return block.content
-  if (Array.isArray(block.content)) {
-    return block.content
-      .map(item => typeof item === 'string' ? item
-                 : typeof (item as { text?: unknown }).text === 'string' ? (item as { text: string }).text
-                 : '')
-      .join('\n')
-  }
-  return ''
-}
-
-/** Which agent provider this Feed is rendering for. Determines
- *  which row renderers are used for tool_use blocks. */
-export type AgentProvider = 'claude' | 'codex'
-
-/** Scroll info pushed from Feed to its parent on every scroll tick.
- *  Used by TileLeaf to render the scroll position indicator. */
-export type ScrollInfo = {
-  /** 0 = at bottom, 1 = at top. */
-  fraction: number
-}
+// buildToolUseIndex / buildToolResultIndex / extractToolCommand /
+// toolResultText moved to ../lib/helpers.ts. AgentProvider and
+// ScrollInfo types moved to ../types.ts; re-exported at the top of
+// this file.
 
 type Props = {
   /** Session identity — used as the key for per-session scroll
@@ -375,43 +271,8 @@ type Props = {
   }) => void
 }
 
-type VisibleDecision = {
-  key: string
-  entry: Entry
-  visible: boolean
-  reason:
-    | 'compact_boundary'
-    | 'compact_summary'
-    | 'conversation'
-    | 'not_conversation'
-    | 'meta_filtered'
-}
-
-type DebugVisibleRow = {
-  key: string
-  slot: 'entry' | 'semantic' | 'work' | 'empty'
-  label: string
-}
-
-function debugKeyForEntry(entry: Entry, index: number): string {
-  const uuid = (entry as Entry).uuid
-  return uuid ?? `${entry.type}:${index}`
-}
-
-function debugLabelForEntry(entry: Entry): string {
-  if (entry.type === 'user' || entry.type === 'assistant') {
-    const message = (entry as ConversationEntry).message
-    const content = Array.isArray(message.content) ? message.content : []
-    const first = content[0] as Record<string, unknown> | undefined
-    if (first?.type === 'text' && typeof first.text === 'string') {
-      return `${entry.type}: ${first.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`
-    }
-    if (typeof first?.type === 'string') {
-      return `${entry.type}: ${String(first.type)}`
-    }
-  }
-  return entry.type
-}
+// VisibleDecision + DebugVisibleRow moved to ../types.ts.
+// debugKeyForEntry + debugLabelForEntry moved to ../lib/helpers.ts.
 
 // 2026-04-20: shouldSuppressSemanticTurnForCommittedTail and its two
 // helpers (textFromConversationEntry, normalizeRenderableText) were
@@ -433,43 +294,9 @@ function debugLabelForEntry(entry: Entry): string {
 //
 // See docs/superpowers/plans/2026-04-20-rendering-fixes.md Task 6.
 
-// ---------------------------------------------------------------------------
-// Per-session scroll position memory.
-//
-// When the user switches tabs, App.tsx unmounts the inactive tab's
-// TileTree — and with it, every Feed inside. When they switch back,
-// a fresh Feed mounts with a brand-new scroll container at scrollTop=0.
-// Without intervention that snaps the viewport to the top (or to a
-// weird "just after first paint" position), which the user rightly
-// called out as "weird and stupid."
-//
-// The fix is to persist each Feed's scroll state OUTSIDE the React
-// component tree so it survives unmount. A module-level Map keyed by
-// sessionId is the simplest possible store: no re-renders, no store
-// plumbing, no prop noise. We record (scrollTop + stickyBottom flag)
-// on every scroll tick and read them back in a useLayoutEffect on
-// mount to restore the viewport BEFORE the browser paints.
-//
-// Why not put this in SessionRuntime: scroll position is a pure UI
-// concern — no IPC, no persistence across app restarts, no other
-// consumer. Hoisting it into the runtime state would force Feed to
-// take an extra prop (workspace or a setter) and would invalidate
-// Feed's React.memo shallow-compare on every scroll tick because the
-// runtime object reference would change. Module-level Map sidesteps
-// both problems.
-//
-// The Map is not bounded — if a session is killed, its entry sticks
-// around forever. That's fine: each entry is two numbers and a
-// boolean, and the Map only grows by the count of sessions EVER
-// opened in this browser process lifetime (which typically resets
-// on Electron window reload). Adding a cleanup on session kill
-// would be a minor optimization if that ever matters.
-// ---------------------------------------------------------------------------
-type ScrollPosition = {
-  scrollTop: number
-  stickyBottom: boolean
-}
-const scrollPositions = new Map<string, ScrollPosition>()
+// ScrollPosition type + scrollPositions map moved to ../scroll.ts
+// and ../types.ts respectively — see those files for the "why persist
+// scroll state outside the component tree" rationale.
 
 // -----------------------------------------------------------------------------
 // Memoization strategy — the whole reason this file is fast enough to type in
@@ -1171,30 +998,7 @@ function FeedImpl({
   )
 }
 
-function countFenceMarkers(text: string): number {
-  const matches = text.match(/```/g)
-  return matches ? matches.length : 0
-}
-
-function splitStreamingCodeFence(text: string): {
-  prose: string
-  code: string
-  language: string | null
-} | null {
-  const lastFence = text.lastIndexOf('```')
-  if (lastFence === -1) return null
-  if (countFenceMarkers(text) % 2 === 0) return null
-
-  const openingLine = text.slice(lastFence).split('\n', 1)[0] ?? ''
-  const language = openingLine.slice(3).trim() || null
-  const code = text.slice(lastFence + openingLine.length)
-    .replace(/^\n/, '')
-  return {
-    prose: text.slice(0, lastFence).trimEnd(),
-    code,
-    language,
-  }
-}
+// countFenceMarkers + splitStreamingCodeFence moved to ../lib/helpers.ts.
 
 type SemanticRenderUnit =
   | {
@@ -1214,96 +1018,9 @@ type SemanticRenderUnit =
       isRunning: boolean
     }
 
-// Bash classifier helpers.
-//
-// WHY anchored to command position, not plain \b:
-//   Earlier version used /\b(ls|tree|du)\b/ — that matched inside
-//   argv, so `pipx install tree-sitter` classified as "list" and
-//   `sudo ls` or `cat foo-tree.txt` matched too. We only want to
-//   fire when the name is the *program being invoked*, i.e. at the
-//   start of the command or at a pipeline/boundary separator
-//   (`;`, `|`, `||`, `&&`), optionally preceded by env-var
-//   assignments (`FOO=bar`) or `sudo`.
-//
-// The regex below captures: (start | separator) (env-var prefix?)
-// (sudo?) (one of the names) (followed by end or whitespace).
-// `git grep` is handled as its own leading-position pattern.
-const COMMAND_START = /(?:^|[;|&]\s*)(?:[A-Z_][A-Z0-9_]*=\S+\s+)*(?:sudo\s+)?/i
-
-function atCommandPosition(command: string, names: readonly string[]): boolean {
-  const alternation = names.map(n => n.replace(/\s+/g, '\\s+')).join('|')
-  const re = new RegExp(`${COMMAND_START.source}(?:${alternation})(?=\\s|$)`, 'i')
-  return re.test(command)
-}
-
-function looksLikeSearchCommand(command: string): boolean {
-  return atCommandPosition(command, ['rg', 'grep', 'find', 'fd', 'ag', 'ack', 'git grep'])
-}
-
-function looksLikeReadCommand(command: string): boolean {
-  return atCommandPosition(command, ['cat', 'less', 'more', 'head', 'tail', 'sed', 'awk', 'wc'])
-}
-
-function looksLikeListCommand(command: string): boolean {
-  return atCommandPosition(command, ['ls', 'tree', 'du'])
-}
-
-function classifySemanticToolActivity(block: SemanticLiveTurn['blocks'][number]): {
-  collapsible: boolean
-  category: 'search' | 'read' | 'list' | 'bash' | null
-  hint: string | null
-} {
-  const toolName = block.toolName ?? ''
-  const parsed = block.parsedInput ?? {}
-  const pathLike =
-    typeof parsed.file_path === 'string'
-      ? parsed.file_path
-      : typeof parsed.path === 'string'
-        ? parsed.path
-        : null
-
-  if (toolName === 'Glob' || toolName === 'Grep') {
-    const pattern =
-      typeof parsed.pattern === 'string'
-        ? parsed.pattern
-        : typeof parsed.glob === 'string'
-          ? parsed.glob
-          : null
-    return {
-      collapsible: true,
-      category: 'search',
-      hint: pattern ? `"${pattern}"` : pathLike,
-    }
-  }
-
-  if (toolName === 'Read' || toolName === 'FileRead') {
-    return {
-      collapsible: true,
-      category: 'read',
-      hint: pathLike,
-    }
-  }
-
-  if (toolName === 'Bash') {
-    const command =
-      typeof parsed.command === 'string'
-        ? parsed.command.trim()
-        : null
-    if (!command) return { collapsible: false, category: null, hint: null }
-    if (looksLikeListCommand(command)) {
-      return { collapsible: true, category: 'list', hint: command }
-    }
-    if (looksLikeSearchCommand(command)) {
-      return { collapsible: true, category: 'search', hint: command }
-    }
-    if (looksLikeReadCommand(command)) {
-      return { collapsible: true, category: 'read', hint: command }
-    }
-    return { collapsible: true, category: 'bash', hint: command }
-  }
-
-  return { collapsible: false, category: null, hint: null }
-}
+// Bash classifier helpers (COMMAND_START, atCommandPosition,
+// looksLikeSearchCommand/ReadCommand/ListCommand) and
+// classifySemanticToolActivity moved to ../lib/helpers.ts.
 
 function buildSemanticRenderUnits(turn: SemanticLiveTurn): SemanticRenderUnit[] {
   const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
@@ -2150,16 +1867,7 @@ function UserBand({ children }: { children: React.ReactNode }) {
   )
 }
 
-function imageDataUrl(block: ContentBlock): string | null {
-  const source = (block as { source?: unknown }).source
-  if (!source || typeof source !== 'object') return null
-  const rec = source as Record<string, unknown>
-  if (rec.type !== 'base64') return null
-  const mediaType = typeof rec.media_type === 'string' ? rec.media_type : 'image/png'
-  const data = typeof rec.data === 'string' ? rec.data : null
-  if (!data) return null
-  return `data:${mediaType};base64,${data}`
-}
+// imageDataUrl moved to ../lib/helpers.ts.
 
 const ImageBlockRow = memo(function ImageBlockRow({
   block,
@@ -2238,31 +1946,9 @@ const CompactSummaryRow = memo(function CompactSummaryRow({
   )
 })
 
-function compactSummaryText(entry: CompactSummaryEntry): string {
-  const content = entry.message.content
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return ''
-  return content
-    .map(block => {
-      const item = block as ContentBlock & { text?: string; thinking?: string }
-      if (item.type === 'text' && typeof item.text === 'string') return item.text
-      if (item.type === 'thinking' && typeof item.thinking === 'string') return item.thinking
-      return ''
-    })
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-function truncateCompactSummary(text: string): string {
-  const lines = text.split('\n')
-  if (lines.length > 24) {
-    return `${lines.slice(0, 24).join('\n')}\n\n[summary truncated]`
-  }
-  if (text.length > 2400) {
-    return `${text.slice(0, 2400).trimEnd()}\n\n[summary truncated]`
-  }
-  return text
-}
+// compactSummaryText + truncateCompactSummary moved to
+// ../lib/helpers.ts. See those for the thinking-block + two-cap
+// truncation rationale.
 
 /**
  * Background band for tool output (Read, Grep, Edit results).
@@ -2490,23 +2176,8 @@ const StreamingProse = memo(function StreamingProse({
 // whole command remains in the transcript; the collapse is purely
 // a density choice so a 20-line heredoc doesn't push the next
 // assistant message below the fold.
-const MAX_COMMAND_DISPLAY_LINES = 2
-const MAX_COMMAND_DISPLAY_CHARS = 160
-
-function truncateBashCommand(cmd: string): string {
-  const lines = cmd.split('\n')
-  const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
-  const needsCharTruncation = cmd.length > MAX_COMMAND_DISPLAY_CHARS
-  if (!needsLineTruncation && !needsCharTruncation) return cmd
-  let truncated = cmd
-  if (needsLineTruncation) {
-    truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n')
-  }
-  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
-    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS)
-  }
-  return truncated.trimEnd() + '…'
-}
+// MAX_COMMAND_DISPLAY_* constants + truncateBashCommand moved to
+// ../lib/helpers.ts.
 
 const ToolUseRow = memo(function ToolUseRow({ block }: { block: ToolUseBlock }) {
   // Extract the command / description for Bash-like tools. For tools
@@ -2733,23 +2404,8 @@ function TruncatedOutputRow({
   )
 }
 
-/**
- * CC's Read tool emits one line per source line, prefixed with the
- * 1-based line number and a tab:
- *
- *   1\timport foo
- *   2\tconst bar = 1
- *
- * Strip the "<digits>\t" prefix from every line so the user sees the
- * raw source. If a line doesn't match the pattern we keep it verbatim
- * — defensive against future format tweaks.
- */
-function stripLineNumberPrefix(text: string): string {
-  return text
-    .split('\n')
-    .map(line => line.replace(/^\s*\d+\t/, ''))
-    .join('\n')
-}
+// stripLineNumberPrefix moved to ../lib/helpers.ts — see there for
+// the "CC emits 'n\t<line>' in Read tool results" rationale.
 
 /* ---------- System row (hidden by default; shown when toggled on) ---------- */
 
@@ -2771,12 +2427,7 @@ const SystemRow = memo(function SystemRow({ entry }: { entry: Entry }) {
   )
 })
 
-function attachmentLabel(entry: Entry): string {
-  const a = (entry as { attachment?: Record<string, unknown> }).attachment ?? {}
-  if (a.hookEvent) return `hook: ${(a.hookName as string) ?? (a.hookEvent as string)}`
-  if (a.type) return `attachment: ${a.type as string}`
-  return 'attachment'
-}
+// attachmentLabel moved to ../lib/helpers.ts.
 
 /* ---------- Streaming row — REMOVED ----------
  *
