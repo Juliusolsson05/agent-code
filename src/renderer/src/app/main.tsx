@@ -1,6 +1,6 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import App from '@renderer/App'
+import App from '@renderer/app/App'
 import { GlobalToastProvider } from '@renderer/ui/GlobalToast'
 import '@renderer/styles.css'
 import 'highlight.js/styles/github-dark.css'
