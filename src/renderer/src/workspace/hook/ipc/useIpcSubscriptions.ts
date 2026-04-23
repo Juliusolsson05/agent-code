@@ -1,12 +1,12 @@
 import { useEffect } from 'react'
 
-import type { Entry } from '../../../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
   isConversationEntry,
-} from '../../../../../shared/types/transcript'
-import { detectCodexApproval } from '../../../../../shared/parsers/codexScreen'
+} from '@shared/types/transcript'
+import { detectCodexApproval } from '@shared/parsers/codexScreen'
 import { emptyRuntime, type SessionRuntime } from '../../workspaceState'
 import { appendFeedDebugLog, type FeedDebugInput } from '../../runtime/feedDebug'
 import type { SessionId } from '../../types'

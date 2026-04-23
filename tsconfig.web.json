@@ -20,7 +20,18 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "useDefineForClassFields": true,
-    "types": ["node"]
+    "types": ["node"],
+    // See tsconfig.node.json for the full rationale. Both projects
+    // declare the same alias map so imports resolve identically
+    // whether tsc is checking the main/preload or the renderer half.
+    "baseUrl": ".",
+    "paths": {
+      "@main/*": ["./src/main/*"],
+      "@preload/*": ["./src/preload/*"],
+      "@renderer/*": ["./src/renderer/src/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@providers/*": ["./src/providers/*"]
+    }
   },
   "include": [
     "src/renderer/**/*",

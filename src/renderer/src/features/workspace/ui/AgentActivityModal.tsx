@@ -4,7 +4,7 @@ import { useAppStore } from '../../../state/hooks'
 import { collectLeaves } from '../../../workspace/tile-tree/treeOps'
 import type { SessionId, Tab } from '../../../workspace/types'
 import type { Workspace } from '../../../workspace/workspaceStore'
-import type { Entry } from '../../../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 
 // AgentActivityModal — overview of every visible pane grouped by tab
 // with a last-activity indicator per row.

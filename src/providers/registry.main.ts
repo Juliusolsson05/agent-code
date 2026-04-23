@@ -2,7 +2,7 @@
 //
 // sessionManager and IPC handlers import from HERE.
 
-import type { MainProviderConfig } from '../shared/types/providerConfig'
+import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { ClaudeSession } from './claude/runtime/claudeSession'
 import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
 import { CodexSession } from './codex/runtime/codexSession'

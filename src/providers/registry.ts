@@ -6,7 +6,7 @@
 // provider's directory physically cannot break the other provider or
 // the shell — the import graph enforces it.
 
-import type { ProviderConfig } from '../shared/types/providerConfig'
+import type { ProviderConfig } from '@shared/types/providerConfig'
 import { claudeConfig } from './claude/config'
 import { codexConfig } from './codex/config'
 

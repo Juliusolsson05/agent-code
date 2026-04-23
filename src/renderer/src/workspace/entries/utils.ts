@@ -3,7 +3,7 @@ import {
   type Entry,
   type ToolResultBlock,
   type ToolUseBlock,
-} from '../../../../shared/types/transcript'
+} from '@shared/types/transcript'
 
 // Shared entry utilities used by the workspace store, feed-debug log,
 // and the bulk jsonl ingest path. Provider-agnostic: Claude and Codex

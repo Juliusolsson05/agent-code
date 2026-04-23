@@ -17,7 +17,7 @@
 // We walk the entries array backward so the first match is the most
 // recent assistant turn. Returns null if no assistant text is found.
 
-import type { Entry } from '../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 
 export function extractLastAssistantText(
   entries: readonly Entry[],

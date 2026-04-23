@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { readFile, readdir, stat } from 'fs/promises'
 
-import { getMainProvider } from '../../providers/registry.main.js'
+import { getMainProvider } from '@providers/registry.main.js'
 
 // Loader for older history chunks.
 //

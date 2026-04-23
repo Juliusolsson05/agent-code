@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 
 import type { SessionRuntime } from '../../../workspace/workspaceStore'
-import type { Entry } from '../../../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 
 // DebugPanel — inline diagnostic overlay showing the raw state of the
 // focused pane. Toggled via "Toggle Debug Panel" in the command palette.

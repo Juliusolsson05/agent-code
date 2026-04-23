@@ -1,4 +1,4 @@
-import type { Entry } from '../../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 
 // Codex rollout primitives + conversion helpers.
 //

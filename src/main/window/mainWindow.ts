@@ -71,7 +71,7 @@ export function createMainWindow(): void {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0a0a0a',
     webPreferences: {
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: join(__dirname, '@preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,

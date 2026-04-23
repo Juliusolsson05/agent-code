@@ -12,13 +12,13 @@
 import { memo, useContext, useMemo } from 'react'
 import hljs from 'highlight.js'
 
-import { normalizeCodeLanguage } from '../../../../shared/code/language'
-import { diffLines, type DiffLine } from '../../../../shared/parsers/lineDiff'
-import { formatToolFilePath } from '../../../../shared/paths/displayPath'
-import type { ToolUseBlock } from '../../../../shared/types/transcript'
-import { CodeBlock } from '../../../../renderer/src/lib/code/CodeBlock'
-import { CodeRenderContext } from '../../../../renderer/src/features/feed/ui/Feed'
-import { MarkerRow } from '../../../../renderer/src/features/feed/ui/MarkerRow'
+import { normalizeCodeLanguage } from '@shared/code/language'
+import { diffLines, type DiffLine } from '@shared/parsers/lineDiff'
+import { formatToolFilePath } from '@shared/paths/displayPath'
+import type { ToolUseBlock } from '@shared/types/transcript'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
+import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
 /* ---------- Shared helpers ---------- */
 

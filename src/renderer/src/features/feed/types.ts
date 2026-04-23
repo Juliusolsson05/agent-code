@@ -1,4 +1,4 @@
-import type { Entry } from '../../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 
 /** Which agent provider this Feed is rendering for. Determines
  *  which row renderers are used for tool_use blocks. */

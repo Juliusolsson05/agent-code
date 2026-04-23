@@ -1,9 +1,9 @@
 import { readdir, readFile, stat } from 'fs/promises'
 import { join } from 'path'
 
-import { listSessionsForCwd } from '../providers/claude/runtime/sessionList.js'
-import { getProjectDirForCwd } from '../shared/runtime/projectDir.js'
-import { getCodexSessionsDir } from '../providers/codex/runtime/projectDir.js'
+import { listSessionsForCwd } from '@providers/claude/runtime/sessionList.js'
+import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
+import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
 
 // Session Prompt Index — power source for the "Search Conversation
 // Prompts" command.

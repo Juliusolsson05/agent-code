@@ -7,7 +7,7 @@ import type {
   Entry,
   ToolResultBlock,
   ToolUseBlock,
-} from '../../../shared/types/transcript'
+} from '@shared/types/transcript'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 
 export type PickerItem = {

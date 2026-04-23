@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 
 import { CodeBlock } from '../../../lib/code/CodeBlock'
 import { CodeRenderContext } from '../../../features/feed/ui/Feed'
-import { extractAssistantInProgress } from '../../../../../shared/parsers/extractAssistant'
+import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { assistantUuidsWithText, extractAssistantByUuid } from '../../../lib/copyAssistant'
 import { collectLeaves } from '../../../workspace/tile-tree/treeOps'
 import type { SessionId, Workspace } from '../../../workspace/workspaceStore'

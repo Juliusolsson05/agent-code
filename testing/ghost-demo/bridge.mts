@@ -27,12 +27,12 @@ import {
   ghostsToPersist,
   orphanStale,
   reconcileUpstream,
-} from '../../src/renderer/src/workspace/ghosts.js'
+} from '@renderer/workspace/ghosts.js'
 import type {
   SemanticLiveTurn,
   SemanticLiveBlock,
-} from '../../src/renderer/src/workspace/workspaceState.js'
-import type { Entry } from '../../src/shared/types/transcript.js'
+} from '@renderer/workspace/workspaceState.js'
+import type { Entry } from '@shared/types/transcript.js'
 
 let failed = 0
 function check(label: string, ok: boolean, detail?: string): void {

@@ -13,12 +13,24 @@ const headlessAlias = {
   'agent-transcript-parser': resolve(__dirname, 'agent-transcript-parser/src/index.ts'),
 }
 
+// Project-wide absolute-import aliases. MUST match tsconfig.node.json
+// + tsconfig.web.json `paths` — the two resolvers must agree or tsc
+// will green-light an import the runtime can't load. Keep the alias
+// names and targets in sync across all three configs.
+const projectAlias = {
+  '@main': resolve(__dirname, 'src/main'),
+  '@preload': resolve(__dirname, 'src/preload'),
+  '@renderer': resolve(__dirname, 'src/renderer/src'),
+  '@shared': resolve(__dirname, 'src/shared'),
+  '@providers': resolve(__dirname, 'src/providers'),
+}
+
 const headlessExclude = ['claude-code-headless', 'codex-headless', 'agent-transcript-parser']
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin({ exclude: headlessExclude })],
-    resolve: { alias: headlessAlias },
+    resolve: { alias: { ...headlessAlias, ...projectAlias } },
     build: {
       rollupOptions: {
         input: resolve(__dirname, 'src/main/index.ts')
@@ -27,7 +39,7 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin({ exclude: headlessExclude })],
-    resolve: { alias: headlessAlias },
+    resolve: { alias: { ...headlessAlias, ...projectAlias } },
     build: {
       rollupOptions: {
         input: resolve(__dirname, 'src/preload/index.ts')
@@ -36,6 +48,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    resolve: { alias: projectAlias },
     build: {
       rollupOptions: {
         input: resolve(__dirname, 'src/renderer/index.html')

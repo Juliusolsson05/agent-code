@@ -5,7 +5,7 @@ import {
   languageFileExtension,
   normalizeCodeLanguage,
   supportsLsp,
-} from '../../../../src/shared/code/language'
+} from '@shared/code/language'
 
 type Props = {
   code: string

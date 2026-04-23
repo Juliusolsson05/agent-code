@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 import assert from 'node:assert/strict'
 
-import type { SemanticRuntimeState } from '../src/renderer/src/workspace/workspaceState.ts'
+import type { SemanticRuntimeState } from '@renderer/workspace/workspaceState.ts'
 
 function baseState(): SemanticRuntimeState {
   const state: SemanticRuntimeState = {
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
       api: {},
     },
   })
-  const { foldSemanticEvent } = await import('../src/renderer/src/workspace/workspaceStore.ts')
+  const { foldSemanticEvent } = await import('@renderer/workspace/workspaceStore.ts')
 
   const next = foldSemanticEvent(
     baseState(),

@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 
 import { emptyRuntime } from '../../workspaceState'
 import type { SessionId } from '../../types'
-import type { Entry } from '../../../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 import {
   appendFeedDebugLog,
 } from '../../runtime/feedDebug'

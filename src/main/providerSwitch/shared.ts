@@ -12,8 +12,8 @@ import { join } from 'path'
 
 import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
 
-import { getProjectDirForCwd } from '../../shared/runtime/projectDir.js'
-import { getCodexSessionsDir } from '../../providers/codex/runtime/projectDir.js'
+import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
+import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
 
 // ---------------------------------------------------------------------------
 // JSONL io

@@ -6,7 +6,7 @@ import {
   type Entry,
   type ToolResultBlock,
   type ToolUseBlock,
-} from '../../../../../shared/types/transcript'
+} from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '../../../workspace/workspaceState'
 
 // -----------------------------------------------------------------------------

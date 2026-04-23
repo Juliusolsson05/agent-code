@@ -4,15 +4,15 @@
 // This file only imports renderer configs which contain TileLeaf
 // components and parser functions — no session factories, no fs, no pty.
 
-import type { RendererProviderConfig } from '../shared/types/providerConfig'
+import type { RendererProviderConfig } from '@shared/types/providerConfig'
 // Import parser functions by direct file path — NOT through the package
 // entry point. The headless packages pull in Node deps (pty, fs) through
 // their main export, but the parser files are pure TypeScript (no Node,
 // no DOM). Direct imports keep the renderer bundle browser-safe.
-import { extractAssistantInProgress as claudeExtract } from '../shared/parsers/claudeScreen'
-import { extractCodexAssistantInProgress as codexExtract } from '../shared/parsers/codexScreen'
-import { TileLeaf } from '../renderer/src/workspace/tile-tree/TileLeaf'
-import type { TileLeafProps } from '../shared/types/providerConfig'
+import { extractAssistantInProgress as claudeExtract } from '@shared/parsers/claudeScreen'
+import { extractCodexAssistantInProgress as codexExtract } from '@shared/parsers/codexScreen'
+import { TileLeaf } from '@renderer/workspace/tile-tree/TileLeaf'
+import type { TileLeafProps } from '@shared/types/providerConfig'
 
 const claudeRenderer: RendererProviderConfig = {
   id: 'claude',

@@ -44,16 +44,16 @@ import { fileURLToPath } from 'url'
 import { homedir } from 'os'
 import { readdir, readFile, stat } from 'fs/promises'
 
-import { SessionManager } from '../../src/main/sessionManager.js'
+import { SessionManager } from '@main/sessionManager.js'
 import {
   listAllClaudeSessions,
   type SessionInfo as ClaudeSessionInfo,
-} from '../../src/providers/claude/runtime/sessionList.js'
+} from '@providers/claude/runtime/sessionList.js'
 import {
   listCodexSessions,
   type CodexSessionInfo,
-} from '../../src/providers/codex/runtime/sessionList.js'
-import { getMainProvider } from '../../src/providers/registry.main.js'
+} from '@providers/codex/runtime/sessionList.js'
+import { getMainProvider } from '@providers/registry.main.js'
 
 type AgentKind = 'claude' | 'codex'
 
@@ -363,7 +363,7 @@ function createWindow(): void {
       // Reuse the existing preload bridge so the renderer's
       // `window.api` shape matches the main app exactly. All channels
       // it calls are either real handlers above or stubs.
-      preload: join(__dirname, '../preload/index.mjs'),
+      preload: join(__dirname, '@preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,

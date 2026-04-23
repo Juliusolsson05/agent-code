@@ -2,12 +2,12 @@ import { useCallback } from 'react'
 
 import { emptyRuntime, type SessionRuntime } from '../../workspaceState'
 import type { SessionId } from '../../types'
-import type { Entry } from '../../../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
   isConversationEntry,
-} from '../../../../../shared/types/transcript'
+} from '@shared/types/transcript'
 import {
   codexHistoryMarker,
   codexTurnIdFromRollout,

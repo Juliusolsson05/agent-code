@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events'
 import { spawn as ptySpawn } from 'node-pty'
 
-import type { SlashPickerState } from '../../../preload/index.js'
+import type { SlashPickerState } from '@preload/index.js'
 import {
   ClaudeCodeHeadless,
   createProxyServer,

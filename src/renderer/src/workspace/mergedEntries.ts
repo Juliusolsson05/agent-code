@@ -16,7 +16,7 @@
 // atp doc). This file adds nothing to the merge rules; it only
 // chooses atp's default options and threads the runtime's state.
 
-import type { Entry } from '../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 import type { SessionRuntime } from './workspaceState'
 
 /**

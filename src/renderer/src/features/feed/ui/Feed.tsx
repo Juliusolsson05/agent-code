@@ -18,11 +18,11 @@ import {
   MultiEditRow,
   WriteRow,
   TodoRow,
-} from '../../../../../providers/claude/renderer/rows/ClaudeRows'
+} from '@providers/claude/renderer/rows/ClaudeRows'
 import {
   CodexToolRow,
   CodexToolResultRow,
-} from '../../../../../providers/codex/renderer/rows/CodexRows'
+} from '@providers/codex/renderer/rows/CodexRows'
 import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
@@ -33,9 +33,9 @@ import {
   type Entry,
   type ToolResultBlock,
   type ToolUseBlock,
-} from '../../../../../shared/types/transcript'
+} from '@shared/types/transcript'
 import { CodeBlock } from '../../../lib/code/CodeBlock'
-import { detectGitIntent } from '../../../../../shared/git/gitDetect'
+import { detectGitIntent } from '@shared/git/gitDetect'
 import { GitCardRow } from '../../git/ui/GitRows'
 import { useAppStore } from '../../../state/hooks'
 import {
@@ -581,6 +581,12 @@ function FeedImpl({
     scrollPositions.get(sessionId)?.stickyBottom ?? true,
   )
   const loadingOlderRef = useRef(false)
+  // Was there an existing saved scroll position for this session when
+  // this Feed instance mounted? Used to distinguish "restore the
+  // user's deliberate scrolled-up position" from "brand-new/resumed
+  // session should land at latest content even if stickyBottom got
+  // transiently knocked false during bootstrap."
+  const hadSavedPositionOnMountRef = useRef(scrollPositions.has(sessionId))
   // Previous scrollTop, used to distinguish "the user started
   // scrolling upward" from incidental near-bottom jitter. This is
   // load-bearing during active turns: with the old "gap < 48"
@@ -619,6 +625,7 @@ function FeedImpl({
   useLayoutEffect(() => {
     const el = scrollerRef.current
     if (!el) return
+    hadSavedPositionOnMountRef.current = scrollPositions.has(sessionId)
     if (tailMode) {
       el.scrollTop = el.scrollHeight
       stickyBottomRef.current = true
@@ -772,12 +779,28 @@ function FeedImpl({
   useEffect(() => {
     if (prevBootstrappingRef.current && !bootstrapping) {
       const el = scrollerRef.current
-      if (el && (tailMode || stickyBottomRef.current)) {
+      // Fresh/resumed sessions with no saved scroll position should
+      // ALWAYS land on the latest content after the bootstrap burst.
+      // Relying purely on stickyBottomRef here is fragile because the
+      // initial mount/placeholder/lazy-load sequence can transiently
+      // mark the feed non-sticky before the first real user scroll.
+      // That leaves the viewport stranded above the eager tail: the
+      // exact "blank until I scroll down a couple pages" symptom.
+      const shouldForceInitialBottom =
+        !hadSavedPositionOnMountRef.current && !tailMode
+      if (el && (tailMode || stickyBottomRef.current || shouldForceInitialBottom)) {
         el.scrollTop = el.scrollHeight
+        stickyBottomRef.current = true
+        lastScrollTopRef.current = el.scrollTop
+        scrollPositions.set(sessionId, {
+          scrollTop: el.scrollTop,
+          stickyBottom: true,
+        })
+        if (onScrollInfo) onScrollInfo({ fraction: 0 })
       }
     }
     prevBootstrappingRef.current = bootstrapping
-  }, [bootstrapping, tailMode])
+  }, [bootstrapping, onScrollInfo, sessionId, tailMode])
 
   // When the picker selection changes, smoothly tween the scroller
   // so the highlighted entry centers in the viewport.

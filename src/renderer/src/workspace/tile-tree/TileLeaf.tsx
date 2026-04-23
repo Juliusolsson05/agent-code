@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { extractAssistantInProgress } from '../../../../shared/parsers/extractAssistant'
-import { CodexApprovalModal } from '../../../../providers/codex/renderer/CodexApprovalModal'
-import { ResumePromptModal } from '../../../../providers/claude/renderer/ResumePromptModal'
+import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
+import { CodexApprovalModal } from '@providers/codex/renderer/CodexApprovalModal'
+import { ResumePromptModal } from '@providers/claude/renderer/ResumePromptModal'
 import { useGlobalToast } from '../../ui/GlobalToast'
 import { Feed } from '../../features/feed/ui/Feed'
 import type { ScrollInfo } from '../../features/feed/ui/Feed'
-import { TrustDialogModal } from '../../../../providers/claude/renderer/TrustDialogModal'
-import { SlashCommandPicker } from '../../../../providers/claude/renderer/SlashCommandPicker'
+import { TrustDialogModal } from '@providers/claude/renderer/TrustDialogModal'
+import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
 import { extractLatestUserPrompts } from '../../features/workspace/lib/latestUserPrompts'
 import type { SessionRuntime, Workspace } from '../workspaceStore'
 import {

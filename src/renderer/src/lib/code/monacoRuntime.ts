@@ -3,7 +3,7 @@ import type * as Monaco from 'monaco-editor'
 import {
   normalizeCodeLanguage,
   supportsLsp,
-} from '../../../../shared/code/language'
+} from '@shared/code/language'
 
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'

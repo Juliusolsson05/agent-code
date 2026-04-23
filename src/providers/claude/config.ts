@@ -5,16 +5,16 @@
 // TileTree; everything else (slash picker, trust dialog, Claude-specific
 // rows) lives inside that component and the shell never knows about it.
 
-import type { ProviderConfig } from '../../shared/types/providerConfig'
+import type { ProviderConfig } from '@shared/types/providerConfig'
 import { ClaudeSession } from './runtime/claudeSession'
 import { listSessionsForCwd } from './runtime/sessionList'
-import { getProjectDirForCwd } from '../../shared/runtime/projectDir'
+import { getProjectDirForCwd } from '@shared/runtime/projectDir'
 import { extractAssistantInProgress } from './parsers/streamingScreen'
 
 // For now, re-use the shared TileLeaf which already handles Claude.
 // When we create a Claude-specific TileLeaf, this import changes to
 // point at ./renderer/TileLeaf instead.
-import { TileLeaf } from '../../renderer/src/workspace/tile-tree/TileLeaf'
+import { TileLeaf } from '@renderer/workspace/tile-tree/TileLeaf'
 
 export const claudeConfig: ProviderConfig = {
   id: 'claude',

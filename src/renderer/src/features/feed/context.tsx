@@ -3,7 +3,7 @@ import { createContext } from 'react'
 import type {
   ToolResultBlock,
   ToolUseBlock,
-} from '../../../../shared/types/transcript'
+} from '@shared/types/transcript'
 
 import type { AgentProvider } from './types'
 

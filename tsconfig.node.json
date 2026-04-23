@@ -19,10 +19,27 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "types": ["node"],
+    // baseUrl + paths give us absolute imports (`@shared/types/transcript`
+    // instead of `../../../shared/types/transcript`). Deep relative paths
+    // were the #1 source of move-breakage during the refactor — they
+    // encode each file's relation to its target, so any move on either
+    // side invalidates them. Absolute paths only break when the TARGET
+    // moves, cutting the rewrite cost of future refactors in half.
+    //
+    // Vite needs a parallel `resolve.alias` config — see
+    // electron.vite.config.ts. TSC and Vite agree on the alias map; if
+    // they diverge, tsc will green-light something the runtime can't
+    // actually load.
+    "baseUrl": ".",
     "paths": {
       "claude-code-headless": ["./claude-code-headless/src/index.ts"],
       "codex-headless": ["./codex-headless/src/index.ts"],
-      "agent-transcript-parser": ["./agent-transcript-parser/src/index.ts"]
+      "agent-transcript-parser": ["./agent-transcript-parser/src/index.ts"],
+      "@main/*": ["./src/main/*"],
+      "@preload/*": ["./src/preload/*"],
+      "@renderer/*": ["./src/renderer/src/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@providers/*": ["./src/providers/*"]
     }
   },
   "include": [

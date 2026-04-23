@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld('api', api)
 export type { Api }
 
 // Re-export every payload type. Renderer code that imports types
-// from '../preload/index' (or from this file via d.ts) keeps working
+// from '@preload/index' (or from this file via d.ts) keeps working
 // verbatim — the types just moved from inline declarations into
 // ./api/types.ts, and this file is still the public face of the
 // preload bundle.

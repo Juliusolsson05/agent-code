@@ -1,4 +1,4 @@
-import type { ConversationEntry } from '../../../../shared/types/transcript'
+import type { ConversationEntry } from '@shared/types/transcript'
 
 // Claude transcript markers + progress-wrapper unwrapping.
 //

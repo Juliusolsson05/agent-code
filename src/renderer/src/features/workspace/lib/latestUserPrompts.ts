@@ -2,7 +2,7 @@ import {
   isCompactSummaryEntry,
   isConversationEntry,
   type Entry,
-} from '../../../../../shared/types/transcript'
+} from '@shared/types/transcript'
 import type { SessionKind } from '../../../workspace/types'
 
 export type LatestUserPrompt = {
