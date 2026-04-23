@@ -319,6 +319,19 @@ export function classifySemanticToolActivity(block: SemanticLiveTurn['blocks'][n
         ? parsed.path
         : null
 
+  // Don't collapse a block whose result has already arrived with
+  // real content (or that errored). The collapse was designed for
+  // low-signal churn — "2 reads, 1 search" is a useful compaction
+  // while the tools are in-flight or while their stub-success
+  // results are noise. But once a Read / Grep / Bash block carries
+  // real output or an error the user cares about, collapsing it
+  // into "worked: 3 reads" silently hides the content. Route
+  // finished-with-output blocks through the non-collapsible branch
+  // so they render as their own SemanticLiveBlockRow.
+  if (block.resultIsError || (block.resultContent && block.resultContent.trim().length > 0)) {
+    return { collapsible: false, category: null, hint: null }
+  }
+
   if (toolName === 'Glob' || toolName === 'Grep') {
     const pattern =
       typeof parsed.pattern === 'string'
