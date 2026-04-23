@@ -1,33 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { CodexApprovalModal } from '@providers/codex/renderer/CodexApprovalModal'
 import { ResumePromptModal } from '@providers/claude/renderer/ResumePromptModal'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { TrustDialogModal } from '@providers/claude/renderer/TrustDialogModal'
-import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
   selectMergedEntries,
   shouldShowSemanticStreaming,
 } from '@renderer/workspace/mergedEntries'
 import type { SessionId } from '@renderer/workspace/types'
-import {
-  CLAUDE_PASTE_THRESHOLD,
-  CLAUDE_PASTE_SUBMIT_DELAY_MS,
-  CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS,
-  buildClaudeImagePastePayload,
-  sendBracketedPasteThenSubmit,
-  sendClaudeDraftText,
-} from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'
 import { CompactionStrip } from '@renderer/workspace/tile-tree/TileLeaf/CompactionStrip'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIndicator'
+import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
+import { useComposerKeybinds } from '@renderer/workspace/tile-tree/TileLeaf/useComposerKeybinds'
 import { useTypeToFocus } from '@renderer/workspace/tile-tree/TileLeaf/useTypeToFocus'
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
@@ -115,13 +107,6 @@ export function TileLeaf({
   // in ./TileLeaf/useComposerAutoGrow.ts, see there for the
   // "why manual measurement instead of field-sizing:content" story.
   useComposerAutoGrow(inputRef, input)
-  // True while we're forwarding keystrokes to the PTY for a slash
-  // command. Controls key routing in onKeyDown and render of the
-  // picker dropdown (we still render the dropdown from runtime.picker,
-  // but we use slashMode to decide whether keys should be forwarded
-  // vs. stored locally).
-  const [slashMode, setSlashMode] = useState(false)
-
   // Scroll position for the indicator above the composer. Updated on
   // every scroll tick via onScrollInfo callback from Feed. fraction=0
   // means at bottom, fraction=1 means at top.
@@ -173,322 +158,26 @@ export function TileLeaf({
     showToast,
   })
 
-  const exitSlashMode = () => {
-    setSlashMode(false)
-    setInputText('')
-  }
-
-  const onKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Global keybinds bubble up to the document-level listener in
-    // useKeybinds; if a modifier-combo handler called preventDefault
-    // already, skip processing here to avoid routing pane-management
-    // keys into the PTY as text.
-    if (e.defaultPrevented) return
-
-    // ---- Slash mode entry ----
-    //
-    // Only when input is empty AND the user types `/`. That way normal
-    // text containing a `/` in the middle (a URL, a path) doesn't
-    // accidentally flip us into slash mode.
-    if (!slashMode && input === '' && e.key === '/') {
-      e.preventDefault()
-      await send('/')
-      setInputText('/')
-      setSlashMode(true)
-      return
-    }
-
-    // ---- Slash mode: forward every key to PTY ----
-    if (slashMode) {
-      e.preventDefault()
-
-      if (e.key === 'Escape') {
-        // Send ESC to CC (dismisses the picker) and exit slash mode.
-        // slashMode is intentionally flipped off BEFORE the picker's
-        // next screen update arrives — we don't want to wait for CC
-        // to confirm the dismissal before letting the user type.
-        await send('\x1b')
-        exitSlashMode()
-        return
-      }
-      if (e.key === 'Enter') {
-        // Commit whatever CC has highlighted. If there's no highlight
-        // CC will just send the literal text as a regular prompt.
-        await send('\r')
-        exitSlashMode()
-        return
-      }
-      if (e.key === 'Backspace') {
-        await send('\x7f')
-        const next = input.slice(0, -1)
-        setInputText(next)
-        // If the user backspaces all the way out, we're no longer in
-        // slash mode — fall back to the normal composer.
-        if (next === '') setSlashMode(false)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        await send('\x1b[A')
-        return
-      }
-      if (e.key === 'ArrowDown') {
-        await send('\x1b[B')
-        return
-      }
-      if (e.key === 'ArrowLeft') {
-        await send('\x1b[D')
-        return
-      }
-      if (e.key === 'ArrowRight') {
-        await send('\x1b[C')
-        return
-      }
-      if (e.key === 'Tab') {
-        await send('\t')
-        return
-      }
-      // Single printable char: forward + mirror into local state so
-      // the React input visibly tracks what CC has in its buffer.
-      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        await send(e.key)
-        setInputText(input + e.key)
-        return
-      }
-      // Ignore shift, ctrl, meta, function keys, etc. while in slash mode.
-      return
-    }
-
-    // ---- Normal mode ----
-    //
-    // Shift+Enter: insert a literal newline in the composer (normal
-    // textarea behavior). We DON'T preventDefault so the browser handles
-    // the insertion, and we don't forward anything to the PTY — the
-    // newline only becomes visible to CC when the user commits with a
-    // bare Enter below. This gives multi-line prompt editing without
-    // touching the PTY until the user actually wants to send.
-    if (e.key === 'Enter' && e.shiftKey) {
-      return
-    }
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      const draftImages = runtime.draftImages
-      if (input.trim().length === 0 && draftImages.length === 0) {
-        return
-      }
-      // Capture streaming baseline from the very freshest screen text
-      // so the streaming card can detect "this is the old response"
-      // reliably. latestScreenRef is mutated synchronously on every
-      // IPC screen event so this is always current.
-      const screen = workspace.latestScreenRef.current[sessionId] ?? ''
-      const provider = workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
-      const baseline = extractAssistantInProgress(screen, provider)
-      workspace.setStreamingBaseline(sessionId, baseline)
-      if (provider === 'codex') {
-        // Codex does not reliably give us a structured user message at submit
-        // time the way Claude does. Seed the feed immediately from the local
-        // composer state so "submit" is visible even if rollout JSON is late.
-        workspace.addOptimisticCodexUserEntry(sessionId, input)
-      }
-
-      try {
-        const hasClaudeImages = provider === 'claude' && draftImages.length > 0
-        // Three submit modes live here because the two providers'
-        // input stacks are similar but NOT equivalent:
-        //
-        //   1. Codex: always bracketed-paste, always trailing Enter
-        //      outside the paste block, both in one write. This is the
-        //      path that fixed Codex swallowing `\r` as pasted text.
-        //
-        //   2. Claude, normal text: raw text + `\r` in one write. Fast
-        //      path for the overwhelmingly common case.
-        //
-        //   3. Claude, paste-like text (multiline OR long enough to hit
-        //      Claude's own paste path): bracketed paste first, THEN a
-        //      delayed `\r` in a second write. This is the critical fix
-        //      for the "first Enter populates the prompt but does not
-        //      actually submit; second Enter finally sends it" bug.
-        const isClaudePasteLike =
-          provider === 'claude' &&
-          (input.includes('\n') || input.length > CLAUDE_PASTE_THRESHOLD)
-
-        if (provider === 'codex') {
-          await sendBracketedPasteThenSubmit(send, input)
-        } else if (hasClaudeImages) {
-          const savedImages = await Promise.all(
-            draftImages.map(image =>
-              window.api.saveClaudeImage({
-                base64Data: image.base64Data,
-                mediaType: image.mediaType,
-                filename: image.filename,
-              }),
-            ),
-          )
-          const imagePaths = savedImages.map(image => image.path)
-          if (input.length > 0) {
-            await sendClaudeDraftText(send, input)
-            // Claude collapses the following path paste into image pills.
-            // If the user's prompt ends in a non-whitespace character,
-            // inject one separator so the final prompt text does not run
-            // directly into the first `[Image #N]` placeholder.
-            if (!/\s$/.test(input)) {
-              await send(' ')
-            }
-          }
-          const payload = buildClaudeImagePastePayload('', imagePaths)
-          await sendBracketedPasteThenSubmit(send, payload, CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS)
-        } else if (isClaudePasteLike) {
-          // Keep the submit key OUT of the bracketed-paste write and
-          // wait past Claude's paste debounce. Sending `\r` in the same
-          // PTY chunk races Claude's paste accumulator and can leave the
-          // prompt sitting in the composer until a later keypress nudges
-          // it through the normal submit path.
-          await sendBracketedPasteThenSubmit(send, input, CLAUDE_PASTE_SUBMIT_DELAY_MS)
-        } else {
-          await send(input + '\r')
-        }
-        setInputText('')
-        if (provider === 'claude' && draftImages.length > 0) {
-          setDraftImages(sessionId, [])
-        }
-      } catch (err) {
-        // Keep the draft visible if main no longer has a live session for this
-        // pane. Clearing the composer on a dropped write makes the failure look
-        // like Codex ignored the prompt when it never received it.
-        if (provider === 'codex') {
-          workspace.removeOptimisticCodexUserEntry(sessionId, input)
-        }
-        console.warn('[TileLeaf] submit failed', err)
-      }
-      // Any submit exits history cycling — the prompt is committed
-      // and the next Up should start a fresh walk from the (now
-      // updated) newest entry, not continue from wherever we were.
-      endHistoryCycle()
-      return
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault()
-      await send('\x1b')
-      return
-    }
-    if (e.ctrlKey && e.key.toLowerCase() === 'c') {
-      e.preventDefault()
-      await send('\x03')
-      setInputText('')
-      return
-    }
-    if (e.ctrlKey && e.key.toLowerCase() === 'd') {
-      e.preventDefault()
-      await send('\x04')
-      return
-    }
-    // ---- Prompt history: Up cycles BACKWARD into past prompts ----
-    //
-    // Entry gate: we ONLY enter cycling when the composer is
-    // currently empty. That's deliberately more restrictive than
-    // bash's "cycle even with a partial draft and restore on Down".
-    // The permissive version caused real confusion — users pressing
-    // Up with a mid-typed prompt would watch their draft get
-    // replaced with a random historic prompt and think something
-    // was injecting text into their input. The anchor-restore
-    // mechanism was there but non-obvious. Requiring an empty
-    // composer makes the feature discoverable and non-destructive:
-    // you have to actively clear your input before you can cycle.
-    //
-    // Once cycling has STARTED (historyIndex !== null), subsequent
-    // Up/Down steps don't re-check emptiness — the composer is
-    // showing a historic prompt, not user typing, so stepping
-    // further is obviously safe.
-    //
-    // Modifier combos (Shift/Ctrl/Meta/Alt+Up) fall through to the
-    // PTY-forward path so OS line-navigation shortcuts still reach
-    // CC when the user wants them.
-    // Skip history cycling when the approval overlay is visible —
-    // arrow keys need to reach the PTY so Codex can navigate its
-    // selection list.
-    if (
-      e.key === 'ArrowUp' &&
-      !e.shiftKey &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      !e.altKey &&
-      !runtime.pendingApproval &&
-      !runtime.pendingTrustDialog &&
-      !runtime.pendingResumePrompt &&
-      history.length > 0 &&
-      (cyclingHistory || input === '')
-    ) {
-      e.preventDefault()
-      if (!cyclingHistory) {
-        // First entry into cycling: the composer is empty (per the
-        // gate above), so the anchor is also empty. Storing it
-        // anyway keeps the Down-past-newest restore path uniform.
-        setHistoryAnchor('')
-        setHistoryIndex(0)
-        setInputText(history[0])
-      } else {
-        const next = Math.min(historyIndex! + 1, history.length - 1)
-        if (next !== historyIndex) {
-          setHistoryIndex(next)
-          setInputText(history[next])
-        }
-      }
-      return
-    }
-
-    // ---- Prompt history: Down cycles FORWARD toward the anchor ----
-    //
-    // Only meaningful while we're already cycling. Pressing Down
-    // outside a cycle shouldn't do anything (no forward history to
-    // cycle to). We also don't need the cursorOnBottomRow check the
-    // old version had, because the composer's content during
-    // cycling is a historic prompt the user hasn't touched — there's
-    // no multi-line-draft caret navigation to preserve.
-    if (
-      e.key === 'ArrowDown' &&
-      !e.shiftKey &&
-      !e.ctrlKey &&
-      !e.metaKey &&
-      !e.altKey &&
-      !runtime.pendingApproval &&
-      !runtime.pendingTrustDialog &&
-      !runtime.pendingResumePrompt &&
-      cyclingHistory
-    ) {
-      e.preventDefault()
-      const next = historyIndex! - 1
-      if (next < 0) {
-        // Past the newest historic prompt — restore the anchor
-        // (empty, since the Up gate only lets us in from an empty
-        // composer) and exit cycle mode so the next Up starts fresh.
-        setHistoryIndex(null)
-        setInputText(historyAnchor)
-      } else {
-        setHistoryIndex(next)
-        setInputText(history[next])
-      }
-      return
-    }
-
-    // Fallback: any other Up/Down (not cycling, not at top/bottom
-    // row, or with a modifier) falls through to the old PTY-forward
-    // path so CC's own history / caret navigation still reaches it
-    // when appropriate.
-    if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      await send('\x1b[A')
-      return
-    }
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      await send('\x1b[B')
-      return
-    }
-    if (e.key === 'Tab') {
-      e.preventDefault()
-      await send('\t')
-      return
-    }
-  }
+  // Composer keybinds — slash-mode + normal-mode + prompt-history
+  // cycling. Hook in ./TileLeaf/useComposerKeybinds.ts; returns
+  // the onKeyDown handler plus the slashMode flag that the
+  // ComposerInput uses to gate its own onChange logic.
+  const { onKeyDown, slashMode } = useComposerKeybinds({
+    sessionId,
+    provider,
+    runtime,
+    workspace,
+    input,
+    setInputText,
+    send,
+    history,
+    historyIndex,
+    historyAnchor,
+    cyclingHistory,
+    setHistoryIndex,
+    setHistoryAnchor,
+    endHistoryCycle,
+  })
 
   const running = runtime.exited === null
   const isSessionLive = runtime.sessionStatus === 'running'
@@ -618,104 +307,23 @@ export function TileLeaf({
         sessionKind={workspace.state.sessions[sessionId]?.kind}
       />
 
-      {/* Composer */}
-      <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-2 relative">
-        {/* SlashCommandPicker is absolutely positioned relative to this
-            composer container so it floats above the input without
-            shifting layout. */}
-        <SlashCommandPicker state={runtime.picker} />
-
-        {/* The composer is a <textarea> (not <input>) so the box can
-            grow vertically to fit a multi-line prompt. See the
-            useEffect above that drives the height off scrollHeight.
-            The chevron is aligned to the top of the box instead of
-            vertically-centered because a 10-line prompt looks odd
-            with a chevron floating in the middle of nowhere. */}
-        {provider === 'claude' && runtime.draftImages.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-2">
-            {runtime.draftImages.map(image => (
-              <div
-                key={image.id}
-                className="relative w-24 rounded border border-border bg-canvas p-1"
-              >
-                <button
-                  type="button"
-                  className="absolute right-1 top-1 z-10 h-5 w-5 rounded-full bg-surface/90 text-[12px] leading-none text-ink hover:bg-surface"
-                  onClick={() => removeDraftImage(image.id)}
-                  aria-label={`Remove ${image.filename}`}
-                >
-                  ×
-                </button>
-                <img
-                  src={image.previewUrl}
-                  alt={image.filename}
-                  className="h-16 w-full rounded object-cover"
-                />
-                <div className="mt-1 truncate text-[10px] font-code text-muted">
-                  {image.filename}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="relative">
-          <div className="absolute left-2 top-[10px] text-accent text-[12px] pointer-events-none select-none">
-            ❯
-          </div>
-          <textarea
-            ref={inputRef}
-            rows={1}
-            className={`
-              w-full bg-canvas border
-              ${focused ? 'border-accent' : 'border-border'}
-              text-ink text-[12px]
-              pl-6 pr-2 py-2 outline-none
-              placeholder:text-muted
-              transition-colors duration-150
-              resize-none overflow-hidden leading-[1.4]
-              font-code
-            `}
-            value={input}
-            onChange={e => {
-              // In slash mode we manage the value ourselves via
-              // onKeyDown; the browser's default onChange (which fires
-              // on paste, IME composition end, etc.) would duplicate
-              // keystrokes that we already forwarded. Ignore in slash
-              // mode — the display value is already in sync because
-              // onKeyDown called setInputText.
-              if (slashMode) return
-              setInputText(e.target.value)
-              // ANY user edit (typing, paste, delete) cancels history
-              // cycling: once they've touched the recalled prompt it's
-              // theirs, and the next Up should start fresh from the
-              // newest entry rather than continuing the old cycle.
-              // The Up/Down handlers set historyIndex AND call
-              // setInputText, which would trigger this onChange and
-              // wipe their own state — so we guard against that by
-              // only ending the cycle when the NEW value differs from
-              // whatever history slot we're currently parked on.
-              if (
-                historyIndex !== null &&
-                e.target.value !== history[historyIndex]
-              ) {
-                endHistoryCycle()
-              }
-            }}
-            onKeyDown={onKeyDown}
-            onPaste={handlePaste}
-            onFocus={onFocusRequest}
-            placeholder={
-              slashMode
-                ? undefined
-                : focused
-                  ? 'type and press enter… (shift+enter for newline)'
-                  : ''
-            }
-            spellCheck={false}
-            autoComplete="off"
-          />
-        </div>
-      </div>
+      <ComposerInput
+        inputRef={inputRef}
+        input={input}
+        focused={focused}
+        slashMode={slashMode}
+        provider={provider}
+        draftImages={runtime.draftImages}
+        pickerState={runtime.picker}
+        historyIndex={historyIndex}
+        history={history}
+        setInputText={setInputText}
+        endHistoryCycle={endHistoryCycle}
+        onKeyDown={onKeyDown}
+        onPaste={handlePaste}
+        onFocusRequest={onFocusRequest}
+        removeDraftImage={removeDraftImage}
+      />
 
       {/* Per-pane trust dialog: only shown if THIS pane's screen buffer
           contains the trust prompt. Other panes have their own modals. */}
