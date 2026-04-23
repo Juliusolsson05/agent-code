@@ -42,6 +42,8 @@ export type UiShellSlice = UiShellState & {
   closePromptSearch: () => void
   openAgentActivity: () => void
   closeAgentActivity: () => void
+  openRewindPrompt: (sessionId: SessionId) => void
+  closeRewindPrompt: () => void
 }
 
 export type WorkspaceSlice = {

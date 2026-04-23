@@ -14,6 +14,7 @@ import { AgentActivityModal } from './features/workspace/ui/AgentActivityModal'
 import { BuryPanePrompt } from './features/workspace/ui/BuryPanePrompt'
 import { NewAgentPlacementOverlay } from './features/workspace/ui/NewAgentPlacementOverlay'
 import { PromptSearchModal } from './features/workspace/ui/PromptSearchModal'
+import { RewindToPromptModal } from './features/workspace/ui/RewindToPromptModal'
 import { ViewPromptsModal } from './features/workspace/ui/ViewPromptsModal'
 import { GitBar } from './GitBar'
 import { AppearanceMenu } from './feed/AppearanceMenu'
@@ -84,6 +85,9 @@ export default function App() {
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
+  const rewindPromptSessionId = useAppStore(state => state.rewindPromptSessionId)
+  const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
+  const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
 
   useEffect(() => {
     applyTheme(settings)
@@ -286,6 +290,7 @@ export default function App() {
         openViewPrompts={openViewPrompts}
         openPromptSearch={openPromptSearch}
         openAgentActivity={openAgentActivity}
+        openRewindPrompt={openRewindPrompt}
         toggleCustomRendering={toggleCustomRendering}
         customRenderingEnabled={settings.customRendering}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
@@ -348,6 +353,13 @@ export default function App() {
         open={agentActivityOpen}
         workspace={workspace}
         onClose={closeAgentActivity}
+      />
+
+      <RewindToPromptModal
+        open={rewindPromptSessionId !== null}
+        sessionId={rewindPromptSessionId}
+        workspace={workspace}
+        onClose={closeRewindPrompt}
       />
 
     </div>

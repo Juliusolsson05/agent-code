@@ -39,4 +39,11 @@ export type UiShellState = {
    *  panes during a long session. Derived from existing transcript
    *  data — no separate tracking store. */
   agentActivityOpen: boolean
+  /** Non-null when the Rewind-to-Prompt modal is open. Value is the
+   *  sessionId whose transcript the modal is showing prompts for.
+   *  Selecting a prompt in the modal calls
+   *  `workspace.rewindFocusedToPrompt(anchor)` and the modal closes.
+   *  See `RewindToPromptModal` + the parent plan doc for the full
+   *  contract. */
+  rewindPromptSessionId: SessionId | null
 }

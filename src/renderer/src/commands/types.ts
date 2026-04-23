@@ -15,6 +15,7 @@ export type CommandContext = {
     openViewPrompts: (sessionId: string) => void
     openPromptSearch: () => void
     openAgentActivity: () => void
+    openRewindPrompt: (sessionId: string) => void
     toggleGitBar: () => void
     toggleDebugPanel: () => void
     toggleFeedDebugPanel: () => void

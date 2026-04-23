@@ -19,6 +19,52 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Rewind-to-Prompt — pick a past user prompt and re-home the
+    // focused pane onto a truncated transcript ending just before
+    // that prompt. The chosen prompt gets prefilled into the
+    // composer as an unsent draft. The source session's on-disk
+    // transcript is never touched. Inspiration: Claude Code's
+    // double-tap Esc / `/rewind` command (see
+    // claude-code-src/full/commands/rewind/rewind.ts and
+    // `rewindConversationTo` in REPL.tsx).
+    //
+    // Requires a focused Claude/Codex pane with a providerSessionId
+    // — rewind needs a file on disk to truncate from. The action
+    // itself re-checks and surfaces a toast if the pane is
+    // mid-stream.
+    id: 'rewind-to-prompt',
+    title: 'Rewind to Prompt…',
+    keywords: [
+      'rewind',
+      'prompt',
+      'user',
+      'history',
+      'revert',
+      'undo',
+      'back',
+      'rollback',
+      'fork',
+      'branch',
+      'checkpoint',
+    ],
+    when: ({ workspace }) => {
+      const tab = workspace.activeTab
+      if (!tab) return false
+      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const kind = meta?.kind ?? 'claude'
+      return (
+        (kind === 'claude' || kind === 'codex') &&
+        Boolean(meta?.providerSessionId)
+      )
+    },
+    run: ({ workspace, ui }) => {
+      const tab = workspace.activeTab
+      if (!tab) return
+      ui.openRewindPrompt(tab.focusedSessionId)
+      ui.closePalette()
+    },
+  },
+  {
     // Agent Activity — overview of every visible pane/session
     // grouped by tab, sorted by last activity. Primary use case is
     // triaging a long working session: scan which agents have gone

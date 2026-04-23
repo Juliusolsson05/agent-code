@@ -24,6 +24,7 @@ export const createUiShellSlice: StateCreator<
   htmlDebugPanelOpen: false,
   promptSearchOpen: false,
   agentActivityOpen: false,
+  rewindPromptSessionId: null,
 
   openCommandPalette: () =>
     set({ commandPaletteOpen: true }, false, 'uiShell/openCommandPalette'),
@@ -102,4 +103,9 @@ export const createUiShellSlice: StateCreator<
     set({ agentActivityOpen: true }, false, 'uiShell/openAgentActivity'),
   closeAgentActivity: () =>
     set({ agentActivityOpen: false }, false, 'uiShell/closeAgentActivity'),
+
+  openRewindPrompt: sessionId =>
+    set({ rewindPromptSessionId: sessionId }, false, 'uiShell/openRewindPrompt'),
+  closeRewindPrompt: () =>
+    set({ rewindPromptSessionId: null }, false, 'uiShell/closeRewindPrompt'),
 })

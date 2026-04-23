@@ -54,6 +54,7 @@ import {
   emptySemanticRuntime,
   emptyRuntime,
   parseSemanticTodos,
+  type ClaudeDraftImage,
   type FeedDebugEntry,
   type FeedDebugLayer,
   type PickerItem,
@@ -4374,6 +4375,134 @@ export function useWorkspace(
     }
   }, [replaceSession, showPaneToast])
 
+  // Rewind the focused pane to a selected earlier user prompt.
+  //
+  // Contract (see docs/superpowers/plans for the full rationale):
+  //   1. The source session's on-disk transcript is NOT touched.
+  //   2. Main produces a fresh provider session id whose transcript
+  //      ends strictly before the anchor.
+  //   3. The focused pane is re-homed to the new id via
+  //      `replaceSession(...)`, so the pane stays in place; only its
+  //      backing session swaps. This matches resume semantics.
+  //   4. The anchored prompt's text is stuffed into the new pane's
+  //      `draftInput` — the rewound session opens with the prompt
+  //      prefilled and UNSENT, so the user can edit or re-send.
+  //
+  // Bail-outs:
+  //   - No providerSessionId yet (pane still spawning): toast and
+  //     return. Rewinding a session we can't locate on disk is a
+  //     nonsense operation.
+  //   - Session is mid-turn (processActive or live currentTurn):
+  //     toast and return. Rewinding while a response is streaming
+  //     exercises every race we have around the live-to-committed
+  //     handoff at once; requiring idle is the safe path.
+  const rewindFocusedToPrompt = useCallback(
+    async (anchor:
+      | { kind: 'claude'; uuid: string }
+      | { kind: 'codex'; userMessageIndex: number },
+    ) => {
+      const current = stateRef.current
+      const tab = current.tabs.find(t => t.id === current.activeTabId)
+      if (!tab) return
+
+      const sourceSessionId = tab.focusedSessionId
+      const meta = current.sessions[sourceSessionId]
+      if (!meta) return
+
+      const kind = meta.kind ?? 'claude'
+      if (kind !== 'claude' && kind !== 'codex') {
+        showPaneToast(sourceSessionId, 'Only Claude and Codex panes support rewind')
+        return
+      }
+      if (!meta.providerSessionId) {
+        showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
+        return
+      }
+      if (kind !== anchor.kind) {
+        showPaneToast(
+          sourceSessionId,
+          `Anchor is ${anchor.kind} but focused pane is ${kind}`,
+        )
+        return
+      }
+
+      const currentRuntime = latestRuntimesRef.current[sourceSessionId]
+      if (currentRuntime?.processActive || currentRuntime?.semantic.currentTurn) {
+        showPaneToast(sourceSessionId, 'Wait for the current turn to finish before rewinding')
+        return
+      }
+
+      try {
+        const result = await window.api.rewindToPrompt({
+          provider: kind,
+          sourceProviderSessionId: meta.providerSessionId,
+          cwd: meta.cwd,
+          anchor,
+        })
+
+        const newSessionId = await replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: result.newProviderSessionId,
+        })
+        if (!newSessionId) return
+
+        // `replaceSession` copied the PRIOR pane's draft forward.
+        // For rewind we deliberately clobber that draft with the
+        // anchored prompt text — the whole feature is "open this
+        // prompt in unsent form so I can edit/re-send it".
+        //
+        // Bash mode: Claude Code exposes a `bash` input mode that
+        // prefixes `!` when composing. cc-shell's composer doesn't
+        // have a discrete bash mode yet, but it DOES treat a leading
+        // `!` as bash. Mirroring CC's behavior means "rewinding to
+        // a /bash-input prompt rehydrates as `!<body>`" so the next
+        // Enter submits as bash again.
+        //
+        // Images: convert the main-process image records (base64 +
+        // mediaType) into `ClaudeDraftImage` shape the composer
+        // already renders and can send. The preview URL uses a
+        // data: URL so no blob lifecycle is needed.
+        const draftText =
+          result.promptMode === 'bash' && result.promptText.length > 0
+            ? `!${result.promptText}`
+            : result.promptText
+
+        const draftImages: ClaudeDraftImage[] =
+          kind === 'claude'
+            ? result.promptImages.map((image, index) => ({
+                id: `rewind-${Date.now()}-${index}`,
+                mediaType: image.mediaType,
+                base64Data: image.data,
+                previewUrl: `data:${image.mediaType};base64,${image.data}`,
+                filename: `rewind-${index + 1}`,
+              }))
+            : []
+
+        setRuntimes(prev => {
+          const runtime = prev[newSessionId]
+          if (!runtime) return prev
+          return {
+            ...prev,
+            [newSessionId]: {
+              ...runtime,
+              draftInput: draftText,
+              draftImages,
+            },
+          }
+        })
+
+        showPaneToast(newSessionId, 'Rewound to prompt')
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Rewind failed'
+        showPaneToast(sourceSessionId, message)
+      }
+    },
+    [replaceSession, showPaneToast],
+  )
+
   const loadOlderHistory = useCallback(async (sessionId: SessionId) => {
     const currentState = stateRef.current
     const meta = currentState.sessions[sessionId]
@@ -5222,6 +5351,7 @@ export function useWorkspace(
     replaceSession,
     reloadFocusedAgent,
     switchFocusedProvider,
+    rewindFocusedToPrompt,
     reloadAgentSessions,
     toggleSpotlight,
     setSpotlightSession,

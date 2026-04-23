@@ -17,6 +17,10 @@ import { reconcile, type PersistedTerminalRef } from './tmux/tmuxRecovery.js'
 import { getMainProvider } from '../providers/registry.main.js'
 import { switchProvider } from './providerSwitch/switchProvider.js'
 import { duplicateSession } from './providerSwitch/duplicateSession.js'
+import {
+  rewindSession,
+  type RewindSessionRequest,
+} from './providerSwitch/rewindSession.js'
 import { listAllClaudeSessions } from '../providers/claude/runtime/sessionList.js'
 import { listCodexSessions } from '../providers/codex/runtime/sessionList.js'
 
@@ -552,6 +556,19 @@ function registerIpc(): void {
       },
     ) => {
       return await duplicateSession(params)
+    },
+  )
+
+  // Rewind the focused pane's transcript to just before a selected
+  // user prompt. Produces a NEW provider session id; the source file
+  // is never touched. The renderer passes the returned id to
+  // `replaceSession(...)` to re-home the pane, and prefills
+  // `promptText` as an unsent draft. See
+  // `src/main/providerSwitch/rewindSession.ts` for the slicing rules.
+  ipcMain.handle(
+    'session:rewind-to-prompt',
+    async (_evt, params: RewindSessionRequest) => {
+      return await rewindSession(params)
     },
   )
 

@@ -42,6 +42,7 @@ type Props = {
   openViewPrompts: (sessionId: string) => void
   openPromptSearch: () => void
   openAgentActivity: () => void
+  openRewindPrompt: (sessionId: string) => void
   toggleGitBar: () => void
   toggleDebugPanel: () => void
   toggleFeedDebugPanel: () => void
@@ -79,6 +80,7 @@ export function CommandPalette({
   openViewPrompts,
   openPromptSearch,
   openAgentActivity,
+  openRewindPrompt,
   toggleGitBar,
   toggleDebugPanel,
   toggleFeedDebugPanel,
@@ -163,6 +165,7 @@ export function CommandPalette({
         openViewPrompts,
         openPromptSearch,
         openAgentActivity,
+        openRewindPrompt,
         toggleGitBar,
         toggleDebugPanel,
         toggleFeedDebugPanel,
@@ -193,6 +196,7 @@ export function CommandPalette({
       openViewPrompts,
       openPromptSearch,
       openAgentActivity,
+      openRewindPrompt,
       toggleGitBar,
       toggleDebugPanel,
       toggleFeedDebugPanel,
