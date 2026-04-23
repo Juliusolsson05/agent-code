@@ -27,11 +27,11 @@ import {
   mergeWithUpstream,
   isGhost,
   toCodex,
-} from '../../agent-transcript-parser/dist/index.js'
+} from '../../packages/agent-transcript-parser/dist/index.js'
 import type {
   ClaudeEntry,
   GhostEntry,
-} from '../../agent-transcript-parser/dist/types.js'
+} from '../../packages/agent-transcript-parser/dist/types.js'
 
 // ---------------------------------------------------------------------------
 // Pick a transcript

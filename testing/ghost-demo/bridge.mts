@@ -21,7 +21,7 @@ import {
   toCodex,
   type ClaudeEntry,
   type GhostEntry,
-} from '../../agent-transcript-parser/dist/index.js'
+} from '../../packages/agent-transcript-parser/dist/index.js'
 
 import {
   ghostsFromSemanticTurn,

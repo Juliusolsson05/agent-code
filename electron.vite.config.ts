@@ -8,12 +8,12 @@ import { resolve } from 'path'
 // EventEmitter, chokidar, fs). The renderer CANNOT import them —
 // Vite would try to bundle Node modules for the browser and fail.
 const headlessAlias = [
-  { find: /^claude-code-headless\/(.+)$/, replacement: `${resolve(__dirname, 'claude-code-headless/src')}/$1` },
-  { find: 'claude-code-headless', replacement: resolve(__dirname, 'claude-code-headless/src/index.ts') },
-  { find: /^codex-headless\/(.+)$/, replacement: `${resolve(__dirname, 'codex-headless/src')}/$1` },
-  { find: 'codex-headless', replacement: resolve(__dirname, 'codex-headless/src/index.ts') },
-  { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'agent-transcript-parser/src')}/$1` },
-  { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'agent-transcript-parser/src/index.ts') },
+  { find: /^claude-code-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/claude-code-headless/src')}/$1` },
+  { find: 'claude-code-headless', replacement: resolve(__dirname, 'packages/claude-code-headless/src/index.ts') },
+  { find: /^codex-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/codex-headless/src')}/$1` },
+  { find: 'codex-headless', replacement: resolve(__dirname, 'packages/codex-headless/src/index.ts') },
+  { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
+  { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'packages/agent-transcript-parser/src/index.ts') },
 ]
 
 // Project-wide absolute-import aliases. MUST match tsconfig.node.json
