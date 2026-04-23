@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import { useAppStore } from '@renderer/state/hooks'
+import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 
 import type { WorkspaceHookContext } from '@renderer/workspace/hook/context'

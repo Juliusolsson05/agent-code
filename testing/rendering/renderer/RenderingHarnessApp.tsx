@@ -28,8 +28,8 @@ import {
   type ToolUseBlock,
 } from '@shared/types/transcript'
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
-import { applyTheme } from '@renderer/state/settings/theme'
-import { DEFAULT_SETTINGS } from '@renderer/state/settings/types'
+import { applyTheme } from '@renderer/app-state/settings/theme'
+import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 
 // Rendering Debug Harness.
 //

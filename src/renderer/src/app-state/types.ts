@@ -1,5 +1,5 @@
-import type { Settings } from '@renderer/state/settings/types'
-import type { UiShellState } from '@renderer/state/uiShell/types'
+import type { Settings } from '@renderer/app-state/settings/types'
+import type { UiShellState } from '@renderer/app-state/uiShell/types'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type {

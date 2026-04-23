@@ -1,4 +1,4 @@
-import { ACCENTS, DEFAULT_SETTINGS, THEME_MODES, type AccentId, type Settings } from '@renderer/state/settings/types'
+import { ACCENTS, DEFAULT_SETTINGS, THEME_MODES, type AccentId, type Settings } from '@renderer/app-state/settings/types'
 
 const LEGACY_STORAGE_KEY = 'cc-shell:settings'
 

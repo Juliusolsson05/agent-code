@@ -4,7 +4,7 @@ import {
   type AccentId,
   type Settings,
   type ThemeMode,
-} from '@renderer/state/settings/types'
+} from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 

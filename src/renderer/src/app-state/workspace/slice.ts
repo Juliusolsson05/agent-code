@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand'
 
-import type { AppStore, WorkspaceSlice } from '@renderer/state/types'
+import type { AppStore, WorkspaceSlice } from '@renderer/app-state/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type {
   ReaderModeState,

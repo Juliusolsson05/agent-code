@@ -37,7 +37,7 @@ import {
 import { CodeBlock } from './CodeBlock'
 import { detectGitIntent } from '@shared/git/gitDetect'
 import { GitCardRow } from './GitRows'
-import { useAppStore } from '@renderer/state/hooks'
+import { useAppStore } from '@renderer/app-state/hooks'
 import {
   parseSemanticTodos,
   type SemanticLiveTurn,

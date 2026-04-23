@@ -7,7 +7,7 @@ import {
   THEME_MODES,
   isDarkThemeMode,
   type ThemeMode,
-} from '@renderer/state/settings/types'
+} from '@renderer/app-state/settings/types'
 
 type Props = {
   settings: Settings

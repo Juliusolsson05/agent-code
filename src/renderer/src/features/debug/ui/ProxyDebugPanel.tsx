@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useAppStore } from '@renderer/state/hooks'
+import { useAppStore } from '@renderer/app-state/hooks'
 import { emptySemanticRuntime } from '@renderer/workspace/workspaceState'
 
 // ProxyDebugPanel — live inspector for the semantic stream and any

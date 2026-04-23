@@ -1,11 +1,11 @@
 import { create } from 'zustand'
 import { createJSONStorage, devtools, persist, subscribeWithSelector } from 'zustand/middleware'
 
-import { createSettingsSlice } from '@renderer/state/settings/slice'
-import { createUiShellSlice } from '@renderer/state/uiShell/slice'
-import { createWorkspaceSlice } from '@renderer/state/workspace/slice'
-import type { AppStore } from '@renderer/state/types'
-import { DEFAULT_SETTINGS, THEME_MODES, type Settings } from '@renderer/state/settings/types'
+import { createSettingsSlice } from '@renderer/app-state/settings/slice'
+import { createUiShellSlice } from '@renderer/app-state/uiShell/slice'
+import { createWorkspaceSlice } from '@renderer/app-state/workspace/slice'
+import type { AppStore } from '@renderer/app-state/types'
+import { DEFAULT_SETTINGS, THEME_MODES, type Settings } from '@renderer/app-state/settings/types'
 
 export const useAppStore = create<AppStore>()(
   devtools(

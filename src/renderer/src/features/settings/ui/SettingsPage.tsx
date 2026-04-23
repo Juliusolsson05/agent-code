@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 
-import type { Settings } from '@renderer/state/settings/types'
+import type { Settings } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import { getSettingsRegistry, matchesSettingQuery } from '@renderer/features/settings/lib/settingsRegistry'

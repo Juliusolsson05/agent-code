@@ -1,9 +1,9 @@
 import type { StateCreator } from 'zustand'
 
-import { loadInitialSettings } from '@renderer/state/settings/persistence'
-import { applyTheme } from '@renderer/state/settings/theme'
-import { DEFAULT_SETTINGS } from '@renderer/state/settings/types'
-import type { AppStore, SettingsSlice } from '@renderer/state/types'
+import { loadInitialSettings } from '@renderer/app-state/settings/persistence'
+import { applyTheme } from '@renderer/app-state/settings/theme'
+import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
+import type { AppStore, SettingsSlice } from '@renderer/app-state/types'
 
 const initialSettings = loadInitialSettings()
 applyTheme(initialSettings)

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { useAppStore } from '@renderer/state/hooks'
+import { useAppStore } from '@renderer/app-state/hooks'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'

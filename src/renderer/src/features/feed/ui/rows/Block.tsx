@@ -17,7 +17,7 @@ import type {
 } from '@shared/types/transcript'
 import { detectGitIntent } from '@shared/git/gitDetect'
 
-import { useAppStore } from '@renderer/state/hooks'
+import { useAppStore } from '@renderer/app-state/hooks'
 import { GitCardRow } from '@renderer/features/git/ui/GitRows'
 
 import { extractToolCommand, toolResultText } from '@renderer/features/feed/lib/helpers'

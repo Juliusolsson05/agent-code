@@ -1,6 +1,6 @@
 import type { StateCreator } from 'zustand'
 
-import type { AppStore, UiShellSlice } from '@renderer/state/types'
+import type { AppStore, UiShellSlice } from '@renderer/app-state/types'
 
 export const createUiShellSlice: StateCreator<
   AppStore,
