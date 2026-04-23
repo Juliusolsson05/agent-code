@@ -1,6 +1,12 @@
 {
   "compilerOptions": {
     "composite": true,
+    // Project is built by electron-vite; tsc is type-check-only. But
+    // `composite: true` forces emit — `tsc --noEmit` is rejected in
+    // composite mode. Redirect emit to a gitignored scratch dir so
+    // `tsc -b` doesn't pollute src/ with ~200 `.js` / `.d.ts` files
+    // sitting next to every source. See .gitignore for the full story.
+    "outDir": "./.tsc-out/web",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "target": "ES2020",

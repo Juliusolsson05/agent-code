@@ -9,6 +9,38 @@ temp.txt
 # TypeScript incremental build cache
 *.tsbuildinfo
 
+# Stray `tsc -b` / `tsc --declaration` emit.
+#
+# Why: the project is built by electron-vite; tsc is only used for
+# type-checking. But the two tsconfigs (web + node) have
+# `composite: true`, which FORCES emit — `tsc --noEmit` is rejected
+# by tsc in composite mode. If someone runs `tsc -b` from the repo
+# root the emit lands next to every `.ts` source, polluting src/
+# with ~200 `.js` / `.d.ts` files that look identical to sources in
+# file listings.
+#
+# The tsconfigs now set `outDir: ./.tsc-out/...` so future emits go
+# there instead (see tsconfig.web.json, tsconfig.node.json). The
+# rules below are defensive: if someone reverts the outDir or runs
+# tsc with different flags, we still refuse to stage the drift.
+#
+# We have exactly TWO hand-authored `.d.ts` files tracked under src/
+# (`src/preload/index.d.ts` augments `window.api`; `src/renderer/src/
+# vite-env.d.ts` is vite's default client types). Plus one under
+# testing/. Those are explicitly re-included.
+/.tsc-out/
+/electron.vite.config.js
+/electron.vite.config.d.ts
+/src/**/*.js
+/src/**/*.d.ts
+!/src/preload/index.d.ts
+!/src/renderer/src/vite-env.d.ts
+/testing/**/*.js
+/testing/**/*.mjs
+/testing/**/*.d.ts
+/testing/**/*.d.mts
+!/testing/rendering/renderer/vite-env.d.ts
+
 # Reference material we read for understanding CC's internals — not part
 # of cc-shell, intentionally left untracked. Live next to the project as
 # a developer's local checkout.

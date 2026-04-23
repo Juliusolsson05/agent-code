@@ -1,6 +1,12 @@
 {
   "compilerOptions": {
     "composite": true,
+    // See tsconfig.web.json for the full rationale. electron-vite
+    // builds the main + preload bundles; tsc is type-check-only but
+    // `composite: true` forces emit. This redirects the unwanted
+    // emit to a gitignored scratch dir so it doesn't land next to
+    // the `.ts` sources.
+    "outDir": "./.tsc-out/node",
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "target": "ES2022",
