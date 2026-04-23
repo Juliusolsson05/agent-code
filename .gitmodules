@@ -1,12 +1,12 @@
 [submodule "codex-src"]
-	path = codex-src
+	path = vendor/codex-src
 	url = https://github.com/openai/codex.git
 [submodule "claude-code-headless"]
-	path = claude-code-headless
+	path = packages/claude-code-headless
 	url = https://github.com/Juliusolsson05/claude-code-headless.git
 [submodule "codex-headless"]
-	path = codex-headless
+	path = packages/codex-headless
 	url = https://github.com/Juliusolsson05/codex-headless.git
 [submodule "agent-transcript-parser"]
-	path = agent-transcript-parser
+	path = packages/agent-transcript-parser
 	url = git@github-personal:Juliusolsson05/agent-transcript-parser.git

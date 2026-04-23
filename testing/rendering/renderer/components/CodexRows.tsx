@@ -2,7 +2,7 @@ import { memo, useContext } from 'react'
 
 import { CodeBlock } from './CodeBlock'
 import { CodeRenderContext, MarkerRow } from './Feed'
-import type { ToolResultBlock, ToolUseBlock } from '../../../../src/shared/types/transcript'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null

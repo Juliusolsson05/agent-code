@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import type { TabId } from '../../../tiles/types'
+import type { TabId } from '@renderer/workspace/types'
 
 type TileTabOption = {
   id: TabId

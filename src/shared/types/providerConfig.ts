@@ -2,10 +2,19 @@
 //
 // The renderer bundle can't import Node modules (node-pty, chokidar,
 // fs). The main process can't import React components. So the config
-// is two interfaces, each with its own registry.
+// is two interfaces, each with its own registry. Hard split — there
+// is NO combined `ProviderConfig` type. A previous version of this
+// file exported one, and also shipped `providers/<kind>/config.ts`
+// files that implemented it by importing both `ClaudeSession`
+// (Node-only) and `TileLeaf` (React-only). That was the bridge that
+// caused the node tsconfig to walk into renderer files and emit the
+// JSX-not-set cascade across ~500 lines of error output. Both halves
+// and their registries are now strictly separate; `registry.main.ts`
+// builds MainProviderConfig, `registry.renderer.ts` builds
+// RendererProviderConfig, and nothing re-joins them.
 
 import type { ComponentType } from 'react'
-import type { SessionOptions, SessionInfo } from './session.js'
+import type { SessionOptions, SessionInfo } from '@shared/types/session.js'
 
 // Props the shell passes to every provider's TileLeaf.
 export type TileLeafProps = {
@@ -44,6 +53,10 @@ export type MainProviderConfig = {
   getProjectDir: (cwd: string) => Promise<string>
 }
 
-/** Full config — union of both halves. Used in provider config files
- *  that export both sides. */
-export type ProviderConfig = RendererProviderConfig & MainProviderConfig
+// The combined `ProviderConfig = RendererProviderConfig & MainProviderConfig`
+// type used to live here. It was only ever used by
+// `providers/<kind>/config.ts` files that implemented the full
+// surface, which forced those files to import BOTH TileLeaf (React)
+// AND ClaudeSession (Node). That cross-boundary import was the
+// source of the renderer-in-node tsc cascade. Type removed; use the
+// one-sided types above.

@@ -1,9 +1,9 @@
-import type { Settings } from '../../../state/settings/types'
+import type { Settings } from '@renderer/app-state/settings/types'
 import type {
   SettingActionContext,
   SettingDefinition,
-} from '../lib/settingsRegistry'
-import { SETTING_CATEGORIES } from '../lib/settingsCategories'
+} from '@renderer/features/settings/lib/settingsRegistry'
+import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 
 type Props = {
   definitions: SettingDefinition[]

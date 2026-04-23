@@ -28,7 +28,7 @@ every stream visible at once.
 | Preload bridge                       | `src/preload/index.ts`                                   | Yes (reused)           |
 | Transcript types                     | `src/shared/types/transcript.ts` + provider types        | Yes                    |
 | Parsers (extract / screen / git)     | `src/shared/parsers/`, `src/shared/git/`                 | Yes                    |
-| Workspace mappers + semantic fold    | `src/renderer/src/tiles/workspaceStore.ts` (pure exports)| Yes                    |
+| Workspace mappers + semantic fold    | `src/renderer/src/workspace/workspaceStore.ts` (pure exports)| Yes                    |
 | Settings store + theme               | `src/renderer/src/state/`                                | Yes                    |
 | Headless PTY runtimes / providers    | `src/providers/`, `claude-code-headless`, `codex-headless` | Yes                  |
 
@@ -167,7 +167,7 @@ are pure additions — no existing cc-shell behavior changed.
 - `session:list-all` IPC handler in `src/main/index.ts`
 - `listAllSessions` API in `src/preload/index.ts`
 - `listAllClaudeSessions` exported from `src/providers/claude/runtime/sessionList.ts`
-- `mapCodexRolloutToFeedEntries`, `extractEmbeddedClaudeProgressEntry`, `claudeHistoryMarker`, `codexHistoryMarker`, `foldSemanticEvent` exported from `src/renderer/src/tiles/workspaceStore.ts`
+- `mapCodexRolloutToFeedEntries`, `extractEmbeddedClaudeProgressEntry`, `claudeHistoryMarker`, `codexHistoryMarker`, `foldSemanticEvent` exported from `src/renderer/src/workspace/workspaceStore.ts`
 
 If the harness build complains about a missing export, that export
 needs to be added to cc-shell — never duplicate the implementation

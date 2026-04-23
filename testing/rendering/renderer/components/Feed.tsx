@@ -33,16 +33,16 @@ import {
   type Entry,
   type ToolResultBlock,
   type ToolUseBlock,
-} from '../../../../src/shared/types/transcript'
+} from '@shared/types/transcript'
 import { CodeBlock } from './CodeBlock'
-import { detectGitIntent } from '../../../../src/shared/git/gitDetect'
+import { detectGitIntent } from '@shared/git/gitDetect'
 import { GitCardRow } from './GitRows'
-import { useAppStore } from '../../../../src/renderer/src/state/hooks'
+import { useAppStore } from '@renderer/app-state/hooks'
 import {
   parseSemanticTodos,
   type SemanticLiveTurn,
   type SemanticTodoItem,
-} from '../../../../src/renderer/src/tiles/workspaceState'
+} from '@renderer/workspace/workspaceState'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.

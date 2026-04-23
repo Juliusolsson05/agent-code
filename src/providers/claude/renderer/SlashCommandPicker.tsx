@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 
-import type { SlashPickerState } from '../../../renderer/src/tiles/workspaceStore'
+import type { SlashPickerState } from '@renderer/workspace/workspaceStore'
 
 // SlashCommandPicker — React rendering of the slash command dropdown.
 //

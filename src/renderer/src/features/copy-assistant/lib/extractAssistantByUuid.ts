@@ -8,7 +8,7 @@
 //
 // Pure: no React, no DOM, no IO.
 
-import type { Entry } from '../../../../../shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 
 type AssistantMessage = {
   role?: string

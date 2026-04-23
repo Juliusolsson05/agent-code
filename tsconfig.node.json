@@ -19,10 +19,30 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "types": ["node"],
+    // baseUrl + paths give us absolute imports (`@shared/types/transcript`
+    // instead of `../../../shared/types/transcript`). Deep relative paths
+    // were the #1 source of move-breakage during the refactor — they
+    // encode each file's relation to its target, so any move on either
+    // side invalidates them. Absolute paths only break when the TARGET
+    // moves, cutting the rewrite cost of future refactors in half.
+    //
+    // Vite needs a parallel `resolve.alias` config — see
+    // electron.vite.config.ts. TSC and Vite agree on the alias map; if
+    // they diverge, tsc will green-light something the runtime can't
+    // actually load.
+    "baseUrl": ".",
     "paths": {
-      "claude-code-headless": ["./claude-code-headless/src/index.ts"],
-      "codex-headless": ["./codex-headless/src/index.ts"],
-      "agent-transcript-parser": ["./agent-transcript-parser/src/index.ts"]
+      "claude-code-headless": ["./packages/claude-code-headless/src/index.ts"],
+      "claude-code-headless/*": ["./packages/claude-code-headless/src/*"],
+      "codex-headless": ["./packages/codex-headless/src/index.ts"],
+      "codex-headless/*": ["./packages/codex-headless/src/*"],
+      "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
+      "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
+      "@main/*": ["./src/main/*"],
+      "@preload/*": ["./src/preload/*"],
+      "@renderer/*": ["./src/renderer/src/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@providers/*": ["./src/providers/*"]
     }
   },
   "include": [
@@ -33,8 +53,41 @@
     "src/shared/**/*",
     "src/providers/**/*",
     "testing/**/*",
-    "agent-transcript-parser/src/**/*",
-    "claude-code-headless/src/**/*",
-    "codex-headless/src/**/*"
+    "packages/agent-transcript-parser/src/**/*",
+    "packages/claude-code-headless/src/**/*",
+    "packages/codex-headless/src/**/*"
+  ],
+  "exclude": [
+    // Provider renderer halves live under the node project's
+    // `src/providers/**/*` include (so the *.ts runtime files type-
+    // check), but the *.tsx row + modal components inside them are
+    // renderer-only. Without this exclude, tsc walks into
+    // `providers/<kind>/renderer/**/*.tsx` and emits ~530
+    // "Cannot use JSX unless the '--jsx' flag is provided" errors,
+    // plus cascade "`window.api` doesn't exist" noise as it drags
+    // in renderer imports transitively.
+    //
+    // These files ARE type-checked by the web project, which has
+    // `src/providers/*/renderer/**/*` in its include and `jsx:
+    // react-jsx` in its compiler options. Excluding them here keeps
+    // the node project strictly node-typed and eliminates the
+    // single biggest source of pre-existing tsc noise in this
+    // codebase.
+    "src/providers/*/renderer/**/*",
+    // registry.renderer.ts lives at providers/ root (not under
+    // providers/<kind>/renderer/), so the glob above doesn't catch
+    // it. It imports TileLeaf from @renderer/workspace/tile-tree/,
+    // which transitively pulls the entire renderer subtree into
+    // the node program. Explicit exclude stops that walk at the
+    // file.
+    "src/providers/registry.renderer.ts",
+    // The rendering sandbox under testing/rendering/ is its own
+    // electron-vite project (see testing/rendering/electron.vite.config.ts)
+    // — it has its own tsconfig + its own renderer subtree with JSX
+    // components. Letting our main node project walk into it emits
+    // ~420 "Cannot use JSX" errors on files that aren't ours to
+    // type-check. Exclude the whole subtree.
+    "testing/rendering/renderer/**/*",
+    "testing/rendering/out/**/*"
   ]
 }

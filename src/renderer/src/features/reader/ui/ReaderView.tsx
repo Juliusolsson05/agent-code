@@ -2,12 +2,12 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, type Rea
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-import { CodeBlock } from '../../../code/CodeBlock'
-import { CodeRenderContext } from '../../../feed/Feed'
-import { extractAssistantInProgress } from '../../../../../shared/parsers/extractAssistant'
-import { assistantUuidsWithText, extractAssistantByUuid } from '../../../copyAssistant'
-import { collectLeaves } from '../../../tiles/treeOps'
-import type { SessionId, Workspace } from '../../../tiles/workspaceStore'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
+import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
+import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
+import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/copyAssistant'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
 
 // ReaderView — single-message read mode for a focused session.
 //

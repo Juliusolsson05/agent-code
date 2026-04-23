@@ -13,12 +13,12 @@ import {
   extractEmbeddedClaudeProgressEntry,
   foldSemanticEvent,
   mapCodexRolloutToFeedEntries,
-} from '../../../src/renderer/src/tiles/workspaceStore'
+} from '@renderer/workspace/workspaceStore'
 import {
   emptySemanticRuntime,
   type SemanticLiveTurn,
   type SemanticRuntimeState,
-} from '../../../src/renderer/src/tiles/workspaceState'
+} from '@renderer/workspace/workspaceState'
 import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
@@ -26,10 +26,10 @@ import {
   type Entry,
   type ToolResultBlock,
   type ToolUseBlock,
-} from '../../../src/shared/types/transcript'
-import { extractAssistantInProgress } from '../../../src/shared/parsers/extractAssistant'
-import { applyTheme } from '../../../src/renderer/src/state/settings/theme'
-import { DEFAULT_SETTINGS } from '../../../src/renderer/src/state/settings/types'
+} from '@shared/types/transcript'
+import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
+import { applyTheme } from '@renderer/app-state/settings/theme'
+import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 
 // Rendering Debug Harness.
 //

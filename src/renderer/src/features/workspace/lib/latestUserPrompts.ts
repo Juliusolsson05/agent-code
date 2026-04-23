@@ -2,8 +2,8 @@ import {
   isCompactSummaryEntry,
   isConversationEntry,
   type Entry,
-} from '../../../../../shared/types/transcript'
-import type { SessionKind } from '../../../tiles/types'
+} from '@shared/types/transcript'
+import type { SessionKind } from '@renderer/workspace/types'
 
 export type LatestUserPrompt = {
   text: string

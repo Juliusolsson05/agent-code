@@ -1,9 +1,10 @@
 import { memo, useContext, useMemo, useState } from 'react'
 
-import { CodeBlock } from '../../../../renderer/src/code/CodeBlock'
-import { CodeRenderContext, MarkerRow } from '../../../../renderer/src/feed/Feed'
-import { formatToolFilePath } from '../../../../shared/paths/displayPath'
-import type { ToolResultBlock, ToolUseBlock } from '../../../../shared/types/transcript'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
+import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { formatToolFilePath } from '@shared/paths/displayPath'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null

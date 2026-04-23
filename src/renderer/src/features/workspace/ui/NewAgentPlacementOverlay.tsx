@@ -5,9 +5,9 @@ import {
   defaultPlacementTargetId,
   findNearestPlacementTarget,
   type PlacementTarget,
-} from '../lib/newAgentPlacement'
-import type { SessionKind } from '../../../tiles/types'
-import type { Workspace } from '../../../tiles/workspaceStore'
+} from '@renderer/features/workspace/lib/newAgentPlacement'
+import type { SessionKind } from '@renderer/workspace/types'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {
   open: boolean

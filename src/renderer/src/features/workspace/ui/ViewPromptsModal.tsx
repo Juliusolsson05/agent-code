@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef } from 'react'
 
-import { extractLatestUserPrompts } from '../lib/latestUserPrompts'
-import type { Workspace } from '../../../tiles/workspaceStore'
-import type { SessionId } from '../../../tiles/types'
+import { extractLatestUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { SessionId } from '@renderer/workspace/types'
 
 type Props = {
   open: boolean

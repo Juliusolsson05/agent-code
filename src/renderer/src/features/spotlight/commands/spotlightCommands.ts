@@ -1,4 +1,4 @@
-import type { CommandDef } from '../../../commands/types'
+import type { CommandDef } from '@renderer/features/command-palette/types'
 
 export const spotlightCommands: CommandDef[] = [
   {

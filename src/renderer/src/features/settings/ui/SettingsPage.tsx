@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 
-import type { Settings } from '../../../state/settings/types'
-import type { Workspace } from '../../../tiles/workspaceStore'
-import { SETTING_CATEGORIES, type SettingCategoryId } from '../lib/settingsCategories'
-import { getSettingsRegistry, matchesSettingQuery } from '../lib/settingsRegistry'
-import { SettingsList } from './SettingsList'
-import { SettingsSearch } from './SettingsSearch'
-import { SettingsSidebar } from './SettingsSidebar'
+import type { Settings } from '@renderer/app-state/settings/types'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import { getSettingsRegistry, matchesSettingQuery } from '@renderer/features/settings/lib/settingsRegistry'
+import { SettingsList } from '@renderer/features/settings/ui/SettingsList'
+import { SettingsSearch } from '@renderer/features/settings/ui/SettingsSearch'
+import { SettingsSidebar } from '@renderer/features/settings/ui/SettingsSidebar'
 
 type Props = {
   onClose: () => void

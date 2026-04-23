@@ -44,7 +44,7 @@ temp.txt
 # Reference material we read for understanding CC's internals — not part
 # of cc-shell, intentionally left untracked. Live next to the project as
 # a developer's local checkout.
-claude-code-src/
+vendor/claude-code-src/
 file-dumps/
 .proxy-testing/
 

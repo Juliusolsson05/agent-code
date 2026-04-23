@@ -1,4 +1,5 @@
-import type { CommandDef } from '../../../commands/types'
+import type { CommandDef } from '@renderer/features/command-palette/types'
+import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 
 export const sessionCommands: CommandDef[] = [
   {
@@ -239,6 +240,41 @@ export const sessionCommands: CommandDef[] = [
       tone: flags.proxyDebugPanelOpen ? 'accent' : 'neutral',
     }),
     run: ({ ui }) => ui.toggleProxyDebugPanel(),
+  },
+  {
+    // Save Debug Logs — one-shot action (not a toggle). Snapshots the
+    // focused pane's state/feed-debug/proxy-semantic/HTML into a single
+    // timestamped folder under ~/.config/cc-shell/debug-bundles/ and
+    // copies the path to the clipboard. Purpose is dev-time
+    // diagnostics of cc-shell itself — the four debug panels read the
+    // same data live, this command preserves it for after-the-fact
+    // inspection.
+    //
+    // Requires a focused pane (any kind) — the bundle is pane-scoped.
+    // Wide keyword net because the user might remember "save", "dump",
+    // "export", "snapshot", or the name of any one panel.
+    id: 'save-debug-logs',
+    title: 'Save Debug Logs',
+    keywords: [
+      'save',
+      'debug',
+      'logs',
+      'bundle',
+      'dump',
+      'export',
+      'snapshot',
+      'proxy',
+      'feed',
+      'html',
+      'diagnostics',
+    ],
+    when: ({ workspace }) => Boolean(workspace.activeTab),
+    run: ({ workspace, ui }) => {
+      // closePalette immediately so the toast (which lands in the
+      // pane, not the palette) is visible right after trigger.
+      ui.closePalette()
+      void runSaveDebugBundleCommand(workspace)
+    },
   },
   {
     id: 'toggle-html-debug-panel',

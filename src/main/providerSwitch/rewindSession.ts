@@ -31,7 +31,7 @@ import {
   readJsonlFile,
   writeClaudeSessionFile,
   writeCodexRolloutFile,
-} from './shared.js'
+} from '@main/providerSwitch/shared.js'
 
 export type RewindSessionAnchor =
   | ({ kind: 'claude' } & RewindClaudeAnchor)

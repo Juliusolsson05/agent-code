@@ -20,7 +20,24 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "useDefineForClassFields": true,
-    "types": ["node"]
+    "types": ["node"],
+    // See tsconfig.node.json for the full rationale. Both projects
+    // declare the same alias map so imports resolve identically
+    // whether tsc is checking the main/preload or the renderer half.
+    "baseUrl": ".",
+    "paths": {
+      "claude-code-headless": ["./packages/claude-code-headless/src/index.ts"],
+      "claude-code-headless/*": ["./packages/claude-code-headless/src/*"],
+      "codex-headless": ["./packages/codex-headless/src/index.ts"],
+      "codex-headless/*": ["./packages/codex-headless/src/*"],
+      "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
+      "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
+      "@main/*": ["./src/main/*"],
+      "@preload/*": ["./src/preload/*"],
+      "@renderer/*": ["./src/renderer/src/*"],
+      "@shared/*": ["./src/shared/*"],
+      "@providers/*": ["./src/providers/*"]
+    }
   },
   "include": [
     "src/renderer/**/*",
@@ -30,6 +47,24 @@
     "src/shared/parsers/**/*",
     "src/providers/*/parsers/**/*",
     "src/providers/*/renderer/**/*",
+    // registry.renderer.ts lives at providers/ root, outside the
+    // `*/renderer/**/*` glob above. TileTree imports it to mount
+    // provider-specific TileLeaf components, so the web project
+    // needs the file explicitly. (The node project *excludes* this
+    // file — see tsconfig.node.json — because it transitively pulls
+    // the entire renderer subtree in.)
+    "src/providers/registry.renderer.ts",
     "testing/**/*"
+  ],
+  // Project reference: tell tsc to resolve preload imports via node's
+  // emitted declarations, not by walking the source tree. Without
+  // this, `src/preload/index.d.ts` traces `./index` → `index.ts` →
+  // `./api/*.ts` and the web project errors TS6307 because the
+  // api/*.ts files aren't in this project's include list. The
+  // reference makes `tsc -b` build tsconfig.node.json first, drop
+  // its declarations in `.tsc-out/node/`, and have this web project
+  // consume those instead of chasing source files out of scope.
+  "references": [
+    { "path": "./tsconfig.node.json" }
   ]
 }

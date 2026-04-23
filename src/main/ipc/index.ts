@@ -1,0 +1,40 @@
+import type { SessionManager } from '@main/sessionManager.js'
+import type { LspManager } from '@main/lspManager.js'
+import type { GhostJournalRegistry } from '@main/ghostJournal.js'
+
+import { registerSessionIpc } from '@main/ipc/session.js'
+import { registerProviderIpc } from '@main/ipc/provider.js'
+import { registerLspIpc } from '@main/ipc/lsp.js'
+import { registerFsIpc } from '@main/ipc/fs.js'
+import { registerSessionsIpc } from '@main/ipc/sessions.js'
+import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
+import { registerGhostIpc } from '@main/ipc/ghost.js'
+import { registerDebugIpc } from '@main/ipc/debug.js'
+import { registerGitIpc } from '@main/ipc/git.js'
+
+// IPC registration aggregator.
+//
+// main/index.ts calls registerAllIpc(deps) exactly once, right after
+// services are constructed. Each domain module does its own
+// ipcMain.handle wiring inside its register function. Passing deps
+// explicitly (rather than importing singletons into each module)
+// keeps the wiring visible here and makes the domain files testable
+// in isolation — they don't reach into module-scoped state.
+
+export type IpcDeps = {
+  manager: SessionManager
+  lspManager: LspManager
+  ghostJournals: GhostJournalRegistry
+}
+
+export function registerAllIpc(deps: IpcDeps): void {
+  registerSessionIpc(deps.manager)
+  registerProviderIpc()
+  registerLspIpc(deps.lspManager)
+  registerFsIpc()
+  registerSessionsIpc()
+  registerWorkspaceIpc()
+  registerGhostIpc(deps.ghostJournals)
+  registerDebugIpc()
+  registerGitIpc()
+}

@@ -5,14 +5,14 @@ export {
   extractAssistantInProgress,
   extractStreamingText,
   detectActivity,
-} from '../../../claude-code-headless/src/parsers/ScreenParser'
+} from 'claude-code-headless/parsers/ScreenParser'
 
 export {
   detectTrustDialog,
   type TrustDialogState,
-} from '../../../claude-code-headless/src/parsers/TrustDialogParser'
+} from 'claude-code-headless/parsers/TrustDialogParser'
 
 export {
   detectResumePrompt,
   type ResumePromptState,
-} from '../../../claude-code-headless/src/parsers/ResumePromptParser'
+} from 'claude-code-headless/parsers/ResumePromptParser'

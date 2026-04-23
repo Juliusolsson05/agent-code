@@ -12,9 +12,9 @@
 import { memo, useContext, useMemo } from 'react'
 import hljs from 'highlight.js'
 
-import { normalizeCodeLanguage } from '../../../../src/shared/code/language'
-import { diffLines, type DiffLine } from '../../../../src/shared/parsers/lineDiff'
-import type { ToolUseBlock } from '../../../../src/shared/types/transcript'
+import { normalizeCodeLanguage } from '@shared/code/language'
+import { diffLines, type DiffLine } from '@shared/parsers/lineDiff'
+import type { ToolUseBlock } from '@shared/types/transcript'
 import { CodeBlock } from './CodeBlock'
 import { CodeRenderContext, MarkerRow } from './Feed'
 

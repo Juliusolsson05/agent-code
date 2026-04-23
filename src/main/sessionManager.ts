@@ -1,11 +1,11 @@
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 
-import { getMainProvider } from '../providers/registry.main.js'
-import type { ScreenSnapshot } from '../providers/claude/runtime/claudeSession.js'
-import { TerminalSession } from '../shared/runtime/terminalSession.js'
+import { getMainProvider } from '@providers/registry.main.js'
+import type { ScreenSnapshot } from '@providers/claude/runtime/claudeSession.js'
+import { TerminalSession } from '@shared/runtime/terminalSession.js'
 import type { JsonlEntry } from 'claude-code-headless'
-import { TmuxRegistry } from './tmux/TmuxRegistry.js'
+import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event

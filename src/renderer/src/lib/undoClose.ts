@@ -4,8 +4,8 @@ import type {
   SplitDirection,
   Tab,
   TileNode,
-} from '../tiles/types'
-import { collectLeaves } from '../tiles/treeOps'
+} from '@renderer/workspace/types'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
 // Undo-close stack — captures enough state to restore a closed pane or
 // tab exactly where it was in the tile tree.

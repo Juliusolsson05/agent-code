@@ -10,7 +10,7 @@
 // We do NOT touch sessions outside our prefix — those belong to the
 // user and are none of our business.
 
-import type { TmuxRegistry } from './TmuxRegistry.js'
+import type { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 
 export type PersistedTerminalRef = {
   sessionId: string

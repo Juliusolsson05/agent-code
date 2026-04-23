@@ -9,7 +9,7 @@ import {
   readJsonlFile,
   writeClaudeSessionFile,
   writeCodexRolloutFile,
-} from './shared.js'
+} from '@main/providerSwitch/shared.js'
 
 export type SwitchProviderRequest = {
   sourceKind: 'claude' | 'codex'
