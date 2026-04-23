@@ -71,7 +71,16 @@ export function createMainWindow(): void {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0a0a0a',
     webPreferences: {
-      preload: join(__dirname, '@preload/index.mjs'),
+      // This is a RUNTIME filesystem path, not an import — `@preload/…`
+      // path aliases are resolved by vite at build time only, and don't
+      // intercept Node's `path.join`. At runtime __dirname is `out/main/`
+      // (the built main bundle sits there) and the preload bundle
+      // electron-vite emits lives at `out/preload/index.mjs`, so the
+      // relative hop is unavoidable. If this ever gets sed-rewritten to
+      // '@preload/index.mjs' again, Electron fails to load the preload,
+      // `window.api` is undefined in the renderer, every IPC call
+      // throws on startup, and the window ends up a black rectangle.
+      preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
