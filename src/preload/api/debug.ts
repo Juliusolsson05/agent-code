@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 
-import type { FeedDebugPersistEntry } from './types.js'
+import type { FeedDebugPersistEntry } from '@preload/api/types.js'
 
 // Feed-debug log shipper.
 //

@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { mkdir, readFile, writeFile, rename } from 'fs/promises'
 
-import { STATE_DIR, STATE_FILE } from '../storage/paths.js'
+import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 
 // Workspace state persistence.
 //

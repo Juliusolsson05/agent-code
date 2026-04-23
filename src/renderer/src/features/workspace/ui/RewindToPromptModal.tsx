@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { extractAnchoredUserPrompts } from '../lib/latestUserPrompts'
-import type { Workspace } from '../../../workspace/workspaceStore'
-import type { SessionId } from '../../../workspace/types'
+import { extractAnchoredUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { SessionId } from '@renderer/workspace/types'
 
 // RewindToPromptModal — picker for the rewind-to-prompt flow.
 //

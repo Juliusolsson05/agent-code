@@ -7,7 +7,7 @@ import {
   type ToolResultBlock,
   type ToolUseBlock,
 } from '@shared/types/transcript'
-import type { SemanticLiveTurn } from '../../../workspace/workspaceState'
+import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
 // -----------------------------------------------------------------------------
 // Feed pure helpers — no React, no state, no side effects.

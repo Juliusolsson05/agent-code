@@ -1,13 +1,13 @@
-import type { Settings } from './settings/types'
-import type { UiShellState } from './uiShell/types'
-import type { SessionId, TabId } from '../workspace/types'
-import type { WorkspaceState } from '../workspace/types'
+import type { Settings } from '@renderer/state/settings/types'
+import type { UiShellState } from '@renderer/state/uiShell/types'
+import type { SessionId, TabId } from '@renderer/workspace/types'
+import type { WorkspaceState } from '@renderer/workspace/types'
 import type {
   ReaderModeState,
   SessionRuntime,
   SpotlightState,
   TileTabsState,
-} from '../workspace/workspaceState'
+} from '@renderer/workspace/workspaceState'
 
 export type SettingsSlice = {
   settings: Settings

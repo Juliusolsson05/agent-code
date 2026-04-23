@@ -1,6 +1,6 @@
-import type { SessionId, TileNode } from '../types'
-import type { SlashPickerState, TileTabsState } from '../workspaceState'
-import { collectLeaves } from '../tile-tree/treeOps'
+import type { SessionId, TileNode } from '@renderer/workspace/types'
+import type { SlashPickerState, TileTabsState } from '@renderer/workspace/workspaceState'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
 // Layout & picker utilities for the workspace store.
 //

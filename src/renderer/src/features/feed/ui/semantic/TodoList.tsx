@@ -1,6 +1,6 @@
 import { memo } from 'react'
 
-import type { SemanticTodoItem } from '../../../../workspace/workspaceState'
+import type { SemanticTodoItem } from '@renderer/workspace/workspaceState'
 
 // Inline todo-list rendering for the semantic-streaming TodoWrite
 // tool row. Shows the list with status glyphs (☑ done, ◐ in-progress,

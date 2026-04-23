@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
-import type { TileNode } from '../types'
-import type { Workspace } from '../workspaceStore'
+import type { TileNode } from '@renderer/workspace/types'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // TabBar — one row of tab chrome at the top of the window. Each tab has
 // a title, a close button, and activates on click. The `+` button opens

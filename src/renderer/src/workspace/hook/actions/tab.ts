@@ -1,8 +1,8 @@
 import { useCallback } from 'react'
 
-import type { SessionId, SessionKind, SessionMeta, Tab, TabId } from '../../types'
-import { collectLeaves } from '../../tile-tree/treeOps'
-import { sanitizeTileTabsState, titleFromCwd } from '../../layout/helpers'
+import type { SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { sanitizeTileTabsState, titleFromCwd } from '@renderer/workspace/layout/helpers'
 
 import type {
   WorkspaceSetReaderMode,
@@ -10,9 +10,9 @@ import type {
   WorkspaceSetSpotlight,
   WorkspaceSetState,
   WorkspaceSetTileTabs,
-} from '../context'
-import type { WorkspaceRefs } from '../refs'
-import type { SessionActions } from './session'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 // Tab actions — open/close + tab-navigation keybinds.
 

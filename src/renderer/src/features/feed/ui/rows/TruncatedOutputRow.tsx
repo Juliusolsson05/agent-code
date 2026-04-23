@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { MarkerRow } from '../MarkerRow'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
 // MAX_LINES_TO_SHOW in claude-code-src. Hoisted so the memo'd row
 // component doesn't re-create the constant every render.

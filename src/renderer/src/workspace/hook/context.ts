@@ -1,14 +1,14 @@
 import type { Dispatch, MutableRefObject, SetStateAction } from 'react'
 
-import type { UndoCloseStack } from '../../lib/undoClose'
+import type { UndoCloseStack } from '@renderer/lib/undoClose'
 import type {
   ReaderModeState,
   SessionRuntime,
   SpotlightState,
   TileTabsState,
-} from '../workspaceState'
-import type { SessionId, WorkspaceState } from '../types'
-import type { FeedDebugInput } from '../runtime/feedDebug'
+} from '@renderer/workspace/workspaceState'
+import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import type { FeedDebugInput } from '@renderer/workspace/runtime/feedDebug'
 
 // -----------------------------------------------------------------------------
 // WorkspaceHookContext

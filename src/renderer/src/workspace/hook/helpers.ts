@@ -1,18 +1,18 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '../workspaceState'
-import type { SessionId } from '../types'
+import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionId } from '@renderer/workspace/types'
 import {
   appendFeedDebugLog,
   type FeedDebugInput,
-} from '../runtime/feedDebug'
-import { withDerivedSessionStatus } from '../semantic/helpers'
+} from '@renderer/workspace/runtime/feedDebug'
+import { withDerivedSessionStatus } from '@renderer/workspace/semantic/helpers'
 
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
-} from './context'
-import type { WorkspaceRefs } from './refs'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // -----------------------------------------------------------------------------
 // Cross-cutting runtime helpers

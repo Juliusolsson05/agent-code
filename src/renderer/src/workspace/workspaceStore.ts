@@ -8,7 +8,7 @@
 //
 // Prefer importing from './hook' directly in new code.
 
-export { useWorkspace, type Workspace } from './hook'
+export { useWorkspace, type Workspace } from '@renderer/workspace/hook'
 
 // -----------------------------------------------------------------------------
 // Backward-compat re-exports.
@@ -22,18 +22,18 @@ export { useWorkspace, type Workspace } from './hook'
 // graph.
 // -----------------------------------------------------------------------------
 
-export { foldSemanticEvent } from './semantic/foldEvent'
+export { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
 export {
   codexHistoryMarker,
   codexTurnIdFromRollout,
   mapCodexRolloutToFeedEntries,
-} from './codex/rollout'
+} from '@renderer/workspace/codex/rollout'
 export {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
-} from './claude/history'
+} from '@renderer/workspace/claude/history'
 
-export { collectLeaves } from './tile-tree/treeOps'
+export { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
 export type {
   PickerItem,
@@ -43,10 +43,10 @@ export type {
   SlashPickerState,
   SpotlightState,
   TileTabsState,
-} from './workspaceState'
+} from '@renderer/workspace/workspaceState'
 
 // Re-exported from ./types so external callers (ReaderView, etc.)
 // can keep importing from '../workspace/workspaceStore' without
 // reaching into the internal types module. SessionId is a plain
 // string alias but callers use the name for documentation.
-export type { SessionId } from './types'
+export type { SessionId } from '@renderer/workspace/types'

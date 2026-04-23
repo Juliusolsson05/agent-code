@@ -2,14 +2,14 @@ import { memo, useContext } from 'react'
 
 import type { ToolResultBlock } from '@shared/types/transcript'
 
-import { CodeBlock } from '../../../../lib/code/CodeBlock'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 
-import { stripLineNumberPrefix } from '../../lib/helpers'
-import { CodeRenderContext, ToolUseIndexContext } from '../../context'
-import { MarkerRow } from '../MarkerRow'
+import { stripLineNumberPrefix } from '@renderer/features/feed/lib/helpers'
+import { CodeRenderContext, ToolUseIndexContext } from '@renderer/features/feed/context'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
-import { ToolBand } from './primitives'
-import { TruncatedOutputRow } from './TruncatedOutputRow'
+import { ToolBand } from '@renderer/features/feed/ui/rows/primitives'
+import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
 

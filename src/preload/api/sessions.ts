@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 
-import type { SessionIndexEntry } from './types.js'
+import type { SessionIndexEntry } from '@preload/api/types.js'
 
 // Session prompt index — powers the Search Conversation Prompts modal.
 //

@@ -1,4 +1,4 @@
-import type { SessionKind } from '../types'
+import type { SessionKind } from '@renderer/workspace/types'
 
 // Normalize spawn errors so the user-facing toast/showToast has a
 // single string to print. When the Claude proxy startup path is the

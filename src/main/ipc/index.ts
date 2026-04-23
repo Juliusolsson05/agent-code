@@ -1,16 +1,16 @@
-import type { SessionManager } from '../sessionManager.js'
-import type { LspManager } from '../lspManager.js'
-import type { GhostJournalRegistry } from '../ghostJournal.js'
+import type { SessionManager } from '@main/sessionManager.js'
+import type { LspManager } from '@main/lspManager.js'
+import type { GhostJournalRegistry } from '@main/ghostJournal.js'
 
-import { registerSessionIpc } from './session.js'
-import { registerProviderIpc } from './provider.js'
-import { registerLspIpc } from './lsp.js'
-import { registerFsIpc } from './fs.js'
-import { registerSessionsIpc } from './sessions.js'
-import { registerWorkspaceIpc } from './workspace.js'
-import { registerGhostIpc } from './ghost.js'
-import { registerDebugIpc } from './debug.js'
-import { registerGitIpc } from './git.js'
+import { registerSessionIpc } from '@main/ipc/session.js'
+import { registerProviderIpc } from '@main/ipc/provider.js'
+import { registerLspIpc } from '@main/ipc/lsp.js'
+import { registerFsIpc } from '@main/ipc/fs.js'
+import { registerSessionsIpc } from '@main/ipc/sessions.js'
+import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
+import { registerGhostIpc } from '@main/ipc/ghost.js'
+import { registerDebugIpc } from '@main/ipc/debug.js'
+import { registerGitIpc } from '@main/ipc/git.js'
 
 // IPC registration aggregator.
 //

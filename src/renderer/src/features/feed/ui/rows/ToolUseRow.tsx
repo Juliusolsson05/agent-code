@@ -2,8 +2,8 @@ import { memo } from 'react'
 
 import type { ToolUseBlock } from '@shared/types/transcript'
 
-import { truncateBashCommand } from '../../lib/helpers'
-import { MarkerRow } from '../MarkerRow'
+import { truncateBashCommand } from '@renderer/features/feed/lib/helpers'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
 /* ---------- Tool use: "⏺ Bash  ⎿ $ command" ---------- */
 

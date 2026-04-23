@@ -1,8 +1,8 @@
-import type { SemanticLiveTurn } from '../../../../workspace/workspaceState'
+import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
-import { classifySemanticToolActivity } from '../../lib/helpers'
+import { classifySemanticToolActivity } from '@renderer/features/feed/lib/helpers'
 
-import type { SemanticRenderUnit } from './types'
+import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/types'
 
 // WHY add a derived render-unit pass before painting semantic blocks:
 //

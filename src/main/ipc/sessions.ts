@@ -22,7 +22,7 @@ export function registerSessionsIpc(): void {
       _evt,
       options: { limit?: number; promptsPerSession?: number; cwd?: string | null } = {},
     ) => {
-      const { listRecentSessionsWithPrompts } = await import('../sessionIndex.js')
+      const { listRecentSessionsWithPrompts } = await import('@main/sessionIndex.js')
       return listRecentSessionsWithPrompts(options)
     },
   )
@@ -38,7 +38,7 @@ export function registerSessionsIpc(): void {
         cwd?: string | null
       },
     ) => {
-      const { searchSessionPrompts } = await import('../sessionIndex.js')
+      const { searchSessionPrompts } = await import('@main/sessionIndex.js')
       return searchSessionPrompts(options)
     },
   )

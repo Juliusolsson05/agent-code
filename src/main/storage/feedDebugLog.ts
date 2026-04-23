@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 
-import { FEED_DEBUG_DIR } from './paths.js'
+import { FEED_DEBUG_DIR } from '@main/storage/paths.js'
 
 // Per-session feed-debug log writer.
 //

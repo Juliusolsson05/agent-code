@@ -1,13 +1,13 @@
 import { useMemo, useRef, type MutableRefObject } from 'react'
 
-import { UndoCloseStack } from '../../lib/undoClose'
+import { UndoCloseStack } from '@renderer/lib/undoClose'
 import type {
   ReaderModeState,
   SessionRuntime,
   SpotlightState,
   TileTabsState,
-} from '../workspaceState'
-import type { SessionId, WorkspaceState } from '../types'
+} from '@renderer/workspace/workspaceState'
+import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 // -----------------------------------------------------------------------------
 // Ref factory for the workspace hook.

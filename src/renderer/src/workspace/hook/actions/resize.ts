@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 
-import type { SessionId, TabId } from '../../types'
+import type { SessionId, TabId } from '@renderer/workspace/types'
 import {
   adjustNearestSplitRatio,
   collectLeaves,
@@ -8,13 +8,13 @@ import {
   normalizeTree,
   resizeInDirection,
   rotateTree,
-} from '../../tile-tree/treeOps'
-import { setRatioBetween } from '../../layout/helpers'
+} from '@renderer/workspace/tile-tree/treeOps'
+import { setRatioBetween } from '@renderer/workspace/layout/helpers'
 
 import type {
   WorkspaceSetState,
   WorkspaceSetTileTabs,
-} from '../context'
+} from '@renderer/workspace/hook/context'
 
 // Resize + layout normalization actions.
 //

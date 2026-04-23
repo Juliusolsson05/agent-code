@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 
-import type { Unsub } from './types.js'
+import type { Unsub } from '@preload/api/types.js'
 
 // Generic IPC subscription helper.
 //

@@ -1,5 +1,5 @@
-import { subscribe } from './ipc.js'
-import type { Unsub } from './types.js'
+import { subscribe } from '@preload/api/ipc.js'
+import type { Unsub } from '@preload/api/types.js'
 
 // Window-chrome coordination.
 //

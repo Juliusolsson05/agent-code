@@ -1,4 +1,4 @@
-import type { Workspace } from '../../workspace/workspaceStore'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 export type CommandState = {
   label: string

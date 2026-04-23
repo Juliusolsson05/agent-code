@@ -1,9 +1,9 @@
 import { useCallback, useEffect } from 'react'
 
-import type { PersistedWorkspace } from '../../persistence'
-import type { SessionId, WorkspaceState } from '../../types'
+import type { PersistedWorkspace } from '@renderer/workspace/persistence'
+import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
-import type { WorkspaceRefs } from '../refs'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // Debounced workspace-save + beforeunload flush.
 //

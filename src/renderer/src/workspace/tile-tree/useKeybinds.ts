@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 
-import { useAppStore } from '../../state/hooks'
-import type { Workspace } from '../workspaceStore'
+import { useAppStore } from '@renderer/state/hooks'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // Keybinds: global window-level listeners. The handler is attached to
 // `document` in a single useEffect, which captures the key BEFORE the

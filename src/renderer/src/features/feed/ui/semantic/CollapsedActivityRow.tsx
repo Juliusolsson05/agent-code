@@ -1,8 +1,8 @@
 import { memo } from 'react'
 
-import { MarkerRow } from '../MarkerRow'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
-import type { SemanticRenderUnit } from './types'
+import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/types'
 
 // Compact "worked: 3 reads, 1 search" tail for a finished batch of
 // low-signal tool calls. Running-ness is the WorkIndicator's job

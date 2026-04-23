@@ -1,6 +1,6 @@
 import type { JsonlEntry } from 'claude-code-headless'
 
-import { sendToMainWindow } from '../window/mainWindow.js'
+import { sendToMainWindow } from '@main/window/mainWindow.js'
 
 // Per-session jsonl-entry coalescer.
 //

@@ -2,11 +2,11 @@ import { memo } from 'react'
 
 import type { ConversationEntry } from '@shared/types/transcript'
 
-import { MarkerRow } from '../MarkerRow'
-import { TextProse } from '../markdown'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { TextProse } from '@renderer/features/feed/ui/markdown'
 
-import { Block } from './Block'
-import { UserBand } from './primitives'
+import { Block } from '@renderer/features/feed/ui/rows/Block'
+import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 
 // The main renderer for a single assistant or user conversation
 // entry. Branches on content shape:

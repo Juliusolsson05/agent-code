@@ -2,7 +2,7 @@ import type {
   SessionId,
   SplitDirection,
   TabId,
-} from './types'
+} from '@renderer/workspace/types'
 import type {
   Entry,
   ToolResultBlock,

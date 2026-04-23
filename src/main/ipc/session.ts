@@ -1,10 +1,10 @@
 import { ipcMain } from 'electron'
 
-import type { SessionManager } from '../sessionManager.js'
+import type { SessionManager } from '@main/sessionManager.js'
 import { getMainProvider } from '@providers/registry.main.js'
 import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList.js'
 import { listCodexSessions } from '@providers/codex/runtime/sessionList.js'
-import { loadOlderHistoryChunk } from '../sessions/historyLoader.js'
+import { loadOlderHistoryChunk } from '@main/sessions/historyLoader.js'
 
 // Session lifecycle + I/O IPC.
 //

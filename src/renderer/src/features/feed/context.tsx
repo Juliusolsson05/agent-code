@@ -5,7 +5,7 @@ import type {
   ToolUseBlock,
 } from '@shared/types/transcript'
 
-import type { AgentProvider } from './types'
+import type { AgentProvider } from '@renderer/features/feed/types'
 
 // ---------------------------------------------------------------------------
 // Feed contexts.

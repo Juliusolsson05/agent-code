@@ -1,12 +1,12 @@
 import { useCallback } from 'react'
 
-import type { SessionId } from '../../types'
+import type { SessionId } from '@renderer/workspace/types'
 
 import type {
   WorkspaceSetSpotlight,
   WorkspaceSetState,
-} from '../context'
-import type { WorkspaceRefs } from '../refs'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // Spotlight mode — focused-pane zoom within the active tab. toggleSpotlight
 // enters with the active tab's currently-focused session; exits if already

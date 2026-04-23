@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef } from 'react'
 
-import { TileTree } from '../../../workspace/tile-tree/TileTree'
-import type { Workspace } from '../../../workspace/workspaceStore'
+import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {
   workspace: Workspace

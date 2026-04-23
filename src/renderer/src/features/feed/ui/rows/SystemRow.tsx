@@ -2,8 +2,8 @@ import { memo } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
 
-import { attachmentLabel } from '../../lib/helpers'
-import { MarkerRow } from '../MarkerRow'
+import { attachmentLabel } from '@renderer/features/feed/lib/helpers'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
 // System-entry renderer — the hidden-by-default row that shows
 // meta-entries from the transcript (permission-mode switches,

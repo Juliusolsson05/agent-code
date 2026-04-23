@@ -8,7 +8,7 @@ import {
   isCodexExecWrapperOutput,
   parseCodexJson,
   stripCodexExecWrapper,
-} from './entries'
+} from '@renderer/workspace/codex/entries'
 
 // Codex rollout → feed entry mapping.
 //

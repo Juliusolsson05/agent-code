@@ -1,4 +1,4 @@
-import type { SessionId, SplitDirection, TileNode } from '../types'
+import type { SessionId, SplitDirection, TileNode } from '@renderer/workspace/types'
 
 export type Rect = {
   x: number

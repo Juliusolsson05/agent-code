@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '../../workspaceState'
-import type { SessionId } from '../../types'
+import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import {
   isCompactBoundaryEntry,
@@ -13,14 +13,14 @@ import {
   codexTurnIdFromRollout,
   mapCodexRolloutToFeedEntries,
   stampCodexTurnId,
-} from '../../codex/rollout'
+} from '@renderer/workspace/codex/rollout'
 import {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
-} from '../../claude/history'
+} from '@renderer/workspace/claude/history'
 
-import type { WorkspaceSetRuntimes } from '../context'
-import type { WorkspaceRefs } from '../refs'
+import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // Older history loader — called by Feed's scroll handler when the
 // user scrolls near the top.

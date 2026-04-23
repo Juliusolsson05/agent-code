@@ -1,9 +1,9 @@
 import { useEffect } from 'react'
 
-import type { SessionId } from '../../types'
-import type { SessionRuntime } from '../../workspaceState'
+import type { SessionId } from '@renderer/workspace/types'
+import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 
-import type { WorkspaceRefs } from '../refs'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // Ship runtime feed-debug entries to the main process on every
 // runtime update. The main-side queue writes them to

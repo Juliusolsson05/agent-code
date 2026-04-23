@@ -5,10 +5,10 @@ export {
   extractCodexAssistantInProgress,
   extractCodexStreamingText,
   detectCodexActivity,
-} from '../../../codex-headless/src/parsers/ScreenParser'
+} from 'codex-headless/parsers/ScreenParser'
 
 export {
   detectCodexApproval,
   isApprovalOverlayVisible,
   type ScreenApproval,
-} from '../../../codex-headless/src/parsers/ApprovalParser'
+} from 'codex-headless/parsers/ApprovalParser'

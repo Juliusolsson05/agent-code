@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
 
-import type { LspManager } from '../lspManager.js'
+import type { LspManager } from '@main/lspManager.js'
 
 // LSP-backed code intelligence for Monaco code blocks.
 //

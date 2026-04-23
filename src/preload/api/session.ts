@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 
-import { subscribe } from './ipc.js'
+import { subscribe } from '@preload/api/ipc.js'
 import type {
   SessionExitEvent,
   SessionHistoryChunk,
@@ -17,7 +17,7 @@ import type {
   SessionResumePromptEvent,
   SessionCompactionStateEvent,
   Unsub,
-} from './types.js'
+} from '@preload/api/types.js'
 
 // Session lifecycle + I/O bridge methods.
 //

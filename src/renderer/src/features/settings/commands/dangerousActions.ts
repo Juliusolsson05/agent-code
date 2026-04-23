@@ -1,4 +1,4 @@
-import type { CommandContext } from '../../command-palette/types'
+import type { CommandContext } from '@renderer/features/command-palette/types'
 
 async function setDangerousAgentsAndReload(
   ctx: CommandContext,

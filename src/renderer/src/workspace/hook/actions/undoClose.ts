@@ -7,13 +7,13 @@ import type {
   Tab,
   TabId,
   TileNode,
-} from '../../types'
-import { collectLeaves } from '../../tile-tree/treeOps'
-import { reinsertPane } from '../../../lib/undoClose'
+} from '@renderer/workspace/types'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { reinsertPane } from '@renderer/lib/undoClose'
 
-import type { WorkspaceSetState } from '../context'
-import type { WorkspaceRefs } from '../refs'
-import type { SessionActions } from './session'
+import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 // Undo-close action. Pops the most recent entry from the undo stack
 // and restores it.

@@ -1,21 +1,21 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '../../workspaceState'
-import type { SessionId, SessionKind, SessionMeta, TileNode } from '../../types'
-import { closeLeaf, collectLeaves } from '../../tile-tree/treeOps'
-import type { Tab } from '../../types'
-import { sessionSpawnErrorMessage } from '../../spawn/errorMessage'
+import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
+import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import type { Tab } from '@renderer/workspace/types'
+import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
 import {
   ghostsToPersist,
   reconcileUpstream,
-} from '../../ghosts'
+} from '@renderer/workspace/ghosts'
 import { reduceGhostLogSansSuperseded as reduceGhostLog } from 'agent-transcript-parser/ghost'
 
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
-} from '../context'
-import type { WorkspaceRefs } from '../refs'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // -----------------------------------------------------------------------------
 // Session lifecycle actions.

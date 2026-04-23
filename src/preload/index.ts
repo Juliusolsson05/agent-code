@@ -1,6 +1,6 @@
 import { contextBridge } from 'electron'
 
-import { api, type Api } from './api/index.js'
+import { api, type Api } from '@preload/api/index.js'
 
 // Preload bridge — multi-session API.
 //
@@ -54,4 +54,4 @@ export type {
   SessionTerminalDataEvent,
   SessionTrustDialogEvent,
   SlashPickerState,
-} from './api/types.js'
+} from '@preload/api/types.js'

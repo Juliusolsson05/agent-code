@@ -1,6 +1,6 @@
 import { memo } from 'react'
 
-import { MarkerRow } from '../MarkerRow'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
 // The single-line "Conversation compacted" divider that appears at
 // the boundary between a pre-compact and post-compact run of entries.

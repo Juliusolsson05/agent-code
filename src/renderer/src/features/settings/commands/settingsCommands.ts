@@ -1,5 +1,5 @@
-import type { CommandDef } from '../../command-palette/types'
-import { dangerousCommands } from './dangerousCommands'
+import type { CommandDef } from '@renderer/features/command-palette/types'
+import { dangerousCommands } from '@renderer/features/settings/commands/dangerousCommands'
 
 export const settingsCommands: CommandDef[] = [
   {

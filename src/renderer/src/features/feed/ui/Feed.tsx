@@ -17,41 +17,41 @@ import {
 import type {
   SemanticLiveTurn,
   StreamPhase,
-} from '../../../workspace/workspaceState'
-import { WorkIndicator } from '../WorkIndicator'
-import { toolHintFromTurn } from '../workIndicatorHints'
+} from '@renderer/workspace/workspaceState'
+import { WorkIndicator } from '@renderer/features/feed/WorkIndicator'
+import { toolHintFromTurn } from '@renderer/features/feed/workIndicatorHints'
 import {
   ProviderContext,
   ToolUseIndexContext,
   ToolResultIndexContext,
   CodeRenderContext,
-} from '../context'
+} from '@renderer/features/feed/context'
 import {
   type AgentProvider,
   type ScrollInfo,
   type VisibleDecision,
   type DebugVisibleRow,
-} from '../types'
-import { scrollPositions } from '../scroll'
+} from '@renderer/features/feed/types'
+import { scrollPositions } from '@renderer/features/feed/scroll'
 import {
   buildToolUseIndex,
   buildToolResultIndex,
   debugKeyForEntry,
   debugLabelForEntry,
-} from '../lib/helpers'
-import { SemanticStreamingTurn } from './semantic'
+} from '@renderer/features/feed/lib/helpers'
+import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
 import {
   EAGER_TAIL,
   EntryRow,
   LazyEntry,
-} from './rows'
+} from '@renderer/features/feed/ui/rows'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
 // Re-export — many external callers import these types from Feed
 // directly rather than reaching into ../types/../context. Keep the
 // alias stable until the sweep is over.
-export type { AgentProvider, ScrollInfo } from '../types'
-export { CodeRenderContext } from '../context'
+export type { AgentProvider, ScrollInfo } from '@renderer/features/feed/types'
+export { CodeRenderContext } from '@renderer/features/feed/context'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.

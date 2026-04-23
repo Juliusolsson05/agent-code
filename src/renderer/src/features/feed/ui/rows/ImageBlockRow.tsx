@@ -2,10 +2,10 @@ import { memo } from 'react'
 
 import type { ContentBlock } from '@shared/types/transcript'
 
-import { imageDataUrl } from '../../lib/helpers'
-import { MarkerRow } from '../MarkerRow'
+import { imageDataUrl } from '@renderer/features/feed/lib/helpers'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
-import { UserBand } from './primitives'
+import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 
 // Image content-block renderer. Handles both directions of the
 // conversation: an inline image pasted by the user (`❯` marker +

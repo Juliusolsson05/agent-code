@@ -8,28 +8,28 @@ import type {
   SplitDirection,
   Tab,
   TileNode,
-} from '../../types'
-import { RATIO_DEFAULT } from '../../types'
+} from '@renderer/workspace/types'
+import { RATIO_DEFAULT } from '@renderer/workspace/types'
 import {
   closeLeaf,
   collectLeaves,
   insertBesideLeaf,
   splitLeaf,
   wrapRootWithLeaf,
-} from '../../tile-tree/treeOps'
-import { findBestRemainingFocus, findDirectionalNeighbor } from '../../tile-tree/geometry'
-import { findParentSplitInfo } from '../../../lib/undoClose'
-import { titleFromCwd } from '../../layout/helpers'
-import type { PlacementTarget } from '../../../features/workspace/lib/newAgentPlacement'
+} from '@renderer/workspace/tile-tree/treeOps'
+import { findBestRemainingFocus, findDirectionalNeighbor } from '@renderer/workspace/tile-tree/geometry'
+import { findParentSplitInfo } from '@renderer/lib/undoClose'
+import { titleFromCwd } from '@renderer/workspace/layout/helpers'
+import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetSpotlight,
   WorkspaceSetState,
   WorkspaceSetTileTabs,
-} from '../context'
-import type { WorkspaceRefs } from '../refs'
-import type { SessionActions } from './session'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.

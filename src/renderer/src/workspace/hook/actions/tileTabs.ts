@@ -1,14 +1,14 @@
 import { useCallback } from 'react'
 
-import type { SessionId, SplitDirection, TabId } from '../../types'
-import { equalRatios, normalizeRatios } from '../../layout/helpers'
+import type { SessionId, SplitDirection, TabId } from '@renderer/workspace/types'
+import { equalRatios, normalizeRatios } from '@renderer/workspace/layout/helpers'
 
 import type {
   WorkspaceSetSpotlight,
   WorkspaceSetState,
   WorkspaceSetTileTabs,
-} from '../context'
-import type { WorkspaceRefs } from '../refs'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // Tile-tabs actions. Opening a tile-tab set tiles multiple tabs side
 // by side inside a single tab view (meta-tabs). Focus + resize here

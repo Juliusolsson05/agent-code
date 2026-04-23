@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { buildCommandRegistry } from '../registry'
-import type { CommandContext, ResolvedCommand } from '../types'
-import type { Workspace } from '../../../workspace/workspaceStore'
+import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
+import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //

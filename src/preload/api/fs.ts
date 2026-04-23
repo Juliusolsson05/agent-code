@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 
-import type { SavedClaudeImage } from './types.js'
+import type { SavedClaudeImage } from '@preload/api/types.js'
 
 // Filesystem bridge — path expansion + directory listing + Claude
 // image paste cache.

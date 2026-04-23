@@ -1,1 +1,1 @@
-export { useAppStore } from './store'
+export { useAppStore } from '@renderer/state/store'

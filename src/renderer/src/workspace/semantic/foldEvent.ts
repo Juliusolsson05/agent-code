@@ -1,5 +1,5 @@
-import type { SessionKind } from '../types'
-import type { SemanticLiveBlock, SemanticRuntimeState } from '../workspaceState'
+import type { SessionKind } from '@renderer/workspace/types'
+import type { SemanticLiveBlock, SemanticRuntimeState } from '@renderer/workspace/workspaceState'
 
 import {
   SEMANTIC_ERROR_CAP,
@@ -12,8 +12,8 @@ import {
   hasPendingSemanticTools,
   semanticHistoryRow,
   semanticToIndex,
-} from './helpers'
-import { summarizeSemanticEvent } from './summarize'
+} from '@renderer/workspace/semantic/helpers'
+import { summarizeSemanticEvent } from '@renderer/workspace/semantic/summarize'
 
 // ---------------------------------------------------------------------------
 // foldSemanticEvent — the one-session-one-reducer contract

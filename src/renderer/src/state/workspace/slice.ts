@@ -1,13 +1,13 @@
 import type { StateCreator } from 'zustand'
 
-import type { AppStore, WorkspaceSlice } from '../types'
-import type { WorkspaceState } from '../../workspace/types'
+import type { AppStore, WorkspaceSlice } from '@renderer/state/types'
+import type { WorkspaceState } from '@renderer/workspace/types'
 import type {
   ReaderModeState,
   SessionRuntime,
   SpotlightState,
   TileTabsState,
-} from '../../workspace/workspaceState'
+} from '@renderer/workspace/workspaceState'
 
 function applyUpdater<T>(prev: T, next: T | ((prev: T) => T)): T {
   return typeof next === 'function'

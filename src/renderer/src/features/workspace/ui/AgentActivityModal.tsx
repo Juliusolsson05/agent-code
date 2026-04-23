@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { useAppStore } from '../../../state/hooks'
-import { collectLeaves } from '../../../workspace/tile-tree/treeOps'
-import type { SessionId, Tab } from '../../../workspace/types'
-import type { Workspace } from '../../../workspace/workspaceStore'
+import { useAppStore } from '@renderer/state/hooks'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import type { SessionId, Tab } from '@renderer/workspace/types'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
 
 // AgentActivityModal — overview of every visible pane grouped by tab

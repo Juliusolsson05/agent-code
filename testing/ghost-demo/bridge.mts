@@ -19,6 +19,7 @@ import {
   mergeWithUpstream,
   reduceGhostLog,
   toCodex,
+  type ClaudeEntry,
   type GhostEntry,
 } from '../../agent-transcript-parser/dist/index.js'
 
@@ -161,15 +162,15 @@ check(
 // 2. Merge — ghosts appear after upstream entries
 // ---------------------------------------------------------------------------
 
-const upstreamBefore: Entry[] = []
-const merged = mergeWithUpstream(upstreamBefore, ghostsV2) as Entry[]
+const upstreamBefore: ClaudeEntry[] = []
+const merged = mergeWithUpstream(upstreamBefore, ghostsV2) as ClaudeEntry[]
 check('merged list contains both ghosts when no upstream', merged.length === 2)
 
 // ---------------------------------------------------------------------------
 // 3. reconcileUpstream — supersede by message.id
 // ---------------------------------------------------------------------------
 
-const upstreamAssistant: Entry = {
+const upstreamAssistant: ClaudeEntry = {
   type: 'assistant',
   uuid: 'real-uuid-42',
   parentUuid: null,
@@ -188,7 +189,7 @@ const upstreamAssistant: Entry = {
       },
     ],
   },
-} as Entry
+} as ClaudeEntry
 
 const reconciled = reconcileUpstream(upstreamAssistant, ghostsV2)
 
@@ -197,7 +198,7 @@ check(
   [...reconciled.values()].every(g => g._atp.supersededBy === 'real-uuid-42'),
 )
 
-const mergedAfter = mergeWithUpstream([upstreamAssistant], reconciled) as Entry[]
+const mergedAfter = mergeWithUpstream([upstreamAssistant], reconciled) as ClaudeEntry[]
 check(
   'merged tail no longer contains ghosts after supersede',
   mergedAfter.length === 1 && mergedAfter[0]!.uuid === 'real-uuid-42',

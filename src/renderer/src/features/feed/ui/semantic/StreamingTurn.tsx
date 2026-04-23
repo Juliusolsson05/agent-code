@@ -1,13 +1,13 @@
 import { memo } from 'react'
 
-import type { SemanticLiveTurn } from '../../../../workspace/workspaceState'
+import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
-import { MarkerRow } from '../MarkerRow'
-import { StreamingProse } from '../markdown'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
-import { SemanticCollapsedActivityRow } from './CollapsedActivityRow'
-import { SemanticLiveBlockRow } from './BlockRow'
-import { buildSemanticRenderUnits } from './renderUnits'
+import { SemanticCollapsedActivityRow } from '@renderer/features/feed/ui/semantic/CollapsedActivityRow'
+import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
+import { buildSemanticRenderUnits } from '@renderer/features/feed/ui/semantic/renderUnits'
 
 // WHY render the semantic turn block-by-block instead of just dumping
 // `turn.text` through markdown:

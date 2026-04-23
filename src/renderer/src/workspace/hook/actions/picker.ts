@@ -1,14 +1,14 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime } from '../../workspaceState'
-import type { SessionId } from '../../types'
+import { emptyRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionId } from '@renderer/workspace/types'
 import {
   assistantUuidsWithText,
   extractAssistantByUuid,
-} from '../../../lib/copyAssistant'
+} from '@renderer/lib/copyAssistant'
 
-import type { WorkspaceSetRuntimes } from '../context'
-import type { WorkspaceRefs } from '../refs'
+import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // ---- Copy Assistant picker actions ----
 //

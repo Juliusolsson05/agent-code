@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { SessionIndexEntry, SessionIndexPrompt } from '../../../../../preload'
-import type { Workspace } from '../../../workspace/workspaceStore'
+import type { SessionIndexEntry, SessionIndexPrompt } from '@preload/index'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // PromptSearchModal — cross-session prompt search.
 //

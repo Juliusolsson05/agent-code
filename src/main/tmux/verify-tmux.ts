@@ -2,8 +2,8 @@
 // Exits non-zero on any failure. No test framework — this matches
 // the verify scripts in the headless packages.
 
-import { TmuxRegistry } from './TmuxRegistry.js'
-import { reconcile } from './tmuxRecovery.js'
+import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
+import { reconcile } from '@main/tmux/tmuxRecovery.js'
 
 const PREFIX = process.env.TMUX_TEST_PREFIX ?? 'ccshell-verify-'
 let failed = 0

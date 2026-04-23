@@ -14,7 +14,7 @@
 // RendererProviderConfig, and nothing re-joins them.
 
 import type { ComponentType } from 'react'
-import type { SessionOptions, SessionInfo } from './session.js'
+import type { SessionOptions, SessionInfo } from '@shared/types/session.js'
 
 // Props the shell passes to every provider's TileLeaf.
 export type TileLeafProps = {

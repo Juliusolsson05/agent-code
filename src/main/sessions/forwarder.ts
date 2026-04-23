@@ -1,8 +1,8 @@
-import type { SessionManager } from '../sessionManager.js'
-import type { LspManager } from '../lspManager.js'
+import type { SessionManager } from '@main/sessionManager.js'
+import type { LspManager } from '@main/lspManager.js'
 
-import { sendToMainWindow } from '../window/mainWindow.js'
-import { enqueueJsonl, flushAndDropJsonl } from './jsonlCoalescer.js'
+import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { enqueueJsonl, flushAndDropJsonl } from '@main/sessions/jsonlCoalescer.js'
 
 // Session event forwarder.
 //

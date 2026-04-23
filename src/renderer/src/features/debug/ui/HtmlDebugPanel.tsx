@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import { sanitizeHtml } from '../../../lib/sanitizeHtml'
+import { sanitizeHtml } from '@renderer/lib/sanitizeHtml'
 
 // HtmlDebugPanel — grabs the focused pane's `outerHTML` and shows
 // it as copy-pasteable text. Fourth in the debug-panel family

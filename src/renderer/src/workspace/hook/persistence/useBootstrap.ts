@@ -1,15 +1,15 @@
 import { useEffect } from 'react'
 
-import type { PersistedWorkspace } from '../../persistence'
+import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
   WorkspaceSetTileTabs,
-} from '../context'
-import type { WorkspaceRefs } from '../refs'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
-import { rehydrateWorkspace } from './rehydrate'
+import { rehydrateWorkspace } from '@renderer/workspace/hook/persistence/rehydrate'
 
 // Once-only mount effect.
 //

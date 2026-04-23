@@ -5,19 +5,19 @@ import type {
   SessionRuntime,
   SpotlightState,
   TileTabsState,
-} from '../../workspaceState'
-import type { SessionId, Tab } from '../../types'
-import { collectLeaves } from '../../tile-tree/treeOps'
+} from '@renderer/workspace/workspaceState'
+import type { SessionId, Tab } from '@renderer/workspace/types'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
   assistantUuidsWithText,
-} from '../../../lib/copyAssistant'
-import { ratiosEqual, sanitizeTileTabsState } from '../../layout/helpers'
+} from '@renderer/lib/copyAssistant'
+import { ratiosEqual, sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 
 import type {
   WorkspaceSetReaderMode,
   WorkspaceSetSpotlight,
   WorkspaceSetTileTabs,
-} from '../context'
+} from '@renderer/workspace/hook/context'
 
 // Invalidation effects — these fire when state changes and adjust
 // orthogonal slices so they stay consistent with the tile tree.

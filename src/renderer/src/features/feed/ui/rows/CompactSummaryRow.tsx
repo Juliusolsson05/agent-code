@@ -2,8 +2,8 @@ import { memo, useMemo, useState } from 'react'
 
 import type { CompactSummaryEntry } from '@shared/types/transcript'
 
-import { compactSummaryText, truncateCompactSummary } from '../../lib/helpers'
-import { TextProse } from '../markdown'
+import { compactSummaryText, truncateCompactSummary } from '@renderer/features/feed/lib/helpers'
+import { TextProse } from '@renderer/features/feed/ui/markdown'
 
 // Compact-summary entry renderer — the card that replaces a
 // compacted run of turns with a human-readable summary. Shown as a

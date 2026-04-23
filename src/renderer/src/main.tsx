@@ -1,8 +1,8 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import App from './App'
-import { GlobalToastProvider } from './ui/GlobalToast'
-import './styles.css'
+import App from '@renderer/App'
+import { GlobalToastProvider } from '@renderer/ui/GlobalToast'
+import '@renderer/styles.css'
 import 'highlight.js/styles/github-dark.css'
 import 'monaco-editor/min/vs/editor/editor.main.css'
 // xterm.js base CSS — required for the TerminalLeaf component to render

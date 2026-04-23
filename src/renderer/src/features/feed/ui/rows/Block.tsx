@@ -17,22 +17,22 @@ import type {
 } from '@shared/types/transcript'
 import { detectGitIntent } from '@shared/git/gitDetect'
 
-import { useAppStore } from '../../../../state/hooks'
-import { GitCardRow } from '../../../git/ui/GitRows'
+import { useAppStore } from '@renderer/state/hooks'
+import { GitCardRow } from '@renderer/features/git/ui/GitRows'
 
-import { extractToolCommand, toolResultText } from '../../lib/helpers'
+import { extractToolCommand, toolResultText } from '@renderer/features/feed/lib/helpers'
 import {
   ProviderContext,
   ToolResultIndexContext,
   ToolUseIndexContext,
-} from '../../context'
-import { MarkerRow } from '../MarkerRow'
-import { TextProse } from '../markdown'
+} from '@renderer/features/feed/context'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { TextProse } from '@renderer/features/feed/ui/markdown'
 
-import { ImageBlockRow } from './ImageBlockRow'
-import { ToolBand, UserBand } from './primitives'
-import { ToolResultRow } from './ToolResultRow'
-import { ToolUseRow } from './ToolUseRow'
+import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
+import { ToolBand, UserBand } from '@renderer/features/feed/ui/rows/primitives'
+import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
+import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
 
 /* ---------- Block dispatcher ---------- */
 

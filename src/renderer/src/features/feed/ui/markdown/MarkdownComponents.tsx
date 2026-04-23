@@ -1,8 +1,8 @@
 import { useContext, type ReactNode } from 'react'
 
-import { CodeBlock } from '../../../../lib/code/CodeBlock'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 
-import { CodeRenderContext } from '../../context'
+import { CodeRenderContext } from '@renderer/features/feed/context'
 
 // react-markdown component overrides used inside the feed.
 //

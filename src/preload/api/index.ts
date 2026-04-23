@@ -1,13 +1,13 @@
-import { sessionApi } from './session.js'
-import { providerApi } from './provider.js'
-import { sessionsApi } from './sessions.js'
-import { lspApi } from './lsp.js'
-import { workspaceApi } from './workspace.js'
-import { fsApi } from './fs.js'
-import { debugApi } from './debug.js'
-import { systemApi } from './system.js'
-import { gitApi } from './git.js'
-import { ghostApi } from './ghost.js'
+import { sessionApi } from '@preload/api/session.js'
+import { providerApi } from '@preload/api/provider.js'
+import { sessionsApi } from '@preload/api/sessions.js'
+import { lspApi } from '@preload/api/lsp.js'
+import { workspaceApi } from '@preload/api/workspace.js'
+import { fsApi } from '@preload/api/fs.js'
+import { debugApi } from '@preload/api/debug.js'
+import { systemApi } from '@preload/api/system.js'
+import { gitApi } from '@preload/api/git.js'
+import { ghostApi } from '@preload/api/ghost.js'
 
 // Composed preload API surface.
 //

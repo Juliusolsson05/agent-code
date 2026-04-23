@@ -1,8 +1,8 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '../../workspaceState'
-import type { SessionId } from '../../types'
-import type { WorkspaceSetRuntimes } from '../context'
+import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionId } from '@renderer/workspace/types'
+import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 
 // Draft input + image actions.
 //

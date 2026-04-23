@@ -59,4 +59,4 @@ function extractClaude(entries: readonly Entry[]): string | null {
 export {
   extractAssistantByUuid,
   assistantUuidsWithText,
-} from '../features/copy-assistant/lib/extractAssistantByUuid'
+} from '@renderer/features/copy-assistant/lib/extractAssistantByUuid'

@@ -10,8 +10,8 @@
 // Direct file imports — the parser files are pure TypeScript, safe for
 // the renderer bundle. The headless package entry points pull in Node
 // deps so we can't import through them in browser context.
-import { extractAssistantInProgress as claudeExtract } from './claudeScreen'
-import { extractCodexAssistantInProgress as codexExtract } from './codexScreen'
+import { extractAssistantInProgress as claudeExtract } from '@shared/parsers/claudeScreen'
+import { extractCodexAssistantInProgress as codexExtract } from '@shared/parsers/codexScreen'
 
 export type AgentProvider = 'claude' | 'codex'
 

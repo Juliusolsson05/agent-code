@@ -4,8 +4,8 @@ import type {
   SessionMeta,
   TabId,
   TileNode,
-} from './types'
-import type { TileTabsState } from './workspaceState'
+} from '@renderer/workspace/types'
+import type { TileTabsState } from '@renderer/workspace/workspaceState'
 
 // ---------------------------------------------------------------------------
 // Persisted state shape (serialized to ~/.config/cc-shell/workspace.json)

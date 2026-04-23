@@ -17,7 +17,7 @@
 // chooses atp's default options and threads the runtime's state.
 
 import type { Entry } from '@shared/types/transcript'
-import type { SessionRuntime } from './workspaceState'
+import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 
 /**
  * Merged entry list for rendering. Superseded ghosts are dropped;

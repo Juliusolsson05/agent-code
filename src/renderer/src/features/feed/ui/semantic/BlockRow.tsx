@@ -1,16 +1,16 @@
 import { memo } from 'react'
 
-import { CodeBlock } from '../../../../lib/code/CodeBlock'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import {
   parseSemanticTodos,
   type SemanticLiveTurn,
-} from '../../../../workspace/workspaceState'
+} from '@renderer/workspace/workspaceState'
 
-import { splitStreamingCodeFence } from '../../lib/helpers'
-import { MarkerRow } from '../MarkerRow'
-import { StreamingProse } from '../markdown'
+import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
-import { SemanticTodoList } from './TodoList'
+import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
 
 // Single live-block renderer — this is the big dispatch for the
 // semantic streaming path. Each SemanticLiveTurn block is one of a

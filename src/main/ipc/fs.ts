@@ -3,7 +3,7 @@ import { homedir } from 'os'
 import { join, resolve } from 'path'
 import { readdir, stat } from 'fs/promises'
 
-import { saveClaudeImage } from '../storage/claudeImageCache.js'
+import { saveClaudeImage } from '@main/storage/claudeImageCache.js'
 
 // Filesystem-level IPC — path expansion, directory listing, Claude
 // image paste cache.

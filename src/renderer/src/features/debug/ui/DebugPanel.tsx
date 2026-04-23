@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 
-import type { SessionRuntime } from '../../../workspace/workspaceStore'
+import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
 
 // DebugPanel — inline diagnostic overlay showing the raw state of the

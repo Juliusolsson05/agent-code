@@ -1,13 +1,13 @@
-import { layoutCommands } from '../workspace/commands/layoutCommands'
-import { paneCommands } from '../workspace/commands/paneCommands'
-import { sessionCommands } from '../workspace/commands/sessionCommands'
-import { tabCommands } from '../workspace/commands/tabCommands'
-import { settingsCommands } from '../settings/commands/settingsCommands'
-import { spotlightCommands } from '../spotlight/commands/spotlightCommands'
-import { tileTabsCommands } from '../tile-tabs/commands/tileTabsCommands'
-import { readerCommands } from '../reader/commands/readerCommands'
-import { copyAssistantCommands } from '../copy-assistant/commands/copyAssistantCommands'
-import type { CommandContext, CommandDef, ResolvedCommand } from './types'
+import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
+import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
+import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
+import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
+import { settingsCommands } from '@renderer/features/settings/commands/settingsCommands'
+import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlightCommands'
+import { tileTabsCommands } from '@renderer/features/tile-tabs/commands/tileTabsCommands'
+import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
+import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
+import type { CommandContext, CommandDef, ResolvedCommand } from '@renderer/features/command-palette/types'
 
 const commandDefs: CommandDef[] = [
   ...tabCommands,

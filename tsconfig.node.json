@@ -33,8 +33,11 @@
     "baseUrl": ".",
     "paths": {
       "claude-code-headless": ["./claude-code-headless/src/index.ts"],
+      "claude-code-headless/*": ["./claude-code-headless/src/*"],
       "codex-headless": ["./codex-headless/src/index.ts"],
+      "codex-headless/*": ["./codex-headless/src/*"],
       "agent-transcript-parser": ["./agent-transcript-parser/src/index.ts"],
+      "agent-transcript-parser/*": ["./agent-transcript-parser/src/*"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],

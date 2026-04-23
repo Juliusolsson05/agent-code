@@ -1,17 +1,17 @@
 import { app, BrowserWindow } from 'electron'
 import { readFile } from 'fs/promises'
 
-import { SessionManager } from './sessionManager.js'
-import { LspManager } from './lspManager.js'
-import { GhostJournalRegistry } from './ghostJournal.js'
-import { TmuxRegistry } from './tmux/TmuxRegistry.js'
-import { reconcile, type PersistedTerminalRef } from './tmux/tmuxRecovery.js'
+import { SessionManager } from '@main/sessionManager.js'
+import { LspManager } from '@main/lspManager.js'
+import { GhostJournalRegistry } from '@main/ghostJournal.js'
+import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
+import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
-import { STATE_FILE } from './storage/paths.js'
-import { cleanupClaudeImageCacheDir } from './storage/claudeImageCache.js'
-import { createMainWindow } from './window/mainWindow.js'
-import { wireSessionForwarder } from './sessions/forwarder.js'
-import { registerAllIpc } from './ipc/index.js'
+import { STATE_FILE } from '@main/storage/paths.js'
+import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
+import { createMainWindow } from '@main/window/mainWindow.js'
+import { wireSessionForwarder } from '@main/sessions/forwarder.js'
+import { registerAllIpc } from '@main/ipc/index.js'
 
 // Main process — thin Electron host.
 //

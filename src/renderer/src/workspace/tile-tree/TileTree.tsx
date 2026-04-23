@@ -1,10 +1,10 @@
 import { useCallback, useRef } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
-import { TerminalLeaf } from './TerminalLeaf'
-import type { Workspace } from '../workspaceStore'
-import type { SessionId, TabId, TileNode } from '../types'
-import { collectLeaves } from './treeOps'
+import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
 // TileTree — recursive renderer for a tab's binary-split tree.
 //

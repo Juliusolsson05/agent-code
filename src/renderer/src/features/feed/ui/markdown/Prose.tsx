@@ -1,9 +1,9 @@
 import { memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 
-import { COMPLETED_REMARK, STREAMING_REMARK } from '../../lib/remark-plugins'
+import { COMPLETED_REMARK, STREAMING_REMARK } from '@renderer/features/feed/lib/remark-plugins'
 
-import { MARKDOWN_COMPONENTS } from './MarkdownComponents'
+import { MARKDOWN_COMPONENTS } from '@renderer/features/feed/ui/markdown/MarkdownComponents'
 
 // Two prose renderers with the same visual surface but different
 // remark plugin sets. TextProse is for committed JSONL assistant

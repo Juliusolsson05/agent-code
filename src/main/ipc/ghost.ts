@@ -1,8 +1,8 @@
 import { ipcMain } from 'electron'
 import type { GhostEntry } from 'agent-transcript-parser'
 
-import type { GhostJournalRegistry } from '../ghostJournal.js'
-import { readGhostLog } from '../ghostJournal.js'
+import type { GhostJournalRegistry } from '@main/ghostJournal.js'
+import { readGhostLog } from '@main/ghostJournal.js'
 
 // Ghost journal IPC.
 //

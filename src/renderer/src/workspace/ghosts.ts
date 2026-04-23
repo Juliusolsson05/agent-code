@@ -76,7 +76,7 @@ import { isConversationEntry } from '@shared/types/transcript'
 import type {
   SemanticLiveBlock,
   SemanticLiveTurn,
-} from './workspaceState'
+} from '@renderer/workspace/workspaceState'
 
 // -----------------------------------------------------------------------------
 // Semantic block → Claude content blocks

@@ -1,11 +1,11 @@
 import { useCallback } from 'react'
 
-import type { SessionId } from '../../types'
-import type { ClaudeDraftImage } from '../../workspaceState'
+import type { SessionId } from '@renderer/workspace/types'
+import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
 
-import type { WorkspaceSetRuntimes } from '../context'
-import type { WorkspaceRefs } from '../refs'
-import type { SessionActions } from './session'
+import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 // Provider-level actions on the focused pane.
 //

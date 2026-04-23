@@ -7,48 +7,48 @@ import {
   isConversationEntry,
 } from '@shared/types/transcript'
 import { detectCodexApproval } from '@shared/parsers/codexScreen'
-import { emptyRuntime, type SessionRuntime } from '../../workspaceState'
-import { appendFeedDebugLog, type FeedDebugInput } from '../../runtime/feedDebug'
-import type { SessionId } from '../../types'
+import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/workspace/runtime/feedDebug'
+import type { SessionId } from '@renderer/workspace/types'
 import {
   isSemanticTurnRunning,
   withDerivedSessionStatus,
-} from '../../semantic/helpers'
-import { foldSemanticEvent } from '../../semantic/foldEvent'
-import { summarizeSemanticEventForDebug } from '../../semantic/summarize'
+} from '@renderer/workspace/semantic/helpers'
+import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
+import { summarizeSemanticEventForDebug } from '@renderer/workspace/semantic/summarize'
 import {
   extractCodexProviderSessionId,
   isCodexRolloutEntry,
   isOptimisticCodexUserEntry,
-} from '../../codex/entries'
+} from '@renderer/workspace/codex/entries'
 import {
   codexHistoryMarker,
   codexTurnIdFromRollout,
   mapCodexRolloutToFeedEntries,
   stampCodexTurnId,
-} from '../../codex/rollout'
+} from '@renderer/workspace/codex/rollout'
 import {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
-} from '../../claude/history'
+} from '@renderer/workspace/claude/history'
 import {
   entryTextContent,
   indexEntryIntoMaps,
   summarizeEntryForDebug,
-} from '../../entries/utils'
-import { pickerEqual } from '../../layout/helpers'
+} from '@renderer/workspace/entries/utils'
+import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   ghostsFromSemanticTurn,
   ghostsToPersist,
   reconcileUpstream,
-} from '../../ghosts'
-import type { StreamPhase } from '../../workspaceState'
+} from '@renderer/workspace/ghosts'
+import type { StreamPhase } from '@renderer/workspace/workspaceState'
 
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
-} from '../context'
-import type { WorkspaceRefs } from '../refs'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // -----------------------------------------------------------------------------
 // useIpcSubscriptions — the one big side-effect that wires every

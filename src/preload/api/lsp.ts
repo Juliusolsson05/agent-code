@@ -4,7 +4,7 @@ import type {
   LspDiagnosticsEvent,
   LspSemanticLegend,
   Unsub,
-} from './types.js'
+} from '@preload/api/types.js'
 
 // LSP bridge methods.
 //

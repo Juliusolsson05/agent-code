@@ -3,7 +3,7 @@ import { ipcMain } from 'electron'
 import {
   queueFeedDebugAppend,
   type FeedDebugPersistEntry,
-} from '../storage/feedDebugLog.js'
+} from '@main/storage/feedDebugLog.js'
 
 // Debug-panel IPC.
 //

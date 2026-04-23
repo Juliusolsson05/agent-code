@@ -1,4 +1,4 @@
-import type { ScrollPosition } from './types'
+import type { ScrollPosition } from '@renderer/features/feed/types'
 
 // Per-session scroll position memory.
 //

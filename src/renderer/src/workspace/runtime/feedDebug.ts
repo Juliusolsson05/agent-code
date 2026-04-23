@@ -2,7 +2,7 @@ import type {
   FeedDebugEntry,
   FeedDebugLayer,
   SessionRuntime,
-} from '../workspaceState'
+} from '@renderer/workspace/workspaceState'
 
 // Per-session feed-debug log — the runtime-side helper. Every
 // mutation to SessionRuntime that crosses an interesting boundary

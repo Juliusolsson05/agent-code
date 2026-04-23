@@ -7,10 +7,10 @@ import {
   type Entry,
 } from '@shared/types/transcript'
 
-import { CompactBoundaryRow } from './CompactBoundaryRow'
-import { CompactSummaryRow } from './CompactSummaryRow'
-import { ConversationRow } from './ConversationRow'
-import { SystemRow } from './SystemRow'
+import { CompactBoundaryRow } from '@renderer/features/feed/ui/rows/CompactBoundaryRow'
+import { CompactSummaryRow } from '@renderer/features/feed/ui/rows/CompactSummaryRow'
+import { ConversationRow } from '@renderer/features/feed/ui/rows/ConversationRow'
+import { SystemRow } from '@renderer/features/feed/ui/rows/SystemRow'
 
 // Memoized: entry objects are stable across store updates (we append,
 // never mutate), so shallow compare by entry reference skips re-render

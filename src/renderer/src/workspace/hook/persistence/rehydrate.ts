@@ -1,4 +1,4 @@
-import { emptyRuntime, type SessionRuntime, type TileTabsState } from '../../workspaceState'
+import { emptyRuntime, type SessionRuntime, type TileTabsState } from '@renderer/workspace/workspaceState'
 import type {
   BuriedPaneRecord,
   SessionId,
@@ -6,17 +6,17 @@ import type {
   SessionMeta,
   Tab,
   TileNode,
-} from '../../types'
-import { collectLeaves } from '../../tile-tree/treeOps'
-import { sanitizeTileTabsState } from '../../layout/helpers'
-import type { PersistedWorkspace } from '../../persistence'
+} from '@renderer/workspace/types'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
+import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 
 import type {
   WorkspaceSetRuntimes,
   WorkspaceSetState,
   WorkspaceSetTileTabs,
-} from '../context'
-import type { WorkspaceRefs } from '../refs'
+} from '@renderer/workspace/hook/context'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // Remap a persisted tree by replacing every sessionId with a freshly
 // spawned one (spawn happens as we walk). Returns the remapped tree

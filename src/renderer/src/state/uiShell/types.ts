@@ -1,4 +1,4 @@
-import type { TabId, SessionId } from '../../workspace/types'
+import type { TabId, SessionId } from '@renderer/workspace/types'
 
 export type UiShellState = {
   commandPaletteOpen: boolean

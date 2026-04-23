@@ -13,7 +13,7 @@
 import { spawn as childSpawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 
-import { TMUX_SESSION_FLAGS } from './tmuxConfig.js'
+import { TMUX_SESSION_FLAGS } from '@main/tmux/tmuxConfig.js'
 
 export type TmuxRegistryOptions = {
   /** All session names this registry manages will start with this

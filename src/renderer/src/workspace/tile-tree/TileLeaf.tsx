@@ -3,19 +3,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { CodexApprovalModal } from '@providers/codex/renderer/CodexApprovalModal'
 import { ResumePromptModal } from '@providers/claude/renderer/ResumePromptModal'
-import { useGlobalToast } from '../../ui/GlobalToast'
-import { Feed } from '../../features/feed/ui/Feed'
-import type { ScrollInfo } from '../../features/feed/ui/Feed'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import { Feed } from '@renderer/features/feed/ui/Feed'
+import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { TrustDialogModal } from '@providers/claude/renderer/TrustDialogModal'
 import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
-import { extractLatestUserPrompts } from '../../features/workspace/lib/latestUserPrompts'
-import type { SessionRuntime, Workspace } from '../workspaceStore'
+import { extractLatestUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
+import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
   selectMergedEntries,
   shouldShowSemanticStreaming,
-} from '../mergedEntries'
-import type { SessionId, SessionKind } from '../types'
-import type { ClaudeDraftImage } from '../workspaceState'
+} from '@renderer/workspace/mergedEntries'
+import type { SessionId, SessionKind } from '@renderer/workspace/types'
+import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
 
 // Claude's TUI has its own paste-state machine. Large input and bracketed
 // paste do NOT go straight from "bytes arrived" to "submit immediately" —

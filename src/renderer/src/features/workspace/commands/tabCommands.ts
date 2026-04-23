@@ -1,4 +1,4 @@
-import type { CommandDef } from '../../command-palette/types'
+import type { CommandDef } from '@renderer/features/command-palette/types'
 
 export const tabCommands: CommandDef[] = [
   {

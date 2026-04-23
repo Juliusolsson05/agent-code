@@ -1,4 +1,4 @@
-import { ACCENTS, isDarkThemeMode, type Settings } from './types'
+import { ACCENTS, isDarkThemeMode, type Settings } from '@renderer/state/settings/types'
 
 export function applyTheme(settings: Settings): void {
   const root = document.documentElement

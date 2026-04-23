@@ -1,18 +1,18 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime } from '../../workspaceState'
-import type { SessionId } from '../../types'
+import { emptyRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import {
   appendFeedDebugLog,
-} from '../../runtime/feedDebug'
-import { withDerivedSessionStatus } from '../../semantic/helpers'
+} from '@renderer/workspace/runtime/feedDebug'
+import { withDerivedSessionStatus } from '@renderer/workspace/semantic/helpers'
 import {
   entryTextContent,
-} from '../../entries/utils'
-import { isOptimisticCodexUserEntry } from '../../codex/entries'
+} from '@renderer/workspace/entries/utils'
+import { isOptimisticCodexUserEntry } from '@renderer/workspace/codex/entries'
 
-import type { WorkspaceSetRuntimes } from '../context'
+import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 
 // Streaming baseline + optimistic-codex-user entry.
 //

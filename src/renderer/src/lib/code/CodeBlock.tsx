@@ -85,7 +85,7 @@ export const CodeBlock = memo(function CodeBlock({
     const cleanups: Array<() => void> = []
 
     void (async () => {
-      const { ensureSemanticProvider, getMonaco } = await import('./monacoRuntime')
+      const { ensureSemanticProvider, getMonaco } = await import('@renderer/lib/code/monacoRuntime')
       const monaco = await getMonaco()
       if (disposed || !containerRef.current) return
 
