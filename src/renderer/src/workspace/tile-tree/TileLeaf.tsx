@@ -32,7 +32,11 @@ import {
   parseImagesFromHtml,
   readImagesFromClipboard,
 } from '@renderer/workspace/tile-tree/TileLeaf/claudeImages'
-import { providerLabel, shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
+import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'
+import { CompactionStrip } from '@renderer/workspace/tile-tree/TileLeaf/CompactionStrip'
+import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
+import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIndicator'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -741,23 +745,11 @@ export function TileLeaf({
       `}
       onMouseDown={onFocusRequest}
     >
-      {/* Pane header: compact status strip.
-          In status mode, working panes paint with the theme accent;
-          idle/exited panes get no fill — the absence of color is the
-          signal, so a glance across the grid highlights only the
-          panes that still want attention. Previous design used
-          green/red, but red read as "error" for merely idle panes. */}
-      <div className={`flex items-center justify-between px-3 border-b border-border text-[10px] font-code select-none ${
-        workspace.statusMode
-          ? isSessionLive
-            ? 'bg-accent text-accent-fg'
-            : 'bg-surface text-muted'
-          : 'bg-surface text-muted'
-      } ${workspace.statusMode ? 'py-0 min-h-[5px]' : 'py-1'}`}>
-        <span className="truncate" title={runtime.projectDir ?? 'no project dir'}>
-          {shortenCwd(runtime.projectDir)}
-        </span>
-      </div>
+      <PaneHeader
+        projectDir={runtime.projectDir}
+        statusMode={workspace.statusMode}
+        isSessionLive={isSessionLive}
+      />
 
       {/* Feed — overflow-auto lives inside Feed itself so it can
           own its own scroll listener for the sticky-bottom logic
@@ -835,47 +827,7 @@ export function TileLeaf({
         />
       </div>
 
-      {/* Pending queue strip. Renders only when CC's internal message
-          queue has items — i.e. the user submitted prompts while CC
-          was still generating a previous turn. Lives between Feed and
-          composer so it sits in the natural "about to happen" region
-          of the screen, and so the user can see their queued text
-          without it getting mixed into the feed proper (where it
-          would show as either phantom future user rows or as real
-          rows that then duplicate themselves when the actual user
-          entry materializes in the transcript).
-
-          Feature-gated on queuedMessages.length so the strip is
-          zero-DOM when nothing is queued — no layout shift for the
-          common path. */}
-      {runtime.queuedMessages.length > 0 && (
-        <div
-          className="flex-shrink-0 border-t border-border bg-surface px-5 py-2"
-          aria-label="queued messages"
-        >
-          <div className="text-muted text-[10px] uppercase tracking-wider mb-1 select-none">
-            {runtime.queuedMessages.length} queued
-          </div>
-          <ul className="flex flex-col gap-0.5 list-none m-0 p-0">
-            {runtime.queuedMessages.map(q => (
-              <li
-                key={q.timestamp}
-                className="flex items-start gap-2 text-[12px] leading-[1.5] text-ink-dim"
-              >
-                <span
-                  className="text-accent flex-shrink-0 select-none opacity-60"
-                  aria-hidden="true"
-                >
-                  ❯
-                </span>
-                <span className="flex-1 min-w-0 break-words font-code">
-                  {q.content}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <QueueStrip queuedMessages={runtime.queuedMessages} />
 
       {/* Codex approval prompt — rendered inline in the pane, matching
           how Codex's TUI draws it. Sits between feed and composer. */}
@@ -889,80 +841,16 @@ export function TileLeaf({
         onSend={send}
       />
 
-      {runtime.pendingCompaction && runtime.pendingCompaction.phase !== 'done' && (
-        <div
-          className={`flex-shrink-0 border-t px-5 py-2 font-code text-[12px] leading-[1.6] ${
-            runtime.pendingCompaction.phase === 'error'
-              ? 'text-danger border-danger/30 bg-danger/8'
-              : 'text-ink border-border bg-surface'
-          }`}
-        >
-          <div className="font-semibold">
-            {runtime.pendingCompaction.phase === 'error'
-              ? 'Compaction failed'
-              : 'Compacting conversation'}
-          </div>
-          {((runtime.pendingCompaction.phase === 'error'
-            ? runtime.pendingCompaction.errorText
-            : runtime.pendingCompaction.statusText)) && (
-            <div className="mt-0.5 whitespace-pre-wrap break-words opacity-90">
-              {runtime.pendingCompaction.phase === 'error'
-                ? runtime.pendingCompaction.errorText
-                : runtime.pendingCompaction.statusText}
-            </div>
-          )}
-        </div>
-      )}
+      <CompactionStrip pendingCompaction={runtime.pendingCompaction} />
 
-      {/* Pane toast — transient single-slot feedback (e.g. "Copied to clipboard").
-          Renders above the composer so it's contextually tied to this pane,
-          not floating over the feed content. Auto-dismissed by the store
-          timeout; we just render when non-null. */}
-      {runtime.paneToast && (
-        <div className="
-          flex-shrink-0 flex justify-center
-          px-3 py-1.5
-          border-t border-border bg-surface
-        ">
-          <span className="
-            toast-enter
-            text-[11px] font-code text-white font-semibold
-            bg-accent/80
-            px-3 py-0.5
-          ">
-            {runtime.paneToast}
-          </span>
-        </div>
-      )}
+      <PaneToast message={runtime.paneToast} />
 
-      {/* Scroll position indicator — sits just above the composer,
-          right-aligned. Shows which entry you're looking at out of
-          the total. Feed emits `fraction = 1 - scrollTop/maxScroll`,
-          so fraction=0 at the bottom (newest entry visible) and
-          fraction=1 at the top (oldest). We invert before display so
-          the badge reads natural-order: latest = N/N, oldest = 1/N.
-          Floor at 1 so the badge never reads 0/N — even at the
-          extreme bottom there's still an entry on screen. */}
-      {runtime.entries.length > 0 && (
-        <div className="flex-shrink-0 flex justify-end px-3 leading-none">
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-code text-muted">
-              {providerLabel(workspace.state.sessions[sessionId]?.kind)}
-            </span>
-            {runtime.tailMode && (
-              <span className="text-[10px] font-code uppercase tracking-wider text-accent">
-                TAIL
-              </span>
-            )}
-          <span className="text-[12px] font-code tabular-nums text-accent">
-            {Math.max(
-              1,
-              Math.ceil((1 - scrollFraction) * runtime.entries.length),
-            )}/{runtime.entries.length}
-          </span>
-          </div>
-        </div>
-      )}
+      <ScrollIndicator
+        entryCount={runtime.entries.length}
+        scrollFraction={scrollFraction}
+        tailMode={runtime.tailMode}
+        sessionKind={workspace.state.sessions[sessionId]?.kind}
+      />
 
       {/* Composer */}
       <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-2 relative">
