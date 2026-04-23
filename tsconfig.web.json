@@ -41,6 +41,13 @@
     "src/shared/parsers/**/*",
     "src/providers/*/parsers/**/*",
     "src/providers/*/renderer/**/*",
+    // registry.renderer.ts lives at providers/ root, outside the
+    // `*/renderer/**/*` glob above. TileTree imports it to mount
+    // provider-specific TileLeaf components, so the web project
+    // needs the file explicitly. (The node project *excludes* this
+    // file — see tsconfig.node.json — because it transitively pulls
+    // the entire renderer subtree in.)
+    "src/providers/registry.renderer.ts",
     "testing/**/*"
   ],
   // Project reference: tell tsc to resolve preload imports via node's

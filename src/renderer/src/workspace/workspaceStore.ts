@@ -44,3 +44,9 @@ export type {
   SpotlightState,
   TileTabsState,
 } from './workspaceState'
+
+// Re-exported from ./types so external callers (ReaderView, etc.)
+// can keep importing from '../workspace/workspaceStore' without
+// reaching into the internal types module. SessionId is a plain
+// string alias but callers use the name for documentation.
+export type { SessionId } from './types'
