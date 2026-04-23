@@ -1,7 +1,8 @@
 import { memo, useContext, useMemo, useState } from 'react'
 
 import { CodeBlock } from '../../../../renderer/src/lib/code/CodeBlock'
-import { CodeRenderContext, MarkerRow } from '../../../../renderer/src/feed/Feed'
+import { CodeRenderContext } from '../../../../renderer/src/features/feed/ui/Feed'
+import { MarkerRow } from '../../../../renderer/src/features/feed/ui/MarkerRow'
 import { formatToolFilePath } from '../../../../shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '../../../../shared/types/transcript'
 

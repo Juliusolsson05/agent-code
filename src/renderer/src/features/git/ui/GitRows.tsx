@@ -30,7 +30,7 @@
 import { memo, useMemo, useState } from 'react'
 import hljs from 'highlight.js'
 
-import { MarkerRow } from '../../../feed/Feed'
+import { MarkerRow } from '../../../features/feed/ui/MarkerRow'
 import { normalizeCodeLanguage } from '../../../../../shared/code/language'
 import type { GitIntent } from '../../../../../shared/git/gitDetect'
 import {

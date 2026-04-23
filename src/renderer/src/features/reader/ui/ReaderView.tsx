@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { CodeBlock } from '../../../lib/code/CodeBlock'
-import { CodeRenderContext } from '../../../feed/Feed'
+import { CodeRenderContext } from '../../../features/feed/ui/Feed'
 import { extractAssistantInProgress } from '../../../../../shared/parsers/extractAssistant'
 import { assistantUuidsWithText, extractAssistantByUuid } from '../../../lib/copyAssistant'
 import { collectLeaves } from '../../../workspace/tile-tree/treeOps'

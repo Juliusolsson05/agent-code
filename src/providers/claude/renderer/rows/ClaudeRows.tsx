@@ -17,7 +17,8 @@ import { diffLines, type DiffLine } from '../../../../shared/parsers/lineDiff'
 import { formatToolFilePath } from '../../../../shared/paths/displayPath'
 import type { ToolUseBlock } from '../../../../shared/types/transcript'
 import { CodeBlock } from '../../../../renderer/src/lib/code/CodeBlock'
-import { CodeRenderContext, MarkerRow } from '../../../../renderer/src/feed/Feed'
+import { CodeRenderContext } from '../../../../renderer/src/features/feed/ui/Feed'
+import { MarkerRow } from '../../../../renderer/src/features/feed/ui/MarkerRow'
 
 /* ---------- Shared helpers ---------- */
 

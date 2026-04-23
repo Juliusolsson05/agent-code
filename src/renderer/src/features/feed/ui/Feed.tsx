@@ -18,11 +18,11 @@ import {
   MultiEditRow,
   WriteRow,
   TodoRow,
-} from '../../../providers/claude/renderer/rows/ClaudeRows'
+} from '../../../../../providers/claude/renderer/rows/ClaudeRows'
 import {
   CodexToolRow,
   CodexToolResultRow,
-} from '../../../providers/codex/renderer/rows/CodexRows'
+} from '../../../../../providers/codex/renderer/rows/CodexRows'
 import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
@@ -33,19 +33,20 @@ import {
   type Entry,
   type ToolResultBlock,
   type ToolUseBlock,
-} from '../../../shared/types/transcript'
-import { CodeBlock } from '../lib/code/CodeBlock'
-import { detectGitIntent } from '../../../shared/git/gitDetect'
-import { GitCardRow } from '../features/git/ui/GitRows'
-import { useAppStore } from '../state/hooks'
+} from '../../../../../shared/types/transcript'
+import { CodeBlock } from '../../../lib/code/CodeBlock'
+import { detectGitIntent } from '../../../../../shared/git/gitDetect'
+import { GitCardRow } from '../../git/ui/GitRows'
+import { useAppStore } from '../../../state/hooks'
 import {
   parseSemanticTodos,
   type SemanticLiveTurn,
   type SemanticTodoItem,
   type StreamPhase,
-} from '../workspace/workspaceState'
-import { WorkIndicator } from './WorkIndicator'
-import { toolHintFromTurn } from './workIndicatorHints'
+} from '../../../workspace/workspaceState'
+import { WorkIndicator } from '../WorkIndicator'
+import { toolHintFromTurn } from '../workIndicatorHints'
+import { MarkerRow } from './MarkerRow'
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.
@@ -2254,40 +2255,9 @@ function ToolBand({ children }: { children: React.ReactNode }) {
   )
 }
 
-/* ---------- Marker layout primitives ---------- */
-
-/**
- * The core layout: a fixed-width marker column + flex-1 content column
- * that enforces hanging indent. Used by every rendered block.
- */
-export function MarkerRow({
-  marker,
-  tone = 'accent',
-  children,
-  indent = 0,
-}: {
-  marker: string
-  tone?: 'accent' | 'muted' | 'ink'
-  children: React.ReactNode
-  indent?: number
-}) {
-  const toneClass =
-    tone === 'accent' ? 'text-accent' : tone === 'muted' ? 'text-muted' : 'text-ink-dim'
-  return (
-    <div
-      className="flex gap-2.5"
-      style={indent ? { paddingLeft: `${indent * 22}px` } : undefined}
-    >
-      <span
-        className={`${toneClass} flex-shrink-0 w-3 text-[13px] leading-[1.65] select-none`}
-        aria-hidden="true"
-      >
-        {marker}
-      </span>
-      <div className="flex-1 min-w-0">{children}</div>
-    </div>
-  )
-}
+// MarkerRow moved to ./MarkerRow.tsx — the `⏺`/`❯`/`⎿` layout primitive
+// is now a shared module since features/git/ui/GitRows also imports it.
+// Feed itself still imports MarkerRow from the new location at the top.
 
 /* ---------- Block dispatcher ---------- */
 
