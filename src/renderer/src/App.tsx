@@ -18,7 +18,7 @@ import { RewindToPromptModal } from './features/workspace/ui/RewindToPromptModal
 import { ViewPromptsModal } from './features/workspace/ui/ViewPromptsModal'
 import { GitBar } from './features/git/ui/GitBar'
 import { AppearanceMenu } from './feed/AppearanceMenu'
-import { PathPickerModal } from './workspace/PathPickerModal'
+import { PathPickerModal } from './features/path-picker/ui/PathPickerModal'
 import { TabBar } from './workspace/tile-tree/TabBar'
 import { TileTree } from './workspace/tile-tree/TileTree'
 import { useAppStore } from './state/hooks'

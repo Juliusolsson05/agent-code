@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-import { PathInput } from '../components/PathInput'
+import { PathInput } from '../../../ui/PathInput'
 
 // Duplicate of the SessionInfo shape preload exposes. Inlined here so
 // the renderer's tsconfig doesn't need to reach across into src/preload

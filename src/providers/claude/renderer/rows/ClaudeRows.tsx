@@ -16,7 +16,7 @@ import { normalizeCodeLanguage } from '../../../../shared/code/language'
 import { diffLines, type DiffLine } from '../../../../shared/parsers/lineDiff'
 import { formatToolFilePath } from '../../../../shared/paths/displayPath'
 import type { ToolUseBlock } from '../../../../shared/types/transcript'
-import { CodeBlock } from '../../../../renderer/src/code/CodeBlock'
+import { CodeBlock } from '../../../../renderer/src/lib/code/CodeBlock'
 import { CodeRenderContext, MarkerRow } from '../../../../renderer/src/feed/Feed'
 
 /* ---------- Shared helpers ---------- */

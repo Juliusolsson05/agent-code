@@ -2,7 +2,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, type Rea
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-import { CodeBlock } from '../../../code/CodeBlock'
+import { CodeBlock } from '../../../lib/code/CodeBlock'
 import { CodeRenderContext } from '../../../feed/Feed'
 import { extractAssistantInProgress } from '../../../../../shared/parsers/extractAssistant'
 import { assistantUuidsWithText, extractAssistantByUuid } from '../../../lib/copyAssistant'
