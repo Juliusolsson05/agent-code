@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { CodexApprovalModal } from '@providers/codex/renderer/CodexApprovalModal'
@@ -8,14 +8,12 @@ import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
 import { TrustDialogModal } from '@providers/claude/renderer/TrustDialogModal'
 import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
-import { extractLatestUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
   selectMergedEntries,
   shouldShowSemanticStreaming,
 } from '@renderer/workspace/mergedEntries'
 import type { SessionId } from '@renderer/workspace/types'
-import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
 import {
   CLAUDE_PASTE_THRESHOLD,
   CLAUDE_PASTE_SUBMIT_DELAY_MS,
@@ -24,19 +22,15 @@ import {
   sendBracketedPasteThenSubmit,
   sendClaudeDraftText,
 } from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
-import {
-  SUPPORTED_CLAUDE_IMAGE_FORMATS_TEXT,
-  exceedsClaudeImageSizeLimit,
-  filesToDraftImages,
-  isSupportedClaudeImageMediaType,
-  parseImagesFromHtml,
-  readImagesFromClipboard,
-} from '@renderer/workspace/tile-tree/TileLeaf/claudeImages'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'
 import { CompactionStrip } from '@renderer/workspace/tile-tree/TileLeaf/CompactionStrip'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIndicator'
+import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
+import { useTypeToFocus } from '@renderer/workspace/tile-tree/TileLeaf/useTypeToFocus'
+import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
+import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -117,25 +111,10 @@ export function TileLeaf({
   const provider: 'claude' | 'codex' =
     workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
 
-  // Auto-grow the composer textarea to fit its content. We keep a single
-  // line by default, but as the user types (or pastes) a long prompt the
-  // box extends downward so every character is visible without scrolling
-  // inside the input itself. The reflow is driven off `input` so paste,
-  // programmatic setInputText, and typed keystrokes all converge on the
-  // same measurement pass.
-  //
-  // Why manual measurement instead of CSS `field-sizing: content`?
-  //   - Safari/older Chromium don't support it yet and Electron ships a
-  //     pinned Chromium we don't want to track.
-  //   - Setting height to 'auto' first forces layout to forget the
-  //     previous height, so scrollHeight reflects ONLY the current
-  //     content — without the reset we'd ratchet taller and never shrink.
-  useEffect(() => {
-    const el = inputRef.current
-    if (!el) return
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }, [input])
+  // Auto-grow the composer textarea to fit its content — hook lives
+  // in ./TileLeaf/useComposerAutoGrow.ts, see there for the
+  // "why manual measurement instead of field-sizing:content" story.
+  useComposerAutoGrow(inputRef, input)
   // True while we're forwarding keystrokes to the PTY for a slash
   // command. Controls key routing in onKeyDown and render of the
   // picker dropdown (we still render the dropdown from runtime.picker,
@@ -151,186 +130,32 @@ export function TileLeaf({
     setScrollFraction(info.fraction)
   }, [])
 
-  // ---- Prompt history state ----
-  //
-  // cc-shell keeps its own bash-style history for the composer instead
-  // of forwarding Up/Down to CC. Two reasons:
-  //   1. CC's own history updates CC's own input box in the terminal
-  //      buffer, but our composer is a React textarea — the two states
-  //      never reconcile, so pressing Up in our composer and letting
-  //      CC handle it produced no visible change for the user. The
-  //      whole thing looked broken.
-  //   2. We already have every past user prompt in runtime.entries,
-  //      pulled from the JSONL transcript. Deriving a history list
-  //      from that is nearly free.
-  //
-  // `historyIndex` is null when the user is NOT cycling (fresh draft,
-  // or just typed something), and a number in [0, history.length - 1]
-  // while cycling. 0 = most recent historic prompt, 1 = one before
-  // that, etc. When cycling is active the composer displays the
-  // history[historyIndex] string, not the live draft.
-  //
-  // `historyAnchor` stores whatever was in the composer the moment
-  // the user first pressed Up to enter the cycle. Pressing Down past
-  // the newest historic prompt (i.e. historyIndex back to -1) restores
-  // this string so the user doesn't lose mid-typed work.
-  //
-  // Both pieces of state are component-local (not runtime). They don't
-  // need to survive tab-switch because the moment the user comes back
-  // to the tab, they start fresh — cycling mid-tab-switch isn't a
-  // real workflow. Keeping them local avoids cluttering SessionRuntime
-  // and avoids the re-render cost of threading through the store.
-  const [historyIndex, setHistoryIndex] = useState<number | null>(null)
-  const [historyAnchor, setHistoryAnchor] = useState<string>('')
-
-  // Derive the history list from the transcript. We walk every
-  // ConversationEntry, pull USER-role text content (either from a
-  // plain string content or from the first `text` block of an array
-  // content), and collect them in REVERSE chronological order so
-  // index 0 is the most recent prompt.
-  //
-  // Filter: the user-role slot in CC's JSONL is used for MANY things
-  // besides real typed prompts. Without proper filtering our history
-  // picks up strings the user never actually typed, which feels
-  // exactly like "another prompt got injected into my input" — the
-  // exact bug that forced us to revert the first cut of this feature.
-  //
-  // Concrete noise we've seen in real transcripts (see commit
-  // message for the companion fix commit for the full survey):
-  //
-  //   1. `isMeta: true` entries like "Continue from where you left
-  //      off." — CC's auto-continue hint. User never typed it.
-  //   2. `<local-command-caveat>…` and `<command-name>/clear…` —
-  //      system markers for local-command invocations. Caught by
-  //      the old startsWith('<') filter but still in this list for
-  //      the audit record.
-  //   3. "Unknown skill: resumeOne" and similar — CC's error
-  //      response to bad slash-command invocations. Logged as a
-  //      user-role entry, plain-text content, doesn't start with '<'.
-  //      THE main offender that made it into the first cut.
-  //   4. Tool-result-only user-role entries — no text blocks at
-  //      all, just the results for the previous assistant turn's
-  //      tool_use blocks. Harmless with our "has text" check but
-  //      noted for completeness.
-  //
-  // Positive signal for "this was a real prompt the user typed":
-  // the entry has a `permissionMode` field set. Empirically every
-  // real user prompt in the current transcript (27/27) carries it;
-  // every synthetic entry (isMeta, error responses, local-command
-  // markers) lacks it. `isMeta === true` is a redundant secondary
-  // defense in case CC ever starts writing permissionMode into
-  // synthetic meta entries too. startsWith('<') stays as a tertiary
-  // catch-all for any future tag-shaped synthetics.
-  //
-  // Dedup: adjacent identical prompts (the "oops, meant to add
-  // detail" resubmit pattern) collapse into one entry. Distant
-  // duplicates stay, matching bash history behavior. Memoed on
-  // entries reference so normal re-renders don't rebuild the list.
+  // Prompt history — state + derivation live in
+  // ./TileLeaf/usePromptHistory.ts. Returns the history list, the
+  // cycle cursor/anchor, and endHistoryCycle(). See that hook for
+  // the transcript-filter rationale (why `permissionMode` is the
+  // positive signal and what kinds of noise we had to filter out).
   const sessionKind = workspace.state.sessions[sessionId]?.kind
-  const history = useMemo(() => {
-    return extractLatestUserPrompts(runtime.entries, sessionKind).map(prompt => prompt.text)
-  }, [runtime.entries, sessionKind])
-
-  // Helper: are we currently in history-cycling mode? Multiple key
-  // handlers consult this and a named check reads cleaner than
-  // `historyIndex !== null` repeated everywhere.
-  const cyclingHistory = historyIndex !== null
-
-  // Helper: cancel history cycling without changing the composer text.
-  // Called whenever the user makes ANY edit that isn't Up/Down — the
-  // invariant is "once you start typing over a recalled prompt, it's
-  // yours, and the next Up starts from the newest entry again."
-  const endHistoryCycle = () => {
-    if (historyIndex !== null) setHistoryIndex(null)
-  }
-
-  // (cursor-row helpers removed — the new history gate fires only
-  // when the composer is entirely empty, so multi-line caret
-  // navigation is moot.)
+  const {
+    history,
+    historyIndex,
+    historyAnchor,
+    cyclingHistory,
+    setHistoryIndex,
+    setHistoryAnchor,
+    endHistoryCycle,
+  } = usePromptHistory({ entries: runtime.entries, sessionKind })
 
   // When focus flips to this pane, move the DOM caret into its input.
   useEffect(() => {
     if (focused) inputRef.current?.focus()
   }, [focused])
 
-  // Type-to-focus: when the user starts typing anywhere in the
-  // focused pane — feed area, a stray click on a button, whatever —
-  // the keystroke routes to the composer without them having to
-  // click on it first.
-  //
-  // Why this is needed even with the focus-on-focus effect above:
-  // DOM focus wanders. Clicking a feed button, interacting with
-  // the tab bar, switching apps and coming back, hitting a keybind
-  // that focuses something else — all of these leave DOM focus
-  // somewhere other than the composer textarea. The focus-on-pane-
-  // focus effect only fires when `focused` CHANGES, which doesn't
-  // happen in any of those cases. So a fresh keystroke can land
-  // nowhere useful.
-  //
-  // The fix: listen at document level (scoped to the currently
-  // focused pane via the `focused` guard), and when a printable
-  // key comes in while DOM focus is NOT on an editable target,
-  // redirect it to the composer.
-  //
-  // Filter list (all of these are cases where we must NOT steal
-  // the key):
-  //   - `defaultPrevented`: a keybind or earlier handler already
-  //     handled this. Stay out of their way.
-  //   - Any modifier (cmd / ctrl / alt / meta): modifier combos
-  //     are global keybinds, not text input.
-  //   - Non-printable key (e.key.length !== 1): arrow keys,
-  //     Escape, Enter, Backspace, Tab, function keys. Those all
-  //     have multi-char names.
-  //   - Target is already an input / textarea / contentEditable:
-  //     the character is already going somewhere legitimate; don't
-  //     intercept it and double-type.
-  //   - A modal with role="dialog" is open: PathPickerModal,
-  //     TrustDialogModal, or any future modal. Those own keyboard
-  //     focus while visible.
-  //
-  // Injection path: we write directly to SessionRuntime.draftInput
-  // via workspace.setDraftInput (same setter the composer's
-  // onChange uses), then focus() the textarea, then move the
-  // cursor to end on the next frame after React re-renders with
-  // the new value. The rAF is load-bearing: setting selectionStart
-  // synchronously on a textarea whose React-bound `value` hasn't
-  // re-rendered yet targets the OLD value and puts the cursor
-  // at a stale index.
-  useEffect(() => {
-    if (!focused) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return
-      if (e.metaKey || e.ctrlKey || e.altKey) return
-      if (e.key.length !== 1) return
-      const target = e.target as HTMLElement | null
-      if (target) {
-        const tag = target.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return
-        if (target.isContentEditable) return
-      }
-      if (document.querySelector('[role="dialog"]')) return
-
-      const el = inputRef.current
-      if (!el) return
-      e.preventDefault()
-      const next = el.value + e.key
-      setDraftInput(sessionId, next)
-      el.focus()
-      requestAnimationFrame(() => {
-        const el2 = inputRef.current
-        if (!el2) return
-        el2.selectionStart = el2.value.length
-        el2.selectionEnd = el2.value.length
-      })
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-    // setDraftInput is a stable useCallback from the workspace hook
-    // so re-destructuring it every render is a no-op for this dep
-    // array. If workspace ever stops memoing it, this effect would
-    // re-subscribe on every render and we'd add/remove a document
-    // listener every frame — so keep setDraftInput memoed upstream.
-  }, [focused, sessionId, setDraftInput])
+  // Type-to-focus — document-level key listener that routes printable
+  // keys into the composer when the pane is focused but DOM focus
+  // drifted elsewhere. Hook in ./TileLeaf/useTypeToFocus.ts owns
+  // the full filter/injection logic.
+  useTypeToFocus({ focused, sessionId, inputRef, setDraftInput })
 
   const send = async (data: string) => {
     const ok = await window.api.sendInput(sessionId, data)
@@ -339,73 +164,14 @@ export function TileLeaf({
     }
   }
 
-  const appendDraftImages = useCallback(
-    (images: ClaudeDraftImage[]) => {
-      if (images.length === 0) return
-      setDraftImages(sessionId, prev => [...prev, ...images])
-    },
-    [sessionId, setDraftImages],
-  )
-
-  const removeDraftImage = useCallback(
-    (imageId: string) => {
-      setDraftImages(sessionId, prev => prev.filter(image => image.id !== imageId))
-    },
-    [sessionId, setDraftImages],
-  )
-
-  const handlePaste = useCallback(
-    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      if (provider !== 'claude') return
-
-      try {
-        const itemFiles = Array.from(e.clipboardData.items)
-          .map(item => item.type.startsWith('image/') ? item.getAsFile() : null)
-          .filter((file): file is File => Boolean(file && file.type.startsWith('image/')))
-        const htmlImages = parseImagesFromHtml(e.clipboardData.getData('text/html'))
-
-        let images: ClaudeDraftImage[] = htmlImages
-        if (itemFiles.length > 0) {
-          e.preventDefault()
-          const fileImages = await filesToDraftImages(itemFiles)
-          const existing = new Set(images.map(image => image.previewUrl))
-          images = [
-            ...images,
-            ...fileImages.filter(image => !existing.has(image.previewUrl)),
-          ]
-        } else if (images.length === 0) {
-          images = await readImagesFromClipboard()
-          if (images.length > 0) {
-            e.preventDefault()
-          }
-        } else {
-          e.preventDefault()
-        }
-        if (images.length === 0) return
-        const unsupported = images.find(
-          image => !isSupportedClaudeImageMediaType(image.mediaType),
-        )
-        if (unsupported) {
-          showToast(
-            `Unsupported image format: ${unsupported.mediaType}. Claude supports ${SUPPORTED_CLAUDE_IMAGE_FORMATS_TEXT}.`,
-          )
-          return
-        }
-        const oversized = images.find(exceedsClaudeImageSizeLimit)
-        if (oversized) {
-          showToast(
-            `Image is too large. Claude supports pasted images up to 5 MB.`,
-          )
-          return
-        }
-        appendDraftImages(images)
-      } catch (err) {
-        console.warn('[TileLeaf] image paste failed', err)
-        showToast('Image paste failed.')
-      }
-    },
-    [appendDraftImages, provider, showToast],
-  )
+  // Claude image-paste flow — three clipboard ingress paths, media-
+  // type gate, 5 MB size cap. Hook in ./TileLeaf/useClaudeImagePaste.ts.
+  const { handlePaste, removeDraftImage } = useClaudeImagePaste({
+    provider,
+    sessionId,
+    setDraftImages,
+    showToast,
+  })
 
   const exitSlashMode = () => {
     setSlashMode(false)
