@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'fs/promises'
-import { join } from 'path'
+import { dirname, join, normalize } from 'path'
 
 import { DEBUG_BUNDLE_DIR } from '@main/storage/paths.js'
 
@@ -29,8 +29,8 @@ import { DEBUG_BUNDLE_DIR } from '@main/storage/paths.js'
 //   without manual renaming.
 
 export type DebugBundleFile = {
-  /** Filename relative to the bundle folder. Validated: no path
-   *  separators allowed — the renderer only ships leaf names. */
+  /** File path relative to the bundle folder. Validated as a
+   *  portable relative path — no absolute paths, no `..` segments. */
   name: string
   /** Text content. Binary files are not supported because none of
    *  the debug surfaces produce binary data today (HTML capture is
@@ -79,14 +79,21 @@ function buildBundleFolderName(sessionId: string, now: Date): string {
   return `${stamp}-${short}`
 }
 
-// Validate that a file name is a plain leaf and doesn't try to
-// escape the bundle folder. The renderer is in-process and trusted,
-// but the discipline costs one line and makes future refactors
-// (e.g. surfacing this IPC to a plugin) safe by default.
-function isSafeFileName(name: string): boolean {
-  if (!name || name.length > 255) return false
-  if (name.includes('/') || name.includes('\\')) return false
-  if (name === '.' || name === '..') return false
+// Validate that a bundle file path stays inside the timestamped
+// folder. Root-level debug files still pass (`manifest.json`), and
+// trace files can now live in controlled subfolders
+// (`trace/html/commits.jsonl`). Absolute paths, empty segments, and
+// `..` are rejected.
+function isSafeRelativePath(name: string): boolean {
+  if (!name || name.length > 512) return false
+  if (name.startsWith('/') || name.startsWith('\\')) return false
+  if (/^[a-zA-Z]:[\\/]/.test(name)) return false
+  const rawParts = name.split(/[\\/]/)
+  if (rawParts.some(part => !part || part === '.' || part === '..' || part.length > 255)) {
+    return false
+  }
+  const normalized = normalize(name)
+  if (normalized.startsWith('..')) return false
   return true
 }
 
@@ -97,8 +104,8 @@ export async function saveDebugBundle(
     throw new Error('saveDebugBundle: missing sessionId or empty files list')
   }
   for (const file of params.files) {
-    if (!isSafeFileName(file.name)) {
-      throw new Error(`saveDebugBundle: unsafe file name: ${JSON.stringify(file.name)}`)
+    if (!isSafeRelativePath(file.name)) {
+      throw new Error(`saveDebugBundle: unsafe file path: ${JSON.stringify(file.name)}`)
     }
   }
 
@@ -116,7 +123,9 @@ export async function saveDebugBundle(
   // on when debugging cc-shell itself (which is the whole point of
   // this feature).
   for (const file of params.files) {
-    await writeFile(join(bundlePath, file.name), file.content, 'utf8')
+    const target = join(bundlePath, file.name)
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, file.content, 'utf8')
   }
 
   return { bundlePath }

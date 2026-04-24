@@ -40,6 +40,7 @@ export function wireSessionForwarder(
   manager.on('process-state', payload => sendToMainWindow('session:process-state', payload))
   manager.on('trust-dialog', payload => sendToMainWindow('session:trust-dialog', payload))
   manager.on('resume-prompt', payload => sendToMainWindow('session:resume-prompt', payload))
+  manager.on('permission-prompt', payload => sendToMainWindow('session:permission-prompt', payload))
   manager.on('compaction-state', payload => sendToMainWindow('session:compaction-state', payload))
   manager.on('semantic-event', payload => sendToMainWindow('session:semantic-event', payload))
   manager.on('exit', payload => {

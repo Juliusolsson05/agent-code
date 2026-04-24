@@ -119,7 +119,20 @@ export function useHistoryActions(
               ...current,
               entries: prepend.length > 0 ? [...prepend, ...current.entries] : current.entries,
               historyOldestMarker: oldestMarker ?? current.historyOldestMarker,
-              hasOlderHistory: chunk.hasMore || prepend.length === 0,
+              // Trust `chunk.hasMore` as the authoritative "is there
+              // more history to fetch" signal. The old rule OR'd in
+              // `prepend.length === 0` — i.e. "re-enable loading
+              // when nothing renderable came back" — which loops
+              // forever when the loader legitimately returns a tail
+              // chunk whose entries are all non-renderable Codex
+              // metadata (turn_context, session_meta, event_msg
+              // variants the mapper drops). Those chunks have
+              // `hasMore: false`; honoring that ends the pagination
+              // even when `prepend.length === 0`. If a chunk with
+              // `hasMore: true` produces zero renderable entries,
+              // we still fall through with hasOlderHistory=true and
+              // the user can request the next chunk manually.
+              hasOlderHistory: chunk.hasMore,
               loadingOlderHistory: false,
             },
           }

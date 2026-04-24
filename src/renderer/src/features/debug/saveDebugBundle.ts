@@ -1,6 +1,11 @@
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import { sanitizeHtml } from '@renderer/lib/sanitizeHtml'
+import {
+  exportDebugTraceFiles,
+  recordHtmlTraceSnapshot,
+  recordScreenTailSnapshot,
+} from '@renderer/features/debug/renderTrace'
 
 // saveDebugBundle — assemble-and-ship side of the "Save Debug Logs"
 // command. Runs in the renderer because every data source the
@@ -191,6 +196,7 @@ function buildManifest(
   runtime: SessionRuntime,
   kind: string,
   capturedAt: number,
+  files: string[],
 ): string {
   const manifest = {
     schemaVersion: BUNDLE_SCHEMA_VERSION,
@@ -199,7 +205,7 @@ function buildManifest(
     projectDir: runtime.projectDir,
     capturedAt,
     capturedAtIso: new Date(capturedAt).toISOString(),
-    files: Object.values(FILE_NAMES),
+    files,
     // Small bits of runtime state that help orient a consumer
     // without parsing state-snapshot.json first. Deliberately a
     // flat summary, not a duplicate.
@@ -233,11 +239,13 @@ export async function assembleAndSaveDebugBundle(params: {
   const capturedAt = Date.now()
 
   const html = capturePaneHtml(sessionId)
+  recordHtmlTraceSnapshot(sessionId, html.raw, 'manual')
+  recordScreenTailSnapshot(sessionId, runtime.recentScreen)
 
   const files: BundleFile[] = [
     {
       name: FILE_NAMES.manifest,
-      content: buildManifest(sessionId, runtime, kind, capturedAt),
+      content: '',
     },
     {
       name: FILE_NAMES.state,
@@ -253,7 +261,19 @@ export async function assembleAndSaveDebugBundle(params: {
     },
     { name: FILE_NAMES.htmlRaw, content: html.raw },
     { name: FILE_NAMES.htmlClean, content: html.clean },
+    ...exportDebugTraceFiles(sessionId),
   ]
+
+  files[0] = {
+    name: FILE_NAMES.manifest,
+    content: buildManifest(
+      sessionId,
+      runtime,
+      kind,
+      capturedAt,
+      files.map(file => file.name),
+    ),
+  }
 
   return window.api.saveDebugBundle({ sessionId, files })
 }

@@ -49,6 +49,15 @@ export type ManagerEvents = {
     options?: string[]
     selectedIndex?: number
   }]
+  'permission-prompt': [{
+    sessionId: string
+    visible: boolean
+    title?: string
+    toolName?: string
+    command?: string
+    options?: Array<{ key: string; label: string }>
+    selectedIndex?: number
+  }]
   'compaction-state': [{
     sessionId: string
     visible: boolean
@@ -294,6 +303,14 @@ export class SessionManager extends EventEmitter {
         options?: string[]
         selectedIndex?: number
       }) => this.emit('resume-prompt', { sessionId, ...state }))
+      session.on('permission-prompt', (state: {
+        visible: boolean
+        title?: string
+        toolName?: string
+        command?: string
+        options?: Array<{ key: string; label: string }>
+        selectedIndex?: number
+      }) => this.emit('permission-prompt', { sessionId, ...state }))
       session.on('compaction-state', (state: {
         visible: boolean
         phase?: 'running' | 'error' | 'done'

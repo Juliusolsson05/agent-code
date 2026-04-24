@@ -16,6 +16,7 @@ import {
 } from '@renderer/workspace/semantic/helpers'
 import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
 import { summarizeSemanticEventForDebug } from '@renderer/workspace/semantic/summarize'
+import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
 import {
   extractCodexProviderSessionId,
   isCodexRolloutEntry,
@@ -227,6 +228,9 @@ export function useIpcSubscriptions(
                   },
                 },
               )
+          if (!chromeTickOnly) {
+            recordScreenTailSnapshot(sessionId, recent)
+          }
           return {
             ...prev,
             [sessionId]: nextCurrent,
@@ -554,6 +558,22 @@ export function useIpcSubscriptions(
       })
     })
 
+    const offPermissionPrompt = window.api.onSessionPermissionPrompt(({
+      sessionId,
+      visible,
+      title,
+      toolName,
+      command,
+      options,
+      selectedIndex,
+    }) => {
+      updateRuntime(sessionId, {
+        pendingPermissionPrompt: visible
+          ? { title, toolName, command, options, selectedIndex }
+          : null,
+      })
+    })
+
     const offCompactionState = window.api.onSessionCompactionState(({
       sessionId,
       visible,
@@ -697,28 +717,67 @@ export function useIpcSubscriptions(
               pendingApproval = null
             }
 
-            // Optimistic-user reconciliation. Match the first
-            // mapped user entry against either the last entry
-            // we've already accumulated in this burst, or — if
-            // nothing is appended yet — the tail of current.entries.
+            // Optimistic-user reconciliation.
+            //
+            // The optimistic row is appended directly to
+            // `current.entries` by addOptimisticCodexUserEntry on
+            // submit. It stays there until either (a) the PTY write
+            // failed (catch branch in useComposerKeybinds calls
+            // removeOptimisticCodexUserEntry) or (b) the committed
+            // user entry lands here and this block drops it.
+            //
+            // WHY two parallel checks, not an if/else:
+            //
+            // The old implementation gated the `current.entries`
+            // check behind `appended.length === 0` — i.e. "if we
+            // haven't appended anything yet in this burst, consider
+            // the optimistic row as a candidate for removal."
+            // That's wrong when Codex's rollout emits the
+            // env_context `<environment_context>` message BEFORE
+            // the real user message. The env_context is a
+            // non-matching user entry that gets appended first;
+            // when the real user message arrives next, the
+            // `appended.length > 0` branch runs, finds
+            // env_context on the appended tail (not optimistic),
+            // and never touches `current.entries` at all. The
+            // optimistic row survives — the top-of-feed
+            // duplication visible in the 2026-04-23 Codex pane
+            // screenshot.
+            //
+            // The fix is to run both checks independently. They
+            // target different data (appended[] is this burst's
+            // accumulator; current.entries is the pre-burst state),
+            // so there's no logical conflict.
             const firstMapped = mapped[0]
             if (firstMapped?.type === 'user') {
+              const mappedText = entryTextContent(firstMapped)
+              // Check appended[] tail — if an earlier mapped entry
+              // in THIS burst was optimistic-like, pop it. In
+              // practice this fires only on hot-swap / synthetic
+              // cases; the typical hit is the current.entries
+              // check below.
               if (appended.length > 0) {
                 const lastAppended = appended[appended.length - 1]
                 if (
                   isOptimisticCodexUserEntry(lastAppended) &&
-                  entryTextContent(lastAppended) === entryTextContent(firstMapped)
+                  entryTextContent(lastAppended) === mappedText
                 ) {
                   appended.pop()
                 }
-              } else {
-                const lastExisting = current.entries[current.entries.length - 1]
-                if (
-                  isOptimisticCodexUserEntry(lastExisting) &&
-                  entryTextContent(lastExisting) === entryTextContent(firstMapped)
-                ) {
-                  dropOptimisticHead = true
-                }
+              }
+              // Check current.entries tail — if the pre-burst tail
+              // is an optimistic row whose text matches this
+              // mapped user entry, schedule its removal.
+              // Unconditional: the `if (appended.length > 0)` gate
+              // above was the bug that let env_context entries
+              // arriving before the real user message hide the
+              // optimistic tail from reconciliation.
+              const lastExisting = current.entries[current.entries.length - 1]
+              if (
+                isOptimisticCodexUserEntry(lastExisting) &&
+                entryTextContent(lastExisting) === mappedText
+              ) {
+                dropOptimisticHead = true
               }
             }
 
@@ -926,6 +985,7 @@ export function useIpcSubscriptions(
       offSemantic()
       offTrustDialog()
       offResumePrompt()
+      offPermissionPrompt()
       offCompactionState()
       offExit()
       for (const t of refs.bootstrapTimersRef.current.values()) clearTimeout(t)

@@ -23,8 +23,26 @@ export function useFeedDebugPersist(
       const lastPersistedId = refs.persistedFeedDebugIdRef.current[sessionId] ?? 0
       const pending = runtime.feedDebugLog.filter(entry => entry.id > lastPersistedId)
       if (pending.length === 0) continue
-      refs.persistedFeedDebugIdRef.current[sessionId] =
-        pending[pending.length - 1]?.id ?? lastPersistedId
+      const maxPendingId = pending[pending.length - 1]?.id ?? lastPersistedId
+      // Advance the persisted-cursor ONLY after the IPC append
+      // actually resolves. The old ordering advanced the cursor
+      // optimistically before the write, so a transient failure
+      // (disk full, IPC timeout, main-process not ready) would
+      // mark the entries as persisted and the next effect pass
+      // would skip them — permanently dropping that window of
+      // debug logs. Moving the assignment inside `.then()` means
+      // a failed append leaves the cursor at its previous value
+      // and the next runtime update retries those entries.
+      //
+      // Re-entrancy note: the effect only fires when the
+      // runtimes object reference changes, and the filter above
+      // skips entries already ≤ lastPersistedId. If two effect
+      // passes fire in quick succession before the first append
+      // resolves, the second pass will re-send the same `pending`
+      // window. That's safe — the main-side appender is
+      // idempotent on (sessionId, id) because entries are written
+      // in append-order with monotonic ids, so duplicate writes
+      // of the same id just no-op at the file layer.
       void window.api
         .appendFeedDebugLog({
           sessionId,
@@ -37,6 +55,9 @@ export function useFeedDebugPersist(
             summary: entry.summary,
             data: entry.data,
           })),
+        })
+        .then(() => {
+          refs.persistedFeedDebugIdRef.current[sessionId] = maxPendingId
         })
         .catch(err => {
           // eslint-disable-next-line no-console

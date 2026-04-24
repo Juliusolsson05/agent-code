@@ -1,10 +1,12 @@
-import { memo } from 'react'
+import { memo, useContext, useMemo } from 'react'
 
+import type { Entry } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
+import { ToolUseIndexContext } from '@renderer/features/feed/context'
 import { SemanticCollapsedActivityRow } from '@renderer/features/feed/ui/semantic/CollapsedActivityRow'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
 import { buildSemanticRenderUnits } from '@renderer/features/feed/ui/semantic/renderUnits'
@@ -34,11 +36,49 @@ import { buildSemanticRenderUnits } from '@renderer/features/feed/ui/semantic/re
 // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
 export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   turn,
+  committedEntries,
 }: {
   turn: SemanticLiveTurn
+  committedEntries: Entry[]
 }) {
   const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
-  const units = buildSemanticRenderUnits(turn)
+  // Committed tool_use index is threaded down from Feed via context.
+  // buildSemanticRenderUnits uses it to skip live blocks whose
+  // `toolUseId` / `callId` is already committed — kills the bottom-
+  // of-feed dupe where the live turn keeps rendering tool rounds
+  // that the committed transcript already painted above.
+  const committedToolUseIndex = useContext(ToolUseIndexContext)
+  const committedAssistantTextKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (const entry of committedEntries) {
+      if (entry.type !== 'assistant') continue
+      const assistantEntry = entry as {
+        codexTurnId?: unknown
+        message?: { id?: unknown; content?: unknown }
+      }
+      const turnIds = [
+        typeof assistantEntry.message?.id === 'string' ? assistantEntry.message.id : null,
+        typeof assistantEntry.codexTurnId === 'string' ? assistantEntry.codexTurnId : null,
+      ].filter((id): id is string => Boolean(id))
+      if (turnIds.length === 0) continue
+
+      const content = assistantEntry.message?.content
+      if (!Array.isArray(content)) continue
+      for (const block of content) {
+        const item = block as Record<string, unknown>
+        if (item.type !== 'text' || typeof item.text !== 'string' || !item.text) continue
+        for (const turnId of turnIds) {
+          keys.add(`${turnId}\u0000${item.text}`)
+        }
+      }
+    }
+    return keys
+  }, [committedEntries])
+  const units = buildSemanticRenderUnits(
+    turn,
+    committedToolUseIndex,
+    committedAssistantTextKeys,
+  )
   const hasBlocks = blocks.length > 0
 
   if (!hasBlocks) {

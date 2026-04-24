@@ -776,11 +776,32 @@ function FeedImpl({
   }, [entries.length, onDebugLog, renderedRows, semanticTurn?.turnId, streamPhase, visible.length, visibleDecisions])
 
   if (visible.length === 0 && !hasSemanticStreaming) {
+    // Empty-feed branch: no committed entries yet AND no live
+    // semantic turn. Show the WorkIndicator if the stream phase is
+    // non-idle — the placeholder-only render used to swallow
+    // the indicator during `submitting` / `requesting` / early
+    // `thinking`, so a fresh submit looked like a silent stall
+    // until the first delta landed. Reuse the same positioning the
+    // non-empty branch uses (WorkIndicator at the natural
+    // composer-adjacent bottom), wrapped here in a column flex so
+    // the placeholder text stays centered above it when idle.
     return (
-      <div className="h-full flex items-center justify-center">
-        <div className="text-muted text-[12px]">
-          {provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'}
+      <div className="h-full flex flex-col">
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-muted text-[12px]">
+            {provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'}
+          </div>
         </div>
+        {shouldShowWorkIndicator && (
+          <div className="flex-shrink-0 px-8 pb-6">
+            <WorkIndicator
+              phase={streamPhase}
+              toolName={streamPhasePendingToolName}
+              toolHint={toolHintFromTurn(semanticTurn, streamPhasePendingToolUseId)}
+              turnStartedAt={turnStartedAt}
+            />
+          </div>
+        )}
       </div>
     )
   }
@@ -849,7 +870,10 @@ function FeedImpl({
            * baseline so they don't emit the previous turn's buffered
            * text as the first delta of a new turn. */}
           {renderedSemanticTurn != null && (
-            <SemanticStreamingTurn turn={renderedSemanticTurn} />
+            <SemanticStreamingTurn
+              turn={renderedSemanticTurn}
+              committedEntries={entries}
+            />
           )}
           {/* WorkIndicator — the single in-feed "agent is working"
               affordance. Driven by `streamPhase`, NOT gated on whether

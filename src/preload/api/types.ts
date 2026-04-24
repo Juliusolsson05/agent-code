@@ -81,6 +81,15 @@ export type SessionResumePromptEvent = {
   options?: string[]
   selectedIndex?: number
 }
+export type SessionPermissionPromptEvent = {
+  sessionId: string
+  visible: boolean
+  title?: string
+  toolName?: string
+  command?: string
+  options?: Array<{ key: string; label: string }>
+  selectedIndex?: number
+}
 export type SessionCompactionStateEvent = {
   sessionId: string
   visible: boolean

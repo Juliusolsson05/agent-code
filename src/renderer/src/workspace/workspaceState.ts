@@ -271,6 +271,13 @@ export type SessionRuntime = {
     options?: string[]
     selectedIndex?: number
   } | null
+  pendingPermissionPrompt: {
+    title?: string
+    toolName?: string
+    command?: string
+    options?: Array<{ key: string; label: string }>
+    selectedIndex?: number
+  } | null
   pendingCompaction: {
     phase: 'running' | 'error' | 'done'
     statusText?: string
@@ -401,6 +408,7 @@ export function emptyRuntime(): SessionRuntime {
     pendingApproval: null,
     pendingTrustDialog: null,
     pendingResumePrompt: null,
+    pendingPermissionPrompt: null,
     pendingCompaction: null,
     historyOldestMarker: null,
     hasOlderHistory: false,

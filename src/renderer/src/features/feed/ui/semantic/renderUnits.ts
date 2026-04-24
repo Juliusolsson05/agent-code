@@ -1,3 +1,4 @@
+import type { ToolUseBlock } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
 import { classifySemanticToolActivity } from '@renderer/features/feed/lib/helpers'
@@ -20,7 +21,36 @@ import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/typ
 // bucket, tallying per-category counts. The terminal flush() after
 // the loop commits the last bucket if the turn ended while
 // accumulating.
-export function buildSemanticRenderUnits(turn: SemanticLiveTurn): SemanticRenderUnit[] {
+//
+// Committed-ownership filter. When a tool_use / function_call /
+// custom_tool_call block's id already exists in the committed
+// `ToolUseIndex`, the committed transcript has already rendered
+// the row inline above. Painting the same block again from the
+// live semantic turn produces the bottom-of-feed duplicate that
+// shows up whenever the Codex live turn stays mounted longer than
+// its individual tool rounds take to commit (proved by the
+// 2026-04-23 debug bundle: 7 exec_command rows painted at the
+// bottom while their committed counterparts were already in the
+// feed above). Skip those blocks entirely. Text / thinking /
+// citations / image / search / shell blocks that carry no tool
+// correlation id pass through unchanged — they're either still-
+// only-live-owner content or will be filtered by the turn-level
+// suppression when we add it.
+//
+// Output blocks (`function_call_output` / `custom_tool_call_output`
+// / `tool_search_output`) get the same treatment when their
+// `callId` matches a committed tool_use: if the tool_use is
+// already in the committed index, its paired output is rendered
+// by the committed `ToolResultRow` above and the live copy is a
+// duplicate. The rule is "if the tool_use is committed, ALL its
+// associated live blocks are dupes" — simpler than tracking the
+// commit state per output block separately, and matches how the
+// committed feed renders both halves as a pair.
+export function buildSemanticRenderUnits(
+  turn: SemanticLiveTurn,
+  committedToolUseIndex?: Map<string, ToolUseBlock>,
+  committedAssistantTextKeys?: ReadonlySet<string>,
+): SemanticRenderUnit[] {
   const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
   const units: SemanticRenderUnit[] = []
   let pending: Extract<SemanticRenderUnit, { type: 'collapsed_activity' }> | null = null
@@ -32,6 +62,30 @@ export function buildSemanticRenderUnits(turn: SemanticLiveTurn): SemanticRender
   }
 
   for (const block of blocks) {
+    const text = block.text ?? ''
+    if (
+      text &&
+      (block.kind === 'text' || block.kind === 'message') &&
+      (block.finalized || block.status === 'completed') &&
+      committedAssistantTextKeys?.has(`${turn.turnId}\u0000${text}`)
+    ) {
+      continue
+    }
+
+    // Committed-ownership skip. Check both Claude's `toolUseId` and
+    // Codex's `callId` — the committed index is keyed by the
+    // tool_use.id field, which for Codex is the original call_id
+    // (see codexToolUseEntry in workspace/codex/entries.ts). Either
+    // field matching means the committed feed already owns this
+    // block; the live copy is a dupe.
+    const toolId = block.toolUseId ?? block.callId
+    if (toolId && committedToolUseIndex?.has(toolId)) {
+      // Don't flush() here — a collapsed_activity run should stay
+      // open across a committed skip; the next non-skipped block
+      // decides whether to continue accumulating or emit the run.
+      continue
+    }
+
     const toolState = block.toolUseId
       ? turn.lookups.toolCallsById[block.toolUseId] ?? null
       : null

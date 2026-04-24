@@ -136,20 +136,41 @@ export function withDerivedSessionStatus(runtime: SessionRuntime): SessionRuntim
 // Pending-tool bookkeeping
 // ---------------------------------------------------------------------------
 
-/** True when the turn still has at least one tool_use block that's
- *  waiting on its tool_result. The foldSemanticEvent `turn_completed`
+/** True when the turn still has at least one tool-call block that's
+ *  waiting on its result. The foldSemanticEvent `turn_completed`
  *  branch keeps the turn alive whenever this is true so a late
- *  tool_result doesn't land in a closed turn. */
+ *  result doesn't land in a closed turn.
+ *
+ *  Covers both Claude's kinds (tool_use / server_tool_use /
+ *  mcp_tool_use — pending indicator is `resultAt == null` on a
+ *  block that has a toolUseId) AND Codex's kinds (function_call /
+ *  custom_tool_call — pending indicator is `resultAt == null` on a
+ *  block that has a callId). The Codex branch is load-bearing:
+ *  without it, a Codex turn that commits one tool round before the
+ *  next one starts trivially returns false here, and the turn-lifecycle
+ *  logic upstream treats the turn as completable — closing it while
+ *  the agent is actively issuing more function_call items in the
+ *  same turn. See the debug-bundle finding (2026-04-23) where
+ *  `currentTurn.endedAt` stayed null for 2 minutes; had turn_completed
+ *  ever fired on that session, this check would have returned false
+ *  and closed the turn prematurely.
+ */
 export function hasPendingSemanticTools(turn: SemanticLiveTurn): boolean {
   return Object.values(turn.blocks).some(block => {
     if (
-      block.kind !== 'tool_use' &&
-      block.kind !== 'server_tool_use' &&
-      block.kind !== 'mcp_tool_use'
+      block.kind === 'tool_use' ||
+      block.kind === 'server_tool_use' ||
+      block.kind === 'mcp_tool_use'
     ) {
-      return false
+      return block.toolUseId != null && block.resultAt == null
     }
-    return block.toolUseId != null && block.resultAt == null
+    if (
+      block.kind === 'function_call' ||
+      block.kind === 'custom_tool_call'
+    ) {
+      return block.callId != null && block.resultAt == null
+    }
+    return false
   })
 }
 
