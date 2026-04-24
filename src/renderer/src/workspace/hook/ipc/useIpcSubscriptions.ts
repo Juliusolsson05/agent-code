@@ -558,6 +558,22 @@ export function useIpcSubscriptions(
       })
     })
 
+    const offPermissionPrompt = window.api.onSessionPermissionPrompt(({
+      sessionId,
+      visible,
+      title,
+      toolName,
+      command,
+      options,
+      selectedIndex,
+    }) => {
+      updateRuntime(sessionId, {
+        pendingPermissionPrompt: visible
+          ? { title, toolName, command, options, selectedIndex }
+          : null,
+      })
+    })
+
     const offCompactionState = window.api.onSessionCompactionState(({
       sessionId,
       visible,
@@ -969,6 +985,7 @@ export function useIpcSubscriptions(
       offSemantic()
       offTrustDialog()
       offResumePrompt()
+      offPermissionPrompt()
       offCompactionState()
       offExit()
       for (const t of refs.bootstrapTimersRef.current.values()) clearTimeout(t)

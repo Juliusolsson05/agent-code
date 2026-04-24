@@ -313,6 +313,7 @@ export function useComposerKeybinds({
       !runtime.pendingApproval &&
       !runtime.pendingTrustDialog &&
       !runtime.pendingResumePrompt &&
+      !runtime.pendingPermissionPrompt &&
       history.length > 0 &&
       (cyclingHistory || input === '')
     ) {
@@ -352,6 +353,7 @@ export function useComposerKeybinds({
       !runtime.pendingApproval &&
       !runtime.pendingTrustDialog &&
       !runtime.pendingResumePrompt &&
+      !runtime.pendingPermissionPrompt &&
       cyclingHistory
     ) {
       e.preventDefault()

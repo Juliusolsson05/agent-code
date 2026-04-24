@@ -46,6 +46,7 @@ export type {
   SessionJsonlEntriesEvent,
   SessionJsonlEntryEvent,
   SessionJsonlErrorEvent,
+  SessionPermissionPromptEvent,
   SessionKind,
   SessionResumePromptEvent,
   SessionScreenEvent,

@@ -9,6 +9,7 @@ import {
   terminalToMarkdown,
   type CompactionState,
   type JsonlEntry,
+  type PermissionPromptState,
   type ProxyServer,
   type ResumePromptState,
   type SemanticEvent,
@@ -64,6 +65,7 @@ export type ClaudeSessionEvents = {
   'process-state': [{ active: boolean; status?: string }]
   'trust-dialog': [TrustDialogState]
   'resume-prompt': [ResumePromptState]
+  'permission-prompt': [PermissionPromptState]
   'compaction-state': [CompactionState]
   /** New. The flat union of semantic-channel events (see
    *  claude-code-headless EVENT_SPEC.md). Forwarded verbatim so the
@@ -312,6 +314,9 @@ export class ClaudeSession extends EventEmitter {
     )
     this.headless.on('resume-prompt', state =>
       this.emit('resume-prompt', state),
+    )
+    this.headless.on('permission-prompt', state =>
+      this.emit('permission-prompt', state),
     )
     this.headless.on('compaction-state', state =>
       this.emit('compaction-state', state),

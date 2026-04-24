@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { CodexApprovalModal } from '@providers/codex/renderer/CodexApprovalModal'
 import { ResumePromptModal } from '@providers/claude/renderer/ResumePromptModal'
+import { PermissionPromptModal } from '@providers/claude/renderer/PermissionPromptModal'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
@@ -329,6 +330,11 @@ export function TileLeaf({
 
       <ResumePromptModal
         prompt={runtime.pendingResumePrompt}
+        onSend={send}
+      />
+
+      <PermissionPromptModal
+        state={runtime.pendingPermissionPrompt}
         onSend={send}
       />
 

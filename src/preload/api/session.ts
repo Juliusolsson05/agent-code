@@ -8,6 +8,7 @@ import type {
   SessionJsonlEntriesEvent,
   SessionJsonlEntryEvent,
   SessionJsonlErrorEvent,
+  SessionPermissionPromptEvent,
   SessionKind,
   SessionScreenEvent,
   SessionSemanticEvent,
@@ -139,6 +140,9 @@ export const sessionApi = {
 
   onSessionResumePrompt: (cb: (e: SessionResumePromptEvent) => void): Unsub =>
     subscribe('session:resume-prompt', cb),
+
+  onSessionPermissionPrompt: (cb: (e: SessionPermissionPromptEvent) => void): Unsub =>
+    subscribe('session:permission-prompt', cb),
 
   onSessionCompactionState: (cb: (e: SessionCompactionStateEvent) => void): Unsub =>
     subscribe('session:compaction-state', cb),
