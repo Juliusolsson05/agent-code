@@ -41,6 +41,7 @@ import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   ghostsFromSemanticTurn,
   ghostsToPersist,
+  orphanStale,
   reconcileUpstream,
 } from '@renderer/workspace/ghosts'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
@@ -88,6 +89,8 @@ type WorktreeCacheEntry = {
 
 const WORKTREE_CACHE_TTL_MS = 5000
 const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
+const GHOST_ORPHAN_TTL_MS = 3000
+const GHOST_ORPHAN_SWEEP_MS = 1000
 
 function canReduceWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
   const type = (raw as { type?: unknown })?.type
@@ -137,6 +140,38 @@ export function useIpcSubscriptions(
   useEffect(() => {
     const worktreeCache = new Map<string, WorktreeCacheEntry>()
     const recentWorkContextRawBySession = new Map<SessionId, unknown[]>()
+    const orphanSweepTimer = window.setInterval(() => {
+      const now = Date.now()
+      setRuntimes(prev => {
+        let changed = false
+        const next = { ...prev }
+        for (const [sessionId, runtime] of Object.entries(prev)) {
+          if (runtime.ghosts.size === 0) continue
+          const nextGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
+          if (nextGhosts === runtime.ghosts) continue
+          for (const ghost of ghostsToPersist(runtime.ghosts, nextGhosts)) {
+            window.api.ghostAppend(sessionId, ghost)
+          }
+          next[sessionId] = appendFeedDebugLog(
+            { ...runtime, ghosts: nextGhosts },
+            {
+              layer: 'STATE',
+              kind: 'ghost_orphan_sweep',
+              summary: 'stale ghosts marked orphaned',
+              data: {
+                ghostCount: nextGhosts.size,
+                orphanedCount: [...nextGhosts.values()].filter(
+                  ghost => ghost._atp.orphanedAt !== undefined &&
+                    runtime.ghosts.get(ghost.uuid)?._atp.orphanedAt === undefined,
+                ).length,
+              },
+            },
+          )
+          changed = true
+        }
+        return changed ? next : prev
+      })
+    }, GHOST_ORPHAN_SWEEP_MS)
     const refreshWorktrees = (cwd: string | null | undefined): void => {
       if (!cwd) return
       const cached = worktreeCache.get(cwd)
@@ -1149,6 +1184,7 @@ export function useIpcSubscriptions(
     })
 
     return () => {
+      window.clearInterval(orphanSweepTimer)
       offStarted()
       offScreen()
       // No singular offEntry() — see the deleted-handler comment
