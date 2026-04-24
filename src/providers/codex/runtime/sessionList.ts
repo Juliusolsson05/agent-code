@@ -2,6 +2,7 @@ import { readdir, stat, open } from 'fs/promises'
 import { join } from 'path'
 
 import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
+import { performanceService } from '@main/performance/PerformanceService.js'
 
 // Codex session lister — walks ~/.codex/sessions/YYYY/MM/DD/ for
 // rollout-*.jsonl files and extracts summary metadata for the resume
@@ -48,6 +49,9 @@ const ROLLOUT_RE = /^rollout-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 export async function listCodexSessions(
   options: ListCodexSessionsOptions = {},
 ): Promise<CodexSessionInfo[]> {
+  const span = performanceService.span('providers.codex.listSessions', {
+    limit: options.limit ?? 20,
+  })
   const limit = options.limit ?? 20
   const sessionsDir = getCodexSessionsDir()
 
@@ -57,6 +61,7 @@ export async function listCodexSessions(
     await walkForRollouts(sessionsDir, files)
   } catch {
     // Sessions dir doesn't exist yet — no codex sessions recorded.
+    span.end({ result: 'missing-sessions-dir' })
     return []
   }
 
@@ -69,6 +74,11 @@ export async function listCodexSessions(
     const info = await parseCodexSession(f)
     if (info) sessions.push(info)
   }
+  span.end({
+    result: 'listed',
+    candidates: files.length,
+    sessions: sessions.length,
+  })
   return sessions
 }
 

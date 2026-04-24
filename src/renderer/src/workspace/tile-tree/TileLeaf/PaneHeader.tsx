@@ -8,10 +8,12 @@ import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 // panes that still want attention. Previous design used
 // green/red, but red read as "error" for merely idle panes.
 export function PaneHeader({
+  paneLabel,
   projectDir,
   statusMode,
   isSessionLive,
 }: {
+  paneLabel?: string
   projectDir: string | null
   statusMode: boolean
   isSessionLive: boolean
@@ -26,9 +28,16 @@ export function PaneHeader({
           : 'bg-surface text-muted'
       } ${statusMode ? 'py-0 min-h-[5px]' : 'py-1'}`}
     >
-      <span className="truncate" title={projectDir ?? 'no project dir'}>
-        {shortenCwd(projectDir)}
-      </span>
+      <div className="flex items-center gap-2 min-w-0">
+        {paneLabel && (
+          <span className="flex-shrink-0 rounded-[3px] border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
+            {paneLabel}
+          </span>
+        )}
+        <span className="truncate" title={projectDir ?? 'no project dir'}>
+          {shortenCwd(projectDir)}
+        </span>
+      </div>
     </div>
   )
 }

@@ -4,6 +4,7 @@ import { join } from 'path'
 import { listSessionsForCwd } from '@providers/claude/runtime/sessionList.js'
 import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
 import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
+import { performanceService } from '@main/performance/PerformanceService.js'
 
 // Session Prompt Index — power source for the "Search Conversation
 // Prompts" command.
@@ -262,15 +263,22 @@ async function extractPromptsFromFile(
   sessionId: string,
   file: string,
 ): Promise<{ prompts: SessionIndexPrompt[]; cwd: string }> {
+  const span = performanceService.span('sessionIndex.extractPrompts', {
+    kind,
+    sessionId,
+    file,
+  })
   const cached = promptCache.get(cacheKey(kind, sessionId))
   let mtime: number
   try {
     const st = await stat(file)
     mtime = st.mtime.getTime()
   } catch {
+    span.end({ result: 'stat-failed' })
     return { prompts: [], cwd: '' }
   }
   if (cached && cached.mtime === mtime) {
+    span.end({ result: 'cache-hit', prompts: cached.prompts.length })
     return { prompts: cached.prompts, cwd: cached.cwd }
   }
 
@@ -278,6 +286,7 @@ async function extractPromptsFromFile(
   try {
     text = await readFile(file, 'utf-8')
   } catch {
+    span.end({ result: 'read-failed' })
     return { prompts: [], cwd: '' }
   }
 
@@ -290,6 +299,12 @@ async function extractPromptsFromFile(
     mtime,
     prompts: parsed.prompts,
     cwd: parsed.cwd,
+  })
+  span.end({
+    result: 'parsed',
+    bytes: text.length,
+    prompts: parsed.prompts.length,
+    hasCwd: parsed.cwd.length > 0,
   })
   return parsed
 }
@@ -525,12 +540,18 @@ async function claudeCwdFromProjectDir(file: string): Promise<string> {
 export async function listRecentSessionsWithPrompts(
   options: ListRecentOptions = {},
 ): Promise<SessionIndexEntry[]> {
+  const span = performanceService.span('sessionIndex.listRecent', {
+    limit: options.limit ?? 10,
+    promptsPerSession: options.promptsPerSession ?? 4,
+    cwdScoped: Boolean(options.cwd),
+  })
   const limit = options.limit ?? 10
   const promptsPerSession = options.promptsPerSession ?? 4
   const cwd = options.cwd ?? null
 
-  const claude = await discoverClaudeSessions(cwd)
-  const codexFiles = await discoverCodexSessions()
+  try {
+    const claude = await discoverClaudeSessions(cwd)
+    const codexFiles = await discoverCodexSessions()
 
   // Unify into one discovery list with provider tagged.
   const candidates: Array<{
@@ -598,7 +619,16 @@ export async function listRecentSessionsWithPrompts(
       matchCount: 0,
     })
   }
-  return results
+    span.end({
+      claudeCandidates: claude.length,
+      codexCandidates: codexFiles.length,
+      results: results.length,
+    })
+    return results
+  } catch (err) {
+    span.fail(err)
+    throw err
+  }
 }
 
 /** Search every session's prompts for the query. Matching sessions
@@ -611,12 +641,19 @@ export async function searchSessionPrompts(
   const q = options.query.trim()
   if (!q) return listRecentSessionsWithPrompts(options)
 
+  const span = performanceService.span('sessionIndex.search', {
+    limit: options.limit ?? 20,
+    promptsPerSession: options.promptsPerSession ?? 8,
+    cwdScoped: Boolean(options.cwd),
+    queryLength: q.length,
+  })
   const limit = options.limit ?? 20
   const promptsPerSession = options.promptsPerSession ?? 8
   const cwd = options.cwd ?? null
 
-  const claude = await discoverClaudeSessions(cwd)
-  const codex = await discoverCodexSessions()
+  try {
+    const claude = await discoverClaudeSessions(cwd)
+    const codex = await discoverCodexSessions()
   const candidates: Array<{
     kind: 'claude' | 'codex'
     providerSessionId: string
@@ -719,7 +756,18 @@ export async function searchSessionPrompts(
     return b.entry.lastModified - a.entry.lastModified
   })
 
-  return scored.slice(0, limit).map(s => s.entry)
+    const results = scored.slice(0, limit).map(s => s.entry)
+    span.end({
+      claudeCandidates: claude.length,
+      codexCandidates: codex.length,
+      scored: scored.length,
+      results: results.length,
+    })
+    return results
+  } catch (err) {
+    span.fail(err)
+    throw err
+  }
 }
 
 function escapeRegex(s: string): string {

@@ -67,6 +67,7 @@ import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 type Props = {
   sessionId: SessionId
   runtime: SessionRuntime
+  paneLabel?: string
   focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
@@ -76,6 +77,7 @@ type Props = {
 export function TileLeaf({
   sessionId,
   runtime,
+  paneLabel,
   focused,
   onFocusRequest,
   workspace,
@@ -240,6 +242,7 @@ export function TileLeaf({
       onMouseDown={onFocusRequest}
     >
       <PaneHeader
+        paneLabel={paneLabel}
         projectDir={runtime.projectDir}
         statusMode={workspace.statusMode}
         isSessionLive={isSessionLive}

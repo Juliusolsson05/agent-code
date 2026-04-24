@@ -9,6 +9,11 @@ import 'monaco-editor/min/vs/editor/editor.main.css'
 // its cells with correct geometry. xterm.js uses absolute-positioned
 // rows and explicit cell widths, none of which work without this file.
 import '@xterm/xterm/css/xterm.css'
+import { initializePerformance, mark } from '@renderer/performance/client'
+
+void initializePerformance().then(() => {
+  mark('app.renderer.reactRenderCalled')
+})
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

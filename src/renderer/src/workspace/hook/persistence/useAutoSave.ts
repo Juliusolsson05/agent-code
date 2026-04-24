@@ -4,6 +4,7 @@ import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import * as perf from '@renderer/performance/client'
 
 // Debounced workspace-save + beforeunload flush.
 //
@@ -35,6 +36,7 @@ export function useAutoSave(
   bootstrapComplete: boolean,
 ): void {
   const flushSave = useCallback(() => {
+    const saveSpan = perf.span('workspace.autosave.flush')
     const s = refs.latestStateRef.current
     // Collect non-empty drafts so in-progress prompts survive crashes.
     const drafts: Record<SessionId, string> = {}
@@ -54,11 +56,27 @@ export function useAutoSave(
       tileTabs: refs.latestTileTabsRef.current,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
-    const json = JSON.stringify({ workspace: persisted }, null, 2)
-    void window.api.saveWorkspace(json).catch(err => {
-      // eslint-disable-next-line no-console
-      console.warn('[workspace] save failed:', err)
-    })
+    let json = ''
+    try {
+      json = JSON.stringify({ workspace: persisted }, null, 2)
+    } catch (err) {
+      saveSpan.fail(err)
+      throw err
+    }
+    void window.api.saveWorkspace(json)
+      .then(() => {
+        saveSpan.end({
+          tabs: persisted.tabs.length,
+          sessions: Object.keys(persisted.sessions).length,
+          tileTabs: persisted.tileTabs.length,
+          bytes: json.length,
+        })
+      })
+      .catch(err => {
+        saveSpan.fail(err, { bytes: json.length })
+        // eslint-disable-next-line no-console
+        console.warn('[workspace] save failed:', err)
+      })
   }, [refs.latestRuntimesRef, refs.latestStateRef, refs.latestTileTabsRef])
 
   useEffect(() => {

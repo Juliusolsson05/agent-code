@@ -17,6 +17,7 @@ import type {
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import * as perf from '@renderer/performance/client'
 
 // Remap a persisted tree by replacing every sessionId with a freshly
 // spawned one (spawn happens as we walk). Returns the remapped tree
@@ -53,6 +54,11 @@ export async function rehydrateWorkspace(
   setTileTabs: WorkspaceSetTileTabs,
   newTab: (cwd: string) => Promise<unknown>,
 ): Promise<void> {
+  perf.mark('workspace.rehydrate.start', {
+    tabs: persisted.tabs.length,
+    sessions: Object.keys(persisted.sessions).length,
+    buried: persisted.buried?.length ?? 0,
+  })
   const idMap = new Map<SessionId, SessionId>()
   const freshSessions: Record<SessionId, SessionMeta> = {}
 
@@ -184,6 +190,12 @@ export async function rehydrateWorkspace(
   // back.
   await Promise.all(
     Object.entries(persisted.sessions).map(async ([oldId, meta]) => {
+      const restoreSpan = perf.span('workspace.rehydrate.session', {
+        oldId,
+        kind: meta.kind ?? 'claude',
+        hasProviderSessionId: Boolean(meta.providerSessionId),
+        hasTmuxName: Boolean(meta.tmuxName),
+      })
       try {
         const kind: SessionKind = meta.kind ?? 'claude'
         // For terminal sessions with a persisted tmuxName, pass it
@@ -209,7 +221,9 @@ export async function rehydrateWorkspace(
           ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
         }
         commitRehydratedState()
+        restoreSpan.end({ newId })
       } catch (err) {
+        restoreSpan.fail(err)
         // eslint-disable-next-line no-console
         console.warn(`[workspace] failed to respawn ${meta.cwd}:`, err)
       }
@@ -220,4 +234,7 @@ export async function rehydrateWorkspace(
     const cwd = await window.api.defaultCwd()
     await newTab(cwd)
   }
+  perf.mark('workspace.rehydrate.complete', {
+    restoredSessions: Object.keys(freshSessions).length,
+  })
 }

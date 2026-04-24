@@ -39,6 +39,7 @@ export type UiShellSlice = UiShellState & {
   toggleFeedDebugPanel: () => void
   toggleProxyDebugPanel: () => void
   toggleHtmlDebugPanel: () => void
+  togglePerformancePanel: () => void
   openPromptSearch: () => void
   closePromptSearch: () => void
   openAgentActivity: () => void

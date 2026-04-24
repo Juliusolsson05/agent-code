@@ -445,6 +445,10 @@ export class ClaudeSession extends EventEmitter {
     return this.exited
   }
 
+  getProcessPid(): number | null {
+    return this.pty?.pid ?? null
+  }
+
   /**
    * Reset the live-bridge quiet-window timer. Called once at the end
    * of the constructor (so fresh sessions that never replay anything

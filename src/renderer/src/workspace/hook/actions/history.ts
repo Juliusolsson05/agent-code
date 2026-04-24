@@ -22,6 +22,7 @@ import { reduceWorkContextFromRaw } from '@renderer/workspace/work-context/reduc
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import * as perf from '@renderer/performance/client'
 
 function codexTurnIdFromEventPayload(raw: Record<string, unknown>): string | null {
   const payload = raw.payload as Record<string, unknown> | undefined
@@ -50,16 +51,30 @@ export function useHistoryActions(
 } {
   const loadOlderHistory = useCallback(
     async (sessionId: SessionId) => {
+      const span = perf.span('workspace.history.loadOlder', { sessionId })
       const currentState = refs.stateRef.current
       const meta = currentState.sessions[sessionId]
       const runtime = refs.latestRuntimesRef.current[sessionId] ?? emptyRuntime()
-      if (!meta) return
+      if (!meta) {
+        span.end({ skipped: 'missing-meta' })
+        return
+      }
 
       const kind = meta.kind ?? 'claude'
-      if ((kind !== 'claude' && kind !== 'codex') || !meta.providerSessionId) return
-      if (!runtime.hasOlderHistory || runtime.loadingOlderHistory) return
+      if ((kind !== 'claude' && kind !== 'codex') || !meta.providerSessionId) {
+        span.end({ skipped: 'unsupported-or-missing-provider-session', kind })
+        return
+      }
+      if (!runtime.hasOlderHistory || runtime.loadingOlderHistory) {
+        span.end({
+          skipped: runtime.loadingOlderHistory ? 'already-loading' : 'no-older-history',
+          kind,
+        })
+        return
+      }
       if (!runtime.historyOldestMarker) {
         updateRuntime(sessionId, { hasOlderHistory: false, loadingOlderHistory: false })
+        span.end({ skipped: 'missing-marker', kind })
         return
       }
 
@@ -177,7 +192,14 @@ export function useHistoryActions(
             },
           }
         })
+        span.end({
+          kind,
+          fetched: chunk.entries.length,
+          prepended: prepend.length,
+          hasMore: chunk.hasMore,
+        })
       } catch (err) {
+        span.fail(err, { kind })
         console.warn('[history] load older failed', err)
         updateRuntime(sessionId, { loadingOlderHistory: false })
       }

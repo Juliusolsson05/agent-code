@@ -30,3 +30,7 @@ export const FEED_DEBUG_DIR = join(STATE_DIR, 'feed-debug')
 // path in a toast AND copies it to the clipboard, so discoverability
 // doesn't depend on the user knowing the filesystem layout.
 export const DEBUG_BUNDLE_DIR = join(STATE_DIR, 'debug-bundles')
+
+// Environment-gated app performance traces. One folder per app run,
+// written only when CC_SHELL_PERF=1.
+export const PERFORMANCE_RUNS_DIR = join(STATE_DIR, 'performance', 'runs')

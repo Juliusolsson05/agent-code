@@ -46,6 +46,7 @@ import {
   LazyEntry,
 } from '@renderer/features/feed/ui/rows'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import * as perf from '@renderer/performance/client'
 
 // Re-export — many external callers import these types from Feed
 // directly rather than reaching into ../types/../context. Keep the
@@ -604,9 +605,9 @@ function FeedImpl({
   // completion notification would render as a full UserBand in the
   // feed with raw <task-notification> XML visible — exactly the bug
   // the user reported.
-  const visibleDecisions = useMemo<VisibleDecision[]>(
-    () =>
-      entries.map((entry, index) => {
+  const visibleDecisions = useMemo<VisibleDecision[]>(() => {
+    const startedAt = performance.now()
+    const decisions = entries.map((entry, index) => {
         if (isCompactBoundaryEntry(entry)) {
           return {
             key: debugKeyForEntry(entry, index),
@@ -645,9 +646,17 @@ function FeedImpl({
           visible: true,
           reason: 'conversation',
         }
-      }),
-    [entries],
-  )
+      })
+    const durationMs = performance.now() - startedAt
+    if (durationMs >= 10 || entries.length >= 500) {
+      perf.metric('feed.visibleDecisions.build', durationMs, 'sample', {
+        sessionId,
+        entries: entries.length,
+        decisions: decisions.length,
+      })
+    }
+    return decisions
+  }, [entries, sessionId])
 
   const visible = useMemo(
     () => visibleDecisions.filter(item => item.visible).map(item => item.entry),
@@ -682,12 +691,20 @@ function FeedImpl({
   const shouldShowWorkIndicator = streamPhase !== 'idle'
 
   const renderedRows = useMemo<DebugVisibleRow[]>(() => {
+    const startedAt = performance.now()
     if (visible.length === 0 && !hasSemanticStreaming) {
-      return [{
+      const rows: DebugVisibleRow[] = [{
         key: 'empty',
         slot: 'empty',
         label: provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…',
       }]
+      perf.metric('feed.renderedRows.build', performance.now() - startedAt, 'sample', {
+        sessionId,
+        entries: entries.length,
+        visible: visible.length,
+        rows: rows.length,
+      })
+      return rows
     }
     const rows: DebugVisibleRow[] = visibleDecisions
       .filter(item => item.visible)
@@ -717,11 +734,23 @@ function FeedImpl({
             : `work ${streamPhase}`,
       })
     }
+    const durationMs = performance.now() - startedAt
+    if (durationMs >= 10 || entries.length >= 500) {
+      perf.metric('feed.renderedRows.build', durationMs, 'sample', {
+        sessionId,
+        entries: entries.length,
+        visible: visible.length,
+        rows: rows.length,
+        hasSemanticStreaming,
+      })
+    }
     return rows
   }, [
+    entries.length,
     hasSemanticStreaming,
     provider,
     renderedSemanticTurn,
+    sessionId,
     shouldShowWorkIndicator,
     streamPhase,
     streamPhasePendingToolName,

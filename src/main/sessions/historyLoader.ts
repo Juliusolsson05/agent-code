@@ -2,6 +2,7 @@ import { join } from 'path'
 import { readFile, readdir, stat } from 'fs/promises'
 
 import { getMainProvider } from '@providers/registry.main.js'
+import { performanceService } from '@main/performance/PerformanceService.js'
 
 // Loader for older history chunks.
 //
@@ -94,47 +95,82 @@ async function findCodexRolloutPathByThreadId(
 export async function loadOlderHistoryChunk(
   params: HistoryChunkRequest,
 ): Promise<HistoryChunk> {
+  const span = performanceService.span('historyLoader.loadOlderChunk', {
+    kind: params.kind,
+    limit: params.limit,
+    hasBeforeMarker: params.beforeMarker.length > 0,
+  })
   const provider = getMainProvider(params.kind)
   let filePath: string | null = null
 
-  if (params.kind === 'claude') {
-    const projectDir = await provider.getProjectDir(params.cwd)
-    filePath = join(projectDir, `${params.providerSessionId}.jsonl`)
-  } else {
-    const sessionsDir = await provider.getProjectDir(params.cwd)
-    filePath = await findCodexRolloutPathByThreadId(sessionsDir, params.providerSessionId)
-  }
+  try {
+    if (params.kind === 'claude') {
+      const projectDir = await provider.getProjectDir(params.cwd)
+      filePath = join(projectDir, `${params.providerSessionId}.jsonl`)
+    } else {
+      const sessionsDir = await provider.getProjectDir(params.cwd)
+      filePath = await findCodexRolloutPathByThreadId(sessionsDir, params.providerSessionId)
+    }
 
-  if (!filePath) return { entries: [], hasMore: false }
+    if (!filePath) {
+      span.end({ result: 'missing-file' })
+      return { entries: [], hasMore: false }
+    }
 
-  const text = await readFile(filePath, 'utf8').catch(() => null)
-  if (!text) return { entries: [], hasMore: false }
+    const text = await readFile(filePath, 'utf8').catch(() => null)
+    if (!text) {
+      span.end({ result: 'read-failed', filePath })
+      return { entries: [], hasMore: false }
+    }
 
-  const parsed = text
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .map(line => {
-      try {
-        return JSON.parse(line) as Record<string, unknown>
-      } catch {
-        return null
-      }
+    let parseErrors = 0
+    const parsed = text
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .map(line => {
+        try {
+          return JSON.parse(line) as Record<string, unknown>
+        } catch {
+          parseErrors++
+          return null
+        }
+      })
+      .filter((entry): entry is Record<string, unknown> => entry !== null)
+
+    const markerOf = params.kind === 'claude'
+      ? extractClaudeHistoryMarker
+      : extractCodexHistoryMarker
+
+    const anchorIndex = parsed.findIndex(entry => markerOf(entry) === params.beforeMarker)
+    const cutoff = anchorIndex === -1 ? parsed.length : anchorIndex
+    const older = parsed.slice(0, cutoff)
+    if (older.length === 0) {
+      span.end({
+        result: 'no-older',
+        bytes: text.length,
+        parsed: parsed.length,
+        parseErrors,
+      })
+      return { entries: [], hasMore: false }
+    }
+
+    const start = Math.max(0, older.length - params.limit)
+    const entries = older.slice(start)
+    span.end({
+      result: 'loaded',
+      bytes: text.length,
+      parsed: parsed.length,
+      parseErrors,
+      returned: entries.length,
+      hasMore: start > 0,
     })
-    .filter((entry): entry is Record<string, unknown> => entry !== null)
-
-  const markerOf = params.kind === 'claude'
-    ? extractClaudeHistoryMarker
-    : extractCodexHistoryMarker
-
-  const anchorIndex = parsed.findIndex(entry => markerOf(entry) === params.beforeMarker)
-  const cutoff = anchorIndex === -1 ? parsed.length : anchorIndex
-  const older = parsed.slice(0, cutoff)
-  if (older.length === 0) return { entries: [], hasMore: false }
-
-  const start = Math.max(0, older.length - params.limit)
-  return {
-    entries: older.slice(start),
-    hasMore: start > 0,
+    return {
+      entries,
+      hasMore: start > 0,
+    }
+  } catch (err) {
+    span.fail(err)
+    throw err
   }
 }
