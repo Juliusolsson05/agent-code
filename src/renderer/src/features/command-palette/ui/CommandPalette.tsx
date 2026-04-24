@@ -2,6 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
+import {
+  allPromptTemplates,
+  loadCustomPromptTemplates,
+  type PromptTemplate,
+} from '@renderer/features/prompt-templates/templates'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
@@ -29,7 +34,7 @@ type BuriedPaneInfo = {
   buriedAt: number
 }
 
-type PaletteMode = 'commands' | 'resume' | 'buried'
+type PaletteMode = 'commands' | 'resume' | 'buried' | 'kill-buried' | 'prompt-template'
 
 type Props = {
   open: boolean
@@ -101,6 +106,7 @@ export function CommandPalette({
   const [mode, setMode] = useState<PaletteMode>('commands')
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [customPromptTemplates, setCustomPromptTemplates] = useState<PromptTemplate[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -154,6 +160,19 @@ export function CommandPalette({
     setSelectedIndex(0)
   }, [])
 
+  const enterKillBuriedMode = useCallback(() => {
+    setMode('kill-buried')
+    setQuery('')
+    setSelectedIndex(0)
+  }, [])
+
+  const enterPromptTemplateMode = useCallback(() => {
+    setCustomPromptTemplates(loadCustomPromptTemplates())
+    setMode('prompt-template')
+    setQuery('')
+    setSelectedIndex(0)
+  }, [])
+
   const commandContext = useMemo<CommandContext>(
     () => ({
       workspace,
@@ -175,6 +194,8 @@ export function CommandPalette({
         setDangerousAgentsEnabled,
         enterResumeMode,
         enterBuriedMode,
+        enterKillBuriedMode,
+        enterPromptTemplateMode,
         closePalette: onClose,
       },
       flags: {
@@ -206,6 +227,8 @@ export function CommandPalette({
       setDangerousAgentsEnabled,
       enterResumeMode,
       enterBuriedMode,
+      enterKillBuriedMode,
+      enterPromptTemplateMode,
       onClose,
       customRenderingEnabled,
       dangerousAgentsEnabled,
@@ -222,6 +245,11 @@ export function CommandPalette({
     [commandContext],
   )
 
+  const promptTemplates = useMemo(
+    () => allPromptTemplates(customPromptTemplates),
+    [customPromptTemplates],
+  )
+
   const filtered = useMemo(() => {
     if (mode === 'resume') {
       if (!query.trim()) return sessions
@@ -232,7 +260,7 @@ export function CommandPalette({
           fuzzyMatch(s.gitBranch ?? '', query),
       )
     }
-    if (mode === 'buried') {
+    if (mode === 'buried' || mode === 'kill-buried') {
       if (!query.trim()) return buried
       return buried.filter(
         item =>
@@ -241,13 +269,22 @@ export function CommandPalette({
           fuzzyMatch(item.note ?? '', query),
       )
     }
+    if (mode === 'prompt-template') {
+      if (!query.trim()) return promptTemplates
+      return promptTemplates.filter(
+        template =>
+          fuzzyMatch(template.title, query) ||
+          fuzzyMatch(template.description, query) ||
+          fuzzyMatch(template.body, query),
+      )
+    }
     if (!query.trim()) return commands
     return commands.filter(
       command =>
         fuzzyMatch(command.title, query) ||
         command.keywords.some(keyword => fuzzyMatch(keyword, query)),
     )
-  }, [mode, buried, commands, sessions, query])
+  }, [mode, buried, commands, sessions, promptTemplates, query])
 
   useEffect(() => {
     if (open) {
@@ -256,6 +293,7 @@ export function CommandPalette({
       setMode('commands')
       setSessions([])
       setSessionsLoading(false)
+      setCustomPromptTemplates(loadCustomPromptTemplates())
       requestAnimationFrame(() => inputRef.current?.focus())
     }
   }, [open])
@@ -272,7 +310,12 @@ export function CommandPalette({
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
-      if (command.id === 'resume-session' || command.id === 'revive-pane') {
+      if (
+        command.id === 'resume-session' ||
+        command.id === 'revive-pane' ||
+        command.id === 'kill-buried-pane' ||
+        command.id === 'prompt-template'
+      ) {
         void command.run(commandContext)
         return
       }
@@ -302,12 +345,46 @@ export function CommandPalette({
     [onClose, workspace],
   )
 
+  const executeKillBuried = useCallback(
+    (item: BuriedPaneInfo) => {
+      const wasLastBuriedPane = workspace.state.buried.length <= 1
+      void workspace.killBuried(item.id).then(() => {
+        if (wasLastBuriedPane) onClose()
+        else setSelectedIndex(i => Math.max(0, Math.min(i, workspace.state.buried.length - 2)))
+      })
+    },
+    [onClose, workspace],
+  )
+
+  const executePromptTemplate = useCallback(
+    (template: PromptTemplate) => {
+      const tab = workspace.activeTab
+      if (!tab) return
+      const sessionId = tab.focusedSessionId
+
+      // Template insertion deliberately stops at the draft boundary.
+      // The user's next action is still visible and editable in the
+      // composer; nothing is sent to Claude/Codex until they press
+      // Enter themselves. This mirrors rewind-to-prompt's "prefill,
+      // don't replay" contract.
+      workspace.setDraftInput(sessionId, template.body)
+      workspace.showPaneToast(sessionId, `Inserted template: ${template.title}`)
+      onClose()
+    },
+    [onClose, workspace],
+  )
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
-        if (mode === 'resume' || mode === 'buried') {
+        if (
+          mode === 'resume' ||
+          mode === 'buried' ||
+          mode === 'kill-buried' ||
+          mode === 'prompt-template'
+        ) {
           setMode('commands')
           setQuery('')
           setSelectedIndex(0)
@@ -334,13 +411,29 @@ export function CommandPalette({
         } else if (mode === 'buried') {
           const item = filtered[selectedIndex] as BuriedPaneInfo | undefined
           if (item) executeBuried(item)
+        } else if (mode === 'kill-buried') {
+          const item = filtered[selectedIndex] as BuriedPaneInfo | undefined
+          if (item) executeKillBuried(item)
+        } else if (mode === 'prompt-template') {
+          const template = filtered[selectedIndex] as PromptTemplate | undefined
+          if (template) executePromptTemplate(template)
         } else {
           const command = filtered[selectedIndex] as ResolvedCommand | undefined
           if (command) executeCommand(command)
         }
       }
     },
-    [mode, filtered, selectedIndex, executeBuried, executeCommand, executeResume, onClose],
+    [
+      mode,
+      filtered,
+      selectedIndex,
+      executeBuried,
+      executeCommand,
+      executeKillBuried,
+      executePromptTemplate,
+      executeResume,
+      onClose,
+    ],
   )
 
   if (!open) return null
@@ -373,6 +466,16 @@ export function CommandPalette({
               revive &rsaquo;
             </span>
           )}
+          {mode === 'kill-buried' && (
+            <span className="text-red-300 text-[11px] flex-shrink-0 select-none">
+              kill buried &rsaquo;
+            </span>
+          )}
+          {mode === 'prompt-template' && (
+            <span className="text-accent text-[11px] flex-shrink-0 select-none">
+              template &rsaquo;
+            </span>
+          )}
           <input
             ref={inputRef}
             type="text"
@@ -385,8 +488,10 @@ export function CommandPalette({
             placeholder={
               mode === 'resume'
                 ? 'Search sessions…'
-                : mode === 'buried'
+                : mode === 'buried' || mode === 'kill-buried'
                   ? 'Search buried panes…'
+                  : mode === 'prompt-template'
+                    ? 'Search prompt templates…'
                   : 'Type a command…'
             }
             value={query}
@@ -514,6 +619,76 @@ export function CommandPalette({
                   )}
                   <div className="text-[10px] text-muted mt-0.5 truncate">
                     {item.description}
+                  </div>
+                </div>
+              ))
+            ))}
+
+          {mode === 'kill-buried' &&
+            (filtered.length === 0 ? (
+              <div className="px-3 py-4 text-muted text-[12px] text-center">
+                No buried panes
+              </div>
+            ) : (
+              (filtered as BuriedPaneInfo[]).map((item, i) => (
+                <div
+                  key={item.id}
+                  className={`
+                    px-3 py-2
+                    cursor-pointer
+                    border-b border-border last:border-b-0
+                    ${
+                      i === selectedIndex
+                        ? 'bg-red-500/15 text-ink'
+                        : 'text-ink-dim hover:bg-surface-hi'
+                    }
+                  `}
+                  onMouseEnter={() => setSelectedIndex(i)}
+                  onClick={() => executeKillBuried(item)}
+                >
+                  <div className="text-[12px] truncate">{item.label}</div>
+                  {item.note && (
+                    <div className="text-[11px] text-ink mt-0.5 truncate">
+                      {item.note}
+                    </div>
+                  )}
+                  <div className="text-[10px] text-muted mt-0.5 truncate">
+                    {item.description}
+                  </div>
+                </div>
+              ))
+            ))}
+
+          {mode === 'prompt-template' &&
+            (filtered.length === 0 ? (
+              <div className="px-3 py-4 text-muted text-[12px] text-center">
+                No matching templates
+              </div>
+            ) : (
+              (filtered as PromptTemplate[]).map((template, i) => (
+                <div
+                  key={template.id}
+                  className={`
+                    px-3 py-2
+                    cursor-pointer
+                    border-b border-border last:border-b-0
+                    ${
+                      i === selectedIndex
+                        ? 'bg-accent/15 text-ink'
+                        : 'text-ink-dim hover:bg-surface-hi'
+                    }
+                  `}
+                  onMouseEnter={() => setSelectedIndex(i)}
+                  onClick={() => executePromptTemplate(template)}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="text-[12px] truncate">{template.title}</div>
+                    <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+                      {template.scope}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-muted mt-0.5 truncate">
+                    {template.description}
                   </div>
                 </div>
               ))

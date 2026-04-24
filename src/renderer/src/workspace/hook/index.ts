@@ -288,6 +288,7 @@ export function useWorkspace(
     requestBuryFocused: paneActions.requestBuryFocused,
     buryFocused: paneActions.buryFocused,
     reviveBuried: paneActions.reviveBuried,
+    killBuried: paneActions.killBuried,
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
     navigate: paneActions.navigate,

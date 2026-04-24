@@ -36,7 +36,7 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 //
 // Covers: splitFocused, startNewAgentPlacement, commitNewAgentPlacement,
 // closeFocused, closeSession, requestBuryFocused, buryFocused,
-// reviveBuried, focusSession, focusSessionInTab, navigate.
+// reviveBuried, killBuried, focusSession, focusSessionInTab, navigate.
 // -----------------------------------------------------------------------------
 
 export function usePaneActions(
@@ -61,6 +61,7 @@ export function usePaneActions(
   requestBuryFocused: () => void
   buryFocused: (note?: string, targetSessionId?: SessionId) => void
   reviveBuried: (buriedId: string) => void
+  killBuried: (buriedId: string) => Promise<void>
   focusSession: (sessionId: SessionId) => void
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
   navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
@@ -623,6 +624,64 @@ export function usePaneActions(
     [refs.stateRef, setState],
   )
 
+  const killBuried = useCallback(
+    async (buriedId: string) => {
+      const snapshot = refs.stateRef.current
+      const entry = snapshot.buried.find(item => item.id === buriedId)
+      if (!entry) return
+
+      // Buried panes are live sessions removed from every visible tab
+      // tree. `closeSession` intentionally only handles visible panes
+      // because it needs tree geometry and undo-close placement data;
+      // using it here would no-op. Killing a buried pane is a different
+      // operation: terminate the hidden backend and delete the buried
+      // record directly, without briefly reviving or mutating layout.
+      await window.api.killSession(entry.sessionId)
+
+      setRuntimes(prev => {
+        const next = { ...prev }
+        delete next[entry.sessionId]
+        return next
+      })
+      delete refs.seenUuidsRef.current[entry.sessionId]
+      delete refs.latestScreenRef.current[entry.sessionId]
+      const bootstrapTimer = refs.bootstrapTimersRef.current.get(entry.sessionId)
+      if (bootstrapTimer) {
+        clearTimeout(bootstrapTimer)
+        refs.bootstrapTimersRef.current.delete(entry.sessionId)
+      }
+      const paneToastTimer = refs.paneToastTimers.current[entry.sessionId]
+      if (paneToastTimer) {
+        clearTimeout(paneToastTimer)
+        delete refs.paneToastTimers.current[entry.sessionId]
+      }
+
+      setState(prev => {
+        const sessions = { ...prev.sessions }
+        delete sessions[entry.sessionId]
+        return {
+          ...prev,
+          sessions,
+          buried: prev.buried.filter(item => item.id !== buriedId),
+        }
+      })
+
+      const kindLabel = entry.sessionMeta.kind ?? 'claude'
+      const cwdBase = entry.sessionMeta.cwd.split('/').filter(Boolean).pop() ?? entry.sessionMeta.cwd
+      showToast(`Killed buried ${kindLabel} pane (${cwdBase})`)
+    },
+    [
+      refs.bootstrapTimersRef,
+      refs.latestScreenRef,
+      refs.paneToastTimers,
+      refs.seenUuidsRef,
+      refs.stateRef,
+      setRuntimes,
+      setState,
+      showToast,
+    ],
+  )
+
   const focusSession = useCallback(
     (sessionId: SessionId) => {
       setState(prev => ({
@@ -682,6 +741,7 @@ export function usePaneActions(
     requestBuryFocused,
     buryFocused,
     reviveBuried,
+    killBuried,
     focusSession,
     focusSessionInTab,
     navigate,
