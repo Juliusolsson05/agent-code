@@ -129,6 +129,18 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'worktree-badges',
+      category: 'workspace',
+      title: 'Worktree Badges',
+      description: 'Show the inferred git worktree or branch for each agent pane above the composer.',
+      keywords: ['worktree', 'branch', 'badge', 'git', 'agent'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.showWorktreeBadges,
+        onToggle: (ctx, value) => ctx.onChange({ showWorktreeBadges: value }),
+      },
+    },
+    {
       id: 'proxy-streaming',
       category: 'experimental',
       title: 'Proxy-Streamed Semantic Rendering',

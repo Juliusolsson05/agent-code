@@ -22,6 +22,7 @@ export type CommandContext = {
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
     toggleCustomRendering: () => void
+    toggleWorktreeBadges: () => void
     setDangerousAgentsEnabled: (enabled: boolean) => void
     enterResumeMode: () => void
     enterBuriedMode: () => void
@@ -29,6 +30,7 @@ export type CommandContext = {
   }
   flags: {
     customRenderingEnabled: boolean
+    worktreeBadgesEnabled: boolean
     dangerousAgentsEnabled: boolean
     gitBarOpen: boolean
     debugPanelOpen: boolean

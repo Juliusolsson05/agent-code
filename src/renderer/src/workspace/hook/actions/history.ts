@@ -18,6 +18,7 @@ import {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
 } from '@renderer/workspace/claude/history'
+import { reduceWorkContextFromRaw } from '@renderer/workspace/work-context/reducer'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -75,6 +76,9 @@ export function useHistoryActions(
 
         const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
         const prepend: Entry[] = []
+        const worktreesResult = await window.api.gitWorktrees(meta.cwd)
+        const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+        let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker
         // Same rolling Codex turn id as the live JSONL ingest path.
         // Pagination chunks can start after the original `turn_context`
@@ -86,6 +90,18 @@ export function useHistoryActions(
         let codexPaginationTurnId: string | null = null
 
         for (const rawEntry of chunk.entries) {
+          // Older-history pagination walks records that predate the current
+          // tail. Use them only to backfill an unknown badge; never let old
+          // worktree evidence replace fresher live/current context.
+          if (!workContext) {
+            workContext = reduceWorkContextFromRaw(
+              workContext,
+              rawEntry,
+              worktrees,
+              meta.cwd,
+            )
+          }
+
           if (kind === 'codex') {
             const marker = codexHistoryMarker(rawEntry)
             const turnContextId = codexTurnIdFromRollout(rawEntry)
@@ -157,6 +173,7 @@ export function useHistoryActions(
               // the user can request the next chunk manually.
               hasOlderHistory: chunk.hasMore,
               loadingOlderHistory: false,
+              workContext,
             },
           }
         })

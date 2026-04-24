@@ -58,6 +58,7 @@ export type Settings = {
   contrast: boolean
   accent: AccentId
   customRendering: boolean
+  showWorktreeBadges: boolean
   dangerousAgentsEnabled: boolean
   /** When true, Claude sessions are spawned through a per-session
    *  mitmproxy that decrypts Anthropic `/v1/messages` SSE in real
@@ -78,6 +79,7 @@ export const DEFAULT_SETTINGS: Settings = {
   contrast: false,
   accent: 'lime',
   customRendering: false,
+  showWorktreeBadges: true,
   dangerousAgentsEnabled: false,
   useProxyStreaming: false,
 }

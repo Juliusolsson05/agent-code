@@ -9,6 +9,7 @@ import type {
   ToolUseBlock,
 } from '@shared/types/transcript'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
+import type { AgentWorkContext } from '@renderer/workspace/work-context/types'
 
 export type PickerItem = {
   id: string
@@ -249,6 +250,7 @@ export type SessionRuntime = {
   queuedMessages: QueuedMessage[]
   exited: number | null
   projectDir: string | null
+  workContext: AgentWorkContext | null
   picker: SlashPickerState
   draftInput: string
   draftImages: ClaudeDraftImage[]
@@ -400,6 +402,7 @@ export function emptyRuntime(): SessionRuntime {
     queuedMessages: [],
     exited: null,
     projectDir: null,
+    workContext: null,
     picker: { visible: false, items: [] },
     draftInput: '',
     draftImages: [],

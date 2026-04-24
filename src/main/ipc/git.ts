@@ -3,6 +3,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { join } from 'path'
 import { stat } from 'fs/promises'
+import type { WorktreeIdentity } from '@shared/types/git'
 
 // Git status IPC — powers GitBar.
 //
@@ -139,6 +140,40 @@ async function inspectSubmodule(
 }
 
 export function registerGitIpc(): void {
+  ipcMain.handle('git:worktrees', async (_evt, cwd: string) => {
+    try {
+      const out = await git(cwd, ['worktree', 'list', '--porcelain'])
+      if (!out.trim()) throw new Error('not a git worktree')
+      const worktrees: WorktreeIdentity[] = []
+      let current: WorktreeIdentity | null = null
+
+      for (const line of out.split('\n')) {
+        if (!line.trim()) {
+          if (current) worktrees.push(current)
+          current = null
+          continue
+        }
+        const [key, ...rest] = line.split(' ')
+        const value = rest.join(' ')
+        if (key === 'worktree') {
+          if (current) worktrees.push(current)
+          current = { path: value, branch: null, head: null, detached: false }
+        } else if (current && key === 'HEAD') {
+          current.head = value || null
+        } else if (current && key === 'branch') {
+          current.branch = value.replace(/^refs\/heads\//, '') || null
+        } else if (current && key === 'detached') {
+          current.detached = true
+        }
+      }
+      if (current) worktrees.push(current)
+
+      return { ok: true as const, worktrees }
+    } catch {
+      return { ok: false as const }
+    }
+  })
+
   ipcMain.handle('git:status', async (_evt, cwd: string) => {
     try {
       // Parent repo — branch is the cheap "is this a git repo at all"

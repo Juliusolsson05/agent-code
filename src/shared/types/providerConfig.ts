@@ -23,6 +23,7 @@ export type TileLeafProps = {
   focused: boolean
   onFocusRequest: () => void
   workspace: unknown
+  showWorktreeBadges?: boolean
 }
 
 /**

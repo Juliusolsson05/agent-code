@@ -18,6 +18,7 @@ export function loadInitialSettings(): Settings {
         ? (parsed.accent as AccentId)
         : DEFAULT_SETTINGS.accent,
       customRendering: parsed.customRendering === true,
+      showWorktreeBadges: parsed.showWorktreeBadges !== false,
       dangerousAgentsEnabled: parsed.dangerousAgentsEnabled === true,
       useProxyStreaming: parsed.useProxyStreaming === true,
     }
