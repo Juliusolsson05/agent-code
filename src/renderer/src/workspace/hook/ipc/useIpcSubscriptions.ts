@@ -44,6 +44,11 @@ import {
   reconcileUpstream,
 } from '@renderer/workspace/ghosts'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
+import type { WorktreeIdentity } from '@renderer/workspace/work-context/types'
+import {
+  matchWorktree,
+  reduceWorkContextFromRaw,
+} from '@renderer/workspace/work-context/reducer'
 
 import type {
   WorkspaceSetRuntimes,
@@ -74,6 +79,19 @@ function codexEventType(raw: Record<string, unknown>): string | null {
   return typeof payload?.type === 'string' ? payload.type : null
 }
 
+type WorktreeCacheEntry = {
+  worktrees: WorktreeIdentity[]
+  refreshedAt: number
+  inflight: Promise<void> | null
+}
+
+const WORKTREE_CACHE_TTL_MS = 5000
+
+function canReduceWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
+  const type = (raw as { type?: unknown })?.type
+  return type === 'worktree-state' || hasWorktreeCache
+}
+
 // -----------------------------------------------------------------------------
 // useIpcSubscriptions — the one big side-effect that wires every
 // window.api.onSession* listener.
@@ -100,8 +118,63 @@ export function useIpcSubscriptions(
   appendFeedDebug: (sessionId: SessionId, input: FeedDebugInput) => void,
 ): void {
   useEffect(() => {
+    const worktreeCache = new Map<string, WorktreeCacheEntry>()
+    const refreshWorktrees = (cwd: string | null | undefined): void => {
+      if (!cwd) return
+      const cached = worktreeCache.get(cwd)
+      const now = Date.now()
+      if (cached?.inflight) return
+      if (cached && now - cached.refreshedAt < WORKTREE_CACHE_TTL_MS) return
+
+      const inflight = window.api.gitWorktrees(cwd).then(result => {
+        if (!result.ok) return
+        worktreeCache.set(cwd, {
+          worktrees: result.worktrees,
+          refreshedAt: Date.now(),
+          inflight: null,
+        })
+        setRuntimes(prev => {
+          let changed = false
+          const next = { ...prev }
+          for (const [sessionId, runtime] of Object.entries(prev)) {
+            const meta = refs.stateRef.current.sessions[sessionId]
+            const context = runtime.workContext
+            if (meta?.cwd !== cwd || !context?.worktreePath) continue
+            const matched = matchWorktree(context.worktreePath, result.worktrees)
+            if (!matched || matched.branch === context.branch) continue
+            next[sessionId] = {
+              ...runtime,
+              workContext: {
+                ...context,
+                worktreePath: matched.path,
+                branch: matched.branch,
+                repoRoot: result.worktrees[0]?.path ?? context.repoRoot,
+              },
+            }
+            changed = true
+          }
+          return changed ? next : prev
+        })
+      }).catch(() => {
+        // Worktree context is decorative metadata. If git probing fails,
+        // leave the last known cache in place and keep feed ingestion moving.
+      }).finally(() => {
+        const latest = worktreeCache.get(cwd)
+        if (latest?.inflight === inflight) {
+          worktreeCache.set(cwd, { ...latest, inflight: null })
+        }
+      })
+      worktreeCache.set(cwd, {
+        worktrees: cached?.worktrees ?? [],
+        refreshedAt: cached?.refreshedAt ?? 0,
+        inflight,
+      })
+    }
+
     const offStarted = window.api.onSessionStarted(({ sessionId, projectDir }) => {
       updateRuntime(sessionId, { projectDir })
+      const cwd = refs.stateRef.current.sessions[sessionId]?.cwd ?? projectDir
+      refreshWorktrees(cwd)
       appendFeedDebug(sessionId, {
         layer: 'STATE',
         kind: 'session_started',
@@ -630,6 +703,8 @@ export function useIpcSubscriptions(
     //   6. Optimistic-Codex-user reconciliation against the head row.
     const offEntries = window.api.onSessionJsonlEntries(({ sessionId, entries }) => {
       if (!entries || entries.length === 0) return
+      const sessionCwd = refs.stateRef.current.sessions[sessionId]?.cwd
+      refreshWorktrees(sessionCwd)
 
       // Two passes per burst:
       //   A — accumulate workspace-state captures (providerSessionId).
@@ -685,6 +760,10 @@ export function useIpcSubscriptions(
         let pendingApproval = current.pendingApproval
         let queuedMessages = current.queuedMessages
         let awaitingAssistant = current.awaitingAssistant
+        let workContext = current.workContext
+        const cachedWorktrees = sessionCwd ? worktreeCache.get(sessionCwd) : undefined
+        const hasWorktreeCache = !!cachedWorktrees && cachedWorktrees.refreshedAt > 0
+        const worktrees = cachedWorktrees?.worktrees ?? []
         // Set when a Codex user entry mapped from rollout matches an
         // optimistic row already in the feed. Codex can commit tool
         // outputs before the real user message in the same burst, so
@@ -710,6 +789,15 @@ export function useIpcSubscriptions(
           codexCurrentTurnIdBySession.get(sessionId) ?? null
 
         for (const { entry: raw } of entries) {
+          if (canReduceWorkContext(raw, hasWorktreeCache)) {
+            workContext = reduceWorkContextFromRaw(
+              workContext,
+              raw,
+              worktrees,
+              sessionCwd ?? current.projectDir ?? '',
+            )
+          }
+
           // ---- Codex rollout branch ----
           if (isCodexRolloutEntry(raw)) {
             const payload = raw.payload as Record<string, unknown> | undefined
@@ -938,6 +1026,7 @@ export function useIpcSubscriptions(
           pendingApproval === current.pendingApproval &&
           queuedMessages === current.queuedMessages &&
           awaitingAssistant === current.awaitingAssistant &&
+          workContext === current.workContext &&
           !ghostsChanged
         if (noChange) return prev
 
@@ -954,6 +1043,7 @@ export function useIpcSubscriptions(
               pendingApproval,
               queuedMessages,
               awaitingAssistant,
+              workContext,
               toolUseIndex,
               toolResultIndex,
               ghosts: nextGhosts,
@@ -971,6 +1061,7 @@ export function useIpcSubscriptions(
                 reconciledOptimisticUser: reconciledOptimisticText !== null,
                 appended: appended.slice(-8).map(summarizeEntryForDebug),
                 queuedMessages: queuedMessages.length,
+                workContext,
                 pendingApproval: pendingApproval
                   ? {
                       callId: pendingApproval.callId,
