@@ -870,7 +870,10 @@ function FeedImpl({
            * baseline so they don't emit the previous turn's buffered
            * text as the first delta of a new turn. */}
           {renderedSemanticTurn != null && (
-            <SemanticStreamingTurn turn={renderedSemanticTurn} />
+            <SemanticStreamingTurn
+              turn={renderedSemanticTurn}
+              committedEntries={entries}
+            />
           )}
           {/* WorkIndicator — the single in-feed "agent is working"
               affordance. Driven by `streamPhase`, NOT gated on whether

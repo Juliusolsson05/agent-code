@@ -49,6 +49,7 @@ import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/typ
 export function buildSemanticRenderUnits(
   turn: SemanticLiveTurn,
   committedToolUseIndex?: Map<string, ToolUseBlock>,
+  committedAssistantTextKeys?: ReadonlySet<string>,
 ): SemanticRenderUnit[] {
   const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
   const units: SemanticRenderUnit[] = []
@@ -61,6 +62,16 @@ export function buildSemanticRenderUnits(
   }
 
   for (const block of blocks) {
+    const text = block.text ?? ''
+    if (
+      text &&
+      (block.kind === 'text' || block.kind === 'message') &&
+      (block.finalized || block.status === 'completed') &&
+      committedAssistantTextKeys?.has(`${turn.turnId}\u0000${text}`)
+    ) {
+      continue
+    }
+
     // Committed-ownership skip. Check both Claude's `toolUseId` and
     // Codex's `callId` — the committed index is keyed by the
     // tool_use.id field, which for Codex is the original call_id
