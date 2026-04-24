@@ -237,6 +237,8 @@ export async function assembleAndSaveDebugBundle(params: {
 }): Promise<{ bundlePath: string }> {
   const { sessionId, runtime, kind } = params
   const capturedAt = Date.now()
+  await window.api.flushPerformance().catch(() => {})
+  const performanceSnapshot = await window.api.getPerformanceSnapshot().catch(() => null)
 
   const html = capturePaneHtml(sessionId)
   recordHtmlTraceSnapshot(sessionId, html.raw, 'manual')
@@ -262,6 +264,7 @@ export async function assembleAndSaveDebugBundle(params: {
     { name: FILE_NAMES.htmlRaw, content: html.raw },
     { name: FILE_NAMES.htmlClean, content: html.clean },
     ...exportDebugTraceFiles(sessionId),
+    ...(performanceSnapshot?.files ?? []),
   ]
 
   files[0] = {

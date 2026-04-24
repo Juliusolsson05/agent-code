@@ -28,6 +28,7 @@ export type UiShellState = {
    *  Lives on the uiShell slice alongside the other three debug panels
    *  and follows the same toggle pattern. */
   htmlDebugPanelOpen: boolean
+  performancePanelOpen: boolean
   /** When true, the Search Conversation Prompts modal is open. Lives
    *  on the uiShell slice (not the workspace slice) because it's
    *  a cross-session concern: the modal reads prompts from ALL

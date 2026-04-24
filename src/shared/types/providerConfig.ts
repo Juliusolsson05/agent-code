@@ -21,6 +21,7 @@ export type TileLeafProps = {
   sessionId: string
   runtime: unknown
   focused: boolean
+  paneLabel?: string
   onFocusRequest: () => void
   workspace: unknown
 }

@@ -5,6 +5,7 @@ import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 
 // TileTree — recursive renderer for a tab's binary-split tree.
 //
@@ -63,11 +64,13 @@ export function renderWorkspaceLeaf(
 ) {
   const meta = workspace.state.sessions[sessionId]
   const kind = meta?.kind ?? 'claude'
+  const paneLabel = paneLabelForSession(workspace.state.tabs, tabId, sessionId)
 
   if (kind === 'terminal') {
     return (
       <TerminalLeaf
         sessionId={sessionId}
+        paneLabel={paneLabel}
         focused={sessionId === focusedSessionId}
         onFocusRequest={() => workspace.focusSessionInTab(tabId, sessionId)}
         workspace={workspace}
@@ -82,6 +85,7 @@ export function renderWorkspaceLeaf(
     <LeafComponent
       sessionId={sessionId}
       runtime={runtime}
+      paneLabel={paneLabel}
       focused={sessionId === focusedSessionId}
       onFocusRequest={() => workspace.focusSessionInTab(tabId, sessionId)}
       workspace={workspace}

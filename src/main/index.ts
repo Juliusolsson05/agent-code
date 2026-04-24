@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from 'electron'
 import { readFile } from 'fs/promises'
+import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
 import { LspManager } from '@main/lspManager.js'
@@ -12,6 +13,7 @@ import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { createMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
+import { performanceService } from '@main/performance/PerformanceService.js'
 
 // Main process — thin Electron host.
 //
@@ -52,18 +54,33 @@ const ghostJournals = new GhostJournalRegistry()
 let manager: SessionManager = null as unknown as SessionManager
 let tmuxRegistry: TmuxRegistry | null = null
 
+void performanceService.start().catch(err => {
+  console.warn('[performance] failed to start:', err)
+})
+
 // ---------- App lifecycle ----------
 
 app.whenReady().then(async () => {
+  performanceService.mark('app.main.whenReady.start')
   await cleanupClaudeImageCacheDir().catch(err => {
     console.warn('[images] failed to clean Claude image cache:', err)
+    performanceService.error('app.main.imageCache.cleanup.error', err)
   })
   // Tmux availability is checked once at startup. The cost is a
   // child-process roundtrip on `tmux -V` — cheap enough to await
   // before any IPC is wired. Result is cached on the registry; call
   // sites use isAvailable() synchronously thereafter.
   tmuxRegistry = new TmuxRegistry()
+  const tmuxDetectStarted = performance.now()
   const tmuxAvailable = await tmuxRegistry.detectAvailability()
+  performanceService.record({
+    kind: 'span_end',
+    process: 'main',
+    area: 'app.tmux',
+    name: 'app.tmux.detect',
+    durationMs: performance.now() - tmuxDetectStarted,
+    data: { available: tmuxAvailable },
+  })
   console.log(
     tmuxAvailable
       ? '[tmux] available — terminals will persist across restarts'
@@ -95,6 +112,11 @@ app.whenReady().then(async () => {
         .filter(([, meta]) => meta?.kind === 'terminal' && typeof meta?.tmuxName === 'string')
         .map(([sessionId, meta]) => ({ sessionId, tmuxName: meta!.tmuxName! }))
       const recoveryReport = await reconcile(tmuxRegistry, persisted)
+      performanceService.mark('app.tmux.recovery.complete', {
+        recoverable: recoveryReport.recoverable.length,
+        lost: recoveryReport.lost.length,
+        orphans: recoveryReport.orphans.length,
+      })
       console.log(
         `[tmux] recovery: ${recoveryReport.recoverable.length} recoverable, ${recoveryReport.lost.length} lost, ${recoveryReport.orphans.length} orphans cleaned`,
       )
@@ -103,15 +125,19 @@ app.whenReady().then(async () => {
       // through with empty buckets. Log so a real failure is visible.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         console.warn('[tmux] recovery failed (treating all sessions as fresh):', err)
+        performanceService.error('app.tmux.recovery.error', err)
       }
     }
   }
 
   manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null)
+  performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
   registerAllIpc({ manager, lspManager, ghostJournals })
+  performanceService.mark('app.main.ipc.registered')
   createMainWindow()
+  performanceService.mark('app.main.window.created')
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
@@ -125,6 +151,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  performanceService.mark('app.main.beforeQuit')
   void manager.killAll()
   void lspManager.dispose()
   // Flush pending ghost writes. Fire-and-forget is fine — Electron's
@@ -132,4 +159,5 @@ app.on('before-quit', () => {
   // worst-case; in practice drains are empty at quit time because
   // streaming is idle.
   void ghostJournals.flushAll()
+  performanceService.stop()
 })

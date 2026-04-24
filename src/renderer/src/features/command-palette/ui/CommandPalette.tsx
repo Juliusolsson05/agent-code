@@ -48,6 +48,7 @@ type Props = {
   toggleFeedDebugPanel: () => void
   toggleProxyDebugPanel: () => void
   toggleHtmlDebugPanel: () => void
+  togglePerformancePanel: () => void
   toggleCustomRendering: () => void
   customRenderingEnabled: boolean
   dangerousAgentsEnabled: boolean
@@ -56,6 +57,7 @@ type Props = {
   feedDebugPanelOpen: boolean
   proxyDebugPanelOpen: boolean
   htmlDebugPanelOpen: boolean
+  performancePanelOpen: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
 }
 
@@ -86,6 +88,7 @@ export function CommandPalette({
   toggleFeedDebugPanel,
   toggleProxyDebugPanel,
   toggleHtmlDebugPanel,
+  togglePerformancePanel,
   toggleCustomRendering,
   customRenderingEnabled,
   dangerousAgentsEnabled,
@@ -94,6 +97,7 @@ export function CommandPalette({
   feedDebugPanelOpen,
   proxyDebugPanelOpen,
   htmlDebugPanelOpen,
+  performancePanelOpen,
   setDangerousAgentsEnabled,
 }: Props) {
   const [query, setQuery] = useState('')
@@ -171,6 +175,7 @@ export function CommandPalette({
         toggleFeedDebugPanel,
         toggleProxyDebugPanel,
         toggleHtmlDebugPanel,
+        togglePerformancePanel,
         toggleCustomRendering,
         setDangerousAgentsEnabled,
         enterResumeMode,
@@ -185,6 +190,7 @@ export function CommandPalette({
         feedDebugPanelOpen,
         proxyDebugPanelOpen,
         htmlDebugPanelOpen,
+        performancePanelOpen,
       },
     }),
     [
@@ -202,6 +208,7 @@ export function CommandPalette({
       toggleFeedDebugPanel,
       toggleProxyDebugPanel,
       toggleHtmlDebugPanel,
+      togglePerformancePanel,
       toggleCustomRendering,
       setDangerousAgentsEnabled,
       enterResumeMode,
@@ -214,6 +221,7 @@ export function CommandPalette({
       feedDebugPanelOpen,
       proxyDebugPanelOpen,
       htmlDebugPanelOpen,
+      performancePanelOpen,
     ],
   )
 

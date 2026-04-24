@@ -50,6 +50,7 @@ import type {
   WorkspaceSetState,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import * as perf from '@renderer/performance/client'
 
 // -----------------------------------------------------------------------------
 // useIpcSubscriptions — the one big side-effect that wires every
@@ -89,6 +90,7 @@ export function useIpcSubscriptions(
 
     const offScreen = window.api.onSessionScreen(
       ({ sessionId, plain, markdown, recent, recentMarkdown, picker }) => {
+        const startedAt = performance.now()
         // latestScreenRef is the synchronous source of truth for
         // the Enter-baseline capture in TileLeaf — always update
         // it, even when we bail on React state below.
@@ -121,6 +123,13 @@ export function useIpcSubscriptions(
             current.recentScreenMarkdown === recentMarkdown &&
             pickerEqual(current.picker, picker)
           ) {
+            const durationMs = performance.now() - startedAt
+            if (durationMs > 8) {
+              perf.metric('workspace.ipc.screen.noop.slow', durationMs, 'sample', {
+                sessionId,
+                recentLength: recent.length,
+              })
+            }
             return prev
           }
           const changed: string[] = []
@@ -230,6 +239,15 @@ export function useIpcSubscriptions(
               )
           if (!chromeTickOnly) {
             recordScreenTailSnapshot(sessionId, recent)
+          }
+          const durationMs = performance.now() - startedAt
+          if (durationMs > 8) {
+            perf.metric('workspace.ipc.screen.apply.slow', durationMs, 'sample', {
+              sessionId,
+              changed,
+              recentLength: recent.length,
+              pickerVisible: picker.visible,
+            })
           }
           return {
             ...prev,
@@ -350,6 +368,13 @@ export function useIpcSubscriptions(
     )
 
     const offSemantic = window.api.onSessionSemanticEvent(({ sessionId, event }) => {
+      const span = perf.span('workspace.ipc.semantic.fold', { sessionId })
+      let spanClosed = false
+      const closeSpan = (data: Record<string, unknown>) => {
+        if (spanClosed) return
+        spanClosed = true
+        span.end(data)
+      }
       const semanticEvent = event as Record<string, unknown>
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
@@ -503,6 +528,11 @@ export function useIpcSubscriptions(
           ? current.awaitingAssistant === false
           : true
         if (semanticUnchanged && phaseUnchanged && ghostsUnchanged && awaitingUnchanged) {
+          closeSpan({
+            sessionId,
+            eventType: eventType || 'semantic',
+            changed: false,
+          })
           return prev
         }
 
@@ -532,6 +562,11 @@ export function useIpcSubscriptions(
           ...prev,
           [sessionId]: nextCurrent,
         }
+      })
+      closeSpan({
+        sessionId,
+        eventType: typeof semanticEvent.type === 'string' ? semanticEvent.type : 'semantic',
+        scheduled: true,
       })
     })
 
@@ -606,6 +641,16 @@ export function useIpcSubscriptions(
     //   6. Optimistic-Codex-user reconciliation against the head row.
     const offEntries = window.api.onSessionJsonlEntries(({ sessionId, entries }) => {
       if (!entries || entries.length === 0) return
+      const span = perf.span('workspace.ipc.jsonl.bulk', {
+        sessionId,
+        burstSize: entries.length,
+      })
+      let spanClosed = false
+      const closeSpan = (data: Record<string, unknown>) => {
+        if (spanClosed) return
+        spanClosed = true
+        span.end(data)
+      }
 
       // Two passes per burst:
       //   A — accumulate workspace-state captures (providerSessionId).
@@ -899,7 +944,15 @@ export function useIpcSubscriptions(
           queuedMessages === current.queuedMessages &&
           awaitingAssistant === current.awaitingAssistant &&
           !ghostsChanged
-        if (noChange) return prev
+        if (noChange) {
+          closeSpan({
+            sessionId,
+            burstSize: entries.length,
+            appendedCount: 0,
+            changed: false,
+          })
+          return prev
+        }
 
         const nextRuntime = withDerivedSessionStatus(
           appendFeedDebugLog(
@@ -941,6 +994,14 @@ export function useIpcSubscriptions(
             },
           ),
         )
+        closeSpan({
+          sessionId,
+          burstSize: entries.length,
+          appendedCount: appended.length,
+          droppedOptimisticHead: dropOptimisticHead,
+          ghostsChanged,
+          queuedMessages: queuedMessages.length,
+        })
         return {
           ...prev,
           [sessionId]: nextRuntime,
@@ -972,6 +1033,11 @@ export function useIpcSubscriptions(
         })
       }, 150)
       refs.bootstrapTimersRef.current.set(sessionId, timer)
+      closeSpan({
+        sessionId,
+        burstSize: entries.length,
+        scheduled: true,
+      })
     })
 
     return () => {

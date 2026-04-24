@@ -1,11 +1,13 @@
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
+import { performance } from 'perf_hooks'
 
 import { getMainProvider } from '@providers/registry.main.js'
 import type { ScreenSnapshot } from '@providers/claude/runtime/claudeSession.js'
 import { TerminalSession } from '@shared/runtime/terminalSession.js'
 import type { JsonlEntry } from 'claude-code-headless'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
+import { performanceService } from '@main/performance/PerformanceService.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -169,6 +171,8 @@ interface AgentSessionLike {
   resize(cols: number, rows: number): void
   stop(): Promise<void>
   start(): Promise<void>
+  getProcessPid?(): number | null
+  isExited?(): boolean
   removeAllListeners?(event?: string): this
 }
 
@@ -190,6 +194,7 @@ const TERMINAL_BUFFER_CAP = 256 * 1024
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
+  private readonly lastActivityAt = new Map<string, number>()
 
   // Optional tmux backing for terminal sessions. Constructed by the
   // app entrypoint AFTER detectAvailability() has resolved — we only
@@ -231,6 +236,10 @@ export class SessionManager extends EventEmitter {
   private readonly terminalBuffers = new Map<string, string>()
   private readonly terminalAttached = new Set<string>()
 
+  private markActivity(sessionId: string): void {
+    this.lastActivityAt.set(sessionId, Date.now())
+  }
+
   /**
    * Spawn a new session and return its sessionId. Blocks until the PTY
    * is spawned — after this resolves the caller can immediately start
@@ -242,6 +251,13 @@ export class SessionManager extends EventEmitter {
   async spawn(options: SpawnOptions): Promise<SpawnResult> {
     const kind: SessionKind = options.kind ?? 'claude'
     const sessionId = randomUUID()
+    const spawnStartedAt = performance.now()
+    performanceService.mark('session.spawn.start', {
+      sessionId,
+      kind,
+      resume: Boolean(options.resumeSessionId),
+      useProxy: Boolean(options.useProxy),
+    })
 
     // Agent providers (claude, codex) — dispatched through the registry.
     // Both providers emit the same event shape (started, pty-data,
@@ -251,6 +267,7 @@ export class SessionManager extends EventEmitter {
     // cross-provider breakage when editing one provider's spawn logic.
     if (kind === 'claude' || kind === 'codex') {
       const provider = getMainProvider(kind)
+      const createStartedAt = performance.now()
       // `session` here structurally conforms to AgentSessionLike —
       // every provider that registers through the registry is
       // contracted to expose start/stop/write/resize + the standard
@@ -274,24 +291,43 @@ export class SessionManager extends EventEmitter {
         // `openai_base_url`.
         useProxy: options.useProxy,
       }) as unknown as AgentSessionLike
+      performanceService.record({
+        kind: 'span_end',
+        process: 'main',
+        area: 'session.spawn',
+        name: 'session.spawn.providerCreate',
+        durationMs: performance.now() - createStartedAt,
+        sessionId,
+        provider: kind,
+      })
 
       session.on('started', ({ projectDir }: { projectDir: string }) =>
-        this.emit('started', { sessionId, kind, projectDir }),
+        {
+          this.markActivity(sessionId)
+          this.emit('started', { sessionId, kind, projectDir })
+        },
       )
-      session.on('pty-data', (data: string) =>
-        this.emit('pty-data', { sessionId, data }),
-      )
-      session.on('screen', (snap: ScreenSnapshot) =>
-        this.emit('screen', { sessionId, ...snap }),
-      )
-      session.on('jsonl-entry', (entry: JsonlEntry, file: string) =>
-        this.emit('jsonl-entry', { sessionId, entry, file }),
-      )
-      session.on('jsonl-error', (error: Error) =>
-        this.emit('jsonl-error', { sessionId, error }),
-      )
+      session.on('pty-data', (data: string) => {
+        this.markActivity(sessionId)
+        this.emit('pty-data', { sessionId, data })
+      })
+      session.on('screen', (snap: ScreenSnapshot) => {
+        this.markActivity(sessionId)
+        this.emit('screen', { sessionId, ...snap })
+      })
+      session.on('jsonl-entry', (entry: JsonlEntry, file: string) => {
+        this.markActivity(sessionId)
+        this.emit('jsonl-entry', { sessionId, entry, file })
+      })
+      session.on('jsonl-error', (error: Error) => {
+        this.markActivity(sessionId)
+        this.emit('jsonl-error', { sessionId, error })
+      })
       session.on('process-state', (state: { active: boolean; status?: string }) =>
-        this.emit('process-state', { sessionId, ...state }),
+        {
+          this.markActivity(sessionId)
+          this.emit('process-state', { sessionId, ...state })
+        },
       )
       session.on('trust-dialog', (state: { visible: boolean; workspace?: string }) =>
         this.emit('trust-dialog', { sessionId, ...state }),
@@ -317,17 +353,29 @@ export class SessionManager extends EventEmitter {
         statusText?: string
         errorText?: string
       }) => this.emit('compaction-state', { sessionId, ...state }))
-      session.on('semantic-event', (event: unknown) =>
-        this.emit('semantic-event', { sessionId, event }),
-      )
+      session.on('semantic-event', (event: unknown) => {
+        this.markActivity(sessionId)
+        this.emit('semantic-event', { sessionId, event })
+      })
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
+        this.markActivity(sessionId)
         this.emit('exit', { sessionId, exitCode, signal })
         this.sessions.delete(sessionId)
       })
 
       this.sessions.set(sessionId, { kind, session })
       try {
+        const startStartedAt = performance.now()
         await session.start()
+        performanceService.record({
+          kind: 'span_end',
+          process: 'main',
+          area: 'session.spawn',
+          name: 'session.spawn.providerStart',
+          durationMs: performance.now() - startStartedAt,
+          sessionId,
+          provider: kind,
+        })
       } catch (err) {
         // Same shape as the terminal path below: start() failure must
         // not leave a dead entry in the registry. The listeners we
@@ -337,8 +385,21 @@ export class SessionManager extends EventEmitter {
         // on `session` because the wrapper already owns its own
         // EventEmitter — nothing outside the registry subscribed.
         this.sessions.delete(sessionId)
+        performanceService.error('session.spawn.providerStart.error', err, {
+          sessionId,
+          kind,
+        })
         throw err
       }
+      performanceService.record({
+        kind: 'span_end',
+        process: 'main',
+        area: 'session.spawn',
+        name: 'session.spawn.total',
+        durationMs: performance.now() - spawnStartedAt,
+        sessionId,
+        provider: kind,
+      })
       return { sessionId }
     }
 
@@ -352,6 +413,7 @@ export class SessionManager extends EventEmitter {
     const useTmux = this.tmuxRegistry?.isAvailable() === true
     let tmuxSessionName: string | null = null
     if (useTmux) {
+      const tmuxStartedAt = performance.now()
       const reg = this.tmuxRegistry!
       if (
         options.recoverTmuxName &&
@@ -369,6 +431,16 @@ export class SessionManager extends EventEmitter {
           cwd: options.cwd,
         })
       }
+      performanceService.record({
+        kind: 'span_end',
+        process: 'main',
+        area: 'session.spawn',
+        name: 'session.spawn.tmuxPrepare',
+        durationMs: performance.now() - tmuxStartedAt,
+        sessionId,
+        provider: 'terminal',
+        data: { recovered: Boolean(options.recoverTmuxName && tmuxSessionName) },
+      })
     }
 
     const session = new TerminalSession({
@@ -391,9 +463,13 @@ export class SessionManager extends EventEmitter {
     // renderer can route it straight to xterm without the code path
     // for Claude's structured events getting involved.
     session.on('started', () =>
-      this.emit('started', { sessionId, kind, projectDir: undefined }),
+      {
+        this.markActivity(sessionId)
+        this.emit('started', { sessionId, kind, projectDir: undefined })
+      },
     )
     session.on('data', data => {
+      this.markActivity(sessionId)
       // Always append to the rolling buffer so a later attach can
       // replay the full history. Cap at TERMINAL_BUFFER_CAP —
       // longer sessions just lose the oldest bytes, which is the
@@ -431,6 +507,7 @@ export class SessionManager extends EventEmitter {
       }
     })
     session.on('exit', ({ exitCode, signal }) => {
+      this.markActivity(sessionId)
       this.emit('exit', { sessionId, exitCode, signal })
       this.sessions.delete(sessionId)
       this.terminalBuffers.delete(sessionId)
@@ -439,7 +516,17 @@ export class SessionManager extends EventEmitter {
 
     this.sessions.set(sessionId, { kind: 'terminal', session, tmuxName: tmuxSessionName })
     try {
+      const terminalStartStartedAt = performance.now()
       await session.start()
+      performanceService.record({
+        kind: 'span_end',
+        process: 'main',
+        area: 'session.spawn',
+        name: 'session.spawn.terminalStart',
+        durationMs: performance.now() - terminalStartStartedAt,
+        sessionId,
+        provider: 'terminal',
+      })
     } catch (err) {
       // start() can fail if the PTY refuses to spawn or (on the tmux
       // path) the tmux server dies between createSession and attach.
@@ -452,8 +539,18 @@ export class SessionManager extends EventEmitter {
       this.sessions.delete(sessionId)
       this.terminalBuffers.delete(sessionId)
       this.terminalAttached.delete(sessionId)
+      performanceService.error('session.spawn.terminalStart.error', err, { sessionId })
       throw err
     }
+    performanceService.record({
+      kind: 'span_end',
+      process: 'main',
+      area: 'session.spawn',
+      name: 'session.spawn.total',
+      durationMs: performance.now() - spawnStartedAt,
+      sessionId,
+      provider: 'terminal',
+    })
     return { sessionId, tmuxName: tmuxSessionName ?? undefined }
   }
 
@@ -581,6 +678,39 @@ export class SessionManager extends EventEmitter {
     // behavior the user asked for in the P1 brainstorm.
     this.sessions.delete(sessionId)
     return true
+  }
+
+  getProcessTelemetryTargets(sessionIds?: string[]): Array<{
+    sessionId: string
+    kind: SessionKind
+    pid: number | null
+    exited: boolean
+    lastActivityAt: number | null
+  }> {
+    const ids = sessionIds ?? Array.from(this.sessions.keys())
+    return ids.map(sessionId => {
+      const entry = this.sessions.get(sessionId)
+      if (!entry) {
+        return {
+          sessionId,
+          kind: 'terminal' as SessionKind,
+          pid: null,
+          exited: true,
+          lastActivityAt: this.lastActivityAt.get(sessionId) ?? null,
+        }
+      }
+      const maybe = entry.session as {
+        getProcessPid?: () => number | null
+        isExited?: () => boolean
+      }
+      return {
+        sessionId,
+        kind: entry.kind,
+        pid: maybe.getProcessPid?.() ?? null,
+        exited: maybe.isExited?.() === true,
+        lastActivityAt: this.lastActivityAt.get(sessionId) ?? null,
+      }
+    })
   }
 
   /** List all live session ids. Used for state save / debug. */

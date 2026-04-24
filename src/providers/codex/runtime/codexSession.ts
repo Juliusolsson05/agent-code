@@ -310,6 +310,10 @@ export class CodexSession extends EventEmitter {
     return this.exited
   }
 
+  getProcessPid(): number | null {
+    return this.pty?.pid ?? null
+  }
+
   async stop(): Promise<void> {
     // Teardown order matters. The adapter is a listener on the proxy
     // that writes into `this.headless.semantic`. If we stop() the

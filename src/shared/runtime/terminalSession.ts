@@ -215,6 +215,10 @@ export class TerminalSession extends EventEmitter {
     }
   }
 
+  getProcessPid(): number | null {
+    return this.pty?.pid ?? null
+  }
+
   /** True if the PTY has exited. */
   isExited(): boolean {
     return this.exited

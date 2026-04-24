@@ -44,6 +44,7 @@
     "src/preload/index.d.ts",
     "src/shared/code/**/*",
     "src/shared/types/**/*",
+    "src/shared/performance/**/*",
     "src/shared/parsers/**/*",
     "src/providers/*/parsers/**/*",
     "src/providers/*/renderer/**/*",

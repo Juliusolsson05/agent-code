@@ -11,6 +11,8 @@ import { registerWorkspaceIpc } from '@main/ipc/workspace.js'
 import { registerGhostIpc } from '@main/ipc/ghost.js'
 import { registerDebugIpc } from '@main/ipc/debug.js'
 import { registerGitIpc } from '@main/ipc/git.js'
+import { registerPerformanceIpc } from '@main/ipc/performance.js'
+import { installPerformanceIpcInstrumentation } from '@main/performance/instrumentIpc.js'
 
 // IPC registration aggregator.
 //
@@ -28,6 +30,8 @@ export type IpcDeps = {
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
+  registerPerformanceIpc(deps.manager)
+  installPerformanceIpcInstrumentation()
   registerSessionIpc(deps.manager)
   registerProviderIpc()
   registerLspIpc(deps.lspManager)

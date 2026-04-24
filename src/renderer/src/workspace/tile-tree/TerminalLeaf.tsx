@@ -42,6 +42,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {
   sessionId: SessionId
+  paneLabel?: string
   focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
@@ -49,6 +50,7 @@ type Props = {
 
 export function TerminalLeaf({
   sessionId,
+  paneLabel,
   focused,
   onFocusRequest,
   workspace: _workspace,
@@ -315,7 +317,14 @@ export function TerminalLeaf({
           mixed layout doesn't look ragged. We don't have CC-style
           live state to show, so just a static "terminal" label. */}
       <div className="flex items-center justify-between px-3 py-1 border-b border-border bg-surface text-[10px] text-muted font-code select-none">
-        <span>terminal</span>
+        <div className="flex items-center gap-2 min-w-0">
+          {paneLabel && (
+            <span className="flex-shrink-0 rounded-[3px] border border-current/30 px-1 leading-[14px] text-[9px] font-semibold tabular-nums">
+              {paneLabel}
+            </span>
+          )}
+          <span>terminal</span>
+        </div>
         <span className="text-ink-dim">$</span>
       </div>
 

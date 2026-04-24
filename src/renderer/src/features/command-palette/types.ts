@@ -21,6 +21,7 @@ export type CommandContext = {
     toggleFeedDebugPanel: () => void
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
+    togglePerformancePanel: () => void
     toggleCustomRendering: () => void
     setDangerousAgentsEnabled: (enabled: boolean) => void
     enterResumeMode: () => void
@@ -35,6 +36,7 @@ export type CommandContext = {
     feedDebugPanelOpen: boolean
     proxyDebugPanelOpen: boolean
     htmlDebugPanelOpen: boolean
+    performancePanelOpen: boolean
   }
 }
 

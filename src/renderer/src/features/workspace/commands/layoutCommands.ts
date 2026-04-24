@@ -25,4 +25,14 @@ export const layoutCommands: CommandDef[] = [
     }),
     run: ({ workspace }) => workspace.toggleStatusMode(),
   },
+  {
+    id: 'toggle-performance-panel',
+    title: 'Performance Stats',
+    keywords: ['performance', 'stats', 'cpu', 'memory', 'panes'],
+    getState: ({ flags }) => ({
+      label: flags.performancePanelOpen ? 'On' : 'Off',
+      tone: flags.performancePanelOpen ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.togglePerformancePanel(),
+  },
 ]

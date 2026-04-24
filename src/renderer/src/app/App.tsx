@@ -19,6 +19,7 @@ import { ViewPromptsModal } from '@renderer/features/workspace/ui/ViewPromptsMod
 import { GitBar } from '@renderer/features/git/ui/GitBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
+import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -58,6 +59,7 @@ export default function App() {
   const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
+  const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const useProxyStreaming = settings.useProxyStreaming
   const openPathPicker = useAppStore(state => state.openPathPicker)
@@ -79,6 +81,7 @@ export default function App() {
   const toggleFeedDebugPanel = useAppStore(state => state.toggleFeedDebugPanel)
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
+  const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
   const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
   const closePromptSearch = useAppStore(state => state.closePromptSearch)
@@ -182,6 +185,21 @@ export default function App() {
       >
         <div className="flex items-center gap-2 [-webkit-app-region:no-drag]">
           <AppearanceMenu settings={settings} onChange={setSettings} />
+          <button
+            type="button"
+            onClick={togglePerformancePanel}
+            className={`
+              px-2 py-1 border text-[10px] font-code transition-colors
+              ${
+                performancePanelOpen
+                  ? 'border-accent bg-accent text-accent-fg'
+                  : 'border-border bg-surface-hi text-muted hover:text-ink'
+              }
+            `}
+          >
+            perf
+          </button>
+          <PerformancePanel open={performancePanelOpen} workspace={workspace} />
         </div>
       </div>
 
@@ -285,6 +303,7 @@ export default function App() {
         toggleFeedDebugPanel={toggleFeedDebugPanel}
         toggleProxyDebugPanel={toggleProxyDebugPanel}
         toggleHtmlDebugPanel={toggleHtmlDebugPanel}
+        togglePerformancePanel={togglePerformancePanel}
         onTileTabsRequest={onTileTabsRequest}
         onSettingsRequest={openSettingsPage}
         openViewPrompts={openViewPrompts}
@@ -299,6 +318,7 @@ export default function App() {
         feedDebugPanelOpen={feedDebugPanelOpen}
         proxyDebugPanelOpen={proxyDebugPanelOpen}
         htmlDebugPanelOpen={htmlDebugPanelOpen}
+        performancePanelOpen={performancePanelOpen}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
       />
 

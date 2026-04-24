@@ -2,6 +2,7 @@ import { readdir, stat, open } from 'fs/promises'
 import { basename, join } from 'path'
 
 import { getProjectDirForCwd, getProjectsDir } from '@shared/runtime/projectDir.js'
+import { performanceService } from '@main/performance/PerformanceService.js'
 
 // Session lister — reimplements the minimal subset of CC's
 // utils/listSessionsImpl.ts needed to power the cc-shell resume UI.
@@ -207,6 +208,9 @@ export async function listSessionsForCwd(
   cwd: string,
   options: ListSessionsOptions = {},
 ): Promise<SessionInfo[]> {
+  const span = performanceService.span('providers.claude.listSessionsForCwd', {
+    limit: options.limit ?? 20,
+  })
   const limit = options.limit ?? 20
   const projectDir = await getProjectDirForCwd(cwd)
 
@@ -214,6 +218,7 @@ export async function listSessionsForCwd(
   try {
     names = await readdir(projectDir)
   } catch {
+    span.end({ result: 'missing-project-dir' })
     return []
   }
 
@@ -250,6 +255,12 @@ export async function listSessionsForCwd(
     const info = await parseSession(c)
     if (info) sessions.push(info)
   }
+  span.end({
+    result: 'listed',
+    names: names.length,
+    candidates: candidates.length,
+    sessions: sessions.length,
+  })
   return sessions
 }
 
@@ -263,6 +274,9 @@ export async function listSessionsForCwd(
 export async function listAllClaudeSessions(
   options: ListSessionsOptions = {},
 ): Promise<SessionInfo[]> {
+  const span = performanceService.span('providers.claude.listAllSessions', {
+    limit: options.limit ?? 200,
+  })
   const limit = options.limit ?? 200
   const projectsDir = getProjectsDir()
 
@@ -270,6 +284,7 @@ export async function listAllClaudeSessions(
   try {
     projectNames = await readdir(projectsDir)
   } catch {
+    span.end({ result: 'missing-projects-dir' })
     return []
   }
 
@@ -314,6 +329,12 @@ export async function listAllClaudeSessions(
     const info = await parseSession(c)
     if (info) sessions.push(info)
   }
+  span.end({
+    result: 'listed',
+    projects: projectNames.length,
+    candidates: candidates.length,
+    sessions: sessions.length,
+  })
   return sessions
 }
 
