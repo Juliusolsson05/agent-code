@@ -92,6 +92,7 @@ export function useWorkspace(
   // ---- Draft version counter (React state because the save effect
   //      reads it as a dep) ----
   const [draftVersion, setDraftVersion] = useState(0)
+  const [bootstrapComplete, setBootstrapComplete] = useState(false)
 
   // ---- Runtime helpers (updateRuntime / appendFeedDebug / getRuntime / etc) ----
   const { updateRuntime, appendFeedDebug, getRuntime, toggleTailMode, scrollFocusedToLatest } =
@@ -235,8 +236,15 @@ export function useWorkspace(
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
   useIpcSubscriptions(refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
-  useAutoSave(state, draftVersion, refs)
-  useBootstrap(refs, setState, setRuntimes, setTileTabs, tabActions.newTab as unknown as (cwd: string) => Promise<unknown>)
+  useAutoSave(state, draftVersion, refs, bootstrapComplete)
+  useBootstrap(
+    refs,
+    setState,
+    setRuntimes,
+    setTileTabs,
+    tabActions.newTab as unknown as (cwd: string) => Promise<unknown>,
+    setBootstrapComplete,
+  )
   useFeedDebugPersist(runtimes, refs)
   useSpotlightSanity(spotlight, state.tabs, setSpotlight)
   useReaderModeSanity(readerMode, state.tabs, setReaderMode)
