@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
 import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
@@ -94,20 +94,35 @@ export default function App() {
   }, [settings])
 
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming)
+  const pathPickerDefaultedRef = useRef(false)
 
-  // Pre-fill the path input with a sensible default when the modal
-  // opens: the cwd of the most recently-used session, or main's
-  // default cwd if no sessions exist yet. Cached so opening the modal
-  // doesn't hit IPC every time.
+  // Pre-fill the path input once per modal open. Do not keep syncing
+  // while the modal is visible: newTab/resume mutates workspace
+  // sessions before the modal closes, and re-syncing here resets the
+  // picker mid-submit. Also preserve explicit defaults from the
+  // resume shortcut.
   useEffect(() => {
-    if (!pathPickerOpen) return
+    if (!pathPickerOpen) {
+      pathPickerDefaultedRef.current = false
+      return
+    }
+    if (pathPickerDefaultedRef.current) return
+    pathPickerDefaultedRef.current = true
+    if (pathPickerDefault) return
+
+    let cancelled = false
     const mostRecent = Object.values(workspace.state.sessions).pop()
     if (mostRecent?.cwd) {
       setPathPickerDefault(mostRecent.cwd)
       return
     }
-    void window.api.defaultCwd().then(setPathPickerDefault)
-  }, [pathPickerOpen, workspace.state.sessions])
+    void window.api.defaultCwd().then(cwd => {
+      if (!cancelled) setPathPickerDefault(cwd)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [pathPickerDefault, pathPickerOpen, setPathPickerDefault, workspace.state.sessions])
 
   // New tab flow: show the path modal. On accept it calls workspace.newTab
   // with the expanded absolute path and closes the modal.
