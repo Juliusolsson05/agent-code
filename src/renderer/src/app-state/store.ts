@@ -32,6 +32,7 @@ export const useAppStore = create<AppStore>()(
               contrast: data?.settings?.contrast === true,
               accent: data?.settings?.accent ?? DEFAULT_SETTINGS.accent,
               customRendering: data?.settings?.customRendering === true,
+              showWorktreeBadges: data?.settings?.showWorktreeBadges !== false,
               dangerousAgentsEnabled: data?.settings?.dangerousAgentsEnabled === true,
               useProxyStreaming: data?.settings?.useProxyStreaming === true,
             },

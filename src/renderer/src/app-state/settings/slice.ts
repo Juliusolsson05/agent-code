@@ -35,4 +35,13 @@ export const createSettingsSlice: StateCreator<
       applyTheme(next)
       return { settings: next }
     }, false, 'settings/toggleCustomRendering'),
+  toggleWorktreeBadges: () =>
+    set(state => {
+      const next = {
+        ...state.settings,
+        showWorktreeBadges: !state.settings.showWorktreeBadges,
+      }
+      applyTheme(next)
+      return { settings: next }
+    }, false, 'settings/toggleWorktreeBadges'),
 })

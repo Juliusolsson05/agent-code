@@ -16,5 +16,15 @@ export const settingsCommands: CommandDef[] = [
     }),
     run: ({ ui }) => ui.toggleCustomRendering(),
   },
+  {
+    id: 'toggle-worktree-badges',
+    title: 'Worktree Badges',
+    keywords: ['branch', 'git', 'worktree', 'badge', 'agent'],
+    getState: ({ flags }) => ({
+      label: flags.worktreeBadgesEnabled ? 'On' : 'Off',
+      tone: flags.worktreeBadgesEnabled ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleWorktreeBadges(),
+  },
   ...dangerousCommands,
 ]

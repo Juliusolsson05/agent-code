@@ -14,6 +14,7 @@ export type SettingsSlice = {
   setSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
   toggleCustomRendering: () => void
+  toggleWorktreeBadges: () => void
 }
 
 export type UiShellSlice = UiShellState & {
