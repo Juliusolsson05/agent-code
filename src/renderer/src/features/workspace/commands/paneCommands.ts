@@ -93,6 +93,13 @@ export const paneCommands: CommandDef[] = [
     run: ({ ui }) => ui.enterBuriedMode(),
   },
   {
+    id: 'kill-buried-pane',
+    title: 'Kill Buried Pane…',
+    keywords: ['kill', 'buried', 'hidden', 'pane', 'session'],
+    when: ({ workspace }) => workspace.state.buried.length > 0,
+    run: ({ ui }) => ui.enterKillBuriedMode(),
+  },
+  {
     id: 'toggle-tail',
     title: 'Tail',
     getState: ({ workspace }) => {

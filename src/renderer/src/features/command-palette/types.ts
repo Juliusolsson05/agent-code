@@ -27,6 +27,8 @@ export type CommandContext = {
     setDangerousAgentsEnabled: (enabled: boolean) => void
     enterResumeMode: () => void
     enterBuriedMode: () => void
+    enterKillBuriedMode: () => void
+    enterPromptTemplateMode: () => void
     closePalette: () => void
   }
   flags: {

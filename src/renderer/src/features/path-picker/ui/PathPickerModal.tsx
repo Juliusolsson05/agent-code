@@ -123,35 +123,43 @@ export function PathPickerModal({
     if (busy) return
     setBusy(true)
     setError(null)
-    const result = await window.api.expandCwd(value)
-    if (!result.ok) {
-      setError(result.error)
+    try {
+      const result = await window.api.expandCwd(value)
+      if (!result.ok) {
+        setError(result.error)
+        return
+      }
+      await onAccept(result.path, provider)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
       setBusy(false)
-      return
     }
-    await onAccept(result.path, provider)
-    setBusy(false)
   }
 
   const resume = async (sessionId: string) => {
     if (busy) return
     setBusy(true)
     setError(null)
-    // Use the already-validated path if we have one; fall back to
-    // re-validating just in case the user typed something new since
-    // the last debounce.
-    let path = resolvedPath
-    if (!path) {
-      const result = await window.api.expandCwd(value)
-      if (!result.ok) {
-        setError(result.error)
-        setBusy(false)
-        return
+    try {
+      // Use the already-validated path if we have one; fall back to
+      // re-validating just in case the user typed something new since
+      // the last debounce.
+      let path = resolvedPath
+      if (!path) {
+        const result = await window.api.expandCwd(value)
+        if (!result.ok) {
+          setError(result.error)
+          return
+        }
+        path = result.path
       }
-      path = result.path
+      await onResume(path, sessionId, provider)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
     }
-    await onResume(path, sessionId, provider)
-    setBusy(false)
   }
 
   return (
