@@ -23,6 +23,7 @@ import { useComposerKeybinds } from '@renderer/workspace/tile-tree/TileLeaf/useC
 import { useTypeToFocus } from '@renderer/workspace/tile-tree/TileLeaf/useTypeToFocus'
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
+import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -78,6 +79,7 @@ export function TileLeaf({
   workspace,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const paneRef = useRef<HTMLDivElement>(null)
   const { showToast } = useGlobalToast()
   // Destructure the stable useCallback setter so effect deps don't
   // spuriously invalidate on every parent render. workspace itself
@@ -182,6 +184,39 @@ export function TileLeaf({
   const running = runtime.exited === null
   const isSessionLive = runtime.sessionStatus === 'running'
 
+  useEffect(() => {
+    const node = paneRef.current
+    if (!node) return
+
+    let timer: ReturnType<typeof window.setTimeout> | null = null
+    const capture = (reason: 'initial' | 'mutation') => {
+      recordHtmlTraceSnapshot(sessionId, node.outerHTML, reason)
+    }
+    const scheduleCapture = () => {
+      if (timer !== null) return
+      timer = window.setTimeout(() => {
+        timer = null
+        capture('mutation')
+      }, 250)
+    }
+
+    capture('initial')
+    const observer = new MutationObserver(scheduleCapture)
+    observer.observe(node, {
+      attributes: true,
+      childList: true,
+      characterData: true,
+      subtree: true,
+    })
+
+    return () => {
+      observer.disconnect()
+      if (timer !== null) {
+        window.clearTimeout(timer)
+      }
+    }
+  }, [sessionId])
+
   return (
     // data-pane-id: stable DOM hook so DOM-targeting debug tools
     // (HtmlDebugPanel in particular) can locate this pane's root via
@@ -192,6 +227,7 @@ export function TileLeaf({
     // Session UUIDs are unique across the app, so there's no collision
     // risk with multiple panes mounted simultaneously.
     <div
+      ref={paneRef}
       data-pane-id={sessionId}
       className={`
         flex flex-col h-full min-h-0 min-w-0

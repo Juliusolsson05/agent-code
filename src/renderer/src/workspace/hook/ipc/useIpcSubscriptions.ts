@@ -16,6 +16,7 @@ import {
 } from '@renderer/workspace/semantic/helpers'
 import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
 import { summarizeSemanticEventForDebug } from '@renderer/workspace/semantic/summarize'
+import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
 import {
   extractCodexProviderSessionId,
   isCodexRolloutEntry,
@@ -227,6 +228,9 @@ export function useIpcSubscriptions(
                   },
                 },
               )
+          if (!chromeTickOnly) {
+            recordScreenTailSnapshot(sessionId, recent)
+          }
           return {
             ...prev,
             [sessionId]: nextCurrent,
