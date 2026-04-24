@@ -18,6 +18,8 @@
 
 import type { Entry } from '@shared/types/transcript'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { GhostEntry } from 'agent-transcript-parser/ghost'
+import { mergeWithUpstream } from 'agent-transcript-parser/ghost'
 
 /**
  * Merged entry list for rendering. Superseded ghosts are dropped;
@@ -49,45 +51,31 @@ export function selectMergedEntries(
   const { ghosts, entries } = runtime
   if (ghosts.size === 0) return entries
 
-  // 2026-04-20 immediate feed-order sanity fix:
+  // Render ghosts only after the orphan timeout has fired. Plain
+  // unsuperseded ghosts are the normal handoff window between live
+  // semantic streaming and JSONL; showing them immediately was the
+  // source of duplicate/wrong-order feed rows. Orphaned ghosts are
+  // different: the authoritative JSONL has not arrived in time, so
+  // the ghost is the only surviving record of what the proxy observed.
   //
-  // The old merge path still let NON-current ghosts render through
-  // `mergeWithUpstream`, which appends unsuperseded ghosts after the
-  // upstream tail. In practice that meant an older assistant answer
-  // still represented by a ghost could appear BELOW newer committed
-  // tool rows and even below the user's latest message. The session
-  // log for 69e61aa3-38af-... showed exactly that:
-  //
-  //   entry:g-019dab01-...   (older ghost answer)
-  //   semantic:019dab02-...  (current live turn)
-  //
-  // That ordering is irreparably wrong for the main feed. Until we
-  // implement ordered ghost insertion (place ghosts near their logical
-  // transcript position instead of blindly tail-appending), the feed
-  // takes the conservative route:
-  //
-  //   - current turn: rendered ONLY by SemanticStreamingTurn
-  //   - non-current ghosts: hidden from the main feed
-  //
-  // Ghosts still exist in runtime state, persist to disk, and remain
-  // visible in debug tooling; we are only suppressing them from the
-  // user-facing transcript surface to preserve chronological order.
-  //
-  // This means `selectMergedEntries` currently returns the committed
-  // transcript only. Keeping the ghost scan + commentary here makes the
-  // intended next step explicit instead of pretending ghosts are gone.
-  let hasCurrentGhost = false
-  let hasNonCurrentGhost = false
-  for (const ghost of ghosts.values()) {
+  // Current-turn ghosts are still excluded because
+  // SemanticStreamingTurn owns the active live view. When that turn
+  // completes and currentTurn becomes null, orphaned ghosts can step
+  // in as the fallback transcript.
+  const visibleGhosts = new Map<string, GhostEntry>()
+  for (const [uuid, ghost] of ghosts) {
     if (ghost._atp.supersededBy !== undefined) continue
+    if (ghost._atp.orphanedAt === undefined) continue
     if (currentTurnId !== null && ghost._atp.turnId === currentTurnId) {
-      hasCurrentGhost = true
       continue
     }
-    hasNonCurrentGhost = true
+    visibleGhosts.set(uuid, ghost)
   }
-  if (!hasCurrentGhost && !hasNonCurrentGhost) return entries
-  return entries
+  if (visibleGhosts.size === 0) return entries
+
+  return mergeWithUpstream(entries, visibleGhosts, {
+    trustSupersededFlag: true,
+  }) as Entry[]
 }
 
 /**
