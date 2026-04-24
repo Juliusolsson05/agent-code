@@ -11,6 +11,7 @@
     "testing:rendering": "npm run testing:rendering:build && electron testing/rendering/out/main/main.js",
     "testing:rendering:build": "electron-vite build --config testing/rendering/electron.vite.config.ts",
     "testing:rendering:preview": "electron testing/rendering/out/main/main.js",
+    "test:work-context": "tsx --tsconfig tsconfig.web.json scripts/test-work-context.ts",
     "proxy-demo-bootstrap": "npm --prefix packages/claude-code-headless run proxy-test-bootstrap",
     "proxy-demo": "npm --prefix packages/claude-code-headless run build && electron experiments/claude-proxy-stream-app/main.mjs",
     "postinstall": "electron-rebuild -f -w node-pty"

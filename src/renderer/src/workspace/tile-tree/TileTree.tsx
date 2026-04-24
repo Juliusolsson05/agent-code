@@ -18,11 +18,24 @@ type Props = {
   node: TileNode
   focusedSessionId: SessionId | null
   workspace: Workspace
+  showWorktreeBadges?: boolean
 }
 
-export function TileTree({ tabId, node, focusedSessionId, workspace }: Props) {
+export function TileTree({
+  tabId,
+  node,
+  focusedSessionId,
+  workspace,
+  showWorktreeBadges = true,
+}: Props) {
   if (node.type === 'leaf') {
-    return renderWorkspaceLeaf(node.sessionId, focusedSessionId, workspace, tabId)
+    return renderWorkspaceLeaf(
+      node.sessionId,
+      focusedSessionId,
+      workspace,
+      tabId,
+      showWorktreeBadges,
+    )
   }
 
   return (
@@ -35,6 +48,7 @@ export function TileTree({ tabId, node, focusedSessionId, workspace }: Props) {
           node={node.a}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
+          showWorktreeBadges={showWorktreeBadges}
         />
       }
       b={
@@ -43,6 +57,7 @@ export function TileTree({ tabId, node, focusedSessionId, workspace }: Props) {
           node={node.b}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
+          showWorktreeBadges={showWorktreeBadges}
         />
       }
       // Resize dragging needs to know which sessions to update the
@@ -61,6 +76,7 @@ export function renderWorkspaceLeaf(
   focusedSessionId: SessionId | null,
   workspace: Workspace,
   tabId: TabId = workspace.state.activeTabId,
+  showWorktreeBadges = true,
 ) {
   const meta = workspace.state.sessions[sessionId]
   const kind = meta?.kind ?? 'claude'
@@ -89,6 +105,7 @@ export function renderWorkspaceLeaf(
       focused={sessionId === focusedSessionId}
       onFocusRequest={() => workspace.focusSessionInTab(tabId, sessionId)}
       workspace={workspace}
+      showWorktreeBadges={showWorktreeBadges}
     />
   )
 }

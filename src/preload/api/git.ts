@@ -1,4 +1,5 @@
 import { ipcRenderer } from 'electron'
+import type { WorktreeIdentity } from '@shared/types/git'
 
 // Git status bridge — used by GitBar.
 //
@@ -8,6 +9,11 @@ import { ipcRenderer } from 'electron'
 // directories so the bar can cleanly degrade.
 
 export const gitApi = {
+  gitWorktrees: (cwd: string): Promise<
+    | { ok: true; worktrees: WorktreeIdentity[] }
+    | { ok: false }
+  > => ipcRenderer.invoke('git:worktrees', cwd),
+
   gitStatus: (cwd: string): Promise<
     | {
         ok: true

@@ -71,6 +71,7 @@ type Props = {
   focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
+  showWorktreeBadges?: boolean
 }
 
 export function TileLeaf({
@@ -80,6 +81,7 @@ export function TileLeaf({
   focused,
   onFocusRequest,
   workspace,
+  showWorktreeBadges = true,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
@@ -350,6 +352,7 @@ export function TileLeaf({
         scrollFraction={scrollFraction}
         tailMode={runtime.tailMode}
         sessionKind={workspace.state.sessions[sessionId]?.kind}
+        workContext={showWorktreeBadges ? runtime.workContext : null}
       />
 
       <ComposerInput

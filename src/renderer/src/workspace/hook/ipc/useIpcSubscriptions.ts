@@ -44,6 +44,12 @@ import {
   reconcileUpstream,
 } from '@renderer/workspace/ghosts'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
+import type { WorktreeIdentity } from '@renderer/workspace/work-context/types'
+import {
+  fallbackContext,
+  matchWorktree,
+  reduceWorkContextFromRaw,
+} from '@renderer/workspace/work-context/reducer'
 
 import type {
   WorkspaceSetRuntimes,
@@ -51,6 +57,58 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
+
+// Codex rollout is delivered as many small IPC bursts, but `turn_context`
+// is only one line near the beginning of the task. The bundle that
+// reproduced duplicate user rows had later `response_item` user/assistant
+// messages arriving in their own bursts with no nearby `turn_context`, even
+// though the raw payload still carried the same `turn_id`.
+//
+// Keep the rolling turn id outside the React runtime object because this is
+// ingestion bookkeeping, not UI state. Rendering should react to stamped feed
+// entries, not to the parser cursor we happened to need while reading JSONL.
+// Terminal Codex events and session exit clear the cursor so a new task cannot
+// inherit the previous task's turn id.
+const codexCurrentTurnIdBySession = new Map<SessionId, string>()
+
+function codexTurnIdFromEventPayload(raw: Record<string, unknown>): string | null {
+  const payload = raw.payload as Record<string, unknown> | undefined
+  return typeof payload?.turn_id === 'string' ? payload.turn_id : null
+}
+
+function codexEventType(raw: Record<string, unknown>): string | null {
+  const payload = raw.payload as Record<string, unknown> | undefined
+  return typeof payload?.type === 'string' ? payload.type : null
+}
+
+type WorktreeCacheEntry = {
+  worktrees: WorktreeIdentity[]
+  refreshedAt: number
+  inflight: Promise<void> | null
+}
+
+const WORKTREE_CACHE_TTL_MS = 5000
+const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
+
+function canReduceWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
+  const type = (raw as { type?: unknown })?.type
+  return type === 'worktree-state' || hasWorktreeCache
+}
+
+function appendRecentWorkContextRaw(
+  recentRawBySession: Map<SessionId, unknown[]>,
+  sessionId: SessionId,
+  entries: Array<{ entry: unknown }>,
+): void {
+  const current = recentRawBySession.get(sessionId) ?? []
+  const next = current.concat(entries.map(({ entry }) => entry))
+  recentRawBySession.set(
+    sessionId,
+    next.length > WORK_CONTEXT_RECENT_RAW_LIMIT
+      ? next.slice(-WORK_CONTEXT_RECENT_RAW_LIMIT)
+      : next,
+  )
+}
 
 // -----------------------------------------------------------------------------
 // useIpcSubscriptions — the one big side-effect that wires every
@@ -78,8 +136,87 @@ export function useIpcSubscriptions(
   appendFeedDebug: (sessionId: SessionId, input: FeedDebugInput) => void,
 ): void {
   useEffect(() => {
+    const worktreeCache = new Map<string, WorktreeCacheEntry>()
+    const recentWorkContextRawBySession = new Map<SessionId, unknown[]>()
+    const refreshWorktrees = (cwd: string | null | undefined): void => {
+      if (!cwd) return
+      const cached = worktreeCache.get(cwd)
+      const now = Date.now()
+      if (cached?.inflight) return
+      if (cached && now - cached.refreshedAt < WORKTREE_CACHE_TTL_MS) return
+
+      const inflight = window.api.gitWorktrees(cwd).then(result => {
+        if (!result.ok) return
+        worktreeCache.set(cwd, {
+          worktrees: result.worktrees,
+          refreshedAt: Date.now(),
+          inflight: null,
+        })
+        setRuntimes(prev => {
+          let changed = false
+          const next = { ...prev }
+          for (const [sessionId, runtime] of Object.entries(prev)) {
+            const meta = refs.stateRef.current.sessions[sessionId]
+            if (meta?.cwd !== cwd) continue
+
+            let workContext = runtime.workContext
+            const recentRaw = recentWorkContextRawBySession.get(sessionId) ?? []
+            for (const raw of recentRaw) {
+              workContext = reduceWorkContextFromRaw(
+                workContext,
+                raw,
+                result.worktrees,
+                cwd,
+              )
+            }
+
+            if (!workContext) {
+              workContext = fallbackContext(
+                cwd,
+                result.worktrees,
+                Date.now(),
+                'fallback:session-cwd:worktree-cache',
+              )
+            }
+
+            if (workContext?.worktreePath) {
+              const matched = matchWorktree(workContext.worktreePath, result.worktrees)
+              if (matched) {
+                workContext = {
+                  ...workContext,
+                  worktreePath: matched.path,
+                  branch: workContext.branch ?? matched.branch,
+                  repoRoot: result.worktrees[0]?.path ?? workContext.repoRoot,
+                }
+              }
+            }
+
+            if (workContext === runtime.workContext) continue
+            next[sessionId] = { ...runtime, workContext }
+            changed = true
+          }
+          return changed ? next : prev
+        })
+      }).catch(() => {
+        // Worktree context is decorative metadata. If git probing fails,
+        // leave the last known cache in place and keep feed ingestion moving.
+      }).finally(() => {
+        const latest = worktreeCache.get(cwd)
+        if (latest?.inflight === inflight) {
+          worktreeCache.set(cwd, { ...latest, inflight: null })
+        }
+      })
+      worktreeCache.set(cwd, {
+        worktrees: cached?.worktrees ?? [],
+        refreshedAt: cached?.refreshedAt ?? 0,
+        inflight,
+      })
+    }
+
     const offStarted = window.api.onSessionStarted(({ sessionId, projectDir }) => {
       updateRuntime(sessionId, { projectDir })
+      const cwd = refs.stateRef.current.sessions[sessionId]?.cwd ?? projectDir
+      refreshWorktrees(cwd)
       appendFeedDebug(sessionId, {
         layer: 'STATE',
         kind: 'session_started',
@@ -291,6 +428,8 @@ export function useIpcSubscriptions(
     })
 
     const offExit = window.api.onSessionExit(({ sessionId, exitCode }) => {
+      recentWorkContextRawBySession.delete(sessionId)
+      codexCurrentTurnIdBySession.delete(sessionId)
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const next = withDerivedSessionStatus(
@@ -651,6 +790,9 @@ export function useIpcSubscriptions(
         spanClosed = true
         span.end(data)
       }
+      appendRecentWorkContextRaw(recentWorkContextRawBySession, sessionId, entries)
+      const sessionCwd = refs.stateRef.current.sessions[sessionId]?.cwd
+      refreshWorktrees(sessionCwd)
 
       // Two passes per burst:
       //   A — accumulate workspace-state captures (providerSessionId).
@@ -706,12 +848,16 @@ export function useIpcSubscriptions(
         let pendingApproval = current.pendingApproval
         let queuedMessages = current.queuedMessages
         let awaitingAssistant = current.awaitingAssistant
-        // Set when a Codex user entry mapped from rollout matches
-        // the optimistic head row already in current.entries. We
-        // can only resolve it after the loop because the optimistic
-        // row could also live in `appended` if we're processing
-        // multiple bursts.
-        let dropOptimisticHead = false
+        let workContext = current.workContext
+        const cachedWorktrees = sessionCwd ? worktreeCache.get(sessionCwd) : undefined
+        const hasWorktreeCache = !!cachedWorktrees && cachedWorktrees.refreshedAt > 0
+        const worktrees = cachedWorktrees?.worktrees ?? []
+        // Set when a Codex user entry mapped from rollout matches an
+        // optimistic row already in the feed. Codex can commit tool
+        // outputs before the real user message in the same burst, so
+        // the optimistic row is not guaranteed to still be the tail by
+        // the time the committed user entry arrives.
+        let reconciledOptimisticText: string | null = null
 
         // Reuse the existing map references so downstream consumers
         // that hold them live (Feed contexts) keep working without
@@ -720,19 +866,33 @@ export function useIpcSubscriptions(
         const toolUseIndex = current.toolUseIndex
         const toolResultIndex = current.toolResultIndex
 
-        // Rolling Codex turn id — updated when a `turn_context`
-        // rollout entry arrives, then stamped onto every mapped
-        // response_item in the same turn. Feeds reconcileUpstream's
-        // Codex supersede branch. See codexTurnIdFromRollout for
-        // the extraction rule and reconcileUpstream for the match.
-        let codexCurrentTurnId: string | null = null
+        // Rolling Codex turn id. `turn_context` was the first source we
+        // used, but it is too sparse for live rendering: the authoritative
+        // user message that should replace the optimistic prompt can arrive
+        // after unrelated tool-result user rows, in a separate burst, with
+        // only `payload.turn_id` tying it back to the active task. Stamping
+        // every mapped response item gives reconcileUpstream and semantic
+        // ownership a stable key instead of guessing from feed position.
+        let codexCurrentTurnId: string | null =
+          codexCurrentTurnIdBySession.get(sessionId) ?? null
 
         for (const { entry: raw } of entries) {
+          if (canReduceWorkContext(raw, hasWorktreeCache)) {
+            workContext = reduceWorkContextFromRaw(
+              workContext,
+              raw,
+              worktrees,
+              sessionCwd ?? current.projectDir ?? '',
+            )
+          }
+
           // ---- Codex rollout branch ----
           if (isCodexRolloutEntry(raw)) {
             const payload = raw.payload as Record<string, unknown> | undefined
             const turnContextId = codexTurnIdFromRollout(raw)
             if (turnContextId !== null) codexCurrentTurnId = turnContextId
+            const payloadTurnId = codexTurnIdFromEventPayload(raw)
+            if (payloadTurnId !== null) codexCurrentTurnId = payloadTurnId
             const mappedRaw = mapCodexRolloutToFeedEntries(raw)
             const mapped = mappedRaw.map(e => stampCodexTurnId(e, codexCurrentTurnId))
             const marker = mapped.length > 0 ? codexHistoryMarker(raw) : null
@@ -773,21 +933,15 @@ export function useIpcSubscriptions(
             //
             // WHY two parallel checks, not an if/else:
             //
-            // The old implementation gated the `current.entries`
-            // check behind `appended.length === 0` — i.e. "if we
-            // haven't appended anything yet in this burst, consider
-            // the optimistic row as a candidate for removal."
-            // That's wrong when Codex's rollout emits the
-            // env_context `<environment_context>` message BEFORE
-            // the real user message. The env_context is a
-            // non-matching user entry that gets appended first;
-            // when the real user message arrives next, the
-            // `appended.length > 0` branch runs, finds
-            // env_context on the appended tail (not optimistic),
-            // and never touches `current.entries` at all. The
-            // optimistic row survives — the top-of-feed
-            // duplication visible in the 2026-04-23 Codex pane
-            // screenshot.
+            // The old implementation only considered the optimistic
+            // row when it was the feed tail, or when an optimistic-like
+            // entry happened to be the last item appended in this same
+            // burst. That was too positional for Codex. In the
+            // 2026-04-24 bundle, the authoritative user prompt arrived
+            // after three tool-result user rows, so the optimistic row
+            // was no longer the tail by the time the real prompt was
+            // committed. The optimistic row survived and the same user
+            // text rendered twice.
             //
             // The fix is to run both checks independently. They
             // target different data (appended[] is this burst's
@@ -796,33 +950,31 @@ export function useIpcSubscriptions(
             const firstMapped = mapped[0]
             if (firstMapped?.type === 'user') {
               const mappedText = entryTextContent(firstMapped)
-              // Check appended[] tail — if an earlier mapped entry
-              // in THIS burst was optimistic-like, pop it. In
-              // practice this fires only on hot-swap / synthetic
-              // cases; the typical hit is the current.entries
-              // check below.
-              if (appended.length > 0) {
-                const lastAppended = appended[appended.length - 1]
+              // Reconcile optimistic prompts by identity, not by tail
+              // position. In the captured failure, the optimistic user row
+              // stayed visible while Codex committed three tool-result user
+              // entries before the real user prompt. A tail-only removal
+              // therefore looked at the last tool result, missed the
+              // optimistic prompt, and rendered the same user text twice.
+              // Restrict this to optimistic Codex user rows so a genuine
+              // repeated user prompt remains visible.
+              for (let idx = appended.length - 1; idx >= 0; idx -= 1) {
+                const item = appended[idx]
                 if (
-                  isOptimisticCodexUserEntry(lastAppended) &&
-                  entryTextContent(lastAppended) === mappedText
+                  isOptimisticCodexUserEntry(item) &&
+                  entryTextContent(item) === mappedText
                 ) {
-                  appended.pop()
+                  appended.splice(idx, 1)
+                  reconciledOptimisticText = mappedText
                 }
               }
-              // Check current.entries tail — if the pre-burst tail
-              // is an optimistic row whose text matches this
-              // mapped user entry, schedule its removal.
-              // Unconditional: the `if (appended.length > 0)` gate
-              // above was the bug that let env_context entries
-              // arriving before the real user message hide the
-              // optimistic tail from reconciliation.
-              const lastExisting = current.entries[current.entries.length - 1]
               if (
-                isOptimisticCodexUserEntry(lastExisting) &&
-                entryTextContent(lastExisting) === mappedText
+                current.entries.some(entry =>
+                  isOptimisticCodexUserEntry(entry) &&
+                  entryTextContent(entry) === mappedText,
+                )
               ) {
-                dropOptimisticHead = true
+                reconciledOptimisticText = mappedText
               }
             }
 
@@ -834,6 +986,14 @@ export function useIpcSubscriptions(
               }
               appended.push(e)
               indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)
+            }
+            const eventType = codexEventType(raw)
+            if (
+              eventType === 'task_complete' ||
+              eventType === 'turn_complete' ||
+              eventType === 'turn_aborted'
+            ) {
+              codexCurrentTurnId = null
             }
             continue
           }
@@ -897,8 +1057,13 @@ export function useIpcSubscriptions(
           indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)
         }
 
-        const baseEntries = dropOptimisticHead
-          ? current.entries.slice(0, -1)
+        const baseEntries = reconciledOptimisticText !== null
+          ? current.entries.filter(entry =>
+              !(
+                isOptimisticCodexUserEntry(entry) &&
+                entryTextContent(entry) === reconciledOptimisticText
+              ),
+            )
           : current.entries
 
         // Ghost reconciliation — when authoritative entries land,
@@ -927,6 +1092,12 @@ export function useIpcSubscriptions(
           window.api.ghostAppend(sessionId, ghost)
         }
 
+        if (codexCurrentTurnId === null) {
+          codexCurrentTurnIdBySession.delete(sessionId)
+        } else {
+          codexCurrentTurnIdBySession.set(sessionId, codexCurrentTurnId)
+        }
+
         // Bail only when literally nothing changed. Approval,
         // queue, and compaction transitions can fire on bursts
         // that don't append any feed entries at all. Include ghost
@@ -938,11 +1109,12 @@ export function useIpcSubscriptions(
         const ghostsChanged = nextGhosts !== current.ghosts
         const noChange =
           appended.length === 0 &&
-          !dropOptimisticHead &&
+          reconciledOptimisticText === null &&
           pendingCompaction === current.pendingCompaction &&
           pendingApproval === current.pendingApproval &&
           queuedMessages === current.queuedMessages &&
           awaitingAssistant === current.awaitingAssistant &&
+          workContext === current.workContext &&
           !ghostsChanged
         if (noChange) {
           closeSpan({
@@ -958,7 +1130,7 @@ export function useIpcSubscriptions(
           appendFeedDebugLog(
             {
               ...current,
-              entries: appended.length > 0 || dropOptimisticHead
+              entries: appended.length > 0 || reconciledOptimisticText !== null
                 ? [...baseEntries, ...appended]
                 : current.entries,
               historyOldestMarker: oldestMarker,
@@ -967,6 +1139,7 @@ export function useIpcSubscriptions(
               pendingApproval,
               queuedMessages,
               awaitingAssistant,
+              workContext,
               toolUseIndex,
               toolResultIndex,
               ghosts: nextGhosts,
@@ -975,15 +1148,16 @@ export function useIpcSubscriptions(
               layer: 'JSONL',
               kind: 'jsonl_entries',
               summary:
-                appended.length > 0 || dropOptimisticHead
-                  ? `entries +${appended.length}${dropOptimisticHead ? ' · reconciled optimistic user' : ''}`
+                appended.length > 0 || reconciledOptimisticText !== null
+                  ? `entries +${appended.length}${reconciledOptimisticText !== null ? ' · reconciled optimistic user' : ''}`
                   : 'jsonl side-effects only',
               data: {
                 burstSize: entries.length,
                 appendedCount: appended.length,
-                droppedOptimisticHead: dropOptimisticHead,
+                reconciledOptimisticUser: reconciledOptimisticText !== null,
                 appended: appended.slice(-8).map(summarizeEntryForDebug),
                 queuedMessages: queuedMessages.length,
+                workContext,
                 pendingApproval: pendingApproval
                   ? {
                       callId: pendingApproval.callId,
@@ -998,7 +1172,7 @@ export function useIpcSubscriptions(
           sessionId,
           burstSize: entries.length,
           appendedCount: appended.length,
-          droppedOptimisticHead: dropOptimisticHead,
+          reconciledOptimisticUser: reconciledOptimisticText !== null,
           ghostsChanged,
           queuedMessages: queuedMessages.length,
         })

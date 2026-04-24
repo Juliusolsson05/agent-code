@@ -7,6 +7,7 @@ import {
   TodoRow,
 } from '@providers/claude/renderer/rows/ClaudeRows'
 import {
+  CodexApplyPatchRow,
   CodexToolRow,
   CodexToolResultRow,
 } from '@providers/codex/renderer/rows/CodexRows'
@@ -147,6 +148,9 @@ export const Block = memo(function Block({
       }
 
       if (currentProvider === 'codex') {
+        if (tu.name === 'apply_patch') {
+          return <ToolBand><CodexApplyPatchRow block={tu} /></ToolBand>
+        }
         return <CodexToolRow block={tu} />
       }
       // Claude provider — dispatch by tool name.

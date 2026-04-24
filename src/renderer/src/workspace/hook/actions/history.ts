@@ -18,17 +18,29 @@ import {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
 } from '@renderer/workspace/claude/history'
+import { reduceWorkContextFromRaw } from '@renderer/workspace/work-context/reducer'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 
+function codexTurnIdFromEventPayload(raw: Record<string, unknown>): string | null {
+  const payload = raw.payload as Record<string, unknown> | undefined
+  return typeof payload?.turn_id === 'string' ? payload.turn_id : null
+}
+
+function codexEventType(raw: Record<string, unknown>): string | null {
+  const payload = raw.payload as Record<string, unknown> | undefined
+  return typeof payload?.type === 'string' ? payload.type : null
+}
+
 // Older history loader — called by Feed's scroll handler when the
 // user scrolls near the top.
 //
-// Walks the rollout stream linearly; the rolling Codex turn id
-// maintained by `turn_context` markers still stamps response_items
-// that come after it during pagination.
+// Walks the rollout stream linearly; the rolling Codex turn id is
+// maintained from both `turn_context` and payload-level `turn_id`
+// markers so paged response_items get the same ownership metadata as
+// entries that arrived live.
 
 export function useHistoryActions(
   setRuntimes: WorkspaceSetRuntimes,
@@ -79,19 +91,38 @@ export function useHistoryActions(
 
         const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
         const prepend: Entry[] = []
+        const worktreesResult = await window.api.gitWorktrees(meta.cwd)
+        const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+        let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker
-        // Same rolling Codex turn id as the live JSONL ingest path
-        // — loadOlderHistory walks the rollout stream linearly too,
-        // so a `turn_context` marker seen during pagination still
-        // stamps the response_items that come after it. See
-        // codexTurnIdFromRollout.
+        // Same rolling Codex turn id as the live JSONL ingest path.
+        // Pagination chunks can start after the original `turn_context`
+        // marker, so `payload.turn_id` is not just a convenience: it is the
+        // only durable source in many chunks. Without stamping these older
+        // response items the live feed and paged history disagree about
+        // which committed messages belong to the Codex task, and duplicate
+        // suppression becomes dependent on where the scroll boundary landed.
         let codexPaginationTurnId: string | null = null
 
         for (const rawEntry of chunk.entries) {
+          // Older-history pagination walks records that predate the current
+          // tail. Use them only to backfill an unknown badge; never let old
+          // worktree evidence replace fresher live/current context.
+          if (!workContext) {
+            workContext = reduceWorkContextFromRaw(
+              workContext,
+              rawEntry,
+              worktrees,
+              meta.cwd,
+            )
+          }
+
           if (kind === 'codex') {
             const marker = codexHistoryMarker(rawEntry)
             const turnContextId = codexTurnIdFromRollout(rawEntry)
             if (turnContextId !== null) codexPaginationTurnId = turnContextId
+            const payloadTurnId = codexTurnIdFromEventPayload(rawEntry)
+            if (payloadTurnId !== null) codexPaginationTurnId = payloadTurnId
             const mappedRaw = mapCodexRolloutToFeedEntries(rawEntry)
             const mapped = mappedRaw.map(e => stampCodexTurnId(e, codexPaginationTurnId))
             if (mapped.length > 0 && oldestMarker === runtime.historyOldestMarker) {
@@ -102,6 +133,14 @@ export function useHistoryActions(
               if (uuid && seen.has(uuid)) continue
               if (uuid) seen.add(uuid)
               prepend.push(entry)
+            }
+            const eventType = codexEventType(rawEntry)
+            if (
+              eventType === 'task_complete' ||
+              eventType === 'turn_complete' ||
+              eventType === 'turn_aborted'
+            ) {
+              codexPaginationTurnId = null
             }
             continue
           }
@@ -149,6 +188,7 @@ export function useHistoryActions(
               // the user can request the next chunk manually.
               hasOlderHistory: chunk.hasMore,
               loadingOlderHistory: false,
+              workContext,
             },
           }
         })

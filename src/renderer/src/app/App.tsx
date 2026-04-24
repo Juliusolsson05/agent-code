@@ -45,6 +45,7 @@ export default function App() {
   const setSettings = useAppStore(state => state.setSettings)
   const resetSettings = useAppStore(state => state.resetSettings)
   const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
+  const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
   const pathPickerOpen = useAppStore(state => state.pathPickerOpen)
   const pathPickerDefault = useAppStore(state => state.pathPickerDefault)
   const commandPaletteOpen = useAppStore(state => state.commandPaletteOpen)
@@ -234,6 +235,7 @@ export default function App() {
                 node={activeTab.root}
                 focusedSessionId={activeTab.focusedSessionId}
                 workspace={workspace}
+                showWorktreeBadges={settings.showWorktreeBadges}
               />
               <NewAgentPlacementOverlay
                 open={newAgentPlacementOpen}
@@ -311,7 +313,9 @@ export default function App() {
         openAgentActivity={openAgentActivity}
         openRewindPrompt={openRewindPrompt}
         toggleCustomRendering={toggleCustomRendering}
+        toggleWorktreeBadges={toggleWorktreeBadges}
         customRenderingEnabled={settings.customRendering}
+        worktreeBadgesEnabled={settings.showWorktreeBadges}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
         gitBarOpen={gitBarOpen}
         debugPanelOpen={debugPanelOpen}

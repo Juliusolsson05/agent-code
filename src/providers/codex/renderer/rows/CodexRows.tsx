@@ -1,5 +1,8 @@
 import { memo, useContext, useMemo, useState } from 'react'
+import hljs from 'highlight.js'
 
+import { normalizeCodeLanguage } from '@shared/code/language'
+import type { DiffLine } from '@shared/parsers/lineDiff'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -34,6 +37,179 @@ function summarizePatchTargets(input: unknown): string[] {
   if (!text) return []
   const matches = [...text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
   return matches.map(match => match[1]).slice(0, 6)
+}
+
+type ApplyPatchFile = {
+  path: string
+  action: 'Add' | 'Update' | 'Delete'
+  movedTo?: string
+  lines: DiffLine[]
+}
+
+function applyPatchText(input: unknown): string {
+  if (typeof input === 'string') return input
+  const rec = asRecord(input)
+  if (typeof rec?.raw === 'string') return rec.raw
+  if (typeof rec?.arguments === 'string') return rec.arguments
+  return ''
+}
+
+function parseApplyPatch(input: unknown): ApplyPatchFile[] {
+  const text = applyPatchText(input)
+  if (!text.includes('*** Begin Patch')) return []
+
+  const files: ApplyPatchFile[] = []
+  let current: ApplyPatchFile | null = null
+
+  for (const rawLine of text.split('\n')) {
+    const fileMatch = rawLine.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/)
+    if (fileMatch) {
+      current = {
+        action: fileMatch[1] as ApplyPatchFile['action'],
+        path: fileMatch[2] ?? '',
+        lines: [],
+      }
+      files.push(current)
+      continue
+    }
+
+    if (!current) continue
+
+    const moveMatch = rawLine.match(/^\*\*\* Move to: (.+)$/)
+    if (moveMatch) {
+      current.movedTo = moveMatch[1] ?? ''
+      continue
+    }
+
+    if (
+      rawLine === '*** Begin Patch' ||
+      rawLine === '*** End Patch' ||
+      rawLine === '*** End of File' ||
+      rawLine.startsWith('@@')
+    ) {
+      continue
+    }
+
+    if (rawLine.startsWith('+')) {
+      current.lines.push({ kind: '+', text: rawLine.slice(1) })
+    } else if (rawLine.startsWith('-')) {
+      current.lines.push({ kind: '-', text: rawLine.slice(1) })
+    } else if (rawLine.startsWith(' ')) {
+      current.lines.push({ kind: 'ctx', text: rawLine.slice(1) })
+    }
+  }
+
+  return files
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function toHighlightLanguage(language: string): string | null {
+  if (language === 'javascriptreact') return 'javascript'
+  if (language === 'typescriptreact') return 'typescript'
+  return hljs.getLanguage(language) ? language : null
+}
+
+function PatchFileHeader({
+  action,
+  path,
+  movedTo,
+}: {
+  action: ApplyPatchFile['action']
+  path: string
+  movedTo?: string
+}) {
+  const { workspaceRoot } = useContext(CodeRenderContext)
+  const display = formatToolFilePath(path, workspaceRoot)
+  const movedDisplay = movedTo ? formatToolFilePath(movedTo, workspaceRoot) : null
+  const extra = movedDisplay
+    ? `${action.toLowerCase()} -> ${movedDisplay}`
+    : action.toLowerCase()
+  return (
+    <div className="text-[13px] leading-[1.65] flex items-baseline min-w-0" title={path || undefined}>
+      <span className="text-accent font-semibold flex-shrink-0">ApplyPatch</span>
+      {display && (
+        <span
+          className="text-ink-dim ml-2 font-code text-[12px] truncate min-w-0"
+          style={{ direction: 'rtl', textAlign: 'left' }}
+        >
+          {display}
+        </span>
+      )}
+      <span className="text-muted ml-2 text-[11px] flex-shrink-0">{extra}</span>
+    </div>
+  )
+}
+
+function PatchDiffSlab({
+  lines,
+  filePath,
+}: {
+  lines: DiffLine[]
+  filePath?: string
+}) {
+  if (lines.length === 0) {
+    return (
+      <div className="bg-code-bg text-muted text-[11px] font-code px-3 py-2">
+        (no inline diff)
+      </div>
+    )
+  }
+  const highlightLanguage = useMemo(() => {
+    return toHighlightLanguage(normalizeCodeLanguage(undefined, filePath))
+  }, [filePath])
+  const renderedLines = useMemo(
+    () =>
+      lines.map(line => {
+        if (line.text === '') return '\u200b'
+        if (!highlightLanguage) return escapeHtml(line.text)
+        return hljs.highlight(line.text, { language: highlightLanguage }).value
+      }),
+    [highlightLanguage, lines],
+  )
+  return (
+    <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
+      <div className="w-max min-w-full">
+        {lines.map((line, index) => {
+          const bg =
+            line.kind === '+'
+              ? 'bg-diff-add-bg'
+              : line.kind === '-'
+                ? 'bg-diff-remove-bg'
+                : ''
+          const fg =
+            line.kind === '+'
+              ? 'text-diff-add-fg'
+              : line.kind === '-'
+                ? 'text-diff-remove-fg'
+                : 'text-code-ink-dim'
+          const bodyTone = line.kind === 'ctx' ? 'text-code-ink-dim' : 'text-code-ink'
+          return (
+            <div
+              key={index}
+              className={`${bg} flex items-start px-3 whitespace-pre`}
+            >
+              <span
+                className={`${fg} select-none w-4 flex-shrink-0 tabular-nums`}
+                aria-hidden="true"
+              >
+                {line.kind === 'ctx' ? ' ' : line.kind}
+              </span>
+              <span
+                className={`${bodyTone} diff-line-code hljs flex-1 min-w-0 break-all`}
+                dangerouslySetInnerHTML={{ __html: renderedLines[index] ?? '\u200b' }}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 function headlineForTool(block: ToolUseBlock): string | null {
@@ -232,6 +408,35 @@ export const CodexToolRow = memo(function CodexToolRow({
   )
 })
 
+export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
+  block,
+}: {
+  block: ToolUseBlock
+}) {
+  const files = useMemo(() => parseApplyPatch(block.input), [block.input])
+
+  if (files.length === 0) {
+    return <CodexToolRow block={block} />
+  }
+
+  return (
+    <MarkerRow marker="⏺">
+      <div className="flex flex-col gap-2">
+        {files.map((file, index) => (
+          <div key={`${file.path}:${index}`} className="flex flex-col gap-1">
+            <PatchFileHeader
+              action={file.action}
+              path={file.path}
+              movedTo={file.movedTo}
+            />
+            <PatchDiffSlab lines={file.lines} filePath={file.path} />
+          </div>
+        ))}
+      </div>
+    </MarkerRow>
+  )
+})
+
 export const CodexToolResultRow = memo(function CodexToolResultRow({
   block,
 }: {
@@ -288,6 +493,8 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   }
 
   if (kind === 'patch_apply_end') {
+    if (!isError) return null
+
     const changes = asRecord(meta?.changes)
     const items = changes ? Object.entries(changes) : []
     if (items.length > 0) {
