@@ -22,11 +22,17 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 // async but Electron's main process receives the message before the
 // window actually closes — the write lands. Same pattern VS Code
 // uses for its workspace state.
+//
+// Autosave is intentionally disabled until bootstrap finishes. The
+// hook mounts before persisted sessions are respawned, and saving the
+// initial empty Zustand state during that window can overwrite a real
+// workspace.json with `tabs: []` or a partially restored layout.
 
 export function useAutoSave(
   state: WorkspaceState,
   draftVersion: number,
   refs: WorkspaceRefs,
+  bootstrapComplete: boolean,
 ): void {
   const flushSave = useCallback(() => {
     const s = refs.latestStateRef.current
@@ -56,15 +62,17 @@ export function useAutoSave(
   }, [refs.latestRuntimesRef, refs.latestStateRef, refs.latestTileTabsRef])
 
   useEffect(() => {
+    if (!bootstrapComplete) return
     if (refs.saveTimerRef.current) clearTimeout(refs.saveTimerRef.current)
     refs.saveTimerRef.current = setTimeout(flushSave, 400)
     return () => {
       if (refs.saveTimerRef.current) clearTimeout(refs.saveTimerRef.current)
     }
-  }, [state, draftVersion, flushSave, refs.saveTimerRef])
+  }, [state, draftVersion, flushSave, refs.saveTimerRef, bootstrapComplete])
 
   useEffect(() => {
     const onBeforeUnload = () => {
+      if (!bootstrapComplete) return
       // Cancel the debounced timer so we don't double-save.
       if (refs.saveTimerRef.current) {
         clearTimeout(refs.saveTimerRef.current)
@@ -74,5 +82,5 @@ export function useAutoSave(
     }
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [flushSave, refs.saveTimerRef])
+  }, [flushSave, refs.saveTimerRef, bootstrapComplete])
 }

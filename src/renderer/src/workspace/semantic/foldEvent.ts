@@ -1,5 +1,9 @@
 import type { SessionKind } from '@renderer/workspace/types'
-import type { SemanticLiveBlock, SemanticRuntimeState } from '@renderer/workspace/workspaceState'
+import type {
+  SemanticLiveBlock,
+  SemanticLiveTurn,
+  SemanticRuntimeState,
+} from '@renderer/workspace/workspaceState'
 
 import {
   SEMANTIC_ERROR_CAP,
@@ -34,6 +38,25 @@ import { summarizeSemanticEvent } from '@renderer/workspace/semantic/summarize'
 // deltas, must flow through this fold before any UI reads it. If a
 // future surface wants live model structure, it should select from
 // `runtime.semantic`, not open its own transport subscription.
+
+function eventTargetsDifferentTurn(
+  ev: Record<string, unknown>,
+  currentTurn: SemanticLiveTurn,
+): boolean {
+  // The active reducer turn is the UI source of truth. The bundle from
+  // 2026-04-24 had a rollout turn (`019dbf35...`) open while proxy
+  // block events from older `resp_*` flows were still being published.
+  // Letting those block/text/completion events mutate the active turn
+  // mixed proxy tool blocks into the rollout live row, which is one of
+  // the concrete paths to a message appearing pinned at the bottom.
+  //
+  // We only reject events that carry an explicit, different turnId.
+  // Some legacy semantic events are intentionally turnless and are
+  // still reconciled by block index or tool call id; dropping those
+  // here would trade the observed cross-turn corruption for missing
+  // valid updates.
+  return typeof ev.turnId === 'string' && ev.turnId !== currentTurn.turnId
+}
 
 export function foldSemanticEvent(
   state: SemanticRuntimeState,
@@ -150,6 +173,7 @@ export function foldSemanticEvent(
     }
     case 'source_changed': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       currentTurn = {
         ...currentTurn,
         source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
@@ -210,6 +234,7 @@ export function foldSemanticEvent(
     }
     case 'block_started': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       // Codex emits `callId` where Claude emits `toolUseId`. Both feed
@@ -257,6 +282,7 @@ export function foldSemanticEvent(
     }
     case 'text_delta': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       const block = currentTurn.blocks[idx]
@@ -278,6 +304,7 @@ export function foldSemanticEvent(
     }
     case 'connector_text_delta': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       const block = currentTurn.blocks[idx]
@@ -299,6 +326,7 @@ export function foldSemanticEvent(
     }
     case 'thinking_delta': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       const block = currentTurn.blocks[idx]
@@ -320,6 +348,7 @@ export function foldSemanticEvent(
     }
     case 'citations_delta': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       const block = currentTurn.blocks[idx]
@@ -341,6 +370,7 @@ export function foldSemanticEvent(
     }
     case 'signature': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       const block = currentTurn.blocks[idx]
@@ -359,6 +389,7 @@ export function foldSemanticEvent(
     }
     case 'tool_input_delta': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       const block = currentTurn.blocks[idx]
@@ -382,6 +413,7 @@ export function foldSemanticEvent(
     }
     case 'tool_input_finalized': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       const block = currentTurn.blocks[idx]
@@ -408,6 +440,7 @@ export function foldSemanticEvent(
     }
     case 'block_completed': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       const block = currentTurn.blocks[idx]
@@ -499,7 +532,7 @@ export function foldSemanticEvent(
       // store. If we later build a richer agent/task panel, it can still derive
       // timeline rows from this normalized shape.
       if (!currentTurn || typeof ev.toolUseId !== 'string') break
-      if (typeof ev.turnId === 'string' && ev.turnId !== currentTurn.turnId) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const match = Object.entries(currentTurn.blocks).find(([, block]) => block.toolUseId === ev.toolUseId)
       if (!match) break
       const idx = Number(match[0])
@@ -665,6 +698,7 @@ export function foldSemanticEvent(
     }
     case 'usage_updated': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const usage = ev.usage as Record<string, unknown> | undefined
       if (!usage) break
       currentTurn = { ...currentTurn, usage: flattenSemanticUsage(usage) }
@@ -672,6 +706,7 @@ export function foldSemanticEvent(
     }
     case 'turn_stopped': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       currentTurn = {
         ...currentTurn,
         stopReason: typeof ev.stopReason === 'string' ? ev.stopReason : null,
@@ -681,6 +716,7 @@ export function foldSemanticEvent(
     }
     case 'turn_completed': {
       if (!currentTurn) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) break
       const completedTurn = { ...currentTurn, endedAt: currentTurn.endedAt ?? now }
       if (hasPendingSemanticTools(completedTurn)) {
         currentTurn = completedTurn
