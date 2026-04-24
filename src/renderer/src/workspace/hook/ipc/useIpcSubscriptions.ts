@@ -46,6 +46,7 @@ import {
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import type { WorktreeIdentity } from '@renderer/workspace/work-context/types'
 import {
+  fallbackContext,
   matchWorktree,
   reduceWorkContextFromRaw,
 } from '@renderer/workspace/work-context/reducer'
@@ -86,10 +87,26 @@ type WorktreeCacheEntry = {
 }
 
 const WORKTREE_CACHE_TTL_MS = 5000
+const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 
 function canReduceWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
   const type = (raw as { type?: unknown })?.type
   return type === 'worktree-state' || hasWorktreeCache
+}
+
+function appendRecentWorkContextRaw(
+  recentRawBySession: Map<SessionId, unknown[]>,
+  sessionId: SessionId,
+  entries: Array<{ entry: unknown }>,
+): void {
+  const current = recentRawBySession.get(sessionId) ?? []
+  const next = current.concat(entries.map(({ entry }) => entry))
+  recentRawBySession.set(
+    sessionId,
+    next.length > WORK_CONTEXT_RECENT_RAW_LIMIT
+      ? next.slice(-WORK_CONTEXT_RECENT_RAW_LIMIT)
+      : next,
+  )
 }
 
 // -----------------------------------------------------------------------------
@@ -119,6 +136,7 @@ export function useIpcSubscriptions(
 ): void {
   useEffect(() => {
     const worktreeCache = new Map<string, WorktreeCacheEntry>()
+    const recentWorkContextRawBySession = new Map<SessionId, unknown[]>()
     const refreshWorktrees = (cwd: string | null | undefined): void => {
       if (!cwd) return
       const cached = worktreeCache.get(cwd)
@@ -138,19 +156,42 @@ export function useIpcSubscriptions(
           const next = { ...prev }
           for (const [sessionId, runtime] of Object.entries(prev)) {
             const meta = refs.stateRef.current.sessions[sessionId]
-            const context = runtime.workContext
-            if (meta?.cwd !== cwd || !context?.worktreePath) continue
-            const matched = matchWorktree(context.worktreePath, result.worktrees)
-            if (!matched || matched.branch === context.branch) continue
-            next[sessionId] = {
-              ...runtime,
-              workContext: {
-                ...context,
-                worktreePath: matched.path,
-                branch: matched.branch,
-                repoRoot: result.worktrees[0]?.path ?? context.repoRoot,
-              },
+            if (meta?.cwd !== cwd) continue
+
+            let workContext = runtime.workContext
+            const recentRaw = recentWorkContextRawBySession.get(sessionId) ?? []
+            for (const raw of recentRaw) {
+              workContext = reduceWorkContextFromRaw(
+                workContext,
+                raw,
+                result.worktrees,
+                cwd,
+              )
             }
+
+            if (!workContext) {
+              workContext = fallbackContext(
+                cwd,
+                result.worktrees,
+                Date.now(),
+                'fallback:session-cwd:worktree-cache',
+              )
+            }
+
+            if (workContext?.worktreePath) {
+              const matched = matchWorktree(workContext.worktreePath, result.worktrees)
+              if (matched) {
+                workContext = {
+                  ...workContext,
+                  worktreePath: matched.path,
+                  branch: workContext.branch ?? matched.branch,
+                  repoRoot: result.worktrees[0]?.path ?? workContext.repoRoot,
+                }
+              }
+            }
+
+            if (workContext === runtime.workContext) continue
+            next[sessionId] = { ...runtime, workContext }
             changed = true
           }
           return changed ? next : prev
@@ -369,6 +410,7 @@ export function useIpcSubscriptions(
     })
 
     const offExit = window.api.onSessionExit(({ sessionId, exitCode }) => {
+      recentWorkContextRawBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
@@ -703,6 +745,7 @@ export function useIpcSubscriptions(
     //   6. Optimistic-Codex-user reconciliation against the head row.
     const offEntries = window.api.onSessionJsonlEntries(({ sessionId, entries }) => {
       if (!entries || entries.length === 0) return
+      appendRecentWorkContextRaw(recentWorkContextRawBySession, sessionId, entries)
       const sessionCwd = refs.stateRef.current.sessions[sessionId]?.cwd
       refreshWorktrees(sessionCwd)
 
