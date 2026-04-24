@@ -1,6 +1,19 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function buildResumeCommand(kind: 'claude' | 'codex', cwd: string, providerSessionId: string): string {
+  const cd = `cd ${shellQuote(cwd)}`
+  const resume = kind === 'codex'
+    ? `codex resume ${shellQuote(providerSessionId)}`
+    : `claude --resume ${shellQuote(providerSessionId)}`
+  return `${cd} && ${resume}`
+}
+
 export const sessionCommands: CommandDef[] = [
   {
     id: 'view-prompts',
@@ -138,6 +151,45 @@ export const sessionCommands: CommandDef[] = [
       return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
     },
     run: ({ workspace }) => void workspace.reloadFocusedAgent(),
+  },
+  {
+    id: 'copy-resume-command',
+    title: 'Copy Resume Command',
+    keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex'],
+    getState: ({ workspace }) => {
+      const tab = workspace.activeTab
+      const meta = tab ? workspace.state.sessions[tab.focusedSessionId] : null
+      const kind = meta?.kind ?? 'claude'
+      return {
+        label: kind === 'codex' ? 'Codex' : 'Claude',
+        tone: 'neutral',
+      }
+    },
+    when: ({ workspace }) => {
+      const tab = workspace.activeTab
+      if (!tab) return false
+      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const kind = meta?.kind ?? 'claude'
+      return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
+    },
+    run: async ({ workspace, ui }) => {
+      const tab = workspace.activeTab
+      if (!tab) return
+      const sessionId = tab.focusedSessionId
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) return
+
+      const command = buildResumeCommand(kind, meta.cwd, meta.providerSessionId)
+      ui.closePalette()
+      try {
+        await navigator.clipboard.writeText(command)
+        workspace.showPaneToast(sessionId, `copied resume command · ${command}`, 5000)
+      } catch (err) {
+        const msg = (err as Error)?.message ?? String(err)
+        workspace.showPaneToast(sessionId, `copy failed: ${msg}`, 4000)
+      }
+    },
   },
   {
     id: 'duplicate-agent',
