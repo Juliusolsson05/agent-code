@@ -18,6 +18,7 @@ type Props = {
   node: TileNode
   focusedSessionId: SessionId | null
   workspace: Workspace
+  showStatusMode?: boolean
   showWorktreeBadges?: boolean
 }
 
@@ -26,6 +27,7 @@ export function TileTree({
   node,
   focusedSessionId,
   workspace,
+  showStatusMode = true,
   showWorktreeBadges = true,
 }: Props) {
   if (node.type === 'leaf') {
@@ -34,6 +36,7 @@ export function TileTree({
       focusedSessionId,
       workspace,
       tabId,
+      showStatusMode,
       showWorktreeBadges,
     )
   }
@@ -48,6 +51,7 @@ export function TileTree({
           node={node.a}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
+          showStatusMode={showStatusMode}
           showWorktreeBadges={showWorktreeBadges}
         />
       }
@@ -57,6 +61,7 @@ export function TileTree({
           node={node.b}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
+          showStatusMode={showStatusMode}
           showWorktreeBadges={showWorktreeBadges}
         />
       }
@@ -76,6 +81,7 @@ export function renderWorkspaceLeaf(
   focusedSessionId: SessionId | null,
   workspace: Workspace,
   tabId: TabId = workspace.state.activeTabId,
+  showStatusMode = true,
   showWorktreeBadges = true,
 ) {
   const meta = workspace.state.sessions[sessionId]
@@ -105,6 +111,7 @@ export function renderWorkspaceLeaf(
       focused={sessionId === focusedSessionId}
       onFocusRequest={() => workspace.focusSessionInTab(tabId, sessionId)}
       workspace={workspace}
+      showStatusMode={showStatusMode}
       showWorktreeBadges={showWorktreeBadges}
     />
   )

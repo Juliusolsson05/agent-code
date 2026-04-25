@@ -129,6 +129,18 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'status-mode',
+      category: 'workspace',
+      title: 'Status Mode',
+      description: 'Color agent pane headers while sessions are active so working panes stand out.',
+      keywords: ['status', 'header', 'color', 'agent', 'pane', 'active'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.showStatusMode,
+        onToggle: (ctx, value) => ctx.onChange({ showStatusMode: value }),
+      },
+    },
+    {
       id: 'worktree-badges',
       category: 'workspace',
       title: 'Worktree Badges',

@@ -89,6 +89,7 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'revive-pane',
     title: 'Revive Buried Pane',
+    keepPaletteOpen: true,
     when: ({ workspace }) => workspace.state.buried.length > 0,
     run: ({ ui }) => ui.enterBuriedMode(),
   },
@@ -96,6 +97,7 @@ export const paneCommands: CommandDef[] = [
     id: 'kill-buried-pane',
     title: 'Kill Buried Pane…',
     keywords: ['kill', 'buried', 'hidden', 'pane', 'session'],
+    keepPaletteOpen: true,
     when: ({ workspace }) => workspace.state.buried.length > 0,
     run: ({ ui }) => ui.enterKillBuriedMode(),
   },

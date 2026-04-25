@@ -14,6 +14,7 @@ export type SettingsSlice = {
   setSettings: (patch: Partial<Settings>) => void
   resetSettings: () => void
   toggleCustomRendering: () => void
+  toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
 }
 
@@ -54,7 +55,6 @@ export type WorkspaceSlice = {
   workspaceSpotlight: SpotlightState | null
   workspaceReaderMode: ReaderModeState | null
   workspaceTileTabs: TileTabsState | null
-  workspaceStatusMode: boolean
   setWorkspaceState: (
     next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState),
   ) => void
@@ -71,7 +71,6 @@ export type WorkspaceSlice = {
   setWorkspaceTileTabs: (
     next: TileTabsState | null | ((prev: TileTabsState | null) => TileTabsState | null),
   ) => void
-  setWorkspaceStatusMode: (next: boolean | ((prev: boolean) => boolean)) => void
 }
 
 export type AppStore = SettingsSlice & UiShellSlice & WorkspaceSlice

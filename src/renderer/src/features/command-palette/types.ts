@@ -23,16 +23,19 @@ export type CommandContext = {
     toggleHtmlDebugPanel: () => void
     togglePerformancePanel: () => void
     toggleCustomRendering: () => void
+    toggleStatusMode: () => void
     toggleWorktreeBadges: () => void
     setDangerousAgentsEnabled: (enabled: boolean) => void
     enterResumeMode: () => void
     enterBuriedMode: () => void
     enterKillBuriedMode: () => void
     enterPromptTemplateMode: () => void
+    enterSavePromptTemplateMode: () => void
     closePalette: () => void
   }
   flags: {
     customRenderingEnabled: boolean
+    statusModeEnabled: boolean
     worktreeBadgesEnabled: boolean
     dangerousAgentsEnabled: boolean
     gitBarOpen: boolean
@@ -49,6 +52,7 @@ export type CommandDef = {
   title: string | ((ctx: CommandContext) => string)
   shortcut?: string
   keywords?: string[]
+  keepPaletteOpen?: boolean
   when?: (ctx: CommandContext) => boolean
   getState?: (ctx: CommandContext) => CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
@@ -59,6 +63,7 @@ export type ResolvedCommand = {
   title: string
   shortcut?: string
   keywords: string[]
+  keepPaletteOpen: boolean
   state: CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
 }

@@ -31,6 +31,7 @@ export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
       title: typeof command.title === 'function' ? command.title(ctx) : command.title,
       shortcut: command.shortcut,
       keywords: command.keywords ?? [],
+      keepPaletteOpen: command.keepPaletteOpen === true,
       state: command.getState ? command.getState(ctx) : null,
       run: command.run,
     }))

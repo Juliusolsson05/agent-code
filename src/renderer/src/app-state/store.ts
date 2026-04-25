@@ -5,7 +5,8 @@ import { createSettingsSlice } from '@renderer/app-state/settings/slice'
 import { createUiShellSlice } from '@renderer/app-state/uiShell/slice'
 import { createWorkspaceSlice } from '@renderer/app-state/workspace/slice'
 import type { AppStore } from '@renderer/app-state/types'
-import { DEFAULT_SETTINGS, THEME_MODES, type Settings } from '@renderer/app-state/settings/types'
+import type { Settings } from '@renderer/app-state/settings/types'
+import { coerceSettings } from '@renderer/app-state/settings/persistence'
 
 export const useAppStore = create<AppStore>()(
   devtools(
@@ -23,19 +24,7 @@ export const useAppStore = create<AppStore>()(
         migrate: persisted => {
           const data = persisted as { settings?: Partial<Settings> } | undefined
           return {
-            settings: {
-              ...DEFAULT_SETTINGS,
-              ...data?.settings,
-              mode: THEME_MODES.some(option => option.id === data?.settings?.mode)
-                ? (data?.settings?.mode as Settings['mode'])
-                : DEFAULT_SETTINGS.mode,
-              contrast: data?.settings?.contrast === true,
-              accent: data?.settings?.accent ?? DEFAULT_SETTINGS.accent,
-              customRendering: data?.settings?.customRendering === true,
-              showWorktreeBadges: data?.settings?.showWorktreeBadges !== false,
-              dangerousAgentsEnabled: data?.settings?.dangerousAgentsEnabled === true,
-              useProxyStreaming: data?.settings?.useProxyStreaming === true,
-            },
+            settings: coerceSettings(data?.settings),
           } as Partial<AppStore>
         },
       },

@@ -35,6 +35,15 @@ export const createSettingsSlice: StateCreator<
       applyTheme(next)
       return { settings: next }
     }, false, 'settings/toggleCustomRendering'),
+  toggleStatusMode: () =>
+    set(state => {
+      const next = {
+        ...state.settings,
+        showStatusMode: !state.settings.showStatusMode,
+      }
+      applyTheme(next)
+      return { settings: next }
+    }, false, 'settings/toggleStatusMode'),
   toggleWorktreeBadges: () =>
     set(state => {
       const next = {
