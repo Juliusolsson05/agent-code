@@ -82,7 +82,7 @@ export function SetupGate() {
     <div className="absolute inset-0 z-50 flex items-center justify-center bg-canvas/95 px-6">
       <div className="w-full max-w-3xl border border-border bg-surface">
         <div className="border-b border-border px-5 py-4">
-          <div className="text-[14px] text-ink">Code Setup</div>
+          <div className="text-[14px] text-ink">Agent Studio Code Setup</div>
           <div className="mt-1 text-[11px] leading-5 text-muted">
             Required tools must be available before agent sessions can start.
           </div>

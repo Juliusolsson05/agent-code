@@ -17,10 +17,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release-macos:
+  build-app:
     runs-on: macos-latest
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - name: Checkout
@@ -28,13 +28,28 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure SSH for submodules
+      - name: Configure submodule auth
         env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
           SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
         run: |
+          if [ -n "$SUBMODULE_PAT" ]; then
+            echo "::add-mask::$SUBMODULE_PAT"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "git@github-personal:Juliusolsson05/"
+            exit 0
+          fi
+
+          if [ -z "$SUBMODULE_SSH_KEY" ]; then
+            echo "Either SUBMODULE_PAT or SUBMODULE_SSH_KEY must be configured."
+            exit 1
+          fi
+
           mkdir -p ~/.ssh
-          printf '%s\n' "$SUBMODULE_SSH_KEY" > ~/.ssh/submodule_key
+          printf '%s' "$SUBMODULE_SSH_KEY" | perl -pe 's/\\n/\n/g' > ~/.ssh/submodule_key
+          printf '\n' >> ~/.ssh/submodule_key
           chmod 600 ~/.ssh/submodule_key
+          ssh-keygen -y -f ~/.ssh/submodule_key > /dev/null
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<'EOF'
           Host github-personal
@@ -43,11 +58,11 @@ jobs:
             IdentityFile ~/.ssh/submodule_key
             IdentitiesOnly yes
           EOF
+          git config --global url."git@github-personal:Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
 
       - name: Checkout submodules
-        # The two Juliusolsson05 HTTPS submodules must be public. The
-        # private agent-transcript-parser submodule uses github-personal
-        # and is authenticated by SUBMODULE_SSH_KEY above.
+        # Juliusolsson05 submodules use SUBMODULE_PAT or SUBMODULE_SSH_KEY;
+        # public third-party submodules keep HTTPS.
         run: git submodule update --init --recursive
 
       - name: Setup Node
@@ -59,7 +74,93 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
 
-      - name: Build macOS artifacts
+      - name: Build app
+        run: npm run build
+
+      - name: Upload app build
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-build
+          path: out
+          if-no-files-found: error
+
+  package-macos:
+    needs: build-app
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure submodule auth
+        env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
+          SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
+        run: |
+          if [ -n "$SUBMODULE_PAT" ]; then
+            echo "::add-mask::$SUBMODULE_PAT"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "git@github-personal:Juliusolsson05/"
+            exit 0
+          fi
+
+          if [ -z "$SUBMODULE_SSH_KEY" ]; then
+            echo "Either SUBMODULE_PAT or SUBMODULE_SSH_KEY must be configured."
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          printf '%s' "$SUBMODULE_SSH_KEY" | perl -pe 's/\\n/\n/g' > ~/.ssh/submodule_key
+          printf '\n' >> ~/.ssh/submodule_key
+          chmod 600 ~/.ssh/submodule_key
+          ssh-keygen -y -f ~/.ssh/submodule_key > /dev/null
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<'EOF'
+          Host github-personal
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/submodule_key
+            IdentitiesOnly yes
+          EOF
+          git config --global url."git@github-personal:Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
+
+      - name: Checkout submodules
+        # Juliusolsson05 submodules use SUBMODULE_PAT or SUBMODULE_SSH_KEY;
+        # public third-party submodules keep HTTPS.
+        run: git submodule update --init --recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache Electron packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-electron-
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Download app build
+        uses: actions/download-artifact@v4
+        with:
+          name: app-build
+          path: out
+
+      - name: Package macOS artifacts
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
@@ -67,7 +168,14 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run dist:mac
+        run: |
+          if [ -z "${CSC_LINK:-}" ]; then
+            echo "CSC_LINK is not configured; building unsigned artifacts."
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            unset CSC_LINK CSC_KEY_PASSWORD
+            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
+          fi
+          npm run package:mac
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -77,9 +185,10 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
+          if-no-files-found: error
 
       - name: Create GitHub Release
-        if: ${{ github.event.inputs.publish_release == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: manual-${{ github.run_number }}-${{ github.run_attempt }}

@@ -1,5 +1,5 @@
-appId: com.ccshell.code
-productName: Code
+appId: com.agentstudiocode.app
+productName: Agent Studio Code
 artifactName: "${productName}-${version}-${arch}.${ext}"
 directories:
   output: release
