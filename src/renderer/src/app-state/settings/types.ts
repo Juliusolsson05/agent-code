@@ -58,6 +58,7 @@ export type Settings = {
   contrast: boolean
   accent: AccentId
   customRendering: boolean
+  showStatusMode: boolean
   showWorktreeBadges: boolean
   dangerousAgentsEnabled: boolean
   /** When true, Claude sessions are spawned through a per-session
@@ -79,6 +80,7 @@ export const DEFAULT_SETTINGS: Settings = {
   contrast: false,
   accent: 'lime',
   customRendering: false,
+  showStatusMode: true,
   showWorktreeBadges: true,
   dangerousAgentsEnabled: false,
   useProxyStreaming: false,

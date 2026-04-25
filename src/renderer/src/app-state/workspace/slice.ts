@@ -33,7 +33,6 @@ export const createWorkspaceSlice: StateCreator<
   workspaceSpotlight: null,
   workspaceReaderMode: null,
   workspaceTileTabs: null,
-  workspaceStatusMode: false,
 
   setWorkspaceState: next =>
     set(state => ({
@@ -59,9 +58,4 @@ export const createWorkspaceSlice: StateCreator<
     set(state => ({
       workspaceTileTabs: applyUpdater<TileTabsState | null>(state.workspaceTileTabs, next),
     }), false, 'workspace/setWorkspaceTileTabs'),
-
-  setWorkspaceStatusMode: next =>
-    set(state => ({
-      workspaceStatusMode: applyUpdater<boolean>(state.workspaceStatusMode, next),
-    }), false, 'workspace/setWorkspaceStatusMode'),
 })

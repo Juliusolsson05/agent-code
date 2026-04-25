@@ -55,8 +55,10 @@ type Props = {
   toggleHtmlDebugPanel: () => void
   togglePerformancePanel: () => void
   toggleCustomRendering: () => void
+  toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
   customRenderingEnabled: boolean
+  statusModeEnabled: boolean
   worktreeBadgesEnabled: boolean
   dangerousAgentsEnabled: boolean
   gitBarOpen: boolean
@@ -97,8 +99,10 @@ export function CommandPalette({
   toggleHtmlDebugPanel,
   togglePerformancePanel,
   toggleCustomRendering,
+  toggleStatusMode,
   toggleWorktreeBadges,
   customRenderingEnabled,
+  statusModeEnabled,
   worktreeBadgesEnabled,
   dangerousAgentsEnabled,
   gitBarOpen,
@@ -200,6 +204,7 @@ export function CommandPalette({
         toggleHtmlDebugPanel,
         togglePerformancePanel,
         toggleCustomRendering,
+        toggleStatusMode,
         toggleWorktreeBadges,
         setDangerousAgentsEnabled,
         enterResumeMode,
@@ -210,6 +215,7 @@ export function CommandPalette({
       },
       flags: {
         customRenderingEnabled,
+        statusModeEnabled,
         worktreeBadgesEnabled,
         dangerousAgentsEnabled,
         gitBarOpen,
@@ -237,6 +243,7 @@ export function CommandPalette({
       toggleHtmlDebugPanel,
       togglePerformancePanel,
       toggleCustomRendering,
+      toggleStatusMode,
       toggleWorktreeBadges,
       setDangerousAgentsEnabled,
       enterResumeMode,
@@ -245,6 +252,7 @@ export function CommandPalette({
       enterPromptTemplateMode,
       onClose,
       customRenderingEnabled,
+      statusModeEnabled,
       worktreeBadgesEnabled,
       dangerousAgentsEnabled,
       gitBarOpen,

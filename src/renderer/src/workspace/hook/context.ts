@@ -66,8 +66,6 @@ export type WorkspaceSetReaderMode = (
     | ((prev: ReaderModeState | null) => ReaderModeState | null),
 ) => void
 
-export type WorkspaceSetStatusMode = (next: boolean | ((prev: boolean) => boolean)) => void
-
 export type WorkspaceHookContext = {
   // --- Zustand setters (identity-stable) ---
   setState: WorkspaceSetState
@@ -75,7 +73,6 @@ export type WorkspaceHookContext = {
   setSpotlight: WorkspaceSetSpotlight
   setTileTabs: WorkspaceSetTileTabs
   setReaderMode: WorkspaceSetReaderMode
-  setStatusMode: WorkspaceSetStatusMode
 
   // --- UI shell slice actions (identity-stable) ---
   openBuryPrompt: (sessionId: SessionId) => void

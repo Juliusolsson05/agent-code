@@ -23,6 +23,7 @@ export type CommandContext = {
     toggleHtmlDebugPanel: () => void
     togglePerformancePanel: () => void
     toggleCustomRendering: () => void
+    toggleStatusMode: () => void
     toggleWorktreeBadges: () => void
     setDangerousAgentsEnabled: (enabled: boolean) => void
     enterResumeMode: () => void
@@ -33,6 +34,7 @@ export type CommandContext = {
   }
   flags: {
     customRenderingEnabled: boolean
+    statusModeEnabled: boolean
     worktreeBadgesEnabled: boolean
     dangerousAgentsEnabled: boolean
     gitBarOpen: boolean

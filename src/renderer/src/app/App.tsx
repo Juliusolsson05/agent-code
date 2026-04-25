@@ -45,6 +45,7 @@ export default function App() {
   const setSettings = useAppStore(state => state.setSettings)
   const resetSettings = useAppStore(state => state.resetSettings)
   const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
+  const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
   const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
   const pathPickerOpen = useAppStore(state => state.pathPickerOpen)
   const pathPickerDefault = useAppStore(state => state.pathPickerDefault)
@@ -97,7 +98,11 @@ export default function App() {
     applyTheme(settings)
   }, [settings])
 
-  const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming)
+  const workspace = useWorkspace(
+    dangerousAgentsEnabled,
+    useProxyStreaming,
+    settings.showStatusMode,
+  )
   const pathPickerDefaultedRef = useRef(false)
 
   // Pre-fill the path input once per modal open. Do not keep syncing
@@ -328,8 +333,10 @@ export default function App() {
         openAgentActivity={openAgentActivity}
         openRewindPrompt={openRewindPrompt}
         toggleCustomRendering={toggleCustomRendering}
+        toggleStatusMode={toggleStatusMode}
         toggleWorktreeBadges={toggleWorktreeBadges}
         customRenderingEnabled={settings.customRendering}
+        statusModeEnabled={settings.showStatusMode}
         worktreeBadgesEnabled={settings.showWorktreeBadges}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
         gitBarOpen={gitBarOpen}

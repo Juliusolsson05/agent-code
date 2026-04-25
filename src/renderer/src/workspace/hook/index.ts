@@ -6,7 +6,6 @@ import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import type { WorkspaceHookContext } from '@renderer/workspace/hook/context'
 import { useWorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { usePaneToast, useWorkspaceHelpers } from '@renderer/workspace/hook/helpers'
-import { useStatusModeActions } from '@renderer/workspace/hook/actions/statusMode'
 import { useDraftActions } from '@renderer/workspace/hook/actions/draft'
 import { useStreamingActions } from '@renderer/workspace/hook/actions/streaming'
 import { usePickerActions } from '@renderer/workspace/hook/actions/picker'
@@ -51,6 +50,7 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
+  showStatusMode = true,
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
@@ -69,8 +69,6 @@ export function useWorkspace(
   const setTileTabs = useAppStore(store => store.setWorkspaceTileTabs)
   const readerMode = useAppStore(store => store.workspaceReaderMode)
   const setReaderMode = useAppStore(store => store.setWorkspaceReaderMode)
-  const statusMode = useAppStore(store => store.workspaceStatusMode)
-  const setStatusMode = useAppStore(store => store.setWorkspaceStatusMode)
 
   // ---- Refs (identity-stable across renders) ----
   const refs = useWorkspaceRefs(
@@ -114,7 +112,6 @@ export function useWorkspace(
       setSpotlight,
       setTileTabs,
       setReaderMode,
-      setStatusMode,
       openBuryPrompt,
       closeBuryPrompt,
       openNewAgentPlacement,
@@ -148,7 +145,6 @@ export function useWorkspace(
   void ctx
 
   // ---- Actions ----
-  const { toggleStatusMode } = useStatusModeActions(setStatusMode)
   const { setDraftInput, setDraftImages } = useDraftActions(
     setRuntimes,
     updateRuntime,
@@ -273,8 +269,7 @@ export function useWorkspace(
     setReaderModeSession,
     latestScreenRef: refs.latestScreenRef,
     getRuntime,
-    statusMode,
-    toggleStatusMode,
+    statusMode: showStatusMode,
     // actions
     newTab: tabActions.newTab,
     closeTab: tabActions.closeTab,
