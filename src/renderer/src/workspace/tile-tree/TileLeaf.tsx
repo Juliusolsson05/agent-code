@@ -353,6 +353,7 @@ export function TileLeaf({
         tailMode={runtime.tailMode}
         sessionKind={workspace.state.sessions[sessionId]?.kind}
         workContext={showWorktreeBadges ? runtime.workContext : null}
+        workActivity={showWorktreeBadges ? runtime.workActivity : null}
       />
 
       <ComposerInput

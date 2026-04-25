@@ -9,7 +9,10 @@ import type {
   ToolUseBlock,
 } from '@shared/types/transcript'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
-import type { AgentWorkContext } from '@renderer/workspace/work-context/types'
+import type {
+  AgentWorkContext,
+  WorktreeActivityState,
+} from '@renderer/workspace/work-context/types'
 
 export type PickerItem = {
   id: string
@@ -251,6 +254,7 @@ export type SessionRuntime = {
   exited: number | null
   projectDir: string | null
   workContext: AgentWorkContext | null
+  workActivity: WorktreeActivityState | null
   picker: SlashPickerState
   draftInput: string
   draftImages: ClaudeDraftImage[]
@@ -403,6 +407,7 @@ export function emptyRuntime(): SessionRuntime {
     exited: null,
     projectDir: null,
     workContext: null,
+    workActivity: null,
     picker: { visible: false, items: [] },
     draftInput: '',
     draftImages: [],

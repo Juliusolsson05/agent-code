@@ -1,6 +1,9 @@
 import { providerLabel } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import type { SessionKind } from '@renderer/workspace/types'
-import type { AgentWorkContext } from '@renderer/workspace/work-context/types'
+import type {
+  AgentWorkContext,
+  WorktreeActivityState,
+} from '@renderer/workspace/work-context/types'
 
 // Scroll position indicator — sits just above the composer,
 // right-aligned. Shows which entry you're looking at out of the
@@ -22,18 +25,20 @@ export function ScrollIndicator({
   tailMode,
   sessionKind,
   workContext,
+  workActivity,
 }: {
   entryCount: number
   scrollFraction: number
   tailMode: boolean
   sessionKind: SessionKind | undefined
   workContext: AgentWorkContext | null | undefined
+  workActivity: WorktreeActivityState | null | undefined
 }) {
   if (entryCount === 0) return null
   return (
     <div className="flex-shrink-0 flex justify-end px-3 leading-none">
       <div className="flex items-center gap-2">
-        <WorktreeBadge context={workContext} />
+        <WorktreeBadge context={workContext} activity={workActivity} />
         <span className="text-[11px] font-code text-muted">
           {providerLabel(sessionKind)}
         </span>
@@ -52,18 +57,28 @@ export function ScrollIndicator({
 
 function WorktreeBadge({
   context,
+  activity,
 }: {
   context: AgentWorkContext | null | undefined
+  activity: WorktreeActivityState | null | undefined
 }) {
   if (!context?.worktreePath) return null
   const label = context.branch ?? shortPath(context.worktreePath)
   if (!label) return null
   const color = colorFor(context.worktreePath)
   const title = [
+    'Primary worktree',
     context.branch ? `Branch: ${context.branch}` : null,
     `Worktree: ${context.worktreePath}`,
     `Source: ${context.source}`,
     `Confidence: ${context.confidence}`,
+    activity?.active?.worktreePath &&
+      activity.active.worktreePath !== context.worktreePath
+      ? `Active now: ${activity.active.branch ?? shortPath(activity.active.worktreePath)} (${activity.active.worktreePath})`
+      : null,
+    activity
+      ? `Touched: ${Object.values(activity.touched).length}`
+      : null,
   ].filter(Boolean).join('\n')
 
   return (
