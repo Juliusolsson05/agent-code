@@ -8,6 +8,7 @@ import { TerminalSession } from '@shared/runtime/terminalSession.js'
 import type { JsonlEntry } from 'claude-code-headless'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
+import { getToolPath } from '@main/setup/toolchain.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -280,6 +281,7 @@ export class SessionManager extends EventEmitter {
       // EventEmitter.on signature.
       const session = provider.createSession({
         cwd: options.cwd,
+        binary: getToolPath(kind, kind),
         cols: options.cols ?? 120,
         rows: options.rows ?? 40,
         snapshotIntervalMs: 16,

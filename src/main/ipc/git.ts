@@ -4,6 +4,7 @@ import { promisify } from 'util'
 import { join } from 'path'
 import { stat } from 'fs/promises'
 import type { WorktreeIdentity } from '@shared/types/git'
+import { getToolPath } from '@main/setup/toolchain.js'
 
 // Git status IPC — powers GitBar.
 //
@@ -36,7 +37,7 @@ type NumstatLine = { file: string; additions: number; deletions: number }
 // { ok: false }, losing the rest of the data we CAN compute.
 async function git(cwd: string, args: string[]): Promise<string> {
   try {
-    const { stdout } = await exec('git', args, { cwd, timeout: 5000 })
+    const { stdout } = await exec(getToolPath('git', 'git'), args, { cwd, timeout: 5000 })
     return stdout
   } catch {
     return ''

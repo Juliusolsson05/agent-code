@@ -14,6 +14,7 @@ import { createMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
+import { getToolPath, initializeToolchain } from '@main/setup/toolchain.js'
 
 // Main process — thin Electron host.
 //
@@ -62,6 +63,7 @@ void performanceService.start().catch(err => {
 
 app.whenReady().then(async () => {
   performanceService.mark('app.main.whenReady.start')
+  await initializeToolchain()
   await cleanupClaudeImageCacheDir().catch(err => {
     console.warn('[images] failed to clean Claude image cache:', err)
     performanceService.error('app.main.imageCache.cleanup.error', err)
@@ -70,7 +72,7 @@ app.whenReady().then(async () => {
   // child-process roundtrip on `tmux -V` — cheap enough to await
   // before any IPC is wired. Result is cached on the registry; call
   // sites use isAvailable() synchronously thereafter.
-  tmuxRegistry = new TmuxRegistry()
+  tmuxRegistry = new TmuxRegistry({ tmuxBinary: getToolPath('tmux', 'tmux') })
   const tmuxDetectStarted = performance.now()
   const tmuxAvailable = await tmuxRegistry.detectAvailability()
   performanceService.record({

@@ -6,6 +6,7 @@ import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
 import { HtmlDebugPanel } from '@renderer/features/debug/ui/HtmlDebugPanel'
 import { ProxyDebugPanel } from '@renderer/features/debug/ui/ProxyDebugPanel'
 import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
+import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
 import { ReaderView } from '@renderer/features/reader/ui/ReaderView'
 import { TileTabsModal } from '@renderer/features/tile-tabs/ui/TileTabsModal'
@@ -185,7 +186,8 @@ export default function App() {
     : null
 
   return (
-    <div className="h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
+    <div className="relative h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
+      <SetupGate />
       {/* Tab bar */}
       <TabBar workspace={workspace} onNewTabRequest={onNewTabRequest} />
 
