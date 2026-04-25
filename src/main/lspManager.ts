@@ -236,6 +236,10 @@ export class LspManager extends EventEmitter {
       stdio: 'pipe',
       env: {
         ...process.env,
+        // In packaged Electron, process.execPath is the app executable.
+        // Without this flag, spawning the language server re-launches
+        // Agent Studio Code instead of running the CLI as a Node script.
+        ELECTRON_RUN_AS_NODE: '1',
         NODE_NO_WARNINGS: '1',
       },
     })

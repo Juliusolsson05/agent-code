@@ -51,6 +51,13 @@ export function getMainWindow(): BrowserWindow | null {
   return mainWindow
 }
 
+export function focusMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
 /**
  * Send an IPC message to the renderer. No-op when the window is gone
  * — callers shouldn't have to guard lifecycle around every event.
