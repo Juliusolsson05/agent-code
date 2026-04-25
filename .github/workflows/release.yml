@@ -25,7 +25,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release secrets
+        env:
+          PUBLISH_RELEASE: ${{ github.event.inputs.publish_release }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$PUBLISH_RELEASE" != "true" ]; then
+            exit 0
+          fi
+
+          missing=()
+          [ -z "${CSC_LINK:-}" ] && missing+=(CSC_LINK)
+          [ -z "${APPLE_ID:-}" ] && missing+=(APPLE_ID)
+          [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
+          [ -z "${APPLE_TEAM_ID:-}" ] && missing+=(APPLE_TEAM_ID)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'Cannot publish a macOS release without signing/notarization secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
   build-app:
+    needs: validate-release
     runs-on: macos-latest
     permissions:
       contents: read
@@ -170,7 +196,6 @@ jobs:
 
       - name: Package macOS artifacts
         env:
-          PUBLISH_RELEASE: ${{ github.event.inputs.publish_release }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -178,18 +203,6 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "$PUBLISH_RELEASE" = "true" ]; then
-            missing=()
-            [ -z "${CSC_LINK:-}" ] && missing+=(CSC_LINK)
-            [ -z "${APPLE_ID:-}" ] && missing+=(APPLE_ID)
-            [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
-            [ -z "${APPLE_TEAM_ID:-}" ] && missing+=(APPLE_TEAM_ID)
-            if [ "${#missing[@]}" -gt 0 ]; then
-              printf 'Cannot publish a macOS release without signing/notarization secrets: %s\n' "${missing[*]}"
-              exit 1
-            fi
-          fi
-
           if [ -z "${CSC_LINK:-}" ]; then
             echo "CSC_LINK is not configured; building unsigned artifacts."
             export CSC_IDENTITY_AUTO_DISCOVERY=false
