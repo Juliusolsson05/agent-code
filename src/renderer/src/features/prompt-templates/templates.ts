@@ -33,12 +33,15 @@ export const builtinPromptTemplates: PromptTemplate[] = [
 
 function normalizeCustomTemplates(value: unknown): PromptTemplate[] {
   if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
   return value.flatMap(item => {
     if (!item || typeof item !== 'object') return []
     const record = item as Record<string, unknown>
     if (typeof record.id !== 'string') return []
     if (typeof record.title !== 'string') return []
     if (typeof record.body !== 'string') return []
+    if (seen.has(record.id)) return []
+    seen.add(record.id)
     return [{
       id: record.id,
       title: record.title,
@@ -49,6 +52,10 @@ function normalizeCustomTemplates(value: unknown): PromptTemplate[] {
       updatedAt: typeof record.updatedAt === 'number' ? record.updatedAt : undefined,
     }]
   })
+}
+
+function saveCustomPromptTemplates(templates: PromptTemplate[]): void {
+  window.localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(templates))
 }
 
 export function loadCustomPromptTemplates(): PromptTemplate[] {
@@ -73,9 +80,34 @@ export function saveCustomPromptTemplate(title: string, body: string): PromptTem
     createdAt: now,
     updatedAt: now,
   }
-  const next = [template, ...loadCustomPromptTemplates()]
-  window.localStorage.setItem(CUSTOM_TEMPLATES_KEY, JSON.stringify(next))
+  saveCustomPromptTemplates([template, ...loadCustomPromptTemplates()])
   return template
+}
+
+export function updateCustomPromptTemplate(
+  id: string,
+  title: string,
+  body: string,
+): PromptTemplate | null {
+  const now = Date.now()
+  let updated: PromptTemplate | null = null
+  const next = loadCustomPromptTemplates().map(template => {
+    if (template.id !== id) return template
+    updated = {
+      ...template,
+      title: title.trim(),
+      body,
+      updatedAt: now,
+    }
+    return updated
+  })
+  if (!updated) return null
+  saveCustomPromptTemplates(next)
+  return updated
+}
+
+export function deleteCustomPromptTemplate(id: string): void {
+  saveCustomPromptTemplates(loadCustomPromptTemplates().filter(template => template.id !== id))
 }
 
 export function allPromptTemplates(customTemplates = loadCustomPromptTemplates()): PromptTemplate[] {

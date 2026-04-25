@@ -4,7 +4,10 @@ import { buildCommandRegistry } from '@renderer/features/command-palette/registr
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
 import {
   allPromptTemplates,
+  deleteCustomPromptTemplate,
   loadCustomPromptTemplates,
+  saveCustomPromptTemplate,
+  updateCustomPromptTemplate,
   type PromptTemplate,
 } from '@renderer/features/prompt-templates/templates'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -34,7 +37,20 @@ type BuriedPaneInfo = {
   buriedAt: number
 }
 
-type PaletteMode = 'commands' | 'resume' | 'buried' | 'kill-buried' | 'prompt-template'
+type PaletteMode =
+  | 'commands'
+  | 'resume'
+  | 'buried'
+  | 'kill-buried'
+  | 'prompt-template'
+  | 'save-prompt-template'
+  | 'edit-prompt-template'
+
+type PromptTemplateForm = {
+  id: string | null
+  title: string
+  body: string
+}
 
 type Props = {
   open: boolean
@@ -119,6 +135,11 @@ export function CommandPalette({
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [customPromptTemplates, setCustomPromptTemplates] = useState<PromptTemplate[]>([])
+  const [promptTemplateForm, setPromptTemplateForm] = useState<PromptTemplateForm>({
+    id: null,
+    title: '',
+    body: '',
+  })
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -185,6 +206,29 @@ export function CommandPalette({
     setSelectedIndex(0)
   }, [])
 
+  const enterSavePromptTemplateMode = useCallback(() => {
+    const tab = workspace.activeTab
+    if (!tab) return
+    const draft = workspace.getRuntime(tab.focusedSessionId).draftInput.trim()
+    if (!draft) return
+    setPromptTemplateForm({ id: null, title: '', body: draft })
+    setMode('save-prompt-template')
+    setQuery('')
+    setSelectedIndex(0)
+  }, [workspace])
+
+  const enterEditPromptTemplateMode = useCallback((template: PromptTemplate) => {
+    if (template.scope !== 'custom') return
+    setPromptTemplateForm({
+      id: template.id,
+      title: template.title,
+      body: template.body,
+    })
+    setMode('edit-prompt-template')
+    setQuery(template.title)
+    setSelectedIndex(0)
+  }, [])
+
   const commandContext = useMemo<CommandContext>(
     () => ({
       workspace,
@@ -211,6 +255,7 @@ export function CommandPalette({
         enterBuriedMode,
         enterKillBuriedMode,
         enterPromptTemplateMode,
+        enterSavePromptTemplateMode,
         closePalette: onClose,
       },
       flags: {
@@ -250,6 +295,7 @@ export function CommandPalette({
       enterBuriedMode,
       enterKillBuriedMode,
       enterPromptTemplateMode,
+      enterSavePromptTemplateMode,
       onClose,
       customRenderingEnabled,
       statusModeEnabled,
@@ -275,6 +321,9 @@ export function CommandPalette({
   )
 
   const filtered = useMemo(() => {
+    if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
+      return []
+    }
     if (mode === 'resume') {
       if (!query.trim()) return sessions
       return sessions.filter(
@@ -317,7 +366,7 @@ export function CommandPalette({
       setMode('commands')
       setSessions([])
       setSessionsLoading(false)
-      setCustomPromptTemplates(loadCustomPromptTemplates())
+      setPromptTemplateForm({ id: null, title: '', body: '' })
       requestAnimationFrame(() => inputRef.current?.focus())
     }
   }, [open])
@@ -334,12 +383,7 @@ export function CommandPalette({
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
-      if (
-        command.id === 'resume-session' ||
-        command.id === 'revive-pane' ||
-        command.id === 'kill-buried-pane' ||
-        command.id === 'prompt-template'
-      ) {
+      if (command.keepPaletteOpen) {
         void command.run(commandContext)
         return
       }
@@ -371,13 +415,15 @@ export function CommandPalette({
 
   const executeKillBuried = useCallback(
     (item: BuriedPaneInfo) => {
-      const wasLastBuriedPane = workspace.state.buried.length <= 1
+      const remainingCount = (filtered as BuriedPaneInfo[])
+        .filter(candidate => candidate.id !== item.id)
+        .length
       void workspace.killBuried(item.id).then(() => {
-        if (wasLastBuriedPane) onClose()
-        else setSelectedIndex(i => Math.max(0, Math.min(i, workspace.state.buried.length - 2)))
+        if (remainingCount === 0) onClose()
+        else setSelectedIndex(i => Math.max(0, Math.min(i, remainingCount - 1)))
       })
     },
-    [onClose, workspace],
+    [filtered, onClose, workspace],
   )
 
   const executePromptTemplate = useCallback(
@@ -398,6 +444,47 @@ export function CommandPalette({
     [onClose, workspace],
   )
 
+  const refreshCustomPromptTemplates = useCallback(() => {
+    setCustomPromptTemplates(loadCustomPromptTemplates())
+  }, [])
+
+  const savePromptTemplateForm = useCallback(() => {
+    const title = promptTemplateForm.title.trim()
+    const body = promptTemplateForm.body.trim()
+    if (!title || !body) return
+
+    const tab = workspace.activeTab
+    const sessionId = tab?.focusedSessionId ?? null
+    const template = promptTemplateForm.id
+      ? updateCustomPromptTemplate(promptTemplateForm.id, title, body)
+      : saveCustomPromptTemplate(title, body)
+    if (!template) return
+
+    refreshCustomPromptTemplates()
+    setPromptTemplateForm({ id: null, title: '', body: '' })
+    setMode('prompt-template')
+    setQuery('')
+    setSelectedIndex(0)
+    if (sessionId) {
+      workspace.showPaneToast(
+        sessionId,
+        promptTemplateForm.id
+          ? `Updated prompt template: ${template.title}`
+          : `Saved prompt template: ${template.title}`,
+      )
+    }
+  }, [promptTemplateForm, refreshCustomPromptTemplates, workspace])
+
+  const deletePromptTemplate = useCallback(
+    (template: PromptTemplate) => {
+      if (template.scope !== 'custom') return
+      deleteCustomPromptTemplate(template.id)
+      refreshCustomPromptTemplates()
+      setSelectedIndex(i => Math.max(0, Math.min(i, customPromptTemplates.length - 2)))
+    },
+    [customPromptTemplates.length, refreshCustomPromptTemplates],
+  )
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -407,9 +494,18 @@ export function CommandPalette({
           mode === 'resume' ||
           mode === 'buried' ||
           mode === 'kill-buried' ||
-          mode === 'prompt-template'
+          mode === 'prompt-template' ||
+          mode === 'save-prompt-template'
         ) {
-          setMode('commands')
+          setMode(mode === 'save-prompt-template' ? 'commands' : 'commands')
+          setPromptTemplateForm({ id: null, title: '', body: '' })
+          setQuery('')
+          setSelectedIndex(0)
+          return
+        }
+        if (mode === 'edit-prompt-template') {
+          setMode('prompt-template')
+          setPromptTemplateForm({ id: null, title: '', body: '' })
           setQuery('')
           setSelectedIndex(0)
           return
@@ -429,7 +525,9 @@ export function CommandPalette({
       }
       if (e.key === 'Enter') {
         e.preventDefault()
-        if (mode === 'resume') {
+        if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
+          savePromptTemplateForm()
+        } else if (mode === 'resume') {
           const session = filtered[selectedIndex] as SessionInfo | undefined
           if (session) executeResume(session)
         } else if (mode === 'buried') {
@@ -456,6 +554,7 @@ export function CommandPalette({
       executeKillBuried,
       executePromptTemplate,
       executeResume,
+      savePromptTemplateForm,
       onClose,
     ],
   )
@@ -500,6 +599,16 @@ export function CommandPalette({
               template &rsaquo;
             </span>
           )}
+          {mode === 'save-prompt-template' && (
+            <span className="text-accent text-[11px] flex-shrink-0 select-none">
+              save template &rsaquo;
+            </span>
+          )}
+          {mode === 'edit-prompt-template' && (
+            <span className="text-accent text-[11px] flex-shrink-0 select-none">
+              edit template &rsaquo;
+            </span>
+          )}
           <input
             ref={inputRef}
             type="text"
@@ -510,7 +619,9 @@ export function CommandPalette({
               placeholder:text-muted
             "
             placeholder={
-              mode === 'resume'
+              mode === 'save-prompt-template' || mode === 'edit-prompt-template'
+                ? 'Template name…'
+                : mode === 'resume'
                 ? 'Search sessions…'
                 : mode === 'buried' || mode === 'kill-buried'
                   ? 'Search buried panes…'
@@ -518,9 +629,17 @@ export function CommandPalette({
                     ? 'Search prompt templates…'
                   : 'Type a command…'
             }
-            value={query}
+            value={
+              mode === 'save-prompt-template' || mode === 'edit-prompt-template'
+                ? promptTemplateForm.title
+                : query
+            }
             onChange={e => {
-              setQuery(e.target.value)
+              if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
+                setPromptTemplateForm(form => ({ ...form, title: e.target.value }))
+              } else {
+                setQuery(e.target.value)
+              }
               setSelectedIndex(0)
             }}
             onKeyDown={onKeyDown}
@@ -530,6 +649,51 @@ export function CommandPalette({
         </div>
 
         <div ref={listRef} className="flex-1 overflow-y-auto py-1">
+          {(mode === 'save-prompt-template' || mode === 'edit-prompt-template') && (
+            <div className="px-3 py-3 space-y-3">
+              <textarea
+                className="
+                  h-44 w-full resize-none border border-border bg-canvas
+                  px-2 py-2 text-[12px] text-ink font-code outline-none
+                  placeholder:text-muted focus:border-accent
+                "
+                value={promptTemplateForm.body}
+                onChange={e => {
+                  setPromptTemplateForm(form => ({ ...form, body: e.target.value }))
+                }}
+                onKeyDown={e => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                    e.preventDefault()
+                    savePromptTemplateForm()
+                  }
+                }}
+                spellCheck={false}
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="border border-border bg-surface-hi px-2 py-1 text-[11px] text-muted hover:text-ink"
+                  onClick={() => {
+                    setPromptTemplateForm({ id: null, title: '', body: '' })
+                    setMode(mode === 'edit-prompt-template' ? 'prompt-template' : 'commands')
+                    setQuery('')
+                    setSelectedIndex(0)
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
+                  disabled={!promptTemplateForm.title.trim() || !promptTemplateForm.body.trim()}
+                  onClick={savePromptTemplateForm}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+          )}
+
           {mode === 'commands' &&
             (filtered.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
@@ -706,7 +870,31 @@ export function CommandPalette({
                   onClick={() => executePromptTemplate(template)}
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <div className="text-[12px] truncate">{template.title}</div>
+                    <div className="min-w-0 flex-1 text-[12px] truncate">{template.title}</div>
+                    {template.scope === 'custom' && (
+                      <div className="flex flex-shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          className="border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
+                          onClick={e => {
+                            e.stopPropagation()
+                            enterEditPromptTemplateMode(template)
+                          }}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="border border-red-600/40 bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-300 hover:text-red-200"
+                          onClick={e => {
+                            e.stopPropagation()
+                            deletePromptTemplate(template)
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
                     <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
                       {template.scope}
                     </span>

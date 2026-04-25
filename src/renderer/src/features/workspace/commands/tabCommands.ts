@@ -31,6 +31,7 @@ export const tabCommands: CommandDef[] = [
     id: 'resume-session',
     title: 'Resume Session',
     shortcut: '⌘⇧R',
+    keepPaletteOpen: true,
     run: ({ ui }) => ui.enterResumeMode(),
   },
 ]

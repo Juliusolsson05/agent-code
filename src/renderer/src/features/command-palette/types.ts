@@ -30,6 +30,7 @@ export type CommandContext = {
     enterBuriedMode: () => void
     enterKillBuriedMode: () => void
     enterPromptTemplateMode: () => void
+    enterSavePromptTemplateMode: () => void
     closePalette: () => void
   }
   flags: {
@@ -51,6 +52,7 @@ export type CommandDef = {
   title: string | ((ctx: CommandContext) => string)
   shortcut?: string
   keywords?: string[]
+  keepPaletteOpen?: boolean
   when?: (ctx: CommandContext) => boolean
   getState?: (ctx: CommandContext) => CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
@@ -61,6 +63,7 @@ export type ResolvedCommand = {
   title: string
   shortcut?: string
   keywords: string[]
+  keepPaletteOpen: boolean
   state: CommandState | null
   run: (ctx: CommandContext) => void | Promise<void>
 }
