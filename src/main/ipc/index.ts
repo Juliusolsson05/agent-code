@@ -12,6 +12,7 @@ import { registerGhostIpc } from '@main/ipc/ghost.js'
 import { registerDebugIpc } from '@main/ipc/debug.js'
 import { registerGitIpc } from '@main/ipc/git.js'
 import { registerPerformanceIpc } from '@main/ipc/performance.js'
+import { registerSetupIpc } from '@main/ipc/setup.js'
 import { installPerformanceIpcInstrumentation } from '@main/performance/instrumentIpc.js'
 
 // IPC registration aggregator.
@@ -41,4 +42,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerGhostIpc(deps.ghostJournals)
   registerDebugIpc()
   registerGitIpc()
+  registerSetupIpc()
 }

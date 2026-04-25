@@ -56,3 +56,11 @@ export type {
   SessionTrustDialogEvent,
   SlashPickerState,
 } from '@preload/api/types.js'
+
+export type {
+  SetupCheckResult,
+  SetupInstallResult,
+  SetupInstallTarget,
+  SetupToolId,
+  SetupToolStatus,
+} from '@shared/types/setup.js'

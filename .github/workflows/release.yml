@@ -1,0 +1,90 @@
+name: Release macOS App
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Create a GitHub Release with the built artifacts"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+concurrency:
+  group: release-macos
+  cancel-in-progress: false
+
+jobs:
+  release-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure SSH for submodules
+        env:
+          SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SUBMODULE_SSH_KEY" > ~/.ssh/submodule_key
+          chmod 600 ~/.ssh/submodule_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          cat >> ~/.ssh/config <<'EOF'
+          Host github-personal
+            HostName github.com
+            User git
+            IdentityFile ~/.ssh/submodule_key
+            IdentitiesOnly yes
+          EOF
+
+      - name: Checkout submodules
+        # The two Juliusolsson05 HTTPS submodules must be public. The
+        # private agent-transcript-parser submodule uses github-personal
+        # and is authenticated by SUBMODULE_SSH_KEY above.
+        run: git submodule update --init --recursive
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --include=dev
+
+      - name: Build macOS artifacts
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist:mac
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-release
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+
+      - name: Create GitHub Release
+        if: ${{ github.event.inputs.publish_release == 'true' }}
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
+        with:
+          tag_name: manual-${{ github.run_number }}-${{ github.run_attempt }}
+          name: Manual build ${{ github.run_number }}.${{ github.run_attempt }}
+          files: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap

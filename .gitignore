@@ -2,6 +2,7 @@ src.zip
 node_modules
 out
 dist
+release
 .DS_Store
 *.log
 .vite
@@ -53,5 +54,4 @@ file-dumps/
 # version dropped these at the cwd. They contain TLS keylogs and
 # decrypted Anthropic transport events — MUST NOT be committed.
 2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*Z/
-
 
