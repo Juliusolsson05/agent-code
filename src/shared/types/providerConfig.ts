@@ -24,6 +24,7 @@ export type TileLeafProps = {
   paneLabel?: string
   onFocusRequest: () => void
   workspace: unknown
+  showStatusMode?: boolean
   showWorktreeBadges?: boolean
 }
 

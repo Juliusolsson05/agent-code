@@ -71,6 +71,7 @@ type Props = {
   focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
+  showStatusMode?: boolean
   showWorktreeBadges?: boolean
 }
 
@@ -81,6 +82,7 @@ export function TileLeaf({
   focused,
   onFocusRequest,
   workspace,
+  showStatusMode = true,
   showWorktreeBadges = true,
 }: Props) {
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -244,7 +246,7 @@ export function TileLeaf({
       <PaneHeader
         paneLabel={paneLabel}
         projectDir={runtime.projectDir}
-        statusMode={workspace.statusMode}
+        statusMode={showStatusMode}
         isSessionLive={isSessionLive}
       />
 

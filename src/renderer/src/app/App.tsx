@@ -98,11 +98,7 @@ export default function App() {
     applyTheme(settings)
   }, [settings])
 
-  const workspace = useWorkspace(
-    dangerousAgentsEnabled,
-    useProxyStreaming,
-    settings.showStatusMode,
-  )
+  const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming)
   const pathPickerDefaultedRef = useRef(false)
 
   // Pre-fill the path input once per modal open. Do not keep syncing
@@ -255,6 +251,7 @@ export default function App() {
                 node={activeTab.root}
                 focusedSessionId={activeTab.focusedSessionId}
                 workspace={workspace}
+                showStatusMode={settings.showStatusMode}
                 showWorktreeBadges={settings.showWorktreeBadges}
               />
               <NewAgentPlacementOverlay

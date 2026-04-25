@@ -50,7 +50,6 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
-  showStatusMode = true,
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
@@ -269,7 +268,6 @@ export function useWorkspace(
     setReaderModeSession,
     latestScreenRef: refs.latestScreenRef,
     getRuntime,
-    statusMode: showStatusMode,
     // actions
     newTab: tabActions.newTab,
     closeTab: tabActions.closeTab,
