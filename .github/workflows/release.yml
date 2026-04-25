@@ -1,9 +1,6 @@
 name: Release macOS App
 
 on:
-  push:
-    branches:
-      - release-build-fix
   workflow_dispatch:
     inputs:
       publish_release:
