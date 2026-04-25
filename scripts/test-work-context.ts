@@ -4,7 +4,12 @@ import {
   matchWorktree,
   reduceWorkContextFromRaw,
 } from '../src/renderer/src/workspace/work-context/reducer'
+import {
+  deriveAgentWorkContext,
+  ingestWorktreeRawEvent,
+} from '../src/renderer/src/workspace/work-context/tracker'
 import type { WorktreeIdentity } from '../src/shared/types/git'
+import type { WorktreeActivityState } from '../src/renderer/src/workspace/work-context/types'
 
 const worktrees: WorktreeIdentity[] = [
   {
@@ -162,6 +167,75 @@ const claudeToolEntry = (
   assert.equal(context?.branch, 'feat/work')
   assert.equal(context?.confidence, 'medium')
   assert.equal(context?.source, 'claude:entry.cwd')
+}
+
+{
+  let state: WorktreeActivityState | null = null
+  state = ingestWorktreeRawEvent({
+    state,
+    raw: {
+      timestamp: '2026-04-24T16:51:13.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'exec_command_end',
+        call_id: 'status',
+        cwd: '/repo-feature',
+        command: ['git', 'status', '--short'],
+      },
+    },
+    worktrees,
+    sessionCwd: '/repo',
+  })
+  state = ingestWorktreeRawEvent({
+    state,
+    raw: {
+      timestamp: '2026-04-24T16:51:30.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'exec_command_end',
+        call_id: 'commit',
+        cwd: '/repo-feature',
+        command: ['git', 'commit', '-m', 'add workflow commands'],
+      },
+    },
+    worktrees,
+    sessionCwd: '/repo',
+  })
+  state = ingestWorktreeRawEvent({
+    state,
+    raw: {
+      timestamp: '2026-04-24T16:51:45.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'exec_command_end',
+        call_id: 'push',
+        cwd: '/repo-feature',
+        command: ['git', 'push', '-u', 'origin', 'feat/work'],
+      },
+    },
+    worktrees,
+    sessionCwd: '/repo',
+  })
+  state = ingestWorktreeRawEvent({
+    state,
+    raw: {
+      timestamp: '2026-04-24T16:56:49.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'exec_command_end',
+        call_id: 'pull-main',
+        cwd: '/repo',
+        command: ['git', 'pull', '--ff-only'],
+      },
+    },
+    worktrees,
+    sessionCwd: '/repo',
+  })
+
+  assert.equal(deriveAgentWorkContext(state)?.worktreePath, '/repo-feature')
+  assert.equal(state.active?.worktreePath, '/repo')
+  assert.equal(state.primary?.worktreePath, '/repo-feature')
+  assert.equal(state.primary?.branch, 'feat/work')
 }
 
 {
