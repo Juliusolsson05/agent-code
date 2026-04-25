@@ -1,6 +1,9 @@
 name: Release macOS App
 
 on:
+  push:
+    branches:
+      - release-build-fix
   workflow_dispatch:
     inputs:
       publish_release:
@@ -33,8 +36,10 @@ jobs:
           SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "$SUBMODULE_SSH_KEY" > ~/.ssh/submodule_key
+          printf '%s' "$SUBMODULE_SSH_KEY" | perl -pe 's/\\n/\n/g' > ~/.ssh/submodule_key
+          printf '\n' >> ~/.ssh/submodule_key
           chmod 600 ~/.ssh/submodule_key
+          ssh-keygen -y -f ~/.ssh/submodule_key > /dev/null
           ssh-keyscan github.com >> ~/.ssh/known_hosts
           cat >> ~/.ssh/config <<'EOF'
           Host github-personal
@@ -43,11 +48,11 @@ jobs:
             IdentityFile ~/.ssh/submodule_key
             IdentitiesOnly yes
           EOF
+          git config --global url."git@github-personal:Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
 
       - name: Checkout submodules
-        # The two Juliusolsson05 HTTPS submodules must be public. The
-        # private agent-transcript-parser submodule uses github-personal
-        # and is authenticated by SUBMODULE_SSH_KEY above.
+        # Juliusolsson05 submodules are fetched through github-personal
+        # using SUBMODULE_SSH_KEY; public third-party submodules keep HTTPS.
         run: git submodule update --init --recursive
 
       - name: Setup Node
@@ -79,7 +84,7 @@ jobs:
             release/*.blockmap
 
       - name: Create GitHub Release
-        if: ${{ github.event.inputs.publish_release == 'true' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           tag_name: manual-${{ github.run_number }}-${{ github.run_attempt }}
