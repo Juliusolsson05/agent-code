@@ -1,0 +1,35 @@
+appId: com.ccshell.code
+productName: Code
+artifactName: "${productName}-${version}-${arch}.${ext}"
+directories:
+  output: release
+asar: true
+asarUnpack:
+  - out/main/mitmAddon.py
+files:
+  - out/**
+  - package.json
+  - node_modules/**
+  - "!node_modules/.cache/**"
+  - "!vendor/**"
+  - "!testing/**"
+  - "!docs/**"
+  - "!scripts/**"
+  - "!src/**"
+  - "!**/*.map"
+  - "!**/test/**"
+  - "!**/tests/**"
+  - "!.proxy-testing/**"
+  - "!.tsc-out/**"
+extraMetadata:
+  main: out/main/index.js
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - dmg
+    - zip
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+dmg:
+  artifactName: "${productName}-${version}-${arch}.${ext}"
