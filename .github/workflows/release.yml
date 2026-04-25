@@ -31,10 +31,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Configure SSH for submodules
+      - name: Configure submodule auth
         env:
+          SUBMODULE_PAT: ${{ secrets.SUBMODULE_PAT }}
           SUBMODULE_SSH_KEY: ${{ secrets.SUBMODULE_SSH_KEY }}
         run: |
+          if [ -n "$SUBMODULE_PAT" ]; then
+            echo "::add-mask::$SUBMODULE_PAT"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
+            git config --global url."https://x-access-token:${SUBMODULE_PAT}@github.com/Juliusolsson05/".insteadOf "git@github-personal:Juliusolsson05/"
+            exit 0
+          fi
+
+          if [ -z "$SUBMODULE_SSH_KEY" ]; then
+            echo "Either SUBMODULE_PAT or SUBMODULE_SSH_KEY must be configured."
+            exit 1
+          fi
+
           mkdir -p ~/.ssh
           printf '%s' "$SUBMODULE_SSH_KEY" | perl -pe 's/\\n/\n/g' > ~/.ssh/submodule_key
           printf '\n' >> ~/.ssh/submodule_key
@@ -51,8 +64,8 @@ jobs:
           git config --global url."git@github-personal:Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
 
       - name: Checkout submodules
-        # Juliusolsson05 submodules are fetched through github-personal
-        # using SUBMODULE_SSH_KEY; public third-party submodules keep HTTPS.
+        # Juliusolsson05 submodules use SUBMODULE_PAT or SUBMODULE_SSH_KEY;
+        # public third-party submodules keep HTTPS.
         run: git submodule update --init --recursive
 
       - name: Setup Node
