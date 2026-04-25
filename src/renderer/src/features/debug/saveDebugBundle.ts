@@ -6,6 +6,7 @@ import {
   recordHtmlTraceSnapshot,
   recordScreenTailSnapshot,
 } from '@renderer/features/debug/renderTrace'
+import { summarizeWorktreeActivity } from '@renderer/workspace/work-context/debug'
 
 // saveDebugBundle — assemble-and-ship side of the "Save Debug Logs"
 // command. Runs in the renderer because every data source the
@@ -38,6 +39,7 @@ const FILE_NAMES = {
   manifest: 'manifest.json',
   state: 'state-snapshot.json',
   feedDebug: 'feed-debug.jsonl',
+  workContext: 'work-context.json',
   semantic: 'proxy-semantic.json',
   htmlRaw: 'html-raw.html',
   htmlClean: 'html-clean.html',
@@ -256,6 +258,10 @@ export async function assembleAndSaveDebugBundle(params: {
     {
       name: FILE_NAMES.feedDebug,
       content: serializeFeedDebugJsonl(runtime),
+    },
+    {
+      name: FILE_NAMES.workContext,
+      content: JSON.stringify(summarizeWorktreeActivity(runtime.workActivity), null, 2),
     },
     {
       name: FILE_NAMES.semantic,

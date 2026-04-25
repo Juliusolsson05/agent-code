@@ -47,10 +47,12 @@ import {
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import type { WorktreeIdentity } from '@renderer/workspace/work-context/types'
 import {
-  fallbackContext,
-  matchWorktree,
-  reduceWorkContextFromRaw,
-} from '@renderer/workspace/work-context/reducer'
+  canonicalizeWorktreeActivity,
+  deriveAgentWorkContext,
+  ingestWorktreeRawEvent,
+  withFallbackWorktreeActivity,
+} from '@renderer/workspace/work-context/tracker'
+import { summarizeWorktreeActivity } from '@renderer/workspace/work-context/debug'
 
 import type {
   WorkspaceSetRuntimes,
@@ -93,7 +95,7 @@ const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 const GHOST_ORPHAN_TTL_MS = 3000
 const GHOST_ORPHAN_SWEEP_MS = 1000
 
-function canReduceWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
+function canIngestWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
   const type = (raw as { type?: unknown })?.type
   return type === 'worktree-state' || hasWorktreeCache
 }
@@ -194,40 +196,33 @@ export function useIpcSubscriptions(
             const meta = refs.stateRef.current.sessions[sessionId]
             if (meta?.cwd !== cwd) continue
 
-            let workContext = runtime.workContext
+            let workActivity = runtime.workActivity
             const recentRaw = recentWorkContextRawBySession.get(sessionId) ?? []
             for (const raw of recentRaw) {
-              workContext = reduceWorkContextFromRaw(
-                workContext,
+              workActivity = ingestWorktreeRawEvent({
+                state: workActivity,
                 raw,
-                result.worktrees,
-                cwd,
-              )
+                worktrees: result.worktrees,
+                sessionCwd: cwd,
+              })
             }
 
-            if (!workContext) {
-              workContext = fallbackContext(
-                cwd,
-                result.worktrees,
-                Date.now(),
-                'fallback:session-cwd:worktree-cache',
-              )
-            }
+            workActivity = canonicalizeWorktreeActivity(
+              withFallbackWorktreeActivity({
+                state: workActivity,
+                sessionCwd: cwd,
+                worktrees: result.worktrees,
+                source: 'fallback:session-cwd:worktree-cache',
+              }),
+              result.worktrees,
+            )
+            const workContext = deriveAgentWorkContext(workActivity)
 
-            if (workContext?.worktreePath) {
-              const matched = matchWorktree(workContext.worktreePath, result.worktrees)
-              if (matched) {
-                workContext = {
-                  ...workContext,
-                  worktreePath: matched.path,
-                  branch: workContext.branch ?? matched.branch,
-                  repoRoot: result.worktrees[0]?.path ?? workContext.repoRoot,
-                }
-              }
-            }
-
-            if (workContext === runtime.workContext) continue
-            next[sessionId] = { ...runtime, workContext }
+            if (
+              workContext === runtime.workContext &&
+              workActivity === runtime.workActivity
+            ) continue
+            next[sessionId] = { ...runtime, workContext, workActivity }
             changed = true
           }
           return changed ? next : prev
@@ -883,6 +878,7 @@ export function useIpcSubscriptions(
         let pendingApproval = current.pendingApproval
         let queuedMessages = current.queuedMessages
         let awaitingAssistant = current.awaitingAssistant
+        let workActivity = current.workActivity
         let workContext = current.workContext
         const cachedWorktrees = sessionCwd ? worktreeCache.get(sessionCwd) : undefined
         const hasWorktreeCache = !!cachedWorktrees && cachedWorktrees.refreshedAt > 0
@@ -912,13 +908,14 @@ export function useIpcSubscriptions(
           codexCurrentTurnIdBySession.get(sessionId) ?? null
 
         for (const { entry: raw } of entries) {
-          if (canReduceWorkContext(raw, hasWorktreeCache)) {
-            workContext = reduceWorkContextFromRaw(
-              workContext,
+          if (canIngestWorkContext(raw, hasWorktreeCache)) {
+            workActivity = ingestWorktreeRawEvent({
+              state: workActivity,
               raw,
               worktrees,
-              sessionCwd ?? current.projectDir ?? '',
-            )
+              sessionCwd: sessionCwd ?? current.projectDir ?? '',
+            })
+            workContext = deriveAgentWorkContext(workActivity)
           }
 
           // ---- Codex rollout branch ----
@@ -1150,6 +1147,7 @@ export function useIpcSubscriptions(
           queuedMessages === current.queuedMessages &&
           awaitingAssistant === current.awaitingAssistant &&
           workContext === current.workContext &&
+          workActivity === current.workActivity &&
           !ghostsChanged
         if (noChange) {
           closeSpan({
@@ -1175,6 +1173,7 @@ export function useIpcSubscriptions(
               queuedMessages,
               awaitingAssistant,
               workContext,
+              workActivity,
               toolUseIndex,
               toolResultIndex,
               ghosts: nextGhosts,
@@ -1193,6 +1192,7 @@ export function useIpcSubscriptions(
                 appended: appended.slice(-8).map(summarizeEntryForDebug),
                 queuedMessages: queuedMessages.length,
                 workContext,
+                workActivity: summarizeWorktreeActivity(workActivity),
                 pendingApproval: pendingApproval
                   ? {
                       callId: pendingApproval.callId,

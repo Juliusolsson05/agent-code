@@ -18,7 +18,10 @@ import {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
 } from '@renderer/workspace/claude/history'
-import { reduceWorkContextFromRaw } from '@renderer/workspace/work-context/reducer'
+import {
+  deriveAgentWorkContext,
+  ingestWorktreeRawEvent,
+} from '@renderer/workspace/work-context/tracker'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -93,6 +96,7 @@ export function useHistoryActions(
         const prepend: Entry[] = []
         const worktreesResult = await window.api.gitWorktrees(meta.cwd)
         const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
+        let workActivity = runtime.workActivity
         let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker
         // Same rolling Codex turn id as the live JSONL ingest path.
@@ -109,12 +113,13 @@ export function useHistoryActions(
           // tail. Use them only to backfill an unknown badge; never let old
           // worktree evidence replace fresher live/current context.
           if (!workContext) {
-            workContext = reduceWorkContextFromRaw(
-              workContext,
-              rawEntry,
+            workActivity = ingestWorktreeRawEvent({
+              state: workActivity,
+              raw: rawEntry,
               worktrees,
-              meta.cwd,
-            )
+              sessionCwd: meta.cwd,
+            })
+            workContext = deriveAgentWorkContext(workActivity)
           }
 
           if (kind === 'codex') {
@@ -189,6 +194,7 @@ export function useHistoryActions(
               hasOlderHistory: chunk.hasMore,
               loadingOlderHistory: false,
               workContext,
+              workActivity,
             },
           }
         })
