@@ -11,6 +11,14 @@ on:
         options:
           - "false"
           - "true"
+      release_tag:
+        description: "Beta release tag to create when publish_release is true"
+        required: true
+        default: "beta-0.0.2"
+      release_name:
+        description: "Release name to create when publish_release is true"
+        required: true
+        default: "Agent Studio Code 0.0.2 Beta"
 
 concurrency:
   group: release-macos
@@ -162,6 +170,7 @@ jobs:
 
       - name: Package macOS artifacts
         env:
+          PUBLISH_RELEASE: ${{ github.event.inputs.publish_release }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -169,6 +178,18 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if [ "$PUBLISH_RELEASE" = "true" ]; then
+            missing=()
+            [ -z "${CSC_LINK:-}" ] && missing+=(CSC_LINK)
+            [ -z "${APPLE_ID:-}" ] && missing+=(APPLE_ID)
+            [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
+            [ -z "${APPLE_TEAM_ID:-}" ] && missing+=(APPLE_TEAM_ID)
+            if [ "${#missing[@]}" -gt 0 ]; then
+              printf 'Cannot publish a macOS release without signing/notarization secrets: %s\n' "${missing[*]}"
+              exit 1
+            fi
+          fi
+
           if [ -z "${CSC_LINK:-}" ]; then
             echo "CSC_LINK is not configured; building unsigned artifacts."
             export CSC_IDENTITY_AUTO_DISCOVERY=false
@@ -191,8 +212,9 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' }}
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
-          tag_name: manual-${{ github.run_number }}-${{ github.run_attempt }}
-          name: Manual build ${{ github.run_number }}.${{ github.run_attempt }}
+          tag_name: ${{ github.event.inputs.release_tag }}
+          name: ${{ github.event.inputs.release_name }}
+          prerelease: true
           files: |
             release/*.dmg
             release/*.zip
