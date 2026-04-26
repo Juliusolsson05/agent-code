@@ -254,7 +254,42 @@ export class ClaudeSession extends EventEmitter {
       // semantic events would still yield screen-sourced deltas
       // (source='screen', confidence='fallback') — but consumers
       // that opted into proxy specifically want the richer stream.
-      proxy: this.useProxy ? {} : undefined,
+      proxy: this.useProxy
+        ? {
+            // Sidecar Haiku filtering — see ClaudeProxyAdapter for the
+            // full rationale. Without this, Claude Code's auxiliary
+            // Haiku calls (session title generation, compaction
+            // summaries, hook agents, teleport title-and-branch) leak
+            // into the visible transcript as orphan ghost entries
+            // because Claude Code never writes them to the JSONL
+            // rollout, so the renderer's ghost-supersede path can
+            // never fire.
+            //
+            // We default to assuming the user is on a non-Haiku
+            // primary model. Why this is OK as a default:
+            //
+            //   * The vast majority of cc-shell users today run
+            //     Sonnet/Opus; the Anthropic Max / Pro defaults land
+            //     here.
+            //   * The filter only fires when BOTH the flow's model
+            //     matches `/haiku/i` AND the session model does NOT
+            //     — so if the user IS on Haiku as primary, they need
+            //     to opt out. The escape hatch is the
+            //     `CC_SHELL_PRIMARY_MODEL` env var below; setting it
+            //     to a Haiku model id disables filtering.
+            //   * The exact returned string doesn't matter as long as
+            //     it doesn't match `/haiku/i`. The adapter only uses
+            //     it for the pattern test, never as an authoritative
+            //     model id.
+            //
+            // TODO(model-from-screen): replace this constant default
+            // with parsing of Claude Code's header line ("Opus 4.7
+            // (1M context) …") so we always know the actual primary
+            // model and the env-var escape hatch becomes redundant.
+            getSessionModel: () =>
+              process.env.CC_SHELL_PRIMARY_MODEL ?? 'claude-opus-4-7',
+          }
+        : undefined,
     })
 
     // Pipe proxy transport events into the adapter. Only fires when
