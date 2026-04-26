@@ -131,8 +131,10 @@ export function collectLiveAgentsByWorktree(
 export function rankCategory(category: GitWorktreeStatus['category']): number {
   if (category === 'dirty') return 1
   if (category === 'active-unmerged') return 2
-  if (category === 'review') return 3
-  if (category === 'detached') return 4
-  if (category === 'cleanup-merged') return 5
-  return 6
+  if (category === 'stale-review') return 3
+  if (category === 'review') return 4
+  if (category === 'detached') return 5
+  if (category === 'patch-equivalent') return 6
+  if (category === 'cleanup-merged') return 7
+  return 8
 }

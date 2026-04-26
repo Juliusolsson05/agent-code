@@ -24,6 +24,8 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
   lines.push(`- Live: ${countRows(dump.rows, row => row.liveAgents.some(agent => agent.live))}`)
   lines.push(`- Dirty: ${countRows(dump.rows, row => row.dirty)}`)
   lines.push(`- Active/unmerged: ${countRows(dump.rows, row => row.category === 'active-unmerged')}`)
+  lines.push(`- Stale/review: ${countRows(dump.rows, row => row.category === 'stale-review')}`)
+  lines.push(`- Patch-equivalent: ${countRows(dump.rows, row => row.category === 'patch-equivalent')}`)
   lines.push(`- Cleanup/merged: ${countRows(dump.rows, row => row.category === 'cleanup-merged')}`)
   lines.push(`- Detached: ${countRows(dump.rows, row => row.detached)}`)
   lines.push(`- Agent activity: ${dump.activityUnavailable ? 'unavailable' : 'available'}`)
@@ -50,6 +52,9 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
       lines.push(`- Ahead/behind main: +${row.ahead} / -${row.behind}`)
     } else {
       lines.push('- Ahead/behind main: unavailable')
+    }
+    if (row.patchUniqueAhead !== null) {
+      lines.push(`- Patch-unique commits: ${row.patchUniqueAhead}`)
     }
     lines.push(`- Last commit: ${row.lastCommitRelative ?? 'unavailable'}`)
     if (row.liveAgents.length > 0) {
@@ -102,6 +107,8 @@ export function labelFor(category: string): string {
   if (category === 'live') return 'Live'
   if (category === 'dirty') return 'Dirty'
   if (category === 'active-unmerged') return 'Active'
+  if (category === 'stale-review') return 'Review'
+  if (category === 'patch-equivalent') return 'Patch-equivalent'
   if (category === 'cleanup-merged') return 'Cleanup'
   if (category === 'detached') return 'Detached'
   if (category === 'main') return 'Main'

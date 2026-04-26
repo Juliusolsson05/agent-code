@@ -53,6 +53,13 @@ function parseRevListCounts(out: string): { behind: number; ahead: number } | nu
   }
 }
 
+function parsePatchUniqueAhead(out: string): number {
+  return out
+    .split('\n')
+    .filter(line => line.startsWith('+ '))
+    .length
+}
+
 function parseWorktreePorcelain(out: string): WorktreeIdentity[] {
   const worktrees: WorktreeIdentity[] = []
   let current: WorktreeIdentity | null = null
@@ -99,6 +106,7 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
     let mergedToMain: boolean | null = null
     let ahead: number | null = null
     let behind: number | null = null
+    let patchUniqueAhead: number | null = null
     if (branch && branch !== 'main') {
       mergedToMain = await new Promise<boolean>(resolve => {
         execFile(
@@ -113,10 +121,19 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
       )
       behind = counts?.behind ?? null
       ahead = counts?.ahead ?? null
+      // Raw ahead/behind is ancestry-based. Squash merges and
+      // cherry-picks leave old branch commits "ahead" by SHA even
+      // when their patches already exist on main. `git cherry`
+      // answers the cleanup question we actually care about:
+      // does this branch contain any patch-unique work?
+      patchUniqueAhead = parsePatchUniqueAhead(
+        await git(cwd, ['cherry', 'main', branch]),
+      )
     } else if (branch === 'main') {
       mergedToMain = true
       ahead = 0
       behind = 0
+      patchUniqueAhead = 0
     }
 
     const category: GitWorktreeStatus['category'] =
@@ -128,9 +145,13 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
             ? 'dirty'
             : mergedToMain === true && ahead === 0
               ? 'cleanup-merged'
-              : mergedToMain === false && (ahead ?? 0) > 0
-                ? 'active-unmerged'
-                : 'review'
+              : patchUniqueAhead === 0 && (ahead ?? 0) > 0
+                ? 'patch-equivalent'
+                : (patchUniqueAhead ?? 0) > 0 && (behind ?? 0) > 0
+                  ? 'stale-review'
+                  : (patchUniqueAhead ?? 0) > 0
+                    ? 'active-unmerged'
+                    : 'review'
 
     return {
       ...worktree,
@@ -138,6 +159,7 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
       mergedToMain,
       ahead,
       behind,
+      patchUniqueAhead,
       lastCommitAt,
       lastCommitRelative,
       category,

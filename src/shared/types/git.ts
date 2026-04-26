@@ -9,6 +9,8 @@ export type GitWorktreeStatusCategory =
   | 'main'
   | 'dirty'
   | 'active-unmerged'
+  | 'stale-review'
+  | 'patch-equivalent'
   | 'cleanup-merged'
   | 'detached'
   | 'review'
@@ -18,6 +20,7 @@ export type GitWorktreeStatus = WorktreeIdentity & {
   mergedToMain: boolean | null
   ahead: number | null
   behind: number | null
+  patchUniqueAhead: number | null
   lastCommitAt: number | null
   lastCommitRelative: string | null
   category: GitWorktreeStatusCategory

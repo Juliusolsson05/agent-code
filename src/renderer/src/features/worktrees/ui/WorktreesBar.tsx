@@ -150,6 +150,9 @@ function WorktreeRow({ row }: { row: WorktreeDumpRow }) {
             +{row.ahead} / -{row.behind}
           </span>
         )}
+        {row.patchUniqueAhead !== null && row.patchUniqueAhead !== row.ahead && (
+          <span>{row.patchUniqueAhead} patch-unique</span>
+        )}
         {row.lastCommitRelative && <span>{row.lastCommitRelative}</span>}
       </div>
       <div className="mt-1 text-[10px] text-muted">
@@ -167,6 +170,8 @@ function dotClass(category: string): string {
   if (category === 'live') return 'bg-accent'
   if (category === 'dirty') return 'bg-amber-300'
   if (category === 'active-unmerged') return 'bg-sky-400'
+  if (category === 'stale-review') return 'bg-violet-300'
+  if (category === 'patch-equivalent') return 'bg-muted'
   if (category === 'cleanup-merged') return 'bg-muted'
   if (category === 'detached') return 'bg-red-400'
   return 'bg-ink-dim'
