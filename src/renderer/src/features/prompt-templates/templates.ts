@@ -1,8 +1,18 @@
+import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/formatWorktreeDump'
+import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
+
+export type PromptTemplateContext = {
+  workspace: Workspace
+  sessionId: string
+}
+
 export type PromptTemplate = {
   id: string
   title: string
   description: string
   body: string
+  buildBody?: (context: PromptTemplateContext) => string | Promise<string>
   scope: 'builtin' | 'custom'
   createdAt?: number
   updatedAt?: number
@@ -28,6 +38,18 @@ export const builtinPromptTemplates: PromptTemplate[] = [
       '',
       'Do not review the work yourself. Only write the review prompt.',
     ].join('\n'),
+  },
+  {
+    id: 'builtin:analyze-worktree-dump',
+    title: 'Analyze Worktree Dump',
+    description: 'Insert a live status dump for all Git worktrees in the focused project.',
+    scope: 'builtin',
+    body: 'Please analyze this cc-shell worktree status dump.',
+    buildBody: async ({ workspace, sessionId }) => {
+      const cwd = workspace.state.sessions[sessionId]?.cwd ?? null
+      const dump = await loadWorktreeDump({ cwd, workspace, forceActivityRefresh: false })
+      return formatWorktreeDumpPrompt(dump)
+    },
   },
 ]
 

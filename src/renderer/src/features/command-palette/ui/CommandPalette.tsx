@@ -463,19 +463,27 @@ export function CommandPalette({
   )
 
   const executePromptTemplate = useCallback(
-    (template: PromptTemplate) => {
+    async (template: PromptTemplate) => {
       const tab = workspace.activeTab
       if (!tab) return
       const sessionId = tab.focusedSessionId
 
-      // Template insertion deliberately stops at the draft boundary.
-      // The user's next action is still visible and editable in the
-      // composer; nothing is sent to Claude/Codex until they press
-      // Enter themselves. This mirrors rewind-to-prompt's "prefill,
-      // don't replay" contract.
-      workspace.setDraftInput(sessionId, template.body)
-      workspace.showPaneToast(sessionId, `Inserted template: ${template.title}`)
-      onClose()
+      try {
+        const body = template.buildBody
+          ? await template.buildBody({ workspace, sessionId })
+          : template.body
+        // Template insertion deliberately stops at the draft boundary.
+        // The user's next action is still visible and editable in the
+        // composer; nothing is sent to Claude/Codex until they press
+        // Enter themselves. This mirrors rewind-to-prompt's "prefill,
+        // don't replay" contract.
+        workspace.setDraftInput(sessionId, body)
+        workspace.showPaneToast(sessionId, `Inserted template: ${template.title}`)
+        onClose()
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        workspace.showPaneToast(sessionId, `Template failed: ${message}`)
+      }
     },
     [onClose, workspace],
   )
@@ -574,7 +582,7 @@ export function CommandPalette({
           if (item) executeKillBuried(item)
         } else if (mode === 'prompt-template') {
           const template = filtered[selectedIndex] as PromptTemplate | undefined
-          if (template) executePromptTemplate(template)
+          if (template) void executePromptTemplate(template)
         } else {
           const command = filtered[selectedIndex] as ResolvedCommand | undefined
           if (command) executeCommand(command)
@@ -903,7 +911,7 @@ export function CommandPalette({
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
-                  onClick={() => executePromptTemplate(template)}
+                  onClick={() => void executePromptTemplate(template)}
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="min-w-0 flex-1 text-[12px] truncate">{template.title}</div>

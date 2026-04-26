@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
-import type { WorktreeActivityIndexStatus, WorktreeActivitySummary } from '@preload/index'
-import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
-import { matchWorktree } from '@shared/work-context/matching'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import type { SessionId, Tab } from '@renderer/workspace/types'
+import { formatWorktreeDump, labelFor, providerLabel } from '@renderer/features/worktrees/lib/formatWorktreeDump'
+import {
+  loadWorktreeDump,
+  type WorktreeDump,
+  type WorktreeDumpRow,
+} from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {
@@ -13,128 +14,78 @@ type Props = {
   onClose: () => void
 }
 
-type LiveAgent = {
-  sessionId: SessionId
-  kind: 'claude' | 'codex'
-  tabTitle: string
-  live: boolean
-  focused: boolean
-}
-
-type Row = GitWorktreeStatus & {
-  activity: WorktreeActivitySummary | null
-  liveAgents: LiveAgent[]
-}
-
 const POLL_MS = 10_000
 
 export function WorktreesBar({ cwd, workspace, onClose }: Props) {
-  const [worktrees, setWorktrees] = useState<GitWorktreeStatus[]>([])
-  const [activity, setActivity] = useState<WorktreeActivitySummary[]>([])
-  const [indexStatus, setIndexStatus] = useState<WorktreeActivityIndexStatus | null>(null)
-  const [error, setError] = useState(false)
+  const [dump, setDump] = useState<WorktreeDump | null>(null)
   const [loading, setLoading] = useState(false)
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refresh = useCallback(async (forceActivityRefresh = false) => {
-    if (!cwd) {
-      setWorktrees([])
-      setActivity([])
-      setIndexStatus(null)
-      setError(false)
-      setLoading(false)
-      return
-    }
     setLoading(true)
     try {
-      const [gitResult, activityResult] = await Promise.all([
-        window.api.gitWorktreeStatus(cwd),
-        window.api.worktreeActivitySummary(cwd, forceActivityRefresh),
-      ])
-      if (!gitResult.ok) {
-        setWorktrees([])
-        setActivity([])
-        setIndexStatus(null)
-        setError(true)
-        return
-      }
-      setWorktrees(gitResult.worktrees)
-      setError(false)
-      if (activityResult.ok) {
-        setActivity(activityResult.summaries)
-        setIndexStatus(activityResult.status)
-      }
+      setDump(await loadWorktreeDump({ cwd, workspace, forceActivityRefresh }))
     } catch {
-      setWorktrees([])
-      setActivity([])
-      setIndexStatus(null)
-      setError(true)
+      setDump({
+        cwd,
+        generatedAt: Date.now(),
+        rows: [],
+        indexStatus: null,
+        gitUnavailable: Boolean(cwd),
+        activityUnavailable: true,
+      })
     } finally {
       setLoading(false)
     }
-  }, [cwd])
+  }, [cwd, workspace])
+
+  const copyDump = useCallback(async () => {
+    const currentDump = dump ?? {
+      cwd,
+      generatedAt: Date.now(),
+      rows: [],
+      indexStatus: null,
+      gitUnavailable: false,
+      activityUnavailable: true,
+    }
+    try {
+      await navigator.clipboard.writeText(formatWorktreeDump(currentDump))
+      setCopyState('copied')
+    } catch {
+      setCopyState('failed')
+    }
+    if (copyResetRef.current) clearTimeout(copyResetRef.current)
+    copyResetRef.current = setTimeout(() => setCopyState('idle'), 1600)
+  }, [cwd, dump])
 
   useEffect(() => {
     void refresh(false)
     timerRef.current = setInterval(() => void refresh(false), POLL_MS)
     return () => {
       if (timerRef.current) clearInterval(timerRef.current)
+      if (copyResetRef.current) clearTimeout(copyResetRef.current)
     }
   }, [refresh])
 
-  const liveByWorktree = useMemo(() => {
-    const identities: WorktreeIdentity[] = worktrees.map(w => ({
-      path: w.path,
-      branch: w.branch,
-      head: w.head,
-      detached: w.detached,
-    }))
-    const byPath = new Map<string, LiveAgent[]>()
-    workspace.state.tabs.forEach((tab: Tab) => {
-      for (const sessionId of collectLeaves(tab.root)) {
-        const meta = workspace.state.sessions[sessionId]
-        const kind = meta?.kind ?? 'claude'
-        if (kind !== 'claude' && kind !== 'codex') continue
-        const runtime = workspace.runtimes[sessionId]
-        const contextPath = runtime?.workContext?.worktreePath ?? meta?.cwd
-        const matched = matchWorktree(contextPath, identities)
-        if (!matched) continue
-        const rows = byPath.get(matched.path) ?? []
-        rows.push({
-          sessionId,
-          kind,
-          tabTitle: tab.title,
-          live: Boolean(runtime?.sessionStatus === 'running' || runtime?.streamPhase !== 'idle'),
-          focused: tab.focusedSessionId === sessionId,
-        })
-        byPath.set(matched.path, rows)
-      }
-    })
-    return byPath
-  }, [workspace.runtimes, workspace.state.sessions, workspace.state.tabs, worktrees])
-
-  const rows = useMemo<Row[]>(() => {
-    const activityByPath = new Map(activity.map(item => [item.worktreePath, item]))
-    return worktrees.map(worktree => ({
-      ...worktree,
-      activity: activityByPath.get(worktree.path) ?? null,
-      liveAgents: liveByWorktree.get(worktree.path) ?? [],
-    })).sort((a, b) => {
-      const aLive = a.liveAgents.some(agent => agent.live)
-      const bLive = b.liveAgents.some(agent => agent.live)
-      if (aLive !== bLive) return aLive ? -1 : 1
-      const categoryRank = rankCategory(a.category) - rankCategory(b.category)
-      if (categoryRank !== 0) return categoryRank
-      return (b.activity?.lastActivityAt ?? b.lastCommitAt ?? 0) -
-        (a.activity?.lastActivityAt ?? a.lastCommitAt ?? 0)
-    })
-  }, [activity, liveByWorktree, worktrees])
+  const rows = dump?.rows ?? []
+  const error = Boolean(dump?.gitUnavailable)
+  const indexStatus = dump?.indexStatus ?? null
 
   return (
     <div className="h-full w-[340px] flex-shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden text-[11px] font-code">
       <div className="flex items-center justify-between px-3 py-2 border-b border-border text-[10px] text-muted uppercase tracking-wider select-none flex-shrink-0">
         <span>worktrees</span>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void copyDump()}
+            className="text-muted hover:text-ink"
+            title="Copy worktree status dump"
+          >
+            {copyState === 'idle' ? 'copy' : copyState}
+          </button>
           <button
             type="button"
             onClick={() => void refresh(true)}
@@ -175,7 +126,7 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
   )
 }
 
-function WorktreeRow({ row }: { row: Row }) {
+function WorktreeRow({ row }: { row: WorktreeDumpRow }) {
   const liveAgent = row.liveAgents.find(agent => agent.live)
   const category = liveAgent ? 'live' : row.category
   return (
@@ -212,25 +163,6 @@ function WorktreeRow({ row }: { row: Row }) {
   )
 }
 
-function rankCategory(category: GitWorktreeStatus['category']): number {
-  if (category === 'dirty') return 1
-  if (category === 'active-unmerged') return 2
-  if (category === 'review') return 3
-  if (category === 'detached') return 4
-  if (category === 'cleanup-merged') return 5
-  return 6
-}
-
-function labelFor(category: string): string {
-  if (category === 'live') return 'Live'
-  if (category === 'dirty') return 'Dirty'
-  if (category === 'active-unmerged') return 'Active'
-  if (category === 'cleanup-merged') return 'Cleanup'
-  if (category === 'detached') return 'Detached'
-  if (category === 'main') return 'Main'
-  return 'Review'
-}
-
 function dotClass(category: string): string {
   if (category === 'live') return 'bg-accent'
   if (category === 'dirty') return 'bg-amber-300'
@@ -238,10 +170,6 @@ function dotClass(category: string): string {
   if (category === 'cleanup-merged') return 'bg-muted'
   if (category === 'detached') return 'bg-red-400'
   return 'bg-ink-dim'
-}
-
-function providerLabel(kind: 'claude' | 'codex'): string {
-  return kind === 'codex' ? 'Codex' : 'Claude'
 }
 
 function shortenPath(path: string): string {
