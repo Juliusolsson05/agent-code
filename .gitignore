@@ -55,3 +55,6 @@ file-dumps/
 # decrypted Anthropic transport events — MUST NOT be committed.
 2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T*Z/
 
+
+# Local environment overrides
+.env

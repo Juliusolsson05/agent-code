@@ -1,3 +1,9 @@
+// Side-effect import — MUST be first so `.env` is loaded into
+// `process.env` before PerformanceService (and anything else that
+// reads env flags at module load) is imported. See
+// `./loadEnv.ts` for the rationale.
+import '@main/loadEnv.js'
+
 import { app, BrowserWindow } from 'electron'
 import { readFile } from 'fs/promises'
 import { performance } from 'perf_hooks'
