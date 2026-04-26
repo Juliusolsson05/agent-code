@@ -676,16 +676,16 @@ function FeedImpl({
   // build (single pass) and the resulting Map is handed to result rows
   // via context.
   // Incremental indices live on the runtime and grow at entry-ingest
-  // time (see workspaceStore.indexEntryIntoMaps). When Feed is mounted
-  // outside the workspace store (tests, future surfaces) the props
-  // are unset and we fall back to building the maps once from
-  // `entries`. The fallback useMemo is unconditional — React's rules
-  // forbid conditional hooks, so we always call it; the `.has(0)`
-  // shortcut keeps cost negligible when the props are present.
-  const fallbackToolUseIndex = useMemo(() => buildToolUseIndex(entries), [entries])
-  const fallbackToolResultIndex = useMemo(() => buildToolResultIndex(entries), [entries])
-  const toolUseIndex = toolUseIndexProp ?? fallbackToolUseIndex
-  const toolResultIndex = toolResultIndexProp ?? fallbackToolResultIndex
+  // time. When those props are present, return them directly; do not
+  // rebuild the fallback maps from entries on every append.
+  const toolUseIndex = useMemo(
+    () => toolUseIndexProp ?? buildToolUseIndex(entries),
+    [entries, toolUseIndexProp],
+  )
+  const toolResultIndex = useMemo(
+    () => toolResultIndexProp ?? buildToolResultIndex(entries),
+    [entries, toolResultIndexProp],
+  )
 
   const hasSemanticStreaming = renderedSemanticTurn !== null
   const shouldShowWorkIndicator = streamPhase !== 'idle'

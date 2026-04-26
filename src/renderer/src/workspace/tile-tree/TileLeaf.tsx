@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CodexApprovalModal } from '@providers/codex/renderer/CodexApprovalModal'
 import { ResumePromptModal } from '@providers/claude/renderer/ResumePromptModal'
 import { PermissionPromptModal } from '@providers/claude/renderer/PermissionPromptModal'
+import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
@@ -88,6 +89,8 @@ export function TileLeaf({
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { showToast } = useGlobalToast()
+  const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
+  const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   // Destructure the stable useCallback setter so effect deps don't
   // spuriously invalidate on every parent render. workspace itself
   // is a fresh object literal each render, but its methods are
@@ -120,7 +123,10 @@ export function TileLeaf({
   // every scroll tick via onScrollInfo callback from Feed. fraction=0
   // means at bottom, fraction=1 means at top.
   const [scrollFraction, setScrollFraction] = useState(0)
+  const scrollFractionRef = useRef(0)
   const onScrollInfo = useCallback((info: ScrollInfo) => {
+    if (Math.abs(info.fraction - scrollFractionRef.current) < 0.005) return
+    scrollFractionRef.current = info.fraction
     setScrollFraction(info.fraction)
   }, [])
 
@@ -158,6 +164,14 @@ export function TileLeaf({
     }
   }
 
+  const loadOlderHistory = useCallback(async () => {
+    await workspace.loadOlderHistory(sessionId)
+  }, [sessionId, workspace.loadOlderHistory])
+
+  const appendRenderDebug = useCallback((entry: Parameters<typeof workspace.appendFeedDebug>[1]) => {
+    workspace.appendFeedDebug(sessionId, entry)
+  }, [sessionId, workspace.appendFeedDebug])
+
   // Claude image-paste flow — three clipboard ingress paths, media-
   // type gate, 5 MB size cap. Hook in ./TileLeaf/useClaudeImagePaste.ts.
   const { handlePaste, removeDraftImage } = useClaudeImagePaste({
@@ -192,6 +206,7 @@ export function TileLeaf({
   const isSessionLive = runtime.sessionStatus === 'running'
 
   useEffect(() => {
+    if (!htmlDebugPanelOpen || !focused) return
     const node = paneRef.current
     if (!node) return
 
@@ -222,7 +237,7 @@ export function TileLeaf({
         window.clearTimeout(timer)
       }
     }
-  }, [sessionId])
+  }, [focused, htmlDebugPanelOpen, sessionId])
 
   return (
     // data-pane-id: stable DOM hook so DOM-targeting debug tools
@@ -310,9 +325,7 @@ export function TileLeaf({
           onScrollInfo={onScrollInfo}
           hasOlderHistory={runtime.hasOlderHistory}
           loadingOlderHistory={runtime.loadingOlderHistory}
-          onLoadOlderHistory={async () => {
-            await workspace.loadOlderHistory(sessionId)
-          }}
+          onLoadOlderHistory={loadOlderHistory}
           // Bootstrap-replay perf wiring — see workspaceStore +
           // Feed for the WHY. While `bootstrapping` is true Feed
           // suspends per-append auto-scroll and lazy-mount cascades;
@@ -322,7 +335,7 @@ export function TileLeaf({
           scrollToLatestRequest={runtime.scrollToLatestRequest}
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
-          onDebugLog={entry => workspace.appendFeedDebug(sessionId, entry)}
+          onDebugLog={feedDebugPanelOpen && focused ? appendRenderDebug : undefined}
         />
       </div>
 

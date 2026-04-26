@@ -22,16 +22,38 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 // collapse is purely a density choice so a 20-line heredoc doesn't
 // push the next assistant message below the fold.
 export const ToolUseRow = memo(function ToolUseRow({ block }: { block: ToolUseBlock }) {
-  // Extract the command / description for Bash-like tools. For tools
-  // without a `command` field we fall back to stringified input.
+  // Headline lookup order mirrors `workIndicatorHints.toolHintFromBlock`
+  // so the row's "⎿ …" line carries the same identifier the work
+  // indicator showed while the tool was running.
+  //
+  // The historic chain was `command → description → path`, written when
+  // this row was Bash-only. That left every file-op tool (Read,
+  // NotebookRead, etc.) with a blank body because Read's argument is
+  // `file_path`, not `path` — observed in 2026-04-25T10-10-36 debug
+  // bundle as ~75 orphan-ghost rows reading just "Read" with no
+  // argument. We now check `command` (Bash), then the path-shaped
+  // fields any file-op might use, then search/network identifiers,
+  // then `description` as the last-ditch free-form fallback.
+  //
+  // `description` deliberately moves to the bottom: Bash's
+  // `description` is a redundant gloss of `command`, and other tools
+  // that accept a description usually also have a more specific
+  // identifier. If we hit `description` we've exhausted everything
+  // else.
   const input = block.input as Record<string, unknown> | undefined
-  const rawHeadline = typeof input?.command === 'string'
-    ? input.command
-    : typeof input?.description === 'string'
-      ? input.description
-      : typeof input?.path === 'string'
-        ? input.path
-        : null
+  const pickString = (key: string): string | null => {
+    const v = input?.[key]
+    return typeof v === 'string' && v.length > 0 ? v : null
+  }
+  const rawHeadline =
+    pickString('command') ??
+    pickString('file_path') ??
+    pickString('path') ??
+    pickString('notebook_path') ??
+    pickString('pattern') ??
+    pickString('query') ??
+    pickString('url') ??
+    pickString('description')
 
   // Bash commands get the 2-line / 160-char cap claude-code's Ink UI
   // enforces. `description` and `path` headlines are already one-line-
