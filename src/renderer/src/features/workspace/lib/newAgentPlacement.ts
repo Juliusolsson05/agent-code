@@ -22,18 +22,6 @@ export type PlacementTarget =
       scope: 'global'
     }
 
-type Center = {
-  x: number
-  y: number
-}
-
-function centerOf(rect: Rect): Center {
-  return {
-    x: rect.x + rect.width / 2,
-    y: rect.y + rect.height / 2,
-  }
-}
-
 export function buildPlacementTargets(
   root: TileNode,
   anchorSessionId: SessionId,
@@ -122,14 +110,15 @@ export function buildPlacementTargets(
     },
   ]
 
-  // WHY generate explicit placement targets instead of inferring from
-  // arrow "intent":
+  // WHY keep explicit placement target records instead of deriving the
+  // commit operation directly from the key press:
   //
-  // The old model guessed from the focused pane alone, which breaks down as
-  // soon as the user wants to insert relative to the whole layout. Example:
-  // with two stacked rows, "new bottom row" should wrap the entire root, not
-  // try to synthesize something from the focused leaf. These targets are real
-  // layout operations, so the preview and commit path can stay identical.
+  // The placement UI shows ONE preview at a time now, but the selected
+  // preview still has to carry the real layout operation to commit. A
+  // plain arrow maps to a split-leaf target; Shift+arrow maps to a
+  // wrap-root target. Keeping those as addressable records means preview
+  // geometry and commit payload stay identical, instead of rebuilding
+  // "left/right/top/bottom" meaning in two different places.
   return dedupeTargets(targets)
 }
 
@@ -146,11 +135,11 @@ function dedupeTargets(targets: PlacementTarget[]): PlacementTarget[] {
   // care about; dropping the rounding collision trap also drops the
   // silent "which sibling wins?" non-determinism.
   //
-  // We still keep a dedupe pass (rather than trusting callers) because
-  // wrap-root and split-leaf can generate the same id in edge cases
-  // where the anchor IS the root leaf and "left of focused pane" is
-  // visually equivalent to "new left column". Same-id targets are
-  // genuinely redundant and the first one wins.
+  // In the one-leaf case, global and local placements can be visually
+  // identical, but their ids remain intentionally different because
+  // they represent different commands from the UI's perspective
+  // (Shift+arrow vs plain arrow). The pass remains a cheap guard
+  // against accidental duplicate records from future target builders.
   const seen = new Set<string>()
   const out: PlacementTarget[] = []
   for (const target of targets) {
@@ -177,70 +166,23 @@ export function defaultPlacementTargetId(
   )
 }
 
-export function findNearestPlacementTarget(
+export function placementTargetIdForArrow(
   targets: PlacementTarget[],
-  selectedId: string | null,
-  direction: 'left' | 'right' | 'up' | 'down',
+  anchorSessionId: SessionId,
+  arrow: 'left' | 'right' | 'up' | 'down',
+  scope: 'local' | 'global',
 ): string | null {
-  const current =
-    targets.find(target => target.id === selectedId) ??
-    targets[0]
-  if (!current) return null
+  const direction: SplitDirection =
+    arrow === 'left' || arrow === 'right' ? 'vertical' : 'horizontal'
+  const side: 'a' | 'b' =
+    arrow === 'left' || arrow === 'up' ? 'a' : 'b'
 
-  const currentCenter = centerOf(current.rect)
-  const candidates = targets
-    .filter(target => target.id !== current.id)
-    .map(target => ({
-      target,
-      center: centerOf(target.rect),
-    }))
-    .filter(candidate => {
-      if (direction === 'left') return candidate.center.x < currentCenter.x - 1
-      if (direction === 'right') return candidate.center.x > currentCenter.x + 1
-      if (direction === 'up') return candidate.center.y < currentCenter.y - 1
-      return candidate.center.y > currentCenter.y + 1
-    })
-
-  if (candidates.length === 0) return current.id
-
-  const ranked = candidates.sort((a, b) => {
-    const primaryA = primaryAxisDistance(currentCenter, a.center, direction)
-    const primaryB = primaryAxisDistance(currentCenter, b.center, direction)
-    if (primaryA !== primaryB) return primaryA - primaryB
-
-    const crossA = crossAxisDistance(currentCenter, a.center, direction)
-    const crossB = crossAxisDistance(currentCenter, b.center, direction)
-    if (crossA !== crossB) return crossA - crossB
-
-    return euclideanDistance(currentCenter, a.center) - euclideanDistance(currentCenter, b.center)
-  })
-
-  return ranked[0]?.target.id ?? current.id
-}
-
-function primaryAxisDistance(
-  from: Center,
-  to: Center,
-  direction: 'left' | 'right' | 'up' | 'down',
-): number {
-  if (direction === 'left') return from.x - to.x
-  if (direction === 'right') return to.x - from.x
-  if (direction === 'up') return from.y - to.y
-  return to.y - from.y
-}
-
-function crossAxisDistance(
-  from: Center,
-  to: Center,
-  direction: 'left' | 'right' | 'up' | 'down',
-): number {
-  return direction === 'left' || direction === 'right'
-    ? Math.abs(to.y - from.y)
-    : Math.abs(to.x - from.x)
-}
-
-function euclideanDistance(a: Center, b: Center): number {
-  const dx = a.x - b.x
-  const dy = a.y - b.y
-  return Math.hypot(dx, dy)
+  return (
+    targets.find(target => {
+      if (target.direction !== direction || target.side !== side) return false
+      if (scope === 'global') return target.kind === 'wrap-root'
+      return target.kind === 'split-leaf' && target.targetSessionId === anchorSessionId
+    })?.id ??
+    defaultPlacementTargetId(targets, anchorSessionId)
+  )
 }

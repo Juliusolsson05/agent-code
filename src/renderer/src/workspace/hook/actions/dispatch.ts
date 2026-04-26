@@ -15,6 +15,7 @@ export function useDispatchActions(
   setTileTabs: WorkspaceSetTileTabs,
   refs: WorkspaceRefs,
   showToast: (message: string, durationMs?: number) => void,
+  closeNewAgentPlacement: () => void,
   sessionActions: SessionActions,
 ): {
   enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>
@@ -107,6 +108,7 @@ export function useDispatchActions(
 
   const enterDispatchMode = useCallback(
     async (scope: DispatchModeState['scope'] = state.dispatchMode?.scope ?? 'project') => {
+      closeNewAgentPlacement()
       setState(prev => ({
         ...prev,
         dispatchMode: {
@@ -117,7 +119,7 @@ export function useDispatchActions(
       setTileTabs(null)
       await ensureDispatchTerminal()
     },
-    [ensureDispatchTerminal, setState, setTileTabs, state.dispatchMode?.scope],
+    [closeNewAgentPlacement, ensureDispatchTerminal, setState, setTileTabs, state.dispatchMode?.scope],
   )
 
   const exitDispatchMode = useCallback(() => {
@@ -129,6 +131,7 @@ export function useDispatchActions(
 
   const setDispatchScope = useCallback(
     async (scope: DispatchModeState['scope']) => {
+      closeNewAgentPlacement()
       setState(prev => ({
         ...prev,
         dispatchMode: {
@@ -138,7 +141,7 @@ export function useDispatchActions(
       }))
       await ensureDispatchTerminal()
     },
-    [ensureDispatchTerminal, setState],
+    [closeNewAgentPlacement, ensureDispatchTerminal, setState],
   )
 
   const toggleDispatchTerminal = useCallback(async () => {

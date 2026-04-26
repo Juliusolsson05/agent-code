@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 
 import type {
   BuriedPaneRecord,
+  DispatchModeState,
   SessionId,
   SessionKind,
   SessionMeta,
@@ -40,7 +41,12 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 // -----------------------------------------------------------------------------
 
 export function usePaneActions(
-  state: { activeTabId: string; sessions: Record<SessionId, SessionMeta>; tabs: Tab[] },
+  state: {
+    activeTabId: string
+    dispatchMode: DispatchModeState | null
+    sessions: Record<SessionId, SessionMeta>
+    tabs: Tab[]
+  },
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
   setSpotlight: WorkspaceSetSpotlight,
@@ -110,8 +116,12 @@ export function usePaneActions(
   const startNewAgentPlacement = useCallback(() => {
     const tab = state.tabs.find(t => t.id === state.activeTabId)
     if (!tab) return
+    if (state.dispatchMode) {
+      showToast('New Agent placement is only available in the tiled workspace')
+      return
+    }
     openNewAgentPlacement()
-  }, [openNewAgentPlacement, state.activeTabId, state.tabs])
+  }, [openNewAgentPlacement, showToast, state.activeTabId, state.dispatchMode, state.tabs])
 
   const commitNewAgentPlacement = useCallback(
     async (kind: SessionKind, target: PlacementTarget) => {

@@ -257,11 +257,6 @@ export default function App() {
                 showStatusMode={settings.showStatusMode}
                 showWorktreeBadges={settings.showWorktreeBadges}
               />
-              <NewAgentPlacementOverlay
-                open={newAgentPlacementOpen}
-                workspace={workspace}
-                onClose={closeNewAgentPlacement}
-              />
             </div>
           ) : activeTab ? (
             <div className="relative h-full min-h-0 min-w-0">
