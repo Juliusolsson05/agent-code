@@ -135,18 +135,45 @@ export async function rehydrateWorkspace(
     if (newTabs.length === 0) return false
 
     const restoredTileTabs = buildRemappedTileTabs(newTabs)
-    const activeTabId = restoredTileTabs?.focusedTabId
-      ?? newTabs.find(t => t.id === persisted.activeTabId)?.id
-      ?? newTabs[0].id
 
-    setState({
-      tabs: newTabs,
-      activeTabId,
-      dispatchMode: persisted.dispatchMode ?? null,
-      sessions: { ...freshSessions },
-      buried: buildRemappedBuried(),
+    setState(prev => {
+      // Incremental rehydrate commits can keep arriving long after
+      // the first visible tabs are usable. Do not treat persisted
+      // activeTabId as authoritative after the first commit: the
+      // user may already have navigated to another restored tab, and
+      // the next slow session finishing should not bounce focus back
+      // to the startup tab. Preserve the current active tab whenever
+      // it still exists in the newly-remapped partial layout.
+      const currentActiveTabStillExists = newTabs.some(t => t.id === prev.activeTabId)
+      const activeTabId = currentActiveTabStillExists
+        ? prev.activeTabId
+        : restoredTileTabs?.focusedTabId
+          ?? newTabs.find(t => t.id === persisted.activeTabId)?.id
+          ?? newTabs[0].id
+
+      return {
+        tabs: newTabs,
+        activeTabId,
+        dispatchMode: persisted.dispatchMode ?? null,
+        sessions: { ...freshSessions },
+        buried: buildRemappedBuried(),
+      }
     })
-    setTileTabs(restoredTileTabs)
+    setTileTabs(prev => {
+      if (!restoredTileTabs) return null
+      if (!prev) return restoredTileTabs
+      if (!restoredTileTabs.tabIds.includes(prev.focusedTabId)) {
+        return restoredTileTabs
+      }
+      // Same invariant as activeTabId above, but for TileTabs'
+      // internal focus. Rehydrate still owns the tab membership as
+      // panes come online; the user's focused tiled tab survives
+      // each later partial commit.
+      return {
+        ...restoredTileTabs,
+        focusedTabId: prev.focusedTabId,
+      }
+    })
     // WHY commit runtimes incrementally during rehydrate:
     //
     // Boot used to await every respawn before publishing *any*
