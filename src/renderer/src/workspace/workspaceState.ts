@@ -261,6 +261,17 @@ export type SessionRuntime = {
   draftInput: string
   draftImages: ClaudeDraftImage[]
   activityStatus: string | null
+  /** Unread marker for list surfaces such as Dispatch Mode.
+   *
+   *  WHY this lives on the runtime instead of being derived from
+   *  entry counts: entries arrive from several sources (semantic
+   *  ghosts, JSONL replay, optimistic rows), and replaying history
+   *  would make count-based badges lie. The UI only needs a durable
+   *  "something happened while you were elsewhere" bit. Focus
+   *  actions clear it; IPC writers set it when hidden sessions
+   *  receive user-visible output or action-required prompts. */
+  unreadSince: number | null
+  unreadKind: 'output' | 'attention' | null
   paneToast: string | null
   pendingApproval: {
     callId: string | null
@@ -427,6 +438,8 @@ export function emptyRuntime(): SessionRuntime {
     draftInput: '',
     draftImages: [],
     activityStatus: null,
+    unreadSince: null,
+    unreadKind: null,
     paneToast: null,
     pendingApproval: null,
     pendingTrustDialog: null,
