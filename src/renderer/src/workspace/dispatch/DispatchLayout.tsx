@@ -207,6 +207,14 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       workContext: current?.workContext,
       workActivity: current?.workActivity,
       entries: current?.entries,
+      unreadSince: current?.unreadSince,
+      unreadKind: current?.unreadKind,
+      pendingApproval: current?.pendingApproval,
+      pendingTrustDialog: current?.pendingTrustDialog,
+      pendingResumePrompt: current?.pendingResumePrompt,
+      pendingPermissionPrompt: current?.pendingPermissionPrompt,
+      pendingCompaction: current?.pendingCompaction,
+      processError: current?.processError,
     }
   }))
   const onSelect = useCallback(() => {
@@ -218,6 +226,12 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   const title = runtime.entries
     ? cachedLatestPromptTitle(runtime.entries, row.kind) ?? row.title
     : row.title
+  const attentionLabel = dispatchAttentionLabel(runtime)
+  const unreadKind = attentionLabel
+    ? 'attention'
+    : runtime.unreadKind === 'attention'
+      ? 'output'
+      : runtime.unreadKind
 
   return (
     <button
@@ -241,6 +255,9 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
           <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
         )}
         <AgentTypeBadge kind={row.kind} />
+        {unreadKind && (
+          <DispatchUnreadBadge kind={unreadKind} label={attentionLabel} />
+        )}
       </div>
       <div className="mt-1 pl-7 text-[10px] text-muted truncate">
         {subtitle}
@@ -265,12 +282,63 @@ function dispatchSubtitle(runtime: {
   sessionStatus?: string
   streamPhase?: string
   exited?: number | null
+  unreadSince?: number | null
 }): string {
   if (runtime.sessionStatus === undefined) return 'starting'
   if (runtime.streamPhase && runtime.streamPhase !== 'idle') return runtime.streamPhase
   if (runtime.sessionStatus === 'running') return 'running'
   if (runtime.exited !== null && runtime.exited !== undefined) return 'exited'
   return 'idle'
+}
+
+function dispatchAttentionLabel(runtime: {
+  pendingApproval?: unknown
+  pendingTrustDialog?: unknown
+  pendingResumePrompt?: unknown
+  pendingPermissionPrompt?: unknown
+  pendingCompaction?: { phase?: string } | null
+  processError?: string | null
+}): string | null {
+  if (runtime.pendingPermissionPrompt) return 'ACTION'
+  if (runtime.pendingApproval) return 'ACTION'
+  if (runtime.pendingTrustDialog) return 'TRUST'
+  if (runtime.pendingResumePrompt) return 'RESUME'
+  if (runtime.pendingCompaction?.phase === 'error') return 'ERROR'
+  if (runtime.processError) return 'ERROR'
+  return null
+}
+
+function DispatchUnreadBadge({
+  kind,
+  label,
+}: {
+  kind: 'output' | 'attention'
+  label: string | null
+}) {
+  if (kind === 'attention') {
+    return (
+      <span
+        className="
+          flex-shrink-0 rounded-sm border border-amber-300/70 bg-amber-400/20
+          px-1.5 py-[1px] text-[9px] font-semibold leading-none text-amber-100
+          shadow-[0_0_12px_rgba(251,191,36,0.22)]
+        "
+      >
+        {label ?? 'ACTION'}
+      </span>
+    )
+  }
+  return (
+    <span
+      className="
+        flex-shrink-0 rounded-sm border border-accent/70 bg-accent/20
+        px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
+        shadow-[0_0_12px_rgba(56,189,248,0.18)]
+      "
+    >
+      NEW
+    </span>
+  )
 }
 
 function dispatchActivity(runtime: {

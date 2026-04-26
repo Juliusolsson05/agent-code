@@ -690,13 +690,21 @@ export function usePaneActions(
           t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
         ),
       }))
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current || (current.unreadSince === null && current.unreadKind === null)) return prev
+        return {
+          ...prev,
+          [sessionId]: { ...current, unreadSince: null, unreadKind: null },
+        }
+      })
       setSpotlight(prev => (
         prev && prev.tabId === refs.stateRef.current.activeTabId
           ? { ...prev, focusedSessionId: sessionId }
           : prev
       ))
     },
-    [refs.stateRef, setSpotlight, setState],
+    [refs.stateRef, setRuntimes, setSpotlight, setState],
   )
 
   const focusSessionInTab = useCallback(
@@ -708,6 +716,14 @@ export function usePaneActions(
           t.id === tabId ? { ...t, focusedSessionId: sessionId } : t,
         ),
       }))
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current || (current.unreadSince === null && current.unreadKind === null)) return prev
+        return {
+          ...prev,
+          [sessionId]: { ...current, unreadSince: null, unreadKind: null },
+        }
+      })
       setSpotlight(prev => (
         prev && prev.tabId === tabId
           ? { ...prev, focusedSessionId: sessionId }
@@ -719,7 +735,7 @@ export function usePaneActions(
           : prev
       ))
     },
-    [setSpotlight, setState, setTileTabs],
+    [setRuntimes, setSpotlight, setState, setTileTabs],
   )
 
   const navigate = useCallback(

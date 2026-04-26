@@ -243,6 +243,33 @@ export function useIpcSubscriptions(
       })
     }
 
+    const isFocusedSession = (sessionId: SessionId): boolean => {
+      const snap = refs.stateRef.current
+      const activeTab = snap.tabs.find(tab => tab.id === snap.activeTabId)
+      return activeTab?.focusedSessionId === sessionId
+    }
+
+    const withUnread = (
+      sessionId: SessionId,
+      runtime: SessionRuntime,
+      kind: 'output' | 'attention',
+    ): SessionRuntime => {
+      if (isFocusedSession(sessionId)) return runtime
+      // Attention outranks ordinary output: once a permission/trust
+      // prompt appears, the list should keep showing ACTION until
+      // the user opens that agent or the prompt resolves. A later
+      // transcript append must not downgrade the marker to NEW.
+      const unreadKind =
+        runtime.unreadKind === 'attention' || kind === 'attention'
+          ? 'attention'
+          : 'output'
+      return {
+        ...runtime,
+        unreadSince: runtime.unreadSince ?? Date.now(),
+        unreadKind,
+      }
+    }
+
     const offStarted = window.api.onSessionStarted(({ sessionId, projectDir }) => {
       updateRuntime(sessionId, {
         projectDir,
@@ -392,10 +419,14 @@ export function useIpcSubscriptions(
             // writer.
             pendingApproval: nextApproval,
           }
+          const approvalOpened = current.pendingApproval === null && nextApproval !== null
+          const nextBodyWithUnread = approvalOpened
+            ? withUnread(sessionId, nextBody, 'attention')
+            : nextBody
           const nextCurrent = chromeTickOnly
-            ? nextBody
+            ? nextBodyWithUnread
             : appendFeedDebugLog(
-                nextBody,
+                nextBodyWithUnread,
                 {
                   layer: 'STATE',
                   kind: 'screen_update',
@@ -756,8 +787,16 @@ export function useIpcSubscriptions(
 
     const offTrustDialog = window.api.onSessionTrustDialog(
       ({ sessionId, visible, workspace }) => {
-        updateRuntime(sessionId, {
-          pendingTrustDialog: visible ? { workspace } : null,
+        setRuntimes(prev => {
+          const current = prev[sessionId] ?? emptyRuntime()
+          const next = {
+            ...current,
+            pendingTrustDialog: visible ? { workspace } : null,
+          }
+          return {
+            ...prev,
+            [sessionId]: visible ? withUnread(sessionId, next, 'attention') : next,
+          }
         })
       },
     )
@@ -770,10 +809,18 @@ export function useIpcSubscriptions(
       options,
       selectedIndex,
     }) => {
-      updateRuntime(sessionId, {
-        pendingResumePrompt: visible
-          ? { sessionAgeText, tokenCountText, options, selectedIndex }
-          : null,
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const next = {
+          ...current,
+          pendingResumePrompt: visible
+            ? { sessionAgeText, tokenCountText, options, selectedIndex }
+            : null,
+        }
+        return {
+          ...prev,
+          [sessionId]: visible ? withUnread(sessionId, next, 'attention') : next,
+        }
       })
     })
 
@@ -786,10 +833,18 @@ export function useIpcSubscriptions(
       options,
       selectedIndex,
     }) => {
-      updateRuntime(sessionId, {
-        pendingPermissionPrompt: visible
-          ? { title, toolName, command, options, selectedIndex }
-          : null,
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const next = {
+          ...current,
+          pendingPermissionPrompt: visible
+            ? { title, toolName, command, options, selectedIndex }
+            : null,
+        }
+        return {
+          ...prev,
+          [sessionId]: visible ? withUnread(sessionId, next, 'attention') : next,
+        }
       })
     })
 
@@ -800,10 +855,20 @@ export function useIpcSubscriptions(
       statusText,
       errorText,
     }) => {
-      updateRuntime(sessionId, {
-        pendingCompaction: visible && phase
-          ? { phase, statusText, errorText }
-          : null,
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        const next = {
+          ...current,
+          pendingCompaction: visible && phase
+            ? { phase, statusText, errorText }
+            : null,
+        }
+        return {
+          ...prev,
+          [sessionId]: visible && phase === 'error'
+            ? withUnread(sessionId, next, 'attention')
+            : next,
+        }
       })
     })
 
@@ -895,6 +960,7 @@ export function useIpcSubscriptions(
         let awaitingAssistant = current.awaitingAssistant
         let workActivity = current.workActivity
         let workContext = current.workContext
+        let approvalOpened = false
         const cachedWorktrees = sessionCwd ? worktreeCache.get(sessionCwd) : undefined
         const hasWorktreeCache = !!cachedWorktrees && cachedWorktrees.refreshedAt > 0
         const worktrees = cachedWorktrees?.worktrees ?? []
@@ -948,6 +1014,7 @@ export function useIpcSubscriptions(
             // Codex exec_approval_request opens an approval pane;
             // exec_command_end with the same call_id closes it.
             if (raw.type === 'event_msg' && payload?.type === 'exec_approval_request') {
+              approvalOpened = pendingApproval === null
               pendingApproval = {
                 callId: typeof payload.call_id === 'string' ? payload.call_id : null,
                 command: Array.isArray(payload.command)
@@ -1174,7 +1241,8 @@ export function useIpcSubscriptions(
           return prev
         }
 
-        const nextRuntime = withDerivedSessionStatus(
+        const hasLiveOutput = appended.length > 0 && current.transcriptStatus === 'ready'
+        const nextRuntimeBase = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
               ...current,
@@ -1220,6 +1288,11 @@ export function useIpcSubscriptions(
             },
           ),
         )
+        const nextRuntime = approvalOpened
+          ? withUnread(sessionId, nextRuntimeBase, 'attention')
+          : hasLiveOutput
+            ? withUnread(sessionId, nextRuntimeBase, 'output')
+            : nextRuntimeBase
         closeSpan({
           sessionId,
           burstSize: entries.length,
