@@ -65,6 +65,7 @@ type Props = {
   openAgentActivity: () => void
   openRewindPrompt: (sessionId: string) => void
   toggleGitBar: () => void
+  toggleWorktreesBar: () => void
   toggleDebugPanel: () => void
   toggleFeedDebugPanel: () => void
   toggleProxyDebugPanel: () => void
@@ -78,6 +79,7 @@ type Props = {
   worktreeBadgesEnabled: boolean
   dangerousAgentsEnabled: boolean
   gitBarOpen: boolean
+  worktreesBarOpen: boolean
   debugPanelOpen: boolean
   feedDebugPanelOpen: boolean
   proxyDebugPanelOpen: boolean
@@ -109,6 +111,7 @@ export function CommandPalette({
   openAgentActivity,
   openRewindPrompt,
   toggleGitBar,
+  toggleWorktreesBar,
   toggleDebugPanel,
   toggleFeedDebugPanel,
   toggleProxyDebugPanel,
@@ -122,6 +125,7 @@ export function CommandPalette({
   worktreeBadgesEnabled,
   dangerousAgentsEnabled,
   gitBarOpen,
+  worktreesBarOpen,
   debugPanelOpen,
   feedDebugPanelOpen,
   proxyDebugPanelOpen,
@@ -242,6 +246,7 @@ export function CommandPalette({
         openAgentActivity,
         openRewindPrompt,
         toggleGitBar,
+        toggleWorktreesBar,
         toggleDebugPanel,
         toggleFeedDebugPanel,
         toggleProxyDebugPanel,
@@ -264,6 +269,7 @@ export function CommandPalette({
         worktreeBadgesEnabled,
         dangerousAgentsEnabled,
         gitBarOpen,
+        worktreesBarOpen,
         debugPanelOpen,
         feedDebugPanelOpen,
         proxyDebugPanelOpen,
@@ -282,6 +288,7 @@ export function CommandPalette({
       openAgentActivity,
       openRewindPrompt,
       toggleGitBar,
+      toggleWorktreesBar,
       toggleDebugPanel,
       toggleFeedDebugPanel,
       toggleProxyDebugPanel,
@@ -302,6 +309,7 @@ export function CommandPalette({
       worktreeBadgesEnabled,
       dangerousAgentsEnabled,
       gitBarOpen,
+      worktreesBarOpen,
       debugPanelOpen,
       feedDebugPanelOpen,
       proxyDebugPanelOpen,
