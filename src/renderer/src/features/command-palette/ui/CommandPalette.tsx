@@ -71,6 +71,10 @@ type Props = {
   toggleProxyDebugPanel: () => void
   toggleHtmlDebugPanel: () => void
   togglePerformancePanel: () => void
+  enterDispatchMode: () => Promise<void> | void
+  enterGlobalDispatch: () => Promise<void> | void
+  exitDispatchMode: () => void
+  toggleDispatchTerminal: () => Promise<void> | void
   toggleCustomRendering: () => void
   toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
@@ -85,6 +89,9 @@ type Props = {
   proxyDebugPanelOpen: boolean
   htmlDebugPanelOpen: boolean
   performancePanelOpen: boolean
+  dispatchModeEnabled: boolean
+  globalDispatchEnabled: boolean
+  dispatchTerminalVisible: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
 }
 
@@ -117,6 +124,10 @@ export function CommandPalette({
   toggleProxyDebugPanel,
   toggleHtmlDebugPanel,
   togglePerformancePanel,
+  enterDispatchMode,
+  enterGlobalDispatch,
+  exitDispatchMode,
+  toggleDispatchTerminal,
   toggleCustomRendering,
   toggleStatusMode,
   toggleWorktreeBadges,
@@ -131,6 +142,9 @@ export function CommandPalette({
   proxyDebugPanelOpen,
   htmlDebugPanelOpen,
   performancePanelOpen,
+  dispatchModeEnabled,
+  globalDispatchEnabled,
+  dispatchTerminalVisible,
   setDangerousAgentsEnabled,
 }: Props) {
   const [query, setQuery] = useState('')
@@ -252,6 +266,10 @@ export function CommandPalette({
         toggleProxyDebugPanel,
         toggleHtmlDebugPanel,
         togglePerformancePanel,
+        enterDispatchMode,
+        enterGlobalDispatch,
+        exitDispatchMode,
+        toggleDispatchTerminal,
         toggleCustomRendering,
         toggleStatusMode,
         toggleWorktreeBadges,
@@ -275,6 +293,9 @@ export function CommandPalette({
         proxyDebugPanelOpen,
         htmlDebugPanelOpen,
         performancePanelOpen,
+        dispatchModeEnabled,
+        globalDispatchEnabled,
+        dispatchTerminalVisible,
       },
     }),
     [
@@ -294,6 +315,10 @@ export function CommandPalette({
       toggleProxyDebugPanel,
       toggleHtmlDebugPanel,
       togglePerformancePanel,
+      enterDispatchMode,
+      enterGlobalDispatch,
+      exitDispatchMode,
+      toggleDispatchTerminal,
       toggleCustomRendering,
       toggleStatusMode,
       toggleWorktreeBadges,
@@ -315,6 +340,9 @@ export function CommandPalette({
       proxyDebugPanelOpen,
       htmlDebugPanelOpen,
       performancePanelOpen,
+      dispatchModeEnabled,
+      globalDispatchEnabled,
+      dispatchTerminalVisible,
     ],
   )
 

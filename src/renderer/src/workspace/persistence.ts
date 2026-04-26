@@ -1,5 +1,6 @@
 import type {
   BuriedPaneRecord,
+  DispatchModeState,
   SessionId,
   SessionMeta,
   TabId,
@@ -27,6 +28,7 @@ export type PersistedWorkspace = {
     root: TileNode
   }>
   activeTabId: TabId
+  dispatchMode?: DispatchModeState | null
   sessions: Record<SessionId, SessionMeta>
   buried?: BuriedPaneRecord[]
   tileTabs?: TileTabsState | null

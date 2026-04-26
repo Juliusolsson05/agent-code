@@ -2,6 +2,10 @@ import { useEffect } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import {
+  buildDispatchGroups,
+  flattenDispatchRows,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
 
 // Keybinds: global window-level listeners. The handler is attached to
 // `document` in a single useEffect, which captures the key BEFORE the
@@ -19,6 +23,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 //   cmd-w           close focused pane (collapses tree; closes tab if last)
 //   cmd-shift-w     close active tab outright
 //   cmd-1..9        activate Nth tab
+//                   In Dispatch Mode this selects the Nth visible agent row.
+//   cmd-alt-1..9    activate Nth tab, including while Dispatch Mode owns cmd-N.
 //   cmd-[           previous tab
 //   cmd-]           next tab
 //   alt-d           split current pane vertically (new pane to the right)
@@ -177,6 +183,16 @@ export function useKeybinds(
       }
 
       // --- CMD: tab management ---
+      if (cmd && alt && !shift) {
+        const digit = digitFromKeyboardEvent(e)
+        if (digit !== null) {
+          e.preventDefault()
+          workspace.activateTabByIndex(digit - 1)
+          return
+        }
+      }
+
+      // --- CMD: tab management ---
       if (cmd && !alt) {
         if (workspace.tileTabs && pendingTiledResizeIndex !== null) {
           if (k === 'ArrowLeft') {
@@ -243,9 +259,22 @@ export function useKeybinds(
           workspace.nextTab()
           return
         }
+        // In Dispatch Mode, the numbered command grammar moves from
+        // "tab N" to "agent row N" because the left list is the primary
+        // control surface. Tab switching remains available via cmd-[ / ].
+        // The row labels keep their tab letter (A/B/C) for orientation,
+        // but the numeric suffix is global in the visible dispatch list.
+        if (workspace.dispatchMode) {
+          const digit = digitFromKeyboardEvent(e)
+          if (digit !== null) {
+            e.preventDefault()
+            focusDispatchRowByIndex(workspace, digit - 1)
+            return
+          }
+        }
         // cmd-1..9 → tab index
-        const digit = parseInt(k, 10)
-        if (!Number.isNaN(digit) && digit >= 1 && digit <= 9) {
+        const digit = digitFromKeyboardEvent(e)
+        if (digit !== null) {
           e.preventDefault()
           if (workspace.tileTabs) {
             pendingTiledResizeIndex = digit - 1
@@ -267,6 +296,12 @@ export function useKeybinds(
       // and the key values ARE what we want.
       if (alt && !cmd) {
         const code = e.code
+
+        if (workspace.dispatchMode && (k === 'ArrowUp' || k === 'ArrowDown')) {
+          e.preventDefault()
+          moveDispatchSelection(workspace, k === 'ArrowDown' ? 1 : -1)
+          return
+        }
 
         // --- Directional resize: fn+alt+arrow ---
         //
@@ -441,4 +476,33 @@ export function useKeybinds(
     settingsPageOpen,
     workspace,
   ])
+}
+
+function digitFromKeyboardEvent(e: KeyboardEvent): number | null {
+  if (/^Digit[1-9]$/.test(e.code)) {
+    return Number(e.code.slice('Digit'.length))
+  }
+  const digit = parseInt(e.key, 10)
+  return !Number.isNaN(digit) && digit >= 1 && digit <= 9 ? digit : null
+}
+
+function dispatchRows(workspace: Workspace) {
+  return flattenDispatchRows(buildDispatchGroups(workspace.state, workspace.runtimes))
+}
+
+function focusDispatchRowByIndex(workspace: Workspace, index: number) {
+  const row = dispatchRows(workspace)[index]
+  if (!row) return
+  workspace.focusSessionInTab(row.tabId, row.sessionId)
+}
+
+function moveDispatchSelection(workspace: Workspace, delta: number) {
+  const rows = dispatchRows(workspace)
+  if (rows.length === 0) return
+  const currentId = workspace.activeTab?.focusedSessionId ?? null
+  const currentIndex = rows.findIndex(row => row.sessionId === currentId)
+  const nextIndex = (currentIndex + delta + rows.length) % rows.length
+  const row = rows[nextIndex]
+  if (!row) return
+  workspace.focusSessionInTab(row.tabId, row.sessionId)
 }

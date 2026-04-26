@@ -19,6 +19,7 @@ import { usePaneActions } from '@renderer/workspace/hook/actions/pane'
 import { useProviderActions } from '@renderer/workspace/hook/actions/provider'
 import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
+import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
 import { useAutoSave } from '@renderer/workspace/hook/persistence/useAutoSave'
 import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
 import { useFeedDebugPersist } from '@renderer/workspace/hook/persistence/useFeedDebugPersist'
@@ -229,6 +230,15 @@ export function useWorkspace(
     sessionActions,
   )
 
+  const dispatchActions = useDispatchActions(
+    state,
+    setState,
+    setTileTabs,
+    refs,
+    showToast,
+    sessionActions,
+  )
+
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
   useIpcSubscriptions(refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   useAutoSave(state, draftVersion, refs, bootstrapComplete)
@@ -264,6 +274,7 @@ export function useWorkspace(
     spotlight,
     tileTabs,
     readerMode,
+    dispatchMode: state.dispatchMode,
     toggleReaderMode,
     setReaderModeSession,
     latestScreenRef: refs.latestScreenRef,
@@ -325,5 +336,10 @@ export function useWorkspace(
     pickerMove,
     pickerConfirm,
     pickerCancel,
+    enterDispatchMode: dispatchActions.enterDispatchMode,
+    exitDispatchMode: dispatchActions.exitDispatchMode,
+    setDispatchScope: dispatchActions.setDispatchScope,
+    toggleDispatchTerminal: dispatchActions.toggleDispatchTerminal,
+    ensureDispatchTerminal: dispatchActions.ensureDispatchTerminal,
   }
 }

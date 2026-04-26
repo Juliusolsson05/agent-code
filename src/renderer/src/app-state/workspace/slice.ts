@@ -18,6 +18,7 @@ function applyUpdater<T>(prev: T, next: T | ((prev: T) => T)): T {
 const initialWorkspaceState: WorkspaceState = {
   tabs: [],
   activeTabId: '',
+  dispatchMode: null,
   sessions: {},
   buried: [],
 }

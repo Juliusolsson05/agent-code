@@ -1,10 +1,9 @@
-import { providerLabel } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { AgentTypeBadge, WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
 import type { SessionKind } from '@renderer/workspace/types'
 import type {
   AgentWorkContext,
   WorktreeActivityState,
 } from '@renderer/workspace/work-context/types'
-import { worktreeBadgeColor } from '@renderer/workspace/work-context/colors'
 
 // Scroll position indicator — sits just above the composer,
 // right-aligned. Shows which entry you're looking at out of the
@@ -40,9 +39,7 @@ export function ScrollIndicator({
     <div className="flex-shrink-0 flex justify-end px-3 leading-none">
       <div className="flex items-center gap-2">
         <WorktreeBadge context={workContext} activity={workActivity} />
-        <span className="text-[11px] font-code text-muted">
-          {providerLabel(sessionKind)}
-        </span>
+        <AgentTypeBadge kind={sessionKind} />
         {tailMode && (
           <span className="text-[10px] font-code uppercase tracking-wider text-accent">
             TAIL
@@ -54,46 +51,4 @@ export function ScrollIndicator({
       </div>
     </div>
   )
-}
-
-function WorktreeBadge({
-  context,
-  activity,
-}: {
-  context: AgentWorkContext | null | undefined
-  activity: WorktreeActivityState | null | undefined
-}) {
-  if (!context?.worktreePath) return null
-  const label = context.branch ?? shortPath(context.worktreePath)
-  if (!label) return null
-  const color = worktreeBadgeColor(context)
-  const title = [
-    'Primary worktree',
-    context.branch ? `Branch: ${context.branch}` : null,
-    `Worktree: ${context.worktreePath}`,
-    `Source: ${context.source}`,
-    `Confidence: ${context.confidence}`,
-    activity?.active?.worktreePath &&
-      activity.active.worktreePath !== context.worktreePath
-      ? `Active now: ${activity.active.branch ?? shortPath(activity.active.worktreePath)} (${activity.active.worktreePath})`
-      : null,
-    activity
-      ? `Touched: ${Object.values(activity.touched).length}`
-      : null,
-  ].filter(Boolean).join('\n')
-
-  return (
-    <span
-      className="max-w-[180px] truncate rounded-sm px-1.5 py-[1px] text-[10px] font-code leading-none text-white"
-      style={{ backgroundColor: color ?? undefined }}
-      title={title}
-    >
-      {label}
-    </span>
-  )
-}
-
-function shortPath(path: string): string {
-  const parts = path.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? path
 }

@@ -36,13 +36,21 @@ export function useTileTabsActions(
         ? current.activeTabId
         : valid[0]
       setSpotlight(null)
+      // Tile-tabs and Dispatch Mode are both top-level alternatives to
+      // the normal grid. Letting both stay active made Dispatch persist
+      // invisibly behind TileTabs, so entering one mode explicitly clears
+      // the other.
       setTileTabs({
         tabIds: valid,
         focusedTabId,
         direction,
         ratios: equalRatios(valid.length),
       })
-      setState(prev => ({ ...prev, activeTabId: focusedTabId }))
+      setState(prev => ({
+        ...prev,
+        activeTabId: focusedTabId,
+        dispatchMode: null,
+      }))
     },
     [refs.stateRef, setSpotlight, setState, setTileTabs],
   )
