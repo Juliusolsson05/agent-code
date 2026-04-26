@@ -68,6 +68,8 @@ export type SessionJsonlEntriesEvent = {
 export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 /** Raw PTY output for a terminal session — destined for xterm.js. */
 export type SessionTerminalDataEvent = { sessionId: string; data: string }
+/** Raw PTY output for an attached Claude/Codex inline terminal. */
+export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 export type SessionTrustDialogEvent = {
   sessionId: string
   visible: boolean

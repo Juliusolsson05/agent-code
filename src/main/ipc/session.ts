@@ -55,6 +55,19 @@ export function registerSessionIpc(manager: SessionManager): void {
     return manager.attachTerminal(sessionId)
   })
 
+  // Agent PTY attach/replay. DebugPanel uses this for Claude
+  // and Codex panes when the user asks to see the raw underlying TUI
+  // as an xterm terminal. Kept separate from terminal-attach because
+  // plain terminal panes and agent panes have different primary
+  // renderers and different live IPC channels.
+  ipcMain.handle('session:agent-pty-attach', (_evt, sessionId: string) => {
+    return manager.attachAgentPty(sessionId)
+  })
+
+  ipcMain.handle('session:agent-pty-detach', (_evt, sessionId: string) => {
+    manager.detachAgentPty(sessionId)
+  })
+
   ipcMain.handle(
     'session:input',
     (_evt, sessionId: string, data: string) => {

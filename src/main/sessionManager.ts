@@ -37,6 +37,9 @@ export type SessionKind = 'claude' | 'codex' | 'terminal'
 export type ManagerEvents = {
   started: [{ sessionId: string; kind: SessionKind; projectDir?: string }]
   'pty-data': [{ sessionId: string; data: string }]
+  /** Raw PTY bytes for an attached agent inline terminal. Emitted
+   *  only after attachAgentPty() flips the per-session attach flag. */
+  'agent-pty-data': [{ sessionId: string; data: string }]
   /** Emitted only by Claude sessions — the scraped TUI snapshot. */
   screen: [{ sessionId: string } & ScreenSnapshot]
   /** Emitted only by Claude sessions — parsed JSONL entries. */
@@ -117,6 +120,8 @@ export type SpawnResult = {
   tmuxName?: string
 }
 
+type PtySize = { cols: number; rows: number }
+
 export interface SessionManager {
   on<K extends keyof ManagerEvents>(
     event: K,
@@ -193,9 +198,35 @@ type RegistryEntry =
 // content wins) so long-running shells don't blow up memory.
 const TERMINAL_BUFFER_CAP = 256 * 1024
 
+// Raw-agent terminal buffer cap. This is intentionally larger than the
+// plain terminal cap because Claude/Codex TUIs emit more repaint bytes
+// than a normal shell: full-screen redraws, ANSI cursor movement, and
+// progress rows can churn heavily even when the visible content is
+// small. We still cap aggressively because this buffer is debug-only
+// replay state, not the durable transcript source of truth.
+const AGENT_PTY_BUFFER_CAP = 512 * 1024
+
+function appendCappedBuffer(prev: string, data: string, cap: number): string {
+  let next = prev + data
+  if (next.length <= cap) return next
+
+  // Naive slice by string length can split a UTF-16 surrogate pair.
+  // xterm will usually recover from a replacement character, but the
+  // replay buffer should not introduce corruption at its oldest edge
+  // when dropping the whole rune costs only one code unit.
+  let startIdx = next.length - cap
+  const firstCode = next.charCodeAt(startIdx)
+  if (firstCode >= 0xdc00 && firstCode <= 0xdfff) {
+    startIdx += 1
+  }
+  next = next.slice(startIdx)
+  return next
+}
+
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly lastActivityAt = new Map<string, number>()
+  private readonly sessionSizes = new Map<string, PtySize>()
 
   // Optional tmux backing for terminal sessions. Constructed by the
   // app entrypoint AFTER detectAvailability() has resolved — we only
@@ -237,6 +268,24 @@ export class SessionManager extends EventEmitter {
   private readonly terminalBuffers = new Map<string, string>()
   private readonly terminalAttached = new Set<string>()
 
+  // Agent PTY terminal replay state. Agent sessions already publish
+  // parsed screen snapshots to the renderer, which is perfect for the
+  // structured feed but not enough for a real inline terminal: xterm
+  // needs the raw byte stream, including ANSI cursor movement and full
+  // repaint sequences. We therefore keep a capped byte-string replay
+  // buffer per Claude/Codex session and expose it only when the debug
+  // panel explicitly attaches.
+  //
+  // This deliberately uses the same attach/replay contract as
+  // TerminalLeaf instead of forwarding every agent byte to the
+  // renderer from process start: most users never open the raw inline
+  // terminal, and agent PTYs can be noisy. Buffer in main, broadcast
+  // only after an attach, and let the debug component replay the
+  // buffer before draining live bytes.
+  private readonly agentPtyBuffers = new Map<string, string>()
+  private readonly agentPtyAttached = new Set<string>()
+  private readonly agentPtyRestoreSizes = new Map<string, PtySize>()
+
   private markActivity(sessionId: string): void {
     this.lastActivityAt.set(sessionId, Date.now())
   }
@@ -267,6 +316,10 @@ export class SessionManager extends EventEmitter {
     // instantiate. This eliminates the if/else duplication that caused
     // cross-provider breakage when editing one provider's spawn logic.
     if (kind === 'claude' || kind === 'codex') {
+      const initialSize = {
+        cols: options.cols ?? 120,
+        rows: options.rows ?? 40,
+      }
       const provider = getMainProvider(kind)
       const createStartedAt = performance.now()
       // `session` here structurally conforms to AgentSessionLike —
@@ -282,8 +335,8 @@ export class SessionManager extends EventEmitter {
       const session = provider.createSession({
         cwd: options.cwd,
         binary: getToolPath(kind, kind),
-        cols: options.cols ?? 120,
-        rows: options.rows ?? 40,
+        cols: initialSize.cols,
+        rows: initialSize.rows,
         snapshotIntervalMs: 16,
         resumeSessionId: options.resumeSessionId,
         dangerousMode: options.dangerousMode,
@@ -303,6 +356,8 @@ export class SessionManager extends EventEmitter {
         provider: kind,
       })
 
+      this.sessionSizes.set(sessionId, initialSize)
+      this.agentPtyBuffers.set(sessionId, '')
       session.on('started', ({ projectDir }: { projectDir: string }) =>
         {
           this.markActivity(sessionId)
@@ -311,6 +366,14 @@ export class SessionManager extends EventEmitter {
       )
       session.on('pty-data', (data: string) => {
         this.markActivity(sessionId)
+        const prev = this.agentPtyBuffers.get(sessionId) ?? ''
+        this.agentPtyBuffers.set(
+          sessionId,
+          appendCappedBuffer(prev, data, AGENT_PTY_BUFFER_CAP),
+        )
+        if (this.agentPtyAttached.has(sessionId)) {
+          this.emit('agent-pty-data', { sessionId, data })
+        }
         this.emit('pty-data', { sessionId, data })
       })
       session.on('screen', (snap: ScreenSnapshot) => {
@@ -363,6 +426,10 @@ export class SessionManager extends EventEmitter {
         this.markActivity(sessionId)
         this.emit('exit', { sessionId, exitCode, signal })
         this.sessions.delete(sessionId)
+        this.agentPtyBuffers.delete(sessionId)
+        this.agentPtyAttached.delete(sessionId)
+        this.agentPtyRestoreSizes.delete(sessionId)
+        this.sessionSizes.delete(sessionId)
       })
 
       this.sessions.set(sessionId, { kind, session })
@@ -387,6 +454,10 @@ export class SessionManager extends EventEmitter {
         // on `session` because the wrapper already owns its own
         // EventEmitter — nothing outside the registry subscribed.
         this.sessions.delete(sessionId)
+        this.agentPtyBuffers.delete(sessionId)
+        this.agentPtyAttached.delete(sessionId)
+        this.agentPtyRestoreSizes.delete(sessionId)
+        this.sessionSizes.delete(sessionId)
         performanceService.error('session.spawn.providerStart.error', err, {
           sessionId,
           kind,
@@ -445,10 +516,15 @@ export class SessionManager extends EventEmitter {
       })
     }
 
-    const session = new TerminalSession({
-      cwd: options.cwd,
+    const initialSize = {
       cols: options.cols ?? 80,
       rows: options.rows ?? 24,
+    }
+
+    const session = new TerminalSession({
+      cwd: options.cwd,
+      cols: initialSize.cols,
+      rows: initialSize.rows,
       runtime: useTmux ? 'tmux' : 'direct',
       tmuxSessionName: tmuxSessionName ?? undefined,
     })
@@ -457,6 +533,7 @@ export class SessionManager extends EventEmitter {
     // data events. The buffer accumulates every byte of PTY output
     // and is replayed to the renderer on attach — see the block
     // comment on terminalBuffers above for the full reasoning.
+    this.sessionSizes.set(sessionId, initialSize)
     this.terminalBuffers.set(sessionId, '')
 
     // Terminal sessions only emit started / data / exit. The 'data'
@@ -477,28 +554,10 @@ export class SessionManager extends EventEmitter {
       // longer sessions just lose the oldest bytes, which is the
       // standard terminal scrollback behavior.
       const prev = this.terminalBuffers.get(sessionId) ?? ''
-      let next = prev + data
-      if (next.length > TERMINAL_BUFFER_CAP) {
-        // Naive slice by string length can split a UTF-16 surrogate
-        // pair — emoji and most CJK chars in JS strings are stored
-        // as a (high-surrogate, low-surrogate) pair that occupies
-        // two `.length` code units. If TERMINAL_BUFFER_CAP lands
-        // between the two, the replay starts with an orphaned low
-        // surrogate, which xterm renders as U+FFFD or garbage.
-        //
-        // Detect a low surrogate at the slice boundary and advance
-        // one code unit so we drop the whole rune instead of
-        // keeping its tail. This loses one character at the oldest
-        // edge of the scrollback — imperceptible vs the visible
-        // corruption the naive path produces.
-        let startIdx = next.length - TERMINAL_BUFFER_CAP
-        const firstCode = next.charCodeAt(startIdx)
-        if (firstCode >= 0xdc00 && firstCode <= 0xdfff) {
-          startIdx += 1
-        }
-        next = next.slice(startIdx)
-      }
-      this.terminalBuffers.set(sessionId, next)
+      this.terminalBuffers.set(
+        sessionId,
+        appendCappedBuffer(prev, data, TERMINAL_BUFFER_CAP),
+      )
       // Only broadcast live events AFTER the renderer has attached.
       // Before attach, the data is still in the buffer and will be
       // replayed when the renderer calls attachTerminal. See the
@@ -514,6 +573,7 @@ export class SessionManager extends EventEmitter {
       this.sessions.delete(sessionId)
       this.terminalBuffers.delete(sessionId)
       this.terminalAttached.delete(sessionId)
+      this.sessionSizes.delete(sessionId)
     })
 
     this.sessions.set(sessionId, { kind: 'terminal', session, tmuxName: tmuxSessionName })
@@ -541,6 +601,7 @@ export class SessionManager extends EventEmitter {
       this.sessions.delete(sessionId)
       this.terminalBuffers.delete(sessionId)
       this.terminalAttached.delete(sessionId)
+      this.sessionSizes.delete(sessionId)
       performanceService.error('session.spawn.terminalStart.error', err, { sessionId })
       throw err
     }
@@ -609,6 +670,55 @@ export class SessionManager extends EventEmitter {
   }
 
   /**
+   * Agent PTY attach/replay entry point.
+   *
+   * This is the Claude/Codex counterpart to attachTerminal(). It is
+   * intentionally separate because agent panes are not terminal panes:
+   * their primary renderer is the structured feed, while this inline
+   * terminal is a debug-only view into the underlying provider TUI.
+   * Returning the buffered raw bytes lets the inline xterm reconstruct
+   * the provider's latest terminal state, then `agent-pty-data`
+   * carries subsequent live bytes for as long as the session remains
+   * open.
+   */
+  attachAgentPty(sessionId: string): string {
+    const entry = this.sessions.get(sessionId)
+    if (!entry) return ''
+    if (entry.kind !== 'claude' && entry.kind !== 'codex') {
+      console.warn(
+        `[SessionManager] attachAgentPty called on non-agent session`,
+        { sessionId, kind: entry.kind },
+      )
+      return ''
+    }
+    const buffer = this.agentPtyBuffers.get(sessionId) ?? ''
+    if (!this.agentPtyAttached.has(sessionId)) {
+      const currentSize = this.sessionSizes.get(sessionId)
+      if (currentSize) {
+        this.agentPtyRestoreSizes.set(sessionId, { ...currentSize })
+      }
+    }
+    this.agentPtyAttached.add(sessionId)
+    return buffer
+  }
+
+  /**
+   * Detach the debug inline terminal from a Claude/Codex session.
+   * This disables raw PTY IPC forwarding and restores the provider PTY
+   * size that was active before the inline terminal took ownership.
+   */
+  detachAgentPty(sessionId: string): void {
+    const entry = this.sessions.get(sessionId)
+    this.agentPtyAttached.delete(sessionId)
+    const restoreSize = this.agentPtyRestoreSizes.get(sessionId)
+    this.agentPtyRestoreSizes.delete(sessionId)
+    if (!entry || (entry.kind !== 'claude' && entry.kind !== 'codex')) return
+    if (!restoreSize) return
+    entry.session.resize(restoreSize.cols, restoreSize.rows)
+    this.sessionSizes.set(sessionId, restoreSize)
+  }
+
+  /**
    * Write bytes to a session's PTY. Silently no-ops if the session
    * doesn't exist — this happens naturally if a session exits between
    * the renderer queueing input and the main process handling it.
@@ -628,7 +738,10 @@ export class SessionManager extends EventEmitter {
 
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */
   resize(sessionId: string, cols: number, rows: number): void {
-    this.sessions.get(sessionId)?.session.resize(cols, rows)
+    const entry = this.sessions.get(sessionId)
+    if (!entry) return
+    entry.session.resize(cols, rows)
+    this.sessionSizes.set(sessionId, { cols, rows })
   }
 
   /**
@@ -679,6 +792,12 @@ export class SessionManager extends EventEmitter {
     // orphan and kills it. This is the explicit "buffer for undo"
     // behavior the user asked for in the P1 brainstorm.
     this.sessions.delete(sessionId)
+    if (entry.kind === 'claude' || entry.kind === 'codex') {
+      this.agentPtyBuffers.delete(sessionId)
+      this.agentPtyAttached.delete(sessionId)
+      this.agentPtyRestoreSizes.delete(sessionId)
+    }
+    this.sessionSizes.delete(sessionId)
     return true
   }
 

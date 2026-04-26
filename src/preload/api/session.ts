@@ -9,6 +9,7 @@ import type {
   SessionJsonlEntryEvent,
   SessionJsonlErrorEvent,
   SessionPermissionPromptEvent,
+  SessionAgentPtyDataEvent,
   SessionKind,
   SessionScreenEvent,
   SessionSemanticEvent,
@@ -75,6 +76,20 @@ export const sessionApi = {
   attachTerminal: (sessionId: string): Promise<string> =>
     ipcRenderer.invoke('session:terminal-attach', sessionId),
 
+  /**
+   * Attach this renderer to a Claude/Codex session's raw PTY terminal.
+   * Returns a capped replay buffer and enables live
+   * 'session:agent-pty-data' events for the session. Used by
+   * DebugPanel's inline terminal view;
+   * normal agent panes continue to render from screen/jsonl/semantic
+   * state and do not subscribe to this high-volume byte stream.
+   */
+  attachAgentPty: (sessionId: string): Promise<string> =>
+    ipcRenderer.invoke('session:agent-pty-attach', sessionId),
+
+  detachAgentPty: (sessionId: string): Promise<void> =>
+    ipcRenderer.invoke('session:agent-pty-detach', sessionId),
+
   // --- Per-session I/O ---
   sendInput: (sessionId: string, data: string): Promise<boolean> =>
     ipcRenderer.invoke('session:input', sessionId, data),
@@ -138,6 +153,10 @@ export const sessionApi = {
    *  emit on this channel — they use screen/jsonl-entry instead. */
   onSessionTerminalData: (cb: (e: SessionTerminalDataEvent) => void): Unsub =>
     subscribe('session:terminal-data', cb),
+
+  /** Raw PTY bytes for attached Claude/Codex inline terminals. */
+  onSessionAgentPtyData: (cb: (e: SessionAgentPtyDataEvent) => void): Unsub =>
+    subscribe('session:agent-pty-data', cb),
 
   onSessionProcessState: (
     cb: (e: { sessionId: string; active: boolean; status?: string }) => void,

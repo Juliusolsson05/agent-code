@@ -1,7 +1,8 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
+import { AgentInlineTerminal } from '@renderer/features/debug/ui/AgentInlineTerminal'
 
 // DebugPanel — inline diagnostic overlay showing the raw state of the
 // focused pane. Toggled via "Toggle Debug Panel" in the command palette.
@@ -25,6 +26,13 @@ type Props = {
 }
 
 export function DebugPanel({ sessionId, runtime, kind, onClose }: Props) {
+  const [rawTerminalOpen, setRawTerminalOpen] = useState(false)
+  const canOpenRawTerminal = kind === 'claude' || kind === 'codex'
+
+  useEffect(() => {
+    setRawTerminalOpen(false)
+  }, [sessionId])
+
   const screenTail = useMemo(() => {
     const lines = runtime.screen.split('\n')
     return lines.slice(-20).join('\n')
@@ -128,9 +136,30 @@ export function DebugPanel({ sessionId, runtime, kind, onClose }: Props) {
           {lastEntries.length === 0 && <Pre>(no entries)</Pre>}
         </Section>
 
-        {/* Raw screen tail */}
-        <Section title="raw screen (last 20 lines)">
-          <Pre>{screenTail || '(empty)'}</Pre>
+        {/* Raw screen tail / inline PTY terminal */}
+        <Section
+          title={
+            canOpenRawTerminal
+              ? rawTerminalOpen
+                ? 'raw inline terminal'
+                : 'raw screen (click for terminal)'
+              : 'raw screen (last 20 lines)'
+          }
+        >
+          {rawTerminalOpen && canOpenRawTerminal ? (
+            <AgentInlineTerminal sessionId={sessionId} active={rawTerminalOpen} />
+          ) : canOpenRawTerminal ? (
+            <button
+              type="button"
+              onClick={() => setRawTerminalOpen(true)}
+              className="block w-full text-left"
+              title="Open inline raw PTY terminal"
+            >
+              <Pre>{screenTail || '(empty)'}</Pre>
+            </button>
+          ) : (
+            <Pre>{screenTail || '(empty)'}</Pre>
+          )}
         </Section>
 
         {/* Markdown screen tail */}
