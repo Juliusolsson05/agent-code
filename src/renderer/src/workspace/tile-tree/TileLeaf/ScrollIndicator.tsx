@@ -4,6 +4,7 @@ import type {
   AgentWorkContext,
   WorktreeActivityState,
 } from '@renderer/workspace/work-context/types'
+import { worktreeBadgeColor } from '@renderer/workspace/work-context/colors'
 
 // Scroll position indicator — sits just above the composer,
 // right-aligned. Shows which entry you're looking at out of the
@@ -65,7 +66,7 @@ function WorktreeBadge({
   if (!context?.worktreePath) return null
   const label = context.branch ?? shortPath(context.worktreePath)
   if (!label) return null
-  const color = colorFor(context.worktreePath)
+  const color = worktreeBadgeColor(context)
   const title = [
     'Primary worktree',
     context.branch ? `Branch: ${context.branch}` : null,
@@ -84,7 +85,7 @@ function WorktreeBadge({
   return (
     <span
       className="max-w-[180px] truncate rounded-sm px-1.5 py-[1px] text-[10px] font-code leading-none text-white"
-      style={{ backgroundColor: color }}
+      style={{ backgroundColor: color ?? undefined }}
       title={title}
     >
       {label}
@@ -95,13 +96,4 @@ function WorktreeBadge({
 function shortPath(path: string): string {
   const parts = path.split('/').filter(Boolean)
   return parts[parts.length - 1] ?? path
-}
-
-function colorFor(seed: string): string {
-  let hash = 0
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = ((hash << 5) - hash + seed.charCodeAt(i)) | 0
-  }
-  const hue = Math.abs(hash) % 360
-  return `hsl(${hue} 58% 38%)`
 }
