@@ -51,6 +51,7 @@ export function useAutoSave(
         root: t.root,
       })),
       activeTabId: s.activeTabId,
+      dispatchMode: s.dispatchMode,
       sessions: s.sessions,
       buried: s.buried,
       tileTabs: refs.latestTileTabsRef.current,
@@ -68,7 +69,7 @@ export function useAutoSave(
         saveSpan.end({
           tabs: persisted.tabs.length,
           sessions: Object.keys(persisted.sessions).length,
-          tileTabs: persisted.tileTabs.length,
+          tileTabs: persisted.tileTabs?.tabIds.length ?? 0,
           bytes: json.length,
         })
       })

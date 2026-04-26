@@ -130,9 +130,21 @@ export type BuriedPaneRecord = {
   note?: string
 }
 
+export type DispatchModeState = {
+  scope: 'project' | 'global'
+  terminalVisible: boolean
+}
+
 export type WorkspaceState = {
   tabs: Tab[]
   activeTabId: TabId
+  /**
+   * Dispatch Mode is part of the workspace layout, not a global user
+   * preference. Persisting it here means a reload preserves the user's
+   * command-center view for this project while other workspaces can keep
+   * using the grid.
+   */
+  dispatchMode: DispatchModeState | null
   /**
    * Per-session metadata. Every leaf's sessionId MUST exist here or the
    * tree is invalid. Orphaned entries (a session that's no longer in any

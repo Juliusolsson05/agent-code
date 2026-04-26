@@ -22,6 +22,10 @@ export type CommandContext = {
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
     togglePerformancePanel: () => void
+    enterDispatchMode: () => Promise<void> | void
+    enterGlobalDispatch: () => Promise<void> | void
+    exitDispatchMode: () => void
+    toggleDispatchTerminal: () => Promise<void> | void
     toggleCustomRendering: () => void
     toggleStatusMode: () => void
     toggleWorktreeBadges: () => void
@@ -44,6 +48,9 @@ export type CommandContext = {
     proxyDebugPanelOpen: boolean
     htmlDebugPanelOpen: boolean
     performancePanelOpen: boolean
+    dispatchModeEnabled: boolean
+    globalDispatchEnabled: boolean
+    dispatchTerminalVisible: boolean
   }
 }
 

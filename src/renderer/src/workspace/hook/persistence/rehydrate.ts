@@ -103,19 +103,19 @@ export async function rehydrateWorkspace(
 
   const buildRemappedBuried = (): BuriedPaneRecord[] =>
     (persisted.buried ?? [])
-      .map(entry => {
+      .flatMap(entry => {
         const mappedSessionId = idMap.get(entry.sessionId)
-        if (!mappedSessionId) return null
-        return {
+        if (!mappedSessionId) return []
+        const remapped: BuriedPaneRecord = {
           ...entry,
           id: mappedSessionId,
           sessionId: mappedSessionId,
-          siblingLeafId: entry.siblingLeafId
-            ? (idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId)
-            : undefined,
-        } satisfies BuriedPaneRecord
+        }
+        if (entry.siblingLeafId) {
+          remapped.siblingLeafId = idMap.get(entry.siblingLeafId) ?? entry.siblingLeafId
+        }
+        return [remapped]
       })
-      .filter((entry): entry is BuriedPaneRecord => entry !== null)
 
   const buildRemappedTileTabs = (tabs: Tab[]): TileTabsState | null => {
     const persistedTileTabs = persisted.tileTabs
@@ -141,6 +141,7 @@ export async function rehydrateWorkspace(
     setState({
       tabs: newTabs,
       activeTabId,
+      dispatchMode: persisted.dispatchMode ?? null,
       sessions: { ...freshSessions },
       buried: buildRemappedBuried(),
     })

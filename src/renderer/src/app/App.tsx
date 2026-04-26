@@ -23,6 +23,7 @@ import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerMod
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
+import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
@@ -246,6 +247,19 @@ export default function App() {
             <SpotlightView workspace={workspace} />
           ) : workspace.tileTabs ? (
             <TileTabsView workspace={workspace} />
+          ) : activeTab && workspace.dispatchMode ? (
+            <div className="relative h-full min-h-0 min-w-0">
+              <DispatchLayout
+                workspace={workspace}
+                showStatusMode={settings.showStatusMode}
+                showWorktreeBadges={settings.showWorktreeBadges}
+              />
+              <NewAgentPlacementOverlay
+                open={newAgentPlacementOpen}
+                workspace={workspace}
+                onClose={closeNewAgentPlacement}
+              />
+            </div>
           ) : activeTab ? (
             <div className="relative h-full min-h-0 min-w-0">
               <TileTree
@@ -325,6 +339,14 @@ export default function App() {
         toggleProxyDebugPanel={toggleProxyDebugPanel}
         toggleHtmlDebugPanel={toggleHtmlDebugPanel}
         togglePerformancePanel={togglePerformancePanel}
+        enterDispatchMode={workspace.enterDispatchMode}
+        enterGlobalDispatch={() =>
+          workspace.setDispatchScope(
+            workspace.dispatchMode?.scope === 'global' ? 'project' : 'global',
+          )
+        }
+        exitDispatchMode={workspace.exitDispatchMode}
+        toggleDispatchTerminal={workspace.toggleDispatchTerminal}
         onTileTabsRequest={onTileTabsRequest}
         onSettingsRequest={openSettingsPage}
         openViewPrompts={openViewPrompts}
@@ -344,6 +366,9 @@ export default function App() {
         proxyDebugPanelOpen={proxyDebugPanelOpen}
         htmlDebugPanelOpen={htmlDebugPanelOpen}
         performancePanelOpen={performancePanelOpen}
+        dispatchModeEnabled={workspace.dispatchMode !== null}
+        globalDispatchEnabled={workspace.dispatchMode?.scope === 'global'}
+        dispatchTerminalVisible={workspace.dispatchMode?.terminalVisible !== false}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
       />
 
