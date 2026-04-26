@@ -20,7 +20,16 @@ const codexMain: MainProviderConfig = {
   id: 'codex',
   name: 'Codex',
   createSession: (opts) => new CodexSession(opts),
-  listSessions: (_cwd, limit) => listCodexSessions({ limit }),
+  // Pass cwd through so the resume picker only shows sessions
+  // recorded in the user's current working directory. Without this
+  // filter the codex picker silently returned every session globally
+  // (Codex doesn't partition by cwd), which let the user pick a
+  // session whose underlying rollout cwd != cc-shell's spawn cwd.
+  // That mismatch triggers Codex's upstream `cwd_prompt` modal, which
+  // cc-shell has no detector for — the modal then eats the user's
+  // first bracketed-paste submission. See the matching change in
+  // packages/codex-headless/src/transcript/SessionList.ts.
+  listSessions: (cwd, limit) => listCodexSessions({ cwd, limit }),
   getProjectDir: async () => getCodexSessionsDir(),
 }
 
