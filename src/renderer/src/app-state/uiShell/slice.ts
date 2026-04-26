@@ -18,6 +18,7 @@ export const createUiShellSlice: StateCreator<
   viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
   gitBarOpen: false,
+  worktreesBarOpen: false,
   debugPanelOpen: false,
   feedDebugPanelOpen: false,
   proxyDebugPanelOpen: false,
@@ -74,6 +75,12 @@ export const createUiShellSlice: StateCreator<
 
   toggleGitBar: () =>
     set(state => ({ gitBarOpen: !state.gitBarOpen }), false, 'uiShell/toggleGitBar'),
+  toggleWorktreesBar: () =>
+    set(
+      state => ({ worktreesBarOpen: !state.worktreesBarOpen }),
+      false,
+      'uiShell/toggleWorktreesBar',
+    ),
   toggleDebugPanel: () =>
     set(state => ({ debugPanelOpen: !state.debugPanelOpen }), false, 'uiShell/toggleDebugPanel'),
   toggleFeedDebugPanel: () =>

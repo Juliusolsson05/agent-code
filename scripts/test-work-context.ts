@@ -3,13 +3,17 @@ import assert from 'node:assert/strict'
 import {
   matchWorktree,
   reduceWorkContextFromRaw,
-} from '../src/renderer/src/workspace/work-context/reducer'
+} from '../src/shared/work-context/reducer'
 import {
   deriveAgentWorkContext,
   ingestWorktreeRawEvent,
-} from '../src/renderer/src/workspace/work-context/tracker'
+} from '../src/shared/work-context/tracker'
+import {
+  resetWorktreeBadgeColorAssignmentsForTest,
+  worktreeBadgeColor,
+} from '../src/renderer/src/workspace/work-context/colors'
 import type { WorktreeIdentity } from '../src/shared/types/git'
-import type { WorktreeActivityState } from '../src/renderer/src/workspace/work-context/types'
+import type { WorktreeActivityState } from '../src/shared/work-context/types'
 
 const worktrees: WorktreeIdentity[] = [
   {
@@ -258,6 +262,56 @@ const claudeToolEntry = (
   assert.equal(matchWorktree('/repo/src/index.ts', worktrees)?.path, '/repo')
   assert.equal(matchWorktree('/repo-feature/src/index.ts', worktrees)?.path, '/repo-feature')
   assert.equal(matchWorktree('/repo-feature-long/src/index.ts', worktrees), null)
+}
+
+{
+  resetWorktreeBadgeColorAssignmentsForTest()
+  const first = worktreeBadgeColor({
+    worktreePath: '/repo-feature-a',
+    branch: 'feat/a',
+    repoRoot: '/repo',
+    confidence: 'strong',
+    source: 'test',
+    updatedAt: 1,
+  })
+  const second = worktreeBadgeColor({
+    worktreePath: '/repo-feature-b',
+    branch: 'feat/b',
+    repoRoot: '/repo',
+    confidence: 'strong',
+    source: 'test',
+    updatedAt: 2,
+  })
+  const firstAgain = worktreeBadgeColor({
+    worktreePath: '/repo-feature-a',
+    branch: 'feat/a',
+    repoRoot: '/repo',
+    confidence: 'strong',
+    source: 'test',
+    updatedAt: 3,
+  })
+  const main = worktreeBadgeColor({
+    worktreePath: '/repo',
+    branch: 'main',
+    repoRoot: '/repo',
+    confidence: 'strong',
+    source: 'test',
+    updatedAt: 4,
+  })
+  const master = worktreeBadgeColor({
+    worktreePath: '/repo-master',
+    branch: 'master',
+    repoRoot: '/repo',
+    confidence: 'strong',
+    source: 'test',
+    updatedAt: 5,
+  })
+
+  assert.equal(first, '#0f766e')
+  assert.equal(second, '#b45309')
+  assert.equal(firstAgain, first)
+  assert.equal(main, '#2563eb')
+  assert.equal(master, '#475569')
 }
 
 console.log('work-context reducer tests passed')

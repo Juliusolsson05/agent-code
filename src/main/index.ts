@@ -10,11 +10,12 @@ import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js
 
 import { STATE_FILE } from '@main/storage/paths.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
-import { createMainWindow } from '@main/window/mainWindow.js'
+import { createMainWindow, focusMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath, initializeToolchain } from '@main/setup/toolchain.js'
+import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 
 // Main process — thin Electron host.
 //
@@ -45,6 +46,7 @@ const lspManager = new LspManager()
 // See `./ghostJournal.ts` for the full rationale; see
 // `src/renderer/src/workspace/ghosts.ts` for the renderer side.
 const ghostJournals = new GhostJournalRegistry()
+const worktreeActivityIndex = new WorktreeActivityIndex()
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -54,14 +56,25 @@ const ghostJournals = new GhostJournalRegistry()
 // callbacks that fire after the assignment.
 let manager: SessionManager = null as unknown as SessionManager
 let tmuxRegistry: TmuxRegistry | null = null
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
-void performanceService.start().catch(err => {
-  console.warn('[performance] failed to start:', err)
-})
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    focusMainWindow()
+  })
+
+  void performanceService.start().catch(err => {
+    console.warn('[performance] failed to start:', err)
+  })
+
+  void app.whenReady().then(startApp)
+}
 
 // ---------- App lifecycle ----------
 
-app.whenReady().then(async () => {
+async function startApp(): Promise<void> {
   performanceService.mark('app.main.whenReady.start')
   await initializeToolchain()
   await cleanupClaudeImageCacheDir().catch(err => {
@@ -136,7 +149,7 @@ app.whenReady().then(async () => {
   performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
-  registerAllIpc({ manager, lspManager, ghostJournals })
+  registerAllIpc({ manager, lspManager, ghostJournals, worktreeActivityIndex })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()
   performanceService.mark('app.main.window.created')
@@ -144,17 +157,17 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
   })
-})
+}
 
 app.on('window-all-closed', () => {
-  void manager.killAll()
+  void manager?.killAll()
   void lspManager.dispose()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
   performanceService.mark('app.main.beforeQuit')
-  void manager.killAll()
+  void manager?.killAll()
   void lspManager.dispose()
   // Flush pending ghost writes. Fire-and-forget is fine — Electron's
   // quit path gives us a tick before teardown. 100 ms queue depth is

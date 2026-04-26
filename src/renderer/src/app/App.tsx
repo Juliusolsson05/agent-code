@@ -18,6 +18,7 @@ import { PromptSearchModal } from '@renderer/features/workspace/ui/PromptSearchM
 import { RewindToPromptModal } from '@renderer/features/workspace/ui/RewindToPromptModal'
 import { ViewPromptsModal } from '@renderer/features/workspace/ui/ViewPromptsModal'
 import { GitBar } from '@renderer/features/git/ui/GitBar'
+import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
@@ -59,6 +60,7 @@ export default function App() {
   const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
+  const worktreesBarOpen = useAppStore(state => state.worktreesBarOpen)
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
   const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
@@ -81,6 +83,7 @@ export default function App() {
   const closeViewPrompts = useAppStore(state => state.closeViewPrompts)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
+  const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
   const toggleFeedDebugPanel = useAppStore(state => state.toggleFeedDebugPanel)
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
@@ -292,6 +295,18 @@ export default function App() {
           />
         )}
 
+        {worktreesBarOpen && (
+          <WorktreesBar
+            cwd={
+              activeTab
+                ? workspace.state.sessions[activeTab.focusedSessionId]?.cwd ?? null
+                : null
+            }
+            workspace={workspace}
+            onClose={toggleWorktreesBar}
+          />
+        )}
+
         {debugPanelOpen && activeTab && (
           <DebugPanel
             sessionId={activeTab.focusedSessionId}
@@ -334,6 +349,7 @@ export default function App() {
         onNewTabRequest={onNewTabRequest}
         onResumeRequest={onResumeRequest}
         toggleGitBar={toggleGitBar}
+        toggleWorktreesBar={toggleWorktreesBar}
         toggleDebugPanel={toggleDebugPanel}
         toggleFeedDebugPanel={toggleFeedDebugPanel}
         toggleProxyDebugPanel={toggleProxyDebugPanel}
@@ -361,6 +377,7 @@ export default function App() {
         worktreeBadgesEnabled={settings.showWorktreeBadges}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
         gitBarOpen={gitBarOpen}
+        worktreesBarOpen={worktreesBarOpen}
         debugPanelOpen={debugPanelOpen}
         feedDebugPanelOpen={feedDebugPanelOpen}
         proxyDebugPanelOpen={proxyDebugPanelOpen}

@@ -11,6 +11,7 @@ export type UiShellState = {
   viewPromptsSessionId: SessionId | null
   newAgentPlacementOpen: boolean
   gitBarOpen: boolean
+  worktreesBarOpen: boolean
   debugPanelOpen: boolean
   feedDebugPanelOpen: boolean
   /** When true, the right-hand Proxy Debug Panel is mounted. Shows
