@@ -18,6 +18,7 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
+import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 
 // Remap a persisted tree by replacing every sessionId with a freshly
 // spawned one (spawn happens as we walk). Returns the remapped tree
@@ -171,6 +172,13 @@ export async function rehydrateWorkspace(
           ...base,
           ...(draft && !base.draftInput ? { draftInput: draft } : {}),
           hasOlderHistory: Boolean(freshSessions[newId]?.providerSessionId),
+          transcriptStatus: base.transcriptStatus === 'ready' || base.transcriptStatus === 'error'
+            ? base.transcriptStatus
+            : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready',
+          transcriptError: base.transcriptError,
+          processStatus: 'started',
+          processError: null,
+          inputReady: true,
         }
       }
       for (const id of Object.keys(freshSessions)) {
@@ -179,6 +187,14 @@ export async function rehydrateWorkspace(
         out[id] = {
           ...(existing ?? emptyRuntime()),
           hasOlderHistory: Boolean(freshSessions[id]?.providerSessionId),
+          transcriptStatus:
+            existing?.transcriptStatus === 'ready' || existing?.transcriptStatus === 'error'
+              ? existing.transcriptStatus
+              : freshSessions[id]?.providerSessionId ? 'loading' : 'ready',
+          transcriptError: existing?.transcriptError ?? null,
+          processStatus: 'started',
+          processError: null,
+          inputReady: true,
         }
       }
       return out
@@ -222,6 +238,14 @@ export async function rehydrateWorkspace(
           ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
         }
         commitRehydratedState()
+        if (kind !== 'terminal' && freshSessions[newId].providerSessionId) {
+          void loadInitialHistoryForSession({
+            sessionId: newId,
+            meta: freshSessions[newId],
+            refs,
+            setRuntimes,
+          })
+        }
         restoreSpan.end({ newId })
       } catch (err) {
         restoreSpan.fail(err)

@@ -152,6 +152,21 @@ export function TileLeaf({
   useTypeToFocus({ focused, sessionId, inputRef, setDraftInput })
 
   const send = async (data: string) => {
+    if (
+      !runtime.inputReady ||
+      runtime.processStatus !== 'started' ||
+      runtime.exited !== null
+    ) {
+      workspace.showPaneToast(
+        sessionId,
+        runtime.processStatus === 'failed'
+          ? (runtime.processError ?? 'Agent failed to start')
+          : runtime.processStatus === 'exited'
+            ? 'Agent has exited'
+            : 'Agent is still starting; draft preserved',
+      )
+      return
+    }
     const ok = await window.api.sendInput(sessionId, data)
     if (!ok) {
       throw new Error(`sendInput failed for missing session ${sessionId}`)
@@ -188,8 +203,17 @@ export function TileLeaf({
     endHistoryCycle,
   })
 
-  const running = runtime.exited === null
   const isSessionLive = runtime.sessionStatus === 'running'
+  const readinessText =
+    runtime.transcriptStatus === 'loading'
+      ? 'loading transcript'
+      : runtime.transcriptStatus === 'error'
+        ? `transcript unavailable${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
+        : !runtime.inputReady || runtime.processStatus === 'spawning'
+          ? 'starting agent'
+          : runtime.processStatus === 'failed'
+            ? (runtime.processError ?? 'agent failed to start')
+            : null
 
   useEffect(() => {
     const node = paneRef.current
@@ -327,6 +351,12 @@ export function TileLeaf({
       </div>
 
       <QueueStrip queuedMessages={runtime.queuedMessages} />
+
+      {readinessText && (
+        <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
+          {readinessText}
+        </div>
+      )}
 
       {/* Codex approval prompt — rendered inline in the pane, matching
           how Codex's TUI draws it. Sits between feed and composer. */}
