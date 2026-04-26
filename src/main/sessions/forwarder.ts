@@ -11,9 +11,11 @@ import { enqueueJsonl, flushAndDropJsonl } from '@main/sessions/jsonlCoalescer.j
 // right tile. The forwarder's job is the dumbest possible one: tag
 // the channel, push the payload.
 //
-// terminal-data is intentionally a separate channel from screen /
-// jsonl-entry — keeps every Claude pane listener from unpacking and
-// ignoring raw PTY bytes it doesn't care about.
+// terminal-data and agent-pty-data are intentionally separate channels from
+// screen / jsonl-entry. terminal-data is for plain shell panes;
+// agent-pty-data is an opt-in inline terminal for Claude/Codex panes.
+// Keeping both out of the normal structured feed path prevents every
+// agent pane listener from unpacking and ignoring raw PTY bytes.
 
 export function wireSessionForwarder(
   manager: SessionManager,
@@ -36,6 +38,9 @@ export function wireSessionForwarder(
   )
   manager.on('terminal-data', payload =>
     sendToMainWindow('session:terminal-data', payload),
+  )
+  manager.on('agent-pty-data', payload =>
+    sendToMainWindow('session:agent-pty-data', payload),
   )
   manager.on('process-state', payload => sendToMainWindow('session:process-state', payload))
   manager.on('trust-dialog', payload => sendToMainWindow('session:trust-dialog', payload))

@@ -49,6 +49,7 @@ export type {
   SessionJsonlEntryEvent,
   SessionJsonlErrorEvent,
   SessionPermissionPromptEvent,
+  SessionAgentPtyDataEvent,
   SessionKind,
   SessionResumePromptEvent,
   SessionScreenEvent,
