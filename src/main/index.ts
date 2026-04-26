@@ -15,6 +15,7 @@ import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath, initializeToolchain } from '@main/setup/toolchain.js'
+import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 
 // Main process — thin Electron host.
 //
@@ -45,6 +46,7 @@ const lspManager = new LspManager()
 // See `./ghostJournal.ts` for the full rationale; see
 // `src/renderer/src/workspace/ghosts.ts` for the renderer side.
 const ghostJournals = new GhostJournalRegistry()
+const worktreeActivityIndex = new WorktreeActivityIndex()
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -136,7 +138,7 @@ app.whenReady().then(async () => {
   performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
-  registerAllIpc({ manager, lspManager, ghostJournals })
+  registerAllIpc({ manager, lspManager, ghostJournals, worktreeActivityIndex })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()
   performanceService.mark('app.main.window.created')

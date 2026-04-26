@@ -3,7 +3,7 @@ import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { join } from 'path'
 import { stat } from 'fs/promises'
-import type { WorktreeIdentity } from '@shared/types/git'
+import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { getToolPath } from '@main/setup/toolchain.js'
 
 // Git status IPC — powers GitBar.
@@ -42,6 +42,107 @@ async function git(cwd: string, args: string[]): Promise<string> {
   } catch {
     return ''
   }
+}
+
+function parseRevListCounts(out: string): { behind: number; ahead: number } | null {
+  const match = /^(\d+)\s+(\d+)$/.exec(out.trim())
+  if (!match) return null
+  return {
+    behind: Number(match[1]),
+    ahead: Number(match[2]),
+  }
+}
+
+function parseWorktreePorcelain(out: string): WorktreeIdentity[] {
+  const worktrees: WorktreeIdentity[] = []
+  let current: WorktreeIdentity | null = null
+
+  for (const line of out.split('\n')) {
+    if (!line.trim()) {
+      if (current) worktrees.push(current)
+      current = null
+      continue
+    }
+    const [key, ...rest] = line.split(' ')
+    const value = rest.join(' ')
+    if (key === 'worktree') {
+      if (current) worktrees.push(current)
+      current = { path: value, branch: null, head: null, detached: false }
+    } else if (current && key === 'HEAD') {
+      current.head = value || null
+    } else if (current && key === 'branch') {
+      current.branch = value.replace(/^refs\/heads\//, '') || null
+    } else if (current && key === 'detached') {
+      current.detached = true
+    }
+  }
+  if (current) worktrees.push(current)
+  return worktrees
+}
+
+export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity[]> {
+  const out = await git(cwd, ['worktree', 'list', '--porcelain'])
+  if (!out.trim()) return []
+  return parseWorktreePorcelain(out)
+}
+
+export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStatus[]> {
+  const worktrees = await listWorktreesForCwd(cwd)
+  return await Promise.all(worktrees.map(async worktree => {
+    const branch = worktree.branch
+    const dirty = (await git(worktree.path, ['status', '--porcelain'])).trim().length > 0
+    const lastCommitAtRaw = (await git(worktree.path, ['log', '-1', '--format=%ct'])).trim()
+    const lastCommitRelative = (await git(worktree.path, ['log', '-1', '--format=%cr'])).trim() || null
+    const lastCommitAt =
+      /^\d+$/.test(lastCommitAtRaw) ? Number(lastCommitAtRaw) * 1000 : null
+
+    let mergedToMain: boolean | null = null
+    let ahead: number | null = null
+    let behind: number | null = null
+    if (branch && branch !== 'main') {
+      mergedToMain = await new Promise<boolean>(resolve => {
+        execFile(
+          getToolPath('git', 'git'),
+          ['merge-base', '--is-ancestor', branch, 'main'],
+          { cwd, timeout: 5000 },
+          err => resolve(!err),
+        )
+      })
+      const counts = parseRevListCounts(
+        await git(cwd, ['rev-list', '--left-right', '--count', `main...${branch}`]),
+      )
+      behind = counts?.behind ?? null
+      ahead = counts?.ahead ?? null
+    } else if (branch === 'main') {
+      mergedToMain = true
+      ahead = 0
+      behind = 0
+    }
+
+    const category: GitWorktreeStatus['category'] =
+      branch === 'main'
+        ? 'main'
+        : worktree.detached
+          ? 'detached'
+          : dirty
+            ? 'dirty'
+            : mergedToMain === true && ahead === 0
+              ? 'cleanup-merged'
+              : mergedToMain === false && (ahead ?? 0) > 0
+                ? 'active-unmerged'
+                : 'review'
+
+    return {
+      ...worktree,
+      dirty,
+      mergedToMain,
+      ahead,
+      behind,
+      lastCommitAt,
+      lastCommitRelative,
+      category,
+    }
+  }))
 }
 
 // numstat → rows. Binary files emit '-' for both counts; we coerce
@@ -143,32 +244,18 @@ async function inspectSubmodule(
 export function registerGitIpc(): void {
   ipcMain.handle('git:worktrees', async (_evt, cwd: string) => {
     try {
-      const out = await git(cwd, ['worktree', 'list', '--porcelain'])
-      if (!out.trim()) throw new Error('not a git worktree')
-      const worktrees: WorktreeIdentity[] = []
-      let current: WorktreeIdentity | null = null
+      const worktrees = await listWorktreesForCwd(cwd)
+      if (worktrees.length === 0) throw new Error('not a git worktree')
+      return { ok: true as const, worktrees }
+    } catch {
+      return { ok: false as const }
+    }
+  })
 
-      for (const line of out.split('\n')) {
-        if (!line.trim()) {
-          if (current) worktrees.push(current)
-          current = null
-          continue
-        }
-        const [key, ...rest] = line.split(' ')
-        const value = rest.join(' ')
-        if (key === 'worktree') {
-          if (current) worktrees.push(current)
-          current = { path: value, branch: null, head: null, detached: false }
-        } else if (current && key === 'HEAD') {
-          current.head = value || null
-        } else if (current && key === 'branch') {
-          current.branch = value.replace(/^refs\/heads\//, '') || null
-        } else if (current && key === 'detached') {
-          current.detached = true
-        }
-      }
-      if (current) worktrees.push(current)
-
+  ipcMain.handle('git:worktree-status', async (_evt, cwd: string) => {
+    try {
+      const worktrees = await getWorktreeStatusForCwd(cwd)
+      if (worktrees.length === 0) throw new Error('not a git worktree')
       return { ok: true as const, worktrees }
     } catch {
       return { ok: false as const }

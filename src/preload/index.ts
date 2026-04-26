@@ -43,6 +43,8 @@ export type {
   SessionIndexEntry,
   SessionIndexPrompt,
   SessionInfo,
+  WorktreeActivityIndexStatus,
+  WorktreeActivitySummary,
   SessionJsonlEntriesEvent,
   SessionJsonlEntryEvent,
   SessionJsonlErrorEvent,
