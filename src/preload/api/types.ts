@@ -209,3 +209,33 @@ export type SessionInfo = {
   cwd?: string
   createdAt?: number
 }
+
+export type WorktreeActivityCounts = {
+  reads: number
+  writes: number
+  commands: number
+  commits: number
+  pushes: number
+  verifications: number
+}
+
+export type WorktreeActivitySummary = {
+  worktreePath: string
+  branch: string | null
+  lastActivityAt: number
+  lastProvider: 'claude' | 'codex'
+  lastProviderSessionId: string
+  lastTranscriptFile: string
+  lastSource: string
+  score: number
+  eventCounts: WorktreeActivityCounts
+}
+
+export type WorktreeActivityIndexStatus = {
+  lastIndexedAt: number | null
+  refreshing: boolean
+  stale: boolean
+  cacheHits: number
+  parsedFiles: number
+  skippedFiles: number
+}

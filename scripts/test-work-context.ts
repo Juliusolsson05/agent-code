@@ -3,17 +3,17 @@ import assert from 'node:assert/strict'
 import {
   matchWorktree,
   reduceWorkContextFromRaw,
-} from '../src/renderer/src/workspace/work-context/reducer'
+} from '../src/shared/work-context/reducer'
 import {
   deriveAgentWorkContext,
   ingestWorktreeRawEvent,
-} from '../src/renderer/src/workspace/work-context/tracker'
+} from '../src/shared/work-context/tracker'
 import {
   resetWorktreeBadgeColorAssignmentsForTest,
   worktreeBadgeColor,
 } from '../src/renderer/src/workspace/work-context/colors'
 import type { WorktreeIdentity } from '../src/shared/types/git'
-import type { WorktreeActivityState } from '../src/renderer/src/workspace/work-context/types'
+import type { WorktreeActivityState } from '../src/shared/work-context/types'
 
 const worktrees: WorktreeIdentity[] = [
   {

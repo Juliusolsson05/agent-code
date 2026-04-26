@@ -36,6 +36,7 @@ export type UiShellSlice = UiShellState & {
   openNewAgentPlacement: () => void
   closeNewAgentPlacement: () => void
   toggleGitBar: () => void
+  toggleWorktreesBar: () => void
   toggleDebugPanel: () => void
   toggleFeedDebugPanel: () => void
   toggleProxyDebugPanel: () => void

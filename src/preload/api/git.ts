@@ -1,5 +1,9 @@
 import { ipcRenderer } from 'electron'
-import type { WorktreeIdentity } from '@shared/types/git'
+import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
+import type {
+  WorktreeActivityIndexStatus,
+  WorktreeActivitySummary,
+} from '@preload/api/types'
 
 // Git status bridge — used by GitBar.
 //
@@ -13,6 +17,23 @@ export const gitApi = {
     | { ok: true; worktrees: WorktreeIdentity[] }
     | { ok: false }
   > => ipcRenderer.invoke('git:worktrees', cwd),
+
+  gitWorktreeStatus: (cwd: string): Promise<
+    | { ok: true; worktrees: GitWorktreeStatus[] }
+    | { ok: false }
+  > => ipcRenderer.invoke('git:worktree-status', cwd),
+
+  worktreeActivitySummary: (
+    cwd: string,
+    refresh = false,
+  ): Promise<
+    | {
+        ok: true
+        summaries: WorktreeActivitySummary[]
+        status: WorktreeActivityIndexStatus
+      }
+    | { ok: false }
+  > => ipcRenderer.invoke('worktree-activity:summary', cwd, refresh),
 
   gitStatus: (cwd: string): Promise<
     | {

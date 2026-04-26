@@ -17,6 +17,7 @@ export type CommandContext = {
     openAgentActivity: () => void
     openRewindPrompt: (sessionId: string) => void
     toggleGitBar: () => void
+    toggleWorktreesBar: () => void
     toggleDebugPanel: () => void
     toggleFeedDebugPanel: () => void
     toggleProxyDebugPanel: () => void
@@ -39,6 +40,7 @@ export type CommandContext = {
     worktreeBadgesEnabled: boolean
     dangerousAgentsEnabled: boolean
     gitBarOpen: boolean
+    worktreesBarOpen: boolean
     debugPanelOpen: boolean
     feedDebugPanelOpen: boolean
     proxyDebugPanelOpen: boolean

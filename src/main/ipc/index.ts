@@ -13,7 +13,9 @@ import { registerDebugIpc } from '@main/ipc/debug.js'
 import { registerGitIpc } from '@main/ipc/git.js'
 import { registerPerformanceIpc } from '@main/ipc/performance.js'
 import { registerSetupIpc } from '@main/ipc/setup.js'
+import { registerWorktreeActivityIpc } from '@main/ipc/worktreeActivity.js'
 import { installPerformanceIpcInstrumentation } from '@main/performance/instrumentIpc.js'
+import type { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 
 // IPC registration aggregator.
 //
@@ -28,6 +30,7 @@ export type IpcDeps = {
   manager: SessionManager
   lspManager: LspManager
   ghostJournals: GhostJournalRegistry
+  worktreeActivityIndex: WorktreeActivityIndex
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -42,5 +45,6 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerGhostIpc(deps.ghostJournals)
   registerDebugIpc()
   registerGitIpc()
+  registerWorktreeActivityIpc(deps.worktreeActivityIndex)
   registerSetupIpc()
 }
