@@ -236,6 +236,7 @@ export function useWorkspace(
     setTileTabs,
     refs,
     showToast,
+    closeNewAgentPlacement,
     sessionActions,
   )
 

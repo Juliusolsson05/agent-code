@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   buildPlacementTargets,
   defaultPlacementTargetId,
-  findNearestPlacementTarget,
+  placementTargetIdForArrow,
   type PlacementTarget,
 } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { SessionKind } from '@renderer/workspace/types'
@@ -20,6 +20,13 @@ const KIND_OPTIONS: Array<{ kind: SessionKind; label: string; description: strin
   { kind: 'codex', label: 'Codex', description: 'OpenAI coding agent session' },
   { kind: 'terminal', label: 'Terminal', description: 'plain shell pane' },
 ]
+
+const ARROW_TO_DIRECTION = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+} as const
 
 export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -141,24 +148,32 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
         }
         return
       }
-      if (event.key === 'ArrowUp') {
+      if (
+        event.key === 'ArrowLeft' ||
+        event.key === 'ArrowRight' ||
+        event.key === 'ArrowUp' ||
+        event.key === 'ArrowDown'
+      ) {
         event.preventDefault()
-        setSelectedTargetId(prev => findNearestPlacementTarget(placementTargets, prev, 'up'))
-        return
-      }
-      if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        setSelectedTargetId(prev => findNearestPlacementTarget(placementTargets, prev, 'down'))
-        return
-      }
-      if (event.key === 'ArrowLeft') {
-        event.preventDefault()
-        setSelectedTargetId(prev => findNearestPlacementTarget(placementTargets, prev, 'left'))
-        return
-      }
-      if (event.key === 'ArrowRight') {
-        event.preventDefault()
-        setSelectedTargetId(prev => findNearestPlacementTarget(placementTargets, prev, 'right'))
+        // WHY direct arrow mapping instead of nearest-rectangle navigation:
+        //
+        // The target set intentionally contains two different operations:
+        // split the focused pane, or wrap the whole root. Rendering every
+        // target as a clickable rectangle made those operations overlap, and
+        // center-distance navigation could jump from a local split to an
+        // unrelated outer row because a large half-screen target happened to
+        // be closer. Plain arrows now mean "place relative to the focused
+        // pane"; Shift+arrow means "place relative to the whole tab." That
+        // keeps the operations explicit and makes the preview the only visual
+        // source of truth.
+        const arrow = ARROW_TO_DIRECTION[event.key]
+        const scope = event.shiftKey ? 'global' : 'local'
+        setSelectedTargetId(placementTargetIdForArrow(
+          placementTargets,
+          anchorSessionId,
+          arrow,
+          scope,
+        ))
         return
       }
       if (event.key === 'Enter' && placementTarget) {
@@ -196,32 +211,24 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
       ref={overlayRef}
       className="absolute inset-0 z-40 bg-black/20"
     >
-      {selectedKind && placementTargets.map(target => {
-        const active = target.id === placementTarget?.id
-        return (
-          <button
-            key={target.id}
-            type="button"
-            onClick={() => setSelectedTargetId(target.id)}
-            className={`absolute border pointer-events-auto ${
-              active
-                ? 'border-red-500 bg-red-500/12 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]'
-                : target.scope === 'global'
-                  ? 'border-white/20 bg-white/5 hover:border-white/35'
-                  : 'border-white/15 bg-white/[0.03] hover:border-white/25'
-            }`}
-            style={{
-              left: target.rect.x,
-              top: target.rect.y,
-              width: target.rect.width,
-              height: target.rect.height,
-            }}
-            aria-label={target.label}
-          >
-            <span className="sr-only">{target.label}</span>
-          </button>
-        )
-      })}
+      {selectedKind && placementTarget && (
+        <div
+          className={`
+            absolute pointer-events-none border-2
+            ${placementTarget.scope === 'global'
+              ? 'border-amber-400 bg-amber-400/12 shadow-[0_0_0_1px_rgba(251,191,36,0.35)]'
+              : 'border-red-500 bg-red-500/12 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]'
+            }
+          `}
+          style={{
+            left: placementTarget.rect.x,
+            top: placementTarget.rect.y,
+            width: placementTarget.rect.width,
+            height: placementTarget.rect.height,
+          }}
+          aria-label={placementTarget.label}
+        />
+      )}
 
       <div className="absolute left-4 top-4 pointer-events-none">
         <div className="border border-border bg-surface/95 px-3 py-2 text-[11px] text-ink-dim shadow-lg shadow-black/30">
@@ -231,7 +238,7 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
             <div className="space-y-1">
               <div>{KIND_OPTIONS.find(option => option.kind === selectedKind)?.label} placement</div>
               <div className="text-muted">
-                Arrow keys move between real layout targets. Enter confirms. Backspace resets.
+                Arrows split the focused pane. Shift+arrows add an outer row or column.
               </div>
               <div className="text-muted">
                 Target: {placementTarget?.label ?? 'none'}

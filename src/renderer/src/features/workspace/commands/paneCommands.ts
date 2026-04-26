@@ -6,7 +6,7 @@ export const paneCommands: CommandDef[] = [
     id: 'new-agent',
     title: 'New Agent…',
     keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'terminal'],
-    when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
+    when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs && !workspace.dispatchMode),
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
   },
   {
