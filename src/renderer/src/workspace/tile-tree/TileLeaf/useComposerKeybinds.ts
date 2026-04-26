@@ -80,6 +80,21 @@ export function useComposerKeybinds({
     setInputText('')
   }
 
+  const backendReady =
+    runtime.inputReady &&
+    runtime.processStatus === 'started' &&
+    runtime.exited === null
+  const blockBackendWrite = () => {
+    workspace.showPaneToast(
+      sessionId,
+      runtime.processStatus === 'failed'
+        ? (runtime.processError ?? 'Agent failed to start')
+        : runtime.processStatus === 'exited'
+          ? 'Agent has exited'
+          : 'Agent is still starting; draft preserved',
+    )
+  }
+
   const onKeyDown = async (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Global keybinds bubble up to the document-level listener in
     // useKeybinds; if a modifier-combo handler called
@@ -92,7 +107,7 @@ export function useComposerKeybinds({
     // Only when input is empty AND the user types `/`. That way
     // normal text containing a `/` in the middle (a URL, a path)
     // doesn't accidentally flip us into slash mode.
-    if (!slashMode && input === '' && e.key === '/') {
+    if (!slashMode && backendReady && input === '' && e.key === '/') {
       e.preventDefault()
       await send('/')
       setInputText('/')
@@ -103,6 +118,11 @@ export function useComposerKeybinds({
     // ---- Slash mode: forward every key to PTY ----
     if (slashMode) {
       e.preventDefault()
+      if (!backendReady) {
+        blockBackendWrite()
+        exitSlashMode()
+        return
+      }
 
       if (e.key === 'Escape') {
         // Send ESC to CC (dismisses the picker) and exit slash
@@ -164,6 +184,10 @@ export function useComposerKeybinds({
       e.preventDefault()
       const draftImages = runtime.draftImages
       if (input.trim().length === 0 && draftImages.length === 0) return
+      if (!backendReady) {
+        blockBackendWrite()
+        return
+      }
       // Capture streaming baseline from the very freshest screen
       // text so the streaming card can detect "this is the old
       // response" reliably. latestScreenRef is mutated
@@ -263,17 +287,29 @@ export function useComposerKeybinds({
     }
     if (e.key === 'Escape') {
       e.preventDefault()
+      if (!backendReady) {
+        blockBackendWrite()
+        return
+      }
       await send('\x1b')
       return
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'c') {
       e.preventDefault()
+      if (!backendReady) {
+        blockBackendWrite()
+        return
+      }
       await send('\x03')
       setInputText('')
       return
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'd') {
       e.preventDefault()
+      if (!backendReady) {
+        blockBackendWrite()
+        return
+      }
       await send('\x04')
       return
     }
@@ -376,9 +412,24 @@ export function useComposerKeybinds({
     // row, or with a modifier) falls through to the old PTY-
     // forward path so CC's own history / caret navigation still
     // reaches it when appropriate.
-    if (e.key === 'ArrowUp') { e.preventDefault(); await send('\x1b[A'); return }
-    if (e.key === 'ArrowDown') { e.preventDefault(); await send('\x1b[B'); return }
-    if (e.key === 'Tab') { e.preventDefault(); await send('\t'); return }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!backendReady) { blockBackendWrite(); return }
+      await send('\x1b[A')
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (!backendReady) { blockBackendWrite(); return }
+      await send('\x1b[B')
+      return
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      if (!backendReady) { blockBackendWrite(); return }
+      await send('\t')
+      return
+    }
   }
 
   return { onKeyDown, slashMode }

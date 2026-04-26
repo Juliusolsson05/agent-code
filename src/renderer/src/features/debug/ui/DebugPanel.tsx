@@ -74,6 +74,9 @@ export function DebugPanel({ sessionId, runtime, kind, onClose }: Props) {
             <Flag label="sessionStatus" value={runtime.sessionStatus} />
             <Flag label="statusSource" value={runtime.sessionStatusSource} />
             <Flag label="processActive" on={runtime.processActive} />
+            <Flag label="processStatus" value={runtime.processStatus} />
+            <Flag label="inputReady" on={runtime.inputReady} />
+            <Flag label="transcriptStatus" value={runtime.transcriptStatus} />
             <Flag label="awaitingAssistant" on={runtime.awaitingAssistant} />
             <Flag label="exited" value={runtime.exited === null ? 'running' : String(runtime.exited)} />
             <Flag label="activityStatus" value={runtime.activityStatus ?? '(idle)'} />

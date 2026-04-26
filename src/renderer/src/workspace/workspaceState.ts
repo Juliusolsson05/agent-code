@@ -224,6 +224,8 @@ export type SemanticRuntimeState = {
 
 export type SessionStatus = 'idle' | 'running' | 'exited'
 export type SessionStatusSource = 'none' | 'submit' | 'process' | 'semantic' | 'exit'
+export type TranscriptStatus = 'idle' | 'loading' | 'ready' | 'error'
+export type ProcessStatus = 'idle' | 'spawning' | 'started' | 'failed' | 'exited'
 
 /** In-feed "what is the agent doing" phase. Mirrors the upstream
  *  Claude Code `streamMode` vocabulary so the WorkIndicator reads a
@@ -315,6 +317,19 @@ export type SessionRuntime = {
   processActive: boolean
   sessionStatus: SessionStatus
   sessionStatusSource: SessionStatusSource
+  /** Transcript readiness is deliberately separate from process
+   *  readiness. A resumed pane can show durable JSONL history while
+   *  the provider TUI is still warming up, and a live process can be
+   *  usable even if an optional tail-read failed. */
+  transcriptStatus: TranscriptStatus
+  transcriptError: string | null
+  /** Backend process lifecycle for send gating. `sessionStatus` is
+   *  "is the agent doing work right now"; `processStatus` is "does a
+   *  writable backend exist for this pane". Keeping them separate
+   *  avoids treating an idle, ready agent as unavailable. */
+  processStatus: ProcessStatus
+  processError: string | null
+  inputReady: boolean
   semantic: SemanticRuntimeState
   /** Current in-feed stream phase. Set by the `stream_phase` reducer
    *  case from SemanticStreamPhaseEvent; additionally set by the
@@ -430,6 +445,11 @@ export function emptyRuntime(): SessionRuntime {
     processActive: false,
     sessionStatus: 'idle',
     sessionStatusSource: 'none',
+    transcriptStatus: 'ready',
+    transcriptError: null,
+    processStatus: 'idle',
+    processError: null,
+    inputReady: false,
     semantic: emptySemanticRuntime(),
     streamPhase: 'idle',
     streamPhasePendingToolName: null,

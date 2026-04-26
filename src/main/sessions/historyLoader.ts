@@ -28,6 +28,8 @@ export type HistoryChunkRequest = {
   limit: number
 }
 
+export type InitialHistoryChunkRequest = Omit<HistoryChunkRequest, 'beforeMarker'>
+
 export type HistoryChunk = {
   entries: Record<string, unknown>[]
   hasMore: boolean
@@ -88,6 +90,58 @@ async function findCodexRolloutPathByThreadId(
 }
 
 /**
+ * Resolve and parse the provider's durable transcript file. Both the
+ * initial-tail loader and older-history pagination use this path so
+ * provider storage quirks stay in one place; renderer-side mapping is
+ * still provider-specific because those mapped feed rows are UI state.
+ */
+async function readTranscriptEntries(
+  params: InitialHistoryChunkRequest,
+): Promise<{
+  filePath: string | null
+  textLength: number
+  parseErrors: number
+  entries: Record<string, unknown>[]
+}> {
+  const provider = getMainProvider(params.kind)
+  let filePath: string | null = null
+
+  if (params.kind === 'claude') {
+    const projectDir = await provider.getProjectDir(params.cwd)
+    filePath = join(projectDir, `${params.providerSessionId}.jsonl`)
+  } else {
+    const sessionsDir = await provider.getProjectDir(params.cwd)
+    filePath = await findCodexRolloutPathByThreadId(sessionsDir, params.providerSessionId)
+  }
+
+  if (!filePath) {
+    return { filePath: null, textLength: 0, parseErrors: 0, entries: [] }
+  }
+
+  const text = await readFile(filePath, 'utf8').catch(() => null)
+  if (!text) {
+    return { filePath, textLength: 0, parseErrors: 0, entries: [] }
+  }
+
+  let parseErrors = 0
+  const entries = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .map(line => {
+      try {
+        return JSON.parse(line) as Record<string, unknown>
+      } catch {
+        parseErrors++
+        return null
+      }
+    })
+    .filter((entry): entry is Record<string, unknown> => entry !== null)
+
+  return { filePath, textLength: text.length, parseErrors, entries }
+}
+
+/**
  * Read the whole transcript file, locate `beforeMarker`, and return up
  * to `limit` entries immediately preceding it. `hasMore: true` means
  * there's still earlier history the renderer can request.
@@ -100,57 +154,33 @@ export async function loadOlderHistoryChunk(
     limit: params.limit,
     hasBeforeMarker: params.beforeMarker.length > 0,
   })
-  const provider = getMainProvider(params.kind)
-  let filePath: string | null = null
 
   try {
-    if (params.kind === 'claude') {
-      const projectDir = await provider.getProjectDir(params.cwd)
-      filePath = join(projectDir, `${params.providerSessionId}.jsonl`)
-    } else {
-      const sessionsDir = await provider.getProjectDir(params.cwd)
-      filePath = await findCodexRolloutPathByThreadId(sessionsDir, params.providerSessionId)
-    }
+    const parsed = await readTranscriptEntries(params)
 
-    if (!filePath) {
+    if (!parsed.filePath) {
       span.end({ result: 'missing-file' })
       return { entries: [], hasMore: false }
     }
 
-    const text = await readFile(filePath, 'utf8').catch(() => null)
-    if (!text) {
-      span.end({ result: 'read-failed', filePath })
+    if (parsed.entries.length === 0) {
+      span.end({ result: 'empty-or-read-failed', filePath: parsed.filePath })
       return { entries: [], hasMore: false }
     }
-
-    let parseErrors = 0
-    const parsed = text
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-      .map(line => {
-        try {
-          return JSON.parse(line) as Record<string, unknown>
-        } catch {
-          parseErrors++
-          return null
-        }
-      })
-      .filter((entry): entry is Record<string, unknown> => entry !== null)
 
     const markerOf = params.kind === 'claude'
       ? extractClaudeHistoryMarker
       : extractCodexHistoryMarker
 
-    const anchorIndex = parsed.findIndex(entry => markerOf(entry) === params.beforeMarker)
-    const cutoff = anchorIndex === -1 ? parsed.length : anchorIndex
-    const older = parsed.slice(0, cutoff)
+    const anchorIndex = parsed.entries.findIndex(entry => markerOf(entry) === params.beforeMarker)
+    const cutoff = anchorIndex === -1 ? parsed.entries.length : anchorIndex
+    const older = parsed.entries.slice(0, cutoff)
     if (older.length === 0) {
       span.end({
         result: 'no-older',
-        bytes: text.length,
-        parsed: parsed.length,
-        parseErrors,
+        bytes: parsed.textLength,
+        parsed: parsed.entries.length,
+        parseErrors: parsed.parseErrors,
       })
       return { entries: [], hasMore: false }
     }
@@ -159,9 +189,9 @@ export async function loadOlderHistoryChunk(
     const entries = older.slice(start)
     span.end({
       result: 'loaded',
-      bytes: text.length,
-      parsed: parsed.length,
-      parseErrors,
+      bytes: parsed.textLength,
+      parsed: parsed.entries.length,
+      parseErrors: parsed.parseErrors,
       returned: entries.length,
       hasMore: start > 0,
     })
@@ -169,6 +199,49 @@ export async function loadOlderHistoryChunk(
       entries,
       hasMore: start > 0,
     }
+  } catch (err) {
+    span.fail(err)
+    throw err
+  }
+}
+
+/**
+ * Return the newest durable transcript records without waiting for the
+ * provider process to replay them over IPC. The renderer still folds
+ * this through its normal feed-entry mapper and uuid set, so live
+ * replay can arrive before or after this read without double-rendering
+ * entries that carry stable ids.
+ */
+export async function loadInitialHistoryChunk(
+  params: InitialHistoryChunkRequest,
+): Promise<HistoryChunk> {
+  const span = performanceService.span('historyLoader.loadInitialChunk', {
+    kind: params.kind,
+    limit: params.limit,
+  })
+
+  try {
+    const parsed = await readTranscriptEntries(params)
+    if (!parsed.filePath) {
+      span.end({ result: 'missing-file' })
+      return { entries: [], hasMore: false }
+    }
+    if (parsed.entries.length === 0) {
+      span.end({ result: 'empty-or-read-failed', filePath: parsed.filePath })
+      return { entries: [], hasMore: false }
+    }
+
+    const start = Math.max(0, parsed.entries.length - params.limit)
+    const entries = parsed.entries.slice(start)
+    span.end({
+      result: 'loaded',
+      bytes: parsed.textLength,
+      parsed: parsed.entries.length,
+      parseErrors: parsed.parseErrors,
+      returned: entries.length,
+      hasMore: start > 0,
+    })
+    return { entries, hasMore: start > 0 }
   } catch (err) {
     span.fail(err)
     throw err

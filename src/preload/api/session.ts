@@ -107,6 +107,14 @@ export const sessionApi = {
   }): Promise<SessionHistoryChunk> =>
     ipcRenderer.invoke('session:load-older-history', params),
 
+  loadInitialHistory: (params: {
+    kind: 'claude' | 'codex'
+    cwd: string
+    providerSessionId: string
+    limit?: number
+  }): Promise<SessionHistoryChunk> =>
+    ipcRenderer.invoke('session:load-initial-history', params),
+
   // --- Session events (subscribe once; dispatch by sessionId in the callback) ---
   onSessionStarted: (cb: (e: SessionStartedEvent) => void): Unsub =>
     subscribe('session:started', cb),

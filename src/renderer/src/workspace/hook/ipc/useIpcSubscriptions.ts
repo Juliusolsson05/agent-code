@@ -244,7 +244,12 @@ export function useIpcSubscriptions(
     }
 
     const offStarted = window.api.onSessionStarted(({ sessionId, projectDir }) => {
-      updateRuntime(sessionId, { projectDir })
+      updateRuntime(sessionId, {
+        projectDir,
+        processStatus: 'started',
+        processError: null,
+        inputReady: true,
+      })
       const cwd = refs.stateRef.current.sessions[sessionId]?.cwd ?? projectDir
       refreshWorktrees(cwd)
       appendFeedDebug(sessionId, {
@@ -455,6 +460,10 @@ export function useIpcSubscriptions(
     const offErr = window.api.onSessionJsonlError(({ sessionId, message }) => {
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
+      updateRuntime(sessionId, {
+        transcriptStatus: 'error',
+        transcriptError: message,
+      })
     })
 
     const offExit = window.api.onSessionExit(({ sessionId, exitCode }) => {
@@ -471,6 +480,9 @@ export function useIpcSubscriptions(
               queuedMessages: [],
               activityStatus: null,
               processActive: false,
+              processStatus: 'exited',
+              processError: null,
+              inputReady: false,
               // Clear phase on exit. The WorkIndicator renders
               // nothing for `idle`; letting a pre-exit phase
               // linger would leave the in-feed indicator saying
@@ -518,6 +530,9 @@ export function useIpcSubscriptions(
               {
                 ...current,
                 processActive: active,
+                processStatus: current.exited === null ? 'started' : current.processStatus,
+                processError: null,
+                inputReady: current.exited === null,
                 activityStatus: active ? (status ?? null) : null,
                 awaitingAssistant: false,
               },
@@ -1172,6 +1187,8 @@ export function useIpcSubscriptions(
               pendingApproval,
               queuedMessages,
               awaitingAssistant,
+              transcriptStatus: 'ready',
+              transcriptError: null,
               workContext,
               workActivity,
               toolUseIndex,

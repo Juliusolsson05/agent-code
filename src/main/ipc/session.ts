@@ -4,7 +4,10 @@ import type { SessionManager } from '@main/sessionManager.js'
 import { getMainProvider } from '@providers/registry.main.js'
 import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList.js'
 import { listCodexSessions } from '@providers/codex/runtime/sessionList.js'
-import { loadOlderHistoryChunk } from '@main/sessions/historyLoader.js'
+import {
+  loadInitialHistoryChunk,
+  loadOlderHistoryChunk,
+} from '@main/sessions/historyLoader.js'
 
 // Session lifecycle + I/O IPC.
 //
@@ -143,6 +146,24 @@ export function registerSessionIpc(manager: SessionManager): void {
       return await loadOlderHistoryChunk({
         ...params,
         limit: params.limit ?? 200,
+      })
+    },
+  )
+
+  ipcMain.handle(
+    'session:load-initial-history',
+    async (
+      _evt,
+      params: {
+        kind: 'claude' | 'codex'
+        cwd: string
+        providerSessionId: string
+        limit?: number
+      },
+    ) => {
+      return await loadInitialHistoryChunk({
+        ...params,
+        limit: params.limit ?? 120,
       })
     },
   )

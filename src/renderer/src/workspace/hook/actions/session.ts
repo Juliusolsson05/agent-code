@@ -16,6 +16,7 @@ import type {
   WorkspaceSetState,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 
 // -----------------------------------------------------------------------------
 // Session lifecycle actions.
@@ -103,6 +104,14 @@ export function useSessionActions(
       } catch (err) {
         throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
       }
+      const meta: SessionMeta = {
+        cwd,
+        kind,
+        ...(tmuxName ? { tmuxName } : {}),
+        ...(kind !== 'terminal' && opts?.resumeSessionId
+          ? { providerSessionId: opts.resumeSessionId }
+          : {}),
+      }
       setState(prev => ({
         ...prev,
         sessions: {
@@ -110,23 +119,30 @@ export function useSessionActions(
           // Persist tmuxName when main returns one — that's the
           // signal that this terminal got tmux backing and is
           // eligible for cross-restart recovery on next launch.
-          [sessionId]: {
-            cwd,
-            kind,
-            ...(tmuxName ? { tmuxName } : {}),
-            ...(kind !== 'terminal' && opts?.resumeSessionId
-              ? { providerSessionId: opts.resumeSessionId }
-              : {}),
-          },
+          [sessionId]: meta,
         },
       }))
       setRuntimes(prev => ({
         ...prev,
         [sessionId]: {
           ...emptyRuntime(),
-          hasOlderHistory: kind !== 'terminal' && Boolean(opts?.resumeSessionId),
+          hasOlderHistory: kind !== 'terminal' && Boolean(meta.providerSessionId),
+          transcriptStatus:
+            kind !== 'terminal' && meta.providerSessionId ? 'loading' : 'ready',
+          transcriptError: null,
+          processStatus: 'started',
+          processError: null,
+          inputReady: true,
         },
       }))
+      if (kind !== 'terminal' && meta.providerSessionId) {
+        void loadInitialHistoryForSession({
+          sessionId,
+          meta,
+          refs,
+          setRuntimes,
+        })
+      }
 
       // Ghost log bootstrap — fire-and-forget, no await. If a prior
       // run of cc-shell persisted ghosts for this sessionId, replay
@@ -388,6 +404,11 @@ export function useSessionActions(
           const restored = emptyRuntime()
           restored.draftInput = oldRuntimes[oldId]?.draftInput ?? ''
           restored.hasOlderHistory = Boolean(freshSessions[newId]?.providerSessionId)
+          restored.transcriptStatus = freshSessions[newId]?.providerSessionId
+            ? 'loading'
+            : 'ready'
+          restored.processStatus = 'started'
+          restored.inputReady = true
           next[newId] = restored
         }
         return next
@@ -443,6 +464,15 @@ export function useSessionActions(
           buried: nextBuried,
         }
       })
+      for (const [newId, meta] of Object.entries(freshSessions)) {
+        if (!meta.providerSessionId) continue
+        void loadInitialHistoryForSession({
+          sessionId: newId,
+          meta,
+          refs,
+          setRuntimes,
+        })
+      }
     },
     [
       refs.dangerousAgentsRef,
