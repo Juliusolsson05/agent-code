@@ -13,19 +13,28 @@ export function WorktreeBadge({
   context: AgentWorkContext | null | undefined
   activity: WorktreeActivityState | null | undefined
 }) {
-  if (!context?.worktreePath) return null
-  const label = context.branch ?? shortPath(context.worktreePath)
+  // The badge is a "where is this agent working now?" signal, so
+  // prefer the latest active worktree over the longer-lived primary
+  // score winner. The primary context can lag badly in sessions that
+  // start on main and later move to a feature worktree: main has more
+  // cumulative events, while activity.active already reflects the
+  // most recent command cwd.
+  const displayContext = activity?.active?.worktreePath
+    ? activity.active
+    : context
+  if (!displayContext?.worktreePath) return null
+  const label = displayContext.branch ?? shortPath(displayContext.worktreePath)
   if (!label) return null
-  const color = worktreeBadgeColor(context)
+  const color = worktreeBadgeColor(displayContext)
   const title = [
-    'Primary worktree',
-    context.branch ? `Branch: ${context.branch}` : null,
-    `Worktree: ${context.worktreePath}`,
-    `Source: ${context.source}`,
-    `Confidence: ${context.confidence}`,
-    activity?.active?.worktreePath &&
-      activity.active.worktreePath !== context.worktreePath
-      ? `Active now: ${activity.active.branch ?? shortPath(activity.active.worktreePath)} (${activity.active.worktreePath})`
+    activity?.active?.worktreePath ? 'Active worktree' : 'Primary worktree',
+    displayContext.branch ? `Branch: ${displayContext.branch}` : null,
+    `Worktree: ${displayContext.worktreePath}`,
+    `Source: ${displayContext.source}`,
+    `Confidence: ${displayContext.confidence}`,
+    context?.worktreePath &&
+      context.worktreePath !== displayContext.worktreePath
+      ? `Primary: ${context.branch ?? shortPath(context.worktreePath)} (${context.worktreePath})`
       : null,
     activity
       ? `Touched: ${Object.values(activity.touched).length}`
