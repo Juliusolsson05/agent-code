@@ -24,6 +24,8 @@ import {
 //   cmd-shift-w     close active tab outright
 //   cmd-1..9        activate Nth tab
 //                   In Dispatch Mode this selects the Nth visible agent row.
+//                   Press a second digit while cmd is still held to select
+//                   rows 10..99, preserving digit order (cmd-1 then 2 → 12).
 //   cmd-alt-1..9    activate Nth tab, including while Dispatch Mode owns cmd-N.
 //   cmd-[           previous tab
 //   cmd-]           next tab
@@ -84,6 +86,27 @@ export function useKeybinds(
 
   useEffect(() => {
     let pendingTiledResizeIndex: number | null = null
+    let pendingDispatchDigit: number | null = null
+    let pendingDispatchDigitTimer: number | null = null
+
+    const clearPendingDispatchDigit = () => {
+      pendingDispatchDigit = null
+      if (pendingDispatchDigitTimer !== null) {
+        window.clearTimeout(pendingDispatchDigitTimer)
+        pendingDispatchDigitTimer = null
+      }
+    }
+
+    const rememberDispatchDigit = (digit: number) => {
+      pendingDispatchDigit = digit
+      if (pendingDispatchDigitTimer !== null) {
+        window.clearTimeout(pendingDispatchDigitTimer)
+      }
+      pendingDispatchDigitTimer = window.setTimeout(() => {
+        pendingDispatchDigit = null
+        pendingDispatchDigitTimer = null
+      }, 650)
+    }
 
     const handler = (e: KeyboardEvent) => {
       const cmd = e.metaKey
@@ -265,10 +288,24 @@ export function useKeybinds(
         // The row labels keep their tab letter (A/B/C) for orientation,
         // but the numeric suffix is global in the visible dispatch list.
         if (workspace.dispatchMode) {
-          const digit = digitFromKeyboardEvent(e)
+          const digit = digitFromKeyboardEvent(e, {
+            includeZero: pendingDispatchDigit !== null,
+          })
           if (digit !== null) {
             e.preventDefault()
-            focusDispatchRowByIndex(workspace, digit - 1)
+            if (!e.repeat) {
+              const combined =
+                pendingDispatchDigit !== null
+                  ? pendingDispatchDigit * 10 + digit
+                  : null
+              if (combined !== null && combined >= 10 && combined <= 99) {
+                focusDispatchRowByIndex(workspace, combined - 1)
+                clearPendingDispatchDigit()
+              } else if (digit > 0) {
+                focusDispatchRowByIndex(workspace, digit - 1)
+                rememberDispatchDigit(digit)
+              }
+            }
             return
           }
         }
@@ -446,11 +483,15 @@ export function useKeybinds(
     }
 
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Meta') pendingTiledResizeIndex = null
+      if (e.key === 'Meta') {
+        pendingTiledResizeIndex = null
+        clearPendingDispatchDigit()
+      }
     }
 
     const onBlur = () => {
       pendingTiledResizeIndex = null
+      clearPendingDispatchDigit()
     }
 
     // capture: true — run BEFORE focused input sees the key. Without
@@ -460,6 +501,7 @@ export function useKeybinds(
     document.addEventListener('keyup', onKeyUp, { capture: true })
     window.addEventListener('blur', onBlur)
     return () => {
+      clearPendingDispatchDigit()
       document.removeEventListener('keydown', handler, { capture: true })
       document.removeEventListener('keyup', onKeyUp, { capture: true })
       window.removeEventListener('blur', onBlur)
@@ -478,10 +520,15 @@ export function useKeybinds(
   ])
 }
 
-function digitFromKeyboardEvent(e: KeyboardEvent): number | null {
+function digitFromKeyboardEvent(
+  e: KeyboardEvent,
+  options: { includeZero?: boolean } = {},
+): number | null {
+  if (options.includeZero && e.code === 'Digit0') return 0
   if (/^Digit[1-9]$/.test(e.code)) {
     return Number(e.code.slice('Digit'.length))
   }
+  if (options.includeZero && e.key === '0') return 0
   const digit = parseInt(e.key, 10)
   return !Number.isNaN(digit) && digit >= 1 && digit <= 9 ? digit : null
 }

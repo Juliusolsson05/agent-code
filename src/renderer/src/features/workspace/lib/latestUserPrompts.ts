@@ -72,6 +72,36 @@ export function extractLatestUserPrompts(
   return Number.isFinite(limit) ? latestFirst.slice(0, limit) : latestFirst
 }
 
+export function extractLatestUserPrompt(
+  entries: Entry[],
+  sessionKind: SessionKind | undefined,
+): LatestUserPrompt | null {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i]
+    if (!entry) continue
+    if (!isConversationEntry(entry)) continue
+    if (entry.message.role !== 'user') continue
+    if (isCompactSummaryEntry(entry)) continue
+
+    const meta = entry as unknown as {
+      permissionMode?: string
+      isMeta?: boolean
+    }
+    if (meta.isMeta === true) continue
+    if (sessionKind !== 'codex' && meta.permissionMode === undefined) continue
+
+    const text = extractPromptText(entry)
+    if (!text) continue
+    if (text.startsWith('<')) continue
+    return {
+      text,
+      timestamp: typeof entry.timestamp === 'string' ? entry.timestamp : null,
+    }
+  }
+
+  return null
+}
+
 /**
  * Anchored prompt extraction for the Rewind-to-Prompt picker.
  *

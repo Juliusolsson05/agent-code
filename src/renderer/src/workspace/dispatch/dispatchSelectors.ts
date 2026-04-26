@@ -1,5 +1,4 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 
@@ -13,7 +12,6 @@ export type DispatchAgentRow = {
   sessionId: SessionId
   kind: SessionKind | undefined
   title: string
-  subtitle: string
 }
 
 export type DispatchTabGroup = {
@@ -24,7 +22,6 @@ export type DispatchTabGroup = {
 
 export function buildDispatchGroups(
   state: WorkspaceState,
-  runtimes: Record<SessionId, SessionRuntime>,
 ): DispatchTabGroup[] {
   const activeOnly = state.dispatchMode?.scope !== 'global'
   const sourceTabs = activeOnly
@@ -44,7 +41,6 @@ export function buildDispatchGroups(
         .filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
         .map(sessionId => {
           const meta = state.sessions[sessionId]
-          const runtime = runtimes[sessionId]
           const rowIndex = globalIndex++
           return {
             key: `${tab.id}:${sessionId}`,
@@ -55,8 +51,7 @@ export function buildDispatchGroups(
             tabIndex,
             sessionId,
             kind: meta?.kind,
-            title: sessionTitle(meta, runtime),
-            subtitle: sessionSubtitle(runtime),
+            title: sessionTitle(meta),
           } satisfies DispatchAgentRow
         })
       return { tab, tabIndex, rows } satisfies DispatchTabGroup
@@ -78,18 +73,9 @@ export function findTerminalSessionInTab(
 
 function sessionTitle(
   meta: WorkspaceState['sessions'][SessionId] | undefined,
-  runtime: SessionRuntime | undefined,
 ): string {
   if (meta?.title?.trim()) return meta.title.trim()
-  return basename(meta?.cwd ?? runtime?.projectDir ?? 'agent')
-}
-
-function sessionSubtitle(runtime: SessionRuntime | undefined): string {
-  if (!runtime) return 'starting'
-  if (runtime.streamPhase !== 'idle') return runtime.streamPhase
-  if (runtime.sessionStatus === 'running') return 'running'
-  if (runtime.exited !== null) return 'exited'
-  return 'idle'
+  return basename(meta?.cwd ?? 'agent')
 }
 
 function basename(path: string): string {

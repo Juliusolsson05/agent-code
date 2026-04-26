@@ -1,16 +1,28 @@
-import { useEffect, useMemo } from 'react'
+import { memo, useCallback, useEffect, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { useAppStore } from '@renderer/app-state/hooks'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 import { AgentTypeBadge, WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
+import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
 import {
   buildDispatchGroups,
   findTerminalSessionInTab,
   flattenDispatchRows,
   type DispatchAgentRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import type { SessionId, TabId } from '@renderer/workspace/types'
+import type { Entry } from '@shared/types/transcript'
+
+type DispatchAgentActivity = 'working' | 'running' | 'idle' | 'exited' | 'starting'
+
+const latestPromptTitleCache = new WeakMap<
+  Entry[],
+  { kind: DispatchAgentRow['kind']; title: string | null }
+>()
 
 type Props = {
   workspace: Workspace
@@ -24,8 +36,8 @@ export function DispatchLayout({
   showWorktreeBadges,
 }: Props) {
   const groups = useMemo(
-    () => buildDispatchGroups(workspace.state, workspace.runtimes),
-    [workspace.runtimes, workspace.state],
+    () => buildDispatchGroups(workspace.state),
+    [workspace.state],
   )
   const rows = useMemo(() => flattenDispatchRows(groups), [groups])
   const activeRow = selectActiveRow(rows, workspace.activeTab?.focusedSessionId ?? null)
@@ -66,7 +78,8 @@ export function DispatchLayout({
       <DispatchAgentList
         groups={groups}
         activeSessionId={activeRow?.sessionId ?? null}
-        workspace={workspace}
+        dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
+        focusSessionInTab={workspace.focusSessionInTab}
         showWorktreeBadges={showWorktreeBadges}
       />
 
@@ -108,40 +121,36 @@ export function DispatchLayout({
   )
 }
 
-function DispatchAgentList({
+const DispatchAgentList = memo(function DispatchAgentList({
   groups,
   activeSessionId,
-  workspace,
+  dispatchScope,
+  focusSessionInTab,
   showWorktreeBadges,
 }: {
   groups: ReturnType<typeof buildDispatchGroups>
   activeSessionId: string | null
-  workspace: Workspace
+  dispatchScope: 'global' | 'project'
+  focusSessionInTab: Workspace['focusSessionInTab']
   showWorktreeBadges: boolean
 }) {
   return (
-    <aside className="basis-1/4 min-w-[220px] max-w-[420px] min-h-0 border-r border-border bg-surface overflow-y-auto">
+    <aside className="basis-1/4 min-w-[220px] max-w-[420px] min-h-0 border-r border-border bg-surface overflow-y-auto [contain:layout_paint]">
       <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface px-3 py-2 text-[10px] text-muted uppercase">
         <span>Agents</span>
-        <span>{workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}</span>
+        <span>{dispatchScope}</span>
       </div>
       {groups.map(group => (
         <div key={group.tab.id} className="border-b border-border">
-          <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-ink bg-canvas">
-            <span className="truncate">{group.tab.title}</span>
-            <span className="text-muted tabular-nums">
-              {group.rows.filter(row => workspace.runtimes[row.sessionId]?.sessionStatus === 'running').length}/{group.rows.length}
-            </span>
-          </div>
+          <DispatchGroupHeader title={group.tab.title} rows={group.rows} />
           <div>
             {group.rows.map(row => (
               <DispatchAgentListRow
                 key={row.key}
                 row={row}
                 active={row.sessionId === activeSessionId}
-                runtime={workspace.runtimes[row.sessionId]}
                 showWorktreeBadges={showWorktreeBadges}
-                onSelect={() => workspace.focusSessionInTab(row.tabId, row.sessionId)}
+                focusSessionInTab={focusSessionInTab}
               />
             ))}
           </div>
@@ -149,36 +158,84 @@ function DispatchAgentList({
       ))}
     </aside>
   )
-}
+})
 
-function DispatchAgentListRow({
+const DispatchGroupHeader = memo(function DispatchGroupHeader({
+  title,
+  rows,
+}: {
+  title: string
+  rows: DispatchAgentRow[]
+}) {
+  const sessionIds = useMemo(() => rows.map(row => row.sessionId), [rows])
+  const runningCount = useAppStore(useShallow(state => {
+    let count = 0
+    for (const sessionId of sessionIds) {
+      const runtime = state.workspaceRuntimes[sessionId]
+      if (runtime?.sessionStatus === 'running' || runtime?.streamPhase !== 'idle') count += 1
+    }
+    return count
+  }))
+
+  return (
+    <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-ink bg-canvas">
+      <span className="truncate">{title}</span>
+      <span className="text-muted tabular-nums">
+        {runningCount}/{rows.length}
+      </span>
+    </div>
+  )
+})
+
+const DispatchAgentListRow = memo(function DispatchAgentListRow({
   row,
   active,
-  runtime,
   showWorktreeBadges,
-  onSelect,
+  focusSessionInTab,
 }: {
   row: DispatchAgentRow
   active: boolean
-  runtime: Workspace['runtimes'][string] | undefined
   showWorktreeBadges: boolean
-  onSelect: () => void
+  focusSessionInTab: (tabId: TabId, sessionId: SessionId) => void
 }) {
+  const runtime = useAppStore(useShallow(state => {
+    const current = state.workspaceRuntimes[row.sessionId]
+    return {
+      sessionStatus: current?.sessionStatus,
+      streamPhase: current?.streamPhase,
+      exited: current?.exited,
+      workContext: current?.workContext,
+      workActivity: current?.workActivity,
+      entries: current?.entries,
+    }
+  }))
+  const onSelect = useCallback(() => {
+    focusSessionInTab(row.tabId, row.sessionId)
+  }, [focusSessionInTab, row.sessionId, row.tabId])
+  const activity = dispatchActivity(runtime)
+  const activityClasses = dispatchActivityClasses(activity, active)
+  const subtitle = dispatchSubtitle(runtime)
+  const title = runtime.entries
+    ? cachedLatestPromptTitle(runtime.entries, row.kind) ?? row.title
+    : row.title
+
   return (
     <button
       type="button"
       onClick={onSelect}
+      title={title}
       className={`
-        w-full text-left px-3 py-2 border-t border-border
-        ${active ? 'bg-accent-soft text-ink' : 'bg-surface hover:bg-surface-hi text-ink-dim'}
+        relative w-full text-left px-3 py-2 border-t border-border overflow-hidden [contain:layout_paint]
+        ${activityClasses.row}
       `}
     >
+      <span className={`absolute left-0 top-0 h-full w-[3px] ${activityClasses.rail}`} />
       <div className="flex items-center gap-2 min-w-0">
         <span className={`flex-shrink-0 text-[10px] tabular-nums ${active ? 'text-accent' : 'text-muted'}`}>
           {row.label}
         </span>
-        <span className="flex-1 min-w-0 truncate text-[12px] text-ink">
-          {row.title}
+        <span className={`flex-1 min-w-0 truncate px-1 py-[1px] text-[12px] text-ink ${activityClasses.title}`}>
+          {title}
         </span>
         {showWorktreeBadges && (
           <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
@@ -186,10 +243,98 @@ function DispatchAgentListRow({
         <AgentTypeBadge kind={row.kind} />
       </div>
       <div className="mt-1 pl-7 text-[10px] text-muted truncate">
-        {row.subtitle}
+        {subtitle}
       </div>
     </button>
   )
+})
+
+function cachedLatestPromptTitle(
+  entries: Entry[],
+  kind: DispatchAgentRow['kind'],
+): string | null {
+  const cached = latestPromptTitleCache.get(entries)
+  if (cached && cached.kind === kind) return cached.title
+
+  const title = extractLatestUserPrompt(entries, kind)?.text ?? null
+  latestPromptTitleCache.set(entries, { kind, title })
+  return title
+}
+
+function dispatchSubtitle(runtime: {
+  sessionStatus?: string
+  streamPhase?: string
+  exited?: number | null
+}): string {
+  if (runtime.sessionStatus === undefined) return 'starting'
+  if (runtime.streamPhase && runtime.streamPhase !== 'idle') return runtime.streamPhase
+  if (runtime.sessionStatus === 'running') return 'running'
+  if (runtime.exited !== null && runtime.exited !== undefined) return 'exited'
+  return 'idle'
+}
+
+function dispatchActivity(runtime: {
+  sessionStatus?: string
+  streamPhase?: string
+  exited?: number | null
+}): DispatchAgentActivity {
+  if (runtime.sessionStatus === undefined) return 'starting'
+  if (runtime.exited !== null && runtime.exited !== undefined) return 'exited'
+  if (runtime.streamPhase && runtime.streamPhase !== 'idle') return 'working'
+  if (runtime.sessionStatus === 'running') return 'running'
+  return 'idle'
+}
+
+function dispatchActivityClasses(
+  activity: DispatchAgentActivity,
+  active: boolean,
+): {
+  row: string
+  rail: string
+  title: string
+} {
+  if (active) {
+    return {
+      row: 'bg-accent-soft text-ink',
+      rail: 'bg-accent',
+      title: activity === 'working' || activity === 'running'
+        ? 'bg-accent-soft'
+        : '',
+    }
+  }
+  if (activity === 'working') {
+    return {
+      row: 'bg-green-500/10 hover:bg-green-500/15 text-ink',
+      rail: 'bg-green-400',
+      title: 'bg-green-500/15',
+    }
+  }
+  if (activity === 'running') {
+    return {
+      row: 'bg-cyan-500/10 hover:bg-cyan-500/15 text-ink',
+      rail: 'bg-cyan-400',
+      title: 'bg-cyan-500/15',
+    }
+  }
+  if (activity === 'starting') {
+    return {
+      row: 'bg-yellow-500/10 hover:bg-yellow-500/15 text-ink',
+      rail: 'bg-yellow-400',
+      title: 'bg-yellow-500/15',
+    }
+  }
+  if (activity === 'exited') {
+    return {
+      row: 'bg-surface hover:bg-surface-hi text-muted opacity-75',
+      rail: 'bg-border-hi',
+      title: '',
+    }
+  }
+  return {
+    row: 'bg-surface hover:bg-surface-hi text-ink-dim',
+    rail: 'bg-transparent',
+    title: '',
+  }
 }
 
 function DispatchEmpty({ message }: { message: string }) {
