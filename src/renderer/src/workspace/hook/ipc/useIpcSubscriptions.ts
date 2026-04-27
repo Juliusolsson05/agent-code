@@ -1206,9 +1206,15 @@ export function useIpcSubscriptions(
             },
           ),
         )
-        const nextRuntime = hasLiveOutput
-          ? withUnread(nextRuntimeBase, 'output')
-          : nextRuntimeBase
+        // WHY JSONL append does not mark ordinary output unread:
+        // transcript entries can arrive many times during a single model
+        // turn, and Dispatch's NEW marker is meant to mean "the agent's turn
+        // is complete and ready to review." The semantic handler above marks
+        // ordinary unread on `turn_completed` / `turn_stopped`; this bulk
+        // ingest path only commits durable entries and side effects. Keeping
+        // unread out of this path also avoids reviving the old per-append NEW
+        // behavior when provider-specific condition handling changes.
+        const nextRuntime = nextRuntimeBase
         closeSpan({
           sessionId,
           burstSize: entries.length,
