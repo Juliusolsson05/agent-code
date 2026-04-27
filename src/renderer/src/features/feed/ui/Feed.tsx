@@ -127,6 +127,10 @@ type Props = {
   workspaceRoot?: string | null
   /** Called on every scroll tick with the current position. */
   onScrollInfo?: (info: ScrollInfo) => void
+  /** User-originated engagement with the feed surface. Programmatic
+   *  auto-scroll must not call this; unread badges should clear only
+   *  when the user actually touches the session. */
+  onUserEngagement?: () => void
   hasOlderHistory?: boolean
   loadingOlderHistory?: boolean
   onLoadOlderHistory?: () => Promise<void>
@@ -236,6 +240,7 @@ function FeedImpl({
   pickerSelectedUuid = null,
   workspaceRoot = null,
   onScrollInfo,
+  onUserEngagement,
   hasOlderHistory = false,
   loadingOlderHistory = false,
   onLoadOlderHistory,
@@ -843,6 +848,12 @@ function FeedImpl({
       <div
         ref={scrollerRef}
         className="h-full overflow-auto"
+        onWheel={() => {
+          onUserEngagement?.()
+        }}
+        onPointerDown={() => {
+          onUserEngagement?.()
+        }}
       >
         <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
           {visible.map((e, i) => {

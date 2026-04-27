@@ -53,8 +53,18 @@ export function TerminalLeaf({
   paneLabel,
   focused,
   onFocusRequest,
-  workspace: _workspace,
+  workspace,
 }: Props) {
+  const acknowledgeSession = workspace.acknowledgeSession
+  // WHY this is a ref instead of an effect dependency: the effect below owns
+  // the xterm instance and its PTY subscriptions. Re-running it for a helper
+  // identity change would tear down scrollback and re-arm attach races even
+  // though the terminal session itself did not change. The session id is the
+  // real lifecycle boundary; the ref lets the data handler call the latest
+  // acknowledgement function without making helper identity part of xterm's
+  // mount/unmount contract.
+  const acknowledgeSessionRef = useRef(acknowledgeSession)
+  acknowledgeSessionRef.current = acknowledgeSession
   // The DOM node xterm.js renders into. We give it a fresh ref on
   // every mount; xterm's open() attaches on top.
   const containerRef = useRef<HTMLDivElement>(null)
@@ -137,6 +147,7 @@ export function TerminalLeaf({
       // the shell via sendInput. No slash mode, no history
       // cycling, no composer — this is a raw terminal.
       onDataDisposable = term.onData(data => {
+        acknowledgeSessionRef.current(sessionId)
         void window.api.sendInput(sessionId, data)
       })
 
@@ -310,6 +321,7 @@ export function TerminalLeaf({
       //      the synchronous safety net.
       onMouseDown={() => {
         onFocusRequest()
+        acknowledgeSession(sessionId)
         focusTerminal()
       }}
     >

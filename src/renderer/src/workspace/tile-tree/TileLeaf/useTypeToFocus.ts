@@ -50,11 +50,13 @@ export function useTypeToFocus({
   sessionId,
   inputRef,
   setDraftInput,
+  onUserEngagement,
 }: {
   focused: boolean
   sessionId: SessionId
   inputRef: RefObject<HTMLTextAreaElement | null>
   setDraftInput: (sessionId: SessionId, next: string) => void
+  onUserEngagement?: () => void
 }): void {
   useEffect(() => {
     if (!focused) return
@@ -74,6 +76,7 @@ export function useTypeToFocus({
       if (!el) return
       e.preventDefault()
       const next = el.value + e.key
+      onUserEngagement?.()
       setDraftInput(sessionId, next)
       el.focus()
       requestAnimationFrame(() => {
@@ -90,5 +93,5 @@ export function useTypeToFocus({
     // array. If workspace ever stops memoing it, this effect would
     // re-subscribe on every render and we'd add/remove a document
     // listener every frame — so keep setDraftInput memoed upstream.
-  }, [focused, sessionId, inputRef, setDraftInput])
+  }, [focused, sessionId, inputRef, setDraftInput, onUserEngagement])
 }

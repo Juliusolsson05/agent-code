@@ -93,7 +93,7 @@ export function TileLeaf({
   // memoed via useCallback in workspaceStore — depping on the
   // method gives us "re-run only when the workspace rebuilds the
   // callback", which in practice is never.
-  const { setDraftInput } = workspace
+  const { acknowledgeSession: acknowledgeWorkspaceSession, setDraftInput } = workspace
   // Draft input lives in the workspace runtime (not local useState)
   // so it survives TileLeaf unmount when the user switches tabs.
   // App.tsx only mounts the active tab's tree — inactive tabs are
@@ -107,6 +107,9 @@ export function TileLeaf({
   const setInputText = (next: string) => {
     setDraftInput(sessionId, next)
   }
+  const acknowledgeSession = useCallback(() => {
+    acknowledgeWorkspaceSession(sessionId)
+  }, [acknowledgeWorkspaceSession, sessionId])
   const setDraftImages = workspace.setDraftImages
   const provider: 'claude' | 'codex' =
     workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
@@ -151,9 +154,16 @@ export function TileLeaf({
   // keys into the composer when the pane is focused but DOM focus
   // drifted elsewhere. Hook in ./TileLeaf/useTypeToFocus.ts owns
   // the full filter/injection logic.
-  useTypeToFocus({ focused, sessionId, inputRef, setDraftInput })
+  useTypeToFocus({
+    focused,
+    sessionId,
+    inputRef,
+    setDraftInput,
+    onUserEngagement: acknowledgeSession,
+  })
 
   const send = async (data: string) => {
+    acknowledgeSession()
     if (
       !runtime.inputReady ||
       runtime.processStatus !== 'started' ||
@@ -343,6 +353,7 @@ export function TileLeaf({
           tailMode={runtime.tailMode}
           pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
           onScrollInfo={onScrollInfo}
+          onUserEngagement={acknowledgeSession}
           hasOlderHistory={runtime.hasOlderHistory}
           loadingOlderHistory={runtime.loadingOlderHistory}
           onLoadOlderHistory={loadOlderHistory}
@@ -398,6 +409,7 @@ export function TileLeaf({
         onKeyDown={onKeyDown}
         onPaste={handlePaste}
         onFocusRequest={onFocusRequest}
+        onUserEngagement={acknowledgeSession}
         removeDraftImage={removeDraftImage}
       />
     </div>

@@ -305,18 +305,18 @@ export function useIpcSubscriptions(
       })
     }
 
-    const isFocusedSession = (sessionId: SessionId): boolean => {
-      const snap = refs.stateRef.current
-      const activeTab = snap.tabs.find(tab => tab.id === snap.activeTabId)
-      return activeTab?.focusedSessionId === sessionId
-    }
-
     const withUnread = (
-      sessionId: SessionId,
       runtime: SessionRuntime,
       kind: 'output' | 'attention',
     ): SessionRuntime => {
-      if (isFocusedSession(sessionId)) return runtime
+      // Unread is an acknowledgement marker, not a focus marker.
+      // Dispatch navigation, tab restore, and automatic focus sync can all
+      // make a session "focused" without the user reading or acting on it.
+      // Writers therefore mark only meaningful milestones unread: ordinary
+      // output waits until the agent turn finishes, while attention prompts
+      // still surface immediately. Explicit engagement handlers (composer
+      // edit/click/paste, feed scroll/click, terminal click/input, action
+      // sends) clear it via acknowledgeSession().
       // Attention outranks ordinary output: once a permission/trust
       // prompt appears, the list should keep showing ACTION until
       // the user opens that agent or the prompt resolves. A later
@@ -774,9 +774,14 @@ export function useIpcSubscriptions(
             },
           ),
         )
+        const finishedTurn =
+          eventType === 'turn_completed' || eventType === 'turn_stopped'
+        const nextCurrentWithUnread = finishedTurn
+          ? withUnread(nextCurrent, 'output')
+          : nextCurrent
         return {
           ...prev,
-          [sessionId]: nextCurrent,
+          [sessionId]: nextCurrentWithUnread,
         }
       })
       closeSpan({
@@ -813,7 +818,7 @@ export function useIpcSubscriptions(
         return {
           ...prev,
           [sessionId]: !hadAttention && hasAttention
-            ? withUnread(sessionId, logged, 'attention')
+            ? withUnread(logged, 'attention')
             : logged,
         }
       })
@@ -1161,7 +1166,6 @@ export function useIpcSubscriptions(
           return prev
         }
 
-        const hasLiveOutput = appended.length > 0 && current.transcriptStatus === 'ready'
         const nextRuntimeBase = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
@@ -1203,8 +1207,8 @@ export function useIpcSubscriptions(
           ),
         )
         const nextRuntime = hasLiveOutput
-            ? withUnread(sessionId, nextRuntimeBase, 'output')
-            : nextRuntimeBase
+          ? withUnread(nextRuntimeBase, 'output')
+          : nextRuntimeBase
         closeSpan({
           sessionId,
           burstSize: entries.length,

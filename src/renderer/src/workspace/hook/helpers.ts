@@ -30,6 +30,7 @@ export function useWorkspaceHelpers(
 ): {
   updateRuntime: (sessionId: SessionId, patch: Partial<SessionRuntime>) => void
   appendFeedDebug: (sessionId: SessionId, input: FeedDebugInput) => void
+  acknowledgeSession: (sessionId: SessionId) => void
   getRuntime: (sessionId: SessionId) => SessionRuntime
   toggleTailMode: (sessionId: SessionId) => void
   scrollFocusedToLatest: () => void
@@ -56,6 +57,24 @@ export function useWorkspaceHelpers(
         return {
           ...prev,
           [sessionId]: next,
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
+  const acknowledgeSession = useCallback(
+    (sessionId: SessionId) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current || (current.unreadSince === null && current.unreadKind === null)) return prev
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            unreadSince: null,
+            unreadKind: null,
+          },
         }
       })
     },
@@ -96,6 +115,8 @@ export function useWorkspaceHelpers(
         ...prev,
         [sessionId]: {
           ...current,
+          unreadSince: null,
+          unreadKind: null,
           scrollToLatestRequest: current.scrollToLatestRequest + 1,
         },
       }
@@ -105,6 +126,7 @@ export function useWorkspaceHelpers(
   return {
     updateRuntime,
     appendFeedDebug,
+    acknowledgeSession,
     getRuntime,
     toggleTailMode,
     scrollFocusedToLatest,
