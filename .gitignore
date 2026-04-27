@@ -58,3 +58,8 @@ file-dumps/
 
 # Local environment overrides
 .env
+
+# Git worktrees (parallel branches checked out under the repo).
+# Kept hidden + ignored so `git status` from the main checkout never
+# tries to track the contents of sibling branches.
+.worktrees/
