@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
+import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
 
 import type {
   WorkspaceSetRuntimes,
@@ -8,6 +9,7 @@ import type {
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { DispatchModeState } from '@renderer/workspace/types'
 
 import { rehydrateWorkspace } from '@renderer/workspace/hook/persistence/rehydrate'
 import * as perf from '@renderer/performance/client'
@@ -29,6 +31,16 @@ export function useBootstrap(
   setTileTabs: WorkspaceSetTileTabs,
   newTab: (cwd: string) => Promise<unknown>,
   setBootstrapComplete: (complete: boolean) => void,
+  // WHY these two extra params: the "Default Workspace Mode" setting
+  // only matters on a brand-new install (no workspace.json). Rather
+  // than have useBootstrap reach into the app store directly — which
+  // would couple persistence to settings and add a re-render dep we
+  // don't want — the composer (`useWorkspace`) reads the setting once
+  // and threads it in alongside the dispatch entry point. We capture
+  // both in the once-only useEffect closure, so later setting changes
+  // don't retroactively rerun bootstrap.
+  defaultWorkspaceMode: WorkspaceModeId,
+  enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>,
 ): void {
   useEffect(() => {
     if (refs.bootRef.current) return
@@ -46,6 +58,30 @@ export function useBootstrap(
           )
           try {
             await perf.measure('workspace.bootstrap.initialNewTab', () => newTab(cwd))
+            // WHY apply the default mode here, after newTab resolves:
+            //
+            // `enterDispatchMode` triggers `ensureDispatchTerminal`, which
+            // looks up the active tab via `refs.stateRef.current.activeTabId`
+            // and inserts a terminal leaf into that tab's tree. If we called
+            // it before newTab finished, there'd be no tab yet → no terminal
+            // gets attached → the spawned PTY leaks. Sequencing it after
+            // newTab guarantees a tab+focused session exist.
+            //
+            // We deliberately do NOT touch the rehydrate path: existing
+            // workspaces already have `dispatchMode: null` (or a real value)
+            // persisted, so honoring the persisted value is what users
+            // expect. This setting is "first launch only" by design.
+            if (defaultWorkspaceMode === 'dispatch') {
+              try {
+                await enterDispatchMode('project')
+              } catch (dispatchErr) {
+                // Non-fatal: user lands in grid mode, can flip later.
+                // We don't surface a toast because a fresh-install user
+                // hasn't even seen the workspace yet — a stray error
+                // toast on an empty app is more confusing than helpful.
+                console.warn('[workspace] default dispatch entry failed:', dispatchErr)
+              }
+            }
             bootstrapSpan.end({ mode: 'fresh' })
           } catch (err) {
             bootstrapSpan.fail(err, { mode: 'fresh' })

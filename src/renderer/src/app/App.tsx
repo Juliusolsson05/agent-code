@@ -68,6 +68,7 @@ export default function App() {
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const useProxyStreaming = settings.useProxyStreaming
+  const defaultWorkspaceMode = settings.defaultWorkspaceMode
   const openPathPicker = useAppStore(state => state.openPathPicker)
   const closePathPicker = useAppStore(state => state.closePathPicker)
   const setPathPickerDefault = useAppStore(state => state.setPathPickerDefault)
@@ -103,7 +104,7 @@ export default function App() {
     applyTheme(settings)
   }, [settings])
 
-  const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming)
+  const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
   const pathPickerDefaultedRef = useRef(false)
 
   // Pre-fill the path input once per modal open. Do not keep syncing

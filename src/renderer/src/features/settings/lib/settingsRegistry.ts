@@ -1,9 +1,11 @@
 import {
   ACCENTS,
   THEME_MODES,
+  WORKSPACE_MODES,
   type AccentId,
   type Settings,
   type ThemeMode,
+  type WorkspaceModeId,
 } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
@@ -74,6 +76,15 @@ const ACCENT_OPTIONS: ChoiceOption<AccentId>[] = ACCENTS.map(accent => ({
   label: accent.name,
 }))
 
+const WORKSPACE_MODE_OPTIONS: ChoiceOption<WorkspaceModeId>[] = WORKSPACE_MODES.map(mode => ({
+  value: mode.id,
+  label: mode.label,
+  description:
+    mode.id === 'dispatch'
+      ? 'Open with the dispatch sidebar + main pane.'
+      : 'Open with the classic tiled grid.',
+}))
+
 export function getSettingsRegistry(): SettingDefinition[] {
   return [
     {
@@ -126,6 +137,28 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'toggle',
         getValue: settings => settings.customRendering,
         onToggle: (ctx, value) => ctx.onChange({ customRendering: value }),
+      },
+    },
+    {
+      // WHY this entry's copy is so explicit about "first launch":
+      // existing users will flip it expecting an immediate effect, and
+      // the setting deliberately doesn't behave that way. The friction
+      // of a confused user reporting "the setting doesn't work" is
+      // worse than verbose UI text. If this ever proves too narrow we
+      // can add a "Reset workspace to default mode" action later.
+      id: 'default-workspace-mode',
+      category: 'workspace',
+      title: 'Default Workspace Mode',
+      description:
+        'Mode the app opens in on first launch. Existing workspaces keep their last-used mode — flipping this later only affects a fresh install.',
+      keywords: ['default', 'mode', 'dispatch', 'grid', 'startup', 'launch', 'workspace'],
+      control: {
+        type: 'select',
+        getValue: settings => settings.defaultWorkspaceMode,
+        options: WORKSPACE_MODE_OPTIONS,
+        columns: 2,
+        onSelect: (ctx, value) =>
+          ctx.onChange({ defaultWorkspaceMode: value as WorkspaceModeId }),
       },
     },
     {
