@@ -93,7 +93,7 @@ export function useWorkspace(
   const [bootstrapComplete, setBootstrapComplete] = useState(false)
 
   // ---- Runtime helpers (updateRuntime / appendFeedDebug / getRuntime / etc) ----
-  const { updateRuntime, appendFeedDebug, getRuntime, toggleTailMode, scrollFocusedToLatest } =
+  const { updateRuntime, appendFeedDebug, acknowledgeSession, getRuntime, toggleTailMode, scrollFocusedToLatest } =
     useWorkspaceHelpers(runtimes, setRuntimes, refs)
 
   // ---- Pane toast (needs updateRuntime, so after helpers) ----
@@ -305,6 +305,7 @@ export function useWorkspace(
     setSplitRatio,
     setSplitRatioInTab,
     setStreamingBaseline,
+    acknowledgeSession,
     appendFeedDebug,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
