@@ -154,6 +154,18 @@ export type SessionHistoryChunk = {
   hasMore: boolean
 }
 
+export type TranscriptPathRequest = {
+  sessionId: string
+  kind: 'claude' | 'codex'
+  cwd: string
+  providerSessionId: string
+}
+
+export type TranscriptPathResult = TranscriptPathRequest & {
+  transcriptPath: string | null
+  exists: boolean
+}
+
 export type SessionExitEvent = {
   sessionId: string
   exitCode: number
