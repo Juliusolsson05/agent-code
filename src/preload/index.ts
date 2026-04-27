@@ -60,6 +60,8 @@ export type {
   SessionTerminalDataEvent,
   SessionTrustDialogEvent,
   SlashPickerState,
+  TranscriptPathRequest,
+  TranscriptPathResult,
 } from '@preload/api/types.js'
 
 export type {

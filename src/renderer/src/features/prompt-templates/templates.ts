@@ -1,5 +1,6 @@
 import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 export type PromptTemplateContext = {
@@ -19,6 +20,106 @@ export type PromptTemplate = {
 }
 
 const CUSTOM_TEMPLATES_KEY = 'cc-shell.promptTemplates.v1'
+
+type AgentTranscriptRequest = {
+  sessionId: string
+  kind: 'claude' | 'codex'
+  cwd: string
+  providerSessionId: string
+}
+
+type AgentTranscriptResolved = AgentTranscriptRequest & {
+  transcriptPath: string | null
+  exists: boolean
+}
+
+function shellQuote(value: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function buildResumeCommand(kind: 'claude' | 'codex', cwd: string, providerSessionId: string): string {
+  const cd = `cd ${shellQuote(cwd)}`
+  const resume = kind === 'codex'
+    ? `codex resume ${shellQuote(providerSessionId)}`
+    : `claude --resume ${shellQuote(providerSessionId)}`
+  return `${cd} && ${resume}`
+}
+
+function activeTabAgentTranscriptRequests(workspace: Workspace): AgentTranscriptRequest[] {
+  const tab = workspace.activeTab
+  if (!tab) return []
+
+  // The template is explicitly active-tab scoped, so the visible tile
+  // tree is the source of truth. `state.sessions` can contain buried
+  // panes and other live sessions from other tabs; pulling those in
+  // would make the generated prompt leak unrelated work and confuse
+  // the receiving agent about what context it should inspect.
+  return collectLeaves(tab.root).flatMap(sessionId => {
+    const meta = workspace.state.sessions[sessionId]
+    const kind = meta?.kind ?? 'claude'
+    if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) {
+      return []
+    }
+    return [{
+      sessionId,
+      kind,
+      cwd: meta.cwd,
+      providerSessionId: meta.providerSessionId,
+    }]
+  })
+}
+
+function fenced(value: string): string {
+  return ['```text', value, '```'].join('\n')
+}
+
+function buildActiveTabTranscriptPrompt(
+  tabTitle: string,
+  agents: AgentTranscriptResolved[],
+): string {
+  const lines: string[] = [
+    'Please read the active-tab agent transcripts below and use them as context for this task.',
+    '',
+    `Tab: ${tabTitle}`,
+    `Agent transcripts: ${agents.length}`,
+    '',
+    'These files are provider JSONL transcripts. Treat them as read-only evidence, not files to edit.',
+    '',
+    'How to read them:',
+    '- Codex: use shell reads such as `tail -n 200 "<path>"` for recent context, or parse the JSONL line by line when you need the full thread.',
+    '- Claude: use Read on the exact path when practical, or Bash `tail -n 200 "<path>"` for a bounded first pass.',
+    '- Each JSONL line is one event/object. If the transcript is large, start at the tail and only expand earlier when recent context is insufficient.',
+    '',
+  ]
+
+  if (agents.length === 0) {
+    lines.push('No active-tab Claude/Codex transcript paths were available.')
+    return lines.join('\n')
+  }
+
+  agents.forEach((agent, index) => {
+    const label = agent.kind === 'codex' ? 'Codex' : 'Claude'
+    const transcriptPath = agent.transcriptPath ?? '(transcript path not found)'
+    lines.push(
+      `## ${index + 1}. ${label} agent`,
+      '',
+      `cc-shell session id: \`${agent.sessionId}\``,
+      `provider session id: \`${agent.providerSessionId}\``,
+      `provider: \`${agent.kind}\``,
+      'cwd:',
+      fenced(agent.cwd),
+      'transcript:',
+      fenced(transcriptPath),
+      `transcript exists: ${agent.exists ? 'yes' : 'no'}`,
+      'resume command:',
+      fenced(buildResumeCommand(agent.kind, agent.cwd, agent.providerSessionId)),
+      '',
+    )
+  })
+
+  return lines.join('\n')
+}
 
 export const builtinPromptTemplates: PromptTemplate[] = [
   {
@@ -49,6 +150,21 @@ export const builtinPromptTemplates: PromptTemplate[] = [
       const cwd = workspace.state.sessions[sessionId]?.cwd ?? null
       const dump = await loadWorktreeDump({ cwd, workspace, forceActivityRefresh: false })
       return formatWorktreeDumpPrompt(dump)
+    },
+  },
+  {
+    id: 'builtin:active-tab-agent-transcripts',
+    title: 'Active Tab Agent Transcripts',
+    description: 'Insert transcript paths and read instructions for every visible agent in this tab.',
+    scope: 'builtin',
+    body: 'Please read the active-tab agent transcripts and use them as context.',
+    buildBody: async ({ workspace }) => {
+      const tab = workspace.activeTab
+      const requests = activeTabAgentTranscriptRequests(workspace)
+      const resolved = requests.length > 0
+        ? await window.api.resolveTranscriptPaths(requests)
+        : []
+      return buildActiveTabTranscriptPrompt(tab?.title ?? 'Untitled', resolved)
     },
   },
 ]

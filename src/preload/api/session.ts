@@ -19,6 +19,8 @@ import type {
   SessionResumePromptEvent,
   SessionCompactionStateEvent,
   SessionConditionsEvent,
+  TranscriptPathRequest,
+  TranscriptPathResult,
   Unsub,
 } from '@preload/api/types.js'
 
@@ -130,6 +132,11 @@ export const sessionApi = {
     limit?: number
   }): Promise<SessionHistoryChunk> =>
     ipcRenderer.invoke('session:load-initial-history', params),
+
+  resolveTranscriptPaths: (
+    requests: TranscriptPathRequest[],
+  ): Promise<TranscriptPathResult[]> =>
+    ipcRenderer.invoke('session:resolve-transcript-paths', requests),
 
   // --- Session events (subscribe once; dispatch by sessionId in the callback) ---
   onSessionStarted: (cb: (e: SessionStartedEvent) => void): Unsub =>

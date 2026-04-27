@@ -8,6 +8,7 @@ import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
+import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
 
 // Session lifecycle + I/O IPC.
 //
@@ -178,6 +179,21 @@ export function registerSessionIpc(manager: SessionManager): void {
         ...params,
         limit: params.limit ?? 120,
       })
+    },
+  )
+
+  ipcMain.handle(
+    'session:resolve-transcript-paths',
+    async (
+      _evt,
+      requests: Array<{
+        sessionId: string
+        kind: 'claude' | 'codex'
+        cwd: string
+        providerSessionId: string
+      }>,
+    ) => {
+      return await resolveTranscriptPaths(requests)
     },
   )
 }
