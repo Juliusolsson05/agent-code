@@ -47,6 +47,7 @@ export function wireSessionForwarder(
   manager.on('resume-prompt', payload => sendToMainWindow('session:resume-prompt', payload))
   manager.on('permission-prompt', payload => sendToMainWindow('session:permission-prompt', payload))
   manager.on('compaction-state', payload => sendToMainWindow('session:compaction-state', payload))
+  manager.on('conditions', payload => sendToMainWindow('session:conditions', payload))
   manager.on('semantic-event', payload => sendToMainWindow('session:semantic-event', payload))
   manager.on('exit', payload => {
     // Final flush — any entries still buffered from the last

@@ -18,6 +18,7 @@ import type {
   SessionTrustDialogEvent,
   SessionResumePromptEvent,
   SessionCompactionStateEvent,
+  SessionConditionsEvent,
   Unsub,
 } from '@preload/api/types.js'
 
@@ -173,6 +174,9 @@ export const sessionApi = {
 
   onSessionCompactionState: (cb: (e: SessionCompactionStateEvent) => void): Unsub =>
     subscribe('session:compaction-state', cb),
+
+  onSessionConditions: (cb: (e: SessionConditionsEvent) => void): Unsub =>
+    subscribe('session:conditions', cb),
 
   /** Subscribe to Claude's semantic event stream. Fires for every
    *  SemanticEvent emitted by the adapter — the renderer narrows by

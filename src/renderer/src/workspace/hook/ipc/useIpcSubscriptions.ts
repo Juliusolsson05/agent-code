@@ -6,7 +6,6 @@ import {
   isCompactSummaryEntry,
   isConversationEntry,
 } from '@shared/types/transcript'
-import { detectCodexApproval } from '@shared/parsers/codexScreen'
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
 import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/workspace/runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
@@ -45,6 +44,7 @@ import {
   reconcileUpstream,
 } from '@renderer/workspace/ghosts'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
+import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import type { WorktreeIdentity } from '@renderer/workspace/work-context/types'
 import {
   canonicalizeWorktreeActivity,
@@ -113,6 +113,68 @@ function appendRecentWorkContextRaw(
       ? next.slice(-WORK_CONTEXT_RECENT_RAW_LIMIT)
       : next,
   )
+}
+
+function applyConditionSnapshot(
+  runtime: SessionRuntime,
+  snapshot: ProviderConditionSnapshot,
+): SessionRuntime {
+  if (snapshot.provider === 'claude') {
+    const trust = snapshot.conditions['claude.trust-dialog']?.state
+    const resume = snapshot.conditions['claude.resume-prompt']?.state
+    const permission = snapshot.conditions['claude.permission-prompt']?.state
+    const compaction = snapshot.conditions['claude.compaction']?.state
+    const slashPicker = snapshot.conditions['claude.slash-picker']?.state
+
+    return {
+      ...runtime,
+      conditions: snapshot,
+      pendingTrustDialog: trust?.visible ? { workspace: trust.workspace } : null,
+      pendingResumePrompt: resume?.visible
+        ? {
+            sessionAgeText: resume.sessionAgeText,
+            tokenCountText: resume.tokenCountText,
+            selectedIndex: resume.selectedIndex,
+          }
+        : null,
+      pendingPermissionPrompt: permission?.visible
+        ? {
+            title: permission.title,
+            toolName: permission.toolName,
+            command: permission.command,
+            options: permission.options,
+            selectedIndex: permission.selectedIndex,
+          }
+        : null,
+      pendingCompaction: compaction?.visible && compaction.phase
+        ? {
+            phase: compaction.phase,
+            statusText: compaction.statusText,
+            errorText: compaction.errorText,
+          }
+        : null,
+      picker: slashPicker ?? runtime.picker,
+    }
+  }
+
+  const trust = snapshot.conditions['codex.trust-dialog']?.state
+  const approval = snapshot.conditions['codex.approval']?.state
+
+  return {
+    ...runtime,
+    conditions: snapshot,
+    pendingTrustDialog: trust?.visible ? { workspace: trust.workspace } : null,
+    pendingApproval: approval
+      ? {
+          callId: approval.callId ?? null,
+          command: approval.commandParts ?? (approval.command ? approval.command.split(/\s+/) : []),
+          workdir: approval.workdir ?? null,
+          reason: approval.reason,
+          options: approval.options,
+          selectedIndex: approval.selectedIndex,
+        }
+      : null,
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -336,60 +398,6 @@ export function useIpcSubscriptions(
           if (current.recentScreen !== recent) changed.push('recent')
           if (current.screenMarkdown !== markdown) changed.push('markdown')
           if (!pickerEqual(current.picker, picker)) changed.push('picker')
-          // Detect Codex approval overlay from the screen. Only
-          // runs for codex sessions — Claude has its own trust
-          // dialog path.
-          //
-          // Two sources feed `pendingApproval`:
-          //   1. JSONL `exec_approval_request` — authoritative for
-          //      `callId` / `command` / `workdir`. The callId is
-          //      what we match against `exec_command_end` to
-          //      dismiss.
-          //   2. Screen scrape — authoritative for the dynamic UI
-          //      bits the user actually sees (`reason`, `options`,
-          //      `selectedIndex`) since arrow-key nav only updates
-          //      the TUI, never the JSONL.
-          //
-          // Originally this handler clobbered the JSONL fields
-          // with `callId: null`, which broke dismissal: when
-          // `exec_command_end` arrived later, the comparison
-          // `current.pendingApproval?.callId === resolvedCallId`
-          // saw `null === "real-id"` and the modal stuck forever.
-          // Now we MERGE — JSONL fields survive screen frames;
-          // screen fields overwrite their counterparts on every
-          // frame.
-          //
-          // When the screen shows no overlay we PRESERVE a
-          // JSONL-sourced approval (callId !== null) — the rule is
-          // "JSONL opens it, JSONL closes it". A screen-only
-          // approval (callId === null) can be cleared by a stale
-          // frame because there's no JSONL dismissal event coming.
-          const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
-          const screenApproval = sessionKind === 'codex'
-            ? detectCodexApproval(plain)
-            : null
-          const nextApproval = screenApproval
-            ? current.pendingApproval?.callId
-              ? {
-                  ...current.pendingApproval,
-                  reason: screenApproval.reason,
-                  options: screenApproval.options,
-                  selectedIndex: screenApproval.selectedIndex,
-                }
-              : {
-                  callId: null,
-                  command: screenApproval.command
-                    ? screenApproval.command.split(/\s+/)
-                    : [],
-                  workdir: null,
-                  reason: screenApproval.reason,
-                  options: screenApproval.options,
-                  selectedIndex: screenApproval.selectedIndex,
-                }
-            : current.pendingApproval?.callId
-              ? current.pendingApproval
-              : null
-
           // Screen frames can differ only by transient TUI chrome
           // (cursor blink, spinner tick, timestamp) while the
           // visible transcript is unchanged. We still commit the
@@ -400,8 +408,7 @@ export function useIpcSubscriptions(
             changed.every(k => k === 'screen' || k === 'recent' || k === 'markdown') &&
             changed.length > 0 &&
             recent.length === current.recentScreen.length &&
-            pickerEqual(current.picker, picker) &&
-            nextApproval === current.pendingApproval
+            pickerEqual(current.picker, picker)
 
           const nextBody = {
             ...current,
@@ -417,16 +424,11 @@ export function useIpcSubscriptions(
             // Claude-specific and would overwrite Codex's status
             // with null on every frame, racing the process-state
             // writer.
-            pendingApproval: nextApproval,
           }
-          const approvalOpened = current.pendingApproval === null && nextApproval !== null
-          const nextBodyWithUnread = approvalOpened
-            ? withUnread(sessionId, nextBody, 'attention')
-            : nextBody
           const nextCurrent = chromeTickOnly
-            ? nextBodyWithUnread
+            ? nextBody
             : appendFeedDebugLog(
-                nextBodyWithUnread,
+                nextBody,
                 {
                   layer: 'STATE',
                   kind: 'screen_update',
@@ -435,7 +437,6 @@ export function useIpcSubscriptions(
                     changed,
                     pickerVisible: picker.visible,
                     pickerCount: picker.items.length,
-                    approvalOpen: nextApproval !== null,
                     recentLength: recent.length,
                   },
                 },
@@ -785,89 +786,35 @@ export function useIpcSubscriptions(
       })
     })
 
-    const offTrustDialog = window.api.onSessionTrustDialog(
-      ({ sessionId, visible, workspace }) => {
-        setRuntimes(prev => {
-          const current = prev[sessionId] ?? emptyRuntime()
-          const next = {
-            ...current,
-            pendingTrustDialog: visible ? { workspace } : null,
-          }
-          return {
-            ...prev,
-            [sessionId]: visible ? withUnread(sessionId, next, 'attention') : next,
-          }
-        })
-      },
-    )
-
-    const offResumePrompt = window.api.onSessionResumePrompt(({
-      sessionId,
-      visible,
-      sessionAgeText,
-      tokenCountText,
-      options,
-      selectedIndex,
-    }) => {
+    const offConditions = window.api.onSessionConditions(({ sessionId, snapshot }) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
-        const next = {
-          ...current,
-          pendingResumePrompt: visible
-            ? { sessionAgeText, tokenCountText, options, selectedIndex }
-            : null,
-        }
+        const next = applyConditionSnapshot(current, snapshot)
+        const conditionCount = Object.keys(snapshot.conditions).length
+        const hadAttention =
+          current.pendingApproval !== null ||
+          current.pendingTrustDialog !== null ||
+          current.pendingResumePrompt !== null ||
+          current.pendingPermissionPrompt !== null
+        const hasAttention =
+          next.pendingApproval !== null ||
+          next.pendingTrustDialog !== null ||
+          next.pendingResumePrompt !== null ||
+          next.pendingPermissionPrompt !== null
+        const logged = appendFeedDebugLog(
+          next,
+          {
+            layer: 'STATE',
+            kind: 'conditions',
+            summary: `${snapshot.provider} conditions · ${conditionCount}`,
+            data: snapshot,
+          },
+        )
         return {
           ...prev,
-          [sessionId]: visible ? withUnread(sessionId, next, 'attention') : next,
-        }
-      })
-    })
-
-    const offPermissionPrompt = window.api.onSessionPermissionPrompt(({
-      sessionId,
-      visible,
-      title,
-      toolName,
-      command,
-      options,
-      selectedIndex,
-    }) => {
-      setRuntimes(prev => {
-        const current = prev[sessionId] ?? emptyRuntime()
-        const next = {
-          ...current,
-          pendingPermissionPrompt: visible
-            ? { title, toolName, command, options, selectedIndex }
-            : null,
-        }
-        return {
-          ...prev,
-          [sessionId]: visible ? withUnread(sessionId, next, 'attention') : next,
-        }
-      })
-    })
-
-    const offCompactionState = window.api.onSessionCompactionState(({
-      sessionId,
-      visible,
-      phase,
-      statusText,
-      errorText,
-    }) => {
-      setRuntimes(prev => {
-        const current = prev[sessionId] ?? emptyRuntime()
-        const next = {
-          ...current,
-          pendingCompaction: visible && phase
-            ? { phase, statusText, errorText }
-            : null,
-        }
-        return {
-          ...prev,
-          [sessionId]: visible && phase === 'error'
-            ? withUnread(sessionId, next, 'attention')
-            : next,
+          [sessionId]: !hadAttention && hasAttention
+            ? withUnread(sessionId, logged, 'attention')
+            : logged,
         }
       })
     })
@@ -883,7 +830,8 @@ export function useIpcSubscriptions(
     //
     // Side-effects absorbed from the old singular handler:
     //   1. Codex providerSessionId capture (from session_meta).
-    //   2. Codex approval request / resolve (per entry).
+    //   2. Codex approval request / resolve now lives in codex-headless
+    //      conditions; this handler only consumes entries/feed effects.
     //   3. Claude queue-operation bookkeeping (per entry).
     //   4. Claude providerSessionId capture (from any entry's sessionId).
     //   5. pendingCompaction clearing on compact summary entries.
@@ -955,12 +903,10 @@ export function useIpcSubscriptions(
         const appended: Entry[] = []
         let oldestMarker: string | null = current.historyOldestMarker
         let pendingCompaction = current.pendingCompaction
-        let pendingApproval = current.pendingApproval
         let queuedMessages = current.queuedMessages
         let awaitingAssistant = current.awaitingAssistant
         let workActivity = current.workActivity
         let workContext = current.workContext
-        let approvalOpened = false
         const cachedWorktrees = sessionCwd ? worktreeCache.get(sessionCwd) : undefined
         const hasWorktreeCache = !!cachedWorktrees && cachedWorktrees.refreshedAt > 0
         const worktrees = cachedWorktrees?.worktrees ?? []
@@ -1010,31 +956,6 @@ export function useIpcSubscriptions(
             const mapped = mappedRaw.map(e => stampCodexTurnId(e, codexCurrentTurnId))
             const marker = mapped.length > 0 ? codexHistoryMarker(raw) : null
             if (marker && !oldestMarker) oldestMarker = marker
-
-            // Codex exec_approval_request opens an approval pane;
-            // exec_command_end with the same call_id closes it.
-            if (raw.type === 'event_msg' && payload?.type === 'exec_approval_request') {
-              approvalOpened = pendingApproval === null
-              pendingApproval = {
-                callId: typeof payload.call_id === 'string' ? payload.call_id : null,
-                command: Array.isArray(payload.command)
-                  ? payload.command.filter(
-                      (part): part is string => typeof part === 'string',
-                    )
-                  : [],
-                workdir: typeof payload.workdir === 'string' ? payload.workdir : null,
-                reason: pendingApproval?.reason,
-                options: pendingApproval?.options,
-                selectedIndex: pendingApproval?.selectedIndex,
-              }
-            } else if (
-              raw.type === 'event_msg' &&
-              payload?.type === 'exec_command_end' &&
-              typeof payload.call_id === 'string' &&
-              pendingApproval?.callId === payload.call_id
-            ) {
-              pendingApproval = null
-            }
 
             // Optimistic-user reconciliation.
             //
@@ -1225,7 +1146,6 @@ export function useIpcSubscriptions(
           appended.length === 0 &&
           reconciledOptimisticText === null &&
           pendingCompaction === current.pendingCompaction &&
-          pendingApproval === current.pendingApproval &&
           queuedMessages === current.queuedMessages &&
           awaitingAssistant === current.awaitingAssistant &&
           workContext === current.workContext &&
@@ -1252,7 +1172,6 @@ export function useIpcSubscriptions(
               historyOldestMarker: oldestMarker,
               bootstrapping: true,
               pendingCompaction,
-              pendingApproval,
               queuedMessages,
               awaitingAssistant,
               transcriptStatus: 'ready',
@@ -1278,19 +1197,12 @@ export function useIpcSubscriptions(
                 queuedMessages: queuedMessages.length,
                 workContext,
                 workActivity: summarizeWorktreeActivity(workActivity),
-                pendingApproval: pendingApproval
-                  ? {
-                      callId: pendingApproval.callId,
-                      command: pendingApproval.command,
-                    }
-                  : null,
+                conditions: current.conditions,
               },
             },
           ),
         )
-        const nextRuntime = approvalOpened
-          ? withUnread(sessionId, nextRuntimeBase, 'attention')
-          : hasLiveOutput
+        const nextRuntime = hasLiveOutput
             ? withUnread(sessionId, nextRuntimeBase, 'output')
             : nextRuntimeBase
         closeSpan({
@@ -1349,10 +1261,7 @@ export function useIpcSubscriptions(
       offErr()
       offProcessState()
       offSemantic()
-      offTrustDialog()
-      offResumePrompt()
-      offPermissionPrompt()
-      offCompactionState()
+      offConditions()
       offExit()
       for (const t of refs.bootstrapTimersRef.current.values()) clearTimeout(t)
       refs.bootstrapTimersRef.current.clear()

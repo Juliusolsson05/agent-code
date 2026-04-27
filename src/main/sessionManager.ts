@@ -9,6 +9,7 @@ import type { JsonlEntry } from 'claude-code-headless'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath } from '@main/setup/toolchain.js'
+import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -71,6 +72,7 @@ export type ManagerEvents = {
     statusText?: string
     errorText?: string
   }]
+  conditions: [{ sessionId: string; snapshot: ProviderConditionSnapshot }]
   /** Emitted only by terminal sessions — raw PTY output for xterm.js. */
   'terminal-data': [{ sessionId: string; data: string }]
   /** Emitted only by Claude sessions. Proxy-driven per-block semantic
@@ -418,6 +420,10 @@ export class SessionManager extends EventEmitter {
         statusText?: string
         errorText?: string
       }) => this.emit('compaction-state', { sessionId, ...state }))
+      session.on('conditions', (snapshot: ProviderConditionSnapshot) => {
+        this.markActivity(sessionId)
+        this.emit('conditions', { sessionId, snapshot })
+      })
       session.on('semantic-event', (event: unknown) => {
         this.markActivity(sessionId)
         this.emit('semantic-event', { sessionId, event })

@@ -13,6 +13,7 @@ import type {
   AgentWorkContext,
   WorktreeActivityState,
 } from '@renderer/workspace/work-context/types'
+import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 
 export type PickerItem = {
   id: string
@@ -258,6 +259,7 @@ export type SessionRuntime = {
   workContext: AgentWorkContext | null
   workActivity: WorktreeActivityState | null
   picker: SlashPickerState
+  conditions: ProviderConditionSnapshot | null
   draftInput: string
   draftImages: ClaudeDraftImage[]
   activityStatus: string | null
@@ -435,6 +437,7 @@ export function emptyRuntime(): SessionRuntime {
     workContext: null,
     workActivity: null,
     picker: { visible: false, items: [] },
+    conditions: null,
     draftInput: '',
     draftImages: [],
     activityStatus: null,
