@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -198,6 +198,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   showWorktreeBadges: boolean
   focusSessionInTab: (tabId: TabId, sessionId: SessionId) => void
 }) {
+  const rowRef = useRef<HTMLButtonElement | null>(null)
   const runtime = useAppStore(useShallow(state => {
     const current = state.workspaceRuntimes[row.sessionId]
     return {
@@ -233,13 +234,26 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       ? 'output'
       : runtime.unreadKind
 
+  useEffect(() => {
+    if (!active) return
+    // WHY row-owned scrolling instead of a parent "selected index" effect:
+    // Dispatch selection has several entry points (arrow navigation, numeric
+    // shortcuts, row clicks, scope changes, restored focus). The active row is
+    // the common truth all of those paths converge on, so tying scroll to the
+    // row becoming active keeps the list following the cursor without adding
+    // another dispatch-only selection state that could drift from workspace
+    // focus.
+    rowRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [active])
+
   return (
     <button
+      ref={rowRef}
       type="button"
       onClick={onSelect}
       title={title}
       className={`
-        relative w-full text-left px-3 py-2 border-t border-border overflow-hidden [contain:layout_paint]
+        relative w-full scroll-mt-10 text-left px-3 py-2 border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
       `}
     >

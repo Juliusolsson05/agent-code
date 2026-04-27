@@ -37,6 +37,7 @@ export function ComposerInput({
   onKeyDown,
   onPaste,
   onFocusRequest,
+  onUserEngagement,
   removeDraftImage,
 }: {
   inputRef: RefObject<HTMLTextAreaElement | null>
@@ -53,6 +54,7 @@ export function ComposerInput({
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
   onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void
   onFocusRequest: () => void
+  onUserEngagement: () => void
   removeDraftImage: (imageId: string) => void
 }) {
   return (
@@ -115,6 +117,7 @@ export function ComposerInput({
           `}
           value={input}
           onChange={e => {
+            onUserEngagement()
             // In slash mode we manage the value ourselves via
             // onKeyDown; the browser's default onChange (which
             // fires on paste, IME composition end, etc.) would
@@ -141,7 +144,13 @@ export function ComposerInput({
             }
           }}
           onKeyDown={onKeyDown}
-          onPaste={onPaste}
+          onPaste={e => {
+            onUserEngagement()
+            onPaste(e)
+          }}
+          onPointerDown={() => {
+            onUserEngagement()
+          }}
           onFocus={onFocusRequest}
           placeholder={
             slashMode
