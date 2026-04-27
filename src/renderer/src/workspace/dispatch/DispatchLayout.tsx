@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -136,9 +136,44 @@ const DispatchAgentList = memo(function DispatchAgentList({
   focusSessionInTab: Workspace['focusSessionInTab']
   showWorktreeBadges: boolean
 }) {
+  const listRef = useRef<HTMLElement | null>(null)
+
+  useLayoutEffect(() => {
+    const list = listRef.current
+    if (!list || !activeSessionId) return
+    const activeRow = list.querySelector<HTMLElement>('[data-dispatch-active="true"]')
+    if (!activeRow) return
+
+    // WHY not rely on row.scrollIntoView(): Dispatch's list is a nested
+    // overflow region with a sticky header, and `scrollIntoView({nearest})`
+    // lets the browser pick the scroll ancestor and final alignment. In
+    // practice Option+Arrow could move workspace focus while the highlighted
+    // row drifted beyond the list viewport. The list container is the source
+    // of truth for visibility here, so compute against its own rect and move
+    // only its scrollTop.
+    const listRect = list.getBoundingClientRect()
+    const rowRect = activeRow.getBoundingClientRect()
+    const header = list.querySelector<HTMLElement>('[data-dispatch-list-header="true"]')
+    const topInset = header?.offsetHeight ?? 0
+    const visibleTop = listRect.top + topInset
+    const visibleBottom = listRect.bottom
+
+    if (rowRect.top < visibleTop) {
+      list.scrollTop -= visibleTop - rowRect.top
+    } else if (rowRect.bottom > visibleBottom) {
+      list.scrollTop += rowRect.bottom - visibleBottom
+    }
+  }, [activeSessionId, groups])
+
   return (
-    <aside className="basis-1/4 min-w-[220px] max-w-[420px] min-h-0 border-r border-border bg-surface overflow-y-auto [contain:layout_paint]">
-      <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface px-3 py-2 text-[10px] text-muted uppercase">
+    <aside
+      ref={listRef}
+      className="basis-1/4 min-w-[220px] max-w-[420px] min-h-0 border-r border-border bg-surface overflow-y-auto [contain:layout_paint]"
+    >
+      <div
+        data-dispatch-list-header="true"
+        className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface px-3 py-2 text-[10px] text-muted uppercase"
+      >
         <span>Agents</span>
         <span>{dispatchScope}</span>
       </div>
@@ -200,7 +235,6 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   showWorktreeBadges: boolean
   focusSessionInTab: (tabId: TabId, sessionId: SessionId) => void
 }) {
-  const rowRef = useRef<HTMLButtonElement | null>(null)
   const runtime = useAppStore(useShallow(state => {
     const current = state.workspaceRuntimes[row.sessionId]
     return {
@@ -232,26 +266,14 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       ? 'output'
       : runtime.unreadKind
 
-  useEffect(() => {
-    if (!active) return
-    // WHY row-owned scrolling instead of a parent "selected index" effect:
-    // Dispatch selection has several entry points (arrow navigation, numeric
-    // shortcuts, row clicks, scope changes, restored focus). The active row is
-    // the common truth all of those paths converge on, so tying scroll to the
-    // row becoming active keeps the list following the cursor without adding
-    // another dispatch-only selection state that could drift from workspace
-    // focus.
-    rowRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [active])
-
   return (
     <button
-      ref={rowRef}
       type="button"
       onClick={onSelect}
       title={title}
+      data-dispatch-active={active ? 'true' : undefined}
       className={`
-        relative w-full scroll-mt-10 text-left px-3 py-2 border-t border-border overflow-hidden [contain:layout_paint]
+        relative w-full text-left px-3 py-2 border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
       `}
     >
@@ -326,7 +348,6 @@ function DispatchUnreadBadge({
         className="
           flex-shrink-0 rounded-sm border border-amber-300/70 bg-amber-400/20
           px-1.5 py-[1px] text-[9px] font-semibold leading-none text-amber-100
-          shadow-[0_0_12px_rgba(251,191,36,0.22)]
         "
       >
         {label ?? 'ACTION'}
@@ -338,7 +359,6 @@ function DispatchUnreadBadge({
       className="
         flex-shrink-0 rounded-sm border border-accent/70 bg-accent/20
         px-1.5 py-[1px] text-[9px] font-semibold leading-none text-accent
-        shadow-[0_0_12px_rgba(56,189,248,0.18)]
       "
     >
       NEW

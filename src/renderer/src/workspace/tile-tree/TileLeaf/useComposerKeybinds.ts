@@ -104,6 +104,24 @@ export function useComposerKeybinds({
     // routing pane-management keys into the PTY as text.
     if (e.defaultPrevented) return
 
+    if (
+      workspace.dispatchMode &&
+      e.altKey &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      (e.key === 'ArrowUp' || e.key === 'ArrowDown')
+    ) {
+      // WHY let this bubble instead of handling it here: Dispatch Mode uses
+      // Option+Arrow as list navigation. The selected agent pane is rendered
+      // focused, which means its composer owns DOM focus while the user is
+      // only browsing the Dispatch list. If the composer consumes the chord,
+      // the fallback arrow path below sends an escape sequence to the agent;
+      // `send()` correctly acknowledges real input, but here that would clear
+      // NEW just by moving through the list. Returning preserves the event for
+      // the global Dispatch keybind and prevents pane input/acknowledgement.
+      return
+    }
+
     // ---- Slash mode entry ----
     //
     // Only when input is empty AND the user types `/`. That way
