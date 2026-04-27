@@ -1,13 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { CodexApprovalModal } from '@providers/codex/renderer/CodexApprovalModal'
-import { ResumePromptModal } from '@providers/claude/renderer/ResumePromptModal'
-import { PermissionPromptModal } from '@providers/claude/renderer/PermissionPromptModal'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import type { ScrollInfo } from '@renderer/features/feed/ui/Feed'
-import { TrustDialogModal } from '@providers/claude/renderer/TrustDialogModal'
+import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/ProviderConditionOutlet'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
   selectMergedEntries,
@@ -16,7 +13,6 @@ import {
 import type { SessionId } from '@renderer/workspace/types'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'
-import { CompactionStrip } from '@renderer/workspace/tile-tree/TileLeaf/CompactionStrip'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIndicator'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
@@ -382,24 +378,10 @@ export function TileLeaf({
         </div>
       )}
 
-      {/* Codex approval prompt — rendered inline in the pane, matching
-          how Codex's TUI draws it. Sits between feed and composer. */}
-      <CodexApprovalModal
-        approval={runtime.pendingApproval}
+      <ProviderConditionOutlet
+        conditions={runtime.conditions}
         onSend={send}
       />
-
-      <ResumePromptModal
-        prompt={runtime.pendingResumePrompt}
-        onSend={send}
-      />
-
-      <PermissionPromptModal
-        state={runtime.pendingPermissionPrompt}
-        onSend={send}
-      />
-
-      <CompactionStrip pendingCompaction={runtime.pendingCompaction} />
 
       <PaneToast message={runtime.paneToast} />
 
@@ -430,10 +412,6 @@ export function TileLeaf({
         onUserEngagement={acknowledgeSession}
         removeDraftImage={removeDraftImage}
       />
-
-      {/* Per-pane trust dialog: only shown if THIS pane's screen buffer
-          contains the trust prompt. Other panes have their own modals. */}
-      <TrustDialogModal state={runtime.pendingTrustDialog} onSend={send} />
     </div>
   )
 }

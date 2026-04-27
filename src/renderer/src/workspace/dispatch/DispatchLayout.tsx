@@ -16,6 +16,8 @@ import {
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
+import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
 
 type DispatchAgentActivity = 'working' | 'running' | 'idle' | 'exited' | 'starting'
 
@@ -210,11 +212,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       entries: current?.entries,
       unreadSince: current?.unreadSince,
       unreadKind: current?.unreadKind,
-      pendingApproval: current?.pendingApproval,
-      pendingTrustDialog: current?.pendingTrustDialog,
-      pendingResumePrompt: current?.pendingResumePrompt,
-      pendingPermissionPrompt: current?.pendingPermissionPrompt,
-      pendingCompaction: current?.pendingCompaction,
+      conditions: current?.conditions,
       processError: current?.processError,
     }
   }))
@@ -306,18 +304,11 @@ function dispatchSubtitle(runtime: {
 }
 
 function dispatchAttentionLabel(runtime: {
-  pendingApproval?: unknown
-  pendingTrustDialog?: unknown
-  pendingResumePrompt?: unknown
-  pendingPermissionPrompt?: unknown
-  pendingCompaction?: { phase?: string } | null
+  conditions?: ProviderConditionSnapshot | null
   processError?: string | null
 }): string | null {
-  if (runtime.pendingPermissionPrompt) return 'ACTION'
-  if (runtime.pendingApproval) return 'ACTION'
-  if (runtime.pendingTrustDialog) return 'TRUST'
-  if (runtime.pendingResumePrompt) return 'RESUME'
-  if (runtime.pendingCompaction?.phase === 'error') return 'ERROR'
+  const conditionLabel = dispatchAttentionLabelFromConditions(runtime.conditions ?? null)
+  if (conditionLabel) return conditionLabel
   if (runtime.processError) return 'ERROR'
   return null
 }

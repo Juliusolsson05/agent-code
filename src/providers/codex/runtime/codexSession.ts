@@ -6,6 +6,7 @@ import {
   CodexHeadless,
   CodexResponsesAdapter,
   ResponsesProxy,
+  type CodexConditionSnapshot,
   type CodexRolloutLine,
   type CodexSemanticEvent,
 } from 'codex-headless'
@@ -61,6 +62,7 @@ export type CodexSessionEvents = {
   // Codex's bottom Working row and shows a generic "thinking…".
   'process-state': [{ active: boolean; status?: string }]
   'semantic-event': [CodexSemanticEvent]
+  conditions: [CodexConditionSnapshot]
   // Trust dialog visibility — fires on EVERY transition (open + close).
   // Matches the shape Claude already emits so SessionManager's
   // provider-agnostic forwarder picks it up without changes.
@@ -214,6 +216,10 @@ export class CodexSession extends EventEmitter {
     // unmount the modal in lockstep with Codex's own dialog.
     this.headless.on('trust-dialog', state => {
       this.emit('trust-dialog', state)
+    })
+
+    this.headless.on('conditions', snapshot => {
+      this.emit('conditions', snapshot)
     })
 
     // Forward rollout entries as jsonl-entry (matches Claude's event name).

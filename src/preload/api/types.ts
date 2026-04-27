@@ -1,3 +1,6 @@
+import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+
 // Shared payload types for the preload IPC bridge.
 //
 // These are declared once here so every domain module (and the
@@ -98,6 +101,11 @@ export type SessionCompactionStateEvent = {
   phase?: 'running' | 'error' | 'done'
   statusText?: string
   errorText?: string
+}
+
+export type SessionConditionsEvent = {
+  sessionId: string
+  snapshot: ProviderConditionSnapshot
 }
 
 /** Per-block semantic stream from Claude's proxy adapter (or screen

@@ -12,6 +12,7 @@ import {
   sendBracketedPasteThenSubmit,
   sendClaudeDraftText,
 } from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
+import { hasActionCondition } from '@renderer/workspace/conditions/selectors'
 
 // The big onKeyDown handler for the composer textarea.
 //
@@ -84,6 +85,7 @@ export function useComposerKeybinds({
     runtime.inputReady &&
     runtime.processStatus === 'started' &&
     runtime.exited === null
+  const hasBlockingCondition = hasActionCondition(runtime.conditions)
   const blockBackendWrite = () => {
     workspace.showPaneToast(
       sessionId,
@@ -346,10 +348,7 @@ export function useComposerKeybinds({
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
-      !runtime.pendingApproval &&
-      !runtime.pendingTrustDialog &&
-      !runtime.pendingResumePrompt &&
-      !runtime.pendingPermissionPrompt &&
+      !hasBlockingCondition &&
       history.length > 0 &&
       (cyclingHistory || input === '')
     ) {
@@ -386,10 +385,7 @@ export function useComposerKeybinds({
       !e.ctrlKey &&
       !e.metaKey &&
       !e.altKey &&
-      !runtime.pendingApproval &&
-      !runtime.pendingTrustDialog &&
-      !runtime.pendingResumePrompt &&
-      !runtime.pendingPermissionPrompt &&
+      !hasBlockingCondition &&
       cyclingHistory
     ) {
       e.preventDefault()
