@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
+import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
 
 import type { WorkspaceHookContext } from '@renderer/workspace/hook/context'
 import { useWorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -51,6 +52,11 @@ export type Workspace = ReturnType<typeof useWorkspace>
 export function useWorkspace(
   dangerousAgentsEnabled = false,
   useProxyStreaming = false,
+  // Read once at mount via useBootstrap's useEffect closure. Live
+  // changes to this preference do not retro-trigger bootstrap — that
+  // is intentional, the setting only seeds initial state on a fresh
+  // install (no workspace.json yet).
+  defaultWorkspaceMode: WorkspaceModeId = 'grid',
 ) {
   // ---- Zustand subscriptions (these drive re-renders) ----
   const { showToast } = useGlobalToast()
@@ -250,6 +256,8 @@ export function useWorkspace(
     setTileTabs,
     tabActions.newTab as unknown as (cwd: string) => Promise<unknown>,
     setBootstrapComplete,
+    defaultWorkspaceMode,
+    dispatchActions.enterDispatchMode,
   )
   useFeedDebugPersist(runtimes, refs)
   useSpotlightSanity(spotlight, state.tabs, setSpotlight)

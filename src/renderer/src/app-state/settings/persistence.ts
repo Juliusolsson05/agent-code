@@ -1,4 +1,11 @@
-import { ACCENTS, DEFAULT_SETTINGS, THEME_MODES, type AccentId, type Settings } from '@renderer/app-state/settings/types'
+import {
+  ACCENTS,
+  DEFAULT_SETTINGS,
+  THEME_MODES,
+  WORKSPACE_MODES,
+  type AccentId,
+  type Settings,
+} from '@renderer/app-state/settings/types'
 
 const LEGACY_STORAGE_KEY = 'cc-shell:settings'
 
@@ -22,6 +29,12 @@ export function coerceSettings(value: unknown): Settings {
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
     dangerousAgentsEnabled: parsed.dangerousAgentsEnabled === true,
     useProxyStreaming: parsed.useProxyStreaming === true,
+    // WHY membership check via WORKSPACE_MODES rather than a literal
+    // === 'dispatch': keeps the source of truth in one array so adding
+    // a new mode label later (if ever) only requires editing types.ts.
+    defaultWorkspaceMode: WORKSPACE_MODES.some(m => m.id === parsed.defaultWorkspaceMode)
+      ? (parsed.defaultWorkspaceMode as Settings['defaultWorkspaceMode'])
+      : DEFAULT_SETTINGS.defaultWorkspaceMode,
   }
 }
 

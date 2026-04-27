@@ -53,6 +53,26 @@ export const ACCENTS: AccentMeta[] = [
   { id: 'lavender', name: 'Lavender', dark: '#b5a3ff', light: '#6e57c7', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
 ]
 
+// WHY a separate type: this is the user-preference choice (a label)
+// for which mode the app should boot into on a *fresh install*. It is
+// deliberately NOT the same shape as DispatchModeState — the workspace
+// mode at runtime is null for grid and a {scope, terminalVisible}
+// object for dispatch, but the *preference* only needs to encode "which
+// of the two should we start in". Keeping this as a flat string union
+// keeps localStorage payload stable, makes coerceSettings trivial, and
+// avoids leaking workspace-internal shape into a global setting.
+export type WorkspaceModeId = 'grid' | 'dispatch'
+
+export type WorkspaceModeMeta = {
+  id: WorkspaceModeId
+  label: string
+}
+
+export const WORKSPACE_MODES: WorkspaceModeMeta[] = [
+  { id: 'grid', label: 'Grid' },
+  { id: 'dispatch', label: 'Dispatch' },
+]
+
 export type Settings = {
   mode: ThemeMode
   contrast: boolean
@@ -61,6 +81,14 @@ export type Settings = {
   showStatusMode: boolean
   showWorktreeBadges: boolean
   dangerousAgentsEnabled: boolean
+  /** Mode the app boots into on first launch / fresh install (no
+   *  workspace.json yet). After a workspace exists, its persisted
+   *  dispatchMode always wins on subsequent launches — flipping this
+   *  setting later does nothing for users with an existing workspace.
+   *  This intentional narrowness matches the "new workspaces only"
+   *  semantic the user asked for: the setting seeds initial state and
+   *  then gets out of the way. */
+  defaultWorkspaceMode: WorkspaceModeId
   /** When true, Claude sessions are spawned through a per-session
    *  mitmproxy that decrypts Anthropic `/v1/messages` SSE in real
    *  time and feeds structured per-block semantic events to the
@@ -84,4 +112,5 @@ export const DEFAULT_SETTINGS: Settings = {
   showWorktreeBadges: true,
   dangerousAgentsEnabled: false,
   useProxyStreaming: false,
+  defaultWorkspaceMode: 'grid',
 }
