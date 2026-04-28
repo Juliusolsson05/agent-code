@@ -227,7 +227,7 @@ export type FeedDebugPersistEntry = {
   id: number
   ts: number
   tMs: number
-  layer: 'STATE' | 'JSONL' | 'SEM' | 'RENDER'
+  layer: 'STATE' | 'JSONL' | 'SEM' | 'RENDER' | 'GHOST'
   kind: string
   summary: string
   data?: unknown
