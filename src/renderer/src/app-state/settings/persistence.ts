@@ -6,6 +6,7 @@ import {
   type AccentId,
   type Settings,
 } from '@renderer/app-state/settings/types'
+import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 
 const LEGACY_STORAGE_KEY = 'cc-shell:settings'
 
@@ -29,6 +30,15 @@ export function coerceSettings(value: unknown): Settings {
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
     dangerousAgentsEnabled: parsed.dangerousAgentsEnabled === true,
     useProxyStreaming: parsed.useProxyStreaming === true,
+    dictationEnabled: parsed.dictationEnabled === true,
+    dictationProvider: parsed.dictationProvider === 'deepgram'
+      ? parsed.dictationProvider
+      : DEFAULT_SETTINGS.dictationProvider,
+    // WHY not validate against a fixed enum: dictation hotkeys are user-captured
+    // physical bindings, not a closed product list. We only normalize legacy
+    // fixed-choice values from the first integration draft and fall back for
+    // non-strings so a corrupt localStorage blob cannot break settings boot.
+    dictationShortcut: coerceHotkeyBinding(parsed.dictationShortcut),
     // WHY membership check via WORKSPACE_MODES rather than a literal
     // === 'dispatch': keeps the source of truth in one array so adding
     // a new mode label later (if ever) only requires editing types.ts.

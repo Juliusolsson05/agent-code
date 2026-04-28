@@ -4,6 +4,7 @@ import type {
   SettingDefinition,
 } from '@renderer/features/settings/lib/settingsRegistry'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
+import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
 
 type Props = {
   definitions: SettingDefinition[]
@@ -145,6 +146,13 @@ function SettingRow({
                 )
               })}
             </div>
+          ) : null}
+
+          {definition.control.type === 'hotkey' ? (
+            <HotkeyInput
+              value={definition.control.getValue(settings)}
+              onChange={value => definition.control.onChange(context, value)}
+            />
           ) : null}
 
           {definition.control.type === 'action' ? (

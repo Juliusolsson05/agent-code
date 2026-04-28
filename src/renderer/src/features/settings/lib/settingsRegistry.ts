@@ -58,6 +58,18 @@ export type SettingDefinition =
       description: string
       keywords: string[]
       control: {
+        type: 'hotkey'
+        getValue: (settings: Settings) => string
+        onChange: (ctx: SettingActionContext, value: string) => void | Promise<void>
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      control: {
         type: 'action'
         label: string
         tone?: 'neutral' | 'danger'
@@ -84,6 +96,14 @@ const WORKSPACE_MODE_OPTIONS: ChoiceOption<WorkspaceModeId>[] = WORKSPACE_MODES.
       ? 'Open with the dispatch sidebar + main pane.'
       : 'Open with the classic tiled grid.',
 }))
+
+const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] = [
+  {
+    value: 'deepgram',
+    label: 'Deepgram',
+    description: 'Streaming Flux path. Requires DEEPGRAM_API_KEY in the main process environment.',
+  },
+]
 
 export function getSettingsRegistry(): SettingDefinition[] {
   return [
@@ -196,6 +216,47 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'toggle',
         getValue: settings => settings.useProxyStreaming,
         onToggle: (ctx, value) => ctx.onChange({ useProxyStreaming: value }),
+      },
+    },
+    {
+      id: 'dictation-enabled',
+      category: 'dictation',
+      title: 'Inline Dictation',
+      description:
+        'Show a voice control inside each composer and insert transcripts as editable draft text.',
+      keywords: ['voice', 'dictation', 'speech', 'stt', 'composer', 'microphone'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.dictationEnabled,
+        onToggle: (ctx, value) => ctx.onChange({ dictationEnabled: value }),
+      },
+    },
+    {
+      id: 'dictation-provider',
+      category: 'dictation',
+      title: 'Speech Provider',
+      description:
+        'Provider used by the inline composer dictation control. v1 uses the package-owned Deepgram streaming client.',
+      keywords: ['voice', 'dictation', 'provider', 'deepgram', 'flux', 'streaming'],
+      control: {
+        type: 'select',
+        getValue: settings => settings.dictationProvider,
+        options: DICTATION_PROVIDER_OPTIONS,
+        onSelect: (ctx, value) =>
+          ctx.onChange({ dictationProvider: value as Settings['dictationProvider'] }),
+      },
+    },
+    {
+      id: 'dictation-shortcut',
+      category: 'dictation',
+      title: 'Dictation Shortcut',
+      description:
+        'Keyboard binding for toggling the active composer dictation session. Default is fn.',
+      keywords: ['voice', 'dictation', 'shortcut', 'binding', 'hotkey', 'keyboard'],
+      control: {
+        type: 'hotkey',
+        getValue: settings => settings.dictationShortcut,
+        onChange: (ctx, value) => ctx.onChange({ dictationShortcut: value }),
       },
     },
     {

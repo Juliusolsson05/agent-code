@@ -73,6 +73,8 @@ export const WORKSPACE_MODES: WorkspaceModeMeta[] = [
   { id: 'dispatch', label: 'Dispatch' },
 ]
 
+export type DictationProviderId = 'deepgram'
+
 export type Settings = {
   mode: ThemeMode
   contrast: boolean
@@ -101,6 +103,18 @@ export type Settings = {
    *  at spawn time — flipping it mid-session has no effect; the next
    *  new session picks up the new value. */
   useProxyStreaming: boolean
+  /** Inline voice dictation for the active composer. This is intentionally
+   *  a cc-shell setting instead of an agent-voice-dictation setting:
+   *  package code provides STT primitives, while cc-shell decides whether
+   *  voice belongs in its composer UI and which keyboard binding should
+   *  toggle recording. */
+  dictationEnabled: boolean
+  dictationProvider: DictationProviderId
+  /** Arbitrary keyboard binding captured by the settings UI. The standalone
+   *  dictation app historically offered fixed choices, but cc-shell needs the
+   *  same "press the key you want" model because composer bindings compete
+   *  with editor shortcuts. Empty string means "button only". */
+  dictationShortcut: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -112,5 +126,8 @@ export const DEFAULT_SETTINGS: Settings = {
   showWorktreeBadges: true,
   dangerousAgentsEnabled: false,
   useProxyStreaming: false,
+  dictationEnabled: false,
+  dictationProvider: 'deepgram',
+  dictationShortcut: 'Fn',
   defaultWorkspaceMode: 'grid',
 }

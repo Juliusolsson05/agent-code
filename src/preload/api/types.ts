@@ -14,6 +14,25 @@ export type { ProviderConditionSnapshot } from '@shared/types/providerConditions
 
 export type Unsub = () => void
 
+export type DictationProvider = 'deepgram' | 'assemblyai' | 'openai' | 'gladia' | 'elevenlabs'
+
+export type DictationStartResult =
+  | { kind: 'started'; id: string }
+  | { kind: 'error'; message: string }
+
+export type DictationStopResult =
+  | {
+      kind: 'success'
+      raw: string
+      text: string
+      provider: 'deepgram'
+      audioBytes: number
+      chunkCount: number
+      sttMs: number
+    }
+  | { kind: 'no-speech' }
+  | { kind: 'error'; message: string }
+
 export type JsonlEntry = Record<string, unknown>
 
 export type PickerItem = {

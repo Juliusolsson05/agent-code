@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
@@ -18,6 +18,7 @@ import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIn
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
 import { useComposerKeybinds } from '@renderer/workspace/tile-tree/TileLeaf/useComposerKeybinds'
+import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useTypeToFocus } from '@renderer/workspace/tile-tree/TileLeaf/useTypeToFocus'
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
@@ -87,6 +88,9 @@ export function TileLeaf({
   const { showToast } = useGlobalToast()
   const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
+  const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
+  const dictationProvider = useAppStore(state => state.settings.dictationProvider)
+  const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
   // Destructure the stable useCallback setter so effect deps don't
   // spuriously invalidate on every parent render. workspace itself
   // is a fresh object literal each render, but its methods are
@@ -222,6 +226,20 @@ export function TileLeaf({
     setHistoryAnchor,
     endHistoryCycle,
   })
+
+  const dictation = useComposerDictation({
+    enabled: dictationEnabled,
+    provider: dictationProvider,
+    shortcut: dictationShortcut,
+    input,
+    setInputText,
+    onMessage: message => workspace.showPaneToast(sessionId, message),
+  })
+
+  const onComposerKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (dictation.handleShortcut(event)) return
+    onKeyDown(event)
+  }, [dictation, onKeyDown])
 
   const isSessionLive = runtime.sessionStatus === 'running'
   const readinessText =
@@ -406,11 +424,12 @@ export function TileLeaf({
         history={history}
         setInputText={setInputText}
         endHistoryCycle={endHistoryCycle}
-        onKeyDown={onKeyDown}
+        onKeyDown={onComposerKeyDown}
         onPaste={handlePaste}
         onFocusRequest={onFocusRequest}
         onUserEngagement={acknowledgeSession}
         removeDraftImage={removeDraftImage}
+        dictation={dictation}
       />
     </div>
   )

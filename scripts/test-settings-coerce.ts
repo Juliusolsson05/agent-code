@@ -9,6 +9,7 @@ assert(defaults.showStatusMode === true, 'showStatusMode should default on')
 assert(defaults.showWorktreeBadges === true, 'showWorktreeBadges should default on')
 assert(defaults.dangerousAgentsEnabled === false, 'dangerousAgentsEnabled should default off')
 assert(defaults.defaultWorkspaceMode === 'grid', 'defaultWorkspaceMode should default to grid')
+assert(defaults.dictationShortcut === 'Fn', 'dictation shortcut should default to Fn')
 
 const coerced = coerceSettings({
   mode: 'not-a-theme',
@@ -29,6 +30,19 @@ assert(coerced.showStatusMode === false, 'showStatusMode should preserve explici
 assert(coerced.showWorktreeBadges === false, 'showWorktreeBadges should preserve explicit false')
 assert(coerced.dangerousAgentsEnabled === true, 'dangerousAgentsEnabled should accept true')
 assert(coerced.useProxyStreaming === true, 'useProxyStreaming should accept true')
+assert(coerced.dictationShortcut === 'Fn', 'missing dictation shortcut should fall back to Fn')
+
+const customDictationShortcut = coerceSettings({ dictationShortcut: 'Ctrl+Shift+SPACE' })
+assert(
+  customDictationShortcut.dictationShortcut === 'Ctrl+Shift+SPACE',
+  'dictation shortcut should accept arbitrary captured bindings',
+)
+
+const legacyDictationShortcut = coerceSettings({ dictationShortcut: 'mod-shift-d' })
+assert(
+  legacyDictationShortcut.dictationShortcut === 'Cmd+Shift+D',
+  'legacy dictation shortcut ids should migrate to captured binding strings',
+)
 
 const dispatchPick = coerceSettings({ defaultWorkspaceMode: 'dispatch' })
 assert(

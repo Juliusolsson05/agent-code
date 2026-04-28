@@ -14,6 +14,7 @@ import { registerGitIpc } from '@main/ipc/git.js'
 import { registerPerformanceIpc } from '@main/ipc/performance.js'
 import { registerSetupIpc } from '@main/ipc/setup.js'
 import { registerWorktreeActivityIpc } from '@main/ipc/worktreeActivity.js'
+import { registerDictationIpc } from '@main/ipc/dictation.js'
 import { installPerformanceIpcInstrumentation } from '@main/performance/instrumentIpc.js'
 import type { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 
@@ -47,4 +48,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerGitIpc()
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
   registerSetupIpc()
+  registerDictationIpc()
 }

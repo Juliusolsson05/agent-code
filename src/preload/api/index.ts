@@ -10,6 +10,7 @@ import { gitApi } from '@preload/api/git.js'
 import { ghostApi } from '@preload/api/ghost.js'
 import { performanceApi } from '@preload/api/performance.js'
 import { setupApi } from '@preload/api/setup.js'
+import { dictationApi } from '@preload/api/dictation.js'
 
 // Composed preload API surface.
 //
@@ -39,6 +40,7 @@ export const api = {
   ...ghostApi,
   ...performanceApi,
   ...setupApi,
+  ...dictationApi,
 }
 
 export type Api = typeof api
