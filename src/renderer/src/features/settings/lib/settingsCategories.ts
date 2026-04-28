@@ -1,6 +1,7 @@
 export type SettingCategoryId =
   | 'appearance'
   | 'workspace'
+  | 'dictation'
   | 'experimental'
   | 'safety'
 
@@ -20,6 +21,11 @@ export const SETTING_CATEGORIES: SettingCategory[] = [
     id: 'workspace',
     label: 'Workspace',
     description: 'How the shell behaves during normal use.',
+  },
+  {
+    id: 'dictation',
+    label: 'Dictation',
+    description: 'Inline speech-to-text for the active composer.',
   },
   {
     id: 'experimental',

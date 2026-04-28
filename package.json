@@ -21,6 +21,7 @@
     "test:work-context": "tsx --tsconfig tsconfig.web.json scripts/test-work-context.ts",
     "test:worktree-activity": "tsx --tsconfig tsconfig.node.json scripts/test-worktree-activity-index.ts",
     "test:ghost-fallback": "tsx --tsconfig tsconfig.web.json scripts/test-ghost-fallback.ts",
+    "test:dictation": "tsx --tsconfig tsconfig.node.json scripts/test-dictation-imports.ts",
     "proxy-demo-bootstrap": "npm --prefix packages/claude-code-headless run proxy-test-bootstrap",
     "proxy-demo": "npm --prefix packages/claude-code-headless run build && electron experiments/claude-proxy-stream-app/main.mjs",
     "postinstall": "electron-rebuild -f -w node-pty"
@@ -35,6 +36,7 @@
     "@xterm/headless": "^5.5.0",
     "@xterm/xterm": "^6.0.0",
     "agent-transcript-parser": "file:./packages/agent-transcript-parser",
+    "agent-voice-dictation": "file:../agent-voice-dictation",
     "chokidar": "^5.0.0",
     "highlight.js": "^11.11.1",
     "monaco-editor": "^0.52.2",

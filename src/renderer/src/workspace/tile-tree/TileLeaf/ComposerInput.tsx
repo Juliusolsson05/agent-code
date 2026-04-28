@@ -2,6 +2,7 @@ import type { RefObject } from 'react'
 
 import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
 import type { ClaudeDraftImage, SlashPickerState } from '@renderer/workspace/workspaceState'
+import type { ComposerDictationController } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 
 // Composer input — the textarea at the bottom of the pane plus its
 // two siblings: the Claude draft-images preview strip and the
@@ -39,6 +40,7 @@ export function ComposerInput({
   onFocusRequest,
   onUserEngagement,
   removeDraftImage,
+  dictation,
 }: {
   inputRef: RefObject<HTMLTextAreaElement | null>
   input: string
@@ -56,6 +58,7 @@ export function ComposerInput({
   onFocusRequest: () => void
   onUserEngagement: () => void
   removeDraftImage: (imageId: string) => void
+  dictation: ComposerDictationController
 }) {
   return (
     <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-2 relative">
@@ -102,6 +105,32 @@ export function ComposerInput({
         <div className="absolute left-2 top-[10px] text-accent text-[12px] pointer-events-none select-none">
           ❯
         </div>
+        {dictation.enabled ? (
+          <button
+            type="button"
+            className={`
+              absolute right-1.5 top-1.5 z-10 h-7 min-w-7 border px-2
+              text-[10px] font-code transition-colors
+              ${dictation.status === 'recording'
+                ? 'border-danger bg-danger/10 text-danger'
+                : dictation.busy
+                  ? 'border-accent bg-accent/10 text-accent'
+                  : 'border-border-hi bg-surface text-muted hover:border-accent hover:text-ink'}
+            `}
+            onClick={() => {
+              onUserEngagement()
+              dictation.toggle()
+            }}
+            title={dictation.label}
+            aria-label={dictation.label}
+          >
+            {dictation.status === 'recording'
+              ? 'REC'
+              : dictation.status === 'stopping'
+                ? '...'
+                : 'MIC'}
+          </button>
+        ) : null}
         <textarea
           ref={inputRef}
           rows={1}
@@ -109,7 +138,7 @@ export function ComposerInput({
             w-full bg-canvas border
             ${focused ? 'border-accent' : 'border-border'}
             text-ink text-[12px]
-            pl-6 pr-2 py-2 outline-none
+            pl-6 ${dictation.enabled ? 'pr-14' : 'pr-2'} py-2 outline-none
             placeholder:text-muted
             transition-colors duration-150
             resize-none overflow-hidden leading-[1.4]
