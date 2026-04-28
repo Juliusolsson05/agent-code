@@ -19,6 +19,7 @@ import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { createMainWindow, focusMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
+import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath, initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
@@ -175,6 +176,7 @@ app.on('before-quit', () => {
   performanceService.mark('app.main.beforeQuit')
   void manager?.killAll()
   void lspManager.dispose()
+  cleanupDictationIpcResources()
   // Flush pending ghost writes. Fire-and-forget is fine — Electron's
   // quit path gives us a tick before teardown. 100 ms queue depth is
   // worst-case; in practice drains are empty at quit time because

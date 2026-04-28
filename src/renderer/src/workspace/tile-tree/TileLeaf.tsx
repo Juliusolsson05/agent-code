@@ -229,6 +229,7 @@ export function TileLeaf({
 
   const dictation = useComposerDictation({
     enabled: dictationEnabled,
+    focused,
     provider: dictationProvider,
     shortcut: dictationShortcut,
     input,
