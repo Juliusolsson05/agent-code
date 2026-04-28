@@ -53,6 +53,7 @@ const FILE_NAMES = {
 // include recent tool output context but stops the snapshot from
 // ballooning on very long-lived panes.
 const SCREEN_TAIL_LINES = 200
+export const AUTO_DEBUG_BUNDLE_INTERVAL_MS = 60_000
 
 function tailLines(text: string, count: number): string {
   const lines = text.split('\n')
@@ -199,11 +200,13 @@ function buildManifest(
   kind: string,
   capturedAt: number,
   files: string[],
+  reason: string,
 ): string {
   const manifest = {
     schemaVersion: BUNDLE_SCHEMA_VERSION,
     sessionId,
     kind,
+    reason,
     projectDir: runtime.projectDir,
     capturedAt,
     capturedAtIso: new Date(capturedAt).toISOString(),
@@ -236,8 +239,9 @@ export async function assembleAndSaveDebugBundle(params: {
   sessionId: string
   runtime: SessionRuntime
   kind: string
+  reason?: string
 }): Promise<{ bundlePath: string }> {
-  const { sessionId, runtime, kind } = params
+  const { sessionId, runtime, kind, reason = 'manual' } = params
   const capturedAt = Date.now()
   await window.api.flushPerformance().catch(() => {})
   const performanceSnapshot = await window.api.getPerformanceSnapshot().catch(() => null)
@@ -281,10 +285,80 @@ export async function assembleAndSaveDebugBundle(params: {
       kind,
       capturedAt,
       files.map(file => file.name),
+      reason,
     ),
   }
 
   return window.api.saveDebugBundle({ sessionId, files })
+}
+
+export type AutoDebugBundleReason =
+  | 'autosave-enabled'
+  | 'autosave-interval'
+  | 'autosave-beforeunload'
+
+export type AutoDebugBundleResult = {
+  saved: Array<{ sessionId: string; bundlePath: string }>
+  failed: Array<{ sessionId: string; message: string }>
+}
+
+export async function autosaveActiveAgentDebugBundles(
+  workspace: Workspace,
+  reason: AutoDebugBundleReason,
+): Promise<AutoDebugBundleResult> {
+  const candidates = Object.entries(workspace.runtimes)
+    .filter(([sessionId, runtime]) => {
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return (kind === 'claude' || kind === 'codex') && runtime.exited === null
+    })
+
+  const saved: AutoDebugBundleResult['saved'] = []
+  const failed: AutoDebugBundleResult['failed'] = []
+
+  const saveOne = async ([sessionId, runtime]: [string, SessionRuntime]) => {
+    const meta = workspace.state.sessions[sessionId]
+    const kind = meta?.kind ?? 'claude'
+    try {
+      const { bundlePath } = await assembleAndSaveDebugBundle({
+        sessionId,
+        runtime,
+        kind,
+        reason,
+      })
+      saved.push({ sessionId, bundlePath })
+    } catch (err) {
+      failed.push({
+        sessionId,
+        message: (err as Error)?.message ?? String(err),
+      })
+    }
+  }
+
+  if (reason === 'autosave-beforeunload') {
+    // Before unload, starting every save promptly matters more than
+    // keeping disk pressure perfectly smooth: once the renderer is
+    // gone, the DOM/runtime-only parts of the bundle are gone too.
+    // Launch all bundle writes immediately so each IPC request has
+    // the best chance of reaching main before teardown.
+    await Promise.all(candidates.map(saveOne))
+  } else {
+    // Sequential saves keep disk pressure bounded. These bundles can
+    // include DOM, semantic, feed-debug, trace, and performance tails;
+    // running N panes in parallel would make the autosave feature
+    // itself a source of rendering jank exactly when we're trying to
+    // diagnose rendering bugs.
+    for (const candidate of candidates) {
+      await saveOne(candidate)
+    }
+  }
+
+  if (failed.length > 0) {
+    // eslint-disable-next-line no-console
+    console.warn('[debug-autosave] some bundles failed', failed)
+  }
+
+  return { saved, failed }
 }
 
 // Thin wrapper that resolves the focused pane, calls the assembler,

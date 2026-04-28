@@ -115,6 +115,13 @@ export type Settings = {
    *  same "press the key you want" model because composer bindings compete
    *  with editor shortcuts. Empty string means "button only". */
   dictationShortcut: string
+  /** When true, periodically writes Save-Debug-Logs-style bundles for
+   *  every active agent session and attempts one last write during
+   *  renderer unload. This is a developer-mode setting, not a
+   *  user-facing polish toggle: bundles can contain large runtime,
+   *  DOM, semantic, and feed-debug snapshots, so they are interval-
+   *  based rather than emitted on every render. */
+  aggressiveDebugPersistence: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -129,5 +136,6 @@ export const DEFAULT_SETTINGS: Settings = {
   dictationEnabled: false,
   dictationProvider: 'deepgram',
   dictationShortcut: 'Fn',
+  aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
 }

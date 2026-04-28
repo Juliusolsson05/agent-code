@@ -82,6 +82,7 @@ type Props = {
   statusModeEnabled: boolean
   worktreeBadgesEnabled: boolean
   dangerousAgentsEnabled: boolean
+  aggressiveDebugPersistenceEnabled: boolean
   gitBarOpen: boolean
   worktreesBarOpen: boolean
   debugPanelOpen: boolean
@@ -93,6 +94,7 @@ type Props = {
   globalDispatchEnabled: boolean
   dispatchTerminalVisible: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
+  setAggressiveDebugPersistence: (enabled: boolean) => void
 }
 
 function fuzzyMatch(text: string, query: string): boolean {
@@ -135,6 +137,7 @@ export function CommandPalette({
   statusModeEnabled,
   worktreeBadgesEnabled,
   dangerousAgentsEnabled,
+  aggressiveDebugPersistenceEnabled,
   gitBarOpen,
   worktreesBarOpen,
   debugPanelOpen,
@@ -146,6 +149,7 @@ export function CommandPalette({
   globalDispatchEnabled,
   dispatchTerminalVisible,
   setDangerousAgentsEnabled,
+  setAggressiveDebugPersistence,
 }: Props) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -274,6 +278,7 @@ export function CommandPalette({
         toggleStatusMode,
         toggleWorktreeBadges,
         setDangerousAgentsEnabled,
+        setAggressiveDebugPersistence,
         enterResumeMode,
         enterBuriedMode,
         enterKillBuriedMode,
@@ -286,6 +291,7 @@ export function CommandPalette({
         statusModeEnabled,
         worktreeBadgesEnabled,
         dangerousAgentsEnabled,
+        aggressiveDebugPersistenceEnabled,
         gitBarOpen,
         worktreesBarOpen,
         debugPanelOpen,
@@ -323,6 +329,7 @@ export function CommandPalette({
       toggleStatusMode,
       toggleWorktreeBadges,
       setDangerousAgentsEnabled,
+      setAggressiveDebugPersistence,
       enterResumeMode,
       enterBuriedMode,
       enterKillBuriedMode,
@@ -333,6 +340,7 @@ export function CommandPalette({
       statusModeEnabled,
       worktreeBadgesEnabled,
       dangerousAgentsEnabled,
+      aggressiveDebugPersistenceEnabled,
       gitBarOpen,
       worktreesBarOpen,
       debugPanelOpen,

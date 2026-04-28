@@ -60,12 +60,15 @@ function sanitizeForPath(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '_')
 }
 
-// Bundle folder naming: `<ISO-like timestamp>-<sessionShort>`.
+// Bundle folder naming: `<ISO-like timestamp-with-ms>-<sessionShort>`.
 //
 // Why colon-free ISO: macOS tolerates ':' in file names but many
 // tools (and Windows) don't, and the user WILL be copy-pasting this
 // path into a terminal. `2026-04-23T14-32-07` reads unambiguously
-// as a date+time and sorts lexicographically.
+// as a date+time and sorts lexicographically. Keep milliseconds
+// because autosave can race a manual save or close-save inside the
+// same second; silently overwriting a just-written debug bundle is
+// worse than a slightly longer folder name.
 //
 // Why include the 8-char session id: if the user saves two bundles
 // from two different panes in the same second, bare timestamp would
@@ -73,8 +76,8 @@ function sanitizeForPath(value: string): string {
 // disambiguating.
 function buildBundleFolderName(sessionId: string, now: Date): string {
   const iso = now.toISOString()
-  // `2026-04-23T14:32:07.842Z` → `2026-04-23T14-32-07`
-  const stamp = iso.replace(/\..+$/, '').replace(/:/g, '-')
+  // `2026-04-23T14:32:07.842Z` → `2026-04-23T14-32-07-842`
+  const stamp = iso.replace(/Z$/, '').replace(/[:.]/g, '-')
   const short = sanitizeForPath(sessionId.slice(0, 8))
   return `${stamp}-${short}`
 }
