@@ -10,3 +10,6 @@
 [submodule "agent-transcript-parser"]
 	path = packages/agent-transcript-parser
 	url = git@github-personal:Juliusolsson05/agent-transcript-parser.git
+[submodule "packages/agent-voice-dictation"]
+	path = packages/agent-voice-dictation
+	url = https://github.com/Juliusolsson05/agent-voice-dictation.git

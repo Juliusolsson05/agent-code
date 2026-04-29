@@ -38,8 +38,8 @@
       "codex-headless/*": ["./packages/codex-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
-      "agent-voice-dictation": ["../agent-voice-dictation/dist/index.d.ts"],
-      "agent-voice-dictation/*": ["../agent-voice-dictation/dist/*/index.d.ts"],
+      "agent-voice-dictation": ["./packages/agent-voice-dictation/src/index.ts"],
+      "agent-voice-dictation/*": ["./packages/agent-voice-dictation/src/*/index.ts"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
@@ -56,6 +56,7 @@
     "src/providers/**/*",
     "testing/**/*",
     "packages/agent-transcript-parser/src/**/*",
+    "packages/agent-voice-dictation/src/**/*",
     "packages/claude-code-headless/src/**/*",
     "packages/codex-headless/src/**/*"
   ],
