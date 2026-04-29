@@ -59,6 +59,7 @@ export default function App() {
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
   const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
+  const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
   const worktreesBarOpen = useAppStore(state => state.worktreesBarOpen)
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
@@ -83,6 +84,16 @@ export default function App() {
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
   const closeViewPrompts = useAppStore(state => state.closeViewPrompts)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
+  const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
+  const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
+  // Both create-mode and attach-mode share the same overlay; the close
+  // handler must clear both store flags so re-opening one mode after
+  // the other doesn't inherit stale state.
+  const closePlacementOverlay = useCallback(() => {
+    closeNewAgentPlacement()
+    closeDispatchAttach()
+  }, [closeDispatchAttach, closeNewAgentPlacement])
+  const placementOverlayOpen = newAgentPlacementOpen || dispatchAttachIntent !== null
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
@@ -273,9 +284,10 @@ export default function App() {
                 showWorktreeBadges={settings.showWorktreeBadges}
               />
               <NewAgentPlacementOverlay
-                open={newAgentPlacementOpen}
+                open={placementOverlayOpen}
                 workspace={workspace}
-                onClose={closeNewAgentPlacement}
+                onClose={closePlacementOverlay}
+                attachDetachedSessionId={dispatchAttachIntent}
               />
             </div>
           ) : activeTab ? (
@@ -289,9 +301,10 @@ export default function App() {
                 showWorktreeBadges={settings.showWorktreeBadges}
               />
               <NewAgentPlacementOverlay
-                open={newAgentPlacementOpen}
+                open={placementOverlayOpen}
                 workspace={workspace}
-                onClose={closeNewAgentPlacement}
+                onClose={closePlacementOverlay}
+                attachDetachedSessionId={dispatchAttachIntent}
               />
             </div>
           ) : (
@@ -378,6 +391,7 @@ export default function App() {
         }
         exitDispatchMode={workspace.exitDispatchMode}
         toggleDispatchTerminal={workspace.toggleDispatchTerminal}
+        openDispatchAttach={openDispatchAttach}
         onTileTabsRequest={onTileTabsRequest}
         onSettingsRequest={openSettingsPage}
         openViewPrompts={openViewPrompts}

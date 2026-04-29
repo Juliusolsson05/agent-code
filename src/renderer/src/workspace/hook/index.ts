@@ -297,6 +297,8 @@ export function useWorkspace(
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
     commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
+    attachDetachedToGrid: paneActions.attachDetachedToGrid,
+    detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
     requestBuryFocused: paneActions.requestBuryFocused,

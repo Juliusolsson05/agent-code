@@ -33,6 +33,46 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => workspace.requestBuryFocused(),
   },
   {
+    // Promote the dispatch-focused detached agent into the active
+    // tab's grid via the existing placement-target picker. Available
+    // only when Dispatch Mode is active AND its current focus is on a
+    // detached session (grid-focused rows in the dispatch list don't
+    // need attaching — they're already attached).
+    id: 'attach-detached-to-grid',
+    title: 'Attach Detached Agent To Grid…',
+    keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
+    when: ({ workspace }) => {
+      const sessionId = workspace.dispatchMode?.focusedSessionId
+      if (!sessionId) return false
+      return Boolean(workspace.state.detachedSessions[sessionId])
+    },
+    run: ({ workspace, ui }) => {
+      const sessionId = workspace.dispatchMode?.focusedSessionId
+      if (!sessionId) return
+      ui.openDispatchAttach(sessionId)
+    },
+  },
+  {
+    // The reverse of attach: take the focused grid pane out of the
+    // tile tree without killing it and add it to the dispatch
+    // detached bucket. Refuses on the action side (with a toast) for
+    // terminals and for the only-leaf-in-tab case; the `when` check
+    // here just gates on having any non-terminal focused leaf so the
+    // command shows up in the palette.
+    id: 'detach-to-dispatch',
+    title: 'Detach Agent To Dispatch',
+    keywords: ['detach', 'dispatch', 'park', 'background', 'unpin'],
+    when: ({ workspace }) => {
+      const tab = workspace.activeTab
+      if (!tab) return false
+      const sessionId = tab.focusedSessionId
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      return Boolean(meta) && meta.kind !== 'terminal'
+    },
+    run: ({ workspace }) => workspace.detachFocusedToDispatch(),
+  },
+  {
     id: 'terminal-horizontal',
     title: 'New Terminal Right',
     shortcut: '⌥T',
