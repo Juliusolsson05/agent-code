@@ -14,8 +14,13 @@ const headlessAlias = [
   { find: 'codex-headless', replacement: resolve(__dirname, 'packages/codex-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'packages/agent-transcript-parser/src/index.ts') },
-  { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(__dirname, '../agent-voice-dictation/dist')}/$1/index.js` },
-  { find: 'agent-voice-dictation', replacement: resolve(__dirname, '../agent-voice-dictation/dist/index.js') },
+  // `agent-voice-dictation` is a git submodule like the other local packages,
+  // so cc-shell must compile it from source. Relying on `dist` would make a
+  // fresh clone fail unless someone remembered to build the submodule first,
+  // and that hidden ordering dependency is exactly what the packages/ layout
+  // is meant to avoid.
+  { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-voice-dictation/src')}/$1/index.ts` },
+  { find: 'agent-voice-dictation', replacement: resolve(__dirname, 'packages/agent-voice-dictation/src/index.ts') },
 ]
 
 // Project-wide absolute-import aliases. MUST match tsconfig.node.json
