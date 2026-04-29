@@ -6,7 +6,7 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
-import { AgentTypeBadge, WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
+import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
 import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
 import {
   buildDispatchGroups,
@@ -14,7 +14,7 @@ import {
   flattenDispatchRows,
   type DispatchAgentRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
-import type { SessionId, TabId } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
@@ -172,7 +172,7 @@ const DispatchAgentList = memo(function DispatchAgentList({
     >
       <div
         data-dispatch-list-header="true"
-        className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface px-3 py-2 text-[10px] text-muted uppercase"
+        className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface px-2.5 py-1.5 text-[10px] text-muted uppercase"
       >
         <span>Agents</span>
         <span>{dispatchScope}</span>
@@ -215,7 +215,7 @@ const DispatchGroupHeader = memo(function DispatchGroupHeader({
   }))
 
   return (
-    <div className="flex items-center justify-between gap-2 px-3 py-2 text-[11px] text-ink bg-canvas">
+    <div className="flex items-center justify-between gap-2 px-2.5 py-1 text-[10px] text-ink bg-canvas">
       <span className="truncate">{title}</span>
       <span className="text-muted tabular-nums">
         {runningCount}/{rows.length}
@@ -273,7 +273,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       title={title}
       data-dispatch-active={active ? 'true' : undefined}
       className={`
-        relative w-full text-left px-3 py-2 border-t border-border overflow-hidden [contain:layout_paint]
+        relative w-full text-left px-2.5 py-1 border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
       `}
     >
@@ -282,19 +282,24 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
         <span className={`flex-shrink-0 text-[10px] tabular-nums ${active ? 'text-accent' : 'text-muted'}`}>
           {row.label}
         </span>
-        <span className={`flex-1 min-w-0 truncate px-1 py-[1px] text-[12px] text-ink ${activityClasses.title}`}>
+        <span className={`flex-1 min-w-0 truncate px-1 py-[1px] text-[11px] text-ink ${activityClasses.title}`}>
           {title}
         </span>
-        {showWorktreeBadges && (
-          <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
-        )}
-        <AgentTypeBadge kind={row.kind} />
         {unreadKind && (
           <DispatchUnreadBadge kind={unreadKind} label={attentionLabel} />
         )}
       </div>
-      <div className="mt-1 pl-7 text-[10px] text-muted truncate">
-        {subtitle}
+      {/* Row 2 — secondary metadata. Worktree + model are split off the
+          title row so the title can use the full row width before
+          truncating. The activity status (running/idle/working) stays
+          here too because the rail color alone doesn't disambiguate
+          working vs running for users who can't easily compare hues. */}
+      <div className="mt-0.5 pl-7 flex items-center gap-1.5 min-w-0 text-[9px] text-muted">
+        <span className="truncate flex-shrink min-w-0">{subtitle}</span>
+        {showWorktreeBadges && (
+          <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
+        )}
+        <DispatchAgentBadge kind={row.kind} />
       </div>
     </button>
   )
@@ -333,6 +338,21 @@ function dispatchAttentionLabel(runtime: {
   if (conditionLabel) return conditionLabel
   if (runtime.processError) return 'ERROR'
   return null
+}
+
+// Dispatch-local agent badge. Why not reuse AgentTypeBadge from
+// SessionBadges? That component is also rendered in pane headers
+// (ScrollIndicator) where the longer "Claude Code" reads naturally.
+// In the narrow dispatch row we want the shorter "Claude" so the
+// badge doesn't crowd the worktree pill on row 2.
+function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
+  const label =
+    kind === 'codex' ? 'Codex' : kind === 'terminal' ? 'Terminal' : 'Claude'
+  return (
+    <span className="flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none text-muted border border-border bg-surface-hi">
+      {label}
+    </span>
+  )
 }
 
 function DispatchUnreadBadge({
