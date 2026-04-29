@@ -12,6 +12,7 @@ export type DispatchAgentRow = {
   sessionId: SessionId
   kind: SessionKind | undefined
   title: string
+  placement: 'grid' | 'detached'
 }
 
 export type DispatchTabGroup = {
@@ -37,13 +38,26 @@ export function buildDispatchGroups(
   return sourceTabs
     .map(tab => {
       const tabIndex = state.tabs.findIndex(item => item.id === tab.id)
-      const rows = collectLeaves(tab.root)
+      const gridSessionIds = collectLeaves(tab.root)
         .filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
-        .map(sessionId => {
+      const detachedSessionIds = Object.values(state.detachedSessions)
+        .filter(entry => (
+          entry.surface === 'dispatch' &&
+          entry.projectTabId === tab.id &&
+          state.sessions[entry.sessionId]?.kind !== 'terminal'
+        ))
+        .sort((a, b) => a.detachedAt - b.detachedAt)
+        .map(entry => entry.sessionId)
+
+      const rows = [
+        ...gridSessionIds.map(sessionId => ({ sessionId, placement: 'grid' as const })),
+        ...detachedSessionIds.map(sessionId => ({ sessionId, placement: 'detached' as const })),
+      ]
+        .map(({ sessionId, placement }) => {
           const meta = state.sessions[sessionId]
           const rowIndex = globalIndex++
           return {
-            key: `${tab.id}:${sessionId}`,
+            key: `${tab.id}:${placement}:${sessionId}`,
             label: `${tabIndexLabel(tabIndex)}${rowIndex}`,
             globalIndex: rowIndex,
             tabId: tab.id,
@@ -52,6 +66,7 @@ export function buildDispatchGroups(
             sessionId,
             kind: meta?.kind,
             title: sessionTitle(meta),
+            placement,
           } satisfies DispatchAgentRow
         })
       return { tab, tabIndex, rows } satisfies DispatchTabGroup

@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 
-import type { SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
+import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { sanitizeTileTabsState, titleFromCwd } from '@renderer/workspace/layout/helpers'
 
@@ -17,7 +17,12 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 // Tab actions — open/close + tab-navigation keybinds.
 
 export function useTabActions(
-  state: { activeTabId: string; sessions: Record<SessionId, SessionMeta>; tabs: Tab[] },
+  state: {
+    activeTabId: string
+    detachedSessions: Record<SessionId, DetachedSessionRecord>
+    sessions: Record<SessionId, SessionMeta>
+    tabs: Tab[]
+  },
   tileTabs: { tabIds: TabId[]; focusedTabId: TabId } | null,
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
@@ -79,6 +84,10 @@ export function useTabActions(
       // Capture undo info before killing anything.
       const tabIdx = state.tabs.findIndex(t => t.id === tabId)
       const ids = collectLeaves(tab.root)
+      const detachedIds = Object.values(state.detachedSessions)
+        .filter(entry => entry.projectTabId === tabId)
+        .map(entry => entry.sessionId)
+      const idsToKill = [...ids, ...detachedIds]
       const allMetas: Record<SessionId, SessionMeta> = {}
       for (const id of ids) {
         if (state.sessions[id]) allMetas[id] = state.sessions[id]
@@ -95,25 +104,37 @@ export function useTabActions(
       showToast(`Closed “${tab.title}” — ⌘⇧T (Undo Close)`)
 
       // Kill every session in this tab.
-      await Promise.all(ids.map(id => window.api.killSession(id)))
+      await Promise.all(idsToKill.map(id => window.api.killSession(id)))
       setRuntimes(prev => {
         const next = { ...prev }
-        for (const id of ids) delete next[id]
+        for (const id of idsToKill) delete next[id]
         return next
       })
-      for (const id of ids) {
+      for (const id of idsToKill) {
         delete refs.seenUuidsRef.current[id]
         delete refs.latestScreenRef.current[id]
       }
       setState(prev => {
         const tabs = prev.tabs.filter(t => t.id !== tabId)
         const sessions = { ...prev.sessions }
-        for (const id of ids) delete sessions[id]
+        for (const id of idsToKill) delete sessions[id]
+        const detachedSessions = { ...prev.detachedSessions }
+        for (const id of detachedIds) delete detachedSessions[id]
         const activeTabId =
           prev.activeTabId === tabId
             ? (tabs[0]?.id ?? '')
             : prev.activeTabId
-        return { ...prev, tabs, activeTabId, sessions }
+        const dispatchFocused = prev.dispatchMode?.focusedSessionId
+        return {
+          ...prev,
+          tabs,
+          activeTabId,
+          sessions,
+          detachedSessions,
+          dispatchMode: dispatchFocused && idsToKill.includes(dispatchFocused)
+            ? { ...prev.dispatchMode!, focusedSessionId: undefined }
+            : prev.dispatchMode,
+        }
       })
       setTileTabs(prev => {
         if (!prev) return prev
@@ -139,6 +160,7 @@ export function useTabActions(
       setState,
       setTileTabs,
       showToast,
+      state.detachedSessions,
       state.sessions,
       state.tabs,
     ],

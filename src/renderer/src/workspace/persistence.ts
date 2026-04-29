@@ -1,5 +1,6 @@
 import type {
   BuriedPaneRecord,
+  DetachedSessionRecord,
   DispatchModeState,
   SessionId,
   SessionMeta,
@@ -30,6 +31,7 @@ export type PersistedWorkspace = {
   activeTabId: TabId
   dispatchMode?: DispatchModeState | null
   sessions: Record<SessionId, SessionMeta>
+  detachedSessions?: Record<SessionId, DetachedSessionRecord>
   buried?: BuriedPaneRecord[]
   tileTabs?: TileTabsState | null
   /** Draft input text per session, keyed by sessionId. Persisted so

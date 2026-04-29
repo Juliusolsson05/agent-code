@@ -62,6 +62,7 @@ export function usePaneActions(
   splitFocused: (direction: SplitDirection, kind?: SessionKind, resumeSessionId?: string) => Promise<void>
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
+  createDetachedDispatchAgent: (kind: Exclude<SessionKind, 'terminal'>) => Promise<void>
   closeFocused: () => Promise<void>
   closeSession: (targetId: SessionId) => Promise<void>
   requestBuryFocused: () => void
@@ -116,12 +117,70 @@ export function usePaneActions(
   const startNewAgentPlacement = useCallback(() => {
     const tab = state.tabs.find(t => t.id === state.activeTabId)
     if (!tab) return
-    if (state.dispatchMode) {
-      showToast('New Agent placement is only available in the tiled workspace')
-      return
-    }
     openNewAgentPlacement()
-  }, [openNewAgentPlacement, showToast, state.activeTabId, state.dispatchMode, state.tabs])
+  }, [openNewAgentPlacement, state.activeTabId, state.tabs])
+
+  const createDetachedDispatchAgent = useCallback(
+    async (kind: Exclude<SessionKind, 'terminal'>) => {
+      const snapshot = refs.stateRef.current
+      const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+      if (!tab) return
+
+      const leafIds = collectLeaves(tab.root)
+      const focusedDispatchId = snapshot.dispatchMode?.focusedSessionId
+      const cwd =
+        (focusedDispatchId ? snapshot.sessions[focusedDispatchId]?.cwd : null) ??
+        snapshot.sessions[tab.focusedSessionId]?.cwd ??
+        leafIds.map(id => snapshot.sessions[id]?.cwd).find(Boolean)
+      if (!cwd) {
+        showToast('Could not create dispatch agent: no project directory found')
+        return
+      }
+
+      let sessionId: SessionId
+      try {
+        sessionId = await sessionActions.spawn(cwd, { kind })
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Failed to create dispatch agent',
+        )
+        return
+      }
+
+      setState(prev => {
+        const latestTab = prev.tabs.find(t => t.id === tab.id)
+        const projectTabIndex = prev.tabs.findIndex(t => t.id === tab.id)
+        if (!latestTab) return prev
+        // Detached sessions are live workspace sessions with project affinity,
+        // not children of Dispatch Mode. We deliberately do not insert this id
+        // into latestTab.root, because the whole point is that creating ten
+        // command-center agents must not explode the normal grid when Dispatch
+        // Mode is turned off.
+        return {
+          ...prev,
+          activeTabId: latestTab.id,
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [sessionId]: {
+              sessionId,
+              surface: 'dispatch',
+              projectTabId: latestTab.id,
+              projectTabTitle: latestTab.title,
+              projectTabIndex: projectTabIndex >= 0 ? projectTabIndex : 0,
+              detachedAt: Date.now(),
+            },
+          },
+          dispatchMode: prev.dispatchMode
+            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+            : prev.dispatchMode,
+        }
+      })
+      closeNewAgentPlacement()
+    },
+    [closeNewAgentPlacement, refs.stateRef, sessionActions, setState, showToast],
+  )
 
   const commitNewAgentPlacement = useCallback(
     async (kind: SessionKind, target: PlacementTarget) => {
@@ -304,8 +363,41 @@ export function usePaneActions(
     async (targetId: SessionId) => {
       const snapshot = refs.stateRef.current
       const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
-      if (!owningTab) return
       const sessionMeta = snapshot.sessions[targetId]
+      const detached = snapshot.detachedSessions[targetId]
+      if (!owningTab && !detached) return
+
+      if (!owningTab && detached) {
+        await window.api.killSession(targetId)
+
+        setRuntimes(prev => {
+          const next = { ...prev }
+          delete next[targetId]
+          return next
+        })
+        delete refs.seenUuidsRef.current[targetId]
+        delete refs.latestScreenRef.current[targetId]
+
+        setState(prev => {
+          const sessions = { ...prev.sessions }
+          delete sessions[targetId]
+          const detachedSessions = { ...prev.detachedSessions }
+          delete detachedSessions[targetId]
+          return {
+            ...prev,
+            sessions,
+            detachedSessions,
+            dispatchMode: prev.dispatchMode?.focusedSessionId === targetId
+              ? { ...prev.dispatchMode, focusedSessionId: undefined }
+              : prev.dispatchMode,
+          }
+        })
+        const kindLabel = sessionMeta?.kind ?? 'claude'
+        const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'agent'
+        showToast(`Closed detached ${kindLabel} agent (${cwdBase})`)
+        return
+      }
+      if (!owningTab) return
 
       // Same two-case undo capture as closeFocused: pane-in-split
       // vs. last-pane-in-tab. Keeps ⌘⇧T working for modal-driven
@@ -746,6 +838,7 @@ export function usePaneActions(
     splitFocused,
     startNewAgentPlacement,
     commitNewAgentPlacement,
+    createDetachedDispatchAgent,
     closeFocused,
     closeSession,
     requestBuryFocused,

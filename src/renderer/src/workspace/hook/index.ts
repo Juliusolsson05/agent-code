@@ -296,6 +296,7 @@ export function useWorkspace(
     splitFocused: paneActions.splitFocused,
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
     commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
+    createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
     closeFocused: paneActions.closeFocused,
     closeSession: paneActions.closeSession,
     requestBuryFocused: paneActions.requestBuryFocused,
@@ -351,5 +352,6 @@ export function useWorkspace(
     setDispatchScope: dispatchActions.setDispatchScope,
     toggleDispatchTerminal: dispatchActions.toggleDispatchTerminal,
     ensureDispatchTerminal: dispatchActions.ensureDispatchTerminal,
+    focusDispatchSession: dispatchActions.focusDispatchSession,
   }
 }

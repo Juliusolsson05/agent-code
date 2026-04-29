@@ -20,6 +20,7 @@ const initialWorkspaceState: WorkspaceState = {
   activeTabId: '',
   dispatchMode: null,
   sessions: {},
+  detachedSessions: {},
   buried: [],
 }
 

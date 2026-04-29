@@ -46,6 +46,15 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
 
   const activeTab = workspace.activeTab
   const anchorSessionId = activeTab?.focusedSessionId ?? null
+  const dispatchMode = workspace.dispatchMode !== null
+  const kindOptions = useMemo(
+    () => dispatchMode
+      ? KIND_OPTIONS.filter((option): option is Extract<typeof KIND_OPTIONS[number], { kind: 'claude' | 'codex' }> =>
+          option.kind === 'claude' || option.kind === 'codex',
+        )
+      : KIND_OPTIONS,
+    [dispatchMode],
+  )
 
   useEffect(() => {
     if (!open) return
@@ -117,17 +126,29 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
         }
         if (event.key === 'ArrowUp') {
           event.preventDefault()
-          setSelectedIndex(prev => (prev + KIND_OPTIONS.length - 1) % KIND_OPTIONS.length)
+          setSelectedIndex(prev => (prev + kindOptions.length - 1) % kindOptions.length)
           return
         }
         if (event.key === 'ArrowDown') {
           event.preventDefault()
-          setSelectedIndex(prev => (prev + 1) % KIND_OPTIONS.length)
+          setSelectedIndex(prev => (prev + 1) % kindOptions.length)
           return
         }
         if (event.key === 'Enter') {
           event.preventDefault()
-          setSelectedKind(KIND_OPTIONS[selectedIndex]!.kind)
+          const option = kindOptions[selectedIndex]
+          if (!option) return
+          if (dispatchMode) {
+            if (committingRef.current) return
+            committingRef.current = true
+            // Dispatch Mode creates detached agents associated with the active
+            // project tab. There is intentionally no placement step here:
+            // inserting into the grid would recreate the broken ten-agent
+            // layout when the user exits the command-center surface.
+            void workspace.createDetachedDispatchAgent(option.kind)
+            return
+          }
+          setSelectedKind(option.kind)
         }
         return
       }
@@ -195,6 +216,8 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [
     anchorSessionId,
+    dispatchMode,
+    kindOptions,
     onClose,
     open,
     placementTarget,
@@ -204,7 +227,7 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
     workspace,
   ])
 
-  if (!open || !activeTab || !anchorSessionId) return null
+  if (!open || !activeTab || (!dispatchMode && !anchorSessionId)) return null
 
   return (
     <div
@@ -232,8 +255,8 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
 
       <div className="absolute left-4 top-4 pointer-events-none">
         <div className="border border-border bg-surface/95 px-3 py-2 text-[11px] text-ink-dim shadow-lg shadow-black/30">
-          {!selectedKind ? (
-            <div>Choose agent type with ↑/↓ and press Enter</div>
+              {!selectedKind ? (
+                <div>{dispatchMode ? 'Choose dispatch agent type with ↑/↓ and press Enter' : 'Choose agent type with ↑/↓ and press Enter'}</div>
           ) : (
             <div className="space-y-1">
               <div>{KIND_OPTIONS.find(option => option.kind === selectedKind)?.label} placement</div>
@@ -255,7 +278,7 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose }: Props) {
               New Agent
             </div>
             <div className="p-2">
-              {KIND_OPTIONS.map((option, index) => {
+              {kindOptions.map((option, index) => {
                 const active = index === selectedIndex
                 return (
                   <button
