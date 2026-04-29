@@ -10,6 +10,21 @@ export type UiShellState = {
   buryPromptSessionId: SessionId | null
   viewPromptsSessionId: SessionId | null
   newAgentPlacementOpen: boolean
+  /**
+   * Non-null when the placement overlay is open in "attach detached
+   * session to grid" mode. The overlay reads this to skip the kind
+   * picker (the session already exists, we don't spawn a new one) and
+   * to know which detached sessionId to insert into the chosen
+   * placement target.
+   *
+   * WHY a separate field instead of overloading newAgentPlacementOpen:
+   * the two flows commit through different actions
+   * (commitNewAgentPlacement spawns a new session;
+   * attachDetachedToGrid moves an existing one), and conflating them
+   * forces every overlay code path to disambiguate at the bottom of
+   * the call stack instead of at the top.
+   */
+  dispatchAttachIntent: SessionId | null
   gitBarOpen: boolean
   worktreesBarOpen: boolean
   debugPanelOpen: boolean

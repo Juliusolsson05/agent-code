@@ -42,7 +42,11 @@ export function DispatchLayout({
     [workspace.state],
   )
   const rows = useMemo(() => flattenDispatchRows(groups), [groups])
-  const activeRow = selectActiveRow(rows, workspace.activeTab?.focusedSessionId ?? null)
+  const activeRow = selectActiveRow(
+    rows,
+    workspace.state.dispatchMode?.focusedSessionId ?? null,
+    workspace.activeTab?.focusedSessionId ?? null,
+  )
   const activeTab = activeRow
     ? workspace.state.tabs.find(tab => tab.id === activeRow.tabId) ?? null
     : workspace.activeTab
@@ -53,7 +57,7 @@ export function DispatchLayout({
     if (!activeRow) return
     if (
       workspace.activeTab?.id === activeRow.tabId &&
-      workspace.activeTab.focusedSessionId === activeRow.sessionId
+      workspace.state.dispatchMode?.focusedSessionId === activeRow.sessionId
     ) {
       return
     }
@@ -61,13 +65,13 @@ export function DispatchLayout({
     // tab has no visible agent rows. Keep the workspace focus aligned with
     // that visible row so tab chrome, new-agent placement, and project
     // terminal selection all agree with what the user is commanding.
-    workspace.focusSessionInTab(activeRow.tabId, activeRow.sessionId)
+    workspace.focusDispatchSession(activeRow.tabId, activeRow.sessionId)
   }, [
     activeRow?.sessionId,
     activeRow?.tabId,
-    workspace.activeTab?.focusedSessionId,
     workspace.activeTab?.id,
-    workspace.focusSessionInTab,
+    workspace.focusDispatchSession,
+    workspace.state.dispatchMode?.focusedSessionId,
   ])
 
   useEffect(() => {
@@ -81,7 +85,7 @@ export function DispatchLayout({
         groups={groups}
         activeSessionId={activeRow?.sessionId ?? null}
         dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
-        focusSessionInTab={workspace.focusSessionInTab}
+        focusSessionInTab={workspace.focusDispatchSession}
         showWorktreeBadges={showWorktreeBadges}
       />
 
@@ -94,6 +98,7 @@ export function DispatchLayout({
             activeRow.tabId,
             showStatusMode,
             showWorktreeBadges,
+            () => workspace.focusDispatchSession(activeRow.tabId, activeRow.sessionId),
           )
         ) : (
           <DispatchEmpty message="no agents in this dispatch scope" />
@@ -458,9 +463,14 @@ function DispatchEmpty({ message }: { message: string }) {
   )
 }
 
-function selectActiveRow(rows: DispatchAgentRow[], focusedSessionId: string | null): DispatchAgentRow | null {
-  if (focusedSessionId) {
-    const focused = rows.find(row => row.sessionId === focusedSessionId)
+function selectActiveRow(
+  rows: DispatchAgentRow[],
+  dispatchFocusedSessionId: string | null,
+  gridFocusedSessionId: string | null,
+): DispatchAgentRow | null {
+  for (const candidate of [dispatchFocusedSessionId, gridFocusedSessionId]) {
+    if (!candidate) continue
+    const focused = rows.find(row => row.sessionId === candidate)
     if (focused) return focused
   }
   return rows[0] ?? null

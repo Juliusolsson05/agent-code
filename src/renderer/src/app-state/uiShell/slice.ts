@@ -17,6 +17,7 @@ export const createUiShellSlice: StateCreator<
   buryPromptSessionId: null,
   viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
+  dispatchAttachIntent: null,
   gitBarOpen: false,
   worktreesBarOpen: false,
   debugPanelOpen: false,
@@ -72,6 +73,11 @@ export const createUiShellSlice: StateCreator<
     set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),
   closeNewAgentPlacement: () =>
     set({ newAgentPlacementOpen: false }, false, 'uiShell/closeNewAgentPlacement'),
+
+  openDispatchAttach: sessionId =>
+    set({ dispatchAttachIntent: sessionId }, false, 'uiShell/openDispatchAttach'),
+  closeDispatchAttach: () =>
+    set({ dispatchAttachIntent: null }, false, 'uiShell/closeDispatchAttach'),
 
   toggleGitBar: () =>
     set(state => ({ gitBarOpen: !state.gitBarOpen }), false, 'uiShell/toggleGitBar'),

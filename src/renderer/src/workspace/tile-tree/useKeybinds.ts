@@ -534,22 +534,27 @@ function digitFromKeyboardEvent(
 }
 
 function dispatchRows(workspace: Workspace) {
-  return flattenDispatchRows(buildDispatchGroups(workspace.state, workspace.runtimes))
+  // buildDispatchGroups was tightened to a single (state) arg when
+  // detached sessions were added — it no longer needs the runtime map
+  // because rows are derived purely from sessions + tabs + detached.
+  // Anything passing workspace.runtimes here is stale and would
+  // silently typecheck wrong against the new signature.
+  return flattenDispatchRows(buildDispatchGroups(workspace.state))
 }
 
 function focusDispatchRowByIndex(workspace: Workspace, index: number) {
   const row = dispatchRows(workspace)[index]
   if (!row) return
-  workspace.focusSessionInTab(row.tabId, row.sessionId)
+  workspace.focusDispatchSession(row.tabId, row.sessionId)
 }
 
 function moveDispatchSelection(workspace: Workspace, delta: number) {
   const rows = dispatchRows(workspace)
   if (rows.length === 0) return
-  const currentId = workspace.activeTab?.focusedSessionId ?? null
+  const currentId = workspace.dispatchMode?.focusedSessionId ?? workspace.activeTab?.focusedSessionId ?? null
   const currentIndex = rows.findIndex(row => row.sessionId === currentId)
   const nextIndex = (currentIndex + delta + rows.length) % rows.length
   const row = rows[nextIndex]
   if (!row) return
-  workspace.focusSessionInTab(row.tabId, row.sessionId)
+  workspace.focusDispatchSession(row.tabId, row.sessionId)
 }

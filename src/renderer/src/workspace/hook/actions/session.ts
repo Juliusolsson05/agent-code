@@ -229,7 +229,16 @@ export function useSessionActions(
       setState(prev => {
         const nextSessions = { ...prev.sessions }
         delete nextSessions[sessionId]
-        return { ...prev, sessions: nextSessions }
+        const detachedSessions = { ...prev.detachedSessions }
+        delete detachedSessions[sessionId]
+        return {
+          ...prev,
+          sessions: nextSessions,
+          detachedSessions,
+          dispatchMode: prev.dispatchMode?.focusedSessionId === sessionId
+            ? { ...prev.dispatchMode, focusedSessionId: undefined }
+            : prev.dispatchMode,
+        }
       })
       delete refs.seenUuidsRef.current[sessionId]
       delete refs.latestScreenRef.current[sessionId]
@@ -456,12 +465,35 @@ export function useSessionActions(
               : undefined,
           }))
 
+        const nextDetachedSessions = Object.fromEntries(
+          Object.entries(prev.detachedSessions)
+            .filter(([sessionId]) => !failedIds.has(sessionId))
+            .map(([sessionId, entry]) => {
+              const mapped = idMap.get(sessionId)
+              if (!mapped) return [sessionId, entry]
+              return [mapped, { ...entry, sessionId: mapped }]
+            }),
+        )
+
+        const focusedDispatchSessionId = prev.dispatchMode?.focusedSessionId
+        const nextDispatchMode = prev.dispatchMode
+          ? {
+              ...prev.dispatchMode,
+              focusedSessionId: focusedDispatchSessionId
+                ? idMap.get(focusedDispatchSessionId) ??
+                  (failedIds.has(focusedDispatchSessionId) ? undefined : focusedDispatchSessionId)
+                : undefined,
+            }
+          : null
+
         return {
           ...prev,
           tabs: nextTabs,
           activeTabId,
           sessions: nextSessions,
+          detachedSessions: nextDetachedSessions,
           buried: nextBuried,
+          dispatchMode: nextDispatchMode,
         }
       })
       for (const [newId, meta] of Object.entries(freshSessions)) {

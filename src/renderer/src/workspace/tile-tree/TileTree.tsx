@@ -83,6 +83,7 @@ export function renderWorkspaceLeaf(
   tabId: TabId = workspace.state.activeTabId,
   showStatusMode = true,
   showWorktreeBadges = true,
+  onFocusRequest: () => void = () => workspace.focusSessionInTab(tabId, sessionId),
 ) {
   const meta = workspace.state.sessions[sessionId]
   const kind = meta?.kind ?? 'claude'
@@ -94,7 +95,7 @@ export function renderWorkspaceLeaf(
         sessionId={sessionId}
         paneLabel={paneLabel}
         focused={sessionId === focusedSessionId}
-        onFocusRequest={() => workspace.focusSessionInTab(tabId, sessionId)}
+        onFocusRequest={onFocusRequest}
         workspace={workspace}
       />
     )
@@ -109,7 +110,7 @@ export function renderWorkspaceLeaf(
       runtime={runtime}
       paneLabel={paneLabel}
       focused={sessionId === focusedSessionId}
-      onFocusRequest={() => workspace.focusSessionInTab(tabId, sessionId)}
+      onFocusRequest={onFocusRequest}
       workspace={workspace}
       showStatusMode={showStatusMode}
       showWorktreeBadges={showWorktreeBadges}

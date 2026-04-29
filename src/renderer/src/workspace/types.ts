@@ -15,7 +15,8 @@
 //     the split into the surviving sibling.
 //   - `ratio` is clamped to [0.1, 0.9] so no pane can become invisibly small.
 //   - `focusedSessionId` on each tab references a leaf that actually exists
-//     in that tab's root.
+//     in that tab's root. Detached sessions intentionally do NOT use this
+//     field for focus; mode-specific surfaces carry their own selection.
 
 export type SessionId = string
 export type TabId = string
@@ -130,9 +131,42 @@ export type BuriedPaneRecord = {
   note?: string
 }
 
+export type DetachedSessionSurface = 'dispatch'
+
+export type DetachedSessionRecord = {
+  /** The live session that is intentionally not placed in any tile tree. */
+  sessionId: SessionId
+  /**
+   * Which non-grid surface owns the session right now.
+   *
+   * WHY this says "surface" instead of "backlog": the important model
+   * decision is that sessions can be live without grid placement. Dispatch is
+   * the first consumer, but the shape should still scale to future surfaces
+   * without pretending those sessions are children of Dispatch Mode itself.
+   */
+  surface: DetachedSessionSurface
+  /**
+   * Project affinity, not hierarchy. The session is detached from the grid,
+   * but it still needs a project tab for grouping, cwd defaults, terminal
+   * selection, and project/global filtering in Dispatch Mode.
+   */
+  projectTabId: TabId
+  projectTabTitle: string
+  projectTabIndex: number
+  detachedAt: number
+}
+
 export type DispatchModeState = {
   scope: 'project' | 'global'
   terminalVisible: boolean
+  /**
+   * Dispatch Mode selection is separate from grid focus. Reusing
+   * Tab.focusedSessionId for detached rows would violate the tile-tree
+   * invariant above and make every normal grid command capable of targeting a
+   * non-leaf session. Keep this mode-local so exiting Dispatch never leaves the
+   * grid in an impossible focus state.
+   */
+  focusedSessionId?: SessionId
 }
 
 export type WorkspaceState = {
@@ -146,11 +180,13 @@ export type WorkspaceState = {
    */
   dispatchMode: DispatchModeState | null
   /**
-   * Per-session metadata. Every leaf's sessionId MUST exist here or the
-   * tree is invalid. Orphaned entries (a session that's no longer in any
-   * tree) get garbage collected by assertInvariants.
+   * Per-session metadata. Every live session MUST exist here. Grid-placed
+   * sessions are referenced from tab roots; detached sessions are referenced
+   * from detachedSessions. A session should never be in both places.
    */
   sessions: Record<SessionId, SessionMeta>
+  /** Live sessions that intentionally have no tile-tree placement. */
+  detachedSessions: Record<SessionId, DetachedSessionRecord>
   /** Hidden-but-live sessions removed from the visible layout. */
   buried: BuriedPaneRecord[]
 }

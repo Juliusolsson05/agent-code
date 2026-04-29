@@ -62,6 +62,9 @@ export function usePaneActions(
   splitFocused: (direction: SplitDirection, kind?: SessionKind, resumeSessionId?: string) => Promise<void>
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
+  createDetachedDispatchAgent: (kind: Exclude<SessionKind, 'terminal'>) => Promise<void>
+  attachDetachedToGrid: (sessionId: SessionId, target: PlacementTarget) => void
+  detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
   closeSession: (targetId: SessionId) => Promise<void>
   requestBuryFocused: () => void
@@ -116,12 +119,234 @@ export function usePaneActions(
   const startNewAgentPlacement = useCallback(() => {
     const tab = state.tabs.find(t => t.id === state.activeTabId)
     if (!tab) return
-    if (state.dispatchMode) {
-      showToast('New Agent placement is only available in the tiled workspace')
+    openNewAgentPlacement()
+  }, [openNewAgentPlacement, state.activeTabId, state.tabs])
+
+  const createDetachedDispatchAgent = useCallback(
+    async (kind: Exclude<SessionKind, 'terminal'>) => {
+      const snapshot = refs.stateRef.current
+      const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+      if (!tab) return
+
+      const leafIds = collectLeaves(tab.root)
+      const focusedDispatchId = snapshot.dispatchMode?.focusedSessionId
+      const cwd =
+        (focusedDispatchId ? snapshot.sessions[focusedDispatchId]?.cwd : null) ??
+        snapshot.sessions[tab.focusedSessionId]?.cwd ??
+        leafIds.map(id => snapshot.sessions[id]?.cwd).find(Boolean)
+      if (!cwd) {
+        showToast('Could not create dispatch agent: no project directory found')
+        return
+      }
+
+      let sessionId: SessionId
+      try {
+        sessionId = await sessionActions.spawn(cwd, { kind })
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Failed to create dispatch agent',
+        )
+        return
+      }
+
+      setState(prev => {
+        const latestTab = prev.tabs.find(t => t.id === tab.id)
+        const projectTabIndex = prev.tabs.findIndex(t => t.id === tab.id)
+        if (!latestTab) return prev
+        // Detached sessions are live workspace sessions with project affinity,
+        // not children of Dispatch Mode. We deliberately do not insert this id
+        // into latestTab.root, because the whole point is that creating ten
+        // command-center agents must not explode the normal grid when Dispatch
+        // Mode is turned off.
+        return {
+          ...prev,
+          activeTabId: latestTab.id,
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [sessionId]: {
+              sessionId,
+              surface: 'dispatch',
+              projectTabId: latestTab.id,
+              projectTabTitle: latestTab.title,
+              projectTabIndex: projectTabIndex >= 0 ? projectTabIndex : 0,
+              detachedAt: Date.now(),
+            },
+          },
+          dispatchMode: prev.dispatchMode
+            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+            : prev.dispatchMode,
+        }
+      })
+      closeNewAgentPlacement()
+    },
+    [closeNewAgentPlacement, refs.stateRef, sessionActions, setState, showToast],
+  )
+
+  // Promote a detached dispatch session into the grid at a chosen
+  // placement target.
+  //
+  // WHY this is a synchronous setState and not an IPC round-trip:
+  // attaching is purely a workspace-state mutation. The session is
+  // already running in the backend and already has a renderer runtime
+  // entry — we are just moving its identity from `detachedSessions`
+  // into a leaf in `tab.root`. No spawn, no kill, no IPC. That also
+  // means no ghost window and no transcript flicker; the UI seam is
+  // invisible to the user beyond the layout change.
+  //
+  // The target tab need not equal the detached record's projectTabId.
+  // projectTabId was always *affinity* (cwd defaults / dispatch
+  // grouping / terminal selection), never *ownership*. Letting the
+  // user pin a project-A detached agent into project-B's grid is the
+  // whole point of having a placement step.
+  const attachDetachedToGrid = useCallback(
+    (sessionId: SessionId, target: PlacementTarget) => {
+      setState(prev => {
+        const detached = prev.detachedSessions[sessionId]
+        if (!detached) return prev
+        const targetTab = prev.tabs.find(t => t.id === prev.activeTabId)
+        if (!targetTab) return prev
+        // For a split-leaf target, the anchor must still exist in the
+        // chosen tab's tree. The placement overlay computes targets from
+        // a snapshot of the tree, so a stale target after a concurrent
+        // tab close would silently no-op via insertBesideLeaf returning
+        // the input. Bail with no state change so the user can re-open
+        // the picker rather than getting a confusing "I clicked place
+        // and nothing happened."
+        if (target.kind === 'split-leaf') {
+          const anchorStillThere = collectLeaves(targetTab.root).includes(target.targetSessionId)
+          if (!anchorStillThere) return prev
+        }
+        const detachedSessions = { ...prev.detachedSessions }
+        delete detachedSessions[sessionId]
+        return {
+          ...prev,
+          detachedSessions,
+          tabs: prev.tabs.map(currentTab => {
+            if (currentTab.id !== prev.activeTabId) return currentTab
+            return {
+              ...currentTab,
+              root:
+                target.kind === 'wrap-root'
+                  ? wrapRootWithLeaf(
+                      currentTab.root,
+                      target.direction,
+                      target.side,
+                      sessionId,
+                    )
+                  : insertBesideLeaf(
+                      currentTab.root,
+                      target.targetSessionId,
+                      target.direction,
+                      RATIO_DEFAULT,
+                      target.side,
+                      sessionId,
+                    ),
+              focusedSessionId: sessionId,
+            }
+          }),
+          // Drop dispatch focus if it was pointing at this session —
+          // the session now lives in the grid, and grid focus on the
+          // active tab is what owns selection going forward. Leaving
+          // the dispatch focus pointing at a now-grid-placed session
+          // would make the dispatch list highlight a row that has
+          // moved out of detachedSessions on the next render.
+          dispatchMode:
+            prev.dispatchMode?.focusedSessionId === sessionId
+              ? { ...prev.dispatchMode, focusedSessionId: undefined }
+              : prev.dispatchMode,
+        }
+      })
+    },
+    [setState],
+  )
+
+  // The reverse direction: take the focused grid pane out of the tile
+  // tree without killing its session, and add it to the dispatch
+  // detached bucket.
+  //
+  // Refuses in three cases, each surfaced as a toast so the user
+  // understands why nothing happened:
+  //   1. No focused session — nothing to detach.
+  //   2. Focused session is a terminal — terminals already have a
+  //      first-class slot in Dispatch (the right-hand project terminal),
+  //      so detaching one would create two terminals fighting for the
+  //      same surface.
+  //   3. The focused pane is the only leaf in its tab — closeLeaf would
+  //      return null and the tab.root type cannot represent an empty
+  //      tree. We don't want to silently close the tab either, so we
+  //      refuse and ask the user to add another pane first.
+  const detachFocusedToDispatch = useCallback(() => {
+    const snapshot = refs.stateRef.current
+    const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+    if (!tab) return
+    const sessionId = tab.focusedSessionId
+    if (!sessionId) {
+      showToast('No focused agent to detach')
       return
     }
-    openNewAgentPlacement()
-  }, [openNewAgentPlacement, showToast, state.activeTabId, state.dispatchMode, state.tabs])
+    const meta = snapshot.sessions[sessionId]
+    if (!meta) return
+    if (meta.kind === 'terminal') {
+      showToast('Terminals cannot be detached to Dispatch')
+      return
+    }
+    const leaves = collectLeaves(tab.root)
+    if (leaves.length <= 1) {
+      showToast('Cannot detach the last pane in a tab — add another agent first')
+      return
+    }
+    const tabIndex = snapshot.tabs.findIndex(t => t.id === tab.id)
+
+    setState(prev => {
+      const latestTab = prev.tabs.find(t => t.id === tab.id)
+      if (!latestTab) return prev
+      const nextRoot = closeLeaf(latestTab.root, sessionId)
+      // Defensive guard: closeLeaf returning null here would mean a
+      // race against a concurrent close emptied the tab between the
+      // snapshot read and the setState. The leaves.length check above
+      // already filtered the common case; this is for race-window
+      // safety so the type stays sound.
+      if (!nextRoot) return prev
+      const nextLeafIds = collectLeaves(nextRoot)
+      const nextFocus =
+        latestTab.focusedSessionId === sessionId
+          ? nextLeafIds[0] ?? ''
+          : latestTab.focusedSessionId
+
+      return {
+        ...prev,
+        tabs: prev.tabs.map(t =>
+          t.id === tab.id
+            ? { ...t, root: nextRoot, focusedSessionId: nextFocus }
+            : t,
+        ),
+        detachedSessions: {
+          ...prev.detachedSessions,
+          [sessionId]: {
+            sessionId,
+            surface: 'dispatch',
+            projectTabId: tab.id,
+            projectTabTitle: latestTab.title,
+            projectTabIndex: tabIndex >= 0 ? tabIndex : 0,
+            detachedAt: Date.now(),
+          },
+        },
+        // If Dispatch is currently active, focus the freshly detached
+        // agent so the user sees the result of their action. If
+        // Dispatch is not active, leave dispatchMode alone — toggling
+        // into Dispatch later will pick this up via the existing
+        // first-row fallback in selectActiveRow.
+        dispatchMode: prev.dispatchMode
+          ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+          : prev.dispatchMode,
+      }
+    })
+    const cwdBase = meta.cwd.split('/').filter(Boolean).pop() ?? 'agent'
+    showToast(`Detached "${cwdBase}" to Dispatch`)
+  }, [refs.stateRef, setState, showToast])
+
 
   const commitNewAgentPlacement = useCallback(
     async (kind: SessionKind, target: PlacementTarget) => {
@@ -304,8 +529,41 @@ export function usePaneActions(
     async (targetId: SessionId) => {
       const snapshot = refs.stateRef.current
       const owningTab = snapshot.tabs.find(t => collectLeaves(t.root).includes(targetId))
-      if (!owningTab) return
       const sessionMeta = snapshot.sessions[targetId]
+      const detached = snapshot.detachedSessions[targetId]
+      if (!owningTab && !detached) return
+
+      if (!owningTab && detached) {
+        await window.api.killSession(targetId)
+
+        setRuntimes(prev => {
+          const next = { ...prev }
+          delete next[targetId]
+          return next
+        })
+        delete refs.seenUuidsRef.current[targetId]
+        delete refs.latestScreenRef.current[targetId]
+
+        setState(prev => {
+          const sessions = { ...prev.sessions }
+          delete sessions[targetId]
+          const detachedSessions = { ...prev.detachedSessions }
+          delete detachedSessions[targetId]
+          return {
+            ...prev,
+            sessions,
+            detachedSessions,
+            dispatchMode: prev.dispatchMode?.focusedSessionId === targetId
+              ? { ...prev.dispatchMode, focusedSessionId: undefined }
+              : prev.dispatchMode,
+          }
+        })
+        const kindLabel = sessionMeta?.kind ?? 'claude'
+        const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'agent'
+        showToast(`Closed detached ${kindLabel} agent (${cwdBase})`)
+        return
+      }
+      if (!owningTab) return
 
       // Same two-case undo capture as closeFocused: pane-in-split
       // vs. last-pane-in-tab. Keeps ⌘⇧T working for modal-driven
@@ -746,6 +1004,9 @@ export function usePaneActions(
     splitFocused,
     startNewAgentPlacement,
     commitNewAgentPlacement,
+    createDetachedDispatchAgent,
+    attachDetachedToGrid,
+    detachFocusedToDispatch,
     closeFocused,
     closeSession,
     requestBuryFocused,

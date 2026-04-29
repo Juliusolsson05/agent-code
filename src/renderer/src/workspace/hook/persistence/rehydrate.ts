@@ -1,6 +1,7 @@
 import { emptyRuntime, type SessionRuntime, type TileTabsState } from '@renderer/workspace/workspaceState'
 import type {
   BuriedPaneRecord,
+  DetachedSessionRecord,
   SessionId,
   SessionKind,
   SessionMeta,
@@ -58,6 +59,7 @@ export async function rehydrateWorkspace(
   perf.mark('workspace.rehydrate.start', {
     tabs: persisted.tabs.length,
     sessions: Object.keys(persisted.sessions).length,
+    detachedSessions: Object.keys(persisted.detachedSessions ?? {}).length,
     buried: persisted.buried?.length ?? 0,
   })
   const idMap = new Map<SessionId, SessionId>()
@@ -118,6 +120,24 @@ export async function rehydrateWorkspace(
         return [remapped]
       })
 
+  const buildRemappedDetachedSessions = (): Record<SessionId, DetachedSessionRecord> => {
+    const out: Record<SessionId, DetachedSessionRecord> = {}
+    for (const entry of Object.values(persisted.detachedSessions ?? {})) {
+      const mappedSessionId = idMap.get(entry.sessionId)
+      if (!mappedSessionId) continue
+      // WHY key by the fresh session id rather than trusting the persisted
+      // object key: renderer SessionIds are per-launch routing ids. Rehydrate
+      // respawns every process and remaps every old id, so a detached record's
+      // identity has to follow the same old->new map as tile leaves and buried
+      // records or later lifecycle actions would delete/update the wrong key.
+      out[mappedSessionId] = {
+        ...entry,
+        sessionId: mappedSessionId,
+      }
+    }
+    return out
+  }
+
   const buildRemappedTileTabs = (tabs: Tab[]): TileTabsState | null => {
     const persistedTileTabs = persisted.tileTabs
     if (!persistedTileTabs) return null
@@ -156,6 +176,7 @@ export async function rehydrateWorkspace(
         activeTabId,
         dispatchMode: persisted.dispatchMode ?? null,
         sessions: { ...freshSessions },
+        detachedSessions: buildRemappedDetachedSessions(),
         buried: buildRemappedBuried(),
       }
     })

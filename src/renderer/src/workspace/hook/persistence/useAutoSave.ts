@@ -53,6 +53,7 @@ export function useAutoSave(
       activeTabId: s.activeTabId,
       dispatchMode: s.dispatchMode,
       sessions: s.sessions,
+      detachedSessions: s.detachedSessions,
       buried: s.buried,
       tileTabs: refs.latestTileTabsRef.current,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,

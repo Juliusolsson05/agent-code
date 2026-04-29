@@ -23,6 +23,7 @@ export function useDispatchActions(
   setDispatchScope: (scope: DispatchModeState['scope']) => Promise<void>
   toggleDispatchTerminal: () => Promise<void>
   ensureDispatchTerminal: (tabId?: TabId) => Promise<SessionId | null>
+  focusDispatchSession: (tabId: TabId, sessionId: SessionId) => void
 } {
   const pendingTerminalByTabRef = useRef(new Map<TabId, Promise<SessionId | null>>())
 
@@ -114,6 +115,7 @@ export function useDispatchActions(
         dispatchMode: {
           scope,
           terminalVisible: prev.dispatchMode?.terminalVisible ?? true,
+          focusedSessionId: prev.dispatchMode?.focusedSessionId,
         },
       }))
       setTileTabs(null)
@@ -137,6 +139,7 @@ export function useDispatchActions(
         dispatchMode: {
           scope,
           terminalVisible: prev.dispatchMode?.terminalVisible ?? true,
+          focusedSessionId: prev.dispatchMode?.focusedSessionId,
         },
       }))
       await ensureDispatchTerminal()
@@ -160,12 +163,36 @@ export function useDispatchActions(
     if (nextVisible) await ensureDispatchTerminal()
   }, [ensureDispatchTerminal, setState])
 
+  const focusDispatchSession = useCallback(
+    (tabId: TabId, sessionId: SessionId) => {
+      setState(prev => {
+        if (!prev.dispatchMode) return { ...prev, activeTabId: tabId }
+        // WHY not update Tab.focusedSessionId here: Dispatch rows can now be
+        // detached from the grid, while Tab.focusedSessionId is a tile-tree
+        // invariant used by resize, reader, spotlight, and normal pane
+        // commands. Dispatch focus is a mode-local selection; activeTabId still
+        // follows it so project-scoped chrome and terminal selection stay in
+        // sync with the visible command-center row.
+        return {
+          ...prev,
+          activeTabId: tabId,
+          dispatchMode: {
+            ...prev.dispatchMode,
+            focusedSessionId: sessionId,
+          },
+        }
+      })
+    },
+    [setState],
+  )
+
   return {
     enterDispatchMode,
     exitDispatchMode,
     setDispatchScope,
     toggleDispatchTerminal,
     ensureDispatchTerminal,
+    focusDispatchSession,
   }
 }
 
