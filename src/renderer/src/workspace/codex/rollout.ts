@@ -36,22 +36,41 @@ import {
 // ghost reconciler has nothing to match Codex assistant-text ghosts
 // against (they don't carry `message.id`, don't carry `tool_use_id`).
 
-// Codex injects an `<environment_context>` synthetic user message on
-// the first turn of every conversation (cwd, shell, timezone, date
-// metadata for the model). It surfaces on the rollout as a regular
-// user-role message with an `input_text` content block, so the
-// normal mapper would turn it into a user bubble in the feed.
+// Codex injects two synthetic user messages on the first turn of
+// every conversation, both meant for the model and not the human:
 //
-// That's pure noise for the user — the shim is there for the model,
-// not the human. Drop at the mapper so it never enters runtime.entries
-// at all; downstream surfaces (visibleDecisions, debug logs, copy-
-// assistant picker) don't have to know about it.
+//   1. The AGENTS.md preamble — the project's AGENTS.md content
+//      wrapped in a header line "# AGENTS.md instructions for <abs path>".
+//   2. The <environment_context> shim — cwd / shell / timezone / date
+//      metadata for the model.
 //
-// Prefix match against the outer `<environment_context>` tag. Match
-// permissively (trim leading whitespace) so variations across Codex
-// versions still catch.
+// These ride on the rollout as regular `role: "user"` messages with
+// `input_text` content blocks, so the normal mapper would turn them
+// into user bubbles in the feed. Drop at the mapper so they never
+// enter runtime.entries at all; downstream surfaces (visibleDecisions,
+// debug logs, copy-assistant picker) don't have to know about them.
+//
+// Wire shape today (verified from a recent rollout, 2026-04-29):
+// the bootstrap arrives as a SINGLE response_item carrying BOTH
+// blocks at once (AGENTS.md preamble first, then environment_context).
+// An older Codex version emitted env_context as its own one-block
+// message, so we still need to handle the single-block case too.
+// The check below ("every block is a bootstrap block") covers both.
+//
+// Both predicates are permissive prefix matches: leading whitespace
+// is tolerated, and we anchor on a marker that's extremely unlikely
+// to appear at the very start of a real user prompt. A user prompt
+// that quotes either string somewhere in the middle won't match.
 function isCodexEnvironmentContextText(text: string): boolean {
   return /^\s*<environment_context\b/.test(text)
+}
+
+function isCodexAgentsMdPreambleText(text: string): boolean {
+  return /^\s*# AGENTS\.md instructions for /.test(text)
+}
+
+function isCodexBootstrapBlockText(text: string): boolean {
+  return isCodexEnvironmentContextText(text) || isCodexAgentsMdPreambleText(text)
 }
 
 function codexConversationEntryFromMessageItem(
@@ -95,14 +114,16 @@ function codexConversationEntryFromMessageItem(
 
   if (content.length === 0) return null
 
-  // Environment-context shim filter. Only drops if the message's
-  // ENTIRE content is one env-context block; a real user prompt
-  // that happens to mention `<environment_context>` as a quoted
-  // phrase still passes.
+  // Bootstrap shim filter. Drops the synthetic first-turn user
+  // messages Codex injects (AGENTS.md preamble + <environment_context>;
+  // see the predicate comments above). The check requires EVERY block
+  // to be bootstrap-shaped so a real user prompt that happens to
+  // quote either marker still passes through with the user's content
+  // intact — only messages whose entire content is bootstrap noise
+  // get dropped.
   if (
     role === 'user' &&
-    content.length === 1 &&
-    isCodexEnvironmentContextText(content[0].text)
+    content.every(block => isCodexBootstrapBlockText(block.text))
   ) {
     return null
   }
