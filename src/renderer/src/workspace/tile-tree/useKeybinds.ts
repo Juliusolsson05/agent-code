@@ -534,6 +534,11 @@ function digitFromKeyboardEvent(
 }
 
 function dispatchRows(workspace: Workspace) {
+  // buildDispatchGroups was tightened to a single (state) arg when
+  // detached sessions were added — it no longer needs the runtime map
+  // because rows are derived purely from sessions + tabs + detached.
+  // Anything passing workspace.runtimes here is stale and would
+  // silently typecheck wrong against the new signature.
   return flattenDispatchRows(buildDispatchGroups(workspace.state))
 }
 

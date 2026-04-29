@@ -171,6 +171,12 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose, attachDetac
           const option = kindOptions[selectedIndex]
           if (!option) return
           if (dispatchMode) {
+            // kindOptions is filtered above to exclude 'terminal' in
+            // dispatch mode, so this guard is structurally guaranteed
+            // — but the typechecker can't infer that from the runtime
+            // filter, so re-narrow at the call site to satisfy the
+            // 'claude' | 'codex' constraint on createDetachedDispatchAgent.
+            if (option.kind !== 'claude' && option.kind !== 'codex') return
             if (committingRef.current) return
             committingRef.current = true
             // Dispatch Mode creates detached agents associated with the active
@@ -221,6 +227,14 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose, attachDetac
         // source of truth.
         const arrow = ARROW_TO_DIRECTION[event.key]
         const scope = event.shiftKey ? 'global' : 'local'
+        // Arrow placement is anchor-relative; without an anchor in the
+        // active tab there is nothing to place beside. The visibility
+        // guard at the bottom of the component already prevents render
+        // in that case, but the keydown handler is wired at document
+        // level so this branch can still fire while we're in a
+        // transient state — null-guard explicitly so the typechecker
+        // is happy and the runtime is safe.
+        if (!anchorSessionId) return
         setSelectedTargetId(placementTargetIdForArrow(
           placementTargets,
           anchorSessionId,
