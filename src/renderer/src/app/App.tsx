@@ -22,6 +22,10 @@ import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
+import {
+  AUTO_DEBUG_BUNDLE_INTERVAL_MS,
+  autosaveActiveAgentDebugBundles,
+} from '@renderer/features/debug/saveDebugBundle'
 import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
@@ -67,6 +71,7 @@ export default function App() {
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
+  const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const useProxyStreaming = settings.useProxyStreaming
   const defaultWorkspaceMode = settings.defaultWorkspaceMode
   const openPathPicker = useAppStore(state => state.openPathPicker)
@@ -119,7 +124,50 @@ export default function App() {
   }, [settings.dictationEnabled, settings.dictationShortcut])
 
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
+  const workspaceRef = useRef(workspace)
   const pathPickerDefaultedRef = useRef(false)
+
+  useEffect(() => {
+    workspaceRef.current = workspace
+  }, [workspace])
+
+  useEffect(() => {
+    if (!aggressiveDebugPersistenceEnabled) return
+
+    let disposed = false
+    let inFlight = false
+
+    const saveAll = (reason: 'autosave-enabled' | 'autosave-interval' | 'autosave-beforeunload') => {
+      if (inFlight && reason !== 'autosave-beforeunload') return
+      inFlight = true
+      void autosaveActiveAgentDebugBundles(workspaceRef.current, reason)
+        .catch(err => {
+          // eslint-disable-next-line no-console
+          console.warn('[debug-autosave] failed', err)
+        })
+        .finally(() => {
+          if (!disposed) inFlight = false
+        })
+    }
+
+    // Take an immediate baseline when the mode is enabled so a crash
+    // inside the first interval still leaves at least one bundle.
+    saveAll('autosave-enabled')
+    const timer = window.setInterval(
+      () => saveAll('autosave-interval'),
+      AUTO_DEBUG_BUNDLE_INTERVAL_MS,
+    )
+    const onBeforeUnload = () => {
+      saveAll('autosave-beforeunload')
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+      window.removeEventListener('beforeunload', onBeforeUnload)
+    }
+  }, [aggressiveDebugPersistenceEnabled])
 
   // Pre-fill the path input once per modal open. Do not keep syncing
   // while the modal is visible: newTab/resume mutates workspace
@@ -386,6 +434,7 @@ export default function App() {
         statusModeEnabled={settings.showStatusMode}
         worktreeBadgesEnabled={settings.showWorktreeBadges}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
+        aggressiveDebugPersistenceEnabled={aggressiveDebugPersistenceEnabled}
         gitBarOpen={gitBarOpen}
         worktreesBarOpen={worktreesBarOpen}
         debugPanelOpen={debugPanelOpen}
@@ -397,6 +446,8 @@ export default function App() {
         globalDispatchEnabled={workspace.dispatchMode?.scope === 'global'}
         dispatchTerminalVisible={workspace.dispatchMode?.terminalVisible !== false}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
+        setAggressiveDebugPersistence={enabled =>
+          setSettings({ aggressiveDebugPersistence: enabled })}
       />
 
       <PathPickerModal

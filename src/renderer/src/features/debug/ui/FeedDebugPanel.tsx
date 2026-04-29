@@ -9,7 +9,7 @@ type Props = {
   onClose: () => void
 }
 
-const LAYERS: FeedDebugLayer[] = ['STATE', 'JSONL', 'SEM', 'RENDER']
+const LAYERS: FeedDebugLayer[] = ['STATE', 'JSONL', 'SEM', 'RENDER', 'GHOST']
 
 export function FeedDebugPanel({ sessionId, runtime, kind, onClose }: Props) {
   const [enabled, setEnabled] = useState<Record<FeedDebugLayer, boolean>>({
@@ -17,6 +17,7 @@ export function FeedDebugPanel({ sessionId, runtime, kind, onClose }: Props) {
     JSONL: true,
     SEM: true,
     RENDER: true,
+    GHOST: true,
   })
   const [expanded, setExpanded] = useState<Record<number, boolean>>({})
   const [copyToast, setCopyToast] = useState<string | null>(null)
@@ -167,6 +168,8 @@ function layerText(layer: FeedDebugLayer): string {
       return 'text-amber-400'
     case 'RENDER':
       return 'text-fuchsia-400'
+    case 'GHOST':
+      return 'text-violet-400'
   }
 }
 

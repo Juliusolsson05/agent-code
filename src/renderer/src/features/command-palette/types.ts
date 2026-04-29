@@ -31,6 +31,7 @@ export type CommandContext = {
     toggleStatusMode: () => void
     toggleWorktreeBadges: () => void
     setDangerousAgentsEnabled: (enabled: boolean) => void
+    setAggressiveDebugPersistence: (enabled: boolean) => void
     enterResumeMode: () => void
     enterBuriedMode: () => void
     enterKillBuriedMode: () => void
@@ -43,6 +44,7 @@ export type CommandContext = {
     statusModeEnabled: boolean
     worktreeBadgesEnabled: boolean
     dangerousAgentsEnabled: boolean
+    aggressiveDebugPersistenceEnabled: boolean
     gitBarOpen: boolean
     worktreesBarOpen: boolean
     debugPanelOpen: boolean

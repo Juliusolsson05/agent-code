@@ -22,13 +22,14 @@ export type FeedDebugPersistEntry = {
   id: number
   ts: number
   tMs: number
-  layer: 'STATE' | 'JSONL' | 'SEM' | 'RENDER'
+  layer: 'STATE' | 'JSONL' | 'SEM' | 'RENDER' | 'GHOST'
   kind: string
   summary: string
   data?: unknown
 }
 
 const feedDebugWriteQueues = new Map<string, Promise<void>>()
+const lastWrittenFeedDebugId = new Map<string, number>()
 
 function sanitizeSessionIdForPath(sessionId: string): string {
   // Session ids are user-opaque uuids but the renderer also uses them
@@ -52,12 +53,29 @@ export function queueFeedDebugAppend(
     .catch(() => {})
     .then(async () => {
       if (entries.length === 0) return
+      const lastWritten = lastWrittenFeedDebugId.get(sessionId) ?? 0
+      // The renderer advances its persisted cursor only after IPC
+      // success, so two React effect passes can legally send the
+      // same pending window while the first disk write is still in
+      // flight. The comments in useFeedDebugPersist already rely on
+      // idempotence by (sessionId,id); enforce that contract here
+      // instead of making every reader mentally dedupe JSONL rows.
+      // This is intentionally process-local, not reconstructed from
+      // the existing file: a fresh app run should be able to append a
+      // new diagnostic timeline for the same session even though ids
+      // restart from 1 in renderer memory.
+      const freshEntries = entries.filter(entry => entry.id > lastWritten)
+      if (freshEntries.length === 0) return
       await mkdir(FEED_DEBUG_DIR, { recursive: true })
       const filePath = join(FEED_DEBUG_DIR, `${sanitizeSessionIdForPath(sessionId)}.jsonl`)
-      const text = entries
+      const text = freshEntries
         .map(entry => JSON.stringify({ sessionId, ...entry }))
         .join('\n') + '\n'
       await writeFile(filePath, text, { encoding: 'utf8', flag: 'a' })
+      lastWrittenFeedDebugId.set(
+        sessionId,
+        Math.max(lastWritten, ...freshEntries.map(entry => entry.id)),
+      )
     })
   feedDebugWriteQueues.set(sessionId, next)
   return next

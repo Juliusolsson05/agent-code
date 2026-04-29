@@ -39,6 +39,7 @@ export function coerceSettings(value: unknown): Settings {
     // fixed-choice values from the first integration draft and fall back for
     // non-strings so a corrupt localStorage blob cannot break settings boot.
     dictationShortcut: coerceHotkeyBinding(parsed.dictationShortcut),
+    aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
     // WHY membership check via WORKSPACE_MODES rather than a literal
     // === 'dispatch': keeps the source of truth in one array so adding
     // a new mode label later (if ever) only requires editing types.ts.

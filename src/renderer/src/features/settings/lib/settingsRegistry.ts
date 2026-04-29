@@ -206,6 +206,19 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'aggressive-debug-persistence',
+      category: 'experimental',
+      title: 'Persistent Aggressive Debug Logs',
+      description:
+        'Periodically save full debug bundles for active agent panes, plus a best-effort final bundle on close. Expensive, intended for cc-shell development.',
+      keywords: ['debug', 'logs', 'persistent', 'aggressive', 'autosave', 'render', 'trace'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.aggressiveDebugPersistence,
+        onToggle: (ctx, value) => ctx.onChange({ aggressiveDebugPersistence: value }),
+      },
+    },
+    {
       id: 'proxy-streaming',
       category: 'experimental',
       title: 'Proxy-Streamed Semantic Rendering',
