@@ -104,6 +104,20 @@ export default function App() {
     applyTheme(settings)
   }, [settings])
 
+  useEffect(() => {
+    // The default dictation trigger is bare Fn, which Chromium does not expose
+    // reliably to renderer keydown. Settings live in the renderer, but the
+    // actual capture must live in main/native; keep this one-way sync here so
+    // every pane shares the same OS listener while the focused pane decides
+    // whether to consume the resulting press/release event.
+    const binding = settings.dictationEnabled ? settings.dictationShortcut : ''
+    void window.api.configureDictationHotkey({ binding }).then(result => {
+      if (!result.ok) {
+        console.warn('[dictation] hotkey registration failed:', result)
+      }
+    })
+  }, [settings.dictationEnabled, settings.dictationShortcut])
+
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
   const pathPickerDefaultedRef = useRef(false)
 

@@ -69,6 +69,7 @@ type ServerRecord = {
   connection: MessageConnection
   initialized: Promise<InitializeResult>
   legendPromise: Promise<SemanticTokensLegend | null>
+  closed: boolean
 }
 
 function toSeverity(severity?: DiagnosticSeverity): LspDiagnostic['severity'] {
@@ -157,7 +158,7 @@ export class LspManager extends EventEmitter {
       return
     }
 
-    server.connection.sendNotification('textDocument/didOpen', {
+    void this.sendNotificationIfOpen(server, 'textDocument/didOpen', {
       textDocument: {
         uri: serverUri,
         languageId: language,
@@ -181,7 +182,7 @@ export class LspManager extends EventEmitter {
     const server = this.servers.get(doc.serverKey)
     if (!server) return
     doc.version += 1
-    server.connection.sendNotification('textDocument/didChange', {
+    void this.sendNotificationIfOpen(server, 'textDocument/didChange', {
       textDocument: {
         uri: doc.serverUri,
         version: doc.version,
@@ -195,7 +196,7 @@ export class LspManager extends EventEmitter {
     if (!doc) return
     const server = this.servers.get(doc.serverKey)
     if (server) {
-      server.connection.sendNotification('textDocument/didClose', {
+      void this.sendNotificationIfOpen(server, 'textDocument/didClose', {
         textDocument: { uri: doc.serverUri },
       })
     }
@@ -209,9 +210,14 @@ export class LspManager extends EventEmitter {
     const server = this.servers.get(doc.serverKey)
     if (!server) return null
     await server.initialized
-    return await server.connection.sendRequest('textDocument/semanticTokens/full', {
-      textDocument: { uri: doc.serverUri },
-    })
+    try {
+      return await server.connection.sendRequest('textDocument/semanticTokens/full', {
+        textDocument: { uri: doc.serverUri },
+      })
+    } catch (err) {
+      if (isDestroyedStreamError(err) || server.closed) return null
+      throw err
+    }
   }
 
   async dispose(): Promise<void> {
@@ -219,6 +225,7 @@ export class LspManager extends EventEmitter {
       await this.closeDocument(clientUri)
     }
     for (const server of this.servers.values()) {
+      server.closed = true
       server.connection.dispose()
       server.process.kill()
     }
@@ -305,7 +312,9 @@ export class LspManager extends EventEmitter {
     ) as Promise<InitializeResult>
     initialized
       .then(() => {
-        connection.sendNotification('initialized', {})
+        const server = this.servers.get(key)
+        if (!server) return
+        void this.sendNotificationIfOpen(server, 'initialized', {})
       })
       .catch(() => {})
 
@@ -320,9 +329,15 @@ export class LspManager extends EventEmitter {
       connection,
       initialized,
       legendPromise,
+      closed: false,
     }
 
+    child.on('error', () => {
+      record.closed = true
+    })
+
     child.on('exit', () => {
+      record.closed = true
       this.servers.delete(key)
       for (const doc of [...this.docs.values()]) {
         if (doc.serverKey !== key) continue
@@ -334,4 +349,26 @@ export class LspManager extends EventEmitter {
     this.servers.set(key, record)
     return record
   }
+
+  private async sendNotificationIfOpen(
+    server: ServerRecord,
+    method: string,
+    params: unknown,
+  ): Promise<void> {
+    if (server.closed || server.process.killed || server.process.stdin.destroyed) return
+
+    try {
+      await server.connection.sendNotification(method, params)
+    } catch (err) {
+      if (isDestroyedStreamError(err)) {
+        server.closed = true
+        return
+      }
+      throw err
+    }
+  }
+}
+
+function isDestroyedStreamError(err: unknown): boolean {
+  return err instanceof Error && 'code' in err && err.code === 'ERR_STREAM_DESTROYED'
 }

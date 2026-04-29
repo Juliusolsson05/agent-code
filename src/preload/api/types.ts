@@ -33,6 +33,17 @@ export type DictationStopResult =
   | { kind: 'no-speech' }
   | { kind: 'error'; message: string }
 
+export type DictationHotkeyConfigureResult =
+  | { ok: true; binding: string; native: boolean }
+  | { ok: false; binding: string; native: boolean; message?: string }
+
+export type DictationStreamTranscriptEvent = {
+  id: string
+  text: string
+  isFinal: boolean
+  source: 'final' | 'interim'
+}
+
 export type JsonlEntry = Record<string, unknown>
 
 export type PickerItem = {

@@ -60,6 +60,9 @@ export function ComposerInput({
   removeDraftImage: (imageId: string) => void
   dictation: ComposerDictationController
 }) {
+  const showDictationPlaceholder = dictation.enabled && dictation.busy && input.length === 0
+  const showDictationActivity = dictation.enabled && dictation.busy
+
   return (
     <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-2 relative">
       {/* SlashCommandPicker is absolutely positioned relative to this
@@ -105,31 +108,12 @@ export function ComposerInput({
         <div className="absolute left-2 top-[10px] text-accent text-[12px] pointer-events-none select-none">
           ❯
         </div>
-        {dictation.enabled ? (
-          <button
-            type="button"
-            className={`
-              absolute right-1.5 top-1.5 z-10 h-7 min-w-7 border px-2
-              text-[10px] font-code transition-colors
-              ${dictation.status === 'recording'
-                ? 'border-danger bg-danger/10 text-danger'
-                : dictation.busy
-                  ? 'border-accent bg-accent/10 text-accent'
-                  : 'border-border-hi bg-surface text-muted hover:border-accent hover:text-ink'}
-            `}
-            onClick={() => {
-              onUserEngagement()
-              dictation.toggle()
-            }}
-            title={dictation.label}
-            aria-label={dictation.label}
-          >
-            {dictation.status === 'recording'
-              ? 'REC'
-              : dictation.status === 'stopping'
-                ? '...'
-                : 'MIC'}
-          </button>
+        {showDictationActivity ? (
+          <ComposerDictationActivity
+            status={dictation.status}
+            levels={dictation.levels}
+            hasTranscriptPreview={dictation.hasTranscriptPreview}
+          />
         ) : null}
         <textarea
           ref={inputRef}
@@ -138,7 +122,7 @@ export function ComposerInput({
             w-full bg-canvas border
             ${focused ? 'border-accent' : 'border-border'}
             text-ink text-[12px]
-            pl-6 ${dictation.enabled ? 'pr-14' : 'pr-2'} py-2 outline-none
+            pl-6 ${showDictationActivity ? 'pr-16' : 'pr-2'} py-2 outline-none
             placeholder:text-muted
             transition-colors duration-150
             resize-none overflow-hidden leading-[1.4]
@@ -184,7 +168,9 @@ export function ComposerInput({
           placeholder={
             slashMode
               ? undefined
-              : focused
+              : showDictationPlaceholder
+                ? 'listening…'
+                : focused
                 ? 'type and press enter… (shift+enter for newline)'
                 : ''
           }
@@ -192,6 +178,90 @@ export function ComposerInput({
           autoComplete="off"
         />
       </div>
+    </div>
+  )
+}
+
+function ComposerDictationActivity({
+  status,
+  levels,
+  hasTranscriptPreview,
+}: {
+  status: ComposerDictationController['status']
+  levels: number[]
+  hasTranscriptPreview: boolean
+}) {
+  const active = status === 'recording'
+  const stopping = status === 'stopping'
+  const showDots = !hasTranscriptPreview || stopping
+
+  return (
+    <div
+      className={`
+        pointer-events-none absolute right-2 top-1/2 z-10 flex h-6 w-12
+        -translate-y-1/2 items-center justify-center overflow-hidden
+        border-l border-border/70 pl-2
+        ${stopping ? 'text-muted' : 'text-accent'}
+      `}
+      aria-hidden="true"
+    >
+      {showDots ? (
+        <ComposerDictationDots />
+      ) : (
+        <ComposerDictationBars levels={levels} active={active} />
+      )}
+    </div>
+  )
+}
+
+function ComposerDictationBars({
+  levels,
+  active,
+}: {
+  levels: number[]
+  active: boolean
+}) {
+  // Same visual model as the standalone MicPill: the bars are real
+  // speech-band energy values, with the sine curve only giving the strip a
+  // small organic bend. Quiet room means quiet bars; voice bands spike where
+  // the mic actually hears speech.
+  const phases = [0, 0.11, 0.23, 0.37, 0.52, 0.68, 0.84]
+  const t = (Date.now() % 700) / 700
+  return (
+    <div className="flex h-5 items-center gap-[3px]">
+      {phases.map((phase, i) => {
+        const voice = levels[i] ?? 0
+        const wave = active ? 0.86 + 0.14 * Math.abs(Math.sin((t + phase) * Math.PI * 2)) : 1
+        const responsive = active ? Math.max(voice, 0.025) * wave : 0.02
+        const height = Math.max(3, Math.round(responsive * 18))
+        return (
+          <span
+            key={phase}
+            className="w-[3px] rounded-sm bg-current transition-[height] duration-[28ms]"
+            style={{
+              height,
+              opacity: active ? 0.62 + Math.min(0.38, voice * 0.7) : 0.5,
+            }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function ComposerDictationDots() {
+  return (
+    <div className="flex items-center gap-1">
+      {[0, 1, 2].map(i => (
+        <span
+          key={i}
+          className="h-1.5 w-1.5 rounded-full bg-current"
+          style={{
+            animation: `composer-dictation-pulse 1.1s ${i * 0.18}s ease-in-out infinite`,
+          }}
+        />
+      ))}
+      <style>{`@keyframes composer-dictation-pulse { 0%,80%,100%{opacity:.2;transform:scale(.85)} 40%{opacity:1;transform:scale(1)} }`}</style>
     </div>
   )
 }

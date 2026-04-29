@@ -14,6 +14,8 @@ const headlessAlias = [
   { find: 'codex-headless', replacement: resolve(__dirname, 'packages/codex-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'packages/agent-transcript-parser/src/index.ts') },
+  { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(__dirname, '../agent-voice-dictation/dist')}/$1/index.js` },
+  { find: 'agent-voice-dictation', replacement: resolve(__dirname, '../agent-voice-dictation/dist/index.js') },
 ]
 
 // Project-wide absolute-import aliases. MUST match tsconfig.node.json
@@ -28,7 +30,7 @@ const projectAlias = {
   '@providers': resolve(__dirname, 'src/providers'),
 }
 
-const headlessExclude = ['claude-code-headless', 'codex-headless', 'agent-transcript-parser']
+const headlessExclude = ['claude-code-headless', 'codex-headless', 'agent-transcript-parser', 'agent-voice-dictation']
 
 export default defineConfig({
   main: {
@@ -36,7 +38,15 @@ export default defineConfig({
     resolve: { alias: [...headlessAlias, ...Object.entries(projectAlias).map(([find, replacement]) => ({ find, replacement }))] },
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/main/index.ts')
+        input: resolve(__dirname, 'src/main/index.ts'),
+        // `agent-voice-dictation` uses `ws` for Deepgram streaming. Main runs
+        // in Node, so bundling `ws` through Vite is the wrong tradeoff: Rollup
+        // can inline the optional bufferutil fallback into a shape where
+        // `bufferUtil.mask` is not a function, causing a crash on every audio
+        // chunk send. Leave `ws` external and let Node/Electron resolve the
+        // package at runtime, matching the standalone dictation app's proven
+        // Electron config.
+        external: ['ws']
       }
     }
   },
