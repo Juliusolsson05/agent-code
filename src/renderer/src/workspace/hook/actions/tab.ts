@@ -84,20 +84,35 @@ export function useTabActions(
       // Capture undo info before killing anything.
       const tabIdx = state.tabs.findIndex(t => t.id === tabId)
       const ids = collectLeaves(tab.root)
-      const detachedIds = Object.values(state.detachedSessions)
+      const detachedRecords = Object.values(state.detachedSessions)
         .filter(entry => entry.projectTabId === tabId)
-        .map(entry => entry.sessionId)
+      const detachedIds = detachedRecords.map(entry => entry.sessionId)
       const idsToKill = [...ids, ...detachedIds]
       const allMetas: Record<SessionId, SessionMeta> = {}
       for (const id of ids) {
         if (state.sessions[id]) allMetas[id] = state.sessions[id]
       }
+      // Capture detached agents associated with this tab so undoClose
+      // can re-spawn them. They DO get killed below as part of
+      // idsToKill — without capturing their metas here, undo would
+      // restore the tile-tree panes but silently drop every detached
+      // dispatch agent the user had parked in this project. Skip
+      // records whose SessionMeta is missing (defensive — an undo
+      // entry that referenced a non-existent meta would throw at
+      // restore time).
+      const detachedEntries = detachedRecords
+        .flatMap(entry => {
+          const meta = state.sessions[entry.sessionId]
+          if (!meta) return []
+          return [{ meta, detachedAt: entry.detachedAt }]
+        })
       refs.undoStackRef.current.push({
         type: 'tab',
         closedAt: Date.now(),
         tab: { ...tab },
         tabIndex: tabIdx,
         sessionMetas: allMetas,
+        detachedEntries: detachedEntries.length > 0 ? detachedEntries : undefined,
       })
       // Surface a brief undo hint. The label uses the tab title so
       // the user can confirm at a glance which thing they killed.

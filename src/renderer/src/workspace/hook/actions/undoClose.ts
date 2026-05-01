@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 
 import type {
+  DetachedSessionRecord,
   SessionId,
   SessionKind,
   SessionMeta,
@@ -129,6 +130,52 @@ export function useUndoCloseAction(
         focusedSessionId: restoredFocused,
       }
 
+      // Re-spawn any detached dispatch agents that were associated
+      // with this tab at close time. Done AFTER the tile-tree spawn
+      // loop so the restored tab id is already known — DetachedSessionRecord
+      // carries projectTabId, which has to point at the NEW tab id
+      // (the old one is gone). Failed spawns are skipped for the same
+      // reason as the tile-tree loop above: restore what we can.
+      //
+      // Note: sessionActions.spawn registers SessionMeta into
+      // state.sessions itself, so we only need to track DetachedSessionRecord
+      // entries here; the metas land in state.sessions through the spawn
+      // call's own setState, before our setState below runs.
+      const restoredDetached: Record<SessionId, DetachedSessionRecord> = {}
+      for (const detached of entry.detachedEntries ?? []) {
+        try {
+          const kind: SessionKind = detached.meta.kind ?? 'claude'
+          // Detached agents are never terminals in the current model
+          // (createDetachedDispatchAgent rejects 'terminal'), but we
+          // still gate the recover hint on kind for symmetry with the
+          // tile-tree loop above and so a future surface that allows
+          // detached terminals doesn't silently drop tmuxName.
+          const newId = await sessionActions.spawn(detached.meta.cwd, {
+            kind,
+            resumeSessionId: kind !== 'terminal' ? detached.meta.providerSessionId : undefined,
+            recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
+          })
+          restoredDetached[newId] = {
+            sessionId: newId,
+            surface: 'dispatch',
+            projectTabId: restoredTab.id,
+            projectTabTitle: restoredTab.title,
+            // projectTabIndex is a display ordinal recomputed at render
+            // time by buildDispatchGroups (state.tabs.findIndex(...)),
+            // so any value here gets overwritten on next render. Use
+            // entry.tabIndex as the seed; it's correct as long as no
+            // other tabs were inserted before our splice index.
+            projectTabIndex: entry.tabIndex,
+            // Preserve the original detachedAt so the dispatch row's age
+            // display (e.g. "4h" since detached) doesn't snap back to
+            // "just now" on undo.
+            detachedAt: detached.detachedAt,
+          }
+        } catch {
+          // Same restore-what-we-can policy as the tile-tree spawn loop above.
+        }
+      }
+
       setState(prev => {
         const insertIdx = Math.min(entry.tabIndex, prev.tabs.length)
         const tabs = [...prev.tabs]
@@ -137,6 +184,7 @@ export function useUndoCloseAction(
           ...prev,
           tabs,
           activeTabId: restoredTab.id,
+          detachedSessions: { ...prev.detachedSessions, ...restoredDetached },
         }
       })
     }
