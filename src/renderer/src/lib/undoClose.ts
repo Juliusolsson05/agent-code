@@ -73,8 +73,31 @@ export type ClosedPane = {
 }
 
 /**
+ * A detached dispatch agent that was associated with a tab at the
+ * time the tab was closed. Captured separately from `sessionMetas`
+ * because detached agents do NOT live in the tile tree and therefore
+ * have nothing in `tab.root` to remap on restore — they have to be
+ * respawned and re-registered in `detachedSessions` from scratch.
+ *
+ * We keep `detachedAt` so the dispatch row's age display doesn't
+ * snap to "just now" on undo — a 4-hour-old detached agent that gets
+ * killed and restored in the same minute should still read as 4 hours
+ * old in the dispatch list.
+ */
+export type ClosedTabDetachedEntry = {
+  meta: SessionMeta
+  detachedAt: number
+}
+
+/**
  * Captured when an entire tab is closed. We store the full tree
  * structure and all session metas so we can rebuild everything.
+ *
+ * `detachedEntries` is optional because tab closes from before the
+ * detached-sessions feature shipped (or tabs that simply had no
+ * detached agents associated) won't carry it. Restore code MUST treat
+ * the absent / empty case as "no detached work to do" — this is not a
+ * hint that something failed to capture.
  */
 export type ClosedTab = {
   type: 'tab'
@@ -85,6 +108,7 @@ export type ClosedTab = {
    *  in the meantime). */
   tabIndex: number
   sessionMetas: Record<SessionId, SessionMeta>
+  detachedEntries?: ClosedTabDetachedEntry[]
 }
 
 export type ClosedEntry = ClosedPane | ClosedTab
