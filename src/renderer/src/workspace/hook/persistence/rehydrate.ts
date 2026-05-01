@@ -171,10 +171,29 @@ export async function rehydrateWorkspace(
           ?? newTabs.find(t => t.id === persisted.activeTabId)?.id
           ?? newTabs[0].id
 
+      // dispatchMode.focusedSessionId is a SessionId that, like every
+      // other persisted SessionId in the workspace (tab leaves, buried
+      // records, detached records), needs to be remapped through the
+      // idMap built by rehydrate. Without this remap the field carries
+      // a pre-restart sessionId past restart, the dispatch UI silently
+      // falls back to grid focus or first row, and any command that
+      // targets dispatch focus operates on the wrong visible row.
+      // Falling back to undefined when the old id failed to respawn
+      // keeps the model honest — better to clear the focus than to
+      // pretend a dead id is still selectable.
+      const remappedDispatchMode = persisted.dispatchMode
+        ? {
+            ...persisted.dispatchMode,
+            focusedSessionId: persisted.dispatchMode.focusedSessionId
+              ? idMap.get(persisted.dispatchMode.focusedSessionId)
+              : undefined,
+          }
+        : null
+
       return {
         tabs: newTabs,
         activeTabId,
-        dispatchMode: persisted.dispatchMode ?? null,
+        dispatchMode: remappedDispatchMode,
         sessions: { ...freshSessions },
         detachedSessions: buildRemappedDetachedSessions(),
         buried: buildRemappedBuried(),
