@@ -83,6 +83,72 @@ export function usePaneActions(
       kind: SessionKind = 'claude',
       resumeSessionId?: string,
     ) => {
+      const dispatchSnapshot = refs.stateRef.current
+      if (dispatchSnapshot.dispatchMode && kind !== 'terminal') {
+        const tab = dispatchSnapshot.tabs.find(t => t.id === dispatchSnapshot.activeTabId)
+        if (!tab) return
+
+        const leafIds = collectLeaves(tab.root)
+        const focusedDispatchId = dispatchSnapshot.dispatchMode.focusedSessionId
+        const cwd =
+          (focusedDispatchId ? dispatchSnapshot.sessions[focusedDispatchId]?.cwd : null) ??
+          dispatchSnapshot.sessions[tab.focusedSessionId]?.cwd ??
+          leafIds.map(id => dispatchSnapshot.sessions[id]?.cwd).find(Boolean)
+        if (!cwd) {
+          showToast('Could not create dispatch agent: no project directory found')
+          return
+        }
+
+        let sessionId: SessionId
+        try {
+          sessionId = await sessionActions.spawn(cwd, { kind, resumeSessionId })
+        } catch (err) {
+          showToast(
+            err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Failed to create dispatch agent',
+          )
+          return
+        }
+
+        setState(prev => {
+          const latestTab = prev.tabs.find(t => t.id === tab.id)
+          const projectTabIndex = prev.tabs.findIndex(t => t.id === tab.id)
+          if (!latestTab) return prev
+
+          // WHY splitFocused owns this Dispatch detour instead of making every
+          // keybinding and command-palette entry remember Dispatch Mode:
+          // `splitFocused` is the old "make me a new agent" primitive. Before
+          // detached sessions, routing that through the tile tree was correct.
+          // In Dispatch Mode it is now wrong: the command-center surface can
+          // create many agents, and those agents must not mutate the normal grid
+          // just because the user used the familiar Option-D/Option-C grammar.
+          // Keeping the rule here makes all callers agree: normal mode splits
+          // the grid; Dispatch Mode creates a detached dispatch row and focuses
+          // it immediately.
+          return {
+            ...prev,
+            activeTabId: latestTab.id,
+            detachedSessions: {
+              ...prev.detachedSessions,
+              [sessionId]: {
+                sessionId,
+                surface: 'dispatch',
+                projectTabId: latestTab.id,
+                projectTabTitle: latestTab.title,
+                projectTabIndex: projectTabIndex >= 0 ? projectTabIndex : 0,
+                detachedAt: Date.now(),
+              },
+            },
+            dispatchMode: prev.dispatchMode
+              ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+              : prev.dispatchMode,
+          }
+        })
+        closeNewAgentPlacement()
+        return
+      }
+
       const tab = state.tabs.find(t => t.id === state.activeTabId)
       if (!tab) return
       const parentSessionId = tab.focusedSessionId
@@ -113,7 +179,16 @@ export function usePaneActions(
         }),
       }))
     },
-    [sessionActions, setState, showToast, state.activeTabId, state.sessions, state.tabs],
+    [
+      closeNewAgentPlacement,
+      refs.stateRef,
+      sessionActions,
+      setState,
+      showToast,
+      state.activeTabId,
+      state.sessions,
+      state.tabs,
+    ],
   )
 
   const startNewAgentPlacement = useCallback(() => {
