@@ -243,9 +243,22 @@ export async function rehydrateWorkspace(
             ? base.transcriptStatus
             : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready',
           transcriptError: base.transcriptError,
-          processStatus: 'started',
-          processError: null,
-          inputReady: true,
+          // WHY preserve an already-observed lifecycle state:
+          //
+          // Provider start is not a quiet boundary. Codex resume can
+          // replay transcript entries and emit process exit before
+          // spawnSession() resolves back to this rehydrate loop. The
+          // restored pane should inherit that real status; forcing
+          // "started/inputReady" here makes dead resumed sessions look
+          // alive until the user presses Enter and hits the backend
+          // guard.
+          processStatus: existing && existing.processStatus !== 'idle'
+            ? existing.processStatus
+            : 'started',
+          processError: existing?.processError ?? null,
+          inputReady: existing && existing.processStatus !== 'idle'
+            ? existing.inputReady
+            : true,
         }
       }
       for (const id of Object.keys(freshSessions)) {
@@ -259,9 +272,13 @@ export async function rehydrateWorkspace(
               ? existing.transcriptStatus
               : freshSessions[id]?.providerSessionId ? 'loading' : 'ready',
           transcriptError: existing?.transcriptError ?? null,
-          processStatus: 'started',
-          processError: null,
-          inputReady: true,
+          processStatus: existing && existing.processStatus !== 'idle'
+            ? existing.processStatus
+            : 'started',
+          processError: existing?.processError ?? null,
+          inputReady: existing && existing.processStatus !== 'idle'
+            ? existing.inputReady
+            : true,
         }
       }
       return out

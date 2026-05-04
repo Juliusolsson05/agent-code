@@ -248,6 +248,16 @@ export function TileLeaf({
       ? 'loading transcript'
       : runtime.transcriptStatus === 'error'
         ? `transcript unavailable${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
+        // WHY exited beats "not input ready":
+        //
+        // A resumed agent can die before the renderer finishes the
+        // bootstrap quiet-window. That leaves `inputReady=false`,
+        // which used to render "starting agent" forever even though
+        // the composer correctly blocked Enter with "Agent has
+        // exited". The process lifecycle is the stronger signal here:
+        // once main has emitted exit, this pane is no longer starting.
+        : runtime.processStatus === 'exited' || runtime.exited !== null
+          ? `agent exited${runtime.exited !== null ? ` (code ${runtime.exited})` : ''}`
         : !runtime.inputReady || runtime.processStatus === 'spawning'
           ? 'starting agent'
           : runtime.processStatus === 'failed'
