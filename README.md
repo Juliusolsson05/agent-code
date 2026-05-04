@@ -2,8 +2,9 @@
 
 `cc-shell` is an agent-first editor for heavy users of Claude Code and Codex.
 
-The working name is `cc-shell`. The product name will be `Code`:
-Agent Studio Code.
+The working name is `cc-shell`. The product is planned to be renamed to
+**Agent Code**. Some repository paths, package names, and UI labels may still
+use `cc-shell` during the transition.
 
 This is not another "make Claude Code look nicer" wrapper. It is an
 agentic development platform built on the opposite assumption: the agent
