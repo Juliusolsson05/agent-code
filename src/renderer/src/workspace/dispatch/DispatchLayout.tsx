@@ -12,6 +12,7 @@ import {
   buildDispatchGroups,
   findTerminalSessionInTab,
   flattenDispatchRows,
+  selectVisibleDispatchRow,
   type DispatchAgentRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
@@ -42,7 +43,7 @@ export function DispatchLayout({
     [workspace.state],
   )
   const rows = useMemo(() => flattenDispatchRows(groups), [groups])
-  const activeRow = selectActiveRow(
+  const activeRow = selectVisibleDispatchRow(
     rows,
     workspace.state.dispatchMode?.focusedSessionId ?? null,
     workspace.activeTab?.focusedSessionId ?? null,
@@ -461,17 +462,4 @@ function DispatchEmpty({ message }: { message: string }) {
       {message}
     </div>
   )
-}
-
-function selectActiveRow(
-  rows: DispatchAgentRow[],
-  dispatchFocusedSessionId: string | null,
-  gridFocusedSessionId: string | null,
-): DispatchAgentRow | null {
-  for (const candidate of [dispatchFocusedSessionId, gridFocusedSessionId]) {
-    if (!candidate) continue
-    const focused = rows.find(row => row.sessionId === candidate)
-    if (focused) return focused
-  }
-  return rows[0] ?? null
 }

@@ -23,12 +23,26 @@
 //   useWorkspace as a derived getter that everything reads automatically;
 //   the explicit import is the documentation.
 
+import {
+  buildDispatchGroups,
+  flattenDispatchRows,
+  selectVisibleDispatchRow,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
+import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 export function commandTargetSessionId(workspace: Workspace): string | null {
-  return (
-    workspace.dispatchMode?.focusedSessionId ??
-    workspace.activeTab?.focusedSessionId ??
-    null
-  )
+  return commandTargetSessionIdForState(workspace.state)
+}
+
+export function commandTargetSessionIdForState(state: WorkspaceState): SessionId | null {
+  const activeTab = state.tabs.find(tab => tab.id === state.activeTabId)
+  if (!state.dispatchMode) return activeTab?.focusedSessionId ?? null
+
+  const rows = flattenDispatchRows(buildDispatchGroups(state))
+  return selectVisibleDispatchRow(
+    rows,
+    state.dispatchMode.focusedSessionId,
+    activeTab?.focusedSessionId,
+  )?.sessionId ?? null
 }

@@ -22,7 +22,11 @@ import {
 import { findBestRemainingFocus, findDirectionalNeighbor } from '@renderer/workspace/tile-tree/geometry'
 import { findParentSplitInfo } from '@renderer/lib/undoClose'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
-import { buildDispatchGroups, flattenDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
+import {
+  buildDispatchGroups,
+  flattenDispatchRows,
+  selectVisibleDispatchRow,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 
 import type {
@@ -500,11 +504,11 @@ export function usePaneActions(
       ? flattenDispatchRows(buildDispatchGroups(snapshot))
       : []
     const dispatchTargetId = snapshot.dispatchMode
-      ? (
-          dispatchRows.find(row => row.sessionId === snapshot.dispatchMode?.focusedSessionId)?.sessionId ??
-          dispatchRows.find(row => row.sessionId === activeTab?.focusedSessionId)?.sessionId ??
-          dispatchRows[0]?.sessionId
-        )
+      ? selectVisibleDispatchRow(
+          dispatchRows,
+          snapshot.dispatchMode.focusedSessionId,
+          activeTab?.focusedSessionId,
+        )?.sessionId
       : null
     if (dispatchTargetId) {
       // WHY Dispatch Mode delegates by the visible row's explicit id:
@@ -526,6 +530,7 @@ export function usePaneActions(
       await closeSessionRef.current?.(dispatchTargetId)
       return
     }
+    if (snapshot.dispatchMode) return
 
     const tab = state.tabs.find(t => t.id === state.activeTabId)
     if (!tab) return
@@ -669,7 +674,7 @@ export function usePaneActions(
           }
           return {
             ...next,
-            dispatchMode: dispatchModeAfterSessionRemoval(next, targetId, detached.projectTabId),
+            dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId),
           }
         })
         const kindLabel = sessionMeta?.kind ?? 'claude'
@@ -750,6 +755,7 @@ export function usePaneActions(
             activeTabId: nextActiveTabId,
             sessions,
             dispatchMode: dispatchModeAfterSessionRemoval(
+              prev,
               {
                 ...prev,
                 tabs: remaining,
@@ -757,7 +763,6 @@ export function usePaneActions(
                 sessions,
               },
               targetId,
-              owningTab.id,
             ),
           }
         }
@@ -775,7 +780,7 @@ export function usePaneActions(
         const next = { ...prev, tabs, sessions }
         return {
           ...next,
-          dispatchMode: dispatchModeAfterSessionRemoval(next, targetId, owningTab.id),
+          dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId),
         }
       })
     },
@@ -1149,31 +1154,53 @@ export function usePaneActions(
 }
 
 function dispatchModeAfterSessionRemoval(
-  state: WorkspaceState,
+  before: WorkspaceState,
+  after: WorkspaceState,
   removedSessionId: SessionId,
-  preferredTabId?: string,
 ): DispatchModeState | null {
-  if (!state.dispatchMode || state.dispatchMode.focusedSessionId !== removedSessionId) {
-    return state.dispatchMode
+  if (!after.dispatchMode || after.dispatchMode.focusedSessionId !== removedSessionId) {
+    // The user wasn't visibly commanding this row — leave Dispatch focus alone.
+    //
+    // This short-circuit matters because closeSession is also reached from
+    // the Agent Activity modal, which kills *background* panes by id. Without
+    // this branch, killing a stranger row would shuffle the user's visible
+    // Dispatch selection on every removal.
+    return after.dispatchMode
   }
 
-  // WHY choose the next Dispatch focus here instead of letting
-  // DispatchLayout's fallback effect clean it up:
+  // Row-by-index successor selection.
   //
-  // Closing a Dispatch-selected row is a command action with enough context to
-  // know which project just lost a row. If we clear focusedSessionId and wait
-  // for render-time fallback, project scope can fall back through the active
-  // tab's stale grid focus or the first visible row, which feels random after
-  // closing agents quickly. Choosing against the post-removal Dispatch rows
-  // keeps the model explicit: stay in the same project when possible, then use
-  // the first visible row, and only leave the focus empty when no row remains.
-  const rows = flattenDispatchRows(buildDispatchGroups(state))
-  const nextRow =
-    (preferredTabId ? rows.find(row => row.tabId === preferredTabId) : undefined) ??
-    rows[0]
+  // The previous version of this helper picked "first row in the same project
+  // tab, else first row globally," which made closing row 6 of a project jump
+  // visibly to row 1 — there is no list-UI convention where a delete moves
+  // the cursor to the start of the list. Native list pickers (Finder, mail
+  // clients, IDE file lists) all keep the cursor at the same visual position
+  // after delete, falling back to the previous row when the deleted row was
+  // last. We mirror that here so close-and-keep-going feels predictable.
+  //
+  // Why diff against `before` instead of just picking afterRows[0]:
+  //   - The "same visual position" is only meaningful relative to where the
+  //     removed row USED to be. We need the index from the pre-removal list
+  //     to project it back into the post-removal list.
+  //   - When removedIndex is past the end of afterRows (closed the last
+  //     row), we fall back to afterRows[removedIndex - 1] so the cursor
+  //     trails behind the deletion instead of leaping to the top.
+  //
+  // When removedIndex is -1 (the closed session wasn't in the visible scope
+  // — e.g. project-scope close that collapsed the active tab and switched
+  // activeTabId to a different project) we deliberately clear focus instead
+  // of inventing a row. The DispatchLayout fallback effect will pick a sane
+  // first-row default on the next render in the new scope.
+  const beforeRows = flattenDispatchRows(buildDispatchGroups(before))
+  const afterRows = flattenDispatchRows(buildDispatchGroups(after))
+  const removedIndex = beforeRows.findIndex(row => row.sessionId === removedSessionId)
+  const successor =
+    removedIndex >= 0
+      ? (afterRows[removedIndex] ?? afterRows[removedIndex - 1])
+      : undefined
 
   return {
-    ...state.dispatchMode,
-    focusedSessionId: nextRow?.sessionId,
+    ...after.dispatchMode,
+    focusedSessionId: successor?.sessionId,
   }
 }

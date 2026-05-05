@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
 import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
@@ -34,10 +35,8 @@ export function useProviderActions(
 } {
   const switchFocusedProvider = useCallback(async () => {
     const current = refs.stateRef.current
-    const tab = current.tabs.find(t => t.id === current.activeTabId)
-    if (!tab) return
-
-    const sourceSessionId = current.dispatchMode?.focusedSessionId ?? tab.focusedSessionId
+    const sourceSessionId = commandTargetSessionIdForState(current)
+    if (!sourceSessionId) return
     const meta = current.sessions[sourceSessionId]
     if (!meta) return
 
@@ -84,10 +83,8 @@ export function useProviderActions(
 
   const reloadFocusedAgent = useCallback(async () => {
     const current = refs.stateRef.current
-    const tab = current.tabs.find(t => t.id === current.activeTabId)
-    if (!tab) return
-
-    const sourceSessionId = current.dispatchMode?.focusedSessionId ?? tab.focusedSessionId
+    const sourceSessionId = commandTargetSessionIdForState(current)
+    if (!sourceSessionId) return
     const meta = current.sessions[sourceSessionId]
     if (!meta) return
 
@@ -148,10 +145,8 @@ export function useProviderActions(
         | { kind: 'codex'; userMessageIndex: number },
     ) => {
       const current = refs.stateRef.current
-      const tab = current.tabs.find(t => t.id === current.activeTabId)
-      if (!tab) return
-
-      const sourceSessionId = current.dispatchMode?.focusedSessionId ?? tab.focusedSessionId
+      const sourceSessionId = commandTargetSessionIdForState(current)
+      if (!sourceSessionId) return
       const meta = current.sessions[sourceSessionId]
       if (!meta) return
 
