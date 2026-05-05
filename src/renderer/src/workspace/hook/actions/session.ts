@@ -410,14 +410,31 @@ export function useSessionActions(
         const next: Record<SessionId, SessionRuntime> = { ...prev }
         for (const [oldId] of agentEntries) delete next[oldId]
         for (const [oldId, newId] of idMap.entries()) {
-          const restored = emptyRuntime()
-          restored.draftInput = oldRuntimes[oldId]?.draftInput ?? ''
-          restored.hasOlderHistory = Boolean(freshSessions[newId]?.providerSessionId)
-          restored.transcriptStatus = freshSessions[newId]?.providerSessionId
-            ? 'loading'
-            : 'ready'
-          restored.processStatus = 'started'
-          restored.inputReady = true
+          // WHY merge instead of replacing with a fresh runtime:
+          //
+          // Codex resume can synchronously replay JSONL and even emit
+          // an exit while `window.api.spawnSession()` is still inside
+          // provider start. By the time this reload bookkeeping runs,
+          // `prev[newId]` may already contain the real lifecycle
+          // outcome. Replacing it with `emptyRuntime()` would resurrect
+          // a dead process as "started", which is exactly the reload
+          // failure mode where the pane looks stuck and Enter reports
+          // "Agent has exited".
+          const existing = prev[newId]
+          const restored: SessionRuntime = { ...(existing ?? emptyRuntime()) }
+          restored.draftInput = oldRuntimes[oldId]?.draftInput ?? existing?.draftInput ?? ''
+          restored.hasOlderHistory =
+            Boolean(existing?.hasOlderHistory) || Boolean(freshSessions[newId]?.providerSessionId)
+          restored.transcriptStatus =
+            existing?.transcriptStatus === 'ready' || existing?.transcriptStatus === 'error'
+              ? existing.transcriptStatus
+              : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready'
+          restored.transcriptError = existing?.transcriptError ?? null
+          restored.processStatus =
+            existing && existing.processStatus !== 'idle' ? existing.processStatus : 'started'
+          restored.processError = existing?.processError ?? null
+          restored.inputReady =
+            existing && existing.processStatus !== 'idle' ? existing.inputReady : true
           next[newId] = restored
         }
         return next
