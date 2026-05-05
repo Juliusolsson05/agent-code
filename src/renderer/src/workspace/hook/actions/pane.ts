@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 
 import type {
   BuriedPaneRecord,
@@ -75,6 +75,8 @@ export function usePaneActions(
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
   navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
 } {
+  const closeSessionRef = useRef<((targetId: SessionId) => Promise<void>) | null>(null)
+
   // Spawns a new session in the parent pane's cwd, inserts a new
   // leaf under a fresh split node, makes the new pane focused.
   const splitFocused = useCallback(
@@ -490,6 +492,22 @@ export function usePaneActions(
   // onto the undo-close stack so the user can restore the pane (or
   // tab) with a single command within the next 2 minutes.
   const closeFocused = useCallback(async () => {
+    const dispatchTargetId = refs.stateRef.current.dispatchMode?.focusedSessionId
+    if (dispatchTargetId) {
+      // WHY Dispatch Mode delegates by explicit id:
+      //
+      // Tab.focusedSessionId is intentionally grid-only. Dispatch selection can
+      // point at a detached agent that has no tile-tree leaf, or at a grid
+      // agent without mutating the underlying tab focus. The old close path
+      // always read activeTab.focusedSessionId, so closing from Dispatch could
+      // kill whichever grid pane happened to be focused underneath the visible
+      // dispatch row. `closeSession` already owns the explicit-id close
+      // semantics for both detached and grid sessions, so Dispatch close must
+      // go through that path.
+      await closeSessionRef.current?.(dispatchTargetId)
+      return
+    }
+
     const tab = state.tabs.find(t => t.id === state.activeTabId)
     if (!tab) return
     const targetId = tab.focusedSessionId
@@ -582,6 +600,7 @@ export function usePaneActions(
   }, [
     refs.latestScreenRef,
     refs.seenUuidsRef,
+    refs.stateRef,
     refs.undoStackRef,
     setRuntimes,
     setState,
@@ -736,6 +755,7 @@ export function usePaneActions(
       showToast,
     ],
   )
+  closeSessionRef.current = closeSession
 
   // Bury: remove the focused pane from the visible layout without
   // killing the underlying session. The session keeps running in
