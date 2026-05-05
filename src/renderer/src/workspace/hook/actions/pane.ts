@@ -494,9 +494,20 @@ export function usePaneActions(
   // onto the undo-close stack so the user can restore the pane (or
   // tab) with a single command within the next 2 minutes.
   const closeFocused = useCallback(async () => {
-    const dispatchTargetId = refs.stateRef.current.dispatchMode?.focusedSessionId
+    const snapshot = refs.stateRef.current
+    const activeTab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+    const dispatchRows = snapshot.dispatchMode
+      ? flattenDispatchRows(buildDispatchGroups(snapshot))
+      : []
+    const dispatchTargetId = snapshot.dispatchMode
+      ? (
+          dispatchRows.find(row => row.sessionId === snapshot.dispatchMode?.focusedSessionId)?.sessionId ??
+          dispatchRows.find(row => row.sessionId === activeTab?.focusedSessionId)?.sessionId ??
+          dispatchRows[0]?.sessionId
+        )
+      : null
     if (dispatchTargetId) {
-      // WHY Dispatch Mode delegates by explicit id:
+      // WHY Dispatch Mode delegates by the visible row's explicit id:
       //
       // Tab.focusedSessionId is intentionally grid-only. Dispatch selection can
       // point at a detached agent that has no tile-tree leaf, or at a grid
@@ -504,8 +515,14 @@ export function usePaneActions(
       // always read activeTab.focusedSessionId, so closing from Dispatch could
       // kill whichever grid pane happened to be focused underneath the visible
       // dispatch row. `closeSession` already owns the explicit-id close
-      // semantics for both detached and grid sessions, so Dispatch close must
-      // go through that path.
+      // semantics for both detached and grid sessions.
+      //
+      // We still cannot trust dispatchMode.focusedSessionId blindly: after a
+      // scope switch, rehydrate miss, or rapid close, it may point at an id that
+      // is no longer present in the visible Dispatch rows. DispatchLayout falls
+      // back to grid focus and then the first visible row in that case, so close
+      // must use the same row-derived target or the highlighted pane and the
+      // destructive target diverge again.
       await closeSessionRef.current?.(dispatchTargetId)
       return
     }
