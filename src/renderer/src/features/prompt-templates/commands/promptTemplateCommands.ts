@@ -1,11 +1,12 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 function focusedAgentSessionId(workspace: Workspace): string | null {
-  const tab = workspace.activeTab
-  if (!tab) return null
-  const kind = workspace.state.sessions[tab.focusedSessionId]?.kind ?? 'claude'
-  return kind === 'terminal' ? null : tab.focusedSessionId
+  const sessionId = commandTargetSessionId(workspace)
+  if (!sessionId) return null
+  const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+  return kind === 'terminal' ? null : sessionId
 }
 
 export const promptTemplateCommands: CommandDef[] = [

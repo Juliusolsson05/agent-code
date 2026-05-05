@@ -1,5 +1,6 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value
@@ -20,16 +21,16 @@ export const sessionCommands: CommandDef[] = [
     title: 'View Prompts',
     keywords: ['prompts', 'history', 'user', 'modal', 'session', 'context'],
     when: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return false
-      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       return kind === 'claude' || kind === 'codex'
     },
     run: ({ workspace, ui }) => {
-      const tab = workspace.activeTab
-      if (!tab) return
-      ui.openViewPrompts(tab.focusedSessionId)
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      ui.openViewPrompts(sessionId)
     },
   },
   {
@@ -62,9 +63,9 @@ export const sessionCommands: CommandDef[] = [
       'checkpoint',
     ],
     when: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return false
-      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       return (
         (kind === 'claude' || kind === 'codex') &&
@@ -72,9 +73,9 @@ export const sessionCommands: CommandDef[] = [
       )
     },
     run: ({ workspace, ui }) => {
-      const tab = workspace.activeTab
-      if (!tab) return
-      ui.openRewindPrompt(tab.focusedSessionId)
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      ui.openRewindPrompt(sessionId)
       ui.closePalette()
     },
   },
@@ -135,8 +136,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Reload Agent',
     keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'reconnect'],
     getState: ({ workspace }) => {
-      const tab = workspace.activeTab
-      const meta = tab ? workspace.state.sessions[tab.focusedSessionId] : null
+      const sessionId = commandTargetSessionId(workspace)
+      const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? 'claude'
       return {
         label: kind === 'codex' ? 'Codex' : 'Claude',
@@ -144,9 +145,9 @@ export const sessionCommands: CommandDef[] = [
       }
     },
     when: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return false
-      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
     },
@@ -157,8 +158,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Copy Resume Command',
     keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex'],
     getState: ({ workspace }) => {
-      const tab = workspace.activeTab
-      const meta = tab ? workspace.state.sessions[tab.focusedSessionId] : null
+      const sessionId = commandTargetSessionId(workspace)
+      const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? 'claude'
       return {
         label: kind === 'codex' ? 'Codex' : 'Claude',
@@ -166,16 +167,15 @@ export const sessionCommands: CommandDef[] = [
       }
     },
     when: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return false
-      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
     },
     run: async ({ workspace, ui }) => {
-      const tab = workspace.activeTab
-      if (!tab) return
-      const sessionId = tab.focusedSessionId
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) return
@@ -198,9 +198,9 @@ export const sessionCommands: CommandDef[] = [
     when: ({ workspace }) => {
       // Needs a focused agent session that has a providerSessionId
       // — without that id there's nothing on disk to duplicate.
-      const tab = workspace.activeTab
-      if (!tab) return false
-      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       return (
         (kind === 'claude' || kind === 'codex') &&
@@ -208,9 +208,9 @@ export const sessionCommands: CommandDef[] = [
       )
     },
     run: async ({ workspace, ui }) => {
-      const tab = workspace.activeTab
-      if (!tab) return
-      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       if (!meta?.providerSessionId) return
       try {
@@ -238,8 +238,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Switch Provider',
     keywords: ['provider', 'switch', 'claude', 'codex', 'translate'],
     getState: ({ workspace }) => {
-      const tab = workspace.activeTab
-      const meta = tab ? workspace.state.sessions[tab.focusedSessionId] : null
+      const sessionId = commandTargetSessionId(workspace)
+      const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? 'claude'
       return {
         label: kind === 'codex' ? 'Codex' : 'Claude',
@@ -247,9 +247,9 @@ export const sessionCommands: CommandDef[] = [
       }
     },
     when: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return false
-      const meta = workspace.state.sessions[tab.focusedSessionId]
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
     },

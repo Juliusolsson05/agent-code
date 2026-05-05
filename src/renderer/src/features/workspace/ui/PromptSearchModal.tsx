@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { SessionIndexEntry, SessionIndexPrompt } from '@preload/index'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // PromptSearchModal — cross-session prompt search.
@@ -99,16 +100,18 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  // Scope results to the ACTIVE TAB's focused pane cwd. Searching
+  // Scope results to the visibly commanded pane's cwd. Searching
   // across every workspace on disk surfaces sessions from unrelated
   // projects that the user can't meaningfully use from the current
   // tab (resuming a session recorded in /foo while the pane is
   // rooted in /bar leaves the model looking at the wrong
-  // filesystem). When there's no active tab — fresh app launch —
-  // fall back to null which means "all sessions".
+  // filesystem). Dispatch Mode has its own focused row, so using
+  // activeTab.focusedSessionId here would search the stale grid pane
+  // underneath the command center.
+  const commandSessionId = commandTargetSessionId(workspace)
   const activeCwd =
-    workspace.activeTab
-      ? (workspace.state.sessions[workspace.activeTab.focusedSessionId]?.cwd ?? null)
+    commandSessionId
+      ? (workspace.state.sessions[commandSessionId]?.cwd ?? null)
       : null
 
   // Reset state each time the modal opens — we want a fresh list

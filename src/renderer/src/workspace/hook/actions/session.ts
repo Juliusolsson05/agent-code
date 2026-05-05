@@ -265,10 +265,19 @@ export function useSessionActions(
       cwd: string,
       opts?: { resumeSessionId?: string; kind?: SessionKind },
     ): Promise<SessionId | undefined> => {
-      const tab = state.tabs.find(t => t.id === state.activeTabId)
+      const snapshot = refs.stateRef.current
+      const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
       if (!tab) return
-      const oldId = tab.focusedSessionId
-      const nextKind = opts?.kind ?? state.sessions[oldId]?.kind ?? 'claude'
+      // WHY this reads Dispatch focus before tab focus:
+      //
+      // `replaceSession` powers resume, reload, provider-switch, and rewind.
+      // Those commands target the thing the user is visibly commanding. In
+      // Dispatch Mode that can be a detached row, or a grid row that did not
+      // mutate Tab.focusedSessionId. Remapping by the old grid-only focus would
+      // make the palette labels talk about one agent while the destructive
+      // replacement happened to another.
+      const oldId = snapshot.dispatchMode?.focusedSessionId ?? tab.focusedSessionId
+      const nextKind = opts?.kind ?? snapshot.sessions[oldId]?.kind ?? 'claude'
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
       const newId = await spawn(cwd, opts)
       setRuntimes(prev => ({
@@ -288,9 +297,9 @@ export function useSessionActions(
       delete refs.seenUuidsRef.current[oldId]
       delete refs.latestScreenRef.current[oldId]
 
-      // Swap the sessionId in the tree. Walk the tile tree and
-      // replace every occurrence of oldId with newId (there should
-      // be exactly one — the focused leaf).
+      // Swap the sessionId wherever this live session is placed. Grid sessions
+      // live in one tile-tree leaf; detached Dispatch sessions live in
+      // detachedSessions with no leaf at all.
       const remapNode = (n: TileNode): TileNode => {
         if (n.type === 'leaf') {
           return n.sessionId === oldId
@@ -322,10 +331,16 @@ export function useSessionActions(
           kind: nextKind,
           ...(opts?.resumeSessionId ? { providerSessionId: opts.resumeSessionId } : {}),
         }
+        const detachedSessions = { ...prev.detachedSessions }
+        const detached = detachedSessions[oldId]
+        if (detached) {
+          delete detachedSessions[oldId]
+          detachedSessions[newId] = { ...detached, sessionId: newId }
+        }
         return {
           ...prev,
           tabs: prev.tabs.map(t => {
-            if (t.id !== prev.activeTabId) return t
+            if (!collectLeaves(t.root).includes(oldId)) return t
             return {
               ...t,
               root: remapNode(t.root),
@@ -334,6 +349,10 @@ export function useSessionActions(
             }
           }),
           sessions,
+          detachedSessions,
+          dispatchMode: prev.dispatchMode?.focusedSessionId === oldId
+            ? { ...prev.dispatchMode, focusedSessionId: newId }
+            : prev.dispatchMode,
         }
       })
       return newId
@@ -342,12 +361,10 @@ export function useSessionActions(
       refs.latestRuntimesRef,
       refs.latestScreenRef,
       refs.seenUuidsRef,
+      refs.stateRef,
       setRuntimes,
       setState,
       spawn,
-      state.activeTabId,
-      state.sessions,
-      state.tabs,
     ],
   )
 
