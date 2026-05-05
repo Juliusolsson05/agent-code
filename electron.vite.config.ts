@@ -1,7 +1,10 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { copyFile, mkdir } from 'node:fs/promises'
+import { dirname } from 'node:path'
 import { resolve } from 'path'
+import type { Plugin } from 'vite'
 
 // Resolve headless packages from the submodule sources directly.
 // Only main + preload use these (they import Node APIs like
@@ -37,9 +40,47 @@ const projectAlias = {
 
 const headlessExclude = ['claude-code-headless', 'codex-headless', 'agent-transcript-parser', 'agent-voice-dictation']
 
+function copyMainRuntimeResourcesPlugin(): Plugin {
+  const resources = [
+    {
+      from: resolve(__dirname, 'packages/claude-code-headless/src/testing/proxy-testing/mitmAddon.py'),
+      to: resolve(__dirname, 'out/main/mitmAddon.py'),
+    },
+  ]
+
+  const copyResources = async () => {
+    await Promise.all(resources.map(async resource => {
+      await mkdir(dirname(resource.to), { recursive: true })
+      await copyFile(resource.from, resource.to)
+    }))
+  }
+
+  return {
+    name: 'cc-shell-copy-main-runtime-resources',
+    apply: 'build',
+    async closeBundle() {
+      // WHY this lives in the Vite main build instead of only in
+      // `npm run build:app`:
+      //
+      // Claude proxy streaming starts from the bundled main process,
+      // and the proxy launcher resolves `mitmAddon.py` beside
+      // `out/main/index.js` first. `electron-vite dev` rewrites that
+      // output without running the package-level build script, so the
+      // addon disappears in development and every Claude proxy spawn
+      // becomes "Unable to locate mitmAddon.py". Copying from the
+      // main bundle lifecycle keeps dev, preview, and production
+      // builds on the same resource contract.
+      await copyResources()
+    },
+  }
+}
+
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: headlessExclude })],
+    plugins: [
+      externalizeDepsPlugin({ exclude: headlessExclude }),
+      copyMainRuntimeResourcesPlugin(),
+    ],
     resolve: { alias: [...headlessAlias, ...Object.entries(projectAlias).map(([find, replacement]) => ({ find, replacement }))] },
     build: {
       rollupOptions: {
