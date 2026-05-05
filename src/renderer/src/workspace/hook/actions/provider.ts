@@ -37,7 +37,7 @@ export function useProviderActions(
     const tab = current.tabs.find(t => t.id === current.activeTabId)
     if (!tab) return
 
-    const sourceSessionId = tab.focusedSessionId
+    const sourceSessionId = current.dispatchMode?.focusedSessionId ?? tab.focusedSessionId
     const meta = current.sessions[sourceSessionId]
     if (!meta) return
 
@@ -87,7 +87,7 @@ export function useProviderActions(
     const tab = current.tabs.find(t => t.id === current.activeTabId)
     if (!tab) return
 
-    const sourceSessionId = tab.focusedSessionId
+    const sourceSessionId = current.dispatchMode?.focusedSessionId ?? tab.focusedSessionId
     const meta = current.sessions[sourceSessionId]
     if (!meta) return
 
@@ -151,7 +151,7 @@ export function useProviderActions(
       const tab = current.tabs.find(t => t.id === current.activeTabId)
       if (!tab) return
 
-      const sourceSessionId = tab.focusedSessionId
+      const sourceSessionId = current.dispatchMode?.focusedSessionId ?? tab.focusedSessionId
       const meta = current.sessions[sourceSessionId]
       if (!meta) return
 

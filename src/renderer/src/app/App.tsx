@@ -32,6 +32,7 @@ import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
 
 // App — thin shell around the workspace hook.
@@ -260,6 +261,7 @@ export default function App() {
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
   const { state, activeTab } = workspace
+  const commandTargetId = commandTargetSessionId(workspace)
   const buriedPromptMeta = buryPromptSessionId
     ? workspace.state.sessions[buryPromptSessionId] ?? null
     : null
@@ -363,8 +365,8 @@ export default function App() {
         {gitBarOpen && (
           <GitBar
             cwd={
-              activeTab
-                ? workspace.state.sessions[activeTab.focusedSessionId]?.cwd ?? null
+              commandTargetId
+                ? workspace.state.sessions[commandTargetId]?.cwd ?? null
                 : null
             }
             onClose={toggleGitBar}
@@ -374,8 +376,8 @@ export default function App() {
         {worktreesBarOpen && (
           <WorktreesBar
             cwd={
-              activeTab
-                ? workspace.state.sessions[activeTab.focusedSessionId]?.cwd ?? null
+              commandTargetId
+                ? workspace.state.sessions[commandTargetId]?.cwd ?? null
                 : null
             }
             workspace={workspace}
@@ -383,36 +385,36 @@ export default function App() {
           />
         )}
 
-        {debugPanelOpen && activeTab && (
+        {debugPanelOpen && commandTargetId && (
           <DebugPanel
-            sessionId={activeTab.focusedSessionId}
-            runtime={workspace.getRuntime(activeTab.focusedSessionId)}
-            kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
+            sessionId={commandTargetId}
+            runtime={workspace.getRuntime(commandTargetId)}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
             onClose={toggleDebugPanel}
           />
         )}
 
-        {feedDebugPanelOpen && activeTab && (
+        {feedDebugPanelOpen && commandTargetId && (
           <FeedDebugPanel
-            sessionId={activeTab.focusedSessionId}
-            runtime={workspace.getRuntime(activeTab.focusedSessionId)}
-            kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
+            sessionId={commandTargetId}
+            runtime={workspace.getRuntime(commandTargetId)}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
             onClose={toggleFeedDebugPanel}
           />
         )}
 
-        {proxyDebugPanelOpen && activeTab && (
+        {proxyDebugPanelOpen && commandTargetId && (
           <ProxyDebugPanel
-            sessionId={activeTab.focusedSessionId}
-            kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
+            sessionId={commandTargetId}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
             onClose={toggleProxyDebugPanel}
           />
         )}
 
-        {htmlDebugPanelOpen && activeTab && (
+        {htmlDebugPanelOpen && commandTargetId && (
           <HtmlDebugPanel
-            sessionId={activeTab.focusedSessionId}
-            kind={workspace.state.sessions[activeTab.focusedSessionId]?.kind ?? 'claude'}
+            sessionId={commandTargetId}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
             onClose={toggleHtmlDebugPanel}
           />
         )}

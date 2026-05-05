@@ -6,6 +6,7 @@ import {
   buildDispatchGroups,
   flattenDispatchRows,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // Keybinds: global window-level listeners. The handler is attached to
 // `document` in a single useEffect, which captures the key BEFORE the
@@ -138,7 +139,7 @@ export function useKeybinds(
       // the Spotlight Esc handler so picker-Esc wins when both modes
       // are active (shouldn't happen — picker is feed-only — but the
       // ordering keeps the intent local).
-      const focusedSessionId = workspace.activeTab?.focusedSessionId
+      const focusedSessionId = commandTargetSessionId(workspace)
       const picker = focusedSessionId
         ? workspace.runtimes[focusedSessionId]?.assistantPicker
         : null
@@ -254,8 +255,9 @@ export function useKeybinds(
         if (k.toLowerCase() === 'r' && shift) {
           e.preventDefault()
           const tab = workspace.activeTab
-          if (tab) {
-            const cwd = workspace.state.sessions[tab.focusedSessionId]?.cwd
+          const targetSessionId = commandTargetSessionId(workspace)
+          if (tab && targetSessionId) {
+            const cwd = workspace.state.sessions[targetSessionId]?.cwd
             void onResumeRequest(cwd ?? '')
           } else {
             void onResumeRequest('')

@@ -10,6 +10,7 @@ import {
   updateCustomPromptTemplate,
   type PromptTemplate,
 } from '@renderer/features/prompt-templates/templates'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
@@ -167,8 +168,9 @@ export function CommandPalette({
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  const focusedMeta = workspace.activeTab
-    ? workspace.state.sessions[workspace.activeTab.focusedSessionId]
+  const focusedSessionId = commandTargetSessionId(workspace)
+  const focusedMeta = focusedSessionId
+    ? workspace.state.sessions[focusedSessionId]
     : null
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? 'claude'
@@ -231,9 +233,9 @@ export function CommandPalette({
   }, [])
 
   const enterSavePromptTemplateMode = useCallback(() => {
-    const tab = workspace.activeTab
-    if (!tab) return
-    const draft = workspace.getRuntime(tab.focusedSessionId).draftInput.trim()
+    const sessionId = commandTargetSessionId(workspace)
+    if (!sessionId) return
+    const draft = workspace.getRuntime(sessionId).draftInput.trim()
     if (!draft) return
     setPromptTemplateForm({ id: null, title: '', body: draft })
     setMode('save-prompt-template')
@@ -475,9 +477,8 @@ export function CommandPalette({
 
   const executePromptTemplate = useCallback(
     async (template: PromptTemplate) => {
-      const tab = workspace.activeTab
-      if (!tab) return
-      const sessionId = tab.focusedSessionId
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
 
       try {
         const body = template.buildBody
@@ -508,8 +509,7 @@ export function CommandPalette({
     const body = promptTemplateForm.body.trim()
     if (!title || !body) return
 
-    const tab = workspace.activeTab
-    const sessionId = tab?.focusedSessionId ?? null
+    const sessionId = commandTargetSessionId(workspace)
     const template = promptTemplateForm.id
       ? updateCustomPromptTemplate(promptTemplateForm.id, title, body)
       : saveCustomPromptTemplate(title, body)

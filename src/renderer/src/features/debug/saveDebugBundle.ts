@@ -1,6 +1,7 @@
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import { sanitizeHtml } from '@renderer/lib/sanitizeHtml'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import {
   exportDebugTraceFiles,
   recordHtmlTraceSnapshot,
@@ -368,9 +369,8 @@ export async function autosaveActiveAgentDebugBundles(
 // this logic is reusable if we ever surface the command elsewhere
 // (e.g. a keybinding or a right-click menu).
 export async function runSaveDebugBundleCommand(workspace: Workspace): Promise<void> {
-  const tab = workspace.activeTab
-  if (!tab) return
-  const sessionId = tab.focusedSessionId
+  const sessionId = commandTargetSessionId(workspace)
+  if (!sessionId) return
   const meta = workspace.state.sessions[sessionId]
   const runtime = workspace.getRuntime(sessionId)
   const kind = meta?.kind ?? 'claude'

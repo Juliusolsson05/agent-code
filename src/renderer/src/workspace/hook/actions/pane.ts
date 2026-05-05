@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 
 import type {
   BuriedPaneRecord,
@@ -9,6 +9,7 @@ import type {
   SplitDirection,
   Tab,
   TileNode,
+  WorkspaceState,
 } from '@renderer/workspace/types'
 import { RATIO_DEFAULT } from '@renderer/workspace/types'
 import {
@@ -21,6 +22,7 @@ import {
 import { findBestRemainingFocus, findDirectionalNeighbor } from '@renderer/workspace/tile-tree/geometry'
 import { findParentSplitInfo } from '@renderer/lib/undoClose'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
+import { buildDispatchGroups, flattenDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 
 import type {
@@ -75,6 +77,8 @@ export function usePaneActions(
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
   navigate: (direction: 'left' | 'right' | 'up' | 'down') => void
 } {
+  const closeSessionRef = useRef<((targetId: SessionId) => Promise<void>) | null>(null)
+
   // Spawns a new session in the parent pane's cwd, inserts a new
   // leaf under a fresh split node, makes the new pane focused.
   const splitFocused = useCallback(
@@ -490,6 +494,22 @@ export function usePaneActions(
   // onto the undo-close stack so the user can restore the pane (or
   // tab) with a single command within the next 2 minutes.
   const closeFocused = useCallback(async () => {
+    const dispatchTargetId = refs.stateRef.current.dispatchMode?.focusedSessionId
+    if (dispatchTargetId) {
+      // WHY Dispatch Mode delegates by explicit id:
+      //
+      // Tab.focusedSessionId is intentionally grid-only. Dispatch selection can
+      // point at a detached agent that has no tile-tree leaf, or at a grid
+      // agent without mutating the underlying tab focus. The old close path
+      // always read activeTab.focusedSessionId, so closing from Dispatch could
+      // kill whichever grid pane happened to be focused underneath the visible
+      // dispatch row. `closeSession` already owns the explicit-id close
+      // semantics for both detached and grid sessions, so Dispatch close must
+      // go through that path.
+      await closeSessionRef.current?.(dispatchTargetId)
+      return
+    }
+
     const tab = state.tabs.find(t => t.id === state.activeTabId)
     if (!tab) return
     const targetId = tab.focusedSessionId
@@ -582,6 +602,7 @@ export function usePaneActions(
   }, [
     refs.latestScreenRef,
     refs.seenUuidsRef,
+    refs.stateRef,
     refs.undoStackRef,
     setRuntimes,
     setState,
@@ -624,13 +645,14 @@ export function usePaneActions(
           delete sessions[targetId]
           const detachedSessions = { ...prev.detachedSessions }
           delete detachedSessions[targetId]
-          return {
+          const next = {
             ...prev,
             sessions,
             detachedSessions,
-            dispatchMode: prev.dispatchMode?.focusedSessionId === targetId
-              ? { ...prev.dispatchMode, focusedSessionId: undefined }
-              : prev.dispatchMode,
+          }
+          return {
+            ...next,
+            dispatchMode: dispatchModeAfterSessionRemoval(next, targetId, detached.projectTabId),
           }
         })
         const kindLabel = sessionMeta?.kind ?? 'claude'
@@ -710,6 +732,16 @@ export function usePaneActions(
             tabs: remaining,
             activeTabId: nextActiveTabId,
             sessions,
+            dispatchMode: dispatchModeAfterSessionRemoval(
+              {
+                ...prev,
+                tabs: remaining,
+                activeTabId: nextActiveTabId,
+                sessions,
+              },
+              targetId,
+              owningTab.id,
+            ),
           }
         }
 
@@ -723,7 +755,11 @@ export function usePaneActions(
         }
         const sessions = { ...prev.sessions }
         delete sessions[targetId]
-        return { ...prev, tabs, sessions }
+        const next = { ...prev, tabs, sessions }
+        return {
+          ...next,
+          dispatchMode: dispatchModeAfterSessionRemoval(next, targetId, owningTab.id),
+        }
       })
     },
     [
@@ -736,6 +772,7 @@ export function usePaneActions(
       showToast,
     ],
   )
+  closeSessionRef.current = closeSession
 
   // Bury: remove the focused pane from the visible layout without
   // killing the underlying session. The session keeps running in
@@ -1091,5 +1128,35 @@ export function usePaneActions(
     focusSession,
     focusSessionInTab,
     navigate,
+  }
+}
+
+function dispatchModeAfterSessionRemoval(
+  state: WorkspaceState,
+  removedSessionId: SessionId,
+  preferredTabId?: string,
+): DispatchModeState | null {
+  if (!state.dispatchMode || state.dispatchMode.focusedSessionId !== removedSessionId) {
+    return state.dispatchMode
+  }
+
+  // WHY choose the next Dispatch focus here instead of letting
+  // DispatchLayout's fallback effect clean it up:
+  //
+  // Closing a Dispatch-selected row is a command action with enough context to
+  // know which project just lost a row. If we clear focusedSessionId and wait
+  // for render-time fallback, project scope can fall back through the active
+  // tab's stale grid focus or the first visible row, which feels random after
+  // closing agents quickly. Choosing against the post-removal Dispatch rows
+  // keeps the model explicit: stay in the same project when possible, then use
+  // the first visible row, and only leave the focus empty when no row remains.
+  const rows = flattenDispatchRows(buildDispatchGroups(state))
+  const nextRow =
+    (preferredTabId ? rows.find(row => row.tabId === preferredTabId) : undefined) ??
+    rows[0]
+
+  return {
+    ...state.dispatchMode,
+    focusedSessionId: nextRow?.sessionId,
   }
 }

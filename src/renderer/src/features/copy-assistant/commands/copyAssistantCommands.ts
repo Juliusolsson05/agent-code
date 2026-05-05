@@ -1,4 +1,5 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // "Copy Assistant Message" — opens the picker on the focused pane.
 // All navigation (Up/Down/Enter/Esc) is handled by useKeybinds when
@@ -11,11 +12,11 @@ export const copyAssistantCommands: CommandDef[] = [
     id: 'copy-assistant-message',
     title: 'Copy Assistant Message…',
     keywords: ['copy', 'assistant', 'message', 'response', 'pick'],
-    when: ({ workspace }) => workspace.activeTab !== null,
+    when: ({ workspace }) => commandTargetSessionId(workspace) !== null,
     run: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return
-      workspace.pickerEnter(tab.focusedSessionId)
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      workspace.pickerEnter(sessionId)
     },
   },
 ]

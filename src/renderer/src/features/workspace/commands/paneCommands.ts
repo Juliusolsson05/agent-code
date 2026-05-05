@@ -1,5 +1,6 @@
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 export const paneCommands: CommandDef[] = [
   {
@@ -145,9 +146,9 @@ export const paneCommands: CommandDef[] = [
     id: 'toggle-tail',
     title: 'Tail',
     getState: ({ workspace }) => {
-      const tab = workspace.activeTab
-      const tailMode = tab
-        ? workspace.getRuntime(tab.focusedSessionId).tailMode
+      const sessionId = commandTargetSessionId(workspace)
+      const tailMode = sessionId
+        ? workspace.getRuntime(sessionId).tailMode
         : false
       return {
         label: tailMode ? 'On' : 'Off',
@@ -155,9 +156,9 @@ export const paneCommands: CommandDef[] = [
       }
     },
     run: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return
-      workspace.toggleTailMode(tab.focusedSessionId)
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      workspace.toggleTailMode(sessionId)
     },
   },
   {
@@ -165,9 +166,9 @@ export const paneCommands: CommandDef[] = [
     title: 'Jump to Latest Message',
     shortcut: 'End',
     when: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return false
-      const kind = workspace.state.sessions[tab.focusedSessionId]?.kind ?? 'claude'
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
       return kind !== 'terminal'
     },
     run: ({ workspace }) => {
@@ -178,9 +179,8 @@ export const paneCommands: CommandDef[] = [
     id: 'copy-last-assistant',
     title: 'Copy Last Response',
     run: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return
-      const sessionId = tab.focusedSessionId
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
       const runtime = workspace.getRuntime(sessionId)
       const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
       const text = extractLastAssistantText(runtime.entries, kind)
