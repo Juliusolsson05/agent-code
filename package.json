@@ -15,6 +15,13 @@
     "testing:rendering": "npm run testing:rendering:build && electron testing/rendering/out/main/main.js",
     "testing:rendering:build": "electron-vite build --config testing/rendering/electron.vite.config.ts",
     "testing:rendering:preview": "electron testing/rendering/out/main/main.js",
+    "test:review-fixes": "npm run test:settings-coerce && npm run test:prompt-templates",
+    "test:settings-coerce": "tsx --tsconfig tsconfig.web.json scripts/test-settings-coerce.ts",
+    "test:prompt-templates": "tsx --tsconfig tsconfig.web.json scripts/test-prompt-templates.ts",
+    "test:work-context": "tsx --tsconfig tsconfig.web.json scripts/test-work-context.ts",
+    "test:worktree-activity": "tsx --tsconfig tsconfig.node.json scripts/test-worktree-activity-index.ts",
+    "test:ghost-fallback": "tsx --tsconfig tsconfig.web.json scripts/test-ghost-fallback.ts",
+    "test:dictation": "tsx --tsconfig tsconfig.node.json scripts/test-dictation-imports.ts",
     "proxy-demo-bootstrap": "npm --prefix packages/claude-code-headless run proxy-test-bootstrap",
     "proxy-demo": "npm --prefix packages/claude-code-headless run build && electron experiments/claude-proxy-stream-app/main.mjs",
     "postinstall": "electron-rebuild -f -w node-pty"

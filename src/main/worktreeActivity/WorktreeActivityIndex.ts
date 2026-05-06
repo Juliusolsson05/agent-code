@@ -358,7 +358,7 @@ export class WorktreeActivityIndex {
 // transform — the snapshot/disk-load path that builds the input is
 // the messy part; the reduction itself reads more clearly when
 // separate.
-function collectWorktreeActivitySummaries(
+export function collectWorktreeActivitySummaries(
   index: WorktreeActivityIndexFile,
   worktrees: WorktreeIdentity[],
 ): WorktreeActivitySummary[] {
