@@ -14,13 +14,14 @@ import { GhostJournalRegistry } from '@main/ghostJournal.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
-import { STATE_FILE } from '@main/storage/paths.js'
+import { STATE_FILE, pruneStaleFeedDebugLogs } from '@main/storage/paths.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { createMainWindow, focusMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
+import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
 import { getToolPath, initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 
@@ -83,6 +84,20 @@ if (!hasSingleInstanceLock) {
 
 async function startApp(): Promise<void> {
   performanceService.mark('app.main.whenReady.start')
+  // Heap watchdog and feed-debug retention sweep run as early as
+  // possible: the watchdog so any pre-toolchain startup stall has
+  // forensic coverage, and the prune so a stale logs directory is
+  // off the disk before we start writing fresh entries to it.
+  // Both are fire-and-forget — neither blocks app readiness.
+  startMainHeapWatchdog()
+  void pruneStaleFeedDebugLogs().then(result => {
+    if (result.removed > 0) {
+      // eslint-disable-next-line no-console
+      console.info(
+        `[feed-debug] pruned ${result.removed} stale logs (${(result.bytesFreed / 1024 / 1024).toFixed(1)} MiB)`,
+      )
+    }
+  })
   await initializeToolchain()
   await cleanupClaudeImageCacheDir().catch(err => {
     console.warn('[images] failed to clean Claude image cache:', err)
@@ -177,6 +192,7 @@ app.on('before-quit', () => {
   void manager?.killAll()
   void lspManager.dispose()
   cleanupDictationIpcResources()
+  stopMainHeapWatchdog()
   // Flush pending ghost writes. Fire-and-forget is fine — Electron's
   // quit path gives us a tick before teardown. 100 ms queue depth is
   // worst-case; in practice drains are empty at quit time because
