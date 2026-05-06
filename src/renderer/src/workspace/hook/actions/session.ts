@@ -17,6 +17,7 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // -----------------------------------------------------------------------------
 // Session lifecycle actions.
@@ -266,8 +267,6 @@ export function useSessionActions(
       opts?: { resumeSessionId?: string; kind?: SessionKind },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
-      const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
-      if (!tab) return
       // WHY this reads Dispatch focus before tab focus:
       //
       // `replaceSession` powers resume, reload, provider-switch, and rewind.
@@ -276,7 +275,8 @@ export function useSessionActions(
       // mutate Tab.focusedSessionId. Remapping by the old grid-only focus would
       // make the palette labels talk about one agent while the destructive
       // replacement happened to another.
-      const oldId = snapshot.dispatchMode?.focusedSessionId ?? tab.focusedSessionId
+      const oldId = commandTargetSessionIdForState(snapshot)
+      if (!oldId) return
       const nextKind = opts?.kind ?? snapshot.sessions[oldId]?.kind ?? 'claude'
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
       const newId = await spawn(cwd, opts)

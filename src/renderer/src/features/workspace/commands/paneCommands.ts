@@ -43,13 +43,16 @@ export const paneCommands: CommandDef[] = [
     title: 'Attach Detached Agent To Grid…',
     keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
     when: ({ workspace }) => {
-      const sessionId = workspace.dispatchMode?.focusedSessionId
+      if (!workspace.dispatchMode) return false
+      const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       return Boolean(workspace.state.detachedSessions[sessionId])
     },
     run: ({ workspace, ui }) => {
-      const sessionId = workspace.dispatchMode?.focusedSessionId
+      if (!workspace.dispatchMode) return
+      const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
+      if (!workspace.state.detachedSessions[sessionId]) return
       ui.openDispatchAttach(sessionId)
     },
   },

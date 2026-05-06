@@ -13,6 +13,7 @@ import type {
   WorkspaceSetState,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 // -----------------------------------------------------------------------------
 // Cross-cutting runtime helpers
@@ -106,8 +107,17 @@ export function useWorkspaceHelpers(
 
   const scrollFocusedToLatest = useCallback(() => {
     const snap = refs.stateRef.current
-    const tab = snap.tabs.find(t => t.id === snap.activeTabId)
-    const sessionId = tab?.focusedSessionId
+    // WHY command-target instead of tab.focusedSessionId:
+    //
+    // In Dispatch Mode the visible row may be a detached session (no
+    // tile-tree placement at all) or a grid row that didn't mutate
+    // tab.focusedSessionId. Reading tab.focusedSessionId here would
+    // scroll the underlying grid pane while the user expects "End" /
+    // Jump-to-Latest to act on the row they see highlighted in the
+    // Dispatch list. commandTargetSessionIdForState routes through the
+    // same row-derived selector the palette and provider actions use,
+    // so all "act on the visible thing" commands agree.
+    const sessionId = commandTargetSessionIdForState(snap)
     if (!sessionId) return
     setRuntimes(prev => {
       const current = prev[sessionId] ?? emptyRuntime()

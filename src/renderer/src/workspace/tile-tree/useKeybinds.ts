@@ -5,6 +5,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import {
   buildDispatchGroups,
   flattenDispatchRows,
+  selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
@@ -553,8 +554,25 @@ function focusDispatchRowByIndex(workspace: Workspace, index: number) {
 function moveDispatchSelection(workspace: Workspace, delta: number) {
   const rows = dispatchRows(workspace)
   if (rows.length === 0) return
-  const currentId = workspace.dispatchMode?.focusedSessionId ?? workspace.activeTab?.focusedSessionId ?? null
-  const currentIndex = rows.findIndex(row => row.sessionId === currentId)
+  // Resolve the current row through the same row-derived selector that the
+  // visible UI uses. Reading raw dispatchMode.focusedSessionId here (the
+  // previous shape) yields ids that aren't always in the visible list:
+  // stale persisted focus right after rehydrate, scope toggles, or the
+  // tiny gap right after a close. findIndex would then return -1 and the
+  // wrap-around math `(currentIndex + delta + len) % len` produces a
+  // deterministic-but-confusing jump — Down lands on row 0, Up lands on
+  // the second-to-last row — neither matches the row the user sees
+  // highlighted. selectVisibleDispatchRow always returns a row when the
+  // list is non-empty (rows[0] fallback), so currentIndex is always in
+  // range and the visible cursor is the cursor we move from.
+  const currentRow = selectVisibleDispatchRow(
+    rows,
+    workspace.dispatchMode?.focusedSessionId,
+    workspace.activeTab?.focusedSessionId,
+  )
+  const currentIndex = currentRow
+    ? rows.findIndex(row => row.sessionId === currentRow.sessionId)
+    : 0
   const nextIndex = (currentIndex + delta + rows.length) % rows.length
   const row = rows[nextIndex]
   if (!row) return

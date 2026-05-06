@@ -78,6 +78,26 @@ export function flattenDispatchRows(groups: DispatchTabGroup[]): DispatchAgentRo
   return groups.flatMap(group => group.rows)
 }
 
+export function selectVisibleDispatchRow(
+  rows: DispatchAgentRow[],
+  dispatchFocusedSessionId: SessionId | null | undefined,
+  gridFocusedSessionId: SessionId | null | undefined,
+): DispatchAgentRow | null {
+  // WHY this selector lives with the row builder:
+  // Dispatch has two focus-like ids in play. `dispatchFocusedSessionId` is the
+  // persisted command selection, while `gridFocusedSessionId` is the active
+  // tab's tile-tree focus used as a fallback when Dispatch focus is absent or
+  // stale. The visible UI already follows this order in DispatchLayout; command
+  // visibility and destructive actions must follow the same row-derived target
+  // or the highlighted row and the command target drift apart again.
+  for (const candidate of [dispatchFocusedSessionId, gridFocusedSessionId]) {
+    if (!candidate) continue
+    const focused = rows.find(row => row.sessionId === candidate)
+    if (focused) return focused
+  }
+  return rows[0] ?? null
+}
+
 export function findTerminalSessionInTab(
   tab: Tab | null,
   state: WorkspaceState,
