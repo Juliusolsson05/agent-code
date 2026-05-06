@@ -9,15 +9,23 @@ import {
 
 type DictationStatus = 'idle' | 'starting' | 'recording' | 'stopping' | 'error'
 
+type QueuedAudioChunk = {
+  index: number
+  chunk: ArrayBuffer
+}
+
 type ActiveRecording = {
   id: string | null
   recorder: MediaRecorder
   stream: MediaStream
+  mimeType: string | null
   startedAt: number
   baseInput: string
   previewText: string
-  queuedChunks: ArrayBuffer[]
+  queuedChunks: QueuedAudioChunk[]
   pendingPushes: Promise<unknown>[]
+  chunkChain: Promise<void>
+  nextChunkIndex: number
   streamStartPromise: Promise<string | null> | null
   streamStartTimer: number | null
   discarded: boolean
@@ -521,22 +529,26 @@ export function useComposerDictation({
         setLifecycleStatus('idle')
         return
       }
-      const mimeType = pickMimeType()
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+      const requestedMimeType = pickMimeType()
+      const recorder = new MediaRecorder(stream, requestedMimeType ? { mimeType: requestedMimeType } : undefined)
+      const recorderMimeType = recorder.mimeType || requestedMimeType || null
       debug('start:recorder-created', {
-        mimeType,
-        recorderMimeType: recorder.mimeType,
+        requestedMimeType,
+        recorderMimeType,
         state: recorder.state,
       })
       const recording: ActiveRecording = {
         id: null,
         recorder,
         stream,
+        mimeType: recorderMimeType,
         startedAt: Date.now(),
         baseInput: inputRef.current,
         previewText: '',
         queuedChunks: [],
         pendingPushes: [],
+        chunkChain: Promise.resolve(),
+        nextChunkIndex: 0,
         streamStartPromise: null,
         streamStartTimer: null,
         discarded: false,
@@ -546,7 +558,7 @@ export function useComposerDictation({
       const ensureStreamStarted = () => {
         if (recording.streamStartPromise) return recording.streamStartPromise
         debug('stream:start:request', {
-          mimeType,
+          mimeType: recording.mimeType,
           queuedChunks: recording.queuedChunks.length,
           recorderState: recording.recorder.state,
         })
@@ -559,7 +571,7 @@ export function useComposerDictation({
         // shape in the composer hook.
         recording.streamStartPromise = window.api.startDictationStream({
           provider,
-          ...(mimeType ? { mimeType } : {}),
+          ...(recording.mimeType ? { mimeType: recording.mimeType } : {}),
         }).then(async started => {
           debug('stream:start:result', {
             kind: started.kind,
@@ -596,8 +608,8 @@ export function useComposerDictation({
           // next dataavailable sees the id and goes direct.
           let drained = 0
           while (recording.queuedChunks.length > 0) {
-            const chunk = recording.queuedChunks.shift()!
-            const result = await window.api.pushDictationChunk({ id: started.id, chunk })
+            const queued = recording.queuedChunks.shift()!
+            const result = await window.api.pushDictationChunk({ id: started.id, chunk: queued.chunk })
             if (result.kind === 'error') throw new Error(result.message)
             drained += 1
           }
@@ -617,7 +629,10 @@ export function useComposerDictation({
       }
 
       recorder.addEventListener('dataavailable', event => {
+        const chunkIndex = recording.nextChunkIndex
+        recording.nextChunkIndex += 1
         debug('recorder:dataavailable', {
+          chunkIndex,
           size: event.data.size,
           type: event.data.type,
           recorderState: recorder.state,
@@ -626,14 +641,30 @@ export function useComposerDictation({
           queuedChunks: recording.queuedChunks.length,
         })
         if (event.data.size <= 1) return
-        const push = event.data.arrayBuffer()
-          .then(async chunk => {
+        // MediaRecorder fires `dataavailable` in order, but the Blob ->
+        // ArrayBuffer conversion is asynchronous and does not preserve that
+        // ordering for us. That was the root cause of Deepgram's intermittent
+        // `UNPARSABLE_CLIENT_MESSAGE` failures: when chunk 1's conversion won
+        // the race against chunk 0, the queued WebM stream began with a media
+        // cluster instead of the EBML/init segment. Deepgram quite reasonably
+        // rejected "sequence_id: 1" as corrupt even though the microphone,
+        // permissions, and websocket were all fine.
+        //
+        // Chain the whole conversion + local queue/provider push in event order.
+        // This costs at most one chunk of latency, which is invisible next to the
+        // ~500ms provider handshake, and it preserves the only invariant WebM
+        // streaming absolutely requires: byte order must match recorder order.
+        const previousChunk = recording.chunkChain
+        const push = previousChunk
+          .then(async () => {
+            const chunk = await event.data.arrayBuffer()
             if (recording.discarded) return { kind: 'ignored' as const }
             const id = recording.id
             if (!id) {
-              recording.queuedChunks.push(chunk)
+              recording.queuedChunks.push({ index: chunkIndex, chunk })
               const heldMs = Date.now() - recording.startedAt
               debug('recorder:chunk:queued-local', {
+                chunkIndex,
                 bytes: chunk.byteLength,
                 heldMs,
                 queuedChunks: recording.queuedChunks.length,
@@ -658,6 +689,7 @@ export function useComposerDictation({
             }
             debug('recorder:chunk:push-ipc', {
               id,
+              chunkIndex,
               bytes: chunk.byteLength,
               elapsedMs: Date.now() - recording.startedAt,
             })
@@ -671,6 +703,7 @@ export function useComposerDictation({
             })
             throw err
           })
+        recording.chunkChain = push.then(() => undefined, () => undefined)
         recording.pendingPushes.push(push)
       })
 
