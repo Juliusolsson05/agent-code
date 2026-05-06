@@ -51,6 +51,14 @@ type Row = {
   statusTone: 'active' | 'idle' | 'exited' | 'terminal'
 }
 
+type SortMode = 'activity' | 'tabs'
+type TabGroup = {
+  key: string
+  title: string
+  tabIndex: number
+  rows: Array<{ row: Row; idx: number }>
+}
+
 // Relative-time renderer copy-pasted from PromptSearchModal.tsx. We
 // didn't extract to a shared util because the other component is the
 // only other caller right now — when a third surface wants it, hoist.
@@ -114,6 +122,7 @@ function providerGlyph(kind: 'claude' | 'codex' | 'terminal'): string {
 
 export function AgentActivityModal({ open, workspace, onClose }: Props) {
   const [selectedIdx, setSelectedIdx] = useState(0)
+  const [sortMode, setSortMode] = useState<SortMode>('activity')
   const [nowTick, setNowTick] = useState(0)
   const inputRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -207,12 +216,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
       }
     })
 
-    // Sort order: live sessions first (regardless of timestamp) so
-    // the user sees what's working, then everything else by
-    // most-recent-activity descending. Stale sessions naturally
-    // sink to the bottom where they're easiest to mass-close with
-    // End+↑+Delete.
-    built.sort((a, b) => {
+    const compareByActivity = (a: Row, b: Row): number => {
       if (a.isLive !== b.isLive) return a.isLive ? -1 : 1
       const at = a.lastActiveAt ?? 0
       const bt = b.lastActiveAt ?? 0
@@ -220,9 +224,47 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
       // Tie-breaker: group same-tab rows together to aid scanning.
       if (a.tabIndex !== b.tabIndex) return a.tabIndex - b.tabIndex
       return 0
-    })
+    }
+
+    if (sortMode === 'tabs') {
+      // Dispatch Mode presents agents grouped by tab order, not by
+      // recency. This mode intentionally mirrors that mental model:
+      // top-level order follows workspace.state.tabs, then rows inside a
+      // tab still put live work before stale work so an expanded project
+      // group remains useful for triage.
+      built.sort((a, b) => {
+        if (a.tabIndex !== b.tabIndex) return a.tabIndex - b.tabIndex
+        return compareByActivity(a, b)
+      })
+    } else {
+      // Default sort order: live sessions first (regardless of tab) so
+      // the user sees what's working, then everything else by
+      // most-recent-activity descending. Stale sessions naturally sink
+      // to the bottom where they're easiest to mass-close with
+      // End+↑+Delete.
+      built.sort(compareByActivity)
+    }
     return built
-  }, [workspace.state.tabs, workspace.state.sessions, workspace.state.activeTabId, workspace.runtimes, nowTick])
+  }, [workspace.state.tabs, workspace.state.sessions, workspace.state.activeTabId, workspace.runtimes, nowTick, sortMode])
+
+  const tabGroups = useMemo<TabGroup[]>(() => {
+    if (sortMode !== 'tabs') return []
+    const groups: TabGroup[] = []
+    for (const [idx, row] of rows.entries()) {
+      const last = groups[groups.length - 1]
+      if (last && last.key === row.tabId) {
+        last.rows.push({ row, idx })
+      } else {
+        groups.push({
+          key: row.tabId,
+          title: row.tabTitle,
+          tabIndex: row.tabIndex,
+          rows: [{ row, idx }],
+        })
+      }
+    }
+    return groups
+  }, [rows, sortMode])
 
   // Keep selection valid when rows change (close shrinks the list,
   // open reopens with a possibly-different length). Math.min clamps
@@ -283,6 +325,15 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
     [onClose, openBuryPrompt],
   )
 
+  const switchSortMode = useCallback((mode: SortMode) => {
+    setSortMode(mode)
+    // The segmented control lives in the modal header, outside the
+    // keyboard-navigation container. Refocusing the list keeps
+    // Enter/Delete/B working after a mouse click instead of requiring
+    // the user to click back into the rows.
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -340,6 +391,104 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
 
   if (!open) return null
 
+  function renderRow(row: Row, idx: number) {
+    const selected = idx === selectedIdx
+    return (
+      <div
+        key={row.sessionId}
+        data-row-idx={idx}
+        onMouseEnter={() => setSelectedIdx(idx)}
+        onClick={() => focusRow(row)}
+        className={`
+          group flex items-start gap-3
+          px-4 py-2.5 border-b border-border last:border-b-0
+          cursor-pointer
+          ${selected ? 'bg-accent/15 text-ink' : 'text-ink-dim hover:bg-surface-hi'}
+        `}
+      >
+        <div className="flex-shrink-0 w-[72px] flex items-center gap-2">
+          <span className={row.isLive ? 'text-accent' : 'text-muted'}>
+            {providerGlyph(row.kind)}
+          </span>
+          <span className="text-[11px] uppercase tracking-wider text-muted">
+            {row.kind}
+          </span>
+        </div>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 text-[12px] font-code text-ink truncate">
+            <span className="truncate">{row.cwdBase}</span>
+            {row.isFocused && (
+              <span className="text-[9px] uppercase tracking-wider text-accent flex-shrink-0">
+                focused
+              </span>
+            )}
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted truncate">
+            tab {row.tabIndex + 1} · {row.tabTitle} · {row.cwd}
+          </div>
+        </div>
+
+        <div className="flex-shrink-0 w-[140px] text-right">
+          {row.statusLabel && (
+            <div
+              className={
+                row.statusTone === 'active'
+                  ? 'text-[11px] text-accent'
+                  : row.statusTone === 'exited'
+                    ? 'text-[11px] text-red-300'
+                    : 'text-[11px] text-muted'
+              }
+            >
+              {row.statusLabel}
+            </div>
+          )}
+          {row.lastActiveAt != null && !row.isLive && (
+            <>
+              <div className="text-[11px] text-ink-dim">
+                {relativeTime(row.lastActiveAt)}
+              </div>
+              <div className="text-[10px] text-muted">
+                {absoluteTime(row.lastActiveAt)}
+              </div>
+            </>
+          )}
+          {row.lastActiveAt == null && row.kind !== 'terminal' && !row.isLive && (
+            <div className="text-[10px] text-muted">no activity yet</div>
+          )}
+        </div>
+
+        <div
+          className={`
+            flex-shrink-0 flex items-center gap-1
+            ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
+            transition-opacity
+          `}
+          onClick={e => e.stopPropagation()}
+        >
+          {row.kind !== 'terminal' && (
+            <button
+              type="button"
+              onClick={() => buryRow(row)}
+              className="px-2 py-0.5 text-[10px] border border-border text-ink-dim hover:border-border-hi hover:text-ink"
+              title="Bury (b)"
+            >
+              bury
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => void closeRow(row)}
+            className="px-2 py-0.5 text-[10px] border border-red-600/40 text-red-300 hover:border-red-500 hover:bg-red-500/10"
+            title="Close (del)"
+          >
+            close
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div
       role="dialog"
@@ -365,6 +514,30 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
               Enter focus · Del close · B bury · Esc dismiss
             </div>
           </div>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => switchSortMode('activity')}
+              className={`px-2.5 py-1 text-[10px] border ${
+                sortMode === 'activity'
+                  ? 'border-accent text-accent bg-accent/10'
+                  : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
+              }`}
+            >
+              Activity
+            </button>
+            <button
+              type="button"
+              onClick={() => switchSortMode('tabs')}
+              className={`px-2.5 py-1 text-[10px] border ${
+                sortMode === 'tabs'
+                  ? 'border-accent text-accent bg-accent/10'
+                  : 'border-border text-ink-dim hover:text-ink hover:border-border-hi'
+              }`}
+            >
+              Dispatch order
+            </button>
+          </div>
         </div>
 
         <div
@@ -378,115 +551,31 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
               <div className="px-4 py-8 text-center text-[12px] text-muted">
                 Nothing to triage.
               </div>
-            ) : (
-              rows.map((row, idx) => {
-                const selected = idx === selectedIdx
-                return (
-                  <div
-                    key={row.sessionId}
-                    data-row-idx={idx}
-                    onMouseEnter={() => setSelectedIdx(idx)}
-                    onClick={() => focusRow(row)}
-                    className={`
-                      group flex items-start gap-3
-                      px-4 py-2.5 border-b border-border last:border-b-0
-                      cursor-pointer
-                      ${selected ? 'bg-accent/15 text-ink' : 'text-ink-dim hover:bg-surface-hi'}
-                    `}
-                  >
-                    {/* Provider glyph + kind */}
-                    <div className="flex-shrink-0 w-[72px] flex items-center gap-2">
-                      <span className={row.isLive ? 'text-accent' : 'text-muted'}>
-                        {providerGlyph(row.kind)}
-                      </span>
-                      <span className="text-[11px] uppercase tracking-wider text-muted">
-                        {row.kind}
-                      </span>
-                    </div>
-
-                    {/* Main column: cwd + tab */}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 text-[12px] font-code text-ink truncate">
-                        <span className="truncate">{row.cwdBase}</span>
-                        {row.isFocused && (
-                          <span className="text-[9px] uppercase tracking-wider text-accent flex-shrink-0">
-                            focused
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-0.5 text-[10px] text-muted truncate">
-                        tab {row.tabIndex + 1} · {row.tabTitle} · {row.cwd}
-                      </div>
-                    </div>
-
-                    {/* Activity column */}
-                    <div className="flex-shrink-0 w-[140px] text-right">
-                      {row.statusLabel && (
-                        <div
-                          className={
-                            row.statusTone === 'active'
-                              ? 'text-[11px] text-accent'
-                              : row.statusTone === 'exited'
-                                ? 'text-[11px] text-red-300'
-                                : 'text-[11px] text-muted'
-                          }
-                        >
-                          {row.statusLabel}
-                        </div>
-                      )}
-                      {row.lastActiveAt != null && !row.isLive && (
-                        <>
-                          <div className="text-[11px] text-ink-dim">
-                            {relativeTime(row.lastActiveAt)}
-                          </div>
-                          <div className="text-[10px] text-muted">
-                            {absoluteTime(row.lastActiveAt)}
-                          </div>
-                        </>
-                      )}
-                      {row.lastActiveAt == null && row.kind !== 'terminal' && !row.isLive && (
-                        <div className="text-[10px] text-muted">no activity yet</div>
-                      )}
-                    </div>
-
-                    {/* Actions — visible on selected row or on hover. */}
-                    <div
-                      className={`
-                        flex-shrink-0 flex items-center gap-1
-                        ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}
-                        transition-opacity
-                      `}
-                      onClick={e => e.stopPropagation()}
-                    >
-                      {row.kind !== 'terminal' && (
-                        <button
-                          type="button"
-                          onClick={() => buryRow(row)}
-                          className="px-2 py-0.5 text-[10px] border border-border text-ink-dim hover:border-border-hi hover:text-ink"
-                          title="Bury (b)"
-                        >
-                          bury
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => void closeRow(row)}
-                        className="px-2 py-0.5 text-[10px] border border-red-600/40 text-red-300 hover:border-red-500 hover:bg-red-500/10"
-                        title="Close (del)"
-                      >
-                        close
-                      </button>
-                    </div>
+            ) : sortMode === 'tabs' ? (
+              tabGroups.map(group => (
+                <div key={group.key}>
+                  <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-canvas px-4 py-1.5 text-[10px] text-muted">
+                    <span className="truncate">
+                      Tab {group.tabIndex + 1} · {group.title}
+                    </span>
+                    <span className="tabular-nums">
+                      {group.rows.length}
+                    </span>
                   </div>
-                )
-              })
+                  {group.rows.map(({ row, idx }) => renderRow(row, idx))}
+                </div>
+              ))
+            ) : (
+              rows.map((row, idx) => renderRow(row, idx))
             )}
           </div>
         </div>
 
         <div className="flex-shrink-0 border-t border-border px-4 py-2 flex items-center justify-between gap-3">
           <div className="text-[10px] text-muted">
-            Live agents pinned to top. Stale panes sort to the bottom for easy cleanup.
+            {sortMode === 'tabs'
+              ? 'Grouped by Dispatch tab order. Live agents stay first within each tab.'
+              : 'Live agents pinned to top. Stale panes sort to the bottom for easy cleanup.'}
           </div>
           <button
             type="button"
