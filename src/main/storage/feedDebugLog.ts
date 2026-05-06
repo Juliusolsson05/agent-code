@@ -78,5 +78,34 @@ export function queueFeedDebugAppend(
       )
     })
   feedDebugWriteQueues.set(sessionId, next)
+
+  // Reap the queue entry once it settles — but only if no NEWER
+  // append has chained on top of `next`. The `===` check is the
+  // critical safety: a concurrent `queueFeedDebugAppend` for the same
+  // sessionId would have replaced the map value with a longer chain;
+  // deleting it here would race the next caller's read of the
+  // previous chain. Keeping the entry in those cases is correct —
+  // the LATER settle will run this same hook and find no successor.
+  void next
+    .catch(() => {})
+    .finally(() => {
+      if (feedDebugWriteQueues.get(sessionId) === next) {
+        feedDebugWriteQueues.delete(sessionId)
+      }
+    })
+
   return next
+}
+
+/** Drop in-memory bookkeeping for a session that has ended. The
+ *  on-disk JSONL is intentionally LEFT IN PLACE — debug bundles for
+ *  long-since-closed panes still benefit from reading the trail. The
+ *  retention sweep in pruneStaleFeedDebugLogs is what eventually
+ *  deletes the file. */
+export function forgetFeedDebugSession(sessionId: string): void {
+  // We never delete `feedDebugWriteQueues` synchronously here —
+  // there might be an in-flight write that still owns the chain.
+  // The settle-time reaper in queueFeedDebugAppend handles the queue
+  // entry; what we own here is the cursor.
+  lastWrittenFeedDebugId.delete(sessionId)
 }

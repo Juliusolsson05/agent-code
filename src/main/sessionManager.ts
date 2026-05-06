@@ -9,6 +9,7 @@ import type { JsonlEntry } from 'claude-code-headless'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath } from '@main/setup/toolchain.js'
+import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
@@ -436,6 +437,12 @@ export class SessionManager extends EventEmitter {
         this.agentPtyAttached.delete(sessionId)
         this.agentPtyRestoreSizes.delete(sessionId)
         this.sessionSizes.delete(sessionId)
+        // Mirrors `kill()`: a session that exits naturally (provider
+        // process died, user typed /exit, etc.) leaves a cursor entry
+        // in `lastWrittenFeedDebugId` that would otherwise live until
+        // the main process restarted. Cheap delete, idempotent if the
+        // session never produced feed-debug entries.
+        forgetFeedDebugSession(sessionId)
       })
 
       this.sessions.set(sessionId, { kind, session })
@@ -580,6 +587,11 @@ export class SessionManager extends EventEmitter {
       this.terminalBuffers.delete(sessionId)
       this.terminalAttached.delete(sessionId)
       this.sessionSizes.delete(sessionId)
+      // Same rationale as the agent-session exit path above: drop the
+      // feed-debug cursor so it can't outlive the session it tracks.
+      // Idempotent for terminal sessions that never produced feed-debug
+      // entries.
+      forgetFeedDebugSession(sessionId)
     })
 
     this.sessions.set(sessionId, { kind: 'terminal', session, tmuxName: tmuxSessionName })
@@ -804,6 +816,12 @@ export class SessionManager extends EventEmitter {
       this.agentPtyRestoreSizes.delete(sessionId)
     }
     this.sessionSizes.delete(sessionId)
+    // Drop feed-debug bookkeeping for this session. The on-disk JSONL
+    // is left intact (a debug bundle saved later may still want it);
+    // we only release the in-memory cursor that would otherwise live
+    // forever in lastWrittenFeedDebugId. The write-queue Map self-
+    // reaps in queueFeedDebugAppend when its chain settles.
+    forgetFeedDebugSession(sessionId)
     return true
   }
 
