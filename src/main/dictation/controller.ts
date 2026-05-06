@@ -36,7 +36,7 @@ export type DictationProvider = SpeechProviderId
 export type DictationBatchInput = {
   provider: DictationProvider
   apiKey: string
-  audio: ArrayBuffer
+  audio: ArrayBuffer | Uint8Array
   mimeType?: string
   /** ISO 639-1 / BCP-47 short code. v1 is English-only by product
    *  decision (see agent-voice-dictation settings store comment) — leaving
