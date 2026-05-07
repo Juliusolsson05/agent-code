@@ -44,6 +44,24 @@ const FILE_NAMES = {
   semantic: 'proxy-semantic.json',
   htmlRaw: 'html-raw.html',
   htmlClean: 'html-clean.html',
+  // Wire-level proxy capture (mitm for Claude, ResponsesProxy for
+  // Codex). Files are populated only when the session was started
+  // with `useProxy: true` AND the proxy actually wrote any events.
+  // For sessions without a proxy log, these entries are simply
+  // omitted from the file list — the manifest reflects the actual
+  // contents.
+  //
+  // proxy-events.jsonl carries the request/response wire log:
+  // headers (allowlist), request body (≤ 2 MiB or tailed), response
+  // chunks, request_shape, etc. See
+  // main/storage/proxyEventsReader.ts for the tail cap and search
+  // strategy.
+  //
+  // proxy-session-meta.json is the run dir's session-meta.json,
+  // written by the proxy at start. Carries cwd / sessionKey /
+  // createdAt context.
+  proxyEvents: 'proxy-events.jsonl',
+  proxySessionMeta: 'proxy-session-meta.json',
 } as const
 
 // Screen text can be tens of KB of ANSI-stripped terminal buffer.
@@ -202,6 +220,7 @@ function buildManifest(
   capturedAt: number,
   files: string[],
   reason: string,
+  proxyRunDir: string | null,
 ): string {
   const manifest = {
     schemaVersion: BUNDLE_SCHEMA_VERSION,
@@ -212,6 +231,13 @@ function buildManifest(
     capturedAt,
     capturedAtIso: new Date(capturedAt).toISOString(),
     files,
+    // Pointer to the FULL proxy log on disk. The bundled
+    // proxy-events.jsonl is tail-capped at
+    // PROXY_EVENTS_BUNDLE_MAX_BYTES (5 MiB at the time of writing —
+    // see main/storage/proxyEventsReader.ts); anything older than
+    // that tail still lives at this path. Null when the session had
+    // no proxy capture at all.
+    proxyRunDir,
     // Small bits of runtime state that help orient a consumer
     // without parsing state-snapshot.json first. Deliberately a
     // flat summary, not a duplicate.
@@ -241,8 +267,19 @@ export async function assembleAndSaveDebugBundle(params: {
   runtime: SessionRuntime
   kind: string
   reason?: string
+  /** Working directory of the session, used to locate the matching
+   *  proxy-events run dir under ~/.config/cc-shell/proxy/. Optional
+   *  because sessions that ran without proxy capture (or callers
+   *  that don't have the cwd handy) should still produce a bundle —
+   *  the proxy section just gets omitted. */
+  cwd?: string
+  /** providerSessionId (Claude resume id, Codex thread id). When
+   *  present, the proxy reader narrows its search to the matching
+   *  `resume-<id>` session segment. Falls back to scanning every
+   *  session segment under the cwd if absent or unmatched. */
+  providerSessionId?: string | null
 }): Promise<{ bundlePath: string }> {
-  const { sessionId, runtime, kind, reason = 'manual' } = params
+  const { sessionId, runtime, kind, reason = 'manual', cwd, providerSessionId } = params
   const capturedAt = Date.now()
   await window.api.flushPerformance().catch(() => {})
   const performanceSnapshot = await window.api.getPerformanceSnapshot().catch(() => null)
@@ -250,6 +287,17 @@ export async function assembleAndSaveDebugBundle(params: {
   const html = capturePaneHtml(sessionId)
   recordHtmlTraceSnapshot(sessionId, html.raw, 'manual')
   recordScreenTailSnapshot(sessionId, runtime.recentScreen)
+
+  // Pull the wire-level proxy capture in parallel with the rest of
+  // the bundle. Failure here NEVER aborts the bundle — the IPC
+  // helper returns nulls on any error, and we omit the section if
+  // nothing was found. See main/storage/proxyEventsReader.ts.
+  const proxySection = cwd
+    ? await window.api.readProxyEvents({
+        cwd,
+        sessionKey: providerSessionId ? `resume-${providerSessionId}` : null,
+      }).catch(() => null)
+    : null
 
   const files: BundleFile[] = [
     {
@@ -274,6 +322,17 @@ export async function assembleAndSaveDebugBundle(params: {
     },
     { name: FILE_NAMES.htmlRaw, content: html.raw },
     { name: FILE_NAMES.htmlClean, content: html.clean },
+    // Proxy section is conditional. Only emit the files when the
+    // reader found something — otherwise the manifest would list
+    // entries that don't exist on disk, which is worse than a quiet
+    // omission. The reader returns nulls for missing/unreadable
+    // logs.
+    ...(proxySection?.proxyEvents
+      ? [{ name: FILE_NAMES.proxyEvents, content: proxySection.proxyEvents }]
+      : []),
+    ...(proxySection?.sessionMeta
+      ? [{ name: FILE_NAMES.proxySessionMeta, content: proxySection.sessionMeta }]
+      : []),
     ...exportDebugTraceFiles(sessionId),
     ...(performanceSnapshot?.files ?? []),
   ]
@@ -287,6 +346,11 @@ export async function assembleAndSaveDebugBundle(params: {
       capturedAt,
       files.map(file => file.name),
       reason,
+      // Pass the resolved run dir so the manifest can document where
+      // the FULL log lives on disk — bundle tail capture is bounded
+      // at PROXY_EVENTS_BUNDLE_MAX_BYTES, anything earlier is still
+      // available there.
+      proxySection?.runDir ?? null,
     ),
   }
 
@@ -326,6 +390,12 @@ export async function autosaveActiveAgentDebugBundles(
         runtime,
         kind,
         reason,
+        // cwd + providerSessionId let the assembler pull the latest
+        // proxy-events.jsonl into the bundle. Both come from the
+        // session metadata Workspace already tracks; no new
+        // plumbing needed.
+        cwd: meta?.cwd,
+        providerSessionId: meta?.providerSessionId ?? null,
       })
       saved.push({ sessionId, bundlePath })
     } catch (err) {
@@ -376,7 +446,13 @@ export async function runSaveDebugBundleCommand(workspace: Workspace): Promise<v
   const kind = meta?.kind ?? 'claude'
 
   try {
-    const { bundlePath } = await assembleAndSaveDebugBundle({ sessionId, runtime, kind })
+    const { bundlePath } = await assembleAndSaveDebugBundle({
+      sessionId,
+      runtime,
+      kind,
+      cwd: meta?.cwd,
+      providerSessionId: meta?.providerSessionId ?? null,
+    })
 
     // Best-effort clipboard copy. A denied clipboard permission
     // shouldn't hide the fact that the save succeeded — we still

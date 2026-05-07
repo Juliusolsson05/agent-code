@@ -2,6 +2,7 @@ import { ipcRenderer } from 'electron'
 
 import type {
   FeedDebugPersistEntry,
+  ProxyEventsBundleSection,
   SaveDebugBundleParams,
   SaveDebugBundleResult,
 } from '@preload/api/types.js'
@@ -25,4 +26,15 @@ export const debugApi = {
 
   saveDebugBundle: (params: SaveDebugBundleParams): Promise<SaveDebugBundleResult> =>
     ipcRenderer.invoke('debug:save-bundle', params),
+
+  // Pull the latest proxy-events.jsonl tail + session-meta for a
+  // given session into the renderer so the bundle assembler can
+  // include it. Returns nulls when no proxy log was found — never
+  // throws. See main/storage/proxyEventsReader.ts for caps and
+  // search strategy.
+  readProxyEvents: (params: {
+    cwd: string
+    sessionKey?: string | null
+  }): Promise<ProxyEventsBundleSection> =>
+    ipcRenderer.invoke('debug:read-proxy-events', params),
 }

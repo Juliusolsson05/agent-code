@@ -250,6 +250,19 @@ export type SaveDebugBundleResult = {
   bundlePath: string
 }
 
+// Section of a debug bundle filled by readProxyEvents IPC.
+// Carries the renderer-readable form of whatever
+// ~/.config/cc-shell/proxy/<project>/<session>/<run>/proxy-events.jsonl
+// existed for the target session at bundle-save time. Nulls signal
+// "no record found" — callers must tolerate them. See
+// main/storage/proxyEventsReader.ts for the search strategy and
+// PROXY_EVENTS_BUNDLE_MAX_BYTES tail cap.
+export type ProxyEventsBundleSection = {
+  proxyEvents: string | null
+  runDir: string | null
+  sessionMeta: string | null
+}
+
 export type SessionInfo = {
   sessionId: string
   summary: string
