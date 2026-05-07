@@ -431,34 +431,34 @@ function dispatchActivityClasses(
   if (activity === 'working') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-emerald-500 text-white',
+      index: 'bg-green-600 text-white',
       title: '',
     }
   }
   if (activity === 'running') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-sky-500 text-white',
+      index: 'bg-blue-600 text-white',
       title: '',
     }
   }
   if (activity === 'starting') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-amber-500 text-black',
+      index: 'bg-orange-500 text-black',
       title: '',
     }
   }
   if (activity === 'exited') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-muted opacity-75',
-      index: 'bg-zinc-600 text-zinc-200',
+      index: 'bg-red-700 text-white',
       title: '',
     }
   }
   return {
     row: 'bg-surface hover:bg-surface-hi text-ink-dim',
-    index: 'bg-surface-hi text-muted',
+    index: 'bg-zinc-700 text-zinc-100',
     title: '',
   }
 }
