@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
@@ -409,7 +409,6 @@ export function CommandPalette({
     return commands.filter(
       command =>
         fuzzyMatch(command.title, query) ||
-        fuzzyMatch(command.description, query) ||
         command.keywords.some(keyword => fuzzyMatch(keyword, query)),
     )
   }, [mode, buried, commands, sessions, promptTemplates, query])
@@ -720,7 +719,7 @@ export function CommandPalette({
             className={`
               min-h-0 py-1
               ${mode === 'commands'
-                ? 'basis-[70%] min-w-0 overflow-y-auto border-r border-border'
+                ? 'flex-1 min-w-0 overflow-y-auto md:basis-[70%] md:border-r md:border-border'
                 : 'flex-1 overflow-y-auto'}
             `}
           >
@@ -991,21 +990,40 @@ export function CommandPalette({
   )
 }
 
-function CommandDescriptionPanel({
+const COMMAND_DESCRIPTION_COMPONENTS: import('react-markdown').Options['components'] = {
+  p: ({ children }) => (
+    <p className="mb-2 text-[11px] leading-[1.55] text-ink-dim last:mb-0">
+      {children}
+    </p>
+  ),
+  strong: ({ children }) => (
+    <strong className="font-semibold text-ink">{children}</strong>
+  ),
+}
+
+const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
   command,
 }: {
   command: ResolvedCommand | null
 }) {
   if (!command) {
     return (
-      <aside className="basis-[30%] min-w-[220px] bg-canvas px-4 py-4 text-[12px] text-muted">
+      <aside
+        role="region"
+        aria-label="Command details"
+        className="hidden basis-[30%] min-w-[220px] bg-canvas px-4 py-4 text-[12px] text-muted md:block"
+      >
         Select a command to see what it does.
       </aside>
     )
   }
 
   return (
-    <aside className="basis-[30%] min-w-[240px] overflow-y-auto bg-canvas px-4 py-4">
+    <aside
+      role="region"
+      aria-label="Command details"
+      className="hidden basis-[30%] min-w-[220px] overflow-y-auto bg-canvas px-4 py-4 md:block"
+    >
       <div className="mb-3 border-b border-border pb-3">
         <div className="text-[13px] text-ink">{command.title}</div>
         <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
@@ -1025,9 +1043,11 @@ function CommandDescriptionPanel({
           )}
         </div>
       </div>
-      <div className="prose-theme text-[11px] leading-[1.55] text-ink-dim">
-        <ReactMarkdown>{command.description}</ReactMarkdown>
+      <div>
+        <ReactMarkdown components={COMMAND_DESCRIPTION_COMPONENTS}>
+          {command.description}
+        </ReactMarkdown>
       </div>
     </aside>
   )
-}
+})

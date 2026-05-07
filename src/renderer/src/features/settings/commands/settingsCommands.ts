@@ -5,7 +5,7 @@ export const settingsCommands: CommandDef[] = [
   {
     id: 'open-settings',
     title: 'Open Settings',
-    description: '**What it does:** Opens **Settings**.\n\n**Use when:** You want to change app preferences.\n\n**Notes:** Includes appearance, workspace, provider, and debug settings.',
+    description: '**What it does:** Opens **Settings**.\n\n**Use when:** You want to change app preferences.\n\n**Notes:** Includes appearance, workspace, dictation, experimental, and safety settings.',
     run: ({ ui }) => ui.openSettings(),
   },
   {

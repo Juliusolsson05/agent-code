@@ -200,7 +200,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'duplicate-agent',
     title: 'Duplicate Agent',
-    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** Opens the clone beside the source.',
+    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** In **Dispatch**, the clone is created as a detached agent.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
     when: ({ workspace }) => {
       // Needs a focused agent session that has a providerSessionId
