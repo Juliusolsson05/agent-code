@@ -1,5 +1,6 @@
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {
@@ -8,10 +9,13 @@ type Props = {
 
 export function SpotlightView({ workspace }: Props) {
   const spotlight = workspace.spotlight
-  const activeTab = workspace.activeTab
-  if (!spotlight || !activeTab || activeTab.id !== spotlight.tabId) return null
+  if (!spotlight) return null
+  const tab = workspace.state.tabs.find(item => item.id === spotlight.tabId)
+  if (!tab) return null
 
-  const sessionIds = collectLeaves(activeTab.root)
+  const sessionIds = workspace.dispatchMode
+    ? dispatchSessionIdsForTab(workspace.state, tab.id)
+    : collectLeaves(tab.root)
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(spotlight.focusedSessionId)
@@ -51,7 +55,7 @@ export function SpotlightView({ workspace }: Props) {
           focusedSessionId,
           focusedSessionId,
           workspace,
-          activeTab.id,
+          tab.id,
         )}
       </div>
     </div>

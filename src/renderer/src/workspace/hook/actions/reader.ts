@@ -1,6 +1,11 @@
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
+import {
+  buildDispatchGroups,
+  flattenDispatchRows,
+  selectVisibleDispatchRow,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
 
 import type {
   WorkspaceSetReaderMode,
@@ -27,30 +32,62 @@ export function useReaderActions(
     const current = refs.stateRef.current
     const activeTab = current.tabs.find(t => t.id === current.activeTabId)
     if (!activeTab) return
+    const dispatchRow = current.dispatchMode
+      ? selectVisibleDispatchRow(
+          flattenDispatchRows(buildDispatchGroups(current)),
+          current.dispatchMode.focusedSessionId,
+          activeTab.focusedSessionId,
+        )
+      : null
     setSpotlight(null)
     setReaderMode(prev => {
-      if (prev?.tabId === activeTab.id) return null
+      const tabId = dispatchRow?.tabId ?? activeTab.id
+      if (prev?.tabId === tabId) return null
       return {
-        tabId: activeTab.id,
-        focusedSessionId: activeTab.focusedSessionId,
+        tabId,
+        focusedSessionId: dispatchRow?.sessionId ?? activeTab.focusedSessionId,
       }
     })
   }, [refs.stateRef, setReaderMode, setSpotlight])
 
-  // Switch which session is being read inside ReaderMode. Mirrors
-  // setSpotlightSession exactly — also updates the tab's
-  // focusedSessionId so leaving Reader returns to that pane.
+  // Switch which session is being read inside ReaderMode.
+  //
+  // WHY Dispatch mode is special here: detached sessions are not tile-tree
+  // leaves, and Tab.focusedSessionId is a grid-only invariant. The original
+  // Reader implementation wrote every selected reader session into
+  // Tab.focusedSessionId, which corrupts the tab whenever the selected row is
+  // detached. In Dispatch, keep focus on dispatchMode.focusedSessionId and
+  // activeTabId instead; outside Dispatch, preserve the older grid behavior.
   const setReaderModeSession = useCallback(
     (sessionId: SessionId) => {
-      setReaderMode(prev => (prev ? { ...prev, focusedSessionId: sessionId } : prev))
+      const snapshot = refs.stateRef.current
+      const rows = snapshot.dispatchMode
+        ? flattenDispatchRows(buildDispatchGroups(snapshot))
+        : []
+      const dispatchRow = rows.find(row => row.sessionId === sessionId) ?? null
+      setReaderMode(prev => (
+        prev
+          ? {
+              ...prev,
+              tabId: dispatchRow?.tabId ?? prev.tabId,
+              focusedSessionId: sessionId,
+            }
+          : prev
+      ))
       setState(prev => ({
         ...prev,
-        tabs: prev.tabs.map(t =>
-          t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
-        ),
+        activeTabId: dispatchRow?.tabId ?? prev.activeTabId,
+        dispatchMode: prev.dispatchMode && dispatchRow
+          ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+          : prev.dispatchMode,
+        tabs: prev.dispatchMode
+          ? prev.tabs
+          : prev.tabs.map(t =>
+              t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
+            ),
       }))
     },
-    [setReaderMode, setState],
+    [refs.stateRef, setReaderMode, setState],
   )
 
   return { toggleReaderMode, setReaderModeSession }
