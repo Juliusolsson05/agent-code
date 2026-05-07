@@ -333,14 +333,16 @@ export function TileLeaf({
           sessionId={sessionId}
           provider={provider}
           workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}
-          // Merged upstream + ghost feed. Split ownership: the live
-          // turn's ghosts are EXCLUDED from the merge (the live view
-          // component below is the sole owner of the current turn);
-          // earlier turns' orphaned or still-unreconciled ghosts fall
-          // through. The `currentTurnId` argument is what encodes that
-          // split — see `./mergedEntries.ts` for the filter and
-          // docs/superpowers/plans/2026-04-20-rendering-fixes.md
-          // Task 5 for the WHY.
+          // Committed transcript + (rare) orphan-ghost fallback.
+          // The layered predicate in selectMergedEntries renders
+          // a ghost only when JSONL has stalled past the proxy
+          // AND the ghost is not sidecar-shaped (title-gen /
+          // predict-next-prompt fingerprint). The live current
+          // turn is owned by `SemanticStreamingTurn` below; the
+          // `currentTurnId` argument hides any ghost for that
+          // turn so the two surfaces never double-render.
+          // See ./mergedEntries.ts and
+          // docs/superpowers/plans/2026-05-07-ghost-system-findings.md.
           entries={selectMergedEntries(
             runtime,
             runtime.semantic.currentTurn?.turnId ?? null,
@@ -364,16 +366,12 @@ export function TileLeaf({
           streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
           turnStartedAt={runtime.turnStartedAt}
           // Live-turn ownership: SemanticStreamingTurn renders the
-          // current turn end-to-end. Earlier un-reconciled ghosts
-          // are now filtered OUT of the merged feed (see the
-          // `currentTurnId` argument to selectMergedEntries above),
-          // so there is no double-render risk — the two surfaces
-          // own different time slices. `shouldShowSemanticStreaming`
-          // collapses to "is there a current turn?" as a result.
-          // See
-          // docs/superpowers/plans/2026-04-20-rendering-fixes.md
-          // Task 5 and
-          // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
+          // current turn end-to-end off the semantic channel.
+          // Ghosts for the same turnId are filtered out of the
+          // merged feed by selectMergedEntries (currentTurnId
+          // argument), so there is no double-render risk.
+          // shouldShowSemanticStreaming collapses to "is there a
+          // current turn?".
           semanticTurn={
             shouldShowSemanticStreaming(runtime)
               ? runtime.semantic.currentTurn
