@@ -26,13 +26,20 @@ const commandDefs: CommandDef[] = [
 export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
   return commandDefs
     .filter(command => (command.when ? command.when(ctx) : true))
-    .map(command => ({
-      id: command.id,
-      title: typeof command.title === 'function' ? command.title(ctx) : command.title,
-      shortcut: command.shortcut,
-      keywords: command.keywords ?? [],
-      keepPaletteOpen: command.keepPaletteOpen === true,
-      state: command.getState ? command.getState(ctx) : null,
-      run: command.run,
-    }))
+    .map(command => {
+      const description = command.description.trim()
+      if (!description) {
+        throw new Error(`Command ${command.id} is missing a description`)
+      }
+      return {
+        id: command.id,
+        title: typeof command.title === 'function' ? command.title(ctx) : command.title,
+        description,
+        shortcut: command.shortcut,
+        keywords: command.keywords ?? [],
+        keepPaletteOpen: command.keepPaletteOpen === true,
+        state: command.getState ? command.getState(ctx) : null,
+        run: command.run,
+      }
+    })
 }

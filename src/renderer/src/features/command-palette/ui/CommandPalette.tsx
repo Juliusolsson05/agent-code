@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
@@ -412,6 +413,11 @@ export function CommandPalette({
     )
   }, [mode, buried, commands, sessions, promptTemplates, query])
 
+  const selectedCommand = useMemo(() => {
+    if (mode !== 'commands') return null
+    return filtered[selectedIndex] as ResolvedCommand | undefined ?? null
+  }, [filtered, mode, selectedIndex])
+
   useEffect(() => {
     if (open) {
       setQuery('')
@@ -629,7 +635,7 @@ export function CommandPalette({
     >
       <div
         className="
-          mt-[12vh] w-[min(560px,90vw)]
+          mt-[12vh] w-[min(900px,92vw)]
           max-h-[60vh] flex flex-col
           bg-surface border border-border
           shadow-lg shadow-black/30
@@ -707,7 +713,16 @@ export function CommandPalette({
           />
         </div>
 
-        <div ref={listRef} className="flex-1 overflow-y-auto py-1">
+        <div className="flex-1 min-h-0 flex overflow-hidden">
+          <div
+            ref={listRef}
+            className={`
+              min-h-0 py-1
+              ${mode === 'commands'
+                ? 'flex-1 min-w-0 overflow-y-auto md:basis-[70%] md:border-r md:border-border'
+                : 'flex-1 overflow-y-auto'}
+            `}
+          >
           {(mode === 'save-prompt-template' || mode === 'edit-prompt-template') && (
             <div className="px-3 py-3 space-y-3">
               <textarea
@@ -964,8 +979,75 @@ export function CommandPalette({
                 </div>
               ))
             ))}
+          </div>
+
+          {mode === 'commands' && (
+            <CommandDescriptionPanel command={selectedCommand} />
+          )}
         </div>
       </div>
     </div>
   )
 }
+
+const COMMAND_DESCRIPTION_COMPONENTS: import('react-markdown').Options['components'] = {
+  p: ({ children }) => (
+    <p className="mb-2 text-[11px] leading-[1.55] text-ink-dim last:mb-0">
+      {children}
+    </p>
+  ),
+  strong: ({ children }) => (
+    <strong className="font-semibold text-ink">{children}</strong>
+  ),
+}
+
+const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
+  command,
+}: {
+  command: ResolvedCommand | null
+}) {
+  if (!command) {
+    return (
+      <aside
+        role="region"
+        aria-label="Command details"
+        className="hidden basis-[30%] min-w-[220px] bg-canvas px-4 py-4 text-[12px] text-muted md:block"
+      >
+        Select a command to see what it does.
+      </aside>
+    )
+  }
+
+  return (
+    <aside
+      role="region"
+      aria-label="Command details"
+      className="hidden basis-[30%] min-w-[220px] overflow-y-auto bg-canvas px-4 py-4 md:block"
+    >
+      <div className="mb-3 border-b border-border pb-3">
+        <div className="text-[13px] text-ink">{command.title}</div>
+        <div className="mt-1 flex items-center gap-2 text-[10px] text-muted">
+          {command.shortcut && <span>{command.shortcut}</span>}
+          {command.state && (
+            <span
+              className={
+                command.state.tone === 'danger'
+                  ? 'border border-red-600/40 bg-red-500/10 px-1.5 py-0.5 uppercase tracking-wider text-red-300'
+                  : command.state.tone === 'accent'
+                    ? 'border border-accent/30 bg-accent/10 px-1.5 py-0.5 uppercase tracking-wider text-accent'
+                    : 'border border-border bg-surface-hi px-1.5 py-0.5 uppercase tracking-wider text-muted'
+              }
+            >
+              {command.state.label}
+            </span>
+          )}
+        </div>
+      </div>
+      <div>
+        <ReactMarkdown components={COMMAND_DESCRIPTION_COMPONENTS}>
+          {command.description}
+        </ReactMarkdown>
+      </div>
+    </aside>
+  )
+})
