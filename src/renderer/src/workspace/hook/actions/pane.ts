@@ -361,7 +361,6 @@ export function usePaneActions(
         if (detachedIds.length === 0) return prev
         attachedCount = detachedIds.length
 
-        const detachedIdSet = new Set(detachedIds)
         const detachedSessions = { ...prev.detachedSessions }
         for (const sessionId of detachedIds) {
           delete detachedSessions[sessionId]
@@ -381,7 +380,7 @@ export function usePaneActions(
           'b',
           attachedSubtree,
         )
-        const focusedSessionId = detachedIds[0] ?? tab.focusedSessionId
+        const focusedSessionId = detachedIds[0]
 
         return {
           ...prev,
@@ -396,11 +395,13 @@ export function usePaneActions(
                 }
               : currentTab,
           ),
-          dispatchMode:
-            prev.dispatchMode?.focusedSessionId &&
-            detachedIdSet.has(prev.dispatchMode.focusedSessionId)
-              ? { ...prev.dispatchMode, focusedSessionId: undefined }
-              : prev.dispatchMode,
+          // The attached agents stop being detached records, but the first one
+          // is still the user's target for the bulk attach action. Keep
+          // Dispatch focus explicit so the highlighted row and command target
+          // do not depend on selectVisibleDispatchRow's grid-focus fallback.
+          dispatchMode: prev.dispatchMode
+            ? { ...prev.dispatchMode, focusedSessionId }
+            : prev.dispatchMode,
         }
       })
       if (attachedCount > 0) {
