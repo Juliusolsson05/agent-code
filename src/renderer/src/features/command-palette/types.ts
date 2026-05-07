@@ -11,6 +11,7 @@ export type CommandContext = {
     openNewTabPicker: () => void
     openResumePicker: (defaultCwd: string) => void
     openTileTabs: () => void
+    openReorderTabs: () => void
     openSettings: () => void
     openViewPrompts: (sessionId: string) => void
     openPromptSearch: () => void

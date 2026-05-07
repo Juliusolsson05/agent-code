@@ -15,6 +15,7 @@ import { AgentActivityModal } from '@renderer/features/workspace/ui/AgentActivit
 import { BuryPanePrompt } from '@renderer/features/workspace/ui/BuryPanePrompt'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
 import { PromptSearchModal } from '@renderer/features/workspace/ui/PromptSearchModal'
+import { ReorderTabsModal } from '@renderer/features/workspace/ui/ReorderTabsModal'
 import { RewindToPromptModal } from '@renderer/features/workspace/ui/RewindToPromptModal'
 import { ViewPromptsModal } from '@renderer/features/workspace/ui/ViewPromptsModal'
 import { GitBar } from '@renderer/features/git/ui/GitBar'
@@ -60,6 +61,7 @@ export default function App() {
   const commandPaletteOpen = useAppStore(state => state.commandPaletteOpen)
   const tileTabsModalOpen = useAppStore(state => state.tileTabsModalOpen)
   const tileTabsInitialSelectedIds = useAppStore(state => state.tileTabsInitialSelectedIds)
+  const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
   const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
@@ -84,6 +86,8 @@ export default function App() {
   const toggleCommandPalette = useAppStore(state => state.toggleCommandPalette)
   const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
   const closeTileTabsModal = useAppStore(state => state.closeTileTabsModal)
+  const openReorderTabs = useAppStore(state => state.openReorderTabs)
+  const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
   const openSettingsPage = useAppStore(state => state.openSettingsPage)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
@@ -443,6 +447,7 @@ export default function App() {
         toggleDispatchTerminal={workspace.toggleDispatchTerminal}
         openDispatchAttach={openDispatchAttach}
         onTileTabsRequest={onTileTabsRequest}
+        onReorderTabsRequest={openReorderTabs}
         onSettingsRequest={openSettingsPage}
         openViewPrompts={openViewPrompts}
         openPromptSearch={openPromptSearch}
@@ -487,6 +492,17 @@ export default function App() {
         onConfirm={tabIds => {
           workspace.openTileTabs(tabIds)
           closeTileTabsModal()
+        }}
+      />
+
+      <ReorderTabsModal
+        open={reorderTabsOpen}
+        tabs={workspace.state.tabs.map(tab => ({ id: tab.id, title: tab.title }))}
+        activeTabId={workspace.state.activeTabId}
+        onCancel={closeReorderTabs}
+        onConfirm={tabIds => {
+          workspace.reorderTabs(tabIds)
+          closeReorderTabs()
         }}
       />
 

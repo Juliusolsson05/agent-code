@@ -13,6 +13,7 @@ export const createUiShellSlice: StateCreator<
   pathPickerDefault: '',
   tileTabsModalOpen: false,
   tileTabsInitialSelectedIds: [],
+  reorderTabsOpen: false,
   settingsPageOpen: false,
   buryPromptSessionId: null,
   viewPromptsSessionId: null,
@@ -53,6 +54,11 @@ export const createUiShellSlice: StateCreator<
     }, false, 'uiShell/openTileTabsModal'),
   closeTileTabsModal: () =>
     set({ tileTabsModalOpen: false }, false, 'uiShell/closeTileTabsModal'),
+
+  openReorderTabs: () =>
+    set({ reorderTabsOpen: true }, false, 'uiShell/openReorderTabs'),
+  closeReorderTabs: () =>
+    set({ reorderTabsOpen: false }, false, 'uiShell/closeReorderTabs'),
 
   openSettingsPage: () =>
     set({ settingsPageOpen: true }, false, 'uiShell/openSettingsPage'),

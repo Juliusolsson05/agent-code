@@ -28,6 +28,13 @@ export const tabCommands: CommandDef[] = [
     run: ({ workspace }) => workspace.prevTab(),
   },
   {
+    id: 'reorder-tabs',
+    title: 'Reorder Tabs',
+    keywords: ['move tabs', 'arrange tabs', 'tab order'],
+    when: ({ workspace }) => workspace.state.tabs.length > 1,
+    run: ({ ui }) => ui.openReorderTabs(),
+  },
+  {
     id: 'resume-session',
     title: 'Resume Session',
     shortcut: '⌘⇧R',
