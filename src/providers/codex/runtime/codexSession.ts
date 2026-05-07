@@ -1,4 +1,7 @@
 import { EventEmitter } from 'events'
+import { mkdir } from 'fs/promises'
+import { homedir } from 'os'
+import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import type { SlashPickerState } from '@preload/index.js'
@@ -10,6 +13,61 @@ import {
   type CodexRolloutLine,
   type CodexSemanticEvent,
 } from 'codex-headless'
+import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
+
+
+/** Allocate a per-session run directory and return the path of its
+ *  proxy-events.jsonl. Mirrors the layout claude-code-headless'
+ *  ProxyServer / createWorkDir produces (see proxy-testing/proxyServer.ts
+ *  createWorkDir) so a single bundle-inspection tool can read either
+ *  provider's proxy events without branching.
+ *
+ *  Path shape:
+ *    ~/.config/cc-shell/proxy/<project-segment>/<session-segment>/<timestamp>/proxy-events.jsonl
+ *
+ *  WHY a fresh run dir per call instead of reusing one per session:
+ *    A single CodexSession can be stopped + restarted (binary crash,
+ *    user resume after exit). Each restart spawns a new ResponsesProxy
+ *    with its own listening port; reusing one events file would
+ *    interleave events from multiple proxy lifetimes onto the same
+ *    line stream, where consumers can't distinguish them. Fresh
+ *    timestamped run dirs keep each proxy lifetime self-contained.
+ *
+ *  The directory is created here (not at file-open time inside the
+ *  proxy) so a permission failure surfaces during session start rather
+ *  than mid-flight on the first request. */
+async function allocateProxyEventsFile(opts: {
+  cwd: string
+  sessionKey: string
+}): Promise<string> {
+  // Path layout MUST match the Claude proxy's createWorkDir
+  // (packages/claude-code-headless/src/testing/proxy-testing/proxyServer.ts)
+  // so a single bundle-inspection tool can read either provider's
+  // proxy-events.jsonl with one path resolver. The sanitisation
+  // strategy comes from the shared sanitizePath helper — Claude uses
+  // the SAME helper inside the headless submodule, so using it here
+  // guarantees both providers produce identical segments for
+  // identical inputs. Diverging would silently make the reader miss
+  // Codex bundles (or vice versa).
+  const root = join(homedir(), '.config', 'cc-shell', 'proxy')
+  const canonicalCwd = await canonicalizePath(opts.cwd)
+  const cwdSegment = sanitiseSegment(canonicalCwd) || 'unknown-project'
+  const sessionSegment = sanitiseSegment(opts.sessionKey) || 'unknown-session'
+  const ts = new Date().toISOString().replace(/[:.]/g, '-')
+  const runDir = join(root, cwdSegment, sessionSegment, ts)
+  await mkdir(runDir, { recursive: true })
+  return join(runDir, 'proxy-events.jsonl')
+}
+
+/** Identical to claude-code-headless' proxyServer.ts sanitizeSegment.
+ *  Splitting from sanitizePath proper is intentional — sanitizePath
+ *  returns 'a-b---c' for inputs like '/a/b/c' and we want 'a-b-c'
+ *  with no dash runs. Run the sanitizer, then collapse runs and
+ *  trim. */
+function sanitiseSegment(value: string): string {
+  const sanitized = sanitizePath(value).replace(/-+/g, '-').replace(/^-|-$/g, '')
+  return sanitized.length > 0 ? sanitized : 'unknown'
+}
 
 // CodexSession — thin wrapper that spawns the `codex` binary in a PTY
 // and delegates all screen parsing, transcript tailing, trust dialog
@@ -138,7 +196,37 @@ export class CodexSession extends EventEmitter {
       args.push('resume', this.resumeSessionId)
     }
     if (this.useProxy) {
-      const proxy = await ResponsesProxy.create()
+      // Mirror the Claude proxy's on-disk layout so a single
+      // bundle-inspection tool can read either provider's
+      // proxy-events.jsonl without branching:
+      //   ~/.config/cc-shell/proxy/<project-segment>/<session-segment>/<timestamp>/proxy-events.jsonl
+      //
+      // The path discipline is identical to what
+      // claude-code-headless' createProxyServer does (see ProxyServer
+      // in proxy-testing/proxyServer.ts createWorkDir). Codex's
+      // ResponsesProxy doesn't own that allocation today (the
+      // testing harness used to construct it without disk
+      // persistence at all), so we compute it here and pass it as
+      // an explicit `eventsFile` option.
+      //
+      // sessionKey naming mirrors Claude exactly: `resume-<id>` when
+      // resuming a known thread, else `shell-<sessionId>` so a fresh
+      // session still produces a stable folder name. Both segments
+      // are sanitised before joining so a path-traversal attempt via
+      // a malformed cwd or session id can't escape the proxy root.
+      const eventsFile = await allocateProxyEventsFile({
+        cwd: this.cwd,
+        sessionKey: this.resumeSessionId
+          ? `resume-${this.resumeSessionId}`
+          // Fresh sessions don't have an upstream-stable id we can
+          // anchor the folder name to; pin to a per-process timestamp
+          // so multiple proxy runs from the same launch sit under one
+          // parent dir. The actual run dir below appends another
+          // timestamp, so collisions are impossible even if
+          // newCodexSessionDate fires twice in the same ms.
+          : `shell-${new Date().toISOString().replace(/[:.]/g, '-')}`,
+      })
+      const proxy = await ResponsesProxy.create({ eventsFile })
       this.proxyServer = proxy
       args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
     }
