@@ -37,6 +37,7 @@ export function useTabActions(
   closeTab: (tabId: TabId) => Promise<void>
   activateTab: (tabId: TabId) => void
   activateTabByIndex: (index: number) => void
+  reorderTabs: (tabIds: TabId[]) => void
   nextTab: () => void
   prevTab: () => void
 } {
@@ -224,6 +225,32 @@ export function useTabActions(
     [refs.stateRef, setSpotlight, setState, setTileTabs],
   )
 
+  const reorderTabs = useCallback(
+    (tabIds: TabId[]) => {
+      setState(prev => {
+        // Reordering tabs is intentionally the smallest possible
+        // workspace mutation: the user is changing the top chrome
+        // order, not moving sessions, changing pane focus, or
+        // touching any runtime. Validate that the modal gave us a
+        // strict permutation before mutating so a stale modal opened
+        // across tab-close/new-tab events cannot drop or duplicate a
+        // project tab in WorkspaceState.
+        if (tabIds.length !== prev.tabs.length) return prev
+        const byId = new Map(prev.tabs.map(tab => [tab.id, tab]))
+        const seen = new Set<TabId>()
+        const tabs: Tab[] = []
+        for (const id of tabIds) {
+          const tab = byId.get(id)
+          if (!tab || seen.has(id)) return prev
+          seen.add(id)
+          tabs.push(tab)
+        }
+        return { ...prev, tabs }
+      })
+    },
+    [setState],
+  )
+
   const nextTab = useCallback(() => {
     const tiled = tileTabs
     if (tiled && tiled.tabIds.length > 1) {
@@ -266,6 +293,7 @@ export function useTabActions(
     closeTab,
     activateTab,
     activateTabByIndex,
+    reorderTabs,
     nextTab,
     prevTab,
   }
