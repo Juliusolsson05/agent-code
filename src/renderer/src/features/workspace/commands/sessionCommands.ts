@@ -19,6 +19,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'view-prompts',
     title: 'View Prompts',
+    description: '**What it does:** Opens prompt history for the focused **agent**.\n\n**Use when:** You want to inspect previous user prompts.\n\n**Notes:** Claude and Codex agents only.',
     keywords: ['prompts', 'history', 'user', 'modal', 'session', 'context'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -49,6 +50,7 @@ export const sessionCommands: CommandDef[] = [
     // mid-stream.
     id: 'rewind-to-prompt',
     title: 'Rewind to Prompt…',
+    description: '**What it does:** Rewinds the focused **agent session** to an earlier prompt.\n\n**Use when:** You want to branch from a previous point.\n\n**Notes:** The original transcript file is not edited.',
     keywords: [
       'rewind',
       'prompt',
@@ -89,6 +91,7 @@ export const sessionCommands: CommandDef[] = [
     // needs nothing to be focused.
     id: 'open-agent-activity',
     title: 'Agent Activity…',
+    description: '**What it does:** Opens an overview of **agent activity** across the workspace.\n\n**Use when:** You want to triage active, idle, or stale agents.\n\n**Notes:** Useful for cleanup during long multi-agent sessions.',
     keywords: [
       'agent',
       'activity',
@@ -115,6 +118,7 @@ export const sessionCommands: CommandDef[] = [
     // pane to focus first.
     id: 'search-conversation-prompts',
     title: 'Search Conversation Prompts',
+    description: '**What it does:** Searches saved conversations by **prompt text**.\n\n**Use when:** You remember what you asked, but not where it was.\n\n**Notes:** Searches sessions on disk, not only visible panes.',
     keywords: [
       'search',
       'prompt',
@@ -134,6 +138,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'reload-agent',
     title: 'Reload Agent',
+    description: '**What it does:** Restarts the focused **Claude or Codex agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
     keywords: ['reload', 'resume', 'agent', 'claude', 'codex', 'reconnect'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -156,6 +161,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'copy-resume-command',
     title: 'Copy Resume Command',
+    description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces a Claude or Codex CLI command.',
     keywords: ['copy', 'resume', 'command', 'terminal', 'cli', 'shell', 'claude', 'codex'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -194,6 +200,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'duplicate-agent',
     title: 'Duplicate Agent',
+    description: '**What it does:** Clones the focused **agent session** into a new pane.\n\n**Use when:** You want a parallel branch of the same conversation.\n\n**Notes:** Opens the clone beside the source.',
     keywords: ['duplicate', 'clone', 'fork', 'copy', 'session', 'agent'],
     when: ({ workspace }) => {
       // Needs a focused agent session that has a providerSessionId
@@ -236,6 +243,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'switch-provider',
     title: 'Switch Provider',
+    description: '**What it does:** Switches the focused agent between **Claude** and **Codex**.\n\n**Use when:** You want to continue the same work with another provider.\n\n**Notes:** Requires a resumable provider session.',
     keywords: ['provider', 'switch', 'claude', 'codex', 'translate'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -258,6 +266,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'toggle-git-bar',
     title: 'Git Bar',
+    description: '**What it does:** Shows or hides the **Git** side panel.\n\n**Use when:** You want repository status for the focused project.\n\n**Notes:** Uses the focused command target’s working directory.',
     getState: ({ flags }) => ({
       label: flags.gitBarOpen ? 'On' : 'Off',
       tone: flags.gitBarOpen ? 'accent' : 'neutral',
@@ -267,6 +276,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'toggle-debug-panel',
     title: 'Debug Panel',
+    description: '**What it does:** Shows or hides the focused pane’s **debug panel**.\n\n**Use when:** You need low-level pane or runtime state.\n\n**Notes:** Developer-oriented.',
     getState: ({ flags }) => ({
       label: flags.debugPanelOpen ? 'On' : 'Off',
       tone: flags.debugPanelOpen ? 'accent' : 'neutral',
@@ -276,6 +286,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'toggle-feed-debug-panel',
     title: 'Open Debug Logs',
+    description: '**What it does:** Shows or hides the **feed debug log** panel.\n\n**Use when:** You want render and feed timeline logs.\n\n**Notes:** Developer-oriented.',
     keywords: ['debug', 'logs', 'feed', 'render', 'rows', 'timeline', 'panel'],
     getState: ({ flags }) => ({
       label: flags.feedDebugPanelOpen ? 'On' : 'Off',
@@ -286,6 +297,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'toggle-proxy-debug-panel',
     title: 'Proxy Debug Panel',
+    description: '**What it does:** Shows or hides **proxy/SSE debug** details.\n\n**Use when:** You are debugging streamed provider events.\n\n**Notes:** Most useful when proxy streaming is enabled.',
     keywords: ['proxy', 'sse', 'stream', 'semantic', 'anthropic', 'debug'],
     getState: ({ flags }) => ({
       label: flags.proxyDebugPanelOpen ? 'On' : 'Off',
@@ -307,6 +319,7 @@ export const sessionCommands: CommandDef[] = [
     // "export", "snapshot", or the name of any one panel.
     id: 'save-debug-logs',
     title: 'Save Debug Logs',
+    description: '**What it does:** Saves a **debug bundle** for the focused pane.\n\n**Use when:** You need a snapshot to inspect or share later.\n\n**Notes:** Copies the saved bundle path after writing it.',
     keywords: [
       'save',
       'debug',
@@ -331,6 +344,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'toggle-html-debug-panel',
     title: 'HTML Debug Panel',
+    description: '**What it does:** Shows or hides rendered **HTML/DOM** inspection.\n\n**Use when:** You need to inspect the exact pane markup.\n\n**Notes:** Developer-oriented.',
     // Wide keyword net so fuzzy search hits this from likely queries:
     // "html", "dom", "outerhtml", "markup", "inspect", "copy pane".
     // The feature is niche enough that users won't remember its exact

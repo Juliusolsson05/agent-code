@@ -67,6 +67,7 @@ export type CommandContext = {
 export type CommandDef = {
   id: string
   title: string | ((ctx: CommandContext) => string)
+  description: string
   shortcut?: string
   keywords?: string[]
   keepPaletteOpen?: boolean
@@ -78,6 +79,7 @@ export type CommandDef = {
 export type ResolvedCommand = {
   id: string
   title: string
+  description: string
   shortcut?: string
   keywords: string[]
   keepPaletteOpen: boolean

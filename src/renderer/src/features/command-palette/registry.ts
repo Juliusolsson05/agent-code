@@ -29,6 +29,7 @@ export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
     .map(command => ({
       id: command.id,
       title: typeof command.title === 'function' ? command.title(ctx) : command.title,
+      description: command.description,
       shortcut: command.shortcut,
       keywords: command.keywords ?? [],
       keepPaletteOpen: command.keepPaletteOpen === true,
