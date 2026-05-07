@@ -194,7 +194,8 @@ export function useWorkspace(
 
   // Session lifecycle + derivatives that depend on it
   const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
-  const { spawn, killSession, replaceSession, reloadAgentSessions } = sessionActions
+  const { spawn, killSession, replaceSession, reloadAgentSessions, softReloadAgentView } =
+    sessionActions
 
   const tabActions = useTabActions(
     state,
@@ -334,6 +335,7 @@ export function useWorkspace(
     rotateLayout,
     replaceSession,
     reloadFocusedAgent,
+    softReloadAgentView,
     switchFocusedProvider,
     rewindFocusedToPrompt,
     reloadAgentSessions,
