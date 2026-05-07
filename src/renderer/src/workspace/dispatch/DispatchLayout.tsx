@@ -279,33 +279,36 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       title={title}
       data-dispatch-active={active ? 'true' : undefined}
       className={`
-        relative w-full text-left px-2.5 py-1 border-t border-border overflow-hidden [contain:layout_paint]
+        relative flex w-full items-stretch text-left pr-2.5 border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
       `}
     >
-      <span className={`absolute left-0 top-0 h-full w-[3px] ${activityClasses.rail}`} />
-      <div className="flex items-center gap-2 min-w-0">
-        <span className={`flex-shrink-0 text-[10px] tabular-nums ${active ? 'text-accent' : 'text-muted'}`}>
-          {row.label}
-        </span>
-        <span className={`flex-1 min-w-0 truncate px-1 py-[1px] text-[11px] text-ink ${activityClasses.title}`}>
-          {title}
-        </span>
-        {unreadKind && (
-          <DispatchUnreadBadge kind={unreadKind} label={attentionLabel} />
-        )}
-      </div>
-      {/* Row 2 — secondary metadata. Worktree + model are split off the
-          title row so the title can use the full row width before
-          truncating. The activity status (running/idle/working) stays
-          here too because the rail color alone doesn't disambiguate
-          working vs running for users who can't easily compare hues. */}
-      <div className="mt-0.5 pl-7 flex items-center gap-1.5 min-w-0 text-[9px] text-muted">
-        <span className="truncate flex-shrink min-w-0">{subtitle}</span>
-        {showWorktreeBadges && (
-          <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
-        )}
-        <DispatchAgentBadge kind={row.kind} />
+      <span className={`flex w-9 flex-shrink-0 items-center justify-center text-[10px] font-semibold tabular-nums ${activityClasses.index}`}>
+        {row.label}
+      </span>
+      <div className="min-w-0 flex-1 py-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="min-w-0 flex-1">
+            <span className={`block min-w-0 truncate px-1 py-[1px] text-[11px] text-ink ${activityClasses.title}`}>
+              {title}
+            </span>
+          </span>
+          {unreadKind && (
+            <DispatchUnreadBadge kind={unreadKind} label={attentionLabel} />
+          )}
+        </div>
+        {/* Row 2 — secondary metadata. Worktree + model are split off the
+            title row so the title can use the full row width before
+            truncating. The index block owns the activity color now; keeping
+            the secondary row visually neutral prevents the whole dispatch
+            list from turning into a set of competing colored strips. */}
+        <div className="mt-0.5 flex items-center gap-1.5 min-w-0 text-[9px] text-muted">
+          <span className="truncate flex-shrink min-w-0">{subtitle}</span>
+          {showWorktreeBadges && (
+            <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
+          )}
+          <DispatchAgentBadge kind={row.kind} />
+        </div>
       </div>
     </button>
   )
@@ -409,49 +412,53 @@ function dispatchActivityClasses(
   active: boolean,
 ): {
   row: string
-  rail: string
+  index: string
   title: string
 } {
+  // Dispatch is a dense scanning surface, so full-row status backgrounds
+  // make every state compete with the actual content. The index cell is the
+  // one stable visual affordance every row already has, which makes it the
+  // right place for both active selection and process state. Active wins here
+  // because it answers "where am I focused?" while the text metadata still
+  // spells out whether the underlying session is running, working, or exited.
   if (active) {
     return {
-      row: 'bg-accent-soft text-ink',
-      rail: 'bg-accent',
-      title: activity === 'working' || activity === 'running'
-        ? 'bg-accent-soft'
-        : '',
+      row: 'bg-surface hover:bg-surface-hi text-ink',
+      index: 'bg-accent text-accent-fg',
+      title: '',
     }
   }
   if (activity === 'working') {
     return {
-      row: 'bg-green-500/10 hover:bg-green-500/15 text-ink',
-      rail: 'bg-green-400',
-      title: 'bg-green-500/15',
+      row: 'bg-surface hover:bg-surface-hi text-ink',
+      index: 'bg-emerald-500 text-white',
+      title: '',
     }
   }
   if (activity === 'running') {
     return {
-      row: 'bg-cyan-500/10 hover:bg-cyan-500/15 text-ink',
-      rail: 'bg-cyan-400',
-      title: 'bg-cyan-500/15',
+      row: 'bg-surface hover:bg-surface-hi text-ink',
+      index: 'bg-sky-500 text-white',
+      title: '',
     }
   }
   if (activity === 'starting') {
     return {
-      row: 'bg-yellow-500/10 hover:bg-yellow-500/15 text-ink',
-      rail: 'bg-yellow-400',
-      title: 'bg-yellow-500/15',
+      row: 'bg-surface hover:bg-surface-hi text-ink',
+      index: 'bg-amber-500 text-black',
+      title: '',
     }
   }
   if (activity === 'exited') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-muted opacity-75',
-      rail: 'bg-border-hi',
+      index: 'bg-zinc-600 text-zinc-200',
       title: '',
     }
   }
   return {
     row: 'bg-surface hover:bg-surface-hi text-ink-dim',
-    rail: 'bg-transparent',
+    index: 'bg-surface-hi text-muted',
     title: '',
   }
 }
