@@ -94,7 +94,20 @@ type WorktreeCacheEntry = {
 
 const WORKTREE_CACHE_TTL_MS = 5000
 const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
-const GHOST_ORPHAN_TTL_MS = 3000
+// Threshold before an unsuperseded ghost is marked orphaned.
+//
+// 3000ms was the value used while orphan rendering was always-on
+// (commit 686b94e) — the goal was to surface fallback fast. With
+// the layered predicate in mergedEntries.ts an orphan flag merely
+// makes a ghost ELIGIBLE for rendering; rules 4 (timestamp gate)
+// and 5 (sidecar shape) still gate final visibility. So the TTL
+// is now "how long do we wait before concluding JSONL had its
+// chance for this ghost," not "how fast do we paint." 30000ms
+// matches atp's library default and safely covers slow tool
+// results (large Read, large Bash output, slow fetches) without
+// prematurely qualifying a ghost mid-turn. Sweep cadence stays at
+// 1s — that's the polling rate, not the threshold.
+const GHOST_ORPHAN_TTL_MS = 30000
 const GHOST_ORPHAN_SWEEP_MS = 1000
 
 function canIngestWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {

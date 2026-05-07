@@ -1,186 +1,172 @@
-// Render-time selector: merge upstream entries with current ghost
-// state into the single Entry list Feed consumes.
+// Render-time selector: decide which (if any) ghost entries get
+// merged into the rendered feed.
 //
-// WHY this lives in its own file:
-//   The merge is called from TileLeaf's render path, and memoization
-//   needs stable references. Putting the selector alongside the
-//   ghost reducer keeps the integration surface tiny — TileLeaf
-//   imports one function from one place; workspaceStore imports
-//   reducer helpers from `./ghosts`; Feed imports nothing about
-//   ghosts at all. That separation is load-bearing: when Phase 3
-//   deletes the old "two owners" branch in Feed.tsx, Feed will
-//   simply consume the merged list with no awareness of ghosts.
+// -----------------------------------------------------------------------------
+// Where ghost rendering fits in cc-shell today
+// -----------------------------------------------------------------------------
 //
-// The merge is a thin wrapper around atp's `mergeWithUpstream` so
-// the provenance and semantics stay documented in one place (the
-// atp doc). This file adds nothing to the merge rules; it only
-// chooses atp's default options and threads the runtime's state.
+// The live current turn is rendered by `SemanticStreamingTurn`
+// directly off `runtime.semantic.currentTurn`, NOT through ghosts.
+// JSONL writes catch up within ~100 ms via `reconcileUpstream` and
+// supersede the ghost. Most ticks, the ghost map has no rendered
+// output here at all.
+//
+// The one case ghost rendering exists for is JSONL stalling past
+// the proxy. Two situations produce that:
+//   1. Live-stuck: the agent process gets wedged or its writer
+//      backlogs while the proxy keeps emitting events. Eventually
+//      the orphan TTL fires and the ghost is the only record of
+//      what happened for that turn.
+//   2. Resume-after-crash: ghost log on disk has events past the
+//      newest JSONL entry; JSONL never caught up before the
+//      previous run died. On bootstrap, that ghost surfaces as the
+//      lost partial turn.
+//
+// -----------------------------------------------------------------------------
+// The layered predicate
+// -----------------------------------------------------------------------------
+//
+// A ghost is render-eligible iff ALL of:
+//   1. Not superseded.
+//   2. Orphaned (TTL has elapsed without a JSONL match).
+//   3. `turnId !== currentTurnId` (SemanticStreamingTurn owns that).
+//   4. `_atp.updatedAt > lastJsonlEntryAt` (proxy state is past the
+//      JSONL tail; structurally distinguishes the live-stuck case
+//      from "ghost from earlier in the session that JSONL kept
+//      writing past").
+//   5. Not sidecar-shaped.
+//
+// Why rules 4 AND 5, not just rule 4:
+//   The timestamp predicate is structurally correct for "stale
+//   orphan from earlier in the session below newer commits," but
+//   it cannot tell apart these two TAIL cases:
+//     a) JSONL stopped mid-turn, ghost has the lost partial turn
+//        (should render).
+//     b) Last real JSONL entry committed at t=100, then a sidecar
+//        leak (predict-next-prompt / title-gen / branch-name) at
+//        t=105 with no later real turn to supersede it (should
+//        NOT render).
+//   Both have ghost.updatedAt > lastJsonlEntryAt and produce a
+//   tail orphan with no JSONL counterpart. Rule 5 is a structural
+//   shape check that matches Claude Code's known sidecar
+//   fingerprint: assistant role + single text block + ≤200 chars.
+//   Predict-next-prompt with full conversation history can exceed
+//   the proxy-side budget predicate, but the response body is
+//   short and shaped this way; matching at render time is the
+//   backstop.
+//
+// Trade-off (knowingly accepted): a real assistant turn that
+// crashed before any JSONL write AND was a single short text
+// block (e.g. "Done.") would also be hidden. In production, that
+// loss is rare; the alternative (orphan title-gen / next-prompt
+// fragments piling up at the bottom of every session) is a daily
+// UX harm. The trade is the same one commit 2a83978 made; this
+// file keeps the shape filter while adding the timestamp gate
+// that 686b94e was missing.
+//
+// -----------------------------------------------------------------------------
+// Reference stability (load-bearing for Feed memos)
+// -----------------------------------------------------------------------------
+//
+// Feed's row memos key off the `entries` array IDENTITY. When no
+// ghost survives the predicate, this selector returns
+// `runtime.entries` by identity, NOT a fresh `[...entries]`. The
+// pre-fix `mergeWithUpstream` always returned `[...upstream,
+// ...trailing]` even when `trailing` was empty, busting memos on
+// every tick. atp's `mergeWithUpstream` is only called when
+// `visible.size > 0`.
+//
+// Future work, not done here:
+//   Phase 3 of the original headless redesign (delete
+//   SemanticStreamingTurn, render the live current turn through
+//   ghosts + ordered insertion in `mergeWithUpstream`) requires
+//   atp learning to anchor by parentUuid / turnId / nearest
+//   committed neighbor instead of always tail-appending. Until
+//   that ships, the live current turn stays owned by
+//   SemanticStreamingTurn and ghost rendering is reserved for the
+//   JSONL-stalled-past-proxy fallback case described above.
 
 import type { Entry } from '@shared/types/transcript'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { ClaudeContentBlock, GhostEntry } from 'agent-transcript-parser/ghost'
 import { mergeWithUpstream } from 'agent-transcript-parser/ghost'
 
-// Sidecar-shape suppression — the symptom side of a known proxy-filter gap.
-//
-// WHAT this is fighting:
-//   Claude Code routes auxiliary API calls (title gen, branch-name gen,
-//   "predict the user's next prompt" follow-ups) through the same
-//   /v1/messages endpoint as real turns. ClaudeProxyAdapter sees them as
-//   live flows, publishes turn_started → text_delta → turn_completed
-//   semantic events, ghostsFromSemanticTurn mints a ghost block. Claude
-//   Code does NOT write these calls to its JSONL rollout, so
-//   reconcileUpstream never matches a real entry, the orphan timeout
-//   fires (~30s later), and mergeWithUpstream appends the ghost to the
-//   tail of the feed. Each title-gen call leaves a 2-10 word fragment
-//   permanently parked at the bottom of the conversation.
-//
-// WHY this lives in cc-shell instead of the headless filter:
-//   ClaudeProxyAdapter already has a sidecar predicate (see commit
-//   c8c2623, May 2026) that demotes flows by request body shape:
-//     - max_tokens ≤ 1024 AND messageCount ≤ 3, OR
-//     - one of four known system-prompt prefixes
-//   That predicate misses the "predict-next-prompt" feature because the
-//   call carries the full conversation history (messageCount > 3) and
-//   uses a system prompt not in the prefix list. Forensic confirmation
-//   from debug bundle 2026-05-07T08-26-35-212-5d948ab5: 7 orphan ghosts
-//   visible at the bottom of the feed, none of 23 flows demoted, all
-//   sidecar turns 12-41 chars and 188-602ms — well below any real
-//   assistant turn (≥76 chars, ≥808ms in the same bundle).
-//
-//   Fixing the predicate properly requires the actual request body to
-//   know the new system prompt template, which we don't have here.
-//   This filter eliminates the symptom by detecting the SHAPE of the
-//   leaked turn (short, single-block, plain text, assistant role,
-//   orphaned) at render time.
-//
-// Trade-off / false-positive risk:
-//   A genuinely brief assistant turn (e.g. "Done.") whose JSONL never
-//   committed would also be suppressed. Acceptable because:
-//     a) Orphans are already an error path — JSONL not landing means
-//        upstream Claude Code crashed mid-turn.
-//     b) The 200-char threshold is wider than any observed sidecar in
-//        production bundles, so it errs toward keeping real content
-//        visible at the cost of letting through marginal sidecars.
-//     c) Permanent clutter from 6+ orphan titles is a daily UX harm;
-//        a hidden 4-char crash response is a once-in-a-rare-while
-//        invisible loss.
-//
-// Future work:
-//   When we capture a live request body for the predict-next-prompt
-//   feature, extend SIDECAR_SYSTEM_PROMPT_PREFIXES in claude-code-headless
-//   and the body-shape predicate. At that point this renderer-side
-//   filter becomes redundant and can be deleted.
-
-// Cap chosen empirically against this user's debug bundle (max sidecar
-// turn = 41 chars; min real assistant turn = 76 chars). 200 leaves
-// headroom for slightly longer titles and a generous safety margin
-// before we'd start cutting into real prose.
+// Cap chosen empirically against debug bundle 2026-05-07T08-26-35
+// (max sidecar turn = 41 chars, min real assistant turn = 76
+// chars). 200 leaves headroom for slightly-longer next-prompt
+// variants and a generous safety margin before we'd start cutting
+// into real prose. Same constant lived in mergedEntries.ts at
+// commit 2a83978; reused here with the same threshold so the
+// regression surface is unchanged.
 const SIDECAR_GHOST_TEXT_MAX = 200
 
 function ghostHasSidecarShape(ghost: GhostEntry): boolean {
-  // Only assistant orphans match — sidecars come back through the proxy
-  // as assistant streams. User entries don't ghost (they get optimistic
-  // user rows reconciled separately) and don't have this failure mode.
+  // Only assistant orphans match. Sidecars come back through the
+  // proxy as assistant streams; user entries don't ghost (they get
+  // optimistic-row reconciliation separately) and don't have this
+  // failure mode.
   if (ghost.message?.role !== 'assistant') return false
   const content = ghost.message?.content
   if (!Array.isArray(content)) return false
-  // Single block. Real turns from a healthy proxy stream nearly always
-  // carry at least a tool_use companion or fragmentation across blocks
-  // even when short; a lone text block is the title-gen fingerprint.
+  // Single block. Real assistant turns from a healthy proxy stream
+  // nearly always carry at least a tool_use companion or
+  // fragmentation across blocks even when short; a lone text block
+  // is the title-gen / predict-next-prompt fingerprint.
   if (content.length !== 1) return false
   const block = content[0] as ClaudeContentBlock
   if (block.type !== 'text') return false
-  // `text` is required on text blocks per atp's content type, but be
-  // defensive — a malformed ghost should not crash the feed selector.
+  // `text` is required on text blocks per atp's content type, but
+  // be defensive — a malformed ghost should not crash the feed
+  // selector.
   const text = (block as { text?: unknown }).text
   if (typeof text !== 'string') return false
   return text.length <= SIDECAR_GHOST_TEXT_MAX
 }
 
 /**
- * Merged entry list for rendering. Superseded ghosts are dropped;
- * orphaned ghosts stay visible (they're the only record of the
- * block).
- *
- * Reference stability:
- *   - if `runtime.ghosts` is empty OR every ghost in the map has
- *     been superseded, returns `runtime.entries` as-is. That short-
- *     circuit is what keeps Feed's useMemo([entries]) chain from
- *     thrashing once the live turn is done and all ghosts have
- *     handed off to the committed JSONL entries.
- *   - otherwise returns a fresh array from mergeWithUpstream. Feed's
- *     memos recompute, which is correct: there is at least one
- *     provisional ghost visible and the list is genuinely different
- *     from `runtime.entries`.
- *
- * WHY not always call mergeWithUpstream: the previous implementation
- * did, and even when `trailing` ended up empty, the return was still
- * `[...upstream, ...[]]` — a fresh array reference. Downstream memos
- * keyed on entries identity recomputed on every tick, so the
- * "memoization path is unchanged" promise in the old docstring was
- * only theoretical.
+ * Render-time merge of `runtime.entries` with the surviving ghost
+ * set. See the file-level WHY block above for the predicate
+ * design.
  */
 export function selectMergedEntries(
   runtime: SessionRuntime,
   currentTurnId: string | null,
 ): Entry[] {
-  const { ghosts, entries } = runtime
+  const { ghosts, entries, lastJsonlEntryAt } = runtime
   if (ghosts.size === 0) return entries
 
-  // Render ghosts only after the orphan timeout has fired. Plain
-  // unsuperseded ghosts are the normal handoff window between live
-  // semantic streaming and JSONL; showing them immediately was the
-  // source of duplicate/wrong-order feed rows. Orphaned ghosts are
-  // different: the authoritative JSONL has not arrived in time, so
-  // the ghost is the only surviving record of what the proxy observed.
-  //
-  // Current-turn ghosts are still excluded because
-  // SemanticStreamingTurn owns the active live view. When that turn
-  // completes and currentTurn becomes null, orphaned ghosts can step
-  // in as the fallback transcript.
-  const visibleGhosts = new Map<string, GhostEntry>()
+  const visible = new Map<string, GhostEntry>()
   for (const [uuid, ghost] of ghosts) {
     if (ghost._atp.supersededBy !== undefined) continue
     if (ghost._atp.orphanedAt === undefined) continue
-    if (currentTurnId !== null && ghost._atp.turnId === currentTurnId) {
-      continue
-    }
-    // Suppress orphan ghosts that match Claude Code's sidecar
-    // (title-gen / predict-next-prompt) shape. See the
-    // ghostHasSidecarShape doc-comment above for the full rationale —
-    // short version: these calls leak through the proxy, never land in
-    // JSONL, get orphaned, and pile up at the bottom of the feed
-    // forever. Detecting them by content shape is a renderer-side
-    // workaround until the headless body-shape predicate is widened.
+    if (currentTurnId !== null && ghost._atp.turnId === currentTurnId) continue
+    // Rule 4: only ghosts past the JSONL tail. Null
+    // lastJsonlEntryAt (fresh session, never observed any JSONL
+    // entry) falls through — rule 5 still applies, and the rest
+    // of the predicate (orphaned + non-current) keeps this
+    // narrow.
+    if (lastJsonlEntryAt !== null && ghost._atp.updatedAt <= lastJsonlEntryAt) continue
     if (ghostHasSidecarShape(ghost)) continue
-    visibleGhosts.set(uuid, ghost)
+    visible.set(uuid, ghost)
   }
-  if (visibleGhosts.size === 0) return entries
+  if (visible.size === 0) return entries
 
-  return mergeWithUpstream(entries, visibleGhosts, {
+  // Tail-append is correct for the surviving set: every visible
+  // ghost is by predicate-3 not the active turn and by predicate-4
+  // newer than every committed entry, so chronologically it
+  // belongs at the very end.
+  return mergeWithUpstream(entries, visible, {
     trustSupersededFlag: true,
   }) as Entry[]
 }
 
 /**
  * Whether Feed should render the live `SemanticStreamingTurn`
- * component. True iff there is a current turn — the merged feed
- * selector (`selectMergedEntries`) suppresses ghosts from the main
- * feed, so SemanticStreamingTurn has exclusive ownership of the
- * live view and there is no duplicate-render risk.
- *
- * WHY the old predicate was wrong:
- *   It returned false the moment any un-superseded ghost for the
- *   current turn existed — which happens on every block transition,
- *   because tool_use ghosts are minted BEFORE their upstream entry
- *   commits. The live view flicker/null-flip at id:131 in the
- *   2026-04-20 rendering-fixes evidence log was that gate tripping.
- *
- *   Phase 3 of the original headless redesign will delete
- *   SemanticStreamingTurn entirely and render everything through
- *   ghosts + the merged feed. Until then, single-ownership in the
- *   main feed is the surgical fix.
+ * component. True iff there is a current turn — full stop. The
+ * merged feed selector (`selectMergedEntries`) hides ghosts whose
+ * `turnId === currentTurnId`, so SemanticStreamingTurn has
+ * exclusive ownership of the live view and there is no
+ * duplicate-render risk.
  */
 export function shouldShowSemanticStreaming(runtime: SessionRuntime): boolean {
   return runtime.semantic.currentTurn !== null
