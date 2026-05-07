@@ -11,6 +11,8 @@ import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/workspace/run
 import type { SessionId } from '@renderer/workspace/types'
 import {
   isSemanticTurnRunning,
+  semanticHistoryRow,
+  SEMANTIC_HISTORY_CAP,
   withDerivedSessionStatus,
 } from '@renderer/workspace/semantic/helpers'
 import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
@@ -1240,14 +1242,121 @@ export function useIpcSubscriptions(
         setRuntimes(prev => {
           const current = prev[sessionId]
           if (!current || !current.bootstrapping) return prev
+
+          // Reconcile flags that JSONL replay opened but never
+          // explicitly closed. Two distinct shapes have been
+          // observed in production debug bundles, both producing
+          // sessionStatus='running' on rehydrated panes that the
+          // user has not touched in days:
+          //
+          //   1) Claude queue-op replay leaves awaitingAssistant=true.
+          //      The queue-op handler in handleBulkJsonl forces
+          //      `awaitingAssistant = true` on enqueue (so the
+          //      streaming card spans cross-turn queue drain) but
+          //      has no symmetric clear on the final dequeue.
+          //      During live operation the next `turn_completed` /
+          //      `turn_stopped` semantic event clears it via
+          //      clearOptimisticAwaiting; during JSONL replay no
+          //      semantic events re-fire, so the flag stays true.
+          //      Evidence: scripts/diag-stuck-running.mjs against
+          //      production debug bundles, Claude case
+          //      `sessionStatusSource: "submit"` with
+          //      `submittedAt: null` (setStreamingBaseline never
+          //      ran — only the queue-op path could have set the
+          //      flag).
+          //
+          //   2) Codex rollout replay leaves
+          //      semantic.currentTurn open. A rollout-sourced
+          //      `turn_started` opens currentTurn, but no matching
+          //      `turn_completed`/`turn_stopped` arrives in the
+          //      replay stream. Same diagnostic confirms 7+
+          //      Codex sessions stuck this way after the user's
+          //      last app restart.
+          //
+          // Why HERE: this callback fires once the bulk-JSONL bursts
+          // for a session have been quiet for 150ms — i.e. replay
+          // has finished. Reconciling earlier (per-burst) would
+          // race a still-streaming live tail; reconciling later
+          // (e.g. on idle timer) would let dispatch render
+          // 'running' for the entire window. The bootstrap_complete
+          // boundary is the natural "replay is done, take stock"
+          // seam.
+          //
+          // Safety: we only reconcile when there's NO live signal
+          // (processActive=false AND streamPhase='idle'). If the
+          // pane is genuinely mid-turn at the moment the timer
+          // fires, processActive will be true (resume spinner) or
+          // streamPhase non-idle and we leave state untouched. A
+          // resumed-but-genuinely-running pane that briefly drops
+          // both signals between events would only get its stuck
+          // flag reset for one tick before live events reopen it,
+          // which is a far better failure mode than the existing
+          // "permanently lying about running for days."
+          const hasLiveSignal =
+            current.processActive || current.streamPhase !== 'idle'
+          let next = current
+          const reconciled: string[] = []
+
+          if (
+            !hasLiveSignal &&
+            next.awaitingAssistant &&
+            next.queuedMessages.length === 0
+          ) {
+            next = { ...next, awaitingAssistant: false }
+            reconciled.push('awaitingAssistant')
+          }
+
+          if (
+            !hasLiveSignal &&
+            isSemanticTurnRunning(next.semantic.currentTurn)
+          ) {
+            // Mirror the turn_completed close path in foldEvent.ts —
+            // archive into history with endedAt stamped, then clear
+            // currentTurn. We do NOT call hasPendingSemanticTools()
+            // here: that gate exists to keep currentTurn alive while
+            // a cross-turn tool_result is in flight, which is a
+            // live-only concern. After replay quiesces with no live
+            // signal, any pending tool result has already been
+            // missed and there's no value in keeping the turn open.
+            const closedTurn = {
+              ...next.semantic.currentTurn!,
+              endedAt: next.semantic.currentTurn!.endedAt ?? Date.now(),
+            }
+            next = {
+              ...next,
+              semantic: {
+                ...next.semantic,
+                history: [
+                  ...next.semantic.history,
+                  semanticHistoryRow(closedTurn),
+                ].slice(-SEMANTIC_HISTORY_CAP),
+                currentTurn: null,
+              },
+            }
+            reconciled.push('semantic.currentTurn')
+          }
+
+          // withDerivedSessionStatus re-runs the
+          //   exited > semantic > process > submit > idle
+          // priority chain so sessionStatus matches the cleaned
+          // inputs. Without it the runtime would keep the stale
+          // 'running' string alongside the cleared inputs.
+          const finalized = withDerivedSessionStatus({
+            ...next,
+            bootstrapping: false,
+          })
+
           return {
             ...prev,
             [sessionId]: appendFeedDebugLog(
-              { ...current, bootstrapping: false },
+              finalized,
               {
                 layer: 'STATE',
                 kind: 'bootstrap_complete',
-                summary: 'bootstrap replay quiet window elapsed',
+                summary: reconciled.length === 0
+                  ? 'bootstrap replay quiet window elapsed'
+                  : `bootstrap replay closed: ${reconciled.join(', ')}`,
+                data: reconciled.length === 0 ? undefined : { reconciled },
               },
             ),
           }
