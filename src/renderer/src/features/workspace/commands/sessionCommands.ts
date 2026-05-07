@@ -159,6 +159,45 @@ export const sessionCommands: CommandDef[] = [
     run: ({ workspace }) => void workspace.reloadFocusedAgent(),
   },
   {
+    id: 'soft-reload-agent',
+    title: 'Soft Reload Agent',
+    description: '**What it does:** Refreshes the focused **agent view** without restarting its backend process.\n\n**Use when:** The feed or rendering state looks stale, duplicated, or corrupted while the agent is still working.\n\n**Notes:** Keeps the same session, draft, pane placement, and running process.',
+    keywords: [
+      'soft',
+      'reload',
+      'refresh',
+      'render',
+      'renderer',
+      'agent',
+      'view',
+      'stale',
+      'corrupt',
+      'feed',
+      'repair',
+    ],
+    getState: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      const meta = sessionId ? workspace.state.sessions[sessionId] : null
+      const kind = meta?.kind ?? 'claude'
+      return {
+        label: kind === 'codex' ? 'Codex' : 'Claude',
+        tone: 'neutral',
+      }
+    },
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: async ({ workspace, ui }) => {
+      ui.closePalette()
+      const sessionId = await workspace.softReloadAgentView()
+      if (sessionId) workspace.showPaneToast(sessionId, 'Soft reloaded agent view')
+    },
+  },
+  {
     id: 'copy-resume-command',
     title: 'Copy Resume Command',
     description: '**What it does:** Copies a shell command to **resume this session**.\n\n**Use when:** You want to continue the agent outside the app.\n\n**Notes:** Produces a Claude or Codex CLI command.',

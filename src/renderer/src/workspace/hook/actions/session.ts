@@ -52,6 +52,57 @@ export type SessionActions = {
     opts?: { resumeSessionId?: string; kind?: SessionKind },
   ) => Promise<SessionId | undefined>
   reloadAgentSessions: (dangerousMode?: boolean) => Promise<void>
+  softReloadAgentView: (sessionId?: SessionId) => Promise<SessionId | null>
+}
+
+function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean): SessionRuntime {
+  const reset = emptyRuntime()
+
+  // WHY this is a selective reset instead of a fresh `emptyRuntime()`:
+  //
+  // Soft reload is meant for "the renderer/feed got weird while the
+  // backend is still working". A hard reload can throw the process
+  // away and resume from disk, but this action must leave the live
+  // provider process alone. That means process lifecycle, input
+  // readiness, in-progress phase text, draft text/images, and tail
+  // preference are still authoritative and must survive. The things
+  // we discard are renderer-derived caches: visible entries, semantic
+  // ghosts, screen snapshots, indexes, pickers, and transient prompts.
+  //
+  // The history loader runs immediately after this reset when a
+  // providerSessionId exists. It rebuilds committed transcript rows
+  // and worktree context from disk, while any IPC events that arrive
+  // during the load merge into this same runtime. Resetting UUID
+  // de-dupe state in the caller is the other half of that contract;
+  // without it, replay would think every old row was already visible.
+  return {
+    ...reset,
+    draftInput: current.draftInput,
+    draftImages: current.draftImages,
+    tailMode: current.tailMode,
+    scrollToLatestRequest: current.scrollToLatestRequest + 1,
+    processActive: current.processActive,
+    sessionStatus: current.sessionStatus,
+    sessionStatusSource: current.sessionStatusSource,
+    processStatus: current.processStatus,
+    processError: current.processError,
+    inputReady: current.inputReady,
+    exited: current.exited,
+    projectDir: current.projectDir,
+    conditions: current.conditions,
+    activityStatus: current.activityStatus,
+    unreadSince: current.unreadSince,
+    unreadKind: current.unreadKind,
+    streamPhase: current.streamPhase,
+    streamPhasePendingToolName: current.streamPhasePendingToolName,
+    streamPhasePendingToolUseId: current.streamPhasePendingToolUseId,
+    turnStartedAt: current.turnStartedAt,
+    phaseChangedAt: current.phaseChangedAt,
+    submittedAt: current.submittedAt,
+    hasOlderHistory: hasProviderSession,
+    transcriptStatus: hasProviderSession ? 'loading' : 'ready',
+    transcriptError: null,
+  }
 }
 
 export function useSessionActions(
@@ -552,5 +603,58 @@ export function useSessionActions(
     ],
   )
 
-  return { spawn, killSession, replaceSession, reloadAgentSessions }
+  const softReloadAgentView = useCallback(
+    async (sessionIdOverride?: SessionId): Promise<SessionId | null> => {
+      const snapshot = refs.stateRef.current
+      // WHY use command-target focus here: this command is most useful when
+      // triaging from Dispatch Mode. The row the user has highlighted may be
+      // detached and absent from the grid's focused leaf, so reading only the
+      // active tab would refresh the wrong pane.
+      const sessionId = sessionIdOverride ?? commandTargetSessionIdForState(snapshot)
+      if (!sessionId) return null
+
+      const meta = snapshot.sessions[sessionId]
+      if (!meta) return null
+      const kind = meta.kind ?? 'claude'
+      if (kind !== 'claude' && kind !== 'codex') return null
+
+      const hasProviderSession = Boolean(meta.providerSessionId)
+
+      const timer = refs.bootstrapTimersRef.current.get(sessionId)
+      if (timer) {
+        clearTimeout(timer)
+        refs.bootstrapTimersRef.current.delete(sessionId)
+      }
+      refs.seenUuidsRef.current[sessionId] = new Set()
+      delete refs.latestScreenRef.current[sessionId]
+
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        return {
+          ...prev,
+          [sessionId]: softReloadRuntime(current, hasProviderSession),
+        }
+      })
+
+      if (hasProviderSession) {
+        await loadInitialHistoryForSession({
+          sessionId,
+          meta,
+          refs,
+          setRuntimes,
+        })
+      }
+
+      return sessionId
+    },
+    [
+      refs.bootstrapTimersRef,
+      refs.latestScreenRef,
+      refs.seenUuidsRef,
+      refs.stateRef,
+      setRuntimes,
+    ],
+  )
+
+  return { spawn, killSession, replaceSession, reloadAgentSessions, softReloadAgentView }
 }
