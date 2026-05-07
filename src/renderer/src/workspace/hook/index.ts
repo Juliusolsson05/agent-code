@@ -260,8 +260,8 @@ export function useWorkspace(
     dispatchActions.enterDispatchMode,
   )
   useFeedDebugPersist(runtimes, refs)
-  useSpotlightSanity(spotlight, state.tabs, setSpotlight)
-  useReaderModeSanity(readerMode, state.tabs, setReaderMode)
+  useSpotlightSanity(spotlight, state, setSpotlight)
+  useReaderModeSanity(readerMode, state, setReaderMode)
   usePickerSanity(runtimes, pickerCancel)
   useTileTabsSanity(tileTabs, state.tabs, setTileTabs)
 

@@ -6,8 +6,12 @@ import type {
   SpotlightState,
   TileTabsState,
 } from '@renderer/workspace/workspaceState'
-import type { SessionId, Tab } from '@renderer/workspace/types'
+import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import {
+  buildDispatchGroups,
+  flattenDispatchRows,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
   assistantUuidsWithText,
 } from '@renderer/lib/copyAssistant'
@@ -32,25 +36,24 @@ import type {
 
 export function useSpotlightSanity(
   spotlight: SpotlightState | null,
-  tabs: Tab[],
+  state: WorkspaceState,
   setSpotlight: WorkspaceSetSpotlight,
 ): void {
   useEffect(() => {
     if (!spotlight) return
-    const tab = tabs.find(t => t.id === spotlight.tabId)
-    if (!tab) {
+    const validSessionIds = validFocusSessionIdsForMode(state, spotlight.tabId)
+    if (!validSessionIds) {
       setSpotlight(null)
       return
     }
-    const leaves = collectLeaves(tab.root)
-    if (leaves.length === 0) {
+    if (validSessionIds.length === 0) {
       setSpotlight(null)
       return
     }
-    if (!leaves.includes(spotlight.focusedSessionId)) {
-      setSpotlight(prev => (prev ? { ...prev, focusedSessionId: leaves[0] } : prev))
+    if (!validSessionIds.includes(spotlight.focusedSessionId)) {
+      setSpotlight(prev => (prev ? { ...prev, focusedSessionId: validSessionIds[0] } : prev))
     }
-  }, [setSpotlight, spotlight, tabs])
+  }, [setSpotlight, spotlight, state])
 }
 
 // Same invalidation rule for ReaderMode — if the tab disappears or
@@ -60,25 +63,45 @@ export function useSpotlightSanity(
 // and a blank screen.
 export function useReaderModeSanity(
   readerMode: ReaderModeState | null,
-  tabs: Tab[],
+  state: WorkspaceState,
   setReaderMode: WorkspaceSetReaderMode,
 ): void {
   useEffect(() => {
     if (!readerMode) return
-    const tab = tabs.find(t => t.id === readerMode.tabId)
-    if (!tab) {
+    const validSessionIds = validFocusSessionIdsForMode(state, readerMode.tabId)
+    if (!validSessionIds) {
       setReaderMode(null)
       return
     }
-    const leaves = collectLeaves(tab.root)
-    if (leaves.length === 0) {
+    if (validSessionIds.length === 0) {
       setReaderMode(null)
       return
     }
-    if (!leaves.includes(readerMode.focusedSessionId)) {
-      setReaderMode(prev => (prev ? { ...prev, focusedSessionId: leaves[0] } : prev))
+    if (!validSessionIds.includes(readerMode.focusedSessionId)) {
+      setReaderMode(prev => (prev ? { ...prev, focusedSessionId: validSessionIds[0] } : prev))
     }
-  }, [readerMode, setReaderMode, tabs])
+  }, [readerMode, setReaderMode, state])
+}
+
+function validFocusSessionIdsForMode(
+  state: WorkspaceState,
+  tabId: TabId,
+): SessionId[] | null {
+  const tab = state.tabs.find(t => t.id === tabId)
+  if (!tab) return null
+
+  // Reader/Spotlight sanity used to validate only tile-tree leaves. That is
+  // correct in the normal grid, but wrong in Dispatch: detached agents are
+  // intentionally outside `tab.root` and still must be legal reader/spotlight
+  // targets. Reusing the Dispatch row builder keeps this invariant tied to the
+  // same scoped, terminal-filtered list the user can actually see and select.
+  if (state.dispatchMode) {
+    return flattenDispatchRows(buildDispatchGroups(state))
+      .filter(row => row.tabId === tabId)
+      .map(row => row.sessionId)
+  }
+
+  return collectLeaves(tab.root)
 }
 
 // Picker invalidation. If the selected uuid is no longer present in

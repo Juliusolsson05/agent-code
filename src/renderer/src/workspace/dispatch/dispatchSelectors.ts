@@ -71,6 +71,15 @@ export function flattenDispatchRows(groups: DispatchTabGroup[]): DispatchAgentRo
   return groups.flatMap(group => group.rows)
 }
 
+export function dispatchSessionIdsForTab(
+  state: WorkspaceState,
+  tabId: TabId,
+): SessionId[] {
+  return buildDispatchGroups(state)
+    .find(group => group.tab.id === tabId)
+    ?.rows.map(row => row.sessionId) ?? []
+}
+
 export function detachedDispatchSessionIdsForTab(
   state: WorkspaceState,
   tabId: TabId,
