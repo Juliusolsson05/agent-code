@@ -286,7 +286,7 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       <span className={`flex w-9 flex-shrink-0 items-center justify-center text-[10px] font-semibold tabular-nums ${activityClasses.index}`}>
         {row.label}
       </span>
-      <div className="min-w-0 flex-1 py-1">
+      <div className="min-w-0 flex-1 py-1 pl-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="min-w-0 flex-1">
             <span className={`block min-w-0 truncate px-1 py-[1px] text-[11px] text-ink ${activityClasses.title}`}>
