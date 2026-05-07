@@ -6,6 +6,15 @@ export type UiShellState = {
   pathPickerDefault: string
   tileTabsModalOpen: boolean
   tileTabsInitialSelectedIds: TabId[]
+  /** When true, the Reorder Tabs modal is open.
+   *
+   * WHY this lives in uiShell instead of WorkspaceState: the modal is
+   * transient command chrome, not workspace data. The resulting tab
+   * order is persisted through WorkspaceState only after the user
+   * confirms. Keeping the draft UI state out of WorkspaceState prevents
+   * autosave from recording half-finished reorder attempts that the
+   * user later cancels with Escape. */
+  reorderTabsOpen: boolean
   settingsPageOpen: boolean
   buryPromptSessionId: SessionId | null
   viewPromptsSessionId: SessionId | null

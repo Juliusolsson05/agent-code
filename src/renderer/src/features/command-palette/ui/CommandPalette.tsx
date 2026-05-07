@@ -60,6 +60,7 @@ type Props = {
   onNewTabRequest: () => void
   onResumeRequest: (defaultCwd: string) => void
   onTileTabsRequest: () => void
+  onReorderTabsRequest: () => void
   onSettingsRequest: () => void
   openViewPrompts: (sessionId: string) => void
   openPromptSearch: () => void
@@ -116,6 +117,7 @@ export function CommandPalette({
   onNewTabRequest,
   onResumeRequest,
   onTileTabsRequest,
+  onReorderTabsRequest,
   onSettingsRequest,
   openViewPrompts,
   openPromptSearch,
@@ -262,6 +264,7 @@ export function CommandPalette({
         openNewTabPicker: onNewTabRequest,
         openResumePicker: onResumeRequest,
         openTileTabs: onTileTabsRequest,
+        openReorderTabs: onReorderTabsRequest,
         openSettings: onSettingsRequest,
         openViewPrompts,
         openPromptSearch,
@@ -314,6 +317,7 @@ export function CommandPalette({
       onNewTabRequest,
       onResumeRequest,
       onTileTabsRequest,
+      onReorderTabsRequest,
       onSettingsRequest,
       openViewPrompts,
       openPromptSearch,

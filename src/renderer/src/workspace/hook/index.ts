@@ -310,6 +310,7 @@ export function useWorkspace(
     navigate: paneActions.navigate,
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,
+    reorderTabs: tabActions.reorderTabs,
     nextTab: tabActions.nextTab,
     prevTab: tabActions.prevTab,
     resizeFocused,
