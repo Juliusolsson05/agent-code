@@ -2,6 +2,7 @@ import { useCallback, useRef } from 'react'
 
 import type {
   BuriedPaneRecord,
+  DetachedSessionRecord,
   DispatchModeState,
   SessionId,
   SessionKind,
@@ -16,14 +17,17 @@ import {
   closeLeaf,
   collectLeaves,
   insertBesideLeaf,
+  normalizeTree,
   splitLeaf,
   wrapRootWithLeaf,
+  wrapRootWithNode,
 } from '@renderer/workspace/tile-tree/treeOps'
 import { findBestRemainingFocus, findDirectionalNeighbor } from '@renderer/workspace/tile-tree/geometry'
 import { findParentSplitInfo } from '@renderer/lib/undoClose'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 import {
   buildDispatchGroups,
+  detachedDispatchSessionIdsForTab,
   flattenDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -49,6 +53,7 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 export function usePaneActions(
   state: {
     activeTabId: string
+    detachedSessions: Record<SessionId, DetachedSessionRecord>
     dispatchMode: DispatchModeState | null
     sessions: Record<SessionId, SessionMeta>
     tabs: Tab[]
@@ -70,6 +75,7 @@ export function usePaneActions(
   commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
   createDetachedDispatchAgent: (kind: Exclude<SessionKind, 'terminal'>) => Promise<void>
   attachDetachedToGrid: (sessionId: SessionId, target: PlacementTarget) => void
+  attachAllDetachedForTab: (tabId: string) => void
   detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
   closeSession: (targetId: SessionId) => Promise<void>
@@ -343,6 +349,67 @@ export function usePaneActions(
       })
     },
     [setState],
+  )
+
+  const attachAllDetachedForTab = useCallback(
+    (tabId: string) => {
+      let attachedCount = 0
+      setState(prev => {
+        const tab = prev.tabs.find(t => t.id === tabId)
+        if (!tab) return prev
+        const detachedIds = detachedDispatchSessionIdsForTab(prev, tabId)
+        if (detachedIds.length === 0) return prev
+        attachedCount = detachedIds.length
+
+        const detachedIdSet = new Set(detachedIds)
+        const detachedSessions = { ...prev.detachedSessions }
+        for (const sessionId of detachedIds) {
+          delete detachedSessions[sessionId]
+        }
+
+        // Bulk attach deliberately creates one new subtree for the
+        // incoming Dispatch agents and hard-normalizes ONLY that
+        // subtree. The existing tab root is preserved byte-for-byte
+        // below a single wrapper split; its internal ratios and pane
+        // arrangement are not flattened. This gives users a predictable
+        // "pin all background agents beside my current grid" action
+        // without punishing the layout they already curated.
+        const attachedSubtree = normalizeTree(detachedIds)
+        const nextRoot = wrapRootWithNode(
+          tab.root,
+          'vertical',
+          'b',
+          attachedSubtree,
+        )
+        const focusedSessionId = detachedIds[0] ?? tab.focusedSessionId
+
+        return {
+          ...prev,
+          activeTabId: tabId,
+          detachedSessions,
+          tabs: prev.tabs.map(currentTab =>
+            currentTab.id === tabId
+              ? {
+                  ...currentTab,
+                  root: nextRoot,
+                  focusedSessionId,
+                }
+              : currentTab,
+          ),
+          dispatchMode:
+            prev.dispatchMode?.focusedSessionId &&
+            detachedIdSet.has(prev.dispatchMode.focusedSessionId)
+              ? { ...prev.dispatchMode, focusedSessionId: undefined }
+              : prev.dispatchMode,
+        }
+      })
+      if (attachedCount > 0) {
+        showToast(
+          `Attached ${attachedCount} Dispatch ${attachedCount === 1 ? 'agent' : 'agents'} to grid`,
+        )
+      }
+    },
+    [setState, showToast],
   )
 
   // The reverse direction: take the focused grid pane out of the tile
@@ -1140,6 +1207,7 @@ export function usePaneActions(
     commitNewAgentPlacement,
     createDetachedDispatchAgent,
     attachDetachedToGrid,
+    attachAllDetachedForTab,
     detachFocusedToDispatch,
     closeFocused,
     closeSession,

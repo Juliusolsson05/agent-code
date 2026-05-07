@@ -73,12 +73,34 @@ export function wrapRootWithLeaf(
   newSessionId: SessionId,
 ): TileNode {
   const newLeaf: TileNode = { type: 'leaf', sessionId: newSessionId }
+  return wrapRootWithNode(node, direction, side, newLeaf)
+}
+
+/**
+ * Wrap the whole existing layout in a new split and place an already-shaped
+ * subtree on one side of it.
+ *
+ * WHY this exists separately from wrapRootWithLeaf:
+ * bulk attach from Dispatch should preserve the current grid exactly and only
+ * hard-normalize the incoming detached agents. That means the new content is
+ * not one leaf; it is a prebuilt normalized subtree. If callers inserted those
+ * sessions one-by-one with insertBesideLeaf, the attach order would create a
+ * lopsided binary chain and disturb existing split ratios repeatedly. One
+ * wrapper split gives the old grid one stable half and the incoming group one
+ * stable half, while the incoming group owns its own internal geometry.
+ */
+export function wrapRootWithNode(
+  node: TileNode,
+  direction: SplitDirection,
+  side: 'a' | 'b',
+  newNode: TileNode,
+): TileNode {
   return {
     type: 'split',
     direction,
     ratio: RATIO_DEFAULT,
-    a: side === 'a' ? newLeaf : node,
-    b: side === 'b' ? newLeaf : node,
+    a: side === 'a' ? newNode : node,
+    b: side === 'b' ? newNode : node,
   }
 }
 
