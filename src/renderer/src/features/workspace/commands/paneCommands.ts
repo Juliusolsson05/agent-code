@@ -1,6 +1,12 @@
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
-import type { CommandDef } from '@renderer/features/command-palette/types'
+import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import {
+  detachedDispatchSessionIdsForTab,
+  buildDispatchGroups,
+  flattenDispatchRows,
+  selectVisibleDispatchRow,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
 
 export const paneCommands: CommandDef[] = [
   {
@@ -54,6 +60,21 @@ export const paneCommands: CommandDef[] = [
       if (!sessionId) return
       if (!workspace.state.detachedSessions[sessionId]) return
       ui.openDispatchAttach(sessionId)
+    },
+  },
+  {
+    id: 'attach-all-detached-for-tab',
+    title: 'Attach All Dispatch Agents For Tab',
+    keywords: ['attach', 'all', 'detached', 'dispatch', 'grid', 'tab', 'pin'],
+    when: ({ workspace }) => {
+      const tabId = dispatchCommandTabId(workspace)
+      if (!tabId) return false
+      return detachedDispatchSessionIdsForTab(workspace.state, tabId).length > 0
+    },
+    run: ({ workspace }) => {
+      const tabId = dispatchCommandTabId(workspace)
+      if (!tabId) return
+      workspace.attachAllDetachedForTab(tabId)
     },
   },
   {
@@ -194,3 +215,19 @@ export const paneCommands: CommandDef[] = [
     },
   },
 ]
+
+function dispatchCommandTabId(
+  workspace: CommandContext['workspace'],
+): string | null {
+  if (!workspace.dispatchMode) return null
+  if (workspace.dispatchMode.scope !== 'global') {
+    return workspace.state.activeTabId || null
+  }
+  const activeTab = workspace.activeTab
+  const row = selectVisibleDispatchRow(
+    flattenDispatchRows(buildDispatchGroups(workspace.state)),
+    workspace.dispatchMode.focusedSessionId,
+    activeTab?.focusedSessionId,
+  )
+  return row?.tabId ?? workspace.state.activeTabId ?? null
+}

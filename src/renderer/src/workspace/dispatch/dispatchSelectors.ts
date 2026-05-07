@@ -40,14 +40,7 @@ export function buildDispatchGroups(
       const tabIndex = state.tabs.findIndex(item => item.id === tab.id)
       const gridSessionIds = collectLeaves(tab.root)
         .filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
-      const detachedSessionIds = Object.values(state.detachedSessions)
-        .filter(entry => (
-          entry.surface === 'dispatch' &&
-          entry.projectTabId === tab.id &&
-          state.sessions[entry.sessionId]?.kind !== 'terminal'
-        ))
-        .sort((a, b) => a.detachedAt - b.detachedAt)
-        .map(entry => entry.sessionId)
+      const detachedSessionIds = detachedDispatchSessionIdsForTab(state, tab.id)
 
       const rows = [
         ...gridSessionIds.map(sessionId => ({ sessionId, placement: 'grid' as const })),
@@ -76,6 +69,34 @@ export function buildDispatchGroups(
 
 export function flattenDispatchRows(groups: DispatchTabGroup[]): DispatchAgentRow[] {
   return groups.flatMap(group => group.rows)
+}
+
+export function dispatchSessionIdsForTab(
+  state: WorkspaceState,
+  tabId: TabId,
+): SessionId[] {
+  return buildDispatchGroups(state)
+    .find(group => group.tab.id === tabId)
+    ?.rows.map(row => row.sessionId) ?? []
+}
+
+export function detachedDispatchSessionIdsForTab(
+  state: WorkspaceState,
+  tabId: TabId,
+): SessionId[] {
+  // Keep this ordering in one place so the list UI and bulk attach agree on
+  // what "all Dispatch agents for this tab" means. Detached rows are displayed
+  // oldest-first in buildDispatchGroups; bulk attach should preserve that same
+  // user-visible sequence inside the normalized incoming subtree.
+  return Object.values(state.detachedSessions)
+    .filter(entry => (
+      entry.surface === 'dispatch' &&
+      entry.projectTabId === tabId &&
+      state.sessions[entry.sessionId] !== undefined &&
+      state.sessions[entry.sessionId]?.kind !== 'terminal'
+    ))
+    .sort((a, b) => a.detachedAt - b.detachedAt)
+    .map(entry => entry.sessionId)
 }
 
 export function selectVisibleDispatchRow(

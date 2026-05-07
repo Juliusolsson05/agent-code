@@ -1,6 +1,11 @@
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
+import {
+  buildDispatchGroups,
+  flattenDispatchRows,
+  selectVisibleDispatchRow,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
 
 import type {
   WorkspaceSetSpotlight,
@@ -25,26 +30,53 @@ export function useSpotlightActions(
     const current = refs.stateRef.current
     const activeTab = current.tabs.find(t => t.id === current.activeTabId)
     if (!activeTab) return
+    const dispatchRow = current.dispatchMode
+      ? selectVisibleDispatchRow(
+          flattenDispatchRows(buildDispatchGroups(current)),
+          current.dispatchMode.focusedSessionId,
+          activeTab.focusedSessionId,
+        )
+      : null
     setSpotlight(prev => {
-      if (prev?.tabId === activeTab.id) return null
+      const tabId = dispatchRow?.tabId ?? activeTab.id
+      if (prev?.tabId === tabId) return null
       return {
-        tabId: activeTab.id,
-        focusedSessionId: activeTab.focusedSessionId,
+        tabId,
+        focusedSessionId: dispatchRow?.sessionId ?? activeTab.focusedSessionId,
       }
     })
   }, [refs.stateRef, setSpotlight])
 
   const setSpotlightSession = useCallback(
     (sessionId: SessionId) => {
-      setSpotlight(prev => (prev ? { ...prev, focusedSessionId: sessionId } : prev))
+      const snapshot = refs.stateRef.current
+      const rows = snapshot.dispatchMode
+        ? flattenDispatchRows(buildDispatchGroups(snapshot))
+        : []
+      const dispatchRow = rows.find(row => row.sessionId === sessionId) ?? null
+      setSpotlight(prev => (
+        prev
+          ? {
+              ...prev,
+              tabId: dispatchRow?.tabId ?? prev.tabId,
+              focusedSessionId: sessionId,
+            }
+          : prev
+      ))
       setState(prev => ({
         ...prev,
-        tabs: prev.tabs.map(t =>
-          t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
-        ),
+        activeTabId: dispatchRow?.tabId ?? prev.activeTabId,
+        dispatchMode: prev.dispatchMode && dispatchRow
+          ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+          : prev.dispatchMode,
+        tabs: prev.dispatchMode
+          ? prev.tabs
+          : prev.tabs.map(t =>
+              t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
+            ),
       }))
     },
-    [setSpotlight, setState],
+    [refs.stateRef, setSpotlight, setState],
   )
 
   return { toggleSpotlight, setSpotlightSession }

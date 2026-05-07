@@ -7,6 +7,7 @@ import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/copyAssistant'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
 
 // ReaderView — single-message read mode for a focused session.
@@ -88,10 +89,13 @@ type Props = {
 
 export function ReaderView({ workspace }: Props) {
   const reader = workspace.readerMode
-  const activeTab = workspace.activeTab
-  if (!reader || !activeTab || activeTab.id !== reader.tabId) return null
+  if (!reader) return null
+  const tab = workspace.state.tabs.find(item => item.id === reader.tabId)
+  if (!tab) return null
 
-  const sessionIds = collectLeaves(activeTab.root)
+  const sessionIds = workspace.dispatchMode
+    ? dispatchSessionIdsForTab(workspace.state, tab.id)
+    : collectLeaves(tab.root)
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(reader.focusedSessionId)
@@ -100,7 +104,11 @@ export function ReaderView({ workspace }: Props) {
 
   return (
     <div className="h-full min-h-0 min-w-0 flex flex-col bg-canvas">
-      <ReaderBody workspace={workspace} sessionId={focusedSessionId} />
+      <ReaderBody
+        workspace={workspace}
+        sessionId={focusedSessionId}
+        sessionIds={sessionIds}
+      />
     </div>
   )
 }
@@ -108,19 +116,17 @@ export function ReaderView({ workspace }: Props) {
 function ReaderBody({
   workspace,
   sessionId,
+  sessionIds,
 }: {
   workspace: Workspace
   sessionId: SessionId
+  sessionIds: SessionId[]
 }) {
   const runtime = workspace.getRuntime(sessionId)
   const meta = workspace.state.sessions[sessionId]
   const provider = (meta?.kind === 'codex') ? 'codex' : 'claude'
   const workspaceRoot = meta?.cwd ?? null
   const reader = workspace.readerMode
-  const activeTab = workspace.activeTab
-  const sessionIds = useMemo(() => (
-    activeTab ? collectLeaves(activeTab.root) : [sessionId]
-  ), [activeTab, sessionId])
   const focusedSessionId = reader && sessionIds.includes(reader.focusedSessionId)
     ? reader.focusedSessionId
     : sessionIds[0] ?? sessionId
