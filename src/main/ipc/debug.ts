@@ -9,6 +9,10 @@ import {
   type SaveDebugBundleParams,
   type SaveDebugBundleResult,
 } from '@main/storage/debugBundle.js'
+import {
+  readProxyEventsForBundle,
+  type ProxyEventsBundleSection,
+} from '@main/storage/proxyEventsReader.js'
 
 // Debug-panel IPC.
 //
@@ -45,6 +49,29 @@ export function registerDebugIpc(): void {
       // explicitly, so silent failure is strictly worse than a
       // surfaced one.
       return saveDebugBundle(params)
+    },
+  )
+
+  // Read the latest proxy-events.jsonl for a session (Claude or
+  // Codex; they share the on-disk layout). Used by saveDebugBundle
+  // in the renderer to pull the wire-level capture into the bundle
+  // without forcing the whole bundle assembler into the main
+  // process. Errors are swallowed inside readProxyEventsForBundle —
+  // a missing or unreadable proxy log must never break bundle
+  // save.
+  ipcMain.handle(
+    'debug:read-proxy-events',
+    async (
+      _evt,
+      params: { cwd: string; sessionKey?: string | null },
+    ): Promise<ProxyEventsBundleSection> => {
+      if (!params || typeof params.cwd !== 'string') {
+        return { proxyEvents: null, runDir: null, sessionMeta: null }
+      }
+      return readProxyEventsForBundle({
+        cwd: params.cwd,
+        sessionKey: params.sessionKey ?? null,
+      })
     },
   )
 }
