@@ -1108,6 +1108,36 @@ export function useIpcSubscriptions(
             )
           : current.entries
 
+        // Track the newest JSONL entry timestamp this session has
+        // ever observed. selectMergedEntries uses this to decide
+        // whether an orphaned ghost is past the JSONL tail (render —
+        // proxy stalled past disk) or covered by it (hide — JSONL
+        // kept writing past this ghost, so it's a sidecar leak
+        // Claude Code never logs to its rollout). Comparison uses
+        // entry.timestamp (ISO 8601 on both Claude and Codex
+        // entries), NOT Date.now(), because on resume after a crash
+        // we want apples-to-apples wall-clock semantics with ghost
+        // _atp.updatedAt — both sides represent "when the producer
+        // observed this," so a yesterday-vs-yesterday comparison
+        // remains valid even if "now" is hours later.
+        //
+        // Non-conversation entries that lack `timestamp` (compact
+        // boundaries, queue ops) silently pass through the
+        // typeof-string guard without moving the cursor. That is
+        // the correct behaviour: those entries do not represent a
+        // fresh "JSONL is alive" signal at the wall clock the rest
+        // of the predicate cares about.
+        let lastJsonlEntryAt = current.lastJsonlEntryAt
+        for (const entry of appended) {
+          const ts = (entry as { timestamp?: unknown }).timestamp
+          if (typeof ts !== 'string') continue
+          const ms = Date.parse(ts)
+          if (!Number.isFinite(ms)) continue
+          if (lastJsonlEntryAt === null || ms > lastJsonlEntryAt) {
+            lastJsonlEntryAt = ms
+          }
+        }
+
         // Ghost reconciliation — when authoritative entries land,
         // supersede any live ghost whose `(turnId, blockIndex)`
         // they replace. Runs per appended entry so ghost→real
@@ -1149,6 +1179,7 @@ export function useIpcSubscriptions(
         // ghosts actually changed. Matches the treatment of
         // queuedMessages and the rest of this guard.
         const ghostsChanged = nextGhosts !== current.ghosts
+        const lastJsonlChanged = lastJsonlEntryAt !== current.lastJsonlEntryAt
         const noChange =
           appended.length === 0 &&
           reconciledOptimisticText === null &&
@@ -1157,7 +1188,8 @@ export function useIpcSubscriptions(
           awaitingAssistant === current.awaitingAssistant &&
           workContext === current.workContext &&
           workActivity === current.workActivity &&
-          !ghostsChanged
+          !ghostsChanged &&
+          !lastJsonlChanged
         if (noChange) {
           closeSpan({
             sessionId,
@@ -1187,6 +1219,7 @@ export function useIpcSubscriptions(
               toolUseIndex,
               toolResultIndex,
               ghosts: nextGhosts,
+              lastJsonlEntryAt,
             },
             {
               layer: 'JSONL',
