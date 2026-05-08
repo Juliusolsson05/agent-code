@@ -63,6 +63,95 @@ const prewarmMicrophone = async (): Promise<void> => {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Force the built-in Mac microphone for dictation.
+// -----------------------------------------------------------------------------
+//
+// WHY this exists, in one paragraph:
+//   `getUserMedia({ audio: true })` returns whatever the OS thinks the
+//   "default" audio input is. On macOS, pairing AirPods (or any other
+//   Bluetooth headset) makes them the default input device, and Chromium
+//   inside Electron then opens that device in HFP/SCO mode. HFP/SCO is
+//   the low-quality two-way profile, and on a non-trivial number of
+//   user setups it produces a stream that delivers ZERO audio samples —
+//   the MediaRecorder still emits a valid WebM/Opus container, the
+//   AnalyserNode in audioLevels.ts reads all zeros, the level meter
+//   stays flat, the recorded blob ships to Deepgram, and Deepgram
+//   transcribes silence as the empty string. The user sees: recording
+//   pill works, sine-wave indicator dead, transcription comes back
+//   empty. None of the recent fixes (chunk ordering, batch fallback,
+//   cumulative interim text, EndOfTurn capture) help because all of
+//   them assumed audio data exists in the first place.
+//
+// What this DOESN'T try to be:
+//   * a generic device-picker UI
+//   * smart "detect silence at runtime, switch device" logic
+//   * a setting the user can change without editing code
+//
+// Per the user's request, the rule is "always record from the MacBook
+// microphone." Picking by `MediaDeviceInfo.label` regex is the only
+// route that doesn't depend on a brittle deviceId we'd have to track
+// across reboots — labels are stable across reboots and roughly stable
+// across macOS versions. The patterns below cover every Apple-built-in
+// audio input observed in the wild on macOS 14/15:
+//
+//     "MacBook Pro Microphone"
+//     "MacBook Air Microphone"
+//     "MacBook Pro 16-inch Microphone"
+//     "Built-in Microphone"          (older models)
+//     "iMac Microphone"
+//     "Mac mini Microphone"
+//
+// What makes this correct:
+//   * On any Mac with a built-in mic, we forcibly select it; AirPods,
+//     external USB mics, headsets are all bypassed at the source.
+//   * On non-Mac platforms (Linux/Windows builds, future ports) the
+//     match falls through and we revert to `{ audio: true }` — current
+//     behaviour, no regression.
+//   * On a Mac with no built-in mic (Mac Studio, headless server)
+//     enumeration finds nothing and we fall back to default. Those
+//     setups always have an external mic of some kind plugged in by
+//     definition, so the default is fine.
+//
+// What would make this wrong:
+//   * If a user actually wants their USB studio mic, they can't get
+//     it. Acceptable per user direction; future work is a device-
+//     picker UI, not undoing this rule.
+//   * If `enumerateDevices()` is ever called BEFORE permission has
+//     been granted (no prior `getUserMedia`), labels come back as
+//     empty strings. The match fails, we fall back to `{ audio: true }`,
+//     which prompts permission. After that, subsequent calls have
+//     populated labels and the rule fires. The pre-warm above already
+//     primes permission before the first real dictation, so this is
+//     only a concern if pre-warm itself was denied — and in that case
+//     dictation is broken regardless.
+async function pickAudioConstraints(): Promise<MediaStreamConstraints> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices()
+    const inputs = devices.filter(d => d.kind === 'audioinput')
+    const builtIn = inputs.find(d => {
+      const label = (d.label ?? '').toLowerCase()
+      if (!label || !label.includes('microphone')) return false
+      return (
+        label.includes('built-in') ||
+        label.includes('built in') ||
+        label.includes('macbook') ||
+        /\bimac\b/.test(label) ||
+        /\bmac\s*mini\b/.test(label) ||
+        /\bmac\s*studio\b/.test(label)
+      )
+    })
+    if (builtIn?.deviceId) {
+      return { audio: { deviceId: { exact: builtIn.deviceId } } }
+    }
+  } catch {
+    // enumerateDevices() can throw inside locked-down sandboxes or
+    // older WebView builds. Falling through to default is safe — same
+    // behaviour as before this helper existed.
+  }
+  return { audio: true }
+}
+
 const VOICE_BANDS_HZ: Array<[number, number]> = [
   [120, 240],
   [240, 420],
@@ -512,9 +601,24 @@ export function useComposerDictation({
 
     try {
       const gumStartedAt = Date.now()
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // Force the built-in Mac microphone when one is enumerable.
+      // See pickAudioConstraints above for the full rationale —
+      // short version: AirPods (and other Bluetooth headsets) become
+      // the OS default input on pairing, and Chromium opens them in
+      // HFP/SCO mode where the stream produces zero audio samples,
+      // killing the level meter and producing empty transcripts.
+      const constraints = await pickAudioConstraints()
+      const stream = await navigator.mediaDevices.getUserMedia(constraints)
       debug('start:get-user-media:done', {
         ms: Date.now() - gumStartedAt,
+        // `forcedDeviceId` reflects what we asked for, NOT what we
+        // got. The granted track's `label` is the source of truth —
+        // useful for verifying that the built-in selection actually
+        // landed at runtime.
+        forcedDeviceId:
+          typeof constraints.audio === 'object' && constraints.audio !== null
+            ? (constraints.audio.deviceId as { exact?: string } | undefined)?.exact ?? null
+            : null,
         tracks: stream.getAudioTracks().map(track => ({
           label: track.label,
           enabled: track.enabled,
