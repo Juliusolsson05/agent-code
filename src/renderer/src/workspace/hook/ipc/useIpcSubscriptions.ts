@@ -94,7 +94,33 @@ type WorktreeCacheEntry = {
 
 const WORKTREE_CACHE_TTL_MS = 5000
 const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
-const GHOST_ORPHAN_TTL_MS = 3000
+// Threshold before an unsuperseded ghost is marked orphaned.
+//
+// History: 3000ms while orphan rendering was always-on (commit
+// 686b94e), then 30000ms when the layered predicate landed.
+//
+// With the layered predicate in mergedEntries.ts, an orphan flag
+// merely makes a ghost ELIGIBLE for rendering; rules 4 (timestamp
+// gate) and 5 (sidecar shape) still gate final visibility, and
+// rule 3 hides ghosts whose `turnId === currentTurnId`. So during
+// healthy operation, even a tool that runs tens of seconds doesn't
+// visibly orphan: the semantic reducer keeps `currentTurn` alive
+// across pending tools (see hasPendingSemanticTools in
+// semantic/helpers.ts), and rule 3 hides any ghost whose turn is
+// still active. The TTL here is the failsafe boundary for "how
+// long before we conclude JSONL had its chance" — reachable only
+// when currentTurn has cleared and JSONL has genuinely stalled.
+//
+// 30000ms matches atp's library default and is the right balance:
+// long enough that a normal slow operation doesn't trip it, short
+// enough that a real stuck-mid-turn case surfaces within roughly
+// half a minute on resume.
+//
+// Sweep cadence stays at 1s — that's the polling rate, not the
+// threshold.
+//
+// See docs/design/ghost-system.md for the canonical explanation.
+const GHOST_ORPHAN_TTL_MS = 30000
 const GHOST_ORPHAN_SWEEP_MS = 1000
 
 function canIngestWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
@@ -207,6 +233,13 @@ export function useIpcSubscriptions(
   useEffect(() => {
     const worktreeCache = new Map<string, WorktreeCacheEntry>()
     const recentWorkContextRawBySession = new Map<SessionId, unknown[]>()
+    // Ghost orphan sweep — see docs/design/ghost-system.md for the
+    // canonical explanation. Runs every GHOST_ORPHAN_SWEEP_MS,
+    // calls orphanStale to flag any ghost whose updatedAt has been
+    // silent for longer than GHOST_ORPHAN_TTL_MS, persists the
+    // resulting state changes to disk via ghostAppend. Reference-
+    // stable on no-op: orphanStale returns the input map by
+    // identity when no ghost crossed the threshold.
     const orphanSweepTimer = window.setInterval(() => {
       const now = Date.now()
       setRuntimes(prev => {
@@ -696,7 +729,8 @@ export function useIpcSubscriptions(
         // the new semantic turn. This runs on every semantic tick;
         // `ghostsFromSemanticTurn` is idempotent and
         // reference-stable so no-op ticks (e.g. usage_updated
-        // events) do not churn the map.
+        // events) do not churn the map. See
+        // docs/design/ghost-system.md for the canonical explanation.
         //
         // WHY here and not inside `foldSemanticEvent`:
         //   foldSemanticEvent is intentionally agnostic to
@@ -705,9 +739,9 @@ export function useIpcSubscriptions(
         //   outer runtime. The ghost map lives on SessionRuntime
         //   because it needs to survive across semantic history
         //   archival (when `currentTurn` flips to null) and because
-        //   Phase 2 will persist it to disk with session-scoped
-        //   file names. Calling the ghost reducer at this outer
-        //   boundary keeps the layering clean.
+        //   the ghost journal persists it to disk with session-
+        //   scoped file names. Calling the ghost reducer at this
+        //   outer boundary keeps the layering clean.
         const nextGhosts = ghostsFromSemanticTurn(
           nextSemantic.currentTurn,
           sessionId,
@@ -1108,6 +1142,36 @@ export function useIpcSubscriptions(
             )
           : current.entries
 
+        // Track the newest JSONL entry timestamp this session has
+        // ever observed. selectMergedEntries uses this to decide
+        // whether an orphaned ghost is past the JSONL tail (render —
+        // proxy stalled past disk) or covered by it (hide — JSONL
+        // kept writing past this ghost, so it's a sidecar leak
+        // Claude Code never logs to its rollout). Comparison uses
+        // entry.timestamp (ISO 8601 on both Claude and Codex
+        // entries), NOT Date.now(), because on resume after a crash
+        // we want apples-to-apples wall-clock semantics with ghost
+        // _atp.updatedAt — both sides represent "when the producer
+        // observed this," so a yesterday-vs-yesterday comparison
+        // remains valid even if "now" is hours later.
+        //
+        // Non-conversation entries that lack `timestamp` (compact
+        // boundaries, queue ops) silently pass through the
+        // typeof-string guard without moving the cursor. That is
+        // the correct behaviour: those entries do not represent a
+        // fresh "JSONL is alive" signal at the wall clock the rest
+        // of the predicate cares about.
+        let lastJsonlEntryAt = current.lastJsonlEntryAt
+        for (const entry of appended) {
+          const ts = (entry as { timestamp?: unknown }).timestamp
+          if (typeof ts !== 'string') continue
+          const ms = Date.parse(ts)
+          if (!Number.isFinite(ms)) continue
+          if (lastJsonlEntryAt === null || ms > lastJsonlEntryAt) {
+            lastJsonlEntryAt = ms
+          }
+        }
+
         // Ghost reconciliation — when authoritative entries land,
         // supersede any live ghost whose `(turnId, blockIndex)`
         // they replace. Runs per appended entry so ghost→real
@@ -1149,6 +1213,7 @@ export function useIpcSubscriptions(
         // ghosts actually changed. Matches the treatment of
         // queuedMessages and the rest of this guard.
         const ghostsChanged = nextGhosts !== current.ghosts
+        const lastJsonlChanged = lastJsonlEntryAt !== current.lastJsonlEntryAt
         const noChange =
           appended.length === 0 &&
           reconciledOptimisticText === null &&
@@ -1157,7 +1222,8 @@ export function useIpcSubscriptions(
           awaitingAssistant === current.awaitingAssistant &&
           workContext === current.workContext &&
           workActivity === current.workActivity &&
-          !ghostsChanged
+          !ghostsChanged &&
+          !lastJsonlChanged
         if (noChange) {
           closeSpan({
             sessionId,
@@ -1187,6 +1253,7 @@ export function useIpcSubscriptions(
               toolUseIndex,
               toolResultIndex,
               ghosts: nextGhosts,
+              lastJsonlEntryAt,
             },
             {
               layer: 'JSONL',

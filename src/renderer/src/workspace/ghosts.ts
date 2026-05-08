@@ -1,62 +1,78 @@
-// Ghost-record bridge between the live semantic reducer and the
-// durable JSONL transcript.
+// Renderer-side ghost reducer + the bridge between the live
+// semantic stream, the durable JSONL transcript, and disk
+// persistence.
 //
 // -----------------------------------------------------------------------------
-// WHY this exists
+// What ghost is in cc-shell today
 // -----------------------------------------------------------------------------
 //
-// The Feed used to have two independent owners of visible assistant text:
+// Ghost is a parallel disk-backed ledger of semantic events. As
+// the proxy stream emits events, this file mints provisional
+// `ClaudeEntry` records via atp's `createGhost`. When the
+// authoritative JSONL entry lands (Claude's batched 100 ms drain;
+// Codex's mpsc flush), `reconcileUpstream` matches by message.id /
+// codexTurnId / tool_use_id and supersedes the ghost. If JSONL
+// never matches (Claude Code's auxiliary calls — title gen,
+// predict-next-prompt, branch-name gen — are not written to the
+// rollout), `orphanStale` flags the ghost after the TTL.
 //
-//   1. committed transcript entries read from disk JSONL (`runtime.entries`)
-//   2. the live semantic tail (`runtime.semantic.currentTurn`)
+// The live current turn renders via `SemanticStreamingTurn`
+// directly off `runtime.semantic.currentTurn` — NOT through
+// ghosts. So most ticks, the ghost map has no rendered output:
+// the work this file does is bookkeeping (mint, reconcile,
+// orphan, gc, persist) for two consumers:
 //
-// Feed rendered both unconditionally — upstream entries first, then the
-// live tail below. That worked while upstream's write was same-tick with
-// the live event, which it is NOT. Upstream Claude Code writes transcript
-// JSONL fire-and-forget on a 100 ms batched drain (10 ms for remote
-// sessions), and Codex's RolloutRecorder queues writes through a tokio
-// mpsc to a background task that persists on explicit flush barriers.
-// Both CLIs intentionally let the live view lead, then eventually catch
-// up.
+//   1. `selectMergedEntries` (./mergedEntries.ts) — surfaces
+//      orphan ghosts ONLY when JSONL has stalled past the proxy
+//      (live-stuck mid-turn or resume-after-crash with partial
+//      JSONL). The layered predicate there has the full design
+//      rationale.
 //
-// That design is fine for the CLI's own TUI, which is the ONLY consumer
-// and knows never to show both views at once. It breaks for cc-shell,
-// which reads the durable JSONL AND consumes the live semantic channel
-// and must merge the two into one feed. The observed symptom was a
-// duplicate-render bug on Codex: committed assistant entry plus live
-// rollout semantic turn rendered the same sentence twice.
-//
-// The fix is a transcript-first feed with a ghost overlay. Ghosts are
-// minted from live semantic state as a provisional `ClaudeEntry` with
-// `_atp.origin = 'ghost'`, reconciled against upstream entries as they
-// land, and merged at read time via `mergeWithUpstream`. Once the real
-// entry exists, the ghost is superseded and drops out of the merged
-// list. If the real entry never arrives, the ghost is orphaned and
-// stays visible as the sole record of what the live layer saw.
-//
-// See `agent-transcript-parser/docs/ghost.md` for the full primitive,
-// and the 2026-04-18 plan in cc-shell's docs for the integration.
+//   2. `ghostJournal.ts` (main process) — append-only JSONL log
+//      under <userData>/ghost-logs/<sessionId>.ghost.jsonl.
+//      Survives reload / restart so the JSONL-stuck case can
+//      recover the lost partial turn on resume via the bootstrap
+//      merge in src/renderer/src/workspace/hook/actions/session.ts.
 //
 // -----------------------------------------------------------------------------
-// Layering
+// Provider-aware reconciliation
 // -----------------------------------------------------------------------------
 //
-//   atp                — agent-agnostic primitives (`createGhost`,
-//                        `updateGhost`, `supersedeGhost`, `orphanGhost`,
-//                        `reduceGhostLog`, `mergeWithUpstream`)
-//   cc-shell/ghosts.ts — THIS FILE. Pure functions that bridge
-//                        `SemanticLiveTurn` → ghost entries and fold
-//                        upstream ingest into supersedes.
-//   workspaceStore.ts  — calls the two functions here at the semantic
-//                        fold site and the JSONL ingest site. Disk
-//                        persistence (Phase 2) is owned by
-//                        `src/main/ghostJournal.ts`.
-//   Feed.tsx           — consumes the merged Entry list via a derived
-//                        selector; never sees ghost/non-ghost
-//                        distinction at the component level.
+// Claude: upstream assistant entries carry `message.id == turnId`,
+// so one upstream entry supersedes every ghost block for that
+// turn at once.
 //
-// No function here performs IO. No function here subscribes to events.
-// Input goes in, new `Map<uuid, GhostEntry>` comes out.
+// Codex: rollout emits one entry per content block, with the
+// rollout response_id stamped onto the mapped entry by
+// `stampCodexTurnId` in ../codex/rollout.ts. Match is by
+// (turnId, blockIndex). When that fails, both providers fall back
+// to tool_use_id / call_id pairing for tool blocks.
+//
+// -----------------------------------------------------------------------------
+// Reference stability
+// -----------------------------------------------------------------------------
+//
+// Every reducer below MUST return `prev` unchanged on no-op so
+// React memoization holds at the call site. This isn't an
+// optimization — it's load-bearing. The pre-fix versions always
+// allocated `new Map(prev)` at the top, which made
+// `nextGhosts !== current.ghosts` always true downstream, forcing
+// a setRuntimes cascade that busted every useMemo([entries]) in
+// Feed via selectMergedEntries.
+//
+// See docs/design/ghost-system.md for the canonical explanation
+// of the ghost subsystem — what it does, the five-rule render
+// predicate, and the load-bearing invariants this file must
+// uphold. DO NOT change the lifecycle, reconciliation, or
+// reference-stability behavior here without re-reading that doc.
+//
+// See also `agent-transcript-parser/docs/ghost.md` for the
+// underlying primitive's semantics, and
+// docs/superpowers/plans/2026-05-07-ghost-system-findings.md for
+// the long-form diagnostic of how cc-shell got here.
+//
+// No function here performs IO. No function here subscribes to
+// events. Input goes in, new `Map<uuid, GhostEntry>` comes out.
 
 import {
   createGhost,

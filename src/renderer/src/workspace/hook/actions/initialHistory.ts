@@ -188,6 +188,26 @@ export async function loadInitialHistoryForSession({
         window.api.ghostAppend(sessionId, ghost)
       }
 
+      // Bootstrap-load equivalent of the live-ingest stamping in
+      // useIpcSubscriptions.ts. selectMergedEntries gates orphan
+      // ghost rendering against this timestamp; on resume we need
+      // it primed from the loaded JSONL tail so a ghost from the
+      // previous session whose updatedAt is older than the freshest
+      // loaded JSONL entry stays correctly hidden, while a ghost
+      // newer than every loaded entry (the
+      // "JSONL-stopped-mid-turn before the previous run died" case)
+      // surfaces as expected.
+      let lastJsonlEntryAt = current.lastJsonlEntryAt
+      for (const entry of initialEntries) {
+        const ts = (entry as { timestamp?: unknown }).timestamp
+        if (typeof ts !== 'string') continue
+        const ms = Date.parse(ts)
+        if (!Number.isFinite(ms)) continue
+        if (lastJsonlEntryAt === null || ms > lastJsonlEntryAt) {
+          lastJsonlEntryAt = ms
+        }
+      }
+
       const nextRuntime = appendFeedDebugLog(
         {
           ...current,
@@ -203,6 +223,7 @@ export async function loadInitialHistoryForSession({
           toolUseIndex,
           toolResultIndex,
           ghosts: nextGhosts,
+          lastJsonlEntryAt,
         },
         {
           layer: 'STATE',

@@ -376,20 +376,52 @@ export type SessionRuntime = {
   feedDebugLog: FeedDebugEntry[]
   feedDebugNextId: number
   feedDebugEpochMs: number | null
+  /** Wall-clock ms (epoch) of the newest JSONL entry timestamp we
+   *  have observed for this session.
+   *
+   *  WHY this exists separately from `entries[entries.length-1]`:
+   *    Render decisions need a single comparable scalar against
+   *    ghost `_atp.updatedAt`. Walking `entries` to find the max
+   *    timestamp on every render would be O(N) per call; this is
+   *    O(1) read after a single O(burst-size) update at ingest
+   *    time. Equally important: the comparison must use entry
+   *    *timestamp* (when the producer observed the event), not
+   *    `Date.now()`. On resume after a crash the most recent
+   *    JSONL entry might be from yesterday but ghost `updatedAt`
+   *    is also from yesterday — both sides need to be in the
+   *    same wall-clock universe or the comparison flips to
+   *    nonsense.
+   *
+   *  WHY null instead of 0 for "never seen":
+   *    A 0-valued sentinel would make `ghost.updatedAt > 0`
+   *    always true, accidentally rendering ghosts on a brand-new
+   *    session that has produced nothing yet. Null is checked
+   *    explicitly in `selectMergedEntries`.
+   *
+   *  Used by `selectMergedEntries` (./mergedEntries.ts) to decide
+   *  whether an orphaned ghost represents JSONL stalling past the
+   *  proxy (render — proxy event is the only record) vs. a
+   *  sidecar leak Claude Code never logs to its rollout (hide —
+   *  JSONL kept writing real turns past it). See
+   *  docs/design/ghost-system.md for the canonical explanation of
+   *  the predicate this field feeds, and
+   *  docs/superpowers/plans/2026-05-07-ghost-system-findings.md
+   *  for the long-form diagnostic. */
+  lastJsonlEntryAt: number | null
   /** Ghost-record state keyed by ghost uuid (`g-<turnId>-<blockIndex>`).
    *
    *  Ghosts are provisional ClaudeEntry records emitted from the
    *  live semantic reducer to paper over the gap between a
    *  provider's streaming events and its durable JSONL write. See
-   *  `./ghosts.ts` for the reducer and
+   *  docs/design/ghost-system.md for the canonical explanation of
+   *  the subsystem, `./ghosts.ts` for the reducer functions, and
    *  `agent-transcript-parser/docs/ghost.md` for the underlying
    *  primitive.
    *
-   *  The Map is opaque to most code — Feed reads merged entries via
-   *  the selector `selectMergedEntries`, and only the ghost reducer
-   *  functions mutate this field. The in-memory shape is the only
-   *  source of truth for Phase 1; Phase 2 adds disk persistence in
-   *  `src/main/ghostJournal.ts` for crash recovery. */
+   *  The Map is opaque to most code — Feed reads merged entries
+   *  via the selector `selectMergedEntries`, and only the ghost
+   *  reducer functions mutate this field. Disk persistence lives
+   *  in `src/main/ghostJournal.ts`. */
   ghosts: Map<string, GhostEntry>
 }
 
@@ -476,6 +508,7 @@ export function emptyRuntime(): SessionRuntime {
     feedDebugLog: [],
     feedDebugNextId: 1,
     feedDebugEpochMs: null,
+    lastJsonlEntryAt: null,
     ghosts: new Map(),
   }
 }
