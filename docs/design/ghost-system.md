@@ -154,7 +154,7 @@ A ghost is **render-eligible** iff ALL FIVE of the following hold:
 1. **Not superseded.** `ghost._atp.supersededBy === undefined`. JSONL has not caught up; the ghost is still potentially the only record.
 2. **Orphaned.** `ghost._atp.orphanedAt !== undefined`. The TTL has elapsed without a JSONL match. JSONL has had its chance for this ghost.
 3. **Not the live current turn.** `ghost._atp.turnId !== currentTurnId`. `SemanticStreamingTurn` owns the live turn render; surfacing a ghost for the same turn would double-render.
-4. **Past the JSONL tail.** `lastJsonlEntryAt !== null && ghost._atp.updatedAt > lastJsonlEntryAt`. The ghost was minted from a proxy event that occurred *after* the most recent JSONL entry this session has observed. This structurally distinguishes "JSONL stalled past the proxy" from "JSONL kept writing past this ghost."
+4. **Past the JSONL tail (when known).** When `lastJsonlEntryAt !== null`, the ghost's `_atp.updatedAt` must be strictly greater than `lastJsonlEntryAt`. When `lastJsonlEntryAt === null` (fresh session, no JSONL entry has ever been observed), this rule does not gate — the ghost falls through to rule 5. The non-null branch structurally distinguishes "JSONL stalled past the proxy" (proxy event newer than every JSONL entry → render) from "JSONL kept writing past this ghost" (sidecar that real JSONL turns have moved past → hide).
 5. **Not sidecar-shaped.** `!ghostHasSidecarShape(ghost)`. The shape predicate matches Claude Code's known auxiliary-call fingerprint: assistant role, single text block, ≤200 chars. This is the backstop for tail-sidecar leaks rule 4 cannot see.
 
 Why rules 4 AND 5, not just rule 4: the timestamp predicate is structurally correct for "stale orphan from earlier in the session, JSONL kept writing past it" — rule 4 catches that. But it cannot tell apart these two TAIL cases:
@@ -177,7 +177,7 @@ A real assistant turn that crashed before any JSONL write AND happened to be a s
 When a JSONL entry lands, `reconcileUpstream` walks the ghost map and supersedes anything whose authoritative record this entry is. Provider-aware:
 
 - **Claude:** assistant entries carry `message.id` which equals the `turnId` we used for the ghost. Match by `turnId === message.id`. One upstream entry can supersede every ghost block for that turn at once.
-- **Codex:** rollout emits one entry per content block, each with its own uuid. The rollout response_id is stamped onto every mapped entry by `stampCodexTurnId` in `src/renderer/src/workspace/codex/rollout.ts`. Match by `(turnId === codexTurnId, blockIndex)`.
+- **Codex:** rollout emits one entry per content block, each with its own uuid. The rollout response_id is stamped onto every mapped entry by `stampCodexTurnId` in `src/renderer/src/workspace/codex/rollout.ts`. Match is by `turnId === codexTurnId` — same shape as Claude. A single landed Codex entry supersedes every ghost in that turn even though only one block's authoritative entry has arrived in this burst; subsequent block entries for the same turn arrive harmlessly because their ghosts are already superseded. Per-block disambiguation comes from the tool_use_id / call_id fallback below when a ghost needs to track a specific block by id.
 - **Both providers, fallback:** if the upstream entry has any `tool_use` block whose id matches a ghost's `_atp.context.toolUseId` or `context.callId`, supersede that specific ghost. This handles edge cases where turn ids don't line up (Codex rollout can mint fresh uuids on replay).
 
 Reconciliation is reference-stable: `reconcileUpstream` returns the input map unchanged when no match was found, so Feed's row memoization holds across no-op JSONL bursts.
@@ -225,7 +225,7 @@ In practice, during healthy operation the orphan flag rarely fires for a real as
 
 The TTL does fire reliably in the genuine stuck cases:
 
-- **Live-stuck:** `currentTurn` cleared (or hangs), JSONL stalled, semantic stream went silent → orphan after 30 s, predicate evaluates, ghost may render.
+- **Live-stuck:** `currentTurn` cleared (without JSONL having caught up), semantic stream went silent → orphan after 30 s, predicate evaluates, ghost may render. Note: if `currentTurn` instead hangs alive with the same `turnId`, rule 3 keeps the ghost hidden and `SemanticStreamingTurn` continues to own visibility — the live-stuck branch only applies once the live owner has released the turn.
 - **Resume-after-crash:** ghost log loaded from disk, ghost's `updatedAt` is from before the crash → orphan sweep fires within the first second of resume → predicate evaluates against the loaded JSONL tail.
 
 ## Phase 3: deliberately out of scope
