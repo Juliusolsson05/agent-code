@@ -60,10 +60,16 @@
 // a setRuntimes cascade that busted every useMemo([entries]) in
 // Feed via selectMergedEntries.
 //
-// See `agent-transcript-parser/docs/ghost.md` for the underlying
-// primitive's semantics, and
+// See docs/design/ghost-system.md for the canonical explanation
+// of the ghost subsystem — what it does, the five-rule render
+// predicate, and the load-bearing invariants this file must
+// uphold. DO NOT change the lifecycle, reconciliation, or
+// reference-stability behavior here without re-reading that doc.
+//
+// See also `agent-transcript-parser/docs/ghost.md` for the
+// underlying primitive's semantics, and
 // docs/superpowers/plans/2026-05-07-ghost-system-findings.md for
-// the longer story of how cc-shell got here.
+// the long-form diagnostic of how cc-shell got here.
 //
 // No function here performs IO. No function here subscribes to
 // events. Input goes in, new `Map<uuid, GhostEntry>` comes out.

@@ -85,6 +85,22 @@
 //   that ships, the live current turn stays owned by
 //   SemanticStreamingTurn and ghost rendering is reserved for the
 //   JSONL-stalled-past-proxy fallback case described above.
+//
+// -----------------------------------------------------------------------------
+// CANONICAL EXPLANATION
+// -----------------------------------------------------------------------------
+//
+// docs/design/ghost-system.md is the source of truth for the
+// ghost subsystem. The five-rule predicate below is reproduced
+// there with the full rationale; this file's comments reflect
+// the predicate as implemented. If the rules need to change,
+// update the doc first.
+//
+// Each prior simplification of these rules regressed in
+// production (see the Warning section in the design doc for the
+// commit-by-commit history). Changing this predicate without
+// re-reading that doc is how cc-shell ends up with stale ghost
+// rows at the bottom of every feed again.
 
 import type { Entry } from '@shared/types/transcript'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'

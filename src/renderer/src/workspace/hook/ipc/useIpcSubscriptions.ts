@@ -96,17 +96,30 @@ const WORKTREE_CACHE_TTL_MS = 5000
 const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 // Threshold before an unsuperseded ghost is marked orphaned.
 //
-// 3000ms was the value used while orphan rendering was always-on
-// (commit 686b94e) — the goal was to surface fallback fast. With
-// the layered predicate in mergedEntries.ts an orphan flag merely
-// makes a ghost ELIGIBLE for rendering; rules 4 (timestamp gate)
-// and 5 (sidecar shape) still gate final visibility. So the TTL
-// is now "how long do we wait before concluding JSONL had its
-// chance for this ghost," not "how fast do we paint." 30000ms
-// matches atp's library default and safely covers slow tool
-// results (large Read, large Bash output, slow fetches) without
-// prematurely qualifying a ghost mid-turn. Sweep cadence stays at
-// 1s — that's the polling rate, not the threshold.
+// History: 3000ms while orphan rendering was always-on (commit
+// 686b94e), then 30000ms when the layered predicate landed.
+//
+// With the layered predicate in mergedEntries.ts, an orphan flag
+// merely makes a ghost ELIGIBLE for rendering; rules 4 (timestamp
+// gate) and 5 (sidecar shape) still gate final visibility, and
+// rule 3 hides ghosts whose `turnId === currentTurnId`. So during
+// healthy operation, even a tool that runs tens of seconds doesn't
+// visibly orphan: the semantic reducer keeps `currentTurn` alive
+// across pending tools (see hasPendingSemanticTools in
+// semantic/helpers.ts), and rule 3 hides any ghost whose turn is
+// still active. The TTL here is the failsafe boundary for "how
+// long before we conclude JSONL had its chance" — reachable only
+// when currentTurn has cleared and JSONL has genuinely stalled.
+//
+// 30000ms matches atp's library default and is the right balance:
+// long enough that a normal slow operation doesn't trip it, short
+// enough that a real stuck-mid-turn case surfaces within roughly
+// half a minute on resume.
+//
+// Sweep cadence stays at 1s — that's the polling rate, not the
+// threshold.
+//
+// See docs/design/ghost-system.md for the canonical explanation.
 const GHOST_ORPHAN_TTL_MS = 30000
 const GHOST_ORPHAN_SWEEP_MS = 1000
 
@@ -220,6 +233,13 @@ export function useIpcSubscriptions(
   useEffect(() => {
     const worktreeCache = new Map<string, WorktreeCacheEntry>()
     const recentWorkContextRawBySession = new Map<SessionId, unknown[]>()
+    // Ghost orphan sweep — see docs/design/ghost-system.md for the
+    // canonical explanation. Runs every GHOST_ORPHAN_SWEEP_MS,
+    // calls orphanStale to flag any ghost whose updatedAt has been
+    // silent for longer than GHOST_ORPHAN_TTL_MS, persists the
+    // resulting state changes to disk via ghostAppend. Reference-
+    // stable on no-op: orphanStale returns the input map by
+    // identity when no ghost crossed the threshold.
     const orphanSweepTimer = window.setInterval(() => {
       const now = Date.now()
       setRuntimes(prev => {
@@ -709,7 +729,8 @@ export function useIpcSubscriptions(
         // the new semantic turn. This runs on every semantic tick;
         // `ghostsFromSemanticTurn` is idempotent and
         // reference-stable so no-op ticks (e.g. usage_updated
-        // events) do not churn the map.
+        // events) do not churn the map. See
+        // docs/design/ghost-system.md for the canonical explanation.
         //
         // WHY here and not inside `foldSemanticEvent`:
         //   foldSemanticEvent is intentionally agnostic to
@@ -718,9 +739,9 @@ export function useIpcSubscriptions(
         //   outer runtime. The ghost map lives on SessionRuntime
         //   because it needs to survive across semantic history
         //   archival (when `currentTurn` flips to null) and because
-        //   Phase 2 will persist it to disk with session-scoped
-        //   file names. Calling the ghost reducer at this outer
-        //   boundary keeps the layering clean.
+        //   the ghost journal persists it to disk with session-
+        //   scoped file names. Calling the ghost reducer at this
+        //   outer boundary keeps the layering clean.
         const nextGhosts = ghostsFromSemanticTurn(
           nextSemantic.currentTurn,
           sessionId,

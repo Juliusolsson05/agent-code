@@ -6,6 +6,13 @@
 // a cc-shell-owned JSONL file so the live view survives a crash, a
 // window reload, or an Electron restart.
 //
+// See docs/design/ghost-system.md for the canonical explanation
+// of the ghost subsystem — what it does, when ghosts surface in
+// the rendered feed, and why this file exists at all. DO NOT
+// change the persistence model (one file per session, append-
+// only, 100 ms batch) without re-reading that doc; resume + the
+// reduceGhostLog last-write-wins rule depend on it.
+//
 // -----------------------------------------------------------------------------
 // Why a separate file and not upstream's JSONL
 // -----------------------------------------------------------------------------

@@ -256,14 +256,16 @@ export class ClaudeSession extends EventEmitter {
       // that opted into proxy specifically want the richer stream.
       proxy: this.useProxy
         ? {
-            // Sidecar Haiku filtering — see ClaudeProxyAdapter for the
-            // full rationale. Without this, Claude Code's auxiliary
-            // Haiku calls (session title generation, compaction
-            // summaries, hook agents, teleport title-and-branch) leak
-            // into the visible transcript as orphan ghost entries
-            // because Claude Code never writes them to the JSONL
-            // rollout, so the renderer's ghost-supersede path can
-            // never fire.
+            // Sidecar Haiku filtering — see ClaudeProxyAdapter for
+            // the full rationale, and docs/design/ghost-system.md
+            // for how this interacts with the renderer-side shape
+            // filter (rule 5 of the predicate). Without this, Claude
+            // Code's auxiliary Haiku calls (session title generation,
+            // compaction summaries, hook agents, teleport
+            // title-and-branch) leak into the visible transcript as
+            // orphan ghost entries because Claude Code never writes
+            // them to the JSONL rollout, so the renderer's
+            // ghost-supersede path can never fire.
             //
             // We default to assuming the user is on a non-Haiku
             // primary model. Why this is OK as a default:

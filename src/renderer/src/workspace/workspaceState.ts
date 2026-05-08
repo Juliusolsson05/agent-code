@@ -403,23 +403,25 @@ export type SessionRuntime = {
    *  proxy (render — proxy event is the only record) vs. a
    *  sidecar leak Claude Code never logs to its rollout (hide —
    *  JSONL kept writing real turns past it). See
+   *  docs/design/ghost-system.md for the canonical explanation of
+   *  the predicate this field feeds, and
    *  docs/superpowers/plans/2026-05-07-ghost-system-findings.md
-   *  for the full rationale. */
+   *  for the long-form diagnostic. */
   lastJsonlEntryAt: number | null
   /** Ghost-record state keyed by ghost uuid (`g-<turnId>-<blockIndex>`).
    *
    *  Ghosts are provisional ClaudeEntry records emitted from the
    *  live semantic reducer to paper over the gap between a
    *  provider's streaming events and its durable JSONL write. See
-   *  `./ghosts.ts` for the reducer and
+   *  docs/design/ghost-system.md for the canonical explanation of
+   *  the subsystem, `./ghosts.ts` for the reducer functions, and
    *  `agent-transcript-parser/docs/ghost.md` for the underlying
    *  primitive.
    *
-   *  The Map is opaque to most code — Feed reads merged entries via
-   *  the selector `selectMergedEntries`, and only the ghost reducer
-   *  functions mutate this field. The in-memory shape is the only
-   *  source of truth for Phase 1; Phase 2 adds disk persistence in
-   *  `src/main/ghostJournal.ts` for crash recovery. */
+   *  The Map is opaque to most code — Feed reads merged entries
+   *  via the selector `selectMergedEntries`, and only the ghost
+   *  reducer functions mutate this field. Disk persistence lives
+   *  in `src/main/ghostJournal.ts`. */
   ghosts: Map<string, GhostEntry>
 }
 

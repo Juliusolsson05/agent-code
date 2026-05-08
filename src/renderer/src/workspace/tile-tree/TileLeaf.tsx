@@ -341,8 +341,9 @@ export function TileLeaf({
           // turn is owned by `SemanticStreamingTurn` below; the
           // `currentTurnId` argument hides any ghost for that
           // turn so the two surfaces never double-render.
-          // See ./mergedEntries.ts and
-          // docs/superpowers/plans/2026-05-07-ghost-system-findings.md.
+          // See docs/design/ghost-system.md for the canonical
+          // explanation of the predicate and the dual-owner
+          // model.
           entries={selectMergedEntries(
             runtime,
             runtime.semantic.currentTurn?.turnId ?? null,
