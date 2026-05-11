@@ -9,7 +9,7 @@ import { EditorTabs } from '@renderer/features/editor/ui/EditorTabs'
 import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
 
 import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
-import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
 // Splitter geometry. SPLITTER_PX is the visual width of the
 // draggable bar between the editor and the workspace. We avoid
@@ -82,6 +82,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     useShallow(state => {
       const byCwd = state.byCwd
       const aCwd = state.activeCwd
+      // EMPTY_CWD_STATE is a MODULE-SCOPE singleton — must NOT
+      // be replaced with an inline `{ fileOrder: [], ... }` here.
+      // Inline objects have a fresh reference every selector
+      // call, defeat useShallow's equality check, and put the
+      // renderer in an infinite re-render loop (black screen +
+      // runaway memory). See note in store.ts.
       return {
         activeCwd: aCwd,
         setActiveCwd: state.setActiveCwd,
@@ -90,12 +96,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         updateFileText: state.updateFileText,
         markFileSaved: state.markFileSaved,
         closeFileAction: state.closeFile,
-        cwdState:
-          (aCwd && byCwd[aCwd]) || {
-            fileOrder: [],
-            openFiles: {},
-            activeFilePath: null,
-          },
+        cwdState: (aCwd && byCwd[aCwd]) || EMPTY_CWD_STATE,
       }
     }),
   )

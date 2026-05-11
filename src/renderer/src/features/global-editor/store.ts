@@ -70,7 +70,14 @@ type GlobalEditorStore = {
   closeFile: (cwd: string, path: string) => boolean
 }
 
-const EMPTY_CWD_STATE: GlobalEditorCwdState = {
+// Exported because consumers (notably GlobalEditorShell's
+// useShallow selector) MUST return this exact reference as the
+// "no cwd active" fallback. Returning a fresh object literal from
+// the selector body — { fileOrder: [], openFiles: {}, ... } — has
+// a different reference every render, breaks useShallow's
+// equality check, and triggers an infinite render loop that
+// freezes the renderer and balloons memory.
+export const EMPTY_CWD_STATE: GlobalEditorCwdState = {
   fileOrder: [],
   openFiles: {},
   activeFilePath: null,
