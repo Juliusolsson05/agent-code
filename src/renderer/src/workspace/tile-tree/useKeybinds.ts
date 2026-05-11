@@ -85,13 +85,25 @@ export function useKeybinds(
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
+  // The placement overlay is opened from TWO independent flows:
+  // - newAgentPlacementOpen: the cmd+T / new-agent-placement flow
+  // - dispatchAttachIntent: attach-detached-to-grid
+  // App.tsx already unifies them as `placementOverlayOpen` and
+  // closes them together via `closePlacementOverlay`. We must
+  // subscribe to BOTH here — an earlier revision only checked
+  // newAgentPlacementOpen, so cmd+W / cmd+1..9 / alt+d still
+  // mutated the workspace under the attach overlay before the
+  // overlay's own listener could stop propagation. See PR #75
+  // review.
+  const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
+  const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
   // Reorder Tabs and Pin Agents are modal overlays with their own
   // internal onKeyDown handlers. Without bailing out here, the
   // global capture-phase handler still fires cmd+1..9 / cmd+t /
   // alt+d / cmd+W underneath the modal — which mutates the
   // workspace while the user is in a "transient draft" UI that
-  // promises Escape-cancellation. Mirror the newAgentPlacement
-  // bailout: consume Escape, drop everything else on the floor.
+  // promises Escape-cancellation. Mirror the placement bailout:
+  // consume Escape, swallow shortcut chords, drop everything else.
   const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
@@ -126,34 +138,40 @@ export function useKeybinds(
       const alt = e.altKey
       const shift = e.shiftKey
       const k = e.key
+      // Unified placement-overlay predicate — matches App.tsx:112
+      // (`placementOverlayOpen = newAgentPlacementOpen ||
+      // dispatchAttachIntent !== null`) so create-mode and
+      // attach-mode share one bailout.
+      const placementOverlayOpen = newAgentPlacementOpen || dispatchAttachIntent !== null
 
-      if (newAgentPlacementOpen) {
+      // Placement overlay (create-new or attach-detached) and the
+      // two draft modals (reorder / pin) all share the same shape:
+      // a transient UI with its own onKeyDown that owns Enter /
+      // Space / Arrow / j / k, plus Escape-to-cancel. Three things
+      // we must do here in the global capture handler:
+      //   1. Consume Escape so it closes the modal even when the
+      //      modal's inner div has lost focus.
+      //   2. preventDefault on shortcut chords (cmd / alt). Without
+      //      this, returning early stops cc-shell's handler but
+      //      not the macOS / Electron defaults — cmd+W would still
+      //      close the window, cmd+T would still open a new tab in
+      //      Electron, alt+number cycles tab focus on some setups.
+      //      preventDefault on chords blocks those defaults while
+      //      still letting the event bubble to the modal's React
+      //      onKeyDown for navigation keys.
+      //   3. Drop unmodified keys (j/k/Space/Enter/etc) — the
+      //      modal's own onKeyDown handles those via React bubble.
+      if (placementOverlayOpen || reorderTabsOpen || pinAgentsOpen) {
         if (k === 'Escape') {
           e.preventDefault()
-          closeNewAgentPlacement()
+          if (newAgentPlacementOpen) closeNewAgentPlacement()
+          if (dispatchAttachIntent !== null) closeDispatchAttach()
+          if (reorderTabsOpen) closeReorderTabs()
+          if (pinAgentsOpen) closePinAgents()
+          return
         }
-        return
-      }
-
-      // Reorder Tabs / Pin Agents share the same shape as the
-      // placement modal above: a draft selection that the user
-      // commits with Enter or discards with Escape. The modal owns
-      // Enter / Space / Arrow / j / k via its own onKeyDown — we
-      // only need to (a) consume Escape so the global handler can
-      // close the modal even when its inner div lost focus, and
-      // (b) swallow every other keystroke so nothing leaks into the
-      // workspace underneath.
-      if (reorderTabsOpen) {
-        if (k === 'Escape') {
+        if (cmd || alt) {
           e.preventDefault()
-          closeReorderTabs()
-        }
-        return
-      }
-      if (pinAgentsOpen) {
-        if (k === 'Escape') {
-          e.preventDefault()
-          closePinAgents()
         }
         return
       }
@@ -547,12 +565,14 @@ export function useKeybinds(
     closeSettingsPage,
     closeBuryPrompt,
     closeNewAgentPlacement,
+    closeDispatchAttach,
     closeReorderTabs,
     closePinAgents,
     onCommandPalette,
     onNewTabRequest,
     onResumeRequest,
     buryPromptSessionId,
+    dispatchAttachIntent,
     newAgentPlacementOpen,
     pinAgentsOpen,
     reorderTabsOpen,
