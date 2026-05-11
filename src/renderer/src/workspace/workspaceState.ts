@@ -175,6 +175,22 @@ export type SemanticLiveTurn = {
   lookups: SemanticLookupSnapshot
   startedAt: number
   endedAt: number | null
+  /** True when the proxy adapter tagged this assistant turn as
+   *  Claude Code's compaction synthesis call (the request body's
+   *  last user message matched the fixed compact-prompt signature).
+   *  The body that streams back is `<analysis>…</analysis>
+   *  <summary>…</summary>` XML, NOT user-visible text — the real
+   *  user-facing artefacts are the `compact_boundary` system entry
+   *  and the `isCompactSummary: true` user entry that land later
+   *  via JSONL. The streaming renderer uses this flag to swap the
+   *  raw block stream for a "Compacting conversation…" placeholder.
+   *
+   *  Defaults missing/false because non-Claude turns (codex, screen
+   *  fallback) and pre-2026-05-11 proxy adapters never set it. The
+   *  flag is set ONCE at `turn_started`; subsequent events for the
+   *  same turn don't carry it (it's a turn-scope attribute, not an
+   *  event attribute). */
+  isCompactionSynthesis?: boolean
 }
 
 export type SemanticFlow = {
