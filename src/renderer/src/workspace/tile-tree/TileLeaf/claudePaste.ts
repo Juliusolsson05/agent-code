@@ -37,18 +37,38 @@
 //     not a load-bearing primary path.
 //
 // Why these numbers:
-//   - 800 chars matches Claude's current PASTE_THRESHOLD upstream.
+//   - 100 chars: empirical lower bound on text length where Claude's
+//     TUI runs its internal paste accumulator. The original constant
+//     was 800 because we believed it had to match Claude's *collapse*
+//     threshold (the size at which Claude renders `[Pasted text #N]`
+//     instead of inlining the bytes). It does not. Claude's paste
+//     ACCUMULATOR triggers independently, around ~100 chars, regardless
+//     of whether the inlined-vs-collapse cutoff has been crossed. Real
+//     per-paste debug dumps showed the bug recurring on 145 / 156 / 177
+//     / 215-char single-line text that we were sending as
+//     `route:claude-plain-text` (raw text + `\r` in one PTY write),
+//     because Claude's accumulator engaged on the inline bytes and
+//     swallowed the trailing `\r`. Lowering this to 100 routes those
+//     cases through the bracketed-paste + event-driven path instead,
+//     which is the bug fix.
 //   - 125 ms is slightly above Claude's 100 ms paste completion
 //     timeout. Going lower risks reintroducing the race; going much
 //     higher makes submit feel laggy on every long paste. Only
 //     consulted when the event-driven path times out or is disabled.
-//   - 2000 ms event-driven safety bound is ~10x the harness's
-//     observed p95 placeholder wait (~108 ms).
+//   - 500 ms event-driven safety bound (down from 2000 ms): for
+//     bracketed pastes that DO NOT cross Claude's inline→collapse
+//     threshold, the `[Pasted text #N]` placeholder never renders, so
+//     our detector hits the timeout fallback every time. At 2000 ms
+//     that became a noticeable per-submit lag on any text 100–800
+//     chars — exactly the size range this PR moves into the
+//     bracketed-paste path. 500 ms is well past Claude's 100 ms
+//     accumulator window (so `\r` is always safe by then) and short
+//     enough to feel responsive even on the slow-path fallback.
 
-export const CLAUDE_PASTE_THRESHOLD = 800
+export const CLAUDE_PASTE_THRESHOLD = 100
 export const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
 export const CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS = 750
-export const CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS = 2_000
+export const CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS = 500
 
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
