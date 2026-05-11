@@ -18,6 +18,11 @@ import type {
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import {
+  collectOwnedSessionIds,
+  collectUnownedSessionIds,
+  pickOwnedSessions,
+} from '@renderer/workspace/sessionOwnership'
 
 // -----------------------------------------------------------------------------
 // Session lifecycle actions.
@@ -426,7 +431,23 @@ export function useSessionActions(
   const reloadAgentSessions = useCallback(
     async (dangerousMode = refs.dangerousAgentsRef.current) => {
       const current = refs.stateRef.current
-      const agentEntries = Object.entries(current.sessions).filter(([, meta]) => {
+      const ownedIds = collectOwnedSessionIds(current)
+      const staleIds = collectUnownedSessionIds(current)
+      if (staleIds.length > 0) {
+        // WHY reload prunes but does not kill unowned ids directly:
+        //
+        // `reloadAgentSessions` is a user-visible policy change ("restart the
+        // owned agents with the current dangerous-mode setting"), not a
+        // workspace garbage collector. If an unowned runtime process exists,
+        // it has already escaped the UI ownership model; respawning it here is
+        // the bug. Dropping the metadata prevents the stale row from surviving
+        // the reload/autosave cycle, while process cleanup can stay best-effort
+        // at the explicit kill/session-manager layer.
+        // eslint-disable-next-line no-console
+        console.warn('[workspace] dropping unowned sessions during agent reload:', staleIds)
+      }
+      const agentEntries = Object.entries(current.sessions).filter(([id, meta]) => {
+        if (!ownedIds.has(id)) return false
         const kind = meta.kind ?? 'claude'
         return kind === 'claude' || kind === 'codex'
       })
@@ -509,7 +530,10 @@ export function useSessionActions(
       })
 
       setState(prev => {
-        const nextSessions = { ...prev.sessions }
+        const nextSessions = pickOwnedSessions(
+          prev.sessions,
+          collectOwnedSessionIds(prev),
+        )
         for (const [oldId] of agentEntries) delete nextSessions[oldId]
         for (const [newId, meta] of Object.entries(freshSessions)) {
           nextSessions[newId] = meta

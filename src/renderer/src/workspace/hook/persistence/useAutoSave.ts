@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react'
 
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+import { pruneSessionOwnership } from '@renderer/workspace/sessionOwnership'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
@@ -38,10 +39,23 @@ export function useAutoSave(
   const flushSave = useCallback(() => {
     const saveSpan = perf.span('workspace.autosave.flush')
     const s = refs.latestStateRef.current
+    const pruned = pruneSessionOwnership(s)
+    if (pruned.droppedSessionIds.length > 0) {
+      // WHY autosave prunes instead of faithfully serializing runtime state:
+      //
+      // Autosave is the durability boundary. If an action accidentally leaves
+      // an unowned row in `state.sessions`, writing it to workspace.json turns a
+      // transient invariant violation into a startup respawn on every future
+      // launch. Pruning here is the last line of defense: owned hidden sessions
+      // (detached/buried) still persist, but metadata with no owner cannot make
+      // itself durable.
+      // eslint-disable-next-line no-console
+      console.warn('[workspace] dropping unowned sessions during autosave:', pruned.droppedSessionIds)
+    }
     // Collect non-empty drafts so in-progress prompts survive crashes.
     const drafts: Record<SessionId, string> = {}
     for (const [id, rt] of Object.entries(refs.latestRuntimesRef.current)) {
-      if (rt.draftInput) drafts[id] = rt.draftInput
+      if (pruned.sessions[id] && rt.draftInput) drafts[id] = rt.draftInput
     }
     const persisted: PersistedWorkspace = {
       tabs: s.tabs.map(t => ({
@@ -51,10 +65,10 @@ export function useAutoSave(
         root: t.root,
       })),
       activeTabId: s.activeTabId,
-      dispatchMode: s.dispatchMode,
-      sessions: s.sessions,
-      detachedSessions: s.detachedSessions,
-      buried: s.buried,
+      dispatchMode: pruned.dispatchMode,
+      sessions: pruned.sessions,
+      detachedSessions: pruned.detachedSessions,
+      buried: pruned.buried,
       tileTabs: refs.latestTileTabsRef.current,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }
