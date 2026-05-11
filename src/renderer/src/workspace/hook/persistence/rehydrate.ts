@@ -140,6 +140,33 @@ export async function rehydrateWorkspace(
         return [remapped]
       })
 
+  // WHY remap pins through idMap: same reason as detached/buried.
+  // Persisted SessionIds are pre-restart routing ids; every rehydrated
+  // process gets a fresh id and the map is the only bridge. A pin that
+  // can't be remapped (its source session failed to respawn) drops
+  // silently — better an empty Pinned section than a phantom row that
+  // resolves to nothing on focus.
+  const buildRemappedPinnedSessionIds = (): SessionId[] => {
+    // Defensive: hand-edited workspace.json could have non-array
+    // pinnedSessionIds (or string-typed elements). Coerce to a clean
+    // SessionId[] before remap to keep the runtime invariant
+    // ("pinnedSessionIds is always SessionId[]") cheap to rely on.
+    const raw = persisted.pinnedSessionIds
+    const ids: SessionId[] = Array.isArray(raw)
+      ? raw.filter((id): id is SessionId => typeof id === 'string' && id.length > 0)
+      : []
+    const remapped: SessionId[] = []
+    const seen = new Set<SessionId>()
+    for (const oldId of ids) {
+      const mapped = idMap.get(oldId)
+      if (!mapped) continue
+      if (seen.has(mapped)) continue
+      seen.add(mapped)
+      remapped.push(mapped)
+    }
+    return remapped
+  }
+
   const buildRemappedDetachedSessions = (): Record<SessionId, DetachedSessionRecord> => {
     const out: Record<SessionId, DetachedSessionRecord> = {}
     for (const entry of Object.values(persisted.detachedSessions ?? {})) {
@@ -217,6 +244,7 @@ export async function rehydrateWorkspace(
         sessions: { ...freshSessions },
         detachedSessions: buildRemappedDetachedSessions(),
         buried: buildRemappedBuried(),
+        pinnedSessionIds: buildRemappedPinnedSessionIds(),
       }
     })
     setTileTabs(prev => {

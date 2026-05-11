@@ -15,6 +15,15 @@ export type UiShellState = {
    * autosave from recording half-finished reorder attempts that the
    * user later cancels with Escape. */
   reorderTabsOpen: boolean
+  /** When true, the Pin Agents multi-select modal is open.
+   *
+   * Same rationale for living on uiShell as reorderTabsOpen above:
+   * it's transient command chrome, not workspace data. The committed
+   * pin list lands on WorkspaceState.pinnedSessionIds only after the
+   * user confirms with Enter; keeping the draft selection out of the
+   * persisted store prevents autosave from recording a half-edited
+   * pin session that the user later cancels with Escape. */
+  pinAgentsOpen: boolean
   settingsPageOpen: boolean
   buryPromptSessionId: SessionId | null
   viewPromptsSessionId: SessionId | null

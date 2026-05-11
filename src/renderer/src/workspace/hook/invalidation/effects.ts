@@ -124,6 +124,62 @@ export function usePickerSanity(
   }, [pickerCancel, runtimes])
 }
 
+// Pinned-session sanity. When any session disappears from
+// state.sessions (killed, ownership-pruned by autosave, etc.) the
+// pin list is the one place orphans don't get cleaned by an existing
+// reducer — pinning is read-only on `sessions`. The selector
+// (buildPinnedDispatchRows) and the autosave filter both drop
+// orphans defensively too, but those are render/durability gates;
+// keeping the live state internally consistent means commands that
+// read state.pinnedSessionIds directly (e.g. unpin-agent's `when`
+// guard) don't have to re-prove the invariant on every call.
+//
+// Why an effect instead of a reducer hook on every removal site:
+// session removal is scattered (killSession, dangerous-mode reload,
+// autosave prune, rehydrate partial commit, etc.) and trying to
+// thread "also strip pinnedSessionIds" through every one of those
+// invites the same drift problem the rest of this file solves.
+// Centralized invariant: "after any setState, pinnedSessionIds is a
+// subset of Object.keys(sessions) (minus terminals)."
+//
+// SetWorkspaceState typing: reproducing the narrow shape locally
+// instead of importing from context.ts to avoid a circular dep
+// through hook/index.ts.
+type WorkspaceSetState = (
+  next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState),
+) => void
+
+export function usePinnedSessionIdsSanity(
+  state: WorkspaceState,
+  setState: WorkspaceSetState,
+): void {
+  useEffect(() => {
+    const { pinnedSessionIds, sessions } = state
+    if (pinnedSessionIds.length === 0) return
+    const valid = pinnedSessionIds.filter(id => {
+      const meta = sessions[id]
+      // Terminals can never be pinned. If one somehow lands here
+      // (legacy workspace.json, manual reducer slip) treat it like a
+      // missing session and drop it — the invariant the modal +
+      // command paths depend on is "pinned ids point at agents."
+      return meta !== undefined && meta.kind !== 'terminal'
+    })
+    if (valid.length === pinnedSessionIds.length) return
+    setState(prev => {
+      // Re-derive against the freshest state in case a concurrent
+      // setState ran between this effect's read and the queued
+      // update — same race-safe pattern as the other sanity hooks
+      // in this file.
+      const next = prev.pinnedSessionIds.filter(id => {
+        const meta = prev.sessions[id]
+        return meta !== undefined && meta.kind !== 'terminal'
+      })
+      if (next.length === prev.pinnedSessionIds.length) return prev
+      return { ...prev, pinnedSessionIds: next }
+    })
+  }, [setState, state])
+}
+
 export function useTileTabsSanity(
   tileTabs: TileTabsState | null,
   tabs: Tab[],

@@ -33,6 +33,18 @@ export type PersistedWorkspace = {
   sessions: Record<SessionId, SessionMeta>
   detachedSessions?: Record<SessionId, DetachedSessionRecord>
   buried?: BuriedPaneRecord[]
+  /**
+   * Ordered list of pinned session ids. Optional because legacy
+   * workspace.json files predate this field; rehydrate defaults the
+   * runtime state to [] when this is absent or malformed.
+   *
+   * These ids are pre-remap (current-launch ids at save time). On
+   * load they pass through the same id remap as tile leaves /
+   * detached / buried, and pins whose source session fails to
+   * respawn are dropped — see buildRemappedPinnedSessionIds in
+   * rehydrate.ts.
+   */
+  pinnedSessionIds?: SessionId[]
   tileTabs?: TileTabsState | null
   /** Draft input text per session, keyed by sessionId. Persisted so
    *  in-progress prompts survive app crashes and restarts. Only

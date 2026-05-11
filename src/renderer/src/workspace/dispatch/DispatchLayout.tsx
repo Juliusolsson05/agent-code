@@ -10,11 +10,13 @@ import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBad
 import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
 import {
   buildDispatchGroups,
+  buildPinnedDispatchRows,
   findTerminalSessionInTab,
   flattenDispatchRows,
   selectVisibleDispatchRow,
   type DispatchAgentRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
@@ -42,7 +44,20 @@ export function DispatchLayout({
     () => buildDispatchGroups(workspace.state),
     [workspace.state],
   )
-  const rows = useMemo(() => flattenDispatchRows(groups), [groups])
+  const pinnedRows = useMemo(
+    () => buildPinnedDispatchRows(workspace.state),
+    [workspace.state],
+  )
+  // Pinned rows participate in keyboard dispatch (cmd+N) and in
+  // "which row is currently focused?" selection — they're real
+  // dispatch rows, just rendered in their own section. Prepending
+  // them here makes the focus fallback prefer a pinned row over
+  // anything else when the explicit focus id is stale, which matches
+  // the Pinned section's visual position at the top of the list.
+  const rows = useMemo(
+    () => [...pinnedRows, ...flattenDispatchRows(groups)],
+    [groups, pinnedRows],
+  )
   const activeRow = selectVisibleDispatchRow(
     rows,
     workspace.state.dispatchMode?.focusedSessionId ?? null,
@@ -97,6 +112,7 @@ export function DispatchLayout({
     <div className="h-full min-h-0 min-w-0 flex overflow-hidden bg-canvas">
       <DispatchAgentList
         groups={groups}
+        pinnedRows={pinnedRows}
         activeSessionId={activeRow?.sessionId ?? null}
         dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
         focusSessionInTab={workspace.focusDispatchSession}
@@ -144,12 +160,14 @@ export function DispatchLayout({
 
 const DispatchAgentList = memo(function DispatchAgentList({
   groups,
+  pinnedRows,
   activeSessionId,
   dispatchScope,
   focusSessionInTab,
   showWorktreeBadges,
 }: {
   groups: ReturnType<typeof buildDispatchGroups>
+  pinnedRows: DispatchAgentRow[]
   activeSessionId: string | null
   dispatchScope: 'global' | 'project'
   focusSessionInTab: Workspace['focusSessionInTab']
@@ -196,6 +214,30 @@ const DispatchAgentList = memo(function DispatchAgentList({
         <span>Agents</span>
         <span>{dispatchScope}</span>
       </div>
+      {/* Pinned section. Rendered above the regular groups and
+          always visible — pinned agents are cross-scope by design.
+          The chip on each row carries the tab letter + project title
+          so a global pin (e.g. ★1 → tab D / "ml-pipeline") stays
+          legible while dispatch scope is set to a different project.
+          Skip rendering when there are no pins so the regular agent
+          groups don't gain an empty section header. */}
+      {pinnedRows.length > 0 && (
+        <div className="border-b border-border" data-dispatch-pinned-group="true">
+          <DispatchGroupHeader title="Pinned" rows={pinnedRows} />
+          <div>
+            {pinnedRows.map(row => (
+              <DispatchAgentListRow
+                key={row.key}
+                row={row}
+                active={row.sessionId === activeSessionId}
+                showWorktreeBadges={showWorktreeBadges}
+                focusSessionInTab={focusSessionInTab}
+                projectChip={`${tabIndexLabel(row.tabIndex)} · ${row.tabTitle}`}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {groups.map(group => (
         <div key={group.tab.id} className="border-b border-border">
           <DispatchGroupHeader title={group.tab.title} rows={group.rows} />
@@ -248,11 +290,17 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   active,
   showWorktreeBadges,
   focusSessionInTab,
+  projectChip,
 }: {
   row: DispatchAgentRow
   active: boolean
   showWorktreeBadges: boolean
   focusSessionInTab: (tabId: TabId, sessionId: SessionId) => void
+  // Optional small label (tab letter + project title) shown next to
+  // the secondary metadata row. Only pinned rows pass this — regular
+  // rows already live under a group header that names the project,
+  // so a chip would just duplicate that information.
+  projectChip?: string
 }) {
   const runtime = useAppStore(useShallow(state => {
     const current = state.workspaceRuntimes[row.sessionId]
@@ -321,6 +369,18 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
             <WorktreeBadge context={runtime?.workContext} activity={runtime?.workActivity} />
           )}
           <DispatchAgentBadge kind={row.kind} />
+          {projectChip && (
+            <span
+              className="
+                ml-auto flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code
+                leading-none text-muted border border-border bg-surface-hi
+                truncate max-w-[140px]
+              "
+              title={projectChip}
+            >
+              {projectChip}
+            </span>
+          )}
         </div>
       </div>
     </button>

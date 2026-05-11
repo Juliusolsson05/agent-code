@@ -194,6 +194,32 @@ export type WorkspaceState = {
   detachedSessions: Record<SessionId, DetachedSessionRecord>
   /** Hidden-but-live sessions removed from the visible layout. */
   buried: BuriedPaneRecord[]
+  /**
+   * Ordered list of session IDs the user has explicitly pinned to the
+   * top of the dispatch list. ORDER MATTERS — `pinnedSessionIds[0]`
+   * renders at the top of the Pinned section. The modal commits via
+   * setPinnedSessionIds, which preserves caller order (the Space-toggle
+   * sequence in the modal).
+   *
+   * Pinned sessions are ALWAYS visible in the Pinned section
+   * regardless of dispatch scope (project vs global) — the whole
+   * point of pins is that they survive the scope toggle. To keep the
+   * cross-project view readable, each pinned row in
+   * DispatchAgentList renders a small project chip (tab letter +
+   * project basename). See dispatchSelectors.buildPinnedDispatchRows.
+   *
+   * Sessions that disappear from `sessions` are dropped at render
+   * (buildPinnedDispatchRows skips missing ids) and at save time
+   * (useAutoSave filters against the pruned session map) so a killed
+   * session can never linger in the Pinned section as a phantom row
+   * or in workspace.json as a stale entry.
+   *
+   * Terminals are never pinned: they're per-tab infrastructure, not
+   * a unit the user "pins to favorites." setPinnedSessionIds rejects
+   * terminal session ids defensively, and the modal filters them out
+   * of its candidate row list.
+   */
+  pinnedSessionIds: SessionId[]
 }
 
 export const RATIO_MIN = 0.1

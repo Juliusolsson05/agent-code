@@ -57,6 +57,16 @@ export function useAutoSave(
     for (const [id, rt] of Object.entries(refs.latestRuntimesRef.current)) {
       if (pruned.sessions[id] && rt.draftInput) drafts[id] = rt.draftInput
     }
+    // Filter pins against the pruned `sessions` map so a stale entry
+    // (kill-races, hand-edited workspace.json, mid-rehydrate
+    // inconsistency) cannot make itself durable. Same "autosave is
+    // the last line of defense" reasoning as the
+    // pruneSessionOwnership call above — better to lose a pin than
+    // to boot the next launch with a phantom row that points at
+    // nothing.
+    const persistedPinnedSessionIds = s.pinnedSessionIds.filter(
+      id => pruned.sessions[id] !== undefined,
+    )
     const persisted: PersistedWorkspace = {
       tabs: s.tabs.map(t => ({
         id: t.id,
@@ -69,6 +79,9 @@ export function useAutoSave(
       sessions: pruned.sessions,
       detachedSessions: pruned.detachedSessions,
       buried: pruned.buried,
+      pinnedSessionIds: persistedPinnedSessionIds.length > 0
+        ? persistedPinnedSessionIds
+        : undefined,
       tileTabs: refs.latestTileTabsRef.current,
       drafts: Object.keys(drafts).length > 0 ? drafts : undefined,
     }

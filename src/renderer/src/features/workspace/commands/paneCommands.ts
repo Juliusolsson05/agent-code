@@ -69,6 +69,57 @@ export const paneCommands: CommandDef[] = [
     },
   },
   {
+    // Dispatch-only multi-select pin command. Opens the Pin Agents
+    // modal; the user picks agents with Space, commits with Enter,
+    // and the resulting ordered list lands on
+    // workspace.state.pinnedSessionIds. Pinned agents render in
+    // their own "Pinned" section at the top of the dispatch list,
+    // visible in BOTH project and global scope — the whole point of
+    // pins is that they survive the scope toggle.
+    //
+    // We gate on dispatchMode rather than the dispatch-row count
+    // because the modal handles the empty case ("No agents
+    // available to pin") gracefully. Showing the command in an
+    // empty workspace is fine — running it just opens a modal that
+    // tells the user there's nothing to pin yet, which is more
+    // discoverable than hiding the entry altogether.
+    id: 'pin-agents',
+    title: 'Pin Agents…',
+    description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
+    keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch'],
+    when: ({ workspace }) => Boolean(workspace.dispatchMode),
+    run: ({ ui }) => ui.openPinAgents(),
+  },
+  {
+    // Quick-remove counterpart to pin-agents. Targets the currently
+    // dispatch-focused row so the keyboard-driven flow is "navigate
+    // to a pinned row, run Unpin Agent." We use the same
+    // commandTargetSessionId resolver the rest of this file uses
+    // for dispatch-aware target picking, so the highlighted row in
+    // the dispatch list IS the unpin target.
+    //
+    // The `when` guard is intentionally strict: only show the
+    // command if the focused row is currently pinned. Showing it
+    // unconditionally would lead users to "Unpin Agent" on a
+    // non-pinned row, which silently no-ops in the reducer — bad
+    // affordance.
+    id: 'unpin-agent',
+    title: 'Unpin Agent',
+    description: '**What it does:** Removes the currently-focused **Dispatch** row from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused dispatch row is currently pinned.',
+    keywords: ['unpin', 'remove', 'pin', 'pinned', 'star'],
+    when: ({ workspace }) => {
+      if (!workspace.dispatchMode) return false
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      return workspace.state.pinnedSessionIds.includes(sessionId)
+    },
+    run: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      workspace.unpinSession(sessionId)
+    },
+  },
+  {
     // Available in BOTH grid and Dispatch modes. The original gate was
     // `dispatchCommandTabId`, which returned null whenever the workspace
     // was not in Dispatch — that was the wrong shape for this command.

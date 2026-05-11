@@ -14,6 +14,7 @@ export const createUiShellSlice: StateCreator<
   tileTabsModalOpen: false,
   tileTabsInitialSelectedIds: [],
   reorderTabsOpen: false,
+  pinAgentsOpen: false,
   settingsPageOpen: false,
   buryPromptSessionId: null,
   viewPromptsSessionId: null,
@@ -59,6 +60,11 @@ export const createUiShellSlice: StateCreator<
     set({ reorderTabsOpen: true }, false, 'uiShell/openReorderTabs'),
   closeReorderTabs: () =>
     set({ reorderTabsOpen: false }, false, 'uiShell/closeReorderTabs'),
+
+  openPinAgents: () =>
+    set({ pinAgentsOpen: true }, false, 'uiShell/openPinAgents'),
+  closePinAgents: () =>
+    set({ pinAgentsOpen: false }, false, 'uiShell/closePinAgents'),
 
   openSettingsPage: () =>
     set({ settingsPageOpen: true }, false, 'uiShell/openSettingsPage'),
