@@ -11,6 +11,10 @@ import type {
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
+import {
+  collectOwnedSessionIds,
+  collectUnownedSessionIds,
+} from '@renderer/workspace/sessionOwnership'
 
 import type {
   WorkspaceSetRuntimes,
@@ -64,6 +68,22 @@ export async function rehydrateWorkspace(
   })
   const idMap = new Map<SessionId, SessionId>()
   const freshSessions: Record<SessionId, SessionMeta> = {}
+  const ownedIds = collectOwnedSessionIds(persisted)
+  const staleIds = collectUnownedSessionIds(persisted)
+
+  if (staleIds.length > 0) {
+    // WHY log and drop instead of trying to repair by providerSessionId:
+    //
+    // Local SessionIds are the workspace ownership keys. providerSessionId is
+    // provider history identity and can legitimately be duplicated by clone,
+    // rewind, or failed restore paths. Using it as a repair key risks attaching
+    // a hidden stale row to the wrong visible pane. The only safe restore set is
+    // the ids already owned by tab leaves, detached sessions, or buried panes.
+    // Dropping stale metadata here prevents invisible persisted rows from
+    // becoming real backend processes/proxies during startup.
+    // eslint-disable-next-line no-console
+    console.warn('[workspace] dropping unowned persisted sessions during rehydrate:', staleIds)
+  }
 
   const remapNode = (n: TileNode): TileNode => {
     if (n.type === 'leaf') {
@@ -290,53 +310,55 @@ export async function rehydrateWorkspace(
   // slow respawn must not block the entire tab strip from coming
   // back.
   await Promise.all(
-    Object.entries(persisted.sessions).map(async ([oldId, meta]) => {
-      const restoreSpan = perf.span('workspace.rehydrate.session', {
-        oldId,
-        kind: meta.kind ?? 'claude',
-        hasProviderSessionId: Boolean(meta.providerSessionId),
-        hasTmuxName: Boolean(meta.tmuxName),
-      })
-      try {
-        const kind: SessionKind = meta.kind ?? 'claude'
-        // For terminal sessions with a persisted tmuxName, pass it
-        // as recoverTmuxName so main re-attaches the alive tmux
-        // session (or falls back to fresh spawn if it died). Agents
-        // ignore recoverTmuxName at the main side; safe to omit.
-        const { sessionId: newId, tmuxName: nextTmuxName } = await window.api.spawnSession({
-          kind,
-          cwd: meta.cwd,
-          resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
-          dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
-          useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
-          recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+    Object.entries(persisted.sessions)
+      .filter(([oldId]) => ownedIds.has(oldId))
+      .map(async ([oldId, meta]) => {
+        const restoreSpan = perf.span('workspace.rehydrate.session', {
+          oldId,
+          kind: meta.kind ?? 'claude',
+          hasProviderSessionId: Boolean(meta.providerSessionId),
+          hasTmuxName: Boolean(meta.tmuxName),
         })
-        idMap.set(oldId, newId)
-        // Carry the full meta forward — kind + providerSessionId +
-        // tmuxName — so the next save cycle doesn't drop these and
-        // cause the session to degrade on the NEXT reload.
-        // tmuxName is replaced with whatever main reported
-        // (recovered name when alive, fresh name when respawned).
-        freshSessions[newId] = {
-          ...meta,
-          ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
-        }
-        commitRehydratedState()
-        if (kind !== 'terminal' && freshSessions[newId].providerSessionId) {
-          void loadInitialHistoryForSession({
-            sessionId: newId,
-            meta: freshSessions[newId],
-            refs,
-            setRuntimes,
+        try {
+          const kind: SessionKind = meta.kind ?? 'claude'
+          // For terminal sessions with a persisted tmuxName, pass it
+          // as recoverTmuxName so main re-attaches the alive tmux
+          // session (or falls back to fresh spawn if it died). Agents
+          // ignore recoverTmuxName at the main side; safe to omit.
+          const { sessionId: newId, tmuxName: nextTmuxName } = await window.api.spawnSession({
+            kind,
+            cwd: meta.cwd,
+            resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
+            dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
+            useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
+            recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
           })
+          idMap.set(oldId, newId)
+          // Carry the full meta forward — kind + providerSessionId +
+          // tmuxName — so the next save cycle doesn't drop these and
+          // cause the session to degrade on the NEXT reload.
+          // tmuxName is replaced with whatever main reported
+          // (recovered name when alive, fresh name when respawned).
+          freshSessions[newId] = {
+            ...meta,
+            ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
+          }
+          commitRehydratedState()
+          if (kind !== 'terminal' && freshSessions[newId].providerSessionId) {
+            void loadInitialHistoryForSession({
+              sessionId: newId,
+              meta: freshSessions[newId],
+              refs,
+              setRuntimes,
+            })
+          }
+          restoreSpan.end({ newId })
+        } catch (err) {
+          restoreSpan.fail(err)
+          // eslint-disable-next-line no-console
+          console.warn(`[workspace] failed to respawn ${meta.cwd}:`, err)
         }
-        restoreSpan.end({ newId })
-      } catch (err) {
-        restoreSpan.fail(err)
-        // eslint-disable-next-line no-console
-        console.warn(`[workspace] failed to respawn ${meta.cwd}:`, err)
-      }
-    }),
+      }),
   )
 
   if (!commitRehydratedState()) {
