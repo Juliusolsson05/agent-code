@@ -31,6 +31,13 @@ export const dictationApi = {
   startDictationStream: (params: {
     provider: DictationProvider
     mimeType?: string
+    // Renderer-minted debug-session UUID. Threaded to main so the
+    // [dictation:stream-*] handlers can emit IPC/CHUNK/PROVIDER events
+    // into the per-session journal (see preload/api/types.ts →
+    // DictationDebugLayer). Optional in the type so a hypothetical
+    // caller that doesn't care about debugging still compiles; the
+    // composer hook always sends it.
+    debugSessionId?: string
   }): Promise<DictationStartResult> =>
     ipcRenderer.invoke('dictation:stream-start', params),
 
