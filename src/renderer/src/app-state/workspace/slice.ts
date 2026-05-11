@@ -22,6 +22,9 @@ const initialWorkspaceState: WorkspaceState = {
   sessions: {},
   detachedSessions: {},
   buried: [],
+  // Fresh workspace has no pins. The array is the source of truth
+  // for order: index 0 is the topmost pin in the Pinned section.
+  pinnedSessionIds: [],
 }
 
 export const createWorkspaceSlice: StateCreator<

@@ -26,6 +26,7 @@ import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
 import { useFeedDebugPersist } from '@renderer/workspace/hook/persistence/useFeedDebugPersist'
 import {
   usePickerSanity,
+  usePinnedSessionIdsSanity,
   useReaderModeSanity,
   useSpotlightSanity,
   useTileTabsSanity,
@@ -265,6 +266,7 @@ export function useWorkspace(
   useReaderModeSanity(readerMode, state, setReaderMode)
   usePickerSanity(runtimes, pickerCancel)
   useTileTabsSanity(tileTabs, state.tabs, setTileTabs)
+  usePinnedSessionIdsSanity(state, setState)
 
   // ---- Derived values ----
   const activeTab = useMemo(
@@ -358,5 +360,8 @@ export function useWorkspace(
     setDispatchScope: dispatchActions.setDispatchScope,
     ensureDispatchTerminal: dispatchActions.ensureDispatchTerminal,
     focusDispatchSession: dispatchActions.focusDispatchSession,
+    pinSession: dispatchActions.pinSession,
+    unpinSession: dispatchActions.unpinSession,
+    setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
   }
 }

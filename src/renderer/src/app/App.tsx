@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
+import { PinAgentsModal, type PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
 import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
 import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
 import { HtmlDebugPanel } from '@renderer/features/debug/ui/HtmlDebugPanel'
@@ -35,6 +36,8 @@ import { applyTheme } from '@renderer/app-state/settings/theme'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import type { SessionId, TabId } from '@renderer/workspace/types'
 
 // App — thin shell around the workspace hook.
 //
@@ -62,6 +65,7 @@ export default function App() {
   const tileTabsModalOpen = useAppStore(state => state.tileTabsModalOpen)
   const tileTabsInitialSelectedIds = useAppStore(state => state.tileTabsInitialSelectedIds)
   const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
+  const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
   const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
@@ -88,6 +92,8 @@ export default function App() {
   const closeTileTabsModal = useAppStore(state => state.closeTileTabsModal)
   const openReorderTabs = useAppStore(state => state.openReorderTabs)
   const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
+  const openPinAgents = useAppStore(state => state.openPinAgents)
+  const closePinAgents = useAppStore(state => state.closePinAgents)
   const openSettingsPage = useAppStore(state => state.openSettingsPage)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
@@ -266,6 +272,86 @@ export default function App() {
 
   const { state, activeTab } = workspace
   const commandTargetId = commandTargetSessionId(workspace)
+
+  // Candidate rows for the Pin Agents modal. Built here (not inside
+  // the modal) because we already have cheap access to the full
+  // workspace state via the workspace hook — the modal stays a dumb
+  // props-driven component.
+  //
+  // Ordering: currently-pinned agents first in pin order, then
+  // everyone else tab-by-tab in tab order. Pinned-first means the
+  // user's existing pins surface at the top when they open the
+  // modal — the most common operation is "tweak my pins," not
+  // "scroll through every agent in the workspace."
+  //
+  // Terminals are excluded: pin reducer / sanity effect / modal
+  // selection all agree pins are agents. Detached agents ARE
+  // included — they're the ones the user is most likely pinning
+  // (background work they want one keystroke away).
+  const pinAgentsRows = useMemo<PinAgentsModalRow[]>(() => {
+    const rows: PinAgentsModalRow[] = []
+    const pinnedSet = new Set(state.pinnedSessionIds)
+    const seen = new Set<SessionId>()
+
+    const tabIndexFor = (tabId: TabId): number => state.tabs.findIndex(tab => tab.id === tabId)
+
+    const pushRow = (sessionId: SessionId, tabId: TabId): void => {
+      if (seen.has(sessionId)) return
+      const meta = state.sessions[sessionId]
+      if (!meta || meta.kind === 'terminal') return
+      const tabIndex = tabIndexFor(tabId)
+      const tab = state.tabs[tabIndex]
+      if (!tab) return
+      seen.add(sessionId)
+      rows.push({
+        sessionId,
+        tabIndex,
+        tabTitle: tab.title,
+        // Same title fallback the dispatch selectors use — keep this
+        // in sync if the title source ever changes. Inlined rather
+        // than importing the selector helper because it's two lines.
+        title: meta.title?.trim() || meta.cwd?.split('/').filter(Boolean).pop() || 'agent',
+      })
+    }
+
+    // Pass 1: pinned ids, in pin order.
+    for (const sessionId of state.pinnedSessionIds) {
+      const detached = state.detachedSessions[sessionId]
+      if (detached) {
+        pushRow(sessionId, detached.projectTabId)
+        continue
+      }
+      const owner = state.tabs.find(tab => collectLeaves(tab.root).includes(sessionId))
+      if (owner) pushRow(sessionId, owner.id)
+    }
+
+    // Pass 2: every other agent, tab-by-tab (grid leaves then
+    // detached ordered oldest-first). The pinnedSet check is
+    // belt-and-suspenders — seen would catch it too, but the
+    // explicit set makes the intent obvious to a future reader.
+    for (const tab of state.tabs) {
+      const gridIds = collectLeaves(tab.root)
+      for (const sessionId of gridIds) {
+        if (pinnedSet.has(sessionId)) continue
+        pushRow(sessionId, tab.id)
+      }
+      const detachedIds = Object.values(state.detachedSessions)
+        .filter(entry => entry.projectTabId === tab.id)
+        .sort((a, b) => a.detachedAt - b.detachedAt)
+        .map(entry => entry.sessionId)
+      for (const sessionId of detachedIds) {
+        if (pinnedSet.has(sessionId)) continue
+        pushRow(sessionId, tab.id)
+      }
+    }
+
+    return rows
+  }, [
+    state.detachedSessions,
+    state.pinnedSessionIds,
+    state.sessions,
+    state.tabs,
+  ])
   const buriedPromptMeta = buryPromptSessionId
     ? workspace.state.sessions[buryPromptSessionId] ?? null
     : null
@@ -445,6 +531,7 @@ export default function App() {
         }
         exitDispatchMode={workspace.exitDispatchMode}
         openDispatchAttach={openDispatchAttach}
+        openPinAgents={openPinAgents}
         onTileTabsRequest={onTileTabsRequest}
         onReorderTabsRequest={openReorderTabs}
         onSettingsRequest={openSettingsPage}
@@ -501,6 +588,17 @@ export default function App() {
         onConfirm={tabIds => {
           workspace.reorderTabs(tabIds)
           closeReorderTabs()
+        }}
+      />
+
+      <PinAgentsModal
+        open={pinAgentsOpen}
+        rows={pinAgentsRows}
+        initialSelectedIds={workspace.state.pinnedSessionIds}
+        onCancel={closePinAgents}
+        onConfirm={ids => {
+          workspace.setPinnedSessionIds(ids)
+          closePinAgents()
         }}
       />
 

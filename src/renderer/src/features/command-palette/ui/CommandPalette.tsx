@@ -78,6 +78,7 @@ type Props = {
   enterGlobalDispatch: () => Promise<void> | void
   exitDispatchMode: () => void
   openDispatchAttach: (sessionId: string) => void
+  openPinAgents: () => void
   toggleCustomRendering: () => void
   toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
@@ -133,6 +134,7 @@ export function CommandPalette({
   enterGlobalDispatch,
   exitDispatchMode,
   openDispatchAttach,
+  openPinAgents,
   toggleCustomRendering,
   toggleStatusMode,
   toggleWorktreeBadges,
@@ -278,6 +280,7 @@ export function CommandPalette({
         enterGlobalDispatch,
         exitDispatchMode,
         openDispatchAttach,
+        openPinAgents,
         toggleCustomRendering,
         toggleStatusMode,
         toggleWorktreeBadges,
@@ -328,6 +331,7 @@ export function CommandPalette({
       enterDispatchMode,
       enterGlobalDispatch,
       exitDispatchMode,
+      openPinAgents,
       toggleCustomRendering,
       toggleStatusMode,
       toggleWorktreeBadges,

@@ -32,6 +32,10 @@ export type CommandContext = {
      *  workspace.state.detachedSessions; the command's `when` guard is
      *  responsible for that check. */
     openDispatchAttach: (sessionId: string) => void
+    /** Open the Pin Agents multi-select modal. Lives on uiShell as a
+     *  transient flag — the draft selection state is owned by the
+     *  modal itself, not the store. */
+    openPinAgents: () => void
     toggleCustomRendering: () => void
     toggleStatusMode: () => void
     toggleWorktreeBadges: () => void

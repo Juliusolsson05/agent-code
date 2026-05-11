@@ -23,6 +23,9 @@ export function useDispatchActions(
   setDispatchScope: (scope: DispatchModeState['scope']) => Promise<void>
   ensureDispatchTerminal: (tabId?: TabId) => Promise<SessionId | null>
   focusDispatchSession: (tabId: TabId, sessionId: SessionId) => void
+  pinSession: (sessionId: SessionId) => void
+  unpinSession: (sessionId: SessionId) => void
+  setPinnedSessionIds: (ids: SessionId[]) => void
 } {
   const pendingTerminalByTabRef = useRef(new Map<TabId, Promise<SessionId | null>>())
 
@@ -177,12 +180,91 @@ export function useDispatchActions(
     [setState],
   )
 
+  // Pin reducers. Three callbacks share the same invariant:
+  //   pinnedSessionIds[i] -> state.sessions[id] is an agent (not a terminal,
+  //   not undefined). The reducer is defensive on top of the command-palette
+  //   `when` guard and the modal's row filter — multiple write paths can
+  //   reach these (palette command, modal commit, programmatic) and the
+  //   invariant has to be local rather than relying on every call site.
+  //
+  // append-on-pin ordering is the user-facing spec: "order you pin in is
+  // the order it displays." First pin lands at index 0; subsequent pins
+  // sink to the tail. Reordering is intentionally out of scope for v1.
+  const pinSession = useCallback(
+    (sessionId: SessionId) => {
+      setState(prev => {
+        if (prev.pinnedSessionIds.includes(sessionId)) return prev
+        const meta = prev.sessions[sessionId]
+        if (!meta || meta.kind === 'terminal') return prev
+        return {
+          ...prev,
+          pinnedSessionIds: [...prev.pinnedSessionIds, sessionId],
+        }
+      })
+    },
+    [setState],
+  )
+
+  const unpinSession = useCallback(
+    (sessionId: SessionId) => {
+      setState(prev => {
+        if (!prev.pinnedSessionIds.includes(sessionId)) return prev
+        return {
+          ...prev,
+          pinnedSessionIds: prev.pinnedSessionIds.filter(id => id !== sessionId),
+        }
+      })
+    },
+    [setState],
+  )
+
+  const setPinnedSessionIds = useCallback(
+    (ids: SessionId[]) => {
+      setState(prev => {
+        // Filter against the live sessions snapshot at write time so a
+        // stale modal selection (the user pinned X, then X was killed
+        // before they hit Enter) can never reintroduce an orphan into
+        // the array. Same defensive shape as buildPinnedDispatchRows
+        // at render time.
+        const filtered = ids.filter(id => {
+          const meta = prev.sessions[id]
+          return meta !== undefined && meta.kind !== 'terminal'
+        })
+        // Deduplicate while preserving caller order (first occurrence wins).
+        // The modal already enforces this client-side, but a programmatic
+        // caller could pass duplicates; keeping the dedupe here means the
+        // invariant "pinnedSessionIds is unique" doesn't depend on the caller.
+        const seen = new Set<SessionId>()
+        const ordered: SessionId[] = []
+        for (const id of filtered) {
+          if (seen.has(id)) continue
+          seen.add(id)
+          ordered.push(id)
+        }
+        // No-op fast path: if the resulting list matches what's already there
+        // (same ids in the same order), don't churn the reference — same
+        // pattern as the rest of the reducers in this file.
+        if (
+          ordered.length === prev.pinnedSessionIds.length &&
+          ordered.every((id, i) => id === prev.pinnedSessionIds[i])
+        ) {
+          return prev
+        }
+        return { ...prev, pinnedSessionIds: ordered }
+      })
+    },
+    [setState],
+  )
+
   return {
     enterDispatchMode,
     exitDispatchMode,
     setDispatchScope,
     ensureDispatchTerminal,
     focusDispatchSession,
+    pinSession,
+    unpinSession,
+    setPinnedSessionIds,
   }
 }
 
