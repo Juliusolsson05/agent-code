@@ -69,17 +69,27 @@ export const paneCommands: CommandDef[] = [
     },
   },
   {
+    // Available in BOTH grid and Dispatch modes. The original gate was
+    // `dispatchCommandTabId`, which returned null whenever the workspace
+    // was not in Dispatch — that was the wrong shape for this command.
+    // Detached agents can outlive a Dispatch session (you can leave
+    // Dispatch with agents still parked), and the natural recovery flow
+    // is "from the regular grid, bring my parked agents back into this
+    // tab." Forcing the user to flip into Dispatch first was friction
+    // with no upside. In Dispatch we still delegate to the dispatch-
+    // aware resolver so global Dispatch can target the focused row's
+    // tab (which may differ from `activeTabId`).
     id: 'attach-all-detached-for-tab',
     title: 'Attach All Dispatch Agents For Tab',
-    description: '**What it does:** Moves all detached **Dispatch** agents for a tab into the grid.\n\n**Use when:** You want to bring a whole tab’s background agents into view.\n\n**Notes:** Preserves the existing grid and adds the agents beside it.',
+    description: '**What it does:** Moves all detached **Dispatch** agents for a tab into the grid.\n\n**Use when:** You want to bring a whole tab’s background agents into view.\n\n**Notes:** Preserves the existing grid and adds the agents beside it. Works in both Grid and Dispatch modes.',
     keywords: ['attach', 'all', 'detached', 'dispatch', 'grid', 'tab', 'pin'],
     when: ({ workspace }) => {
-      const tabId = dispatchCommandTabId(workspace)
+      const tabId = attachAllCommandTabId(workspace)
       if (!tabId) return false
       return detachedDispatchSessionIdsForTab(workspace.state, tabId).length > 0
     },
     run: ({ workspace }) => {
-      const tabId = dispatchCommandTabId(workspace)
+      const tabId = attachAllCommandTabId(workspace)
       if (!tabId) return
       workspace.attachAllDetachedForTab(tabId)
     },
@@ -252,4 +262,16 @@ function dispatchCommandTabId(
     activeTab?.focusedSessionId,
   )
   return row?.tabId ?? workspace.state.activeTabId ?? null
+}
+
+// Resolver for "attach all dispatch agents for tab" that works in BOTH
+// modes. In Dispatch we delegate to `dispatchCommandTabId` so global
+// Dispatch can target the focused row's tab (potentially != activeTabId).
+// Outside Dispatch we use the active tab — there is no dispatch focus
+// to consult and the user's only reasonable target is "this tab."
+function attachAllCommandTabId(
+  workspace: CommandContext['workspace'],
+): string | null {
+  if (workspace.dispatchMode) return dispatchCommandTabId(workspace)
+  return workspace.state.activeTabId || null
 }

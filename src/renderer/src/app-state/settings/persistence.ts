@@ -40,6 +40,11 @@ export function coerceSettings(value: unknown): Settings {
     // non-strings so a corrupt localStorage blob cannot break settings boot.
     dictationShortcut: coerceHotkeyBinding(parsed.dictationShortcut),
     aggressiveDebugPersistence: parsed.aggressiveDebugPersistence === true,
+    // Strict `=== true` so missing OR malformed values default to off —
+    // matches the "off by default, opt in" semantics promised in the
+    // setting's docstring. Anything looser (e.g. `!== false`) would
+    // flip the default to ON for fresh installs.
+    dispatchProjectTerminal: parsed.dispatchProjectTerminal === true,
     // WHY membership check via WORKSPACE_MODES rather than a literal
     // === 'dispatch': keeps the source of truth in one array so adding
     // a new mode label later (if ever) only requires editing types.ts.

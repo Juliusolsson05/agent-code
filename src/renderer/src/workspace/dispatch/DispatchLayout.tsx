@@ -52,7 +52,13 @@ export function DispatchLayout({
     ? workspace.state.tabs.find(tab => tab.id === activeRow.tabId) ?? null
     : workspace.activeTab
   const terminalSessionId = findTerminalSessionInTab(activeTab, workspace.state)
-  const terminalVisible = workspace.state.dispatchMode?.terminalVisible !== false
+  // Source of truth for whether the project terminal mounts is now the
+  // global setting, not the ephemeral `dispatchMode.terminalVisible` we
+  // used to keep on workspace state. The setting defaults to OFF —
+  // matches the user's "off by default, opt in" intent and removes the
+  // "I turned it off but it came back" failure mode that the per-session
+  // flag suffered from. Toggle is in Settings → Workspace.
+  const terminalVisible = useAppStore(state => state.settings.dispatchProjectTerminal)
 
   useEffect(() => {
     if (!activeRow) return
@@ -76,6 +82,13 @@ export function DispatchLayout({
   ])
 
   useEffect(() => {
+    // Spawn the terminal lazily when the user opts in. This is the ONLY
+    // entry point that calls ensureDispatchTerminal — the dispatch
+    // actions (enter/setScope) deliberately no longer do, so flipping
+    // the setting OFF and re-entering Dispatch will NOT silently spawn
+    // a fresh terminal in the background. The existing terminal in a
+    // tab that was spawned earlier stays as a tile-tree leaf; if the
+    // user wants to remove it, they close it like any other pane.
     if (!terminalVisible || !activeTab) return
     void workspace.ensureDispatchTerminal(activeTab.id)
   }, [activeTab?.id, terminalVisible, workspace.ensureDispatchTerminal])

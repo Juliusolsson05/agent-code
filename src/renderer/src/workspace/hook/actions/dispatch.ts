@@ -21,7 +21,6 @@ export function useDispatchActions(
   enterDispatchMode: (scope?: DispatchModeState['scope']) => Promise<void>
   exitDispatchMode: () => void
   setDispatchScope: (scope: DispatchModeState['scope']) => Promise<void>
-  toggleDispatchTerminal: () => Promise<void>
   ensureDispatchTerminal: (tabId?: TabId) => Promise<SessionId | null>
   focusDispatchSession: (tabId: TabId, sessionId: SessionId) => void
 } {
@@ -114,14 +113,20 @@ export function useDispatchActions(
         ...prev,
         dispatchMode: {
           scope,
-          terminalVisible: prev.dispatchMode?.terminalVisible ?? true,
           focusedSessionId: prev.dispatchMode?.focusedSessionId,
         },
       }))
       setTileTabs(null)
-      await ensureDispatchTerminal()
+      // Terminal mount is now gated by `settings.dispatchProjectTerminal`,
+      // which lives outside this action's reach (settings live in the
+      // settings store, dispatch state lives in workspace state).
+      // DispatchLayout's useEffect reads the setting and calls
+      // ensureDispatchTerminal itself when appropriate — meaning we
+      // deliberately do NOT unconditionally fire it here anymore. Doing so
+      // would spawn a terminal even with the setting OFF, which is the
+      // exact bug shape we're fixing.
     },
-    [closeNewAgentPlacement, ensureDispatchTerminal, setState, setTileTabs, state.dispatchMode?.scope],
+    [closeNewAgentPlacement, setState, setTileTabs, state.dispatchMode?.scope],
   )
 
   const exitDispatchMode = useCallback(() => {
@@ -138,30 +143,16 @@ export function useDispatchActions(
         ...prev,
         dispatchMode: {
           scope,
-          terminalVisible: prev.dispatchMode?.terminalVisible ?? true,
           focusedSessionId: prev.dispatchMode?.focusedSessionId,
         },
       }))
-      await ensureDispatchTerminal()
+      // Same rationale as enterDispatchMode: terminal mount is now the
+      // DispatchLayout effect's responsibility, gated by the global
+      // setting. Re-entering with a different scope must NOT spawn a
+      // terminal behind the setting's back.
     },
-    [closeNewAgentPlacement, ensureDispatchTerminal, setState],
+    [closeNewAgentPlacement, setState],
   )
-
-  const toggleDispatchTerminal = useCallback(async () => {
-    let nextVisible = true
-    setState(prev => {
-      const current = prev.dispatchMode ?? { scope: 'project' as const, terminalVisible: true }
-      nextVisible = !current.terminalVisible
-      return {
-        ...prev,
-        dispatchMode: {
-          ...current,
-          terminalVisible: nextVisible,
-        },
-      }
-    })
-    if (nextVisible) await ensureDispatchTerminal()
-  }, [ensureDispatchTerminal, setState])
 
   const focusDispatchSession = useCallback(
     (tabId: TabId, sessionId: SessionId) => {
@@ -190,7 +181,6 @@ export function useDispatchActions(
     enterDispatchMode,
     exitDispatchMode,
     setDispatchScope,
-    toggleDispatchTerminal,
     ensureDispatchTerminal,
     focusDispatchSession,
   }

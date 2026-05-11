@@ -42,20 +42,13 @@ export const layoutCommands: CommandDef[] = [
     when: ({ flags }) => flags.dispatchModeEnabled,
     run: ({ ui }) => ui.exitDispatchMode(),
   },
-  {
-    id: 'toggle-dispatch-terminal',
-    title: 'Dispatch Terminal',
-    description: '**What it does:** Shows or hides the project terminal inside **Dispatch**.\n\n**Use when:** You want shell access beside the selected agent.\n\n**Notes:** The terminal is tied to the active project tab.',
-    keywords: ['project terminal', 'right terminal'],
-    when: ({ flags }) => flags.dispatchModeEnabled,
-    getState: ({ flags }) => ({
-      label: flags.dispatchTerminalVisible ? 'On' : 'Off',
-      tone: flags.dispatchTerminalVisible ? 'accent' : 'neutral',
-    }),
-    run: async ({ ui }) => {
-      await ui.toggleDispatchTerminal()
-    },
-  },
+  // REMOVED: 'toggle-dispatch-terminal' command. The dispatch project
+  // terminal is now controlled by `settings.dispatchProjectTerminal`
+  // (default OFF) rather than a per-session command-palette toggle. The
+  // old command sat on top of an ephemeral `dispatchMode.terminalVisible`
+  // flag that re-defaulted to ON every time dispatch was re-entered,
+  // producing the "I turned it off but it came back" failure mode.
+  // Search settings → "Attach Project Terminal to Dispatch" to toggle.
   {
     id: 'normalize-layout',
     title: 'Normalize Layout',
