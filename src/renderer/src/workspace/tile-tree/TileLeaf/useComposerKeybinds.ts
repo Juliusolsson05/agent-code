@@ -2,6 +2,7 @@ import { useState } from 'react'
 
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 
+import { useAppStore } from '@renderer/app-state/hooks'
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
@@ -43,7 +44,7 @@ export type UseComposerKeybindsArgs = {
   workspace: Workspace
   input: string
   setInputText: (next: string) => void
-  send: (data: string) => Promise<void>
+  send: (data: string, pasteId?: string) => Promise<void>
   history: string[]
   historyIndex: number | null
   historyAnchor: string
@@ -75,6 +76,12 @@ export function useComposerKeybinds({
   // runtime.picker, but we use slashMode to decide whether keys
   // should be forwarded vs. stored locally).
   const [slashMode, setSlashMode] = useState(false)
+  // Event-driven paste-submit. When ON (default) the paste flow
+  // polls for Claude's `[Pasted text #N]` placeholder before sending
+  // `\r` instead of relying on a wall-clock timer; see claudePaste.ts
+  // for the full strategy comment. Read here so the toggle takes
+  // effect on the next paste without remount.
+  const eventDrivenPasteSubmit = useAppStore(state => state.settings.eventDrivenPasteSubmit)
 
   const exitSlashMode = () => {
     setSlashMode(false)
@@ -208,6 +215,28 @@ export function useComposerKeybinds({
         blockBackendWrite()
         return
       }
+      // Mint a paste-debug id at the EARLIEST observable moment of
+      // the Enter press — before provider routing, before state
+      // mutation, before any async work. If the bug is "the Enter
+      // handler fires twice and the second \r races", both invocations
+      // will mint distinct pasteIds and the debug dump will show two
+      // separate journal files for what the user perceived as one press.
+      // See docs/superpowers/plans/2026-05-11-paste-submit-...md for
+      // the hypothesis space.
+      const pasteId = crypto.randomUUID()
+      window.api.recordPasteDebugEvent(pasteId, {
+        layer: 'RENDER',
+        event: 'keydown:enter',
+        data: {
+          composerLen: input.length,
+          composerHead: input.slice(0, 240),
+          isPasteLike: input.includes('\n') || input.length > CLAUDE_PASTE_THRESHOLD,
+          hasDraftImages: draftImages.length > 0,
+          hasModifier: e.shiftKey || e.altKey || e.ctrlKey || e.metaKey,
+          backendReady,
+          sessionId,
+        },
+      })
       // Capture streaming baseline from the very freshest screen
       // text so the streaming card can detect "this is the old
       // response" reliably. latestScreenRef is mutated
@@ -250,7 +279,17 @@ export function useComposerKeybinds({
           (input.includes('\n') || input.length > CLAUDE_PASTE_THRESHOLD)
 
         if (submitProvider === 'codex') {
-          await sendBracketedPasteThenSubmit(send, input)
+          // Codex's own bracketed-paste handling does NOT exhibit the
+          // race Claude does (the user has not reported a Codex paste-
+          // submit bug). No event-driven path here; pasteId is still
+          // forwarded so the debug dump can confirm "ah, this Enter
+          // routed to the Codex branch" if the failing dump is on a
+          // Codex pane and we were debugging the wrong thing.
+          window.api.recordPasteDebugEvent(pasteId, {
+            layer: 'RENDER',
+            event: 'route:codex-bracketed-paste',
+          })
+          await sendBracketedPasteThenSubmit(send, input, 0, { pasteId })
         } else if (hasClaudeImages) {
           const savedImages = await Promise.all(
             draftImages.map(image =>
@@ -272,7 +311,17 @@ export function useComposerKeybinds({
             if (!/\s$/.test(input)) await send(' ')
           }
           const payload = buildClaudeImagePastePayload('', imagePaths)
-          await sendBracketedPasteThenSubmit(send, payload, CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS)
+          window.api.recordPasteDebugEvent(pasteId, {
+            layer: 'RENDER',
+            event: 'route:claude-images',
+            data: { imageCount: imagePaths.length, textLen: input.length },
+          })
+          // Image-path paste uses the longer 750 ms timer because the
+          // image expansion in Claude's TUI is its own animation; the
+          // placeholder we detect for text pastes does NOT show up
+          // for image-path pastes. Keep the wall-clock fallback here;
+          // event-driven path is disabled for this branch on purpose.
+          await sendBracketedPasteThenSubmit(send, payload, CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS, { pasteId })
         } else if (isClaudePasteLike) {
           // Keep the submit key OUT of the bracketed-paste write
           // and wait past Claude's paste debounce. Sending `\r`
@@ -280,14 +329,46 @@ export function useComposerKeybinds({
           // accumulator and can leave the prompt sitting in the
           // composer until a later keypress nudges it through
           // the normal submit path.
-          await sendBracketedPasteThenSubmit(send, input, CLAUDE_PASTE_SUBMIT_DELAY_MS)
+          //
+          // Event-driven mode (default ON via settings) polls Claude's
+          // screen for `[Pasted text #N]` and submits the instant it
+          // appears — load-independent, dramatically faster than the
+          // 125 ms wall-clock floor. Wall-clock delay is kept as a
+          // safety fallback if the placeholder never materializes
+          // (e.g. future Claude UI rename); see claudePaste.ts.
+          window.api.recordPasteDebugEvent(pasteId, {
+            layer: 'RENDER',
+            event: 'route:claude-paste-like',
+            data: {
+              inputLen: input.length,
+              hasNewline: input.includes('\n'),
+              eventDriven: eventDrivenPasteSubmit,
+            },
+          })
+          await sendBracketedPasteThenSubmit(send, input, CLAUDE_PASTE_SUBMIT_DELAY_MS, {
+            pasteId,
+            eventDriven: { enabled: eventDrivenPasteSubmit, sessionId },
+          })
         } else {
-          await send(input + '\r')
+          window.api.recordPasteDebugEvent(pasteId, {
+            layer: 'RENDER',
+            event: 'route:claude-plain-text',
+            data: { inputLen: input.length },
+          })
+          await send(input + '\r', pasteId)
         }
         setInputText('')
         if (submitProvider === 'claude' && draftImages.length > 0) {
           workspace.setDraftImages(sessionId, [])
         }
+        // OUTCOME marks the end of the submit flow from the renderer's
+        // POV. A real reader of the dump can compare this against
+        // PTY:main:write events to see whether the renderer thinks
+        // the submit completed at the same instant main does.
+        window.api.recordPasteDebugEvent(pasteId, {
+          layer: 'OUTCOME',
+          event: 'submit:returned',
+        })
       } catch (err) {
         // Keep the draft visible if main no longer has a live
         // session for this pane. Clearing the composer on a
@@ -297,6 +378,11 @@ export function useComposerKeybinds({
           workspace.removeOptimisticCodexUserEntry(sessionId, input)
         }
         console.warn('[TileLeaf] submit failed', err)
+        window.api.recordPasteDebugEvent(pasteId, {
+          layer: 'ERROR',
+          event: 'submit:throw',
+          data: { message: err instanceof Error ? err.message : String(err) },
+        })
       }
       // Any submit exits history cycling — the prompt is
       // committed and the next Up should start a fresh walk from

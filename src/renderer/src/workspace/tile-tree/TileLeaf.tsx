@@ -166,7 +166,14 @@ export function TileLeaf({
     onUserEngagement: acknowledgeSession,
   })
 
-  const send = async (data: string) => {
+  // Optional `pasteId` correlates this write into the per-paste debug
+  // journal in main. Set only by the paste-submit flow in
+  // useComposerKeybinds; all other callers (history navigation, slash
+  // forwarding, dictation injection) leave it undefined and pay no
+  // journaling cost. The pasteId-aware path is the diagnostic for the
+  // "first Enter sometimes does nothing" intermittent — see
+  // `docs/superpowers/plans/2026-05-11-paste-submit-harness-findings-and-fix.md`.
+  const send = async (data: string, pasteId?: string) => {
     acknowledgeSession()
     if (
       !runtime.inputReady ||
@@ -183,7 +190,7 @@ export function TileLeaf({
       )
       return
     }
-    const ok = await window.api.sendInput(sessionId, data)
+    const ok = await window.api.sendInput(sessionId, data, pasteId)
     if (!ok) {
       throw new Error(`sendInput failed for missing session ${sessionId}`)
     }

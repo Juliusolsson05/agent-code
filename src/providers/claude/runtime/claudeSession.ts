@@ -483,6 +483,26 @@ export class ClaudeSession extends EventEmitter {
     return this.headless?.getScreenMarkdown() ?? ''
   }
 
+  /**
+   * Poll the live Claude TUI screen for `[Pasted text #N]` and resolve
+   * the instant it appears. Delegates to ClaudeCodeHeadless; see the
+   * method comment there for why this is load-independent and why a
+   * timeout fallback is mandatory. Used by claudePaste.ts to send `\r`
+   * exactly when Claude has visibly committed the paste — the
+   * primary path of the paste-submit fix.
+   *
+   * Returns `{ kind: 'no-headless' }` when the headless instance has
+   * not been constructed yet (start() not called or session torn down)
+   * so the renderer can fall through to the wall-clock path without
+   * waiting for the full 2 s timeout.
+   */
+  async awaitPastePlaceholder(
+    opts?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<{ kind: 'appeared'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }> {
+    if (!this.headless) return { kind: 'no-headless' }
+    return this.headless.awaitPastePlaceholder(opts ?? {})
+  }
+
   isExited(): boolean {
     return this.exited
   }

@@ -136,6 +136,24 @@ export type Settings = {
    *  controls and removes the "terminal always mounted even when turned
    *  off" failure mode. */
   dispatchProjectTerminal: boolean
+  /** Event-driven paste-submit. When ON (default), `claudePaste.ts`
+   *  polls Claude's live TUI screen for `[Pasted text #N]` before
+   *  sending `\r`, instead of waiting a fixed 125 ms wall clock.
+   *  Falls back to the timer if the placeholder doesn't appear within
+   *  2 s — the timer path is the existing production behavior, so
+   *  flipping this setting OFF restores cc-shell v0.0.2 paste-submit
+   *  behavior exactly.
+   *
+   *  Default ON because the PTY-isolated harness at
+   *  `vendor/in_progress/paste-submit-repro/` shows event-driven is
+   *  10/10 reliable AND faster on average (~58 ms wait vs. 125 ms
+   *  unconditional). Even though the harness CANNOT reproduce the
+   *  user-facing "first Enter does nothing" symptom (production has
+   *  an additional failure mode we haven't isolated yet — see the
+   *  per-paste debug-dump diagnostic landed in this same PR),
+   *  event-driven cannot be WORSE than the timer in any modeled
+   *  scenario, so shipping ON is strictly defensive. */
+  eventDrivenPasteSubmit: boolean
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -153,4 +171,5 @@ export const DEFAULT_SETTINGS: Settings = {
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
   dispatchProjectTerminal: false,
+  eventDrivenPasteSubmit: true,
 }

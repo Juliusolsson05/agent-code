@@ -754,6 +754,51 @@ export class SessionManager extends EventEmitter {
     return true
   }
 
+  /**
+   * Claude-specific accessor for the paste-submit event-driven path
+   * in `src/renderer/.../claudePaste.ts`. Returns the live ClaudeSession
+   * cast through `unknown` because AgentSessionLike doesn't (and
+   * shouldn't) expose `awaitPastePlaceholder` — that's a Claude-only
+   * affordance and adding it to the cross-provider interface would
+   * force every other runtime to ship a no-op stub.
+   *
+   * Returns `null` for missing sessions or non-Claude kinds. Callers
+   * MUST treat null as a benign "couldn't reach this session" and
+   * fall through to whatever non-event-driven path they were using
+   * before; the absence of a Claude session is not an error worth
+   * crashing over.
+   */
+  async awaitClaudePastePlaceholder(
+    sessionId: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<
+    | { kind: 'appeared'; waitedMs: number }
+    | { kind: 'timeout' }
+    | { kind: 'no-headless' }
+    | { kind: 'no-session' }
+  > {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind !== 'claude') return { kind: 'no-session' }
+    // The cross-provider AgentSessionLike interface doesn't carry
+    // `awaitPastePlaceholder`; ClaudeSession does. We assert via a
+    // structural duck-type so misconfigured Claude provider builds
+    // (a future ClaudeSession that loses the method) surface as
+    // 'no-session' rather than a TypeError.
+    const session = entry.session as unknown as {
+      awaitPastePlaceholder?: (
+        opts?: { timeoutMs?: number; pollIntervalMs?: number },
+      ) => Promise<
+        | { kind: 'appeared'; waitedMs: number }
+        | { kind: 'timeout' }
+        | { kind: 'no-headless' }
+      >
+    }
+    if (typeof session.awaitPastePlaceholder !== 'function') {
+      return { kind: 'no-session' }
+    }
+    return session.awaitPastePlaceholder(opts)
+  }
+
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */
   resize(sessionId: string, cols: number, rows: number): void {
     const entry = this.sessions.get(sessionId)

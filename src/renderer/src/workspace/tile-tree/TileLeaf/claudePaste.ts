@@ -15,57 +15,195 @@
 // We fix this at the shell boundary instead of forking Claude's paste
 // logic: for Claude only, any prompt that is likely to be treated as
 // a paste gets delivered in TWO phases — first the payload, then
-// (after Claude's own paste debounce window has elapsed) the submit
-// key. This keeps us aligned with Claude's existing placeholder /
-// expansion model instead of fighting it.
+// (depending on the chosen strategy) a separate submit write.
+//
+// TWO submit-after-paste strategies coexist here:
+//
+//   * EVENT-DRIVEN (default, when `eventDriven` is set): poll
+//     Claude's screen snapshot for `[Pasted text #N]` and send `\r`
+//     the instant the placeholder appears. Load-independent —
+//     works at 10 ms or 10 s. This is the strategy the paste-submit
+//     repro harness at `vendor/in_progress/paste-submit-repro/`
+//     showed to be 10/10 reliable with average waits ~58 ms.
+//
+//   * WALL-CLOCK FALLBACK: wait `delayMs` (default 125 ms — slightly
+//     above Claude's 100 ms paste completion timeout) then send `\r`.
+//     Kept as a fallback because the event-driven path depends on
+//     Claude continuing to render the `[Pasted text #N]` placeholder
+//     verbatim. A future Claude UI rename would break placeholder
+//     detection but should not brick paste-submit entirely. The
+//     harness shows the timer races even at 1000 ms under load, so
+//     this is genuinely just a "don't be worse than yesterday" floor,
+//     not a load-bearing primary path.
 //
 // Why these numbers:
 //   - 800 chars matches Claude's current PASTE_THRESHOLD upstream.
-//   - 125ms is slightly above Claude's 100ms paste completion timeout.
-//     Going lower risks reintroducing the race; going much higher
-//     makes submit feel laggy on every long paste.
+//   - 125 ms is slightly above Claude's 100 ms paste completion
+//     timeout. Going lower risks reintroducing the race; going much
+//     higher makes submit feel laggy on every long paste. Only
+//     consulted when the event-driven path times out or is disabled.
+//   - 2000 ms event-driven safety bound is ~10x the harness's
+//     observed p95 placeholder wait (~108 ms).
 
 export const CLAUDE_PASTE_THRESHOLD = 800
 export const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
 export const CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS = 750
+export const CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS = 2_000
 
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+// SHA-256 prefix used as a fingerprint to correlate paste payloads
+// across the renderer→IPC→main→PTY chain in the per-paste debug
+// journal. crypto.subtle is the standard renderer-side digest API;
+// 4 bytes is more than enough for cross-process pairing (collision
+// probability is negligible for a single paste's chunk set).
+async function sha8(data: string): Promise<string> {
+  const buf = new TextEncoder().encode(data)
+  const digest = await crypto.subtle.digest('SHA-256', buf)
+  const hex: string[] = []
+  for (const b of new Uint8Array(digest, 0, 4)) hex.push(b.toString(16).padStart(2, '0'))
+  return hex.join('')
+}
+
+export type ClaudePasteSendFn = (data: string, pasteId?: string) => Promise<void>
+
+export type ClaudePasteOpts = {
+  /** Renderer-minted UUID for the per-paste debug journal. When set,
+   *  every PTY write in this paste emits an IPC:write event to the
+   *  journal. */
+  pasteId?: string
+  /** Event-driven submit. When provided AND `enabled`, poll Claude's
+   *  screen snapshot for `[Pasted text #N]` before sending `\r`,
+   *  instead of relying on `delayMs`. Falls back to the timer path
+   *  after `CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS`. */
+  eventDriven?: { enabled: boolean; sessionId: string }
+}
+
 export async function sendBracketedPaste(
-  send: (data: string) => Promise<void>,
+  send: ClaudePasteSendFn,
   payload: string,
+  opts?: ClaudePasteOpts,
 ): Promise<void> {
-  await send(`\x1b[200~${payload}\x1b[201~`)
+  const pasteId = opts?.pasteId
+  if (pasteId) {
+    window.api.recordPasteDebugEvent(pasteId, {
+      layer: 'IPC',
+      event: 'write:paste-payload',
+      data: { bytes: payload.length, sha8: await sha8(payload) },
+    })
+  }
+  await send(`\x1b[200~${payload}\x1b[201~`, pasteId)
 }
 
 export async function sendBracketedPasteThenSubmit(
-  send: (data: string) => Promise<void>,
+  send: ClaudePasteSendFn,
   payload: string,
   delayMs = 0,
+  opts?: ClaudePasteOpts,
 ): Promise<void> {
-  if (delayMs <= 0) {
-    await send(`\x1b[200~${payload}\x1b[201~\r`)
+  const pasteId = opts?.pasteId
+  const eventDriven = opts?.eventDriven
+
+  // Single-write fast path. Used by callers that don't care about
+  // the placeholder race (e.g. Codex, which has its own paste-state
+  // machine that does NOT exhibit this bug). Even on Claude we honor
+  // this when explicitly opted in via `delayMs <= 0` — but the
+  // composer call site in useComposerKeybinds always sets a positive
+  // delay AND sets `eventDriven` so this branch is effectively
+  // codex-only in production.
+  if (delayMs <= 0 && !eventDriven?.enabled) {
+    if (pasteId) {
+      window.api.recordPasteDebugEvent(pasteId, {
+        layer: 'IPC',
+        event: 'write:paste-and-submit-single',
+        data: { bytes: payload.length, sha8: await sha8(payload) },
+      })
+    }
+    await send(`\x1b[200~${payload}\x1b[201~\r`, pasteId)
     return
   }
-  await sendBracketedPaste(send, payload)
-  await wait(delayMs)
-  await send('\r')
+
+  await sendBracketedPaste(send, payload, opts)
+
+  // Try the event-driven path first if enabled. The placeholder poll
+  // happens main-side inside `awaitClaudePastePlaceholder` so we
+  // don't pay an IPC round-trip per poll tick (10 ms cadence × 100s
+  // of ms wait would be ~30 IPC msgs/paste otherwise).
+  if (eventDriven?.enabled) {
+    const outcome = await window.api.awaitClaudePastePlaceholder(
+      eventDriven.sessionId,
+      { timeoutMs: CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS },
+    )
+    if (pasteId) {
+      window.api.recordPasteDebugEvent(pasteId, {
+        layer: 'SCREEN',
+        event: outcome.kind === 'appeared'
+          ? 'placeholder:appeared'
+          : outcome.kind === 'timeout'
+            ? 'placeholder:timeout'
+            : 'placeholder:no-session',
+        data: outcome.kind === 'appeared' ? { waitedMs: outcome.waitedMs } : {},
+      })
+    }
+    if (outcome.kind === 'appeared') {
+      if (pasteId) {
+        window.api.recordPasteDebugEvent(pasteId, {
+          layer: 'IPC',
+          event: 'write:submit-cr',
+          data: { strategy: 'event-driven', waitedMs: outcome.waitedMs },
+        })
+      }
+      await send('\r', pasteId)
+      return
+    }
+    // Fall through to the wall-clock path. We've already waited some
+    // amount (up to `timeoutMs`) so subtract that from `delayMs` —
+    // otherwise the timeout + delayMs add up to noticeable lag.
+    // Floor at 0 in case the event-driven wait already exceeded delayMs.
+    // We DON'T have the actual elapsed in the no-session/timeout
+    // outcomes, but the timeout case took close to `timeoutMs`, so
+    // skip the timer entirely there.
+    if (outcome.kind === 'timeout') {
+      if (pasteId) {
+        window.api.recordPasteDebugEvent(pasteId, {
+          layer: 'IPC',
+          event: 'write:submit-cr',
+          data: { strategy: 'timeout-skip-timer' },
+        })
+      }
+      await send('\r', pasteId)
+      return
+    }
+    // no-session: the renderer thinks we have a session but main
+    // doesn't. Skip directly to the wall-clock path as a last-ditch.
+  }
+
+  if (delayMs > 0) await wait(delayMs)
+  if (pasteId) {
+    window.api.recordPasteDebugEvent(pasteId, {
+      layer: 'IPC',
+      event: 'write:submit-cr',
+      data: { strategy: 'wall-clock-timer', delayMs },
+    })
+  }
+  await send('\r', pasteId)
 }
 
 export async function sendClaudeDraftText(
-  send: (data: string) => Promise<void>,
+  send: ClaudePasteSendFn,
   text: string,
+  opts?: ClaudePasteOpts,
 ): Promise<void> {
   if (text.length === 0) return
   const isPasteLike = text.includes('\n') || text.length > CLAUDE_PASTE_THRESHOLD
   if (isPasteLike) {
-    await sendBracketedPaste(send, text)
+    await sendBracketedPaste(send, text, opts)
     await wait(CLAUDE_PASTE_SUBMIT_DELAY_MS)
     return
   }
-  await send(text)
+  await send(text, opts?.pasteId)
 }
 
 export function buildClaudeImagePastePayload(text: string, imagePaths: string[]): string {
