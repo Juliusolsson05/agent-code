@@ -85,6 +85,17 @@ export function useKeybinds(
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
+  // Reorder Tabs and Pin Agents are modal overlays with their own
+  // internal onKeyDown handlers. Without bailing out here, the
+  // global capture-phase handler still fires cmd+1..9 / cmd+t /
+  // alt+d / cmd+W underneath the modal — which mutates the
+  // workspace while the user is in a "transient draft" UI that
+  // promises Escape-cancellation. Mirror the newAgentPlacement
+  // bailout: consume Escape, drop everything else on the floor.
+  const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
+  const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
+  const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
+  const closePinAgents = useAppStore(state => state.closePinAgents)
 
   useEffect(() => {
     let pendingTiledResizeIndex: number | null = null
@@ -120,6 +131,29 @@ export function useKeybinds(
         if (k === 'Escape') {
           e.preventDefault()
           closeNewAgentPlacement()
+        }
+        return
+      }
+
+      // Reorder Tabs / Pin Agents share the same shape as the
+      // placement modal above: a draft selection that the user
+      // commits with Enter or discards with Escape. The modal owns
+      // Enter / Space / Arrow / j / k via its own onKeyDown — we
+      // only need to (a) consume Escape so the global handler can
+      // close the modal even when its inner div lost focus, and
+      // (b) swallow every other keystroke so nothing leaks into the
+      // workspace underneath.
+      if (reorderTabsOpen) {
+        if (k === 'Escape') {
+          e.preventDefault()
+          closeReorderTabs()
+        }
+        return
+      }
+      if (pinAgentsOpen) {
+        if (k === 'Escape') {
+          e.preventDefault()
+          closePinAgents()
         }
         return
       }
@@ -513,11 +547,15 @@ export function useKeybinds(
     closeSettingsPage,
     closeBuryPrompt,
     closeNewAgentPlacement,
+    closeReorderTabs,
+    closePinAgents,
     onCommandPalette,
     onNewTabRequest,
     onResumeRequest,
     buryPromptSessionId,
     newAgentPlacementOpen,
+    pinAgentsOpen,
+    reorderTabsOpen,
     settingsPageOpen,
     workspace,
   ])
