@@ -5,6 +5,7 @@ import type {
   PanePerformanceSnapshot,
   PerformanceRecord,
   PerformanceSnapshot,
+  SystemPerformanceStats,
 } from '@shared/performance/types.js'
 
 export const performanceApi = {
@@ -22,4 +23,7 @@ export const performanceApi = {
 
   getPanePerformanceStats: (sessionIds: string[]): Promise<PanePerformanceSnapshot> =>
     ipcRenderer.invoke('performance:pane-stats', sessionIds),
+
+  getSystemPerformanceStats: (): Promise<SystemPerformanceStats> =>
+    ipcRenderer.invoke('performance:system-stats'),
 }
