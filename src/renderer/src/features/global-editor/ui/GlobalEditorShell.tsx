@@ -160,7 +160,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     if (!activePath) return
     const buf = cwdState.openFiles[activePath]
     if (!buf || !buf.dirty) return
-    const result = await window.api.editorWriteFile({
+    const result = await window.api.editorWriteTextFile({
       root: activeCwd,
       path: activePath,
       text: buf.currentText,
@@ -176,7 +176,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const openFileFromTree = useCallback(
     async (relativePath: string) => {
       if (!activeCwd) return
-      const result = await window.api.editorReadFile({
+      const result = await window.api.editorReadTextFile({
         root: activeCwd,
         path: relativePath,
       })

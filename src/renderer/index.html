@@ -3,9 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      img-src adds https://cdn.jsdelivr.net so the editor's file/folder
+      icons (vscode-icons-js + the upstream vscode-icons SVG set hosted on
+      jsDelivr) can render via <img src=...>. This is the only third-party
+      origin allowed by the policy; if we later bundle the SVG set we can
+      tighten this back to 'self'.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+      content="default-src 'self'; img-src 'self' data: blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; script-src 'self'"
     />
     <title>Agent Studio Code</title>
   </head>
