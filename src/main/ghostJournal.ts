@@ -51,11 +51,13 @@
 // of data loss on crash — is acceptable because ghost is provisional
 // by definition and the authoritative CLI JSONL survives independently.
 
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { appendFile, mkdir } from 'node:fs/promises'
+import { createInterface } from 'node:readline'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 
-import type { GhostEntry } from 'agent-transcript-parser'
+import { isGhost, type GhostEntry } from 'agent-transcript-parser/ghost'
 
 /**
  * Flush interval matches upstream Claude's batcher. Anything shorter
@@ -206,32 +208,73 @@ export class GhostJournalRegistry {
 }
 
 /**
- * Read the full ghost log for a session. Returns parsed ghosts in
- * file order; caller folds them through atp's `reduceGhostLog` in
- * the renderer to get current state. A missing file is not an
- * error — no ghosts have been written for this session yet.
+ * Read the ghost log for a session and return only the compact final
+ * ghost state that the renderer needs on bootstrap.
+ *
+ * WHY this streams + reduces in main instead of returning raw JSONL:
+ *   The original implementation did `readFile(..., 'utf8')`, split
+ *   the entire file, parsed every line into an array, and then sent
+ *   that full array over IPC so the renderer could reduce it. That
+ *   shape was fine while ghost logs were KB-sized. It became a main-
+ *   process OOM hazard once real user state accumulated multi-100 MB
+ *   logs: on 2026-05-11 this machine had `ghost-logs/` at 2.1 GB,
+ *   with individual session files at 169 MB, 156 MB, 129 MB, etc.
+ *   Restoring several tmux-backed sessions caused main to allocate
+ *   the raw string, the split line array, tens of thousands of parsed
+ *   objects, and the IPC clone all at once. The crash log showed V8
+ *   dying around a 1.2 GB old-space cap before the old heap watchdog's
+ *   fixed 3 GB threshold could even trip.
+ *
+ *   The append-only ghost log's contract is last-write-wins by
+ *   `(uuid, _atp.updatedAt)`, with equal timestamps resolved by later
+ *   file order. We can preserve that contract while holding only one
+ *   final object per uuid in memory. Superseded ghosts are dropped
+ *   before returning because cc-shell imports `reduceGhostLogSansSuperseded`
+ *   on the renderer side for this same bootstrap path; doing the drop
+ *   here avoids shipping forensic-only entries across IPC.
+ *
+ * Missing files and malformed tail lines are not errors. A missing
+ * file just means no ghosts were ever written for this session; a
+ * malformed line usually means the app crashed mid-append and the
+ * earlier valid JSONL lines are still useful.
  */
 export async function readGhostLog(sessionId: string): Promise<GhostEntry[]> {
   const path = ghostLogPath(sessionId)
-  let raw: string
+  const current = new Map<string, GhostEntry>()
+  const stream = createReadStream(path, { encoding: 'utf8' })
+  stream.on('error', () => {
+    // Swallow ENOENT and other read errors through the async iterator's
+    // close path below. The reader is best-effort bootstrap state; a
+    // missing/unreadable ghost log should never prevent session spawn.
+  })
+  const lines = createInterface({
+    input: stream,
+    crlfDelay: Infinity,
+  })
+
   try {
-    raw = await readFile(path, 'utf8')
+    for await (const line of lines) {
+      if (!line) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (!isGhost(parsed)) continue
+      const existing = current.get(parsed.uuid)
+      if (!existing || parsed._atp.updatedAt >= existing._atp.updatedAt) {
+        current.set(parsed.uuid, parsed)
+      }
+    }
   } catch {
     return []
   }
-  const out: GhostEntry[] = []
-  for (const line of raw.split('\n')) {
-    if (!line) continue
-    try {
-      out.push(JSON.parse(line) as GhostEntry)
-    } catch {
-      // Skip malformed lines — a partial last line from a crash mid-
-      // flush would land here. The rest of the file is still valid
-      // JSONL and still renderable.
-      continue
-    }
+
+  for (const [uuid, ghost] of current) {
+    if (ghost._atp.supersededBy !== undefined) current.delete(uuid)
   }
-  return out
+  return [...current.values()]
 }
 
 /**

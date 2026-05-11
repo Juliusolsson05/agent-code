@@ -30,13 +30,15 @@ import { join } from 'node:path'
 
 import { STATE_DIR } from '@main/storage/paths.js'
 
-// Threshold rationale: v8 main cap is ~4 GB; the observed crash hit at
-// ~3.84 GB during Mark-Compact. We trip the watchdog at 3.0 GB
-// (78 % of cap) to leave headroom for the snapshot itself and the
-// allocations the snapshot writer makes. Lower thresholds risk false
-// positives on legitimate large workloads; higher ones risk OOMing
-// during the snapshot write.
+// Threshold rationale: use the lower of 3 GiB and 75% of the ACTUAL
+// V8 heap limit for this Electron process. The original watchdog used
+// a fixed 3 GiB threshold because the first observed crash had a ~4 GiB
+// main-process heap cap. A later crash on 2026-05-11 died around
+// 1.2 GiB old-space, so the fixed threshold never fired. The heap cap
+// varies with Electron/Node flags and process mode; measuring it at
+// runtime is the only threshold that works across dev/prod launches.
 const HEAP_USED_TRIP_BYTES = 3 * 1024 * 1024 * 1024
+const HEAP_LIMIT_TRIP_RATIO = 0.75
 
 // Sample every 30 s. Heap pressure builds over hours, not seconds, so
 // finer sampling buys nothing and just wakes the event loop more.
@@ -66,7 +68,8 @@ async function sampleAndMaybeSnapshot(): Promise<void> {
   // the limit. used_heap_size is what the v8 fatal-error report shows.
   const heapUsed = stats.used_heap_size
   const limit = stats.heap_size_limit
-  if (heapUsed < HEAP_USED_TRIP_BYTES) return
+  const tripAt = Math.min(HEAP_USED_TRIP_BYTES, limit * HEAP_LIMIT_TRIP_RATIO)
+  if (heapUsed < tripAt) return
   if (snapshotWritten) return
   snapshotWritten = true
 
@@ -86,7 +89,7 @@ async function sampleAndMaybeSnapshot(): Promise<void> {
   )
   // eslint-disable-next-line no-console
   console.warn(
-    `[heap-watchdog] heapUsed=${heapUsed} limit=${limit} → writing snapshot to ${file}`,
+    `[heap-watchdog] heapUsed=${heapUsed} limit=${limit} tripAt=${Math.round(tripAt)} → writing snapshot to ${file}`,
   )
   try {
     writeHeapSnapshot(file)
