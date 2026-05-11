@@ -1,6 +1,7 @@
 import type { SessionManager } from '@main/sessionManager.js'
 import type { LspManager } from '@main/lspManager.js'
 import type { GhostJournalRegistry } from '@main/ghostJournal.js'
+import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 
 import { registerSessionIpc } from '@main/ipc/session.js'
 import { registerProviderIpc } from '@main/ipc/provider.js'
@@ -31,6 +32,7 @@ export type IpcDeps = {
   manager: SessionManager
   lspManager: LspManager
   ghostJournals: GhostJournalRegistry
+  dictationDebugJournals: DictationDebugJournalRegistry
   worktreeActivityIndex: WorktreeActivityIndex
 }
 
@@ -48,5 +50,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerGitIpc()
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
   registerSetupIpc()
-  registerDictationIpc()
+  registerDictationIpc({ dictationDebugJournals: deps.dictationDebugJournals })
 }

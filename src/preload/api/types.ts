@@ -233,6 +233,50 @@ export type FeedDebugPersistEntry = {
   data?: unknown
 }
 
+// Dictation per-session debug dump.
+//
+// Every dictation press writes one append-only JSONL file under
+// `<userData>/dictation-debug/<debugSessionId>.dictation.jsonl`. Both
+// renderer and main emit events through `window.api.recordDictationDebugEvent`
+// (fire-and-forget); main batches them at 100 ms per file. See
+// `src/main/dictationJournal.ts` for the on-disk layout and
+// `src/main/ipc/dictation.ts` for the privacy invariants this surface is
+// required to honour (never log raw audio bytes, never log API keys,
+// transcript text IS in the file because the file is local user-private).
+//
+// WHY `debugSessionId` is renderer-minted and NOT the Deepgram stream id:
+//   The Deepgram `streamId` is null for the first ~180 ms of every press
+//   because we queue chunks locally to discard accidental taps before
+//   opening the provider socket. Keying the debug file on the streamId
+//   would lose every startup event — exactly the window where the
+//   "sine-wave dead / live preview missing" symptoms originate. Minting
+//   our own UUID at recorder construction time gives the file a stable
+//   key from the first emitted event onward.
+export type DictationDebugLayer =
+  | 'META'        // session lifecycle: created, recorder-config, final outcome
+  | 'DEVICE'      // mic enumeration, getUserMedia result, granted track labels
+  | 'RECORDER'    // MediaRecorder lifecycle: start, error, stop, dataavailable
+  | 'CHUNK'       // per-chunk audit across renderer + main, with sha8 + size
+  | 'AUDIO_LEVEL' // 7-band analyser samples (the sine-wave data), ~10 Hz
+  | 'IPC'         // every renderer↔main round-trip with id + result kind
+  | 'PROVIDER'    // streaming WS trace + batch upload trace (deepgram only)
+  | 'TRANSCRIPT'  // every live preview callback + final committed text
+  | 'OUTCOME'     // success / no-speech / error / cancel — terminal event
+  | 'ERROR'       // anything that throws / rejects
+
+export type DictationDebugEventInput = {
+  layer: DictationDebugLayer
+  event: string
+  data?: Record<string, unknown>
+}
+
+// On-disk form. `tMs` is stamped main-side from the journal's anchor
+// (first event = t=0); callers pass DictationDebugEventInput.
+export type DictationDebugEvent = DictationDebugEventInput & {
+  ts: number   // wall clock, Date.now()
+  tMs: number  // monotonic offset from session start
+}
+
 // Debug bundle — opaque file list shipped from renderer to main.
 // See main/storage/debugBundle.ts for the layout rationale. Types
 // are duplicated here (not imported) because preload/main/renderer

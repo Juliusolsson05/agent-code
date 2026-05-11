@@ -11,6 +11,10 @@ import { performance } from 'perf_hooks'
 import { SessionManager } from '@main/sessionManager.js'
 import { LspManager } from '@main/lspManager.js'
 import { GhostJournalRegistry } from '@main/ghostJournal.js'
+import {
+  DictationDebugJournalRegistry,
+  pruneOldDictationDebugLogs,
+} from '@main/dictationJournal.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
@@ -54,6 +58,12 @@ const lspManager = new LspManager()
 // See `./ghostJournal.ts` for the full rationale; see
 // `src/renderer/src/workspace/ghosts.ts` for the renderer side.
 const ghostJournals = new GhostJournalRegistry()
+// Per-dictation-session debug-dump registry. Mirrors `ghostJournals`:
+// constructed before IPC handlers register, flushed on before-quit. See
+// `src/main/dictationJournal.ts` for the on-disk shape and the
+// rationale for cloning the ghost-journal pattern instead of refactoring
+// them into a single shared writer.
+const dictationDebugJournals = new DictationDebugJournalRegistry()
 const worktreeActivityIndex = new WorktreeActivityIndex()
 
 // SessionManager is constructed inside whenReady so we can await
@@ -90,6 +100,12 @@ async function startApp(): Promise<void> {
   // off the disk before we start writing fresh entries to it.
   // Both are fire-and-forget — neither blocks app readiness.
   startMainHeapWatchdog()
+  // Dictation debug logs grow per-press. The pruner trims files older
+  // than 14 days at startup; fire-and-forget — a slow or failing
+  // prune must NOT delay window creation. See dictationJournal.ts.
+  void pruneOldDictationDebugLogs().catch(err => {
+    console.warn('[dictation] prune failed (non-fatal):', err)
+  })
   void pruneStaleFeedDebugLogs().then(result => {
     if (result.removed > 0) {
       // eslint-disable-next-line no-console
@@ -171,7 +187,7 @@ async function startApp(): Promise<void> {
   performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
-  registerAllIpc({ manager, lspManager, ghostJournals, worktreeActivityIndex })
+  registerAllIpc({ manager, lspManager, ghostJournals, dictationDebugJournals, worktreeActivityIndex })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()
   performanceService.mark('app.main.window.created')
@@ -198,5 +214,10 @@ app.on('before-quit', () => {
   // worst-case; in practice drains are empty at quit time because
   // streaming is idle.
   void ghostJournals.flushAll()
+  // Same rationale as ghostJournals — Electron gives us one tick before
+  // teardown. 100 ms queue depth is the worst case; in practice the
+  // dictation journal is idle at quit unless the user is pressing Fn
+  // at the exact moment of app shutdown.
+  void dictationDebugJournals.flushAll()
   performanceService.stop()
 })
