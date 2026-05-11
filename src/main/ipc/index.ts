@@ -2,6 +2,7 @@ import type { SessionManager } from '@main/sessionManager.js'
 import type { LspManager } from '@main/lspManager.js'
 import type { GhostJournalRegistry } from '@main/ghostJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
+import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 
 import { registerSessionIpc } from '@main/ipc/session.js'
 import { registerProviderIpc } from '@main/ipc/provider.js'
@@ -16,6 +17,7 @@ import { registerPerformanceIpc } from '@main/ipc/performance.js'
 import { registerSetupIpc } from '@main/ipc/setup.js'
 import { registerWorktreeActivityIpc } from '@main/ipc/worktreeActivity.js'
 import { registerDictationIpc } from '@main/ipc/dictation.js'
+import { registerPasteDebugIpc } from '@main/ipc/pasteDebug.js'
 import { installPerformanceIpcInstrumentation } from '@main/performance/instrumentIpc.js'
 import type { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 
@@ -33,13 +35,14 @@ export type IpcDeps = {
   lspManager: LspManager
   ghostJournals: GhostJournalRegistry
   dictationDebugJournals: DictationDebugJournalRegistry
+  pasteDebugJournals: PasteDebugJournalRegistry
   worktreeActivityIndex: WorktreeActivityIndex
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
   registerPerformanceIpc(deps.manager)
   installPerformanceIpcInstrumentation()
-  registerSessionIpc(deps.manager)
+  registerSessionIpc(deps.manager, deps.pasteDebugJournals)
   registerProviderIpc()
   registerLspIpc(deps.lspManager)
   registerFsIpc()
@@ -51,4 +54,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
   registerSetupIpc()
   registerDictationIpc({ dictationDebugJournals: deps.dictationDebugJournals })
+  registerPasteDebugIpc({ pasteDebugJournals: deps.pasteDebugJournals })
 }

@@ -1,6 +1,8 @@
 import { ipcMain } from 'electron'
+import { createHash } from 'node:crypto'
 
 import type { SessionManager } from '@main/sessionManager.js'
+import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import { getMainProvider } from '@providers/registry.main.js'
 import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList.js'
 import { listCodexSessions } from '@providers/codex/runtime/sessionList.js'
@@ -23,7 +25,10 @@ import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
 // The prompt-indexing handlers (sessions:*) live in ./sessions.ts
 // because they're a separate concern with their own cache layer.
 
-export function registerSessionIpc(manager: SessionManager): void {
+export function registerSessionIpc(
+  manager: SessionManager,
+  pasteDebugJournals: PasteDebugJournalRegistry,
+): void {
   ipcMain.handle(
     'session:spawn',
     async (
@@ -71,7 +76,27 @@ export function registerSessionIpc(manager: SessionManager): void {
 
   ipcMain.handle(
     'session:input',
-    (_evt, sessionId: string, data: string) => {
+    (_evt, sessionId: string, data: string, pasteId?: string) => {
+      // Optional pasteId journals THIS write into the per-paste debug
+      // dump. Only set by the cc-shell paste flow (claudePaste.ts) —
+      // never set on keystrokes, agent-pty bridging, or other normal
+      // I/O. Pairs against the renderer's IPC:write:* events by sha8
+      // + byte count, same way dictation pairs renderer-produced
+      // against main-received chunks (PR #68).
+      if (typeof pasteId === 'string' && pasteId.length > 0) {
+        const bytes = Buffer.byteLength(data, 'utf8')
+        const sha8 = createHash('sha256').update(data).digest('hex').slice(0, 8)
+        // Head preview is escape-safe: replace ESC with `\e` and CR
+        // with `\r` so the JSONL line is readable when you cat the
+        // file. The raw bytes are never logged — sha8 is the
+        // correlation primitive.
+        const head = data.slice(0, 40).replace(/\x1b/g, '\\e').replace(/\r/g, '\\r')
+        pasteDebugJournals.get(pasteId).append({
+          layer: 'PTY',
+          event: 'main:write',
+          data: { sessionId, bytes, sha8, head },
+        })
+      }
       const ok = manager.write(sessionId, data)
       if (!ok) {
         // eslint-disable-next-line no-console
@@ -79,6 +104,13 @@ export function registerSessionIpc(manager: SessionManager): void {
           sessionId,
           dataLength: data.length,
         })
+        if (typeof pasteId === 'string' && pasteId.length > 0) {
+          pasteDebugJournals.get(pasteId).append({
+            layer: 'ERROR',
+            event: 'main:write-dropped-no-session',
+            data: { sessionId },
+          })
+        }
       }
       return ok
     },
@@ -88,6 +120,25 @@ export function registerSessionIpc(manager: SessionManager): void {
     'session:resize',
     (_evt, sessionId: string, cols: number, rows: number) => {
       manager.resize(sessionId, cols, rows)
+    },
+  )
+
+  // Event-driven paste-submit (Track C of the paste-submit harness PR).
+  // Renderer's claudePaste.ts invokes this AFTER writing the bracketed
+  // paste payload but BEFORE writing `\r`. We resolve as soon as
+  // Claude's TUI renders `[Pasted text #N]`, falling back to a 2 s
+  // timeout if the placeholder never appears (future Claude UI rename
+  // insurance). See `claudePaste.ts` and
+  // `packages/claude-code-headless/src/ClaudeCodeHeadless.ts:awaitPastePlaceholder`
+  // for the full rationale chain.
+  ipcMain.handle(
+    'claude:await-paste-placeholder',
+    async (
+      _evt,
+      sessionId: string,
+      opts?: { timeoutMs?: number; pollIntervalMs?: number },
+    ) => {
+      return manager.awaitClaudePastePlaceholder(sessionId, opts)
     },
   )
 

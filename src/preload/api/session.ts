@@ -94,11 +94,35 @@ export const sessionApi = {
     ipcRenderer.invoke('session:agent-pty-detach', sessionId),
 
   // --- Per-session I/O ---
-  sendInput: (sessionId: string, data: string): Promise<boolean> =>
-    ipcRenderer.invoke('session:input', sessionId, data),
+  //
+  // Optional `pasteId` correlates this write against the per-paste
+  // debug journal in main. When set, main emits a `PTY:main:write`
+  // event into `<userData>/paste-debug/<pasteId>.paste.jsonl` so the
+  // renderer's `IPC:write:*` events can be paired by `sha8` and byte
+  // count. Omit `pasteId` for non-paste writes (keystrokes, agent-pty,
+  // etc.) so we don't journal unrelated traffic.
+  sendInput: (sessionId: string, data: string, pasteId?: string): Promise<boolean> =>
+    ipcRenderer.invoke('session:input', sessionId, data, pasteId),
 
   resize: (sessionId: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('session:resize', sessionId, cols, rows),
+
+  // Event-driven paste-submit primitive. See
+  // src/renderer/.../claudePaste.ts and
+  // packages/claude-code-headless/src/ClaudeCodeHeadless.ts.
+  // Resolves when Claude's TUI renders `[Pasted text #N]`, or after
+  // the configured timeout. Renderer treats every non-'appeared'
+  // outcome as "fall through to the wall-clock submit path."
+  awaitClaudePastePlaceholder: (
+    sessionId: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<
+    | { kind: 'appeared'; waitedMs: number }
+    | { kind: 'timeout' }
+    | { kind: 'no-headless' }
+    | { kind: 'no-session' }
+  > =>
+    ipcRenderer.invoke('claude:await-paste-placeholder', sessionId, opts),
 
   // --- Resume picker: list previous sessions recorded in a cwd ---
   listSessionsForCwd: (

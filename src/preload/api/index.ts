@@ -12,6 +12,7 @@ import { performanceApi } from '@preload/api/performance.js'
 import { setupApi } from '@preload/api/setup.js'
 import { dictationApi } from '@preload/api/dictation.js'
 import { dictationDebugApi } from '@preload/api/dictationDebug.js'
+import { pasteDebugApi } from '@preload/api/pasteDebug.js'
 
 // Composed preload API surface.
 //
@@ -43,6 +44,7 @@ export const api = {
   ...setupApi,
   ...dictationApi,
   ...dictationDebugApi,
+  ...pasteDebugApi,
 }
 
 export type Api = typeof api

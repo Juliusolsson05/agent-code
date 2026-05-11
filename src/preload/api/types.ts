@@ -277,6 +277,51 @@ export type DictationDebugEvent = DictationDebugEventInput & {
   tMs: number  // monotonic offset from session start
 }
 
+// Per-paste debug dump.
+//
+// Direct mirror of the dictation-debug subsystem. Every Enter that
+// triggers cc-shell's paste-submit code path writes one append-only
+// JSONL file under `<userData>/paste-debug/<pasteId>.paste.jsonl`
+// capturing the full renderer→IPC→main→PTY chain. The bug we are
+// chasing is the "paste in cc-shell needs a second Enter to submit"
+// intermittent — the PTY-isolated harness at
+// `vendor/in_progress/paste-submit-repro/` shows the production
+// 125 ms timer path works at 10/10 in isolation, so the failure must
+// be somewhere the harness doesn't model (renderer keyboard handler,
+// IPC queue, React state, double-submit race). This dump is the
+// diagnostic tool that will pin it down.
+//
+// `pasteId` is renderer-minted at the moment Enter is observed in the
+// composer keydown handler, BEFORE any state mutation or async send
+// happens. Threading it through the call stack lets the main side's
+// PTY-write event correlate against the renderer's keydown timestamp
+// for the same press — same pattern dictation uses to pair
+// `CHUNK:renderer:produced` against `CHUNK:main:received` by sha8.
+//
+// Privacy contract is identical to dictation-debug: never log API
+// keys, never log raw PTY bytes — log byte count + sha8 fingerprint
+// instead. Composer text head IS logged (truncated to 240 chars)
+// because the file is local 0o600 and the whole point is to see
+// what the user actually pasted vs. what reached Claude.
+export type PasteDebugLayer =
+  | 'RENDER'   // composer keydown, state snapshot, call into claudePaste fn
+  | 'IPC'      // renderer-side IPC write (paste payload, submit \r)
+  | 'PTY'      // main-side PTY write (sha8 + byte count) — pairs with IPC
+  | 'SCREEN'   // [Pasted text #N] placeholder observed to appear / clear
+  | 'OUTCOME'  // composer cleared / still-stuck / explicit cancel — terminal
+  | 'ERROR'
+
+export type PasteDebugEventInput = {
+  layer: PasteDebugLayer
+  event: string
+  data?: Record<string, unknown>
+}
+
+export type PasteDebugEvent = PasteDebugEventInput & {
+  ts: number
+  tMs: number
+}
+
 // Debug bundle — opaque file list shipped from renderer to main.
 // See main/storage/debugBundle.ts for the layout rationale. Types
 // are duplicated here (not imported) because preload/main/renderer

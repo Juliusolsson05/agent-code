@@ -15,6 +15,10 @@ import {
   DictationDebugJournalRegistry,
   pruneOldDictationDebugLogs,
 } from '@main/dictationJournal.js'
+import {
+  PasteDebugJournalRegistry,
+  pruneOldPasteDebugLogs,
+} from '@main/pasteDebugJournal.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
@@ -64,6 +68,12 @@ const ghostJournals = new GhostJournalRegistry()
 // rationale for cloning the ghost-journal pattern instead of refactoring
 // them into a single shared writer.
 const dictationDebugJournals = new DictationDebugJournalRegistry()
+// Per-paste debug-dump registry. Same lifecycle as dictationDebugJournals:
+// constructed before IPC handlers register, flushed on before-quit,
+// pruned on startup. Diagnostic for the "first Enter does nothing"
+// paste-submit bug; see docs/superpowers/plans/2026-05-11-paste-submit-
+// harness-findings-and-fix.md for context.
+const pasteDebugJournals = new PasteDebugJournalRegistry()
 const worktreeActivityIndex = new WorktreeActivityIndex()
 
 // SessionManager is constructed inside whenReady so we can await
@@ -103,6 +113,9 @@ async function startApp(): Promise<void> {
   // Dictation debug logs grow per-press. The pruner trims files older
   // than 14 days at startup; fire-and-forget — a slow or failing
   // prune must NOT delay window creation. See dictationJournal.ts.
+  void pruneOldPasteDebugLogs().catch(err => {
+    console.warn('[paste-debug] prune failed (non-fatal):', err)
+  })
   void pruneOldDictationDebugLogs().catch(err => {
     console.warn('[dictation] prune failed (non-fatal):', err)
   })
@@ -187,7 +200,7 @@ async function startApp(): Promise<void> {
   performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
-  registerAllIpc({ manager, lspManager, ghostJournals, dictationDebugJournals, worktreeActivityIndex })
+  registerAllIpc({ manager, lspManager, ghostJournals, dictationDebugJournals, pasteDebugJournals, worktreeActivityIndex })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()
   performanceService.mark('app.main.window.created')
@@ -219,5 +232,6 @@ app.on('before-quit', () => {
   // dictation journal is idle at quit unless the user is pressing Fn
   // at the exact moment of app shutdown.
   void dictationDebugJournals.flushAll()
+  void pasteDebugJournals.flushAll()
   performanceService.stop()
 })
