@@ -24,6 +24,7 @@ import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
+import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
 import {
   AUTO_DEBUG_BUNDLE_INTERVAL_MS,
   autosaveActiveAgentDebugBundles,
@@ -389,6 +390,14 @@ export default function App() {
             perf
           </button>
           <PerformancePanel open={performancePanelOpen} workspace={workspace} />
+          {/*
+            Always-visible main-process heap + RSS badge with a 60s
+            sparkline. Self-gates on CC_SHELL_PERF — renders null
+            until the first IPC probe confirms telemetry is on.
+            Click expands to a PerformancePanel-sized popover with
+            the full buffered window and growth rates.
+          */}
+          <SystemPerfHeader />
         </div>
       </div>
 
