@@ -206,6 +206,25 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      // Replaces the old "Dispatch Terminal" command-palette toggle. The
+      // command sat on a per-session `dispatchMode.terminalVisible` flag
+      // that re-defaulted to ON every time dispatch was re-entered, which
+      // produced the "I turned it off but it's back" failure mode. The
+      // settings entry is the single source of truth: off → never mount,
+      // on → mount and live as a normal tile-tree leaf.
+      id: 'dispatch-project-terminal',
+      category: 'workspace',
+      title: 'Attach Project Terminal to Dispatch',
+      description:
+        'When on, Dispatch Mode mounts a project terminal beside the agent list. Off by default.',
+      keywords: ['dispatch', 'terminal', 'project', 'attach', 'shell', 'pane'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.dispatchProjectTerminal,
+        onToggle: (ctx, value) => ctx.onChange({ dispatchProjectTerminal: value }),
+      },
+    },
+    {
       id: 'aggressive-debug-persistence',
       category: 'experimental',
       title: 'Persistent Aggressive Debug Logs',

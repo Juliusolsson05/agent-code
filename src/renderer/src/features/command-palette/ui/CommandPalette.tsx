@@ -77,7 +77,6 @@ type Props = {
   enterDispatchMode: () => Promise<void> | void
   enterGlobalDispatch: () => Promise<void> | void
   exitDispatchMode: () => void
-  toggleDispatchTerminal: () => Promise<void> | void
   openDispatchAttach: (sessionId: string) => void
   toggleCustomRendering: () => void
   toggleStatusMode: () => void
@@ -96,7 +95,6 @@ type Props = {
   performancePanelOpen: boolean
   dispatchModeEnabled: boolean
   globalDispatchEnabled: boolean
-  dispatchTerminalVisible: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
   setAggressiveDebugPersistence: (enabled: boolean) => void
 }
@@ -134,7 +132,6 @@ export function CommandPalette({
   enterDispatchMode,
   enterGlobalDispatch,
   exitDispatchMode,
-  toggleDispatchTerminal,
   openDispatchAttach,
   toggleCustomRendering,
   toggleStatusMode,
@@ -153,7 +150,6 @@ export function CommandPalette({
   performancePanelOpen,
   dispatchModeEnabled,
   globalDispatchEnabled,
-  dispatchTerminalVisible,
   setDangerousAgentsEnabled,
   setAggressiveDebugPersistence,
 }: Props) {
@@ -281,7 +277,6 @@ export function CommandPalette({
         enterDispatchMode,
         enterGlobalDispatch,
         exitDispatchMode,
-        toggleDispatchTerminal,
         openDispatchAttach,
         toggleCustomRendering,
         toggleStatusMode,
@@ -310,7 +305,6 @@ export function CommandPalette({
         performancePanelOpen,
         dispatchModeEnabled,
         globalDispatchEnabled,
-        dispatchTerminalVisible,
       },
     }),
     [
@@ -334,7 +328,6 @@ export function CommandPalette({
       enterDispatchMode,
       enterGlobalDispatch,
       exitDispatchMode,
-      toggleDispatchTerminal,
       toggleCustomRendering,
       toggleStatusMode,
       toggleWorktreeBadges,
@@ -360,7 +353,6 @@ export function CommandPalette({
       performancePanelOpen,
       dispatchModeEnabled,
       globalDispatchEnabled,
-      dispatchTerminalVisible,
     ],
   )
 

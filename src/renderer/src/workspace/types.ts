@@ -158,7 +158,6 @@ export type DetachedSessionRecord = {
 
 export type DispatchModeState = {
   scope: 'project' | 'global'
-  terminalVisible: boolean
   /**
    * Dispatch Mode selection is separate from grid focus. Reusing
    * Tab.focusedSessionId for detached rows would violate the tile-tree
@@ -167,6 +166,12 @@ export type DispatchModeState = {
    * grid in an impossible focus state.
    */
   focusedSessionId?: SessionId
+  // HISTORICAL: a `terminalVisible: boolean` flag used to live here. It
+  // was replaced by the global `settings.dispatchProjectTerminal` toggle
+  // because the per-session flag re-defaulted to ON every time dispatch
+  // was re-entered, producing the "I turned it off but it's back" bug.
+  // Old workspace.json files may still carry the field; it is now ignored
+  // (TypeScript drops unknown properties at runtime on shape coercion).
 }
 
 export type WorkspaceState = {

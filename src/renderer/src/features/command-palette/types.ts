@@ -27,7 +27,6 @@ export type CommandContext = {
     enterDispatchMode: () => Promise<void> | void
     enterGlobalDispatch: () => Promise<void> | void
     exitDispatchMode: () => void
-    toggleDispatchTerminal: () => Promise<void> | void
     /** Open the placement overlay in "attach detached session to grid"
      *  mode for the given sessionId. The session must exist in
      *  workspace.state.detachedSessions; the command's `when` guard is
@@ -60,7 +59,6 @@ export type CommandContext = {
     performancePanelOpen: boolean
     dispatchModeEnabled: boolean
     globalDispatchEnabled: boolean
-    dispatchTerminalVisible: boolean
   }
 }
 

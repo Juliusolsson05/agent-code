@@ -356,7 +356,6 @@ export function useWorkspace(
     enterDispatchMode: dispatchActions.enterDispatchMode,
     exitDispatchMode: dispatchActions.exitDispatchMode,
     setDispatchScope: dispatchActions.setDispatchScope,
-    toggleDispatchTerminal: dispatchActions.toggleDispatchTerminal,
     ensureDispatchTerminal: dispatchActions.ensureDispatchTerminal,
     focusDispatchSession: dispatchActions.focusDispatchSession,
   }

@@ -444,7 +444,6 @@ export default function App() {
           )
         }
         exitDispatchMode={workspace.exitDispatchMode}
-        toggleDispatchTerminal={workspace.toggleDispatchTerminal}
         openDispatchAttach={openDispatchAttach}
         onTileTabsRequest={onTileTabsRequest}
         onReorderTabsRequest={openReorderTabs}
@@ -470,7 +469,6 @@ export default function App() {
         performancePanelOpen={performancePanelOpen}
         dispatchModeEnabled={workspace.dispatchMode !== null}
         globalDispatchEnabled={workspace.dispatchMode?.scope === 'global'}
-        dispatchTerminalVisible={workspace.dispatchMode?.terminalVisible !== false}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
         setAggressiveDebugPersistence={enabled =>
           setSettings({ aggressiveDebugPersistence: enabled })}
