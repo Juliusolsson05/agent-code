@@ -1,0 +1,287 @@
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useShallow } from 'zustand/react/shallow'
+
+import { useAppStore } from '@renderer/app-state/store'
+import type { Workspace } from '@renderer/workspace/workspaceStore'
+
+import { ExplorerPane } from '@renderer/features/editor/ui/ExplorerPane'
+import { EditorTabs } from '@renderer/features/editor/ui/EditorTabs'
+import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
+
+import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+
+// Splitter geometry. SPLITTER_PX is the visual width of the
+// draggable bar between the editor and the workspace. We avoid
+// using percent-only positions so a 12px hit target stays
+// reliably grabbable regardless of viewport width.
+const SPLITTER_PX = 6
+const SPLITTER_HIT_PX = 12 // wider hit-area than visible bar
+
+type Props = {
+  /** Render slot for the existing workspace UI (dispatch / tile /
+   *  spotlight). The shell renders this on the right when the
+   *  overlay is open, OR full-bleed when the overlay is off. Either
+   *  way the wrapped subtree is unchanged — that's the whole point
+   *  of the overlay model. */
+  children: ReactNode
+  /** Needed for cwd derivation (focused agent → cwd). Passed in
+   *  rather than imported via a hook so the shell is a pure
+   *  function of its props for the storybook / testing case. */
+  workspace: Workspace
+}
+
+// Global Editor overlay.
+//
+// WHY this shape (one shell that wraps the entire workspace area):
+// - The user spec was explicit: the right pane is "the normal
+//   looks", just shrunk. The existing dispatch / tile / spotlight
+//   surfaces should not need to know the overlay exists. Wrapping
+//   them in a flex sibling and letting them flex into the
+//   available width is the cleanest way to achieve that.
+// - The alternative (toggling a renderer alongside the workspace
+//   inside each surface) would mean every mode has to opt into
+//   the overlay independently. That's both more code and more
+//   ways for the overlay to break per-mode.
+//
+// WHY the splitter ratio is renderer-only state (no IPC, no
+// persistence): the splitter is purely visual chrome. Like
+// CodeMirror's gutter width or VS Code's activity-bar position,
+// it's a per-session preference at most. In-memory only (lost on
+// app reload) is acceptable until we have a reason to add a
+// persistence channel for it.
+//
+// WHY we drop a global mouse listener while dragging (instead of
+// putting onMouseMove on the splitter itself): if the user
+// drags fast enough the cursor outpaces the splitter and onMouseMove
+// stops firing on the element. window-level mouse capture
+// guarantees we keep receiving move events until mouseup.
+export function GlobalEditorShell({ children, workspace }: Props) {
+  const { open } = useAppStore(
+    useShallow(state => ({ open: state.globalEditorOpen })),
+  )
+
+  const focusedCwd = useFocusedAgentCwd(workspace)
+
+  const { splitterRatio, setSplitterRatio } = useGlobalEditorStore(
+    useShallow(state => ({
+      splitterRatio: state.splitterRatio,
+      setSplitterRatio: state.setSplitterRatio,
+    })),
+  )
+  const {
+    activeCwd,
+    setActiveCwd,
+    openFileAction,
+    setActiveFile,
+    updateFileText,
+    markFileSaved,
+    closeFileAction,
+    cwdState,
+  } = useGlobalEditorStore(
+    useShallow(state => {
+      const byCwd = state.byCwd
+      const aCwd = state.activeCwd
+      return {
+        activeCwd: aCwd,
+        setActiveCwd: state.setActiveCwd,
+        openFileAction: state.openFile,
+        setActiveFile: state.setActiveFile,
+        updateFileText: state.updateFileText,
+        markFileSaved: state.markFileSaved,
+        closeFileAction: state.closeFile,
+        cwdState:
+          (aCwd && byCwd[aCwd]) || {
+            fileOrder: [],
+            openFiles: {},
+            activeFilePath: null,
+          },
+      }
+    }),
+  )
+
+  // Sync the editor's active cwd to whatever agent currently has
+  // focus. WHY a useEffect (not derive directly in render): the
+  // store is the source of truth, so writing into it triggers a
+  // store-driven re-render. The dependency on focusedCwd means we
+  // only fire the action when the agent's cwd actually changes —
+  // not on every re-render of App.tsx.
+  useEffect(() => {
+    if (!open) return
+    if (focusedCwd === activeCwd) return
+    setActiveCwd(focusedCwd)
+  }, [open, focusedCwd, activeCwd, setActiveCwd])
+
+  // Splitter drag handling. We track in a ref so the move handler
+  // doesn't re-create on every ratio change (which would tear
+  // down + re-add the window listener mid-drag).
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [dragging, setDragging] = useState(false)
+
+  const onSplitterMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault()
+      setDragging(true)
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (!dragging) return
+    const onMove = (e: MouseEvent) => {
+      const el = containerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      if (rect.width <= 0) return
+      const ratio = (e.clientX - rect.left) / rect.width
+      setSplitterRatio(ratio)
+    }
+    const onUp = () => setDragging(false)
+    // capture: true so we win against any drag-prevention on the
+    // wrapped workspace pane underneath (e.g. xterm.js panes that
+    // mouse-capture aggressively).
+    window.addEventListener('mousemove', onMove, true)
+    window.addEventListener('mouseup', onUp, true)
+    return () => {
+      window.removeEventListener('mousemove', onMove, true)
+      window.removeEventListener('mouseup', onUp, true)
+    }
+  }, [dragging, setSplitterRatio])
+
+  // Save handler — wired into MonacoFileEditor's Cmd+S. Validates
+  // we have an active cwd + active file, reads the buffer, writes
+  // to disk via the editorFs IPC, then calls markFileSaved on
+  // success. Errors surface through setFileError on the buffer if
+  // we add that path; for now we silently keep dirty.
+  const saveActive = useCallback(async () => {
+    if (!activeCwd) return
+    const activePath = cwdState.activeFilePath
+    if (!activePath) return
+    const buf = cwdState.openFiles[activePath]
+    if (!buf || !buf.dirty) return
+    const result = await window.api.editorWriteFile({
+      root: activeCwd,
+      path: activePath,
+      text: buf.currentText,
+    })
+    if (result.ok) {
+      markFileSaved(activeCwd, activePath, buf.currentText, result.mtimeMs)
+    }
+  }, [activeCwd, cwdState, markFileSaved])
+
+  // Open a file from the explorer. Reads via IPC, then commits to
+  // the store as a fresh buffer (or refreshes savedText on an
+  // already-open dirty file — store.openFile handles both).
+  const openFileFromTree = useCallback(
+    async (relativePath: string) => {
+      if (!activeCwd) return
+      const result = await window.api.editorReadFile({
+        root: activeCwd,
+        path: relativePath,
+      })
+      if (!result.ok) return
+      openFileAction({
+        cwd: activeCwd,
+        path: relativePath,
+        text: result.text,
+        mtimeMs: result.mtimeMs,
+      })
+    },
+    [activeCwd, openFileAction],
+  )
+
+  // When the overlay is closed, render the workspace area
+  // full-bleed. This is the "off" state — zero overhead, no extra
+  // DOM, no event listeners.
+  if (!open) return <>{children}</>
+
+  // When open without a focused cwd (rare boot edge), still show
+  // the split so the user sees the overlay engaged — but the
+  // editor pane displays an empty-state hint instead of an
+  // explorer pointed at nowhere.
+  const leftPercent = (splitterRatio * 100).toFixed(2)
+  const rightPercent = ((1 - splitterRatio) * 100).toFixed(2)
+  const active = cwdState.activeFilePath
+    ? cwdState.openFiles[cwdState.activeFilePath] ?? null
+    : null
+
+  return (
+    <div
+      ref={containerRef}
+      className="relative flex flex-1 min-h-0 min-w-0 overflow-hidden"
+    >
+      <div
+        className="flex flex-col min-h-0 overflow-hidden border-r border-border"
+        style={{ width: `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)` }}
+      >
+        {activeCwd ? (
+          <div className="flex flex-1 min-h-0 overflow-hidden">
+            <div className="w-[240px] flex-shrink-0 border-r border-border overflow-hidden">
+              <ExplorerPane
+                root={activeCwd}
+                activeFilePath={cwdState.activeFilePath}
+                onOpenFile={openFileFromTree}
+              />
+            </div>
+            <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
+              <EditorTabs
+                fileOrder={cwdState.fileOrder}
+                openFiles={cwdState.openFiles}
+                activeFilePath={cwdState.activeFilePath}
+                onActivate={path => setActiveFile(activeCwd, path)}
+                onClose={path => closeFileAction(activeCwd, path)}
+              />
+              <div className="flex-1 min-h-0 min-w-0 overflow-hidden">
+                <MonacoFileEditor
+                  file={active}
+                  projectRoot={activeCwd}
+                  onChange={(path, text) =>
+                    updateFileText(activeCwd, path, text)
+                  }
+                  onSave={() => void saveActive()}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-8 text-center text-[11px] text-muted">
+            Focus an agent to open its workspace in the editor.
+          </div>
+        )}
+      </div>
+      {/*
+        Splitter. The visual bar is SPLITTER_PX wide; the hit area
+        (cursor and event surface) is wider so it's grabbable
+        without pixel-perfect aim. While dragging we apply a
+        cursor on the whole window via a sibling style block so
+        the cursor doesn't flicker as the splitter moves under it.
+      */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={onSplitterMouseDown}
+        className="relative flex-shrink-0 cursor-col-resize select-none"
+        style={{ width: `${SPLITTER_HIT_PX}px` }}
+      >
+        <div
+          className={`absolute left-1/2 top-0 h-full -translate-x-1/2 ${
+            dragging ? 'bg-accent' : 'bg-border'
+          } transition-colors`}
+          style={{ width: `${SPLITTER_PX}px` }}
+        />
+      </div>
+      {dragging ? (
+        // While dragging, force the col-resize cursor everywhere
+        // so the user doesn't see it change when the pointer
+        // crosses pane boundaries. Removed when dragging ends.
+        <style>{`* { cursor: col-resize !important; }`}</style>
+      ) : null}
+      <div
+        className="flex flex-col min-h-0 overflow-hidden"
+        style={{ width: `calc(${rightPercent}% - ${SPLITTER_PX / 2}px)` }}
+      >
+        {children}
+      </div>
+    </div>
+  )
+}

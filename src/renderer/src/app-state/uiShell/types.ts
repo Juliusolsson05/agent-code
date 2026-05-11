@@ -63,6 +63,18 @@ export type UiShellState = {
    *  and follows the same toggle pattern. */
   htmlDebugPanelOpen: boolean
   performancePanelOpen: boolean
+  /** When true, the Global Editor overlay is mounted. Splits the
+   *  workspace area: left half is a file tree + Monaco editor
+   *  rooted at the focused agent's cwd, right half is the entire
+   *  normal workspace UI (dispatch / tile / spotlight / etc),
+   *  unchanged but resized.
+   *
+   *  WHY a separate flag rather than a "mode": the existing modes
+   *  (dispatch, tile, spotlight, reader) are mutually exclusive
+   *  surfaces. Global Editor is ORTHOGONAL — it wraps whatever
+   *  surface is active without replacing it. Tracking it as a
+   *  toggle flag keeps the mode-state machine untouched. */
+  globalEditorOpen: boolean
   /** When true, the Search Conversation Prompts modal is open. Lives
    *  on the uiShell slice (not the workspace slice) because it's
    *  a cross-session concern: the modal reads prompts from ALL

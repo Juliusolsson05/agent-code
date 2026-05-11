@@ -24,6 +24,7 @@ import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
+import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
 import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
 import {
   AUTO_DEBUG_BUNDLE_INTERVAL_MS,
@@ -79,6 +80,7 @@ export default function App() {
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
+  const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const useProxyStreaming = settings.useProxyStreaming
@@ -118,6 +120,7 @@ export default function App() {
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
+  const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
   const closePromptSearch = useAppStore(state => state.closePromptSearch)
@@ -410,6 +413,16 @@ export default function App() {
         and the app looks bricked.
       */}
       <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
+        {/*
+          Global Editor overlay wraps the workspace area. When OFF
+          this is a no-op (renders <main> directly). When ON it
+          splits horizontally: editor on the left, the whole
+          existing workspace UI on the right, untouched but
+          shrunk. The right-side panels (GitBar, WorktreesBar,
+          DebugPanel, etc.) stay as siblings of the shell on the
+          far right — the overlay does not eat their column.
+        */}
+        <GlobalEditorShell workspace={workspace}>
         <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
           {settingsPageOpen ? (
             <SettingsPage
@@ -460,6 +473,7 @@ export default function App() {
             <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
           )}
         </main>
+        </GlobalEditorShell>
 
         {gitBarOpen && (
           <GitBar
@@ -532,6 +546,7 @@ export default function App() {
         toggleProxyDebugPanel={toggleProxyDebugPanel}
         toggleHtmlDebugPanel={toggleHtmlDebugPanel}
         togglePerformancePanel={togglePerformancePanel}
+        toggleGlobalEditor={toggleGlobalEditor}
         enterDispatchMode={workspace.enterDispatchMode}
         enterGlobalDispatch={() =>
           workspace.setDispatchScope(
@@ -563,6 +578,7 @@ export default function App() {
         proxyDebugPanelOpen={proxyDebugPanelOpen}
         htmlDebugPanelOpen={htmlDebugPanelOpen}
         performancePanelOpen={performancePanelOpen}
+        globalEditorOpen={globalEditorOpen}
         dispatchModeEnabled={workspace.dispatchMode !== null}
         globalDispatchEnabled={workspace.dispatchMode?.scope === 'global'}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}

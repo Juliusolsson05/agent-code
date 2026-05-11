@@ -24,6 +24,7 @@ export type CommandContext = {
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
     togglePerformancePanel: () => void
+    toggleGlobalEditor: () => void
     enterDispatchMode: () => Promise<void> | void
     enterGlobalDispatch: () => Promise<void> | void
     exitDispatchMode: () => void
@@ -61,6 +62,7 @@ export type CommandContext = {
     proxyDebugPanelOpen: boolean
     htmlDebugPanelOpen: boolean
     performancePanelOpen: boolean
+    globalEditorOpen: boolean
     dispatchModeEnabled: boolean
     globalDispatchEnabled: boolean
   }
