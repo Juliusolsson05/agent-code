@@ -7,6 +7,13 @@ release
 *.log
 .vite
 temp.txt
+# Scratch directory for diagnosis notes / one-off forensic dumps
+# (e.g. temp/session-respawn-oom-root-cause.md). Keep untracked so
+# investigations don't clutter the repo, but stay in the working
+# tree for the agent that produced them to keep iterating.
+# Anchored with a leading slash so we only catch the repo-root
+# temp/, not nested directories that happen to be named temp.
+/temp/
 # TypeScript incremental build cache
 *.tsbuildinfo
 
@@ -46,6 +53,12 @@ temp.txt
 # of cc-shell, intentionally left untracked. Live next to the project as
 # a developer's local checkout.
 vendor/claude-code-src/
+# In-progress reproduction harnesses (e.g. paste-submit-repro,
+# dictation-repro, opencode). These are isolated checkouts used
+# to bisect bugs against minimal inputs; they live inside
+# vendor/ so they sit next to claude-code-src above but they are
+# emphatically NOT part of cc-shell and must not be committed.
+vendor/in_progress/
 file-dumps/
 .proxy-testing/
 

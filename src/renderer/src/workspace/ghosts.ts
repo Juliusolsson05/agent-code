@@ -258,6 +258,25 @@ export function ghostsFromSemanticTurn(
   // memoization stays intact.
   if (!turn) return prev as Map<string, GhostEntry>
 
+  // Compaction-synthesis turns stream raw `<analysis>...</analysis>
+  // <summary>...</summary>` XML that the renderer hides behind a
+  // "Compacting conversation…" placeholder (StreamingTurn handles it,
+  // foldEvent propagates the flag — see PR #74). But the GHOST log
+  // is a separate, durable on-disk record under
+  // `<userData>/ghost-logs/` that exists so we can recover proxy
+  // content when the provider JSONL hangs behind. Without this
+  // short-circuit, every /compact run accumulates the raw XML in
+  // that JSONL — invisible in the UI, but it bloats the file and
+  // makes debug bundles harder to read.
+  //
+  // We fail-closed: the predicate is `=== true`, so unknown/Codex
+  // turns where the flag is undefined still flow through the normal
+  // ghost path. The 30s orphan-ghost window in mergedEntries.ts
+  // would otherwise re-surface raw synthesis content if JSONL
+  // writes are delayed past that window — suppressing creation here
+  // is the only place that closes that gap completely.
+  if (turn.isCompactionSynthesis === true) return prev as Map<string, GhostEntry>
+
   let next: Map<string, GhostEntry> | null = null
 
   for (const block of Object.values(turn.blocks)) {

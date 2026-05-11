@@ -331,6 +331,7 @@ export function CommandPalette({
       enterDispatchMode,
       enterGlobalDispatch,
       exitDispatchMode,
+      openDispatchAttach,
       openPinAgents,
       toggleCustomRendering,
       toggleStatusMode,
