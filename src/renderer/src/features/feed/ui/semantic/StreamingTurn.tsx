@@ -81,6 +81,43 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   )
   const hasBlocks = blocks.length > 0
 
+  // Compaction-synthesis placeholder.
+  //
+  // When Claude Code triggers `/compact` (manual or auto), the proxy
+  // sees a normal `/v1/messages` POST whose last user message is the
+  // fixed compact prompt. The mitm addon sniffs that signature and
+  // the proxy adapter tags the resulting semantic turn with
+  // `isCompactionSynthesis: true` at turn_started. The model's
+  // response body is `<analysis>…</analysis><summary>…</summary>` XML
+  // — not user-visible text — and rendering it raw is the visible
+  // bug we're fixing.
+  //
+  // Returning a placeholder here is the simplest correct UI: the
+  // user-facing artefacts of compaction (the `compact_boundary`
+  // system entry and the `isCompactSummary: true` user entry) land
+  // via JSONL later and already have proper renderers
+  // (`CompactBoundaryRow` and `CompactSummaryRow` in feed/ui/rows/).
+  // The placeholder just covers the seconds-to-minutes streaming
+  // window where the synthesis turn would otherwise leak XML into
+  // the feed. Mirrors `CompactBoundaryRow` styling so the live and
+  // committed states share visual language.
+  //
+  // Placed AFTER the hooks (useContext/useMemo above) on purpose:
+  // moving it earlier would break Rules of Hooks because the hook
+  // count would differ between compaction and non-compaction renders
+  // of the same component instance. The wasted hook work is cheap —
+  // `committedAssistantTextKeys` memoizes on `committedEntries` which
+  // doesn't grow during the compaction window.
+  if (turn.isCompactionSynthesis) {
+    return (
+      <MarkerRow marker="·" tone="muted">
+        <div className="text-[11px] uppercase tracking-wider text-muted">
+          Compacting conversation…
+        </div>
+      </MarkerRow>
+    )
+  }
+
   if (!hasBlocks) {
     // WHY collapse to null instead of rendering an empty MarkerRow:
     //

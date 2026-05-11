@@ -133,6 +133,14 @@ export function foldSemanticEvent(
       //
       // Same-turnId refresh (re-entry / source promotion) is
       // identical for both providers.
+      // Compaction-synthesis flag rides on `turn_started` only — it's
+      // a turn-scope attribute set by ClaudeProxyAdapter from the
+      // request-body sniff. Read once here; subsequent delta events
+      // don't carry it. Defaults to false on every shape that isn't
+      // an explicit boolean true (other source events, older proxy
+      // adapters, codex/screen sources) so the placeholder UI fails
+      // closed.
+      const isCompactionSynthesis = ev.isCompactionSynthesis === true
       if (!currentTurn) {
         currentTurn = {
           turnId,
@@ -146,11 +154,17 @@ export function foldSemanticEvent(
           lookups: emptySemanticLookupSnapshot(),
           startedAt: now,
           endedAt: null,
+          ...(isCompactionSynthesis ? { isCompactionSynthesis: true } : {}),
         }
       } else if (currentTurn.turnId === turnId) {
+        // Same-turn refresh (source promotion / re-entry). Preserve
+        // the existing flag rather than letting a flagless later
+        // event clear it. The proxy is the only source that sets the
+        // flag and it sets it on the very first turn_started.
         currentTurn = {
           ...currentTurn,
           source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
+          ...(isCompactionSynthesis ? { isCompactionSynthesis: true } : {}),
         }
       } else if (sessionKind === 'claude') {
         history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
@@ -166,6 +180,7 @@ export function foldSemanticEvent(
           lookups: emptySemanticLookupSnapshot(),
           startedAt: now,
           endedAt: null,
+          ...(isCompactionSynthesis ? { isCompactionSynthesis: true } : {}),
         }
       }
       // Codex: mismatched turnId falls through — drop the event.
