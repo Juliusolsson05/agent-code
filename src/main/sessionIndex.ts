@@ -22,7 +22,7 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 //     last-M user prompts) and search (query across ALL prompts with
 //     matching-bubbles-to-top ranking). The UI toggles based on
 //     whether the user has typed anything.
-//   - Linear scan over JSONL files is fine at cc-shell scale; we cap
+//   - Linear scan over JSONL files is fine at Agent Code scale; we cap
 //     visible sessions and back the rest with search. A proper inverted
 //     index would be overkill — a typical user has ≤200 sessions, each
 //     with ≤100 user prompts, so we're scanning a few tens of thousands

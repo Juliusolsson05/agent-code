@@ -1,7 +1,9 @@
 import { EventEmitter } from 'events'
+import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import type { SlashPickerState } from '@preload/index.js'
+import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import {
   ClaudeCodeHeadless,
   createProxyServer,
@@ -184,11 +186,11 @@ export class ClaudeSession extends EventEmitter {
       // Passing the workspace cwd into createProxyServer made the proxy layer
       // create timestamped runtime directories in whatever project the user had
       // open. That polluted repos with `proxy-events.jsonl`, mitmproxy CA
-      // state, and other runtime artifacts. We instead give the proxy helper
-      // enough identity to write under cc-shell's hidden app state directory,
-      // while still naming folders so humans can correlate them back to the
-      // shell session / resumed conversation.
+      // state, and other runtime artifacts. Agent Code owns the storage policy
+      // and passes its concrete app-state root into the reusable package.
       const proxy = await createProxyServer({
+        storageRoot: PROXY_EVENTS_DIR,
+        confDir: join(PROXY_EVENTS_DIR, '_shared-conf'),
         cwd: this.cwd,
         sessionKey: this.resumeSessionId
           ? `resume-${this.resumeSessionId}`
@@ -270,14 +272,14 @@ export class ClaudeSession extends EventEmitter {
             // We default to assuming the user is on a non-Haiku
             // primary model. Why this is OK as a default:
             //
-            //   * The vast majority of cc-shell users today run
+            //   * The vast majority of Agent Code users today run
             //     Sonnet/Opus; the Anthropic Max / Pro defaults land
             //     here.
             //   * The filter only fires when BOTH the flow's model
             //     matches `/haiku/i` AND the session model does NOT
             //     — so if the user IS on Haiku as primary, they need
             //     to opt out. The escape hatch is the
-            //     `CC_SHELL_PRIMARY_MODEL` env var below; setting it
+            //     `AGENT_CODE_PRIMARY_MODEL` env var below; setting it
             //     to a Haiku model id disables filtering.
             //   * The exact returned string doesn't matter as long as
             //     it doesn't match `/haiku/i`. The adapter only uses
@@ -289,7 +291,9 @@ export class ClaudeSession extends EventEmitter {
             // (1M context) …") so we always know the actual primary
             // model and the env-var escape hatch becomes redundant.
             getSessionModel: () =>
-              process.env.CC_SHELL_PRIMARY_MODEL ?? 'claude-opus-4-7',
+              process.env.AGENT_CODE_PRIMARY_MODEL ??
+              process.env.CC_SHELL_PRIMARY_MODEL ??
+              'claude-opus-4-7',
           }
         : undefined,
     })

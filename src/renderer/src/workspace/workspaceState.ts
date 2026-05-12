@@ -154,7 +154,7 @@ export type SemanticToolCallSnapshot = {
 // Per-turn tool-call index. Kept intentionally minimal: only fields
 // consumed by a rendered surface live here. Two fields (hasParseError,
 // siblingToolUseIds) were removed after confirming no reader used
-// them — the upstream Claude render layer needs them, cc-shell does
+// them — the upstream Claude render layer needs them, Agent Code does
 // not yet. Add back only when a real caller appears.
 export type SemanticLookupSnapshot = {
   toolCallsById: Record<string, SemanticToolCallSnapshot>

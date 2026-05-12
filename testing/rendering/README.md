@@ -1,16 +1,16 @@
-# cc-shell rendering harness
+# Agent Code rendering harness
 
 Standalone Electron app for **working on the rendering engine in
-isolation**. The harness reproduces cc-shell's full rendering pipeline
+isolation**. The harness reproduces Agent Code's full rendering pipeline
 — PTY → JSONL → proxy SSE → mapper → Feed component tree — against
 real, live agent sessions, with every layer exposed side by side so
 visual regressions can be traced to the layer that broke.
 
 If you are debugging or extending **only** the rendering layer, work
 here. Edits to vendored render components in this folder do **not**
-touch cc-shell. Edits to data-plumbing modules under `src/` (parsers,
+touch Agent Code. Edits to data-plumbing modules under `src/` (parsers,
 transcript types, workspaceStore mappers, settings store) DO affect
-cc-shell — by design, so a regression in one app reproduces in the
+Agent Code — by design, so a regression in one app reproduces in the
 other.
 
 No tabs. No command palette. No workspace. One session, one window,
@@ -20,7 +20,7 @@ every stream visible at once.
 
 ## Isolation model
 
-| Layer                                | Location                                                 | Shared with cc-shell?  |
+| Layer                                | Location                                                 | Shared with Agent Code?  |
 |--------------------------------------|----------------------------------------------------------|------------------------|
 | Render UI (Feed, rows, code, git)    | `testing/rendering/renderer/components/`                 | **No** — vendored copy |
 | Harness shell + debug panels         | `testing/rendering/renderer/RenderingHarnessApp.tsx`    | No                     |
@@ -33,10 +33,10 @@ every stream visible at once.
 | Headless PTY runtimes / providers    | `src/providers/`, `claude-code-headless`, `codex-headless` | Yes                  |
 
 The vendored render layer is a **one-time copy** with manual sync.
-When cc-shell ships a real Feed/row fix, port it into the vendored
+When Agent Code ships a real Feed/row fix, port it into the vendored
 copy by hand. When you want to experiment with rendering only here,
 edit only the files under `testing/rendering/renderer/components/`
-and cc-shell is untouched.
+and Agent Code is untouched.
 
 ## Run
 
@@ -46,7 +46,7 @@ npm run testing:rendering:build    # build only
 npm run testing:rendering:preview  # launch from existing build
 ```
 
-Output lives under `testing/rendering/out/` — separate from cc-shell's
+Output lives under `testing/rendering/out/` — separate from Agent Code's
 `out/`, so the two builds never clobber each other.
 
 ## What you see
@@ -82,7 +82,7 @@ Right column, stacked:
 
 ## Bug-fix registry
 
-Tickets here track **cc-shell rendering bugs** that the harness
+Tickets here track **Agent Code rendering bugs** that the harness
 helped us reproduce or fix. Harness setup mistakes (wrong CSS, hook
 order, etc.) are NOT in this list — see "Harness architecture notes"
 below for those.
@@ -90,17 +90,17 @@ below for those.
 Every ticket is referenced from a thick WHY-comment at the patch
 site so future-you can jump from code to context and back.
 
-| Ticket   | Bug in cc-shell rendering                                                                                                                                                                                                                              | Harness patch site                                                                                                | cc-shell status                                                                                                       |
+| Ticket   | Bug in Agent Code rendering                                                                                                                                                                                                                              | Harness patch site                                                                                                | Agent Code status                                                                                                       |
 |----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|
 | REND-1   | Bootstrap race: bulk `session:jsonl-entries` burst (~200 entries) fires inside `await spawnSession()`. Any consumer that subscribes AFTER spawn returns drops the entire bootstrap. Visually: only the very last message appears.                       | `RenderingHarnessApp.tsx` — subscriptions hoisted to App level, refs reset before `spawnSession`                  | Fixed: `workspaceStore` subscribes at module mount, before any spawn.                                                  |
 | REND-2   | "Double-rendered last message" on resume. The screen still contains the last assistant message, so `<StreamingRow>` extracts and renders it AT THE SAME TIME the JSONL bootstrap renders it as an `<EntryRow>`. Both visible.                          | `RenderingHarnessApp.tsx` — `isLive` gate on `streamingScreen` prop (mirror of `TileLeaf.isSessionLive`)          | Fixed: `TileLeaf.isSessionLive` zeroes `streamingScreen` when no turn is in flight.                                    |
-| REND-3   | After submitting a prompt, the previous assistant text rendered below the user message until the new turn's first text_delta. Two root causes: (a) no `streamingBaseline` captured at submit, (b) proxy semantic events were never folded into a `SemanticLiveTurn` so Feed always fell back to `<StreamingRow>` (screen scrape) instead of `<SemanticStreamingTurn>` (parsed events). | `RenderingHarnessApp.tsx` — `foldSemanticEvent` fold + `onBeforeSubmit` baseline capture                          | **PARTIAL.** cc-shell captures the baseline (`TileLeaf.tsx` onSubmit) and folds events, but `Feed.tsx isStaleStreamingExtract` early-returns false for Claude — only Codex gets the prefix-containment heuristic. Claude can still flicker the previous turn's text during the submit→first-delta gap. |
+| REND-3   | After submitting a prompt, the previous assistant text rendered below the user message until the new turn's first text_delta. Two root causes: (a) no `streamingBaseline` captured at submit, (b) proxy semantic events were never folded into a `SemanticLiveTurn` so Feed always fell back to `<StreamingRow>` (screen scrape) instead of `<SemanticStreamingTurn>` (parsed events). | `RenderingHarnessApp.tsx` — `foldSemanticEvent` fold + `onBeforeSubmit` baseline capture                          | **PARTIAL.** Agent Code captures the baseline (`TileLeaf.tsx` onSubmit) and folds events, but `Feed.tsx isStaleStreamingExtract` early-returns false for Claude — only Codex gets the prefix-containment heuristic. Claude can still flicker the previous turn's text during the submit→first-delta gap. |
 
 ### Adding a new ticket
 
 1. Pick the next `REND-N`.
 2. Add a row to the table above (one-line summary + harness patch site
-   + cc-shell status: fixed / partial / not fixed).
+   + Agent Code status: fixed / partial / not fixed).
 3. At the harness patch site, write a thick WHY-comment that **starts**
    with the ticket id, e.g.
    ```
@@ -109,13 +109,13 @@ site so future-you can jump from code to context and back.
    // Reason: the prepend loop only ran the conversation/compact filter
    // once, but compact_summary is wrapped in a `progress` envelope that
    // had to be unwrapped first. Mirror of workspaceStore's loadOlder
-   // path in cc-shell.
+   // path in Agent Code.
    ```
 4. Commit with the ticket id in the subject: `REND-4: …`.
 
 ## Harness architecture notes
 
-Items below are **NOT** cc-shell bugs — they are harness setup
+Items below are **NOT** Agent Code bugs — they are harness setup
 decisions / first-cut mistakes documented here so future maintainers
 don't re-litigate them. None of these have a ticket id; they're
 just constraints of the harness itself.
@@ -140,7 +140,7 @@ just constraints of the harness itself.
   `CodeBlock`, `GitRows`, `monacoRuntime` are vendored at
   `renderer/components/`. Edits stay in the harness; data plumbing
   is shared. Bottom padding inside the vendored Feed (`pb-24`) is
-  larger than cc-shell's (`pb-8`) because the harness has a tighter
+  larger than Agent Code's (`pb-8`) because the harness has a tighter
   pane.
 - **FAT debug stream**: per-layer debug log
   (`JSONL` / `MAP` / `SEM` / `STATE` / `RENDER`) so a regression can
@@ -159,10 +159,10 @@ To add e.g. a `PTY` layer:
    ```
 4. The filter chip and copy buttons pick it up automatically.
 
-## Required cc-shell additions
+## Required Agent Code additions
 
 Some additions in `src/` exist purely to support this harness. They
-are pure additions — no existing cc-shell behavior changed.
+are pure additions — no existing Agent Code behavior changed.
 
 - `session:list-all` IPC handler in `src/main/index.ts`
 - `listAllSessions` API in `src/preload/index.ts`
@@ -170,6 +170,6 @@ are pure additions — no existing cc-shell behavior changed.
 - `mapCodexRolloutToFeedEntries`, `extractEmbeddedClaudeProgressEntry`, `claudeHistoryMarker`, `codexHistoryMarker`, `foldSemanticEvent` exported from `src/renderer/src/workspace/workspaceStore.ts`
 
 If the harness build complains about a missing export, that export
-needs to be added to cc-shell — never duplicate the implementation
+needs to be added to Agent Code — never duplicate the implementation
 into the harness; the whole point is that the data layer stays
 shared.

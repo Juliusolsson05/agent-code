@@ -6,7 +6,7 @@ import type { SessionKind } from '@renderer/workspace/types'
 
 // ---- Prompt history state ----
 //
-// cc-shell keeps its own bash-style history for the composer
+// Agent Code keeps its own bash-style history for the composer
 // instead of forwarding Up/Down to CC. Two reasons:
 //   1. CC's own history updates CC's own input box in the terminal
 //      buffer, but our composer is a React textarea — the two

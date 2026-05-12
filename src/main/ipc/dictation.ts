@@ -20,13 +20,15 @@ import { wrapWithSttTag, type SpeechTraceEvent } from 'agent-voice-dictation'
 
 // Opt-in chunk dump for diagnosing recorder/provider audio issues. Writes a
 // `.webm` per session under Electron's app temp dir so we don't pollute
-// world-readable `/tmp`. Off unless `CC_SHELL_DICTATION_DUMP=1` is set —
+// world-readable `/tmp`. Off unless `AGENT_CODE_DICTATION_DUMP=1` is set —
 // keeping mic audio off-disk by default is the right default for a privacy
 // surface, even if we trust the host machine. To use:
-//   CC_SHELL_DICTATION_DUMP=1 npm run dev
+//   AGENT_CODE_DICTATION_DUMP=1 npm run dev
 // then the path is logged at session start and finalize.
-const DICTATION_DUMP_ENABLED = process.env.CC_SHELL_DICTATION_DUMP === '1'
-const dictationDumpPath = (id: string) => join(app.getPath('temp'), `cc-shell-dictation-${id}.webm`)
+const DICTATION_DUMP_ENABLED =
+  process.env.AGENT_CODE_DICTATION_DUMP === '1' ||
+  process.env.CC_SHELL_DICTATION_DUMP === '1'
+const dictationDumpPath = (id: string) => join(app.getPath('temp'), `agent-code-dictation-${id}.webm`)
 
 type ActiveDictationSession = {
   id: string
@@ -121,7 +123,7 @@ export function registerDictationIpc(deps: {
           reason: 'non-deepgram-provider',
           provider: params.provider,
         })
-        return { kind: 'error', message: 'Only Deepgram streaming is wired in cc-shell v1.' }
+        return { kind: 'error', message: 'Only Deepgram streaming is wired in Agent Code v1.' }
       }
 
       const apiKey = readDeepgramApiKey()
@@ -131,7 +133,7 @@ export function registerDictationIpc(deps: {
         })
         return {
           kind: 'error',
-          message: 'Missing DEEPGRAM_API_KEY. Add it to cc-shell .env or the shell environment.',
+          message: 'Missing DEEPGRAM_API_KEY. Add it to Agent Code .env or the shell environment.',
         }
       }
 
@@ -151,7 +153,7 @@ export function registerDictationIpc(deps: {
             })
           },
           onTranscript: event => {
-            // cc-shell keeps the batch upload as the final authority because
+            // Agent Code keeps the batch upload as the final authority because
             // the WebM/Opus websocket path has had provider-side parser
             // failures. Streaming is still valuable as a preview side-channel:
             // if it emits interim text, the composer can paint live words; if

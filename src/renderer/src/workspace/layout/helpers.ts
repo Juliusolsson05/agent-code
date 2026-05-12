@@ -12,7 +12,7 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 // or session-state context.
 
 /** Derive a tab title from a cwd — use the last path segment
- *  ("cc-shell"), falling back to the full cwd if none. */
+ *  ("agent-code"), falling back to the full cwd if none. */
 export function titleFromCwd(cwd: string): string {
   const parts = cwd.split('/').filter(Boolean)
   return parts[parts.length - 1] ?? cwd

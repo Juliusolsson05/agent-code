@@ -16,7 +16,7 @@ import { SystemPerfPopover } from '@renderer/features/system-perf/ui/SystemPerfP
 //   no command-palette entry yet (YAGNI), so it doesn't belong
 //   on uiShell.
 // - Hiding the whole subtree behind one `enabled` check means
-//   when CC_SHELL_PERF is off, this entire feature compiles down
+//   when AGENT_CODE_PERF is off, this entire feature compiles down
 //   to a no-op render with zero IPC traffic after the first probe.
 export function SystemPerfHeader() {
   const { enabled, current, buffer } = useSystemPerfPoller()

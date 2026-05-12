@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 // Vendored Feed — see testing/rendering/renderer/components/.
 // The harness owns its own copy of every renderer component so
-// padding / margin / row tweaks here can't bleed into cc-shell.
+// padding / margin / row tweaks here can't bleed into Agent Code.
 // Data plumbing (transcript types, parsers, mappers, settings) is
 // still imported from src/ — those are stable and the harness wants
-// to reproduce cc-shell behavior, not diverge from it.
+// to reproduce Agent Code behavior, not diverge from it.
 import { Feed } from './components/Feed'
 import {
   claudeHistoryMarker,
@@ -49,7 +49,7 @@ import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 //   permanently lost — visually presents as "only the very last
 //   message rendered after I picked the session".
 //
-//   cc-shell sidesteps this in `workspaceStore` by subscribing at
+//   Agent Code sidesteps this in `workspaceStore` by subscribing at
 //   module mount, before any spawn happens. The harness mirrors
 //   the same pattern: subscribe at the OUTER component
 //   (RenderingHarnessApp), not inside DebugSession which only mounts
@@ -134,7 +134,7 @@ type ScreenState = {
 
 const EMPTY_SCREEN: ScreenState = { plain: '', markdown: '', recent: '', recentMarkdown: '' }
 
-// Setup constraint (NOT a cc-shell bug). `process` is not defined
+// Setup constraint (NOT an Agent Code bug). `process` is not defined
 // in the renderer when contextIsolation is on. First version of this
 // constant was `process?.env?.HOME ?? '/'` and threw a ReferenceError
 // at module load → black screen on first launch. Hardcoded `/` is
@@ -688,7 +688,7 @@ export function RenderingHarnessApp() {
     setSpawned(null)
   }, [spawned])
 
-  // Setup constraint (NOT a cc-shell bug): every hook in this
+  // Setup constraint (NOT an Agent Code bug): every hook in this
   // component must run on every render. First version of this
   // `useCallback` was declared AFTER the `if (!spawned) return …`
   // early return — phase-1 render skipped it, phase-2 called it,
@@ -720,7 +720,7 @@ export function RenderingHarnessApp() {
   // still contained the last assistant message AND the JSONL
   // bootstrap brought the same message in as an Entry → both
   // rendered, "double-rendered last message". Mirror of
-  // TileLeaf.isSessionLive in cc-shell. See README → REND-2.
+  // TileLeaf.isSessionLive in Agent Code. See README → REND-2.
   const isLive =
     activityStatus !== null ||
     awaitingAssistant ||
@@ -785,7 +785,7 @@ function SessionPicker({ onPick }: { onPick: (info: HarnessSessionInfo) => void 
   return (
     <div className="h-screen bg-canvas text-ink font-code overflow-hidden flex flex-col">
       <div className="border-b border-border bg-surface px-5 py-4">
-        <div className="text-[13px] text-ink">cc-shell rendering debug</div>
+        <div className="text-[13px] text-ink">Agent Code rendering debug</div>
         <div className="mt-1 text-[11px] text-muted">
           Pick a session to resume. Spawns the real agent, shows every pipeline
           layer side by side.
@@ -977,7 +977,7 @@ function DebugSession({
         </span>
       </div>
 
-      {/* Setup constraint (NOT a cc-shell bug): split MUST be
+      {/* Setup constraint (NOT an Agent Code bug): split MUST be
        * flex-row, not grid-cols.
        *
        * First implementation used `grid grid-cols-[3fr_2fr]` with no

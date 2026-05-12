@@ -16,7 +16,7 @@ export type SessionOptions = {
   snapshotIntervalMs?: number
   resumeSessionId?: string
   dangerousMode?: boolean
-  /** Stable cc-shell session id assigned by SessionManager. Provider
+  /** Stable Agent Code session id assigned by SessionManager. Provider
    *  runtimes can use this for app-owned artifact storage paths
    *  without coupling themselves to the manager implementation. */
   shellSessionId?: string

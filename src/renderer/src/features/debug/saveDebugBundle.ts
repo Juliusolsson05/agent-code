@@ -268,7 +268,7 @@ export async function assembleAndSaveDebugBundle(params: {
   kind: string
   reason?: string
   /** Working directory of the session, used to locate the matching
-   *  proxy-events run dir under ~/.config/cc-shell/proxy/. Optional
+   *  proxy-events run dir under ~/.config/agent-code/proxy/. Optional
    *  because sessions that ran without proxy capture (or callers
    *  that don't have the cwd handy) should still produce a bundle —
    *  the proxy section just gets omitted. */
@@ -291,7 +291,7 @@ export async function assembleAndSaveDebugBundle(params: {
 
   // Manual bundles include a bounded proxy tail because a human just
   // asked for a forensic snapshot. Autosave bundles intentionally skip
-  // that payload: the full proxy run remains under ~/.config/cc-shell/proxy
+  // that payload: the full proxy run remains under ~/.config/agent-code/proxy
   // and retention now budgets that root directly. Copying the same tail into
   // every minute-level autosave was one of the multipliers behind the 108 GB
   // debug-bundles directory; autosave should preserve orientation, not create

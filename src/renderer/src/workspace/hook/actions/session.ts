@@ -202,7 +202,7 @@ export function useSessionActions(
       }
 
       // Ghost log bootstrap — fire-and-forget, no await. If a prior
-      // run of cc-shell persisted ghosts for this sessionId, replay
+      // run of Agent Code persisted ghosts for this sessionId, replay
       // them through the atp reducer and merge into the runtime's
       // ghost map. The renderer then sees the same merged feed after
       // reload as it saw before. A missing file is not an error.

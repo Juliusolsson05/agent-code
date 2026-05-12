@@ -25,7 +25,7 @@ let config: PerformanceConfig = {
 }
 let initialized = false
 let tracerProvider: BasicTracerProvider | null = null
-let tracer = trace.getTracer('cc-shell-renderer')
+let tracer = trace.getTracer('agent-code-renderer')
 let pending: PerformanceRecord[] = []
 let flushTimer: ReturnType<typeof setInterval> | null = null
 
@@ -138,7 +138,7 @@ export async function initializePerformance(): Promise<PerformanceConfig> {
       ],
     })
     trace.setGlobalTracerProvider(tracerProvider)
-    tracer = trace.getTracer('cc-shell-renderer')
+    tracer = trace.getTracer('agent-code-renderer')
     flushTimer = setInterval(() => {
       void flushPerformance()
     }, FLUSH_INTERVAL_MS)

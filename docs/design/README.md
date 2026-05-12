@@ -1,6 +1,6 @@
 # `docs/design/` — sources of truth for non-obvious system designs
 
-Files in this directory describe **what cc-shell's most complicated subsystems are and why they are shaped the way they are.** They are referenced by inline code comments and treated as authoritative. They are *not* changelogs, *not* running notes, *not* blow-by-blow histories of how a fix was derived.
+Files in this directory describe **what Agent Code's most complicated subsystems are and why they are shaped the way they are.** They are referenced by inline code comments and treated as authoritative. They are *not* changelogs, *not* running notes, *not* blow-by-blow histories of how a fix was derived.
 
 ## DO NOT change these files lightly
 

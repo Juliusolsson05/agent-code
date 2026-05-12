@@ -5,7 +5,7 @@
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile } from '@main/tmux/tmuxRecovery.js'
 
-const PREFIX = process.env.TMUX_TEST_PREFIX ?? 'ccshell-verify-'
+const PREFIX = process.env.TMUX_TEST_PREFIX ?? 'agentcode-verify-'
 let failed = 0
 
 function check(label: string, ok: boolean, detail?: string): void {

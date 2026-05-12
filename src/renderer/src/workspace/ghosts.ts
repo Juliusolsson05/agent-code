@@ -3,7 +3,7 @@
 // persistence.
 //
 // -----------------------------------------------------------------------------
-// What ghost is in cc-shell today
+// What ghost is in Agent Code today
 // -----------------------------------------------------------------------------
 //
 // Ghost is a parallel disk-backed ledger of semantic events. As
@@ -69,7 +69,7 @@
 // See also `agent-transcript-parser/docs/ghost.md` for the
 // underlying primitive's semantics, and
 // docs/superpowers/plans/2026-05-07-ghost-system-findings.md for
-// the long-form diagnostic of how cc-shell got here.
+// the long-form diagnostic of how Agent Code got here.
 //
 // No function here performs IO. No function here subscribes to
 // events. Input goes in, new `Map<uuid, GhostEntry>` comes out.
@@ -367,7 +367,7 @@ function ghostContextForBlock(
  *
  *   Codex:  rollout emits one entry per content block with its own
  *           uuid. We match by (turnId, blockIndex). turnId for Codex
- *           comes from the response id when available; cc-shell's
+ *           comes from the response id when available; Agent Code's
  *           Codex ingest path already exposes it on the mapped
  *           entry. When the mapping is not available we fall back
  *           to tool_use id pairing for tool blocks.

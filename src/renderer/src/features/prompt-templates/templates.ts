@@ -2,6 +2,10 @@ import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/forma
 import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import {
+  LEGACY_PROMPT_TEMPLATES_STORAGE_KEY,
+  PROMPT_TEMPLATES_STORAGE_KEY,
+} from '@renderer/app-state/localStorageMigration'
 
 export type PromptTemplateContext = {
   workspace: Workspace
@@ -19,7 +23,7 @@ export type PromptTemplate = {
   updatedAt?: number
 }
 
-const CUSTOM_TEMPLATES_KEY = 'cc-shell.promptTemplates.v1'
+const CUSTOM_TEMPLATES_KEY = PROMPT_TEMPLATES_STORAGE_KEY
 
 type AgentTranscriptRequest = {
   sessionId: string
@@ -104,7 +108,7 @@ function buildActiveTabTranscriptPrompt(
     lines.push(
       `## ${index + 1}. ${label} agent`,
       '',
-      `cc-shell session id: \`${agent.sessionId}\``,
+      `Agent Code session id: \`${agent.sessionId}\``,
       `provider session id: \`${agent.providerSessionId}\``,
       `provider: \`${agent.kind}\``,
       'cwd:',
@@ -145,7 +149,7 @@ export const builtinPromptTemplates: PromptTemplate[] = [
     title: 'Analyze Worktree Dump',
     description: 'Insert a live status dump for all Git worktrees in the focused project.',
     scope: 'builtin',
-    body: 'Please analyze this cc-shell worktree status dump.',
+    body: 'Please analyze this Agent Code worktree status dump.',
     buildBody: async ({ workspace, sessionId }) => {
       const cwd = workspace.state.sessions[sessionId]?.cwd ?? null
       const dump = await loadWorktreeDump({ cwd, workspace, forceActivityRefresh: false })
@@ -198,7 +202,9 @@ function saveCustomPromptTemplates(templates: PromptTemplate[]): void {
 
 export function loadCustomPromptTemplates(): PromptTemplate[] {
   try {
-    const raw = window.localStorage.getItem(CUSTOM_TEMPLATES_KEY)
+    const raw =
+      window.localStorage.getItem(CUSTOM_TEMPLATES_KEY) ??
+      window.localStorage.getItem(LEGACY_PROMPT_TEMPLATES_STORAGE_KEY)
     if (!raw) return []
     return normalizeCustomTemplates(JSON.parse(raw))
       .sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0))

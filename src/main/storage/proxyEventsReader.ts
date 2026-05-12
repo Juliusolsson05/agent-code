@@ -10,7 +10,7 @@ import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
 //   Both Claude (via mitmproxy + ProxyServer in claude-code-headless)
 //   and Codex (via ResponsesProxy after PR feat/codex-proxy-capture)
 //   write per-session-run JSONL logs under
-//     ~/.config/cc-shell/proxy/<project-segment>/<session-segment>/<run-ts>/proxy-events.jsonl
+//     ~/.config/agent-code/proxy/<project-segment>/<session-segment>/<run-ts>/proxy-events.jsonl
 //
 //   These contain the wire-level capture of every API request and
 //   response chunk: headers, request body (up to 2 MiB), pre-parsed
@@ -45,7 +45,7 @@ const PROXY_ROOT = PROXY_EVENTS_DIR
 //   are within the last few minutes of traffic. Older traffic is
 //   useful for trend analysis but not bundle-immediacy. If the user
 //   needs the full log they can grab it directly from
-//   ~/.config/cc-shell/proxy/.../proxy-events.jsonl — the run dir
+//   ~/.config/agent-code/proxy/.../proxy-events.jsonl — the run dir
 //   path goes into the bundle's manifest so they know where to look.
 const PROXY_EVENTS_BUNDLE_MAX_BYTES = 5 * 1024 * 1024
 

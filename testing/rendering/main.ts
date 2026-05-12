@@ -1,6 +1,6 @@
 // Rendering-debug harness — dedicated Electron main process.
 //
-// Setup constraint (NOT a cc-shell bug; see README → "Harness
+// Setup constraint (NOT an Agent Code bug; see README → "Harness
 // architecture notes"). The harness does NOT load `src/main/index.ts`
 // because that entrypoint boots tmux detection (noisy startup logs:
 // "[tmux] available", "[tmux] recovery: 2 recoverable"), workspace
@@ -357,7 +357,7 @@ function createWindow(): void {
     minWidth: 1200,
     minHeight: 760,
     backgroundColor: '#111111',
-    title: 'cc-shell rendering debug',
+    title: 'Agent Code rendering debug',
     autoHideMenuBar: true,
     webPreferences: {
       // Reuse the existing preload bridge so the renderer's

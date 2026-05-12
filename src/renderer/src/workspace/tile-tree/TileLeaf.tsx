@@ -31,7 +31,7 @@ import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 // the paste debounce, the image size/format gates, and the pane
 // header shortening.
 
-// TileLeaf — one pane. A "mini cc-shell" self-contained in a box:
+// TileLeaf — one pane. A "mini Agent Code" self-contained in a box:
 //   header strip (project dir + status)
 //   Feed (structured JSONL + streaming preview)
 //   composer (input box routing keystrokes to this pane's session)

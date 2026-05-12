@@ -7,8 +7,10 @@ import {
   type Settings,
 } from '@renderer/app-state/settings/types'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
-
-const LEGACY_STORAGE_KEY = 'cc-shell:settings'
+import {
+  APP_SETTINGS_STORAGE_KEY,
+  LEGACY_SETTINGS_STORAGE_KEY,
+} from '@renderer/app-state/localStorageMigration'
 
 export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
@@ -56,7 +58,9 @@ export function coerceSettings(value: unknown): Settings {
 
 export function loadInitialSettings(): Settings {
   try {
-    const raw = localStorage.getItem(LEGACY_STORAGE_KEY)
+    const raw =
+      localStorage.getItem(APP_SETTINGS_STORAGE_KEY) ??
+      localStorage.getItem(LEGACY_SETTINGS_STORAGE_KEY)
     if (!raw) return DEFAULT_SETTINGS
     return coerceSettings(JSON.parse(raw))
   } catch {

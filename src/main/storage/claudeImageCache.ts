@@ -3,6 +3,8 @@ import { extname, join } from 'path'
 import { mkdir, rm, writeFile } from 'fs/promises'
 import { app } from 'electron'
 
+import { APP_SLUG } from '@shared/appIdentity.js'
+
 // Claude image paste cache.
 //
 // When the user pastes an image into the Claude composer, the
@@ -68,7 +70,7 @@ function estimateBase64DecodedBytes(base64Data: string): number {
 }
 
 function getClaudeImageCacheDir(): string {
-  return join(app.getPath('temp'), 'cc-shell', 'claude-images')
+  return join(app.getPath('temp'), APP_SLUG, 'claude-images')
 }
 
 export async function cleanupClaudeImageCacheDir(): Promise<void> {

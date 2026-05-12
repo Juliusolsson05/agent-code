@@ -18,7 +18,7 @@ on:
       release_name:
         description: "Release name to create when publish_release is true"
         required: true
-        default: "Agent Studio Code 0.0.2 Beta"
+        default: "Agent Code 0.0.2 Beta"
 
 concurrency:
   group: release-macos

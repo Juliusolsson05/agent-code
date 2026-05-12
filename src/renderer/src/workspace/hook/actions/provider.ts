@@ -193,7 +193,7 @@ export function useProviderActions(
         // prompt in unsent form so I can edit/re-send it".
         //
         // Bash mode: Claude Code exposes a `bash` input mode that
-        // prefixes `!` when composing. cc-shell's composer doesn't
+        // prefixes `!` when composing. Agent Code's composer doesn't
         // have a discrete bash mode yet, but it DOES treat a
         // leading `!` as bash. Mirroring CC's behavior means
         // "rewinding to a /bash-input prompt rehydrates as

@@ -124,7 +124,7 @@ export async function saveDebugBundle(
   // are small (a few files, typically < 1MB total) and a serial loop
   // keeps error messages unambiguous — a failure names the file that
   // actually failed, not an aggregate rejection that's harder to act
-  // on when debugging cc-shell itself (which is the whole point of
+  // on when debugging Agent Code itself (which is the whole point of
   // this feature).
   for (const file of params.files) {
     const target = join(bundlePath, file.name)

@@ -20,18 +20,19 @@ import {
   type PerformanceLogFile,
 } from '@main/storage/performanceLog.js'
 import { LocalJsonlSpanExporter } from '@main/performance/LocalJsonlSpanExporter.js'
+import { APP_SLUG, LEGACY_APP_SLUG } from '@shared/appIdentity.js'
 
 const DEFAULT_SLOW_SPAN_MS = 50
 const FLUSH_INTERVAL_MS = 500
 const SAMPLE_INTERVAL_MS = 5000
 
-function envFlag(name: string): boolean {
-  const value = process.env[name]
+function envFlag(name: string, legacyName?: string): boolean {
+  const value = process.env[name] ?? (legacyName ? process.env[legacyName] : undefined)
   return value === '1' || value === 'true' || value === 'yes'
 }
 
-function envNumber(name: string, fallback: number): number {
-  const raw = process.env[name]
+function envNumber(name: string, fallback: number, legacyName?: string): number {
+  const raw = process.env[name] ?? (legacyName ? process.env[legacyName] : undefined)
   if (!raw) return fallback
   const parsed = Number(raw)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
@@ -60,13 +61,13 @@ function recordFile(record: PerformanceRecord): PerformanceLogFile {
 }
 
 export class PerformanceService {
-  private readonly enabled = envFlag('CC_SHELL_PERF')
-  private readonly verbose = envFlag('CC_SHELL_PERF_VERBOSE')
-  private readonly slowSpanMs = envNumber('CC_SHELL_PERF_SLOW_MS', DEFAULT_SLOW_SPAN_MS)
+  private readonly enabled = envFlag('AGENT_CODE_PERF', 'CC_SHELL_PERF')
+  private readonly verbose = envFlag('AGENT_CODE_PERF_VERBOSE', 'CC_SHELL_PERF_VERBOSE')
+  private readonly slowSpanMs = envNumber('AGENT_CODE_PERF_SLOW_MS', DEFAULT_SLOW_SPAN_MS, 'CC_SHELL_PERF_SLOW_MS')
   private readonly runId = this.enabled ? `${Date.now()}-${pid}` : null
   private runDir: string | null = null
   private tracerProvider: NodeTracerProvider | null = null
-  private tracer = trace.getTracer('cc-shell-main')
+  private tracer = trace.getTracer(`${APP_SLUG}-main`)
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private sampleTimer: ReturnType<typeof setInterval> | null = null
   private eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | null = null
@@ -88,7 +89,8 @@ export class PerformanceService {
     this.runDir = await ensurePerformanceRunDir(runFolderName(startedAt, pid))
     this.tracerProvider = new NodeTracerProvider({
       resource: resourceFromAttributes({
-        'service.name': 'cc-shell',
+        'service.name': APP_SLUG,
+        'service.legacy_name': LEGACY_APP_SLUG,
         'service.namespace': 'desktop',
         'process.runtime.name': 'electron-main',
         'process.pid': pid,
@@ -105,7 +107,7 @@ export class PerformanceService {
       ],
     })
     this.tracerProvider.register()
-    this.tracer = trace.getTracer('cc-shell-main')
+    this.tracer = trace.getTracer(`${APP_SLUG}-main`)
 
     await writePerformanceManifest(this.runDir, {
       schemaVersion: 2,
@@ -120,6 +122,9 @@ export class PerformanceService {
       electron: versions.electron,
       chrome: versions.chrome,
       env: {
+        AGENT_CODE_PERF: process.env.AGENT_CODE_PERF ?? null,
+        AGENT_CODE_PERF_VERBOSE: process.env.AGENT_CODE_PERF_VERBOSE ?? null,
+        AGENT_CODE_PERF_SLOW_MS: process.env.AGENT_CODE_PERF_SLOW_MS ?? null,
         CC_SHELL_PERF: process.env.CC_SHELL_PERF ?? null,
         CC_SHELL_PERF_VERBOSE: process.env.CC_SHELL_PERF_VERBOSE ?? null,
         CC_SHELL_PERF_SLOW_MS: process.env.CC_SHELL_PERF_SLOW_MS ?? null,

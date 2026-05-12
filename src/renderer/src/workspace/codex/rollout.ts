@@ -191,7 +191,7 @@ export function codexTurnIdFromRollout(entry: Record<string, unknown>): string |
 /**
  * Stamp a mapped Codex feed entry with the rollout turn id so the
  * ghost reconciler can supersede by turn id. The field is added as
- * a cc-shell-local extension to the shared `Entry` type via cast —
+ * an Agent Code-local extension to the shared `Entry` type via cast —
  * consumers that don't care about it ignore it, and
  * `reconcileUpstream` reads it defensively.
  */

@@ -209,7 +209,7 @@ export function emptySemanticLookupSnapshot(): SemanticLiveTurn['lookups'] {
  * from raw transcript rows. It builds a relationship layer first
  * (`toolUseByToolUseID`, `toolResultByToolUseID`, `resolvedToolUseIDs`,
  * sibling sets, progress maps) and then renders from that. This smaller
- * semantic lookup snapshot is the same idea for cc-shell's live turn:
+ * semantic lookup snapshot is the same idea for Agent Code's live turn:
  * keep the expensive / correctness-sensitive "which tool is still live,
  * which one errored, which tools were siblings in this turn?" logic in
  * the shared reducer so every surface reads the same answer.

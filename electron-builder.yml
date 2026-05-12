@@ -1,5 +1,5 @@
-appId: com.agentstudiocode.app
-productName: Agent Studio Code
+appId: com.agentcode.app
+productName: Agent Code
 artifactName: "${productName}-${version}-${arch}.${ext}"
 directories:
   output: release

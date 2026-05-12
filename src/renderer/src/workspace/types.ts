@@ -50,13 +50,13 @@ export type Tab = {
  * Which kind of backend a session drives.
  *
  *   'claude'   — a Claude Code child process. The pane renders the
- *                full cc-shell UI (feed, composer, slash picker, …)
+ *                full Agent Code UI (feed, composer, slash picker, …)
  *                driven by the JSONL transcript + headless terminal
  *                screen scrape.
  *   'terminal' — a plain shell child process. The pane renders an
  *                xterm.js instance that receives raw PTY bytes and
  *                forwards keystrokes back. VS Code-style integrated
- *                terminal with no cc-shell chrome.
+ *                terminal with no Agent Code chrome.
  *
  * Persisted in SessionMeta so a reload restores each pane to the
  * right component. Absent (= undefined) in pre-terminal workspace.json
@@ -76,7 +76,7 @@ export type SessionMeta = {
    */
   kind?: SessionKind
   /**
-   * CC's own session UUID (distinct from cc-shell's SessionId which is
+   * CC's own session UUID (distinct from Agent Code's SessionId which is
    * a per-launch routing key). Captured from the `sessionId` field on
    * the first JSONL entry that lands for this session, and persisted
    * to disk so we can pass `--resume <uuid>` on the next launch and

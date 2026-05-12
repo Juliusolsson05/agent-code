@@ -1,21 +1,21 @@
-// Phase 1 smoke test: prove cc-shell can resolve and use the
+// Phase 1 smoke test: prove Agent Code can resolve and use the
 // agent-voice-dictation package without any actual network round-trip.
 //
 // Why a structural smoke test instead of a real Deepgram call:
-//   - No API key in this dev sandbox, no fixture audio in cc-shell's repo.
+//   - No API key in this dev sandbox, no fixture audio in Agent Code's repo.
 //   - We want a fast, deterministic gate that catches the breakage modes
 //     this integration is most likely to hit: misnamed exports, broken
 //     subpath resolution, types that drift between the two repos. Real
 //     network tests belong in flow-electron's live-providers suite, not
-//     here — cc-shell is a consumer, not a provider gateway.
+//     here — Agent Code is a consumer, not a provider gateway.
 //
 // What this verifies:
-//   1. cc-shell's main-process tsx can import 'agent-voice-dictation'
+//   1. Agent Code's main-process tsx can import 'agent-voice-dictation'
 //      and the controller wrapping it.
 //   2. Both subpath exports we rely on resolve (composer + env).
 //   3. listSelectableProviders() agrees with the package's support map
 //      (catches the case where the package quietly disables a provider
-//      and cc-shell's UI keeps offering it).
+//      and Agent Code's UI keeps offering it).
 //   4. The Deepgram streaming singleton constructs without throwing.
 //
 // Run with: npm run test:dictation

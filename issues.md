@@ -196,7 +196,7 @@ The order should be:
 
 ### Problem
 
-Claude supports pasting images into input. `cc-shell` should support that too.
+Claude supports pasting images into input. Agent Code should support that too.
 
 This should not just be a hidden transport feature. The UI should make the pasted image visible and obvious before send.
 

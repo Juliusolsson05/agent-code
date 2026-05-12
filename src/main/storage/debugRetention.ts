@@ -38,8 +38,8 @@ export type DebugStoragePruneResult = {
 let pruneInFlight: Promise<DebugStoragePruneResult> | null = null
 let lastPruneStartedAt = 0
 
-function envNumber(name: string, fallback: number): number {
-  const raw = process.env[name]?.trim()
+function envNumber(name: string, fallback: number, legacyName?: string): number {
+  const raw = (process.env[name] ?? (legacyName ? process.env[legacyName] : undefined))?.trim()
   if (!raw) return fallback
   const parsed = Number(raw)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
@@ -64,11 +64,11 @@ async function defaultBudgetBytes(): Promise<number> {
 }
 
 async function budgetBytes(): Promise<number> {
-  return Math.floor(envNumber('CC_SHELL_DEBUG_MAX_GB', (await defaultBudgetBytes()) / GIB) * GIB)
+  return Math.floor(envNumber('AGENT_CODE_DEBUG_MAX_GB', (await defaultBudgetBytes()) / GIB, 'CC_SHELL_DEBUG_MAX_GB') * GIB)
 }
 
 function ttlHours(): number {
-  return envNumber('CC_SHELL_DEBUG_TTL_HOURS', DEFAULT_TTL_HOURS)
+  return envNumber('AGENT_CODE_DEBUG_TTL_HOURS', DEFAULT_TTL_HOURS, 'CC_SHELL_DEBUG_TTL_HOURS')
 }
 
 export function scheduleDebugStoragePrune(reason: string): void {

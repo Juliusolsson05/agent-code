@@ -1,10 +1,6 @@
-# cc-shell
+# Agent Code
 
-`cc-shell` is an agent-first editor for heavy users of Claude Code and Codex.
-
-The working name is `cc-shell`. The product is planned to be renamed to
-**Agent Code**. Some repository paths, package names, and UI labels may still
-use `cc-shell` during the transition.
+Agent Code is an agent-first editor for heavy users of Claude Code and Codex.
 
 This is not another "make Claude Code look nicer" wrapper. It is an
 agentic development platform built on the opposite assumption: the agent
@@ -22,7 +18,7 @@ of them hit the same two failure modes:
 
 That leads to tools that look polished but are materially weaker.
 
-`cc-shell` takes a harder line:
+Agent Code takes a harder line:
 
 - Claude Code should still feel like Claude Code.
 - Codex should still feel like Codex.
@@ -39,7 +35,7 @@ The best agent editor is a platform that runs the real Claude Code and the
 real Codex under the hood, preserves their behavior, and then layers better
 workspace primitives on top for people who spend all day in agent loops.
 
-That means `cc-shell` is built for:
+That means Agent Code is built for:
 
 - parallel agent work
 - persistent sessions
@@ -61,11 +57,11 @@ That approach is bad on two fronts:
 If you strip things down to "send message, get message back", you lose most
 of what makes those tools good in practice.
 
-`cc-shell` is explicitly trying not to do that.
+Agent Code is explicitly trying not to do that.
 
 ## How It Works
 
-`cc-shell` runs Claude Code and Codex headlessly under the hood.
+Agent Code runs Claude Code and Codex headlessly under the hood.
 
 But "headless" here does **not** mean using a minimal session API and
 pretending that is the product.
@@ -82,7 +78,7 @@ The architecture combines:
 - transcript parsing
 - session management
 
-This lets `cc-shell` surface the real commands, flows, and tools from Claude
+This lets Agent Code surface the real commands, flows, and tools from Claude
 Code and Codex in an API-like way without collapsing them into a toy chat
 interface.
 
@@ -95,7 +91,7 @@ In practice, the stack includes:
 
 ## What This Project Is
 
-`cc-shell` is:
+Agent Code is:
 
 - an Electron desktop shell for agent-heavy development
 - a multi-session workspace for Claude Code, Codex, and terminals

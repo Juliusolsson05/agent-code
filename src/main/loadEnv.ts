@@ -6,7 +6,7 @@ import { resolve } from 'node:path'
 //
 // WHY this exists: electron-vite's Vite layer only exposes `*_VITE_`
 // prefixed variables via `import.meta.env`. Unprefixed flags like
-// `CC_SHELL_PERF` never reach `process.env` in the main process, so
+// `AGENT_CODE_PERF` never reach `process.env` in the main process, so
 // modules that gate on them at import time (see
 // `@main/performance/PerformanceService.ts`) would always see them
 // as unset no matter what `.env` contained.
@@ -49,7 +49,7 @@ function loadEnvFile(path: string): void {
     if (!parsed) continue
     const [key, value] = parsed
     // Don't clobber an explicit shell export — CLI-set values win
-    // so a `CC_SHELL_PERF=0 npm run dev` turns telemetry off even
+    // so an `AGENT_CODE_PERF=0 npm run dev` turns telemetry off even
     // if `.env` has it enabled.
     if (process.env[key] !== undefined) continue
     process.env[key] = value

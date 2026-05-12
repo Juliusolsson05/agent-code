@@ -1,4 +1,4 @@
-// Smoke test for the cc-shell ghost bridge.
+// Smoke test for the Agent Code ghost bridge.
 //
 // Exercises the pure-function surface area used by `workspaceStore`:
 //   1. `ghostsFromSemanticTurn` — builds a ghost map from a fabricated

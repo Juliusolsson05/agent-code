@@ -14,7 +14,7 @@ import type { ConversationEntry } from '@shared/types/transcript'
 // compact_boundary) which don't participate in either path.
 //
 // `extractEmbeddedClaudeProgressEntry` produces a flat ConversationEntry
-// from a progress wrapper — the shape the rest of cc-shell (Feed,
+// from a progress wrapper — the shape the rest of Agent Code (Feed,
 // reconciler, ghost ops) expects. Returns null for anything that
 // isn't a progress wrapper holding a conversation entry.
 

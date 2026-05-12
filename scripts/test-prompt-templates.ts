@@ -1,11 +1,14 @@
 import {
+  PROMPT_TEMPLATES_STORAGE_KEY,
+} from '@renderer/app-state/localStorageMigration'
+import {
   deleteCustomPromptTemplate,
   loadCustomPromptTemplates,
   saveCustomPromptTemplate,
   updateCustomPromptTemplate,
 } from '@renderer/features/prompt-templates/templates'
 
-const CUSTOM_TEMPLATES_KEY = 'cc-shell.promptTemplates.v1'
+const CUSTOM_TEMPLATES_KEY = PROMPT_TEMPLATES_STORAGE_KEY
 
 function assert(condition: unknown, message: string): void {
   if (!condition) throw new Error(message)

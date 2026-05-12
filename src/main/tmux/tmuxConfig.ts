@@ -5,7 +5,7 @@
 // doesn't shrink the primary view.
 //
 // Keep this list authoritative — every code path that creates a
-// ccshell tmux session must apply these. Drift here would let the
+// Agent Code tmux session must apply these. Drift here would let the
 // status bar leak into the renderer's xterm view.
 
 export const TMUX_SESSION_FLAGS: ReadonlyArray<readonly [string, string]> = [

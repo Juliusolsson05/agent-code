@@ -1,4 +1,5 @@
 import { ACCENTS, isDarkThemeMode, type Settings } from '@renderer/app-state/settings/types'
+import { APP_SLUG } from '@shared/appIdentity'
 
 export function applyTheme(settings: Settings): void {
   const root = document.documentElement
@@ -9,5 +10,5 @@ export function applyTheme(settings: Settings): void {
   const fg = isDarkThemeMode(settings.mode) ? accent.fgDark : accent.fgLight
   root.style.setProperty('--theme-accent', hex)
   root.style.setProperty('--theme-accent-fg', fg)
-  window.dispatchEvent(new CustomEvent('cc-shell:theme-changed', { detail: settings }))
+  window.dispatchEvent(new CustomEvent(`${APP_SLUG}:theme-changed`, { detail: settings }))
 }

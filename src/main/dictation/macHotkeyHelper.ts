@@ -88,7 +88,7 @@ async function ensureHelperBinary(): Promise<string> {
   const sourceBytes = await readFile(source)
   const hash = createHash('sha256').update(sourceBytes).digest('hex').slice(0, 12)
   const dir = join(app.getPath('userData'), 'native-helpers')
-  const target = join(dir, `CcShellDictationHotkeyHelper-${hash}`)
+  const target = join(dir, `AgentCodeDictationHotkeyHelper-${hash}`)
 
   try {
     await access(target, constants.X_OK)

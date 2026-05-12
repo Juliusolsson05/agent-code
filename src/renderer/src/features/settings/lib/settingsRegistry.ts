@@ -229,7 +229,7 @@ export function getSettingsRegistry(): SettingDefinition[] {
       category: 'experimental',
       title: 'Persistent Aggressive Debug Logs',
       description:
-        'Periodically save full debug bundles for active agent panes, plus a best-effort final bundle on close. Expensive, intended for cc-shell development.',
+        'Periodically save full debug bundles for active agent panes, plus a best-effort final bundle on close. Expensive, intended for Agent Code development.',
       keywords: ['debug', 'logs', 'persistent', 'aggressive', 'autosave', 'render', 'trace'],
       control: {
         type: 'toggle',
