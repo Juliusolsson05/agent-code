@@ -7,6 +7,13 @@ import { createWorkspaceSlice } from '@renderer/app-state/workspace/slice'
 import type { AppStore } from '@renderer/app-state/types'
 import type { Settings } from '@renderer/app-state/settings/types'
 import { coerceSettings } from '@renderer/app-state/settings/persistence'
+import {
+  APP_STORE_STORAGE_KEY,
+  migrateLegacyLocalStorageKeys,
+} from '@renderer/app-state/localStorageMigration'
+import { APP_DISPLAY_NAME } from '@shared/appIdentity'
+
+migrateLegacyLocalStorageKeys()
 
 export const useAppStore = create<AppStore>()(
   devtools(
@@ -17,7 +24,7 @@ export const useAppStore = create<AppStore>()(
         ...createWorkspaceSlice(...args),
       })),
       {
-        name: 'cc-shell:app-store',
+        name: APP_STORE_STORAGE_KEY,
         version: 2,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
@@ -29,6 +36,6 @@ export const useAppStore = create<AppStore>()(
         },
       },
     ),
-    { name: 'cc-shell' },
+    { name: APP_DISPLAY_NAME },
   ),
 )

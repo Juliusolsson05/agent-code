@@ -4,7 +4,7 @@ import { spawn as ptySpawn, type IPty } from 'node-pty'
 // TerminalSession — a plain shell session that the user drives directly.
 //
 // Counterpart to ClaudeSession. Where ClaudeSession spawns `claude`
-// and owns a headless terminal parser + JSONL tailer because cc-shell
+// and owns a headless terminal parser + JSONL tailer because Agent Code
 // renders its own UI over the top, TerminalSession is the simpler
 // case: spawn the user's login shell, pipe raw bytes to whoever's
 // subscribed, accept raw bytes back, and let the renderer's xterm.js
@@ -37,7 +37,7 @@ export type TerminalSessionOptions = {
   /**
    * Shell binary to spawn. Defaults to $SHELL, then /bin/zsh, then
    * /bin/bash, then 'sh' as a last resort. We don't try to be clever
-   * about Windows — if/when cc-shell runs there we'll add a branch.
+   * about Windows — if/when Agent Code runs there we'll add a branch.
    */
   shell?: string
   /** Extra environment overrides for the spawned shell. */
@@ -46,7 +46,7 @@ export type TerminalSessionOptions = {
    * Backend used to host the shell.
    *
    *   'direct' — node-pty spawns the shell directly. Original behavior;
-   *              terminal dies with cc-shell.
+   *              terminal dies with Agent Code.
    *
    *   'tmux'   — node-pty spawns `tmux attach -t <tmuxSessionName>`.
    *              The tmux session must already exist (TmuxRegistry

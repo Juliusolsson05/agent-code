@@ -392,7 +392,8 @@ export default function App() {
           <PerformancePanel open={performancePanelOpen} workspace={workspace} />
           {/*
             Always-visible main-process heap + RSS badge with a 60s
-            sparkline. Self-gates on CC_SHELL_PERF — renders null
+            sparkline. Self-gates on AGENT_CODE_PERF (or legacy
+            CC_SHELL_PERF) — renders null
             until the first IPC probe confirms telemetry is on.
             Click expands to a PerformancePanel-sized popover with
             the full buffered window and growth rates.

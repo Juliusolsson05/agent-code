@@ -23,10 +23,10 @@ function inferClientUri(
   path?: string | null,
 ): string {
   if (path) {
-    return `cc-shell://file/${encodeURIComponent(path)}#${encodeURIComponent(codeId)}`
+    return `agent-code://file/${encodeURIComponent(path)}#${encodeURIComponent(codeId)}`
   }
   const ext = languageFileExtension(language)
-  return `cc-shell://snippet/${encodeURIComponent(codeId)}.${ext}`
+  return `agent-code://snippet/${encodeURIComponent(codeId)}.${ext}`
 }
 
 export const CodeBlock = memo(function CodeBlock({
@@ -157,7 +157,7 @@ export const CodeBlock = memo(function CodeBlock({
           if (event.clientUri !== clientUri) return
           monaco.editor.setModelMarkers(
             model,
-            'cc-shell-lsp',
+            'agent-code-lsp',
             event.diagnostics.map(diagnostic => ({
               message: diagnostic.message,
               startLineNumber: diagnostic.startLine + 1,

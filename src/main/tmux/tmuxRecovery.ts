@@ -24,7 +24,7 @@ export type RecoveryReport = {
   /** Persisted sessionIds whose tmuxName was NOT alive — caller
    *  should treat these as fresh spawns. */
   lost: string[]
-  /** Alive ccshell-* sessions that were NOT in persisted state.
+  /** Alive Agent Code-owned sessions that were NOT in persisted state.
    *  P1 kills these silently; P2 will route them to the undo tray. */
   orphans: string[]
 }
@@ -51,7 +51,7 @@ export async function reconcile(
     .filter(s => !persistedNames.has(s.name))
     .map(s => s.name)
 
-  // P1: silently kill orphans. They're stale ccshell sessions from
+  // P1: silently kill orphans. They're stale Agent Code sessions from
   // a previous run that failed to clean up. The registry's prefix
   // guarantees these are ours to kill.
   for (const name of orphans) {

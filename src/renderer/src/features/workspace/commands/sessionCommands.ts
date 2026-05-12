@@ -347,9 +347,9 @@ export const sessionCommands: CommandDef[] = [
   {
     // Save Debug Logs — one-shot action (not a toggle). Snapshots the
     // focused pane's state/feed-debug/proxy-semantic/HTML into a single
-    // timestamped folder under ~/.config/cc-shell/debug-bundles/ and
+    // timestamped folder under ~/.config/agent-code/debug-bundles/ and
     // copies the path to the clipboard. Purpose is dev-time
-    // diagnostics of cc-shell itself — the four debug panels read the
+    // diagnostics of Agent Code itself — the four debug panels read the
     // same data live, this command preserves it for after-the-fact
     // inspection.
     //

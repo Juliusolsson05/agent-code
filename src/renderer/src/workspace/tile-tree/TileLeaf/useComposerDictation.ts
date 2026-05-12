@@ -156,7 +156,7 @@ async function pickAudioConstraints(
     // "what mics were even available at this moment?" The labels are
     // user-data-ish (e.g., "Julius's AirPods Pro Microphone") but the
     // dump file is local 0o600 — same privacy posture as the existing
-    // CC_SHELL_DICTATION_DUMP webm output. See dictationJournal.ts.
+    // AGENT_CODE_DICTATION_DUMP webm output. See dictationJournal.ts.
     window.api.recordDictationDebugEvent(debugSessionId, {
       layer: 'DEVICE',
       event: 'enumerate:audioinput',
@@ -212,7 +212,7 @@ const VOICE_BANDS_HZ: Array<[number, number]> = [
 
 // Composer dictation is intentionally pane-local. The standalone
 // agent-voice-dictation app uses an OS overlay because it has to paste
-// into arbitrary apps; cc-shell already owns the target composer, so a
+// into arbitrary apps; Agent Code already owns the target composer, so a
 // floating knob would be the wrong abstraction here. Keeping state in this
 // hook lets the transcript land as normal editable draft text and keeps
 // every provider/secret decision behind the preload IPC boundary.
@@ -845,7 +845,7 @@ export function useComposerDictation({
           recorderState: recording.recorder.state,
         }, 'IPC')
         // Keep the provider socket lifecycle behind the recorder lifecycle.
-        // The first cc-shell port opened Deepgram before the MediaRecorder was
+        // The first Agent Code port opened Deepgram before the MediaRecorder was
         // definitely running, so a release during startup closed a CONNECTING
         // WebSocket and left the composer stuck on "listening". The standalone
         // app avoids that by letting the recorder own the lifecycle and by
@@ -973,7 +973,7 @@ export function useComposerDictation({
                 void ensureStreamStarted()
               } else if (recording.streamStartTimer === null) {
                 // Do not open Deepgram for the accidental-tap window. The
-                // standalone app discards <180ms presses; in cc-shell the
+                // standalone app discards <180ms presses; in Agent Code the
                 // provider socket was being created early enough that those
                 // discarded taps still produced "WebSocket was closed before
                 // the connection was established". Queue locally until the

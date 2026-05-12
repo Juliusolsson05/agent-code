@@ -7,7 +7,7 @@ import type { SessionId } from '@renderer/workspace/types'
 // RewindToPromptModal — picker for the rewind-to-prompt flow.
 //
 // UX goal: let the user jump back to any past user-prompt in the
-// focused session. On select, cc-shell writes a truncated provider
+// focused session. On select, Agent Code writes a truncated provider
 // transcript, re-homes the focused pane onto it, and prefills the
 // composer with the anchored prompt in an UNSENT state. The source
 // session is never touched.

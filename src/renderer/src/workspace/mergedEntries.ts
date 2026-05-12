@@ -2,7 +2,7 @@
 // merged into the rendered feed.
 //
 // -----------------------------------------------------------------------------
-// Where ghost rendering fits in cc-shell today
+// Where ghost rendering fits in Agent Code today
 // -----------------------------------------------------------------------------
 //
 // The live current turn is rendered by `SemanticStreamingTurn`
@@ -99,7 +99,7 @@
 // Each prior simplification of these rules regressed in
 // production (see the Warning section in the design doc for the
 // commit-by-commit history). Changing this predicate without
-// re-reading that doc is how cc-shell ends up with stale ghost
+// re-reading that doc is how Agent Code ends up with stale ghost
 // rows at the bottom of every feed again.
 
 import type { Entry } from '@shared/types/transcript'

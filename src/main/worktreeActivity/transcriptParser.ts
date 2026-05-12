@@ -17,7 +17,7 @@ export async function parseTranscriptForActivity(
   // This parser stores only compact worktree facts, never rendered
   // transcript content. That keeps the persisted index small and keeps
   // privacy/blast-radius sane: the raw Claude/Codex JSONL files remain
-  // where the providers wrote them, while cc-shell stores enough
+  // where the providers wrote them, while Agent Code stores enough
   // metadata to answer workspace orchestration questions quickly.
   const text = await readFile(candidate.file, 'utf8')
   const events: WorktreeActivityEvent[] = []

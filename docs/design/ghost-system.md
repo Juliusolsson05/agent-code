@@ -4,16 +4,16 @@
 
 ## What ghost is, in plain English
 
-cc-shell talks to the agent (Claude Code, Codex) two ways at the same time:
+Agent Code talks to the agent (Claude Code, Codex) two ways at the same time:
 
 - It **reads the agent's authoritative transcript file** (Claude Code's `~/.claude/projects/<proj>/<sid>.jsonl`, Codex's rollout JSONL). That file is the durable record of what happened — but it's written *lazily*. Claude Code batches transcript writes every 100 ms (10 ms for remote sessions); Codex queues writes through a tokio mpsc channel that drains on flush barriers. The file is structurally behind reality.
 - It **observes the agent's network traffic via a per-session mitmproxy.** The proxy emits a flat semantic stream — `turn_started`, `text_delta`, `tool_input_delta`, `tool_input_finalized`, `block_completed`, `tool_result`, `turn_completed`, etc. — as the model's reply streams in. The proxy is roughly real-time.
 
 The proxy is ahead. The file catches up. Eventually they agree.
 
-A **ghost** is a provisional `ClaudeEntry` cc-shell mints from the proxy stream, tagged `_atp.origin = 'ghost'`, with a deterministic uuid (`g-<turnId>-<blockIndex>`). It exists to bridge the gap between the two sources without producing duplicate-render bugs. When the authoritative JSONL entry lands, the ghost is *superseded* and dropped from the visible set. If it never lands, the ghost is *orphaned* and (sometimes — see the predicate) surfaces as the only record of what the proxy observed.
+A **ghost** is a provisional `ClaudeEntry` Agent Code mints from the proxy stream, tagged `_atp.origin = 'ghost'`, with a deterministic uuid (`g-<turnId>-<blockIndex>`). It exists to bridge the gap between the two sources without producing duplicate-render bugs. When the authoritative JSONL entry lands, the ghost is *superseded* and dropped from the visible set. If it never lands, the ghost is *orphaned* and (sometimes — see the predicate) surfaces as the only record of what the proxy observed.
 
-The ghost primitive is general-purpose and lives in the standalone `agent-transcript-parser` package (`./packages/agent-transcript-parser/src/ghost.ts`, doc at `./packages/agent-transcript-parser/docs/ghost.md`). cc-shell's job is to wire it up: mint ghosts from semantic events, persist to disk, reconcile against JSONL, decide when to render.
+The ghost primitive is general-purpose and lives in the standalone `agent-transcript-parser` package (`./packages/agent-transcript-parser/src/ghost.ts`, doc at `./packages/agent-transcript-parser/docs/ghost.md`). Agent Code's job is to wire it up: mint ghosts from semantic events, persist to disk, reconcile against JSONL, decide when to render.
 
 ## Why ghost exists
 
@@ -22,7 +22,7 @@ The naive alternatives all fail:
 | Approach | Failure |
 |---|---|
 | Render only the JSONL file. | Visible 100 ms+ delay between the model talking and the screen showing anything. Worse during slow batched flushes or large tool_results. |
-| Render only the proxy stream. | No durable record. Closing cc-shell mid-turn loses the partial turn. Resume after crash has nothing to show. |
+| Render only the proxy stream. | No durable record. Closing Agent Code mid-turn loses the partial turn. Resume after crash has nothing to show. |
 | Render BOTH unconditionally — JSONL above, proxy below. | The same sentence appears twice during the lag window. Documented historical bug on Codex (`docs/superpowers/plans/2026-04-20-rendering-fixes.md`). |
 
 The design idea was: one merged feed. Authoritative entries from the file, plus provisional ghost rows when the proxy is ahead, with automatic supersedure when the file catches up. The user sees one row that transitions seamlessly from "live preview" to "committed."
@@ -33,7 +33,7 @@ That plan was never fully completed (see [Phase 3: deliberately out of scope](#p
 
 This is the most-confusing part of the current architecture, and it's load-bearing for every rule below.
 
-In cc-shell today, the **live current turn** (the assistant's in-flight reply) is rendered by `SemanticStreamingTurn`, which reads `runtime.semantic.currentTurn` directly off the semantic reducer. **Not from ghosts.** See `src/renderer/src/features/feed/ui/semantic/StreamingTurn.tsx` and the call site at `src/renderer/src/features/feed/ui/Feed.tsx:912-916`.
+In Agent Code today, the **live current turn** (the assistant's in-flight reply) is rendered by `SemanticStreamingTurn`, which reads `runtime.semantic.currentTurn` directly off the semantic reducer. **Not from ghosts.** See `src/renderer/src/features/feed/ui/semantic/StreamingTurn.tsx` and the call site at `src/renderer/src/features/feed/ui/Feed.tsx:912-916`.
 
 Ghosts exist *in parallel* with that live render. Every semantic event that updates `currentTurn` ALSO mints / updates a corresponding ghost via `ghostsFromSemanticTurn` in `src/renderer/src/workspace/ghosts.ts`. The two paths don't collide because the render predicate (below) explicitly excludes any ghost whose `turnId === currentTurn.turnId` — `SemanticStreamingTurn` owns that turn, ghosts can't surface for it.
 
@@ -42,7 +42,7 @@ So the practical question for the ghost system is: **what is rendering ghost row
 Answer: a small set of fallback cases where `SemanticStreamingTurn` can't help.
 
 1. **JSONL stuck mid-turn.** The agent process gets wedged or its writer backlogs while the proxy keeps emitting events. `currentTurn` eventually clears (or doesn't), JSONL never lands. The ghost on disk is the only record of the turn.
-2. **Crash + restart.** cc-shell exited mid-turn. Semantic state was in-memory and is gone. JSONL has a partial transcript that ends before the in-flight turn. The ghost log on disk preserves what the proxy saw; on resume it surfaces the lost partial turn.
+2. **Crash + restart.** Agent Code exited mid-turn. Semantic state was in-memory and is gone. JSONL has a partial transcript that ends before the in-flight turn. The ghost log on disk preserves what the proxy saw; on resume it surfaces the lost partial turn.
 
 Both reduce to the same condition: **proxy state is past the JSONL tail with no recovery in sight.** The render predicate detects this structurally.
 
@@ -121,8 +121,8 @@ The whole subsystem reads in one direction — semantic events flow in, the rend
 
 ### Components
 
-- **atp ghost primitives** — `packages/agent-transcript-parser/src/ghost.ts`. Pure library: `createGhost`, `updateGhost`, `supersedeGhost`, `orphanGhost`, `reduceGhostLog`, `reduceGhostLogSansSuperseded`, `mergeWithUpstream`. No IO. Reusable outside cc-shell.
-- **cc-shell renderer reducer** — `src/renderer/src/workspace/ghosts.ts`. Bridges semantic events to atp primitives: `ghostsFromSemanticTurn`, `reconcileUpstream`, `orphanStale`, `gcSupersededGhosts`, `ghostsToPersist`. Reference-stable on no-op.
+- **atp ghost primitives** — `packages/agent-transcript-parser/src/ghost.ts`. Pure library: `createGhost`, `updateGhost`, `supersedeGhost`, `orphanGhost`, `reduceGhostLog`, `reduceGhostLogSansSuperseded`, `mergeWithUpstream`. No IO. Reusable outside Agent Code.
+- **Agent Code renderer reducer** — `src/renderer/src/workspace/ghosts.ts`. Bridges semantic events to atp primitives: `ghostsFromSemanticTurn`, `reconcileUpstream`, `orphanStale`, `gcSupersededGhosts`, `ghostsToPersist`. Reference-stable on no-op.
 - **render predicate** — `src/renderer/src/workspace/mergedEntries.ts`. The five-rule selector. Source of truth for "does this ghost surface in the feed."
 - **IPC wiring** — `src/renderer/src/workspace/hook/ipc/useIpcSubscriptions.ts`. The orchestration layer: mint on semantic, reconcile on JSONL, sweep orphans on a 1s timer, stamp `lastJsonlEntryAt` from JSONL bursts, persist diffs.
 - **bootstrap on resume** — `src/renderer/src/workspace/hook/actions/session.ts` (ghost log read + reconcile against loaded JSONL tail) and `src/renderer/src/workspace/hook/actions/initialHistory.ts` (stamping `lastJsonlEntryAt` from the loaded tail).
@@ -198,7 +198,7 @@ If you add a new code path that touches the ghost map, **uphold the contract**: 
 
 The ghost journal lives at `<userData>/ghost-logs/<sessionId>.ghost.jsonl`. One file per session. Append-only JSONL. Owned by the main process; the renderer fires-and-forgets `window.api.ghostAppend`.
 
-Why a separate file and not the agent's own JSONL: cc-shell never writes into Claude Code's `~/.claude/projects/<proj>/<sid>.jsonl` or Codex's rollout file. Those belong to the agent and are actively written by its batched queue; two writers on the same file is a torn-line / lost-write disaster. Ghosts are also a cc-shell-internal concern — no external tool needs them.
+Why a separate file and not the agent's own JSONL: Agent Code never writes into Claude Code's `~/.claude/projects/<proj>/<sid>.jsonl` or Codex's rollout file. Those belong to the agent and are actively written by its batched queue; two writers on the same file is a torn-line / lost-write disaster. Ghosts are also an Agent Code-internal concern — no external tool needs them.
 
 Why batched at 100 ms: matches Claude Code's own transcript batch interval (`FLUSH_INTERVAL_MS` in `claude-code-src/full/utils/sessionStorage.ts`). Per-entry fsync during streaming would be tens of writes per second across every active pane. The trade-off — up to 100 ms of data loss on hard crash — is acceptable because ghost is provisional by definition and the agent's own JSONL survives independently.
 

@@ -10,7 +10,7 @@ import type {
 // appends one entry here, capped at FEED_DEBUG_LOG_CAP. The
 // FeedDebugPanel renders this in realtime; the same entries are
 // shipped to main/storage/feedDebugLog.ts every tick to be written
-// to disk (per-session JSONL under ~/.config/cc-shell/feed-debug/).
+// to disk (per-session JSONL under ~/.config/agent-code/feed-debug/).
 //
 // Why cap the in-memory array: long-running sessions could
 // accumulate tens of thousands of entries, bloating the runtime map

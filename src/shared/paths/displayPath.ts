@@ -4,7 +4,7 @@
 // paths. Showing only the basename is too lossy — a repo can easily
 // have a dozen files called `index.tsx` and the user can't tell which
 // one is being edited. Showing the full absolute path is too noisy —
-// the prefix `/Users/alice/Desktop/Development/cc-shell/` repeats on
+// the prefix `/Users/alice/Desktop/Development/agent-code/` repeats on
 // every single tool row.
 //
 // Compromise: when the path is inside the session's workspace root

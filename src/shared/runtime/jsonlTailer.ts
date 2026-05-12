@@ -19,7 +19,7 @@ import { basename } from 'path'
  *   chokidar on macOS defaults to fs.watch-based change detection for
  *   single files, which is known to silently miss rapid appends from
  *   non-editor writers (append-only files that don't atomic-rename).
- *   Users saw it concretely: submit a prompt in cc-shell, CC writes
+ *   Users saw it concretely: submit a prompt in Agent Code, CC writes
  *   the user entry + a bunch of attachments to the JSONL, and the
  *   feed wouldn't update until some unrelated later write nudged
  *   chokidar into re-reading. "The prompt didn't appear."
@@ -170,7 +170,7 @@ export type JsonlEntry = Record<string, unknown>
  * Watches a CC project directory for the JSONL file CC creates when the
  * session starts, then tails it. Use case:
  *
- *   1. cc-shell spawns `claude` with cwd=X
+ *   1. Agent Code spawns `claude` with cwd=X
  *   2. Before/right after spawn, we call `tailNewSessionFile(projectDir, ...)`
  *   3. CC creates ~/.claude/projects/<sanitized-cwd>/<sessionId>.jsonl
  *   4. The tailer notices the new .jsonl, opens it, and starts emitting entries

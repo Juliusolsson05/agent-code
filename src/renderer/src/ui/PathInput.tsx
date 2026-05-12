@@ -7,7 +7,7 @@ import {
   type CSSProperties,
 } from 'react'
 
-// PathInput — a generic path-with-completion input for anywhere in cc-shell
+// PathInput — a generic path-with-completion input for anywhere in Agent Code
 // that needs the user to type a filesystem path (PathPickerModal today,
 // likely more places soon: file pickers, context attachments, cwd
 // changes within a pane, etc).

@@ -2,7 +2,7 @@ import type { SystemPerformanceStats } from '@shared/performance/types'
 
 // Color zones for the heap badge.
 //
-// Thresholds chosen against observed cc-shell OOMs:
+// Thresholds chosen against observed Agent Code OOMs:
 // - 2026-05-06: crashed at ~3.84 GiB / 4.09 GiB cap → 93% (deep red).
 // - 2026-05-11: crashed at ~2.69 GiB at an effective ~2.78 GiB cap
 //   → 97% (deep red), but the heap-watchdog snapshot threshold is

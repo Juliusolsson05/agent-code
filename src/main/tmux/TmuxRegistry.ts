@@ -1,4 +1,4 @@
-// TmuxRegistry — main-side service that owns every cc-shell-managed
+// TmuxRegistry — main-side service that owns every Agent Code-managed
 // tmux session.
 //
 // Why a registry rather than per-session methods:
@@ -16,21 +16,26 @@ import { randomUUID } from 'node:crypto'
 import { TMUX_SESSION_FLAGS } from '@main/tmux/tmuxConfig.js'
 
 export type TmuxRegistryOptions = {
-  /** All session names this registry manages will start with this
-   *  prefix. Production uses 'ccshell-'; tests use a different
+  /** All new session names this registry manages will start with this
+   *  prefix. Production uses 'agentcode-'; tests use a different
    *  prefix so they never touch the user's real sessions. */
   namePrefix?: string
+  /** Previous production prefixes that should still be treated as ours
+   *  during recovery. Used for the cc-shell -> Agent Code rename. */
+  legacyNamePrefixes?: string[]
   /** Override for the tmux binary path. Defaults to 'tmux' on PATH. */
   tmuxBinary?: string
 }
 
 export class TmuxRegistry {
   private readonly namePrefix: string
+  private readonly managedPrefixes: string[]
   private readonly tmuxBinary: string
   private availability: boolean | null = null
 
   constructor(options: TmuxRegistryOptions = {}) {
-    this.namePrefix = options.namePrefix ?? 'ccshell-'
+    this.namePrefix = options.namePrefix ?? 'agentcode-'
+    this.managedPrefixes = [this.namePrefix, ...(options.legacyNamePrefixes ?? ['ccshell-'])]
     this.tmuxBinary = options.tmuxBinary ?? 'tmux'
   }
 
@@ -117,7 +122,7 @@ export class TmuxRegistry {
   /**
    * Return every tmux session whose name starts with this registry's
    * prefix. Used during launch reconciliation to discover sessions
-   * that survived a previous cc-shell run.
+   * that survived a previous Agent Code run.
    *
    * Returns [] if tmux is unavailable OR if there are no managed
    * sessions — callers shouldn't have to distinguish those cases here
@@ -143,7 +148,7 @@ export class TmuxRegistry {
         const [name, createdStr] = line.split('|')
         return { name, createdAt: Number(createdStr) * 1000 }
       })
-      .filter(s => s.name.startsWith(this.namePrefix))
+      .filter(s => this.managedPrefixes.some(prefix => s.name.startsWith(prefix)))
   }
 
   /** Run a tmux command, resolving with stdout. Reject on non-zero. */

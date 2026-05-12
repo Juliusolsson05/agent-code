@@ -20,7 +20,7 @@ let parts = binding
 let requestedModifiers = Set(parts.filter { modifierNames.contains($0) })
 let requestedKey = parts.last.flatMap { modifierNames.contains($0) ? nil : $0 }
 
-// These names match cc-shell's stored binding vocabulary. They are intentionally
+// These names match Agent Code's stored binding vocabulary. They are intentionally
 // physical-ish key names, not localized glyphs: a dictation trigger should not
 // move just because the user has a Swedish/US/etc keyboard layout selected.
 let keyCodes: [String: CGKeyCode] = [
@@ -76,13 +76,16 @@ func emit(_ type: String, _ extra: String = "") {
 // helper saw Fn at all, but it now floods the terminal at every Cmd press
 // and buries the dictation logs the user actually cares about. Keep the
 // function so the call sites still compile, but make it a no-op unless
-// CC_SHELL_HOTKEY_HELPER_DEBUG is set in the environment. Re-enable by
-// running `CC_SHELL_HOTKEY_HELPER_DEBUG=1 npm run dev` if you ever need
-// the raw modifier stream again.
-let helperDebugEnabled = ProcessInfo.processInfo.environment["CC_SHELL_HOTKEY_HELPER_DEBUG"] == "1"
+// AGENT_CODE_HOTKEY_HELPER_DEBUG is set in the environment. Re-enable by
+// running `AGENT_CODE_HOTKEY_HELPER_DEBUG=1 npm run dev` if you ever need
+// the raw modifier stream again. Keep the old CC_SHELL_* flag as a
+// compatibility fallback for local scripts people may already have.
+let helperDebugEnabled =
+  ProcessInfo.processInfo.environment["AGENT_CODE_HOTKEY_HELPER_DEBUG"] == "1" ||
+  ProcessInfo.processInfo.environment["CC_SHELL_HOTKEY_HELPER_DEBUG"] == "1"
 func debug(_ message: String) {
   if !helperDebugEnabled { return }
-  fputs("[cc-shell-hotkey-helper-debug] \(message)\n", stderr)
+  fputs("[agent-code-hotkey-helper-debug] \(message)\n", stderr)
   fflush(stderr)
 }
 
@@ -103,20 +106,20 @@ func changedModifierName(_ event: CGEvent) -> String? {
 }
 
 if binding.isEmpty {
-  fputs("[cc-shell-hotkey-helper] empty binding\n", stderr)
+  fputs("[agent-code-hotkey-helper] empty binding\n", stderr)
   exit(64)
 }
 
 debug("boot binding=\(binding) requestedModifiers=\(requestedModifiers.sorted().joined(separator: "+")) requestedKey=\(requestedKey ?? "nil")")
 
 if requestedKey != nil && requestedKeyCode == nil {
-  fputs("[cc-shell-hotkey-helper] unsupported key in binding: \(binding)\n", stderr)
+  fputs("[agent-code-hotkey-helper] unsupported key in binding: \(binding)\n", stderr)
   exit(65)
 }
 
 let promptOptions = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
 if !AXIsProcessTrustedWithOptions(promptOptions) {
-  fputs("[cc-shell-hotkey-helper] accessibility permission is required\n", stderr)
+  fputs("[agent-code-hotkey-helper] accessibility permission is required\n", stderr)
 }
 
 let callback: CGEventTapCallBack = { _, type, event, _ in
@@ -194,7 +197,7 @@ guard let tap = CGEvent.tapCreate(
   callback: callback,
   userInfo: nil
 ) else {
-  fputs("[cc-shell-hotkey-helper] failed to create event tap\n", stderr)
+  fputs("[agent-code-hotkey-helper] failed to create event tap\n", stderr)
   exit(66)
 }
 

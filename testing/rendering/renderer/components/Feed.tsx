@@ -842,9 +842,9 @@ function FeedImpl({
         ref={scrollerRef}
         className="h-full overflow-auto"
       >
-        {/* Bigger pb than cc-shell so the last message doesn't sit
+        {/* Bigger pb than Agent Code so the last message doesn't sit
             flush against the harness composer bar. Vendored Feed —
-            cc-shell's copy still uses pb-8. */}
+            Agent Code's copy still uses pb-8. */}
         <div className="max-w-[880px] mx-auto px-8 pt-6 pb-24 flex flex-col gap-4">
           {visible.map((e, i) => {
             const uuid = (e as Entry).uuid
@@ -1065,7 +1065,7 @@ function buildSemanticRenderUnits(turn: SemanticLiveTurn): SemanticRenderUnit[] 
   //
   // Claude Code does not render raw transcript/tool rows directly for noisy
   // low-signal activity. It groups read/search/tool churn into summary units
-  // first, then the UI renders those summaries. cc-shell is not at full parity
+  // first, then the UI renders those summaries. Agent Code is not at full parity
   // yet, but even this narrow pass moves us away from "one semantic block =
   // one visual row" and toward the same safer architecture.
   for (const block of blocks) {
@@ -1207,7 +1207,7 @@ const SemanticTaskSummary = memo(function SemanticTaskSummary({
   //
   // Upstream Claude renders task/agent progress from dedicated task state, not
   // by hoping the user can mentally reconstruct it from scattered tool rows.
-  // cc-shell is not at full upstream parity yet, but exposing the derived task
+  // Agent Code is not at full upstream parity yet, but exposing the derived task
   // snapshot here gives the feed one stable place to surface "what is the
   // session working on right now?" without re-parsing markdown or screen text.
   return (

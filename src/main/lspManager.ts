@@ -103,7 +103,7 @@ function makeVirtualServerUri(
   const ext = languageFileExtension(language)
   const filePath = resolve(
     workspaceRoot,
-    '.cc-shell-lsp',
+    '.agent-code-lsp',
     `virtual-${hashText(clientUri)}.${ext}`,
   )
   return pathToFileURL(filePath).href
@@ -245,7 +245,7 @@ export class LspManager extends EventEmitter {
         ...process.env,
         // In packaged Electron, process.execPath is the app executable.
         // Without this flag, spawning the language server re-launches
-        // Agent Studio Code instead of running the CLI as a Node script.
+        // Agent Code instead of running the CLI as a Node script.
         ELECTRON_RUN_AS_NODE: '1',
         NODE_NO_WARNINGS: '1',
       },

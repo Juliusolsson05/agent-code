@@ -26,7 +26,7 @@ import type { ProviderConditionSnapshot } from '@shared/types/providerConditions
 //     one IPC channel per event type anyway — the mux belongs here where
 //     it's testable in isolation.
 //
-// Multi-kind support: cc-shell can host two kinds of sessions per pane
+// Multi-kind support: Agent Code can host two kinds of sessions per pane
 // today — a Claude Code session (ClaudeSession) or a plain shell
 // terminal (TerminalSession). The registry holds a union; spawn()
 // dispatches on options.kind; events from both are funnelled through
@@ -506,7 +506,7 @@ export class SessionManager extends EventEmitter {
         (await reg.sessionExists(options.recoverTmuxName))
       ) {
         // Reattach path — tmux owned this session through the previous
-        // cc-shell launch and it's still alive. Reuse the name; do
+        // Agent Code launch and it's still alive. Reuse the name; do
         // NOT createSession (that would error or duplicate).
         tmuxSessionName = options.recoverTmuxName
       } else {

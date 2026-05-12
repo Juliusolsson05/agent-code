@@ -1,6 +1,6 @@
-// Phase 1: minimal main-process dictation controller for cc-shell.
+// Phase 1: minimal main-process dictation controller for Agent Code.
 //
-// Purpose of this file is narrow on purpose. It proves cc-shell can call
+// Purpose of this file is narrow on purpose. It proves Agent Code can call
 // `agent-voice-dictation` from its main process and shape the outputs into
 // the discriminated-union outcome type the renderer will eventually consume.
 // No IPC handlers, no global hotkey, no UI yet — those land in Phase 2 with
@@ -13,7 +13,7 @@
 // package converging on the same orchestration vocabulary makes it easier
 // to spot drift later — if the package gains a new primitive (say,
 // per-session diarisation), both hosts adopt it the same way. Every place
-// where cc-shell's needs *intentionally* differ from flow-electron's gets
+// where Agent Code's needs *intentionally* differ from flow-electron's gets
 // a comment explaining why.
 
 import {
@@ -40,10 +40,10 @@ export type DictationBatchInput = {
   mimeType?: string
   /** ISO 639-1 / BCP-47 short code. v1 is English-only by product
    *  decision (see agent-voice-dictation settings store comment) — leaving
-   *  this configurable here keeps the option available for cc-shell to
+   *  this configurable here keeps the option available for Agent Code to
    *  expose multilingual dictation later without a controller refactor. */
   language?: string
-  /** Optional polish step. cc-shell will eventually feed this with
+  /** Optional polish step. Agent Code will eventually feed this with
    *  per-project glossary context (the MCP feedback loop), but Phase 1
    *  keeps it as a plain on/off toggle to stay scoped. */
   polish?: { openRouterApiKey: string; model?: string }
@@ -52,7 +52,7 @@ export type DictationBatchInput = {
 
 // Discriminated union, same shape as the cleanup we landed on the
 // agent-voice-dictation app side (PR #1, "treat empty transcripts as a
-// normal outcome"). Adopted here from the start so cc-shell never has the
+// normal outcome"). Adopted here from the start so Agent Code never has the
 // "no speech detected = thrown exception spamming the terminal" phase
 // flow-electron had to refactor out of.
 export type DictationBatchOutcome =
@@ -119,7 +119,7 @@ function runProvider(input: DictationBatchInput): Promise<SpeechTranscript> {
 // Singleton streaming provider. The package's createDeepgramStreamingProvider
 // is intentionally session-keyed: one instance manages many concurrent
 // sessions identified by id. We construct it lazily on first use because
-// the cc-shell main process should not pay the WebSocket-helper cost
+// the Agent Code main process should not pay the WebSocket-helper cost
 // during boot — most users will never trigger dictation.
 let deepgramStreamingSingleton: ReturnType<typeof createDeepgramStreamingProvider> | null = null
 
@@ -132,10 +132,10 @@ export function deepgramStreaming(): ReturnType<typeof createDeepgramStreamingPr
 
 export function listSelectableProviders(): DictationProvider[] {
   // Source-of-truth for "which providers the UI should expose" is the
-  // package, not cc-shell. Re-exporting through the controller (rather
+  // package, not Agent Code. Re-exporting through the controller (rather
   // than letting renderer code import the package directly) keeps the
   // boundary clean: renderer talks to controller, controller talks to
-  // package. Future additions like a cc-shell-only "DEMO" provider
+  // package. Future additions like an Agent Code-only "DEMO" provider
   // would slot in here without touching the package.
   return (Object.keys(STT_PROVIDER_SUPPORT) as DictationProvider[])
     .filter(id => isSpeechProviderSelectable(id))

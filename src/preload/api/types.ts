@@ -280,10 +280,10 @@ export type DictationDebugEvent = DictationDebugEventInput & {
 // Per-paste debug dump.
 //
 // Direct mirror of the dictation-debug subsystem. Every Enter that
-// triggers cc-shell's paste-submit code path writes one append-only
+// triggers Agent Code's paste-submit code path writes one append-only
 // JSONL file under `<userData>/paste-debug/<pasteId>.paste.jsonl`
 // capturing the full renderer→IPC→main→PTY chain. The bug we are
-// chasing is the "paste in cc-shell needs a second Enter to submit"
+// chasing is the "paste in Agent Code needs a second Enter to submit"
 // intermittent — the PTY-isolated harness at
 // `vendor/in_progress/paste-submit-repro/` shows the production
 // 125 ms timer path works at 10/10 in isolation, so the failure must
@@ -341,7 +341,7 @@ export type SaveDebugBundleResult = {
 
 // Section of a debug bundle filled by readProxyEvents IPC.
 // Carries the renderer-readable form of whatever
-// ~/.config/cc-shell/proxy/<project>/<session>/<run>/proxy-events.jsonl
+// ~/.config/agent-code/proxy/<project>/<session>/<run>/proxy-events.jsonl
 // existed for the target session at bundle-save time. Nulls signal
 // "no record found" — callers must tolerate them. See
 // main/storage/proxyEventsReader.ts for the search strategy and

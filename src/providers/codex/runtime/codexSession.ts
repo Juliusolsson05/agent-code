@@ -24,7 +24,7 @@ import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
  *  provider's proxy events without branching.
  *
  *  Path shape:
- *    ~/.config/cc-shell/proxy/<project-segment>/<session-segment>/<timestamp>/proxy-events.jsonl
+ *    ~/.config/agent-code/proxy/<project-segment>/<session-segment>/<timestamp>/proxy-events.jsonl
  *
  *  WHY a fresh run dir per call instead of reusing one per session:
  *    A single CodexSession can be stopped + restarted (binary crash,
@@ -81,8 +81,8 @@ function sanitiseSegment(value: string): string {
 // SessionManager can treat Claude and Codex sessions uniformly.
 //
 // Why this wrapper exists at all (instead of using CodexHeadless directly):
-//   - cc-shell needs to SPAWN the process (CodexHeadless takes an IPty)
-//   - cc-shell needs the SlashPickerState shape for IPC compatibility
+//   - Agent Code needs to SPAWN the process (CodexHeadless takes an IPty)
+//   - Agent Code needs the SlashPickerState shape for IPC compatibility
 //   - The event shapes must match ClaudeSession's for SessionManager
 
 export type CodexSessionOptions = {
@@ -201,7 +201,7 @@ export class CodexSession extends EventEmitter {
       // Mirror the Claude proxy's on-disk layout so a single
       // bundle-inspection tool can read either provider's
       // proxy-events.jsonl without branching:
-      //   ~/.config/cc-shell/proxy/<project-segment>/<session-segment>/<timestamp>/proxy-events.jsonl
+      //   ~/.config/agent-code/proxy/<project-segment>/<session-segment>/<timestamp>/proxy-events.jsonl
       //
       // The path discipline is identical to what
       // claude-code-headless' createProxyServer does (see ProxyServer

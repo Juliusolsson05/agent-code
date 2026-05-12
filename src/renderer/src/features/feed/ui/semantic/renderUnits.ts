@@ -10,7 +10,7 @@ import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/typ
 // Claude Code does not render raw transcript/tool rows directly for
 // noisy low-signal activity. It groups read/search/tool churn into
 // summary units first, then the UI renders those summaries.
-// cc-shell is not at full parity yet, but even this narrow pass
+// Agent Code is not at full parity yet, but even this narrow pass
 // moves us away from "one semantic block = one visual row" and
 // toward the same safer architecture.
 //

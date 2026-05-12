@@ -5,7 +5,7 @@ import { getProjectDirForCwd, getProjectsDir } from '@shared/runtime/projectDir.
 import { performanceService } from '@main/performance/PerformanceService.js'
 
 // Session lister — reimplements the minimal subset of CC's
-// utils/listSessionsImpl.ts needed to power the cc-shell resume UI.
+// utils/listSessionsImpl.ts needed to power the Agent Code resume UI.
 //
 // We deliberately don't import from claude-code-src. CC's lister pulls
 // in a big transitive dependency graph (bootstrap state, analytics,
@@ -265,7 +265,7 @@ export async function listSessionsForCwd(
 }
 
 /**
- * List every Claude session across every project directory cc-shell
+ * List every Claude session across every project directory Agent Code
  * has ever recorded. Intended for the rendering-debug harness where
  * we want to pick any past session regardless of cwd. Walks
  * `~/.claude/projects/*` once, stats every `*.jsonl`, sorts by

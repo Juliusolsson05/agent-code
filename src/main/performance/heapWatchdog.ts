@@ -2,7 +2,7 @@
 //
 // Heap-pressure watchdog for the Electron main process.
 //
-// WHY this exists: cc-shell long-running sessions have OOMed the main
+// WHY this exists: Agent Code long-running sessions have OOMed the main
 // process (4 GB v8 cap on macOS). Reproductions take 20+ hours, so
 // catching them with a debugger is impractical. The watchdog samples
 // `v8.getHeapStatistics()` at a low duty cycle and writes a heap

@@ -78,7 +78,7 @@ export function registerSessionIpc(
     'session:input',
     (_evt, sessionId: string, data: string, pasteId?: string) => {
       // Optional pasteId journals THIS write into the per-paste debug
-      // dump. Only set by the cc-shell paste flow (claudePaste.ts) —
+      // dump. Only set by the Agent Code paste flow (claudePaste.ts) —
       // never set on keystrokes, agent-pty bridging, or other normal
       // I/O. Pairs against the renderer's IPC:write:* events by sha8
       // + byte count, same way dictation pairs renderer-produced

@@ -24,10 +24,10 @@ function currentThemeName(): string {
   const root = document.documentElement
   if (root.dataset.contrast === 'high') {
     return root.dataset.mode?.startsWith('light')
-      ? 'cc-shell-high-contrast-light'
-      : 'cc-shell-high-contrast-dark'
+      ? 'agent-code-high-contrast-light'
+      : 'agent-code-high-contrast-dark'
   }
-  return root.dataset.mode?.startsWith('light') ? 'cc-shell-light' : 'cc-shell-dark'
+  return root.dataset.mode?.startsWith('light') ? 'agent-code-light' : 'agent-code-dark'
 }
 
 function defineThemes(monaco: typeof Monaco): void {
@@ -39,7 +39,7 @@ function defineThemes(monaco: typeof Monaco): void {
   const border = styles.getPropertyValue('--theme-code-border').trim() || '#262622'
   const accent = styles.getPropertyValue('--theme-accent').trim() || '#7dd3a0'
 
-  monaco.editor.defineTheme('cc-shell-dark', {
+  monaco.editor.defineTheme('agent-code-dark', {
     base: 'vs-dark',
     inherit: true,
     rules: [],
@@ -57,7 +57,7 @@ function defineThemes(monaco: typeof Monaco): void {
     },
   })
 
-  monaco.editor.defineTheme('cc-shell-light', {
+  monaco.editor.defineTheme('agent-code-light', {
     base: 'vs',
     inherit: true,
     rules: [],
@@ -75,7 +75,7 @@ function defineThemes(monaco: typeof Monaco): void {
     },
   })
 
-  monaco.editor.defineTheme('cc-shell-high-contrast-dark', {
+  monaco.editor.defineTheme('agent-code-high-contrast-dark', {
     base: 'hc-black',
     inherit: true,
     rules: [],
@@ -86,7 +86,7 @@ function defineThemes(monaco: typeof Monaco): void {
     },
   })
 
-  monaco.editor.defineTheme('cc-shell-high-contrast-light', {
+  monaco.editor.defineTheme('agent-code-high-contrast-light', {
     base: 'hc-light',
     inherit: true,
     rules: [],
@@ -103,7 +103,7 @@ function defineThemes(monaco: typeof Monaco): void {
 function installThemeListener(monaco: typeof Monaco): void {
   if (themeListenerInstalled) return
   themeListenerInstalled = true
-  window.addEventListener('cc-shell:theme-changed', () => {
+  window.addEventListener('agent-code:theme-changed', () => {
     defineThemes(monaco)
   })
 }

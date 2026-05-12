@@ -104,14 +104,14 @@ export type Settings = {
    *  new session picks up the new value. */
   useProxyStreaming: boolean
   /** Inline voice dictation for the active composer. This is intentionally
-   *  a cc-shell setting instead of an agent-voice-dictation setting:
-   *  package code provides STT primitives, while cc-shell decides whether
+   *  an Agent Code setting instead of an agent-voice-dictation setting:
+   *  package code provides STT primitives, while Agent Code decides whether
    *  voice belongs in its composer UI and which keyboard binding should
    *  toggle recording. */
   dictationEnabled: boolean
   dictationProvider: DictationProviderId
   /** Arbitrary keyboard binding captured by the settings UI. The standalone
-   *  dictation app historically offered fixed choices, but cc-shell needs the
+   *  dictation app historically offered fixed choices, but Agent Code needs the
    *  same "press the key you want" model because composer bindings compete
    *  with editor shortcuts. Empty string means "button only". */
   dictationShortcut: string

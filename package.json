@@ -1,7 +1,7 @@
 {
-  "name": "cc-shell",
+  "name": "agent-code",
   "version": "0.0.2-beta.1",
-  "description": "Agent Studio Code desktop app",
+  "description": "Agent Code desktop app",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {

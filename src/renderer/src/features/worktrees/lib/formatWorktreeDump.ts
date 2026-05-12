@@ -85,7 +85,7 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
 
 export function formatWorktreeDumpPrompt(dump: WorktreeDump): string {
   return [
-    'Please analyze this cc-shell worktree status dump.',
+    'Please analyze this Agent Code worktree status dump.',
     '',
     'Help me decide:',
     '- which worktrees are active',

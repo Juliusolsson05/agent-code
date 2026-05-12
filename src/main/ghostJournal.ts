@@ -3,7 +3,7 @@
 // Ghost entries are minted, updated, superseded, and orphaned in the
 // renderer (via agent-transcript-parser + `src/renderer/src/workspace/ghosts.ts`).
 // This file handles the durable side: append each produced ghost to
-// a cc-shell-owned JSONL file so the live view survives a crash, a
+// an Agent Code-owned JSONL file so the live view survives a crash, a
 // window reload, or an Electron restart.
 //
 // See docs/design/ghost-system.md for the canonical explanation
@@ -21,11 +21,11 @@
 // `~/.codex/sessions/.../rollout-*.jsonl`. Those belong to the CLI
 // and are actively written by its own batched queue; two writers on
 // the same file is a lost-write / torn-line disaster. Native parsers
-// also do not need to see our ghosts — ghosts are a cc-shell concern.
+// also do not need to see our ghosts — ghosts are an Agent Code concern.
 //
 // Our ghost log sits under `app.getPath('userData')` which is the
 // standard Electron-managed profile dir (macOS:
-// `~/Library/Application Support/cc-shell`). One file per sessionId:
+// `~/Library/Application Support/Agent Code`). One file per sessionId:
 //
 //   <userData>/ghost-logs/<sessionId>.ghost.jsonl
 //
@@ -229,7 +229,7 @@ export class GhostJournalRegistry {
  *   `(uuid, _atp.updatedAt)`, with equal timestamps resolved by later
  *   file order. We can preserve that contract while holding only one
  *   final object per uuid in memory. Superseded ghosts are dropped
- *   before returning because cc-shell imports `reduceGhostLogSansSuperseded`
+ *   before returning because Agent Code imports `reduceGhostLogSansSuperseded`
  *   on the renderer side for this same bootstrap path; doing the drop
  *   here avoids shipping forensic-only entries across IPC.
  *

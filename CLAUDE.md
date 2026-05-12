@@ -1,4 +1,4 @@
-# cc-shell
+# Agent Code
 
 This codebase is written and developed by AI. Future you will pick up where past you left off, with no shared memory beyond what's in the repo.
 

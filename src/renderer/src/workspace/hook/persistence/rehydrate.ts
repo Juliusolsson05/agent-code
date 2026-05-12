@@ -33,7 +33,7 @@ import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/i
 // `providerSessionId`, we pass it to the spawn call as
 // `resumeSessionId` so claude boots with `--resume <uuid>` and the
 // full conversation history — tool calls, transcript, queue state,
-// the lot — comes back. The cc-shell SessionId we mint here is a
+// the lot — comes back. The Agent Code SessionId we mint here is a
 // fresh routing key; CC's own session UUID is the thing we care
 // about preserving.
 //

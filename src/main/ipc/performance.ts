@@ -38,7 +38,8 @@ export function registerPerformanceIpc(manager: SessionManager): void {
   // immediately without touching disk.
   //
   // WHY gated on performanceService.getConfig().enabled (which
-  // mirrors CC_SHELL_PERF): the badge is an opt-in diagnostic, not
+  // mirrors AGENT_CODE_PERF, with CC_SHELL_PERF kept as a legacy alias:
+  // the badge is an opt-in diagnostic, not
   // a feature for end users. When disabled we still respond with a
   // valid shape (enabled: false plus zeros) so the renderer hook
   // can detect the gate on its first probe without throwing. The

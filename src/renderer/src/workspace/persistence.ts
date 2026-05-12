@@ -10,7 +10,7 @@ import type {
 import type { TileTabsState } from '@renderer/workspace/workspaceState'
 
 // ---------------------------------------------------------------------------
-// Persisted state shape (serialized to ~/.config/cc-shell/workspace.json)
+// Persisted state shape (serialized to ~/.config/agent-code/workspace.json)
 // ---------------------------------------------------------------------------
 
 /**

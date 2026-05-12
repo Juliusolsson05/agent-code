@@ -91,7 +91,7 @@ export function registerFsIpc(): void {
   // the renderer shows a text input modal where the user types a
   // path; we expand `~`, resolve to an absolute path, and check that
   // it exists and is a directory. Keyboard-first is faster for power
-  // users and matches cc-shell's terminal-native vibe.
+  // users and matches Agent Code's terminal-native vibe.
   ipcMain.handle(
     'fs:expandCwd',
     async (

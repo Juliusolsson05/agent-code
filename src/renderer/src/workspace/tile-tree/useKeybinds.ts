@@ -152,7 +152,7 @@ export function useKeybinds(
       //   1. Consume Escape so it closes the modal even when the
       //      modal's inner div has lost focus.
       //   2. preventDefault on shortcut chords (cmd / alt). Without
-      //      this, returning early stops cc-shell's handler but
+      //      this, returning early stops Agent Code's handler but
       //      not the macOS / Electron defaults — cmd+W would still
       //      close the window, cmd+T would still open a new tab in
       //      Electron, alt+number cycles tab focus on some setups.

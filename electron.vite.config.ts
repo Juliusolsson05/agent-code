@@ -18,7 +18,7 @@ const headlessAlias = [
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'packages/agent-transcript-parser/src/index.ts') },
   // `agent-voice-dictation` is a git submodule like the other local packages,
-  // so cc-shell must compile it from source. Relying on `dist` would make a
+  // so Agent Code must compile it from source. Relying on `dist` would make a
   // fresh clone fail unless someone remembered to build the submodule first,
   // and that hidden ordering dependency is exactly what the packages/ layout
   // is meant to avoid.
@@ -56,7 +56,7 @@ function copyMainRuntimeResourcesPlugin(): Plugin {
   }
 
   return {
-    name: 'cc-shell-copy-main-runtime-resources',
+    name: 'agent-code-copy-main-runtime-resources',
     apply: 'build',
     async closeBundle() {
       // WHY this lives in the Vite main build instead of only in

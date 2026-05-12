@@ -29,7 +29,7 @@ const POLL_INTERVAL_MS = 1000
 
 export type SystemPerfPollerState = {
   // null until the first probe completes; thereafter true if
-  // CC_SHELL_PERF gating allows polling, false if it does not.
+  // AGENT_CODE_PERF gating allows polling, false if it does not.
   // The badge component renders nothing in either null or false
   // state — see SystemPerfHeader.
   enabled: boolean | null
@@ -55,7 +55,7 @@ const INITIAL_STATE: SystemPerfPollerState = {
 // PerformancePanel manages its own polling (see
 // PerformancePanel.tsx — useEffect-owned setInterval).
 //
-// WHY probe first, then start the interval: when CC_SHELL_PERF is
+// WHY probe first, then start the interval: when AGENT_CODE_PERF is
 // off, the badge does not render. We want exactly zero recurring
 // work in that case — no setInterval, no allocation churn. The
 // first tick decides whether to schedule subsequent ticks.
@@ -72,7 +72,7 @@ export function useSystemPerfPoller(): SystemPerfPollerState {
         if (cancelled) return
         if (!stats.enabled) {
           // Disabled: record the gate state once and stop. No
-          // interval is started; if the user toggles CC_SHELL_PERF
+          // interval is started; if the user toggles AGENT_CODE_PERF
           // they need to restart the app, which is consistent with
           // every other place that reads the flag.
           setState(prev =>
