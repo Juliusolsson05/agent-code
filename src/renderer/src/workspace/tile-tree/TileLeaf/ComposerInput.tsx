@@ -112,7 +112,6 @@ export function ComposerInput({
           <ComposerDictationActivity
             status={dictation.status}
             levels={dictation.levels}
-            hasTranscriptPreview={dictation.hasTranscriptPreview}
           />
         ) : null}
         <textarea
@@ -185,15 +184,20 @@ export function ComposerInput({
 function ComposerDictationActivity({
   status,
   levels,
-  hasTranscriptPreview,
 }: {
   status: ComposerDictationController['status']
   levels: number[]
-  hasTranscriptPreview: boolean
 }) {
   const active = status === 'recording'
   const stopping = status === 'stopping'
-  const showDots = !hasTranscriptPreview || stopping
+  // The audio meter and transcript preview are intentionally independent.
+  // The May 12 dictation logs showed healthy AUDIO_LEVEL samples while the UI
+  // stayed on dots because the main process was temporarily batch-only and
+  // therefore never emitted preview text. Hiding bars behind
+  // `hasTranscriptPreview` made a provider-preview outage look like a dead
+  // microphone. During recording, always show the meter; use dots only for
+  // startup/stop states where there is no live analyser frame to trust.
+  const showDots = !active || stopping
 
   return (
     <div
