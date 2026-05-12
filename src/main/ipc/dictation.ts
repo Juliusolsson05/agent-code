@@ -4,6 +4,7 @@ import { appendFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
+  deepgramStreaming,
   listSelectableProviders,
   transcribeBatch,
   type DictationProvider,
@@ -12,9 +13,10 @@ import {
   configureDictationHotkey,
   unregisterDictationHotkey,
 } from '@main/dictation/hotkey.js'
+import { sendToMainWindow } from '@main/window/mainWindow.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 import type { DictationDebugEventInput } from '@preload/api/types.js'
-import { wrapWithSttTag } from 'agent-voice-dictation'
+import { wrapWithSttTag, type SpeechTraceEvent } from 'agent-voice-dictation'
 
 // Opt-in chunk dump for diagnosing recorder/provider audio issues. Writes a
 // `.webm` per session under Electron's app temp dir so we don't pollute
@@ -40,6 +42,7 @@ type ActiveDictationSession = {
   chunkCount: number
   audioBytes: number
   chunks: Buffer[]
+  streamingId: string | null
   startedAt: number
 }
 
@@ -133,6 +136,48 @@ export function registerDictationIpc(deps: {
       }
 
       const id = randomUUID()
+      let streamingId: string | null = null
+
+      try {
+        const streaming = deepgramStreaming().start({
+          apiKey,
+          ...(params.mimeType ? { mimeType: params.mimeType } : {}),
+          onTrace: (event: SpeechTraceEvent) => {
+            emit(debugSessionId, 'PROVIDER', event.phase, {
+              streamId: id,
+              streamingId,
+              provider: event.provider,
+              ...event,
+            })
+          },
+          onTranscript: event => {
+            // cc-shell keeps the batch upload as the final authority because
+            // the WebM/Opus websocket path has had provider-side parser
+            // failures. Streaming is still valuable as a preview side-channel:
+            // if it emits interim text, the composer can paint live words; if
+            // it fails, the final release path below still has every chunk and
+            // uploads the complete WebM over HTTP.
+            sendToMainWindow('dictation:stream-transcript', {
+              id,
+              text: event.text,
+              isFinal: event.isFinal,
+              source: event.source,
+            })
+          },
+        })
+        streamingId = streaming.id
+        emit(debugSessionId, 'PROVIDER', 'streaming:start:ok', {
+          streamId: id,
+          streamingId,
+          provider: params.provider,
+          mimeType: params.mimeType ?? null,
+        })
+      } catch (err) {
+        emit(debugSessionId, 'ERROR', 'streaming:start:throw', {
+          streamId: id,
+          message: err instanceof Error ? err.message : String(err),
+        })
+      }
 
       activeSessions.set(id, {
         id,
@@ -143,28 +188,27 @@ export function registerDictationIpc(deps: {
         chunkCount: 0,
         audioBytes: 0,
         chunks: [],
+        streamingId,
         startedAt: Date.now(),
       })
 
-      // Temporary reliability fallback: the Deepgram websocket path sometimes
-      // rejects browser MediaRecorder WebM/Opus as `UNPARSABLE_CLIENT_MESSAGE`
-      // even when the full concatenated recording is valid. Until we pin down
-      // exactly which websocket framing/container edge case triggers that, keep
-      // the renderer IPC contract stable but transcribe the completed WebM via
-      // the provider's HTTP upload API on stop. That removes live previews, but
-      // it restores the primary invariant: releasing Fn should produce text
-      // instead of losing the utterance.
+      // The batch upload remains the source of truth, but we now also open the
+      // package-owned streaming provider above for live previews. This split is
+      // intentional: Deepgram streaming can fail independently, and that must
+      // never make the release-key path lose the utterance.
       // eslint-disable-next-line no-console
       console.debug('[dictation:trace]', {
         provider: params.provider,
-        phase: 'batch:start',
+        phase: streamingId ? 'hybrid:start' : 'batch:start',
         runId: id,
+        streamingId,
         mimeType: params.mimeType ?? null,
       })
       emit(debugSessionId, 'IPC', 'stream-start:accepted', {
         streamId: id,
         provider: params.provider,
         mimeType: params.mimeType ?? null,
+        streamingId,
         // Never log the key itself — just confirm we found one. See the
         // privacy contract in src/main/dictationJournal.ts.
         hasApiKey: true,
@@ -198,6 +242,22 @@ export function registerDictationIpc(deps: {
       session.chunkCount += 1
       session.audioBytes += chunk.byteLength
       session.chunks.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength))
+      if (session.streamingId) {
+        try {
+          deepgramStreaming().pushChunk(session.streamingId, chunk)
+        } catch (err) {
+          // Streaming is best-effort preview. Keep recording and keep the
+          // batch buffer intact; otherwise a websocket-side failure would
+          // regress the primary behavior the fallback was added to protect.
+          emit(session.debugSessionId, 'ERROR', 'streaming:chunk:throw', {
+            streamId: params.id,
+            streamingId: session.streamingId,
+            message: err instanceof Error ? err.message : String(err),
+          })
+          deepgramStreaming().cancel(session.streamingId)
+          session.streamingId = null
+        }
+      }
       // CHUNK:main:received pairs with the renderer's CHUNK:renderer:produced
       // event by `sha8`. If you see a `renderer:produced` with no matching
       // `main:received`, IPC dropped the chunk. If `sha8` differs across
@@ -242,8 +302,22 @@ export function registerDictationIpc(deps: {
           audioDurationMs: params.audioDurationMs ?? null,
           chunkCount: session.chunkCount,
         })
+        if (session.streamingId) deepgramStreaming().cancel(session.streamingId)
         return { kind: 'no-speech' }
       }
+
+      const streamingId = session.streamingId
+      const streamingStop = streamingId
+        ? deepgramStreaming().stop(streamingId).catch(err => {
+            emit(session.debugSessionId, 'ERROR', 'streaming:stop:throw', {
+              streamId: params.id,
+              streamingId,
+              message: err instanceof Error ? err.message : String(err),
+              ms: Date.now() - session.startedAt,
+            })
+            return null
+          })
+        : Promise.resolve(null)
 
       if (DICTATION_DUMP_ENABLED) {
         // eslint-disable-next-line no-console
@@ -281,6 +355,7 @@ export function registerDictationIpc(deps: {
           audio,
           ...(session.mimeType ? { mimeType: session.mimeType } : {}),
         })
+        void streamingStop
         if (outcome.kind === 'no-speech') {
           emit(session.debugSessionId, 'OUTCOME', 'no-speech', {
             streamId: params.id,
