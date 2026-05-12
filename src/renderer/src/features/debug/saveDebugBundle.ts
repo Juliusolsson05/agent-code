@@ -281,6 +281,7 @@ export async function assembleAndSaveDebugBundle(params: {
 }): Promise<{ bundlePath: string }> {
   const { sessionId, runtime, kind, reason = 'manual', cwd, providerSessionId } = params
   const capturedAt = Date.now()
+  const includeProxyPayload = reason === 'manual'
   await window.api.flushPerformance().catch(() => {})
   const performanceSnapshot = await window.api.getPerformanceSnapshot().catch(() => null)
 
@@ -288,11 +289,14 @@ export async function assembleAndSaveDebugBundle(params: {
   recordHtmlTraceSnapshot(sessionId, html.raw, 'manual')
   recordScreenTailSnapshot(sessionId, runtime.recentScreen)
 
-  // Pull the wire-level proxy capture in parallel with the rest of
-  // the bundle. Failure here NEVER aborts the bundle — the IPC
-  // helper returns nulls on any error, and we omit the section if
-  // nothing was found. See main/storage/proxyEventsReader.ts.
-  const proxySection = cwd
+  // Manual bundles include a bounded proxy tail because a human just
+  // asked for a forensic snapshot. Autosave bundles intentionally skip
+  // that payload: the full proxy run remains under ~/.config/cc-shell/proxy
+  // and retention now budgets that root directly. Copying the same tail into
+  // every minute-level autosave was one of the multipliers behind the 108 GB
+  // debug-bundles directory; autosave should preserve orientation, not create
+  // a second archive of already-persisted wire logs.
+  const proxySection = cwd && includeProxyPayload
     ? await window.api.readProxyEvents({
         cwd,
         sessionKey: providerSessionId ? `resume-${providerSessionId}` : null,

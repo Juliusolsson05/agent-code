@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { dirname, join, normalize } from 'path'
 
 import { DEBUG_BUNDLE_DIR } from '@main/storage/paths.js'
+import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 
 // Debug-bundle writer.
 //
@@ -130,6 +131,8 @@ export async function saveDebugBundle(
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, file.content, 'utf8')
   }
+
+  scheduleDebugStoragePrune('debug-bundle-save')
 
   return { bundlePath }
 }

@@ -1,10 +1,11 @@
 import { EventEmitter } from 'events'
 import { mkdir } from 'fs/promises'
-import { homedir } from 'os'
 import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import type { SlashPickerState } from '@preload/index.js'
+import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
+import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import {
   CodexHeadless,
   CodexResponsesAdapter,
@@ -49,13 +50,14 @@ async function allocateProxyEventsFile(opts: {
   // guarantees both providers produce identical segments for
   // identical inputs. Diverging would silently make the reader miss
   // Codex bundles (or vice versa).
-  const root = join(homedir(), '.config', 'cc-shell', 'proxy')
+  const root = PROXY_EVENTS_DIR
   const canonicalCwd = await canonicalizePath(opts.cwd)
   const cwdSegment = sanitiseSegment(canonicalCwd) || 'unknown-project'
   const sessionSegment = sanitiseSegment(opts.sessionKey) || 'unknown-session'
   const ts = new Date().toISOString().replace(/[:.]/g, '-')
   const runDir = join(root, cwdSegment, sessionSegment, ts)
   await mkdir(runDir, { recursive: true })
+  scheduleDebugStoragePrune('codex-proxy-run-start')
   return join(runDir, 'proxy-events.jsonl')
 }
 
