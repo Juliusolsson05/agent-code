@@ -225,29 +225,6 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
-      // Track C of the paste-submit work. Default ON; flipping OFF
-      // restores the pre-fix wall-clock 125 ms timer path. The
-      // primary reason this toggle exists at all is that the
-      // event-driven path depends on Claude's TUI continuing to
-      // render `[Pasted text #N]` verbatim — if a future Claude
-      // update renames or removes that placeholder, users may want
-      // a quick escape hatch back to the timer without waiting for
-      // us to ship a fix. Categorized as `workspace` (not
-      // `experimental`) because every cc-shell user pastes into
-      // Claude; this is a quality-of-life setting, not an opt-in.
-      id: 'event-driven-paste-submit',
-      category: 'workspace',
-      title: 'Event-Driven Paste Submit',
-      description:
-        'Wait for Claude\'s "[Pasted text #N]" placeholder before sending Enter, instead of a 125 ms wall-clock delay. Faster and more reliable. Turn off only if your Claude TUI version stops rendering the placeholder.',
-      keywords: ['paste', 'submit', 'enter', 'claude', 'event-driven', 'placeholder', 'composer'],
-      control: {
-        type: 'toggle',
-        getValue: settings => settings.eventDrivenPasteSubmit,
-        onToggle: (ctx, value) => ctx.onChange({ eventDrivenPasteSubmit: value }),
-      },
-    },
-    {
       id: 'aggressive-debug-persistence',
       category: 'experimental',
       title: 'Persistent Aggressive Debug Logs',

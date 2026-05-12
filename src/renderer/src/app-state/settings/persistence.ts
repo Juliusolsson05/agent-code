@@ -45,11 +45,6 @@ export function coerceSettings(value: unknown): Settings {
     // setting's docstring. Anything looser (e.g. `!== false`) would
     // flip the default to ON for fresh installs.
     dispatchProjectTerminal: parsed.dispatchProjectTerminal === true,
-    // `!== false` so default-ON applies on fresh installs AND when
-    // the persisted value is missing entirely (older localStorage
-    // blobs predating this setting). The only way to land OFF is an
-    // explicit `false`, which is exactly the toggle UX we want.
-    eventDrivenPasteSubmit: parsed.eventDrivenPasteSubmit !== false,
     // WHY membership check via WORKSPACE_MODES rather than a literal
     // === 'dispatch': keeps the source of truth in one array so adding
     // a new mode label later (if ever) only requires editing types.ts.

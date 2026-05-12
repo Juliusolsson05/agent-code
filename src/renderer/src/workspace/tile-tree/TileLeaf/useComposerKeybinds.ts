@@ -2,7 +2,6 @@ import { useState } from 'react'
 
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 
-import { useAppStore } from '@renderer/app-state/hooks'
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
@@ -76,13 +75,6 @@ export function useComposerKeybinds({
   // runtime.picker, but we use slashMode to decide whether keys
   // should be forwarded vs. stored locally).
   const [slashMode, setSlashMode] = useState(false)
-  // Event-driven paste-submit. When ON (default) the paste flow
-  // polls for Claude's `[Pasted text #N]` placeholder before sending
-  // `\r` instead of relying on a wall-clock timer; see claudePaste.ts
-  // for the full strategy comment. Read here so the toggle takes
-  // effect on the next paste without remount.
-  const eventDrivenPasteSubmit = useAppStore(state => state.settings.eventDrivenPasteSubmit)
-
   const exitSlashMode = () => {
     setSlashMode(false)
     setInputText('')
@@ -330,24 +322,24 @@ export function useComposerKeybinds({
           // composer until a later keypress nudges it through
           // the normal submit path.
           //
-          // Event-driven mode (default ON via settings) polls Claude's
-          // screen for `[Pasted text #N]` and submits the instant it
-          // appears — load-independent, dramatically faster than the
-          // 125 ms wall-clock floor. Wall-clock delay is kept as a
-          // safety fallback if the placeholder never materializes
-          // (e.g. future Claude UI rename); see claudePaste.ts.
+          // Claude paste-like text always takes the event-driven path:
+          // wait until the TUI has visibly committed the paste placeholder,
+          // then send Enter. The old 125 ms timer is not a setting because
+          // real production traces showed it races Claude's accumulator; it
+          // remains only as an internal fallback when placeholder detection
+          // cannot run or times out. See claudePaste.ts.
           window.api.recordPasteDebugEvent(pasteId, {
             layer: 'RENDER',
             event: 'route:claude-paste-like',
             data: {
               inputLen: input.length,
               hasNewline: input.includes('\n'),
-              eventDriven: eventDrivenPasteSubmit,
+              eventDriven: true,
             },
           })
           await sendBracketedPasteThenSubmit(send, input, CLAUDE_PASTE_SUBMIT_DELAY_MS, {
             pasteId,
-            eventDriven: { enabled: eventDrivenPasteSubmit, sessionId },
+            eventDriven: { enabled: true, sessionId },
           })
         } else {
           window.api.recordPasteDebugEvent(pasteId, {

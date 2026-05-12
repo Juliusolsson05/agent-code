@@ -14,27 +14,25 @@
 //
 // We fix this at the shell boundary instead of forking Claude's paste
 // logic: for Claude only, any prompt that is likely to be treated as
-// a paste gets delivered in TWO phases — first the payload, then
-// (depending on the chosen strategy) a separate submit write.
+// a paste gets delivered in TWO phases — first the payload, then a
+// separate submit write after Claude visibly acknowledges the paste.
 //
-// TWO submit-after-paste strategies coexist here:
+// The primary strategy is event-driven and not user-configurable:
 //
-//   * EVENT-DRIVEN (default, when `eventDriven` is set): poll
-//     Claude's screen snapshot for `[Pasted text #N]` and send `\r`
-//     the instant the placeholder appears. Load-independent —
-//     works at 10 ms or 10 s. This is the strategy the paste-submit
-//     repro harness at `vendor/in_progress/paste-submit-repro/`
-//     showed to be 10/10 reliable with average waits ~58 ms.
+//   * EVENT-DRIVEN: poll Claude's screen snapshot for
+//     `[Pasted text #N]` and send `\r` the instant the placeholder
+//     appears. Load-independent — works at 10 ms or 10 s. This is
+//     the strategy the paste-submit repro harness at
+//     `vendor/in_progress/paste-submit-repro/` showed to be 10/10
+//     reliable with average waits ~58 ms.
 //
 //   * WALL-CLOCK FALLBACK: wait `delayMs` (default 125 ms — slightly
 //     above Claude's 100 ms paste completion timeout) then send `\r`.
-//     Kept as a fallback because the event-driven path depends on
-//     Claude continuing to render the `[Pasted text #N]` placeholder
-//     verbatim. A future Claude UI rename would break placeholder
-//     detection but should not brick paste-submit entirely. The
-//     harness shows the timer races even at 1000 ms under load, so
-//     this is genuinely just a "don't be worse than yesterday" floor,
-//     not a load-bearing primary path.
+//     Kept only as a fallback because the event-driven path depends on
+//     Claude continuing to render the placeholder. A future Claude UI
+//     rename should degrade paste-submit, not brick it entirely. The
+//     harness shows the timer races even at 1000 ms under load, so it
+//     must never be exposed as a selectable primary path again.
 //
 // Why these numbers:
 //   - 100 chars: empirical lower bound on text length where Claude's
@@ -54,7 +52,8 @@
 //   - 125 ms is slightly above Claude's 100 ms paste completion
 //     timeout. Going lower risks reintroducing the race; going much
 //     higher makes submit feel laggy on every long paste. Only
-//     consulted when the event-driven path times out or is disabled.
+//     consulted only when the event-driven path times out or cannot
+//     reach the live Claude session.
 //   - 500 ms event-driven safety bound (down from 2000 ms): for
 //     bracketed pastes that DO NOT cross Claude's inline→collapse
 //     threshold, the `[Pasted text #N]` placeholder never renders, so
@@ -94,10 +93,10 @@ export type ClaudePasteOpts = {
    *  every PTY write in this paste emits an IPC:write event to the
    *  journal. */
   pasteId?: string
-  /** Event-driven submit. When provided AND `enabled`, poll Claude's
-   *  screen snapshot for `[Pasted text #N]` before sending `\r`,
-   *  instead of relying on `delayMs`. Falls back to the timer path
-   *  after `CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS`. */
+  /** Event-driven submit for Claude paste-like text. The composer always
+   *  provides this for Claude; optional in the type only because lower-level
+   *  helpers are also used by Codex and image-path paste flows that must not
+   *  wait for Claude's text placeholder. */
   eventDriven?: { enabled: boolean; sessionId: string }
 }
 
