@@ -22,7 +22,8 @@ import {
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
-import { STATE_FILE, pruneStaleFeedDebugLogs } from '@main/storage/paths.js'
+import { STATE_FILE } from '@main/storage/paths.js'
+import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { createMainWindow, focusMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
@@ -104,11 +105,12 @@ if (!hasSingleInstanceLock) {
 
 async function startApp(): Promise<void> {
   performanceService.mark('app.main.whenReady.start')
-  // Heap watchdog and feed-debug retention sweep run as early as
-  // possible: the watchdog so any pre-toolchain startup stall has
-  // forensic coverage, and the prune so a stale logs directory is
-  // off the disk before we start writing fresh entries to it.
-  // Both are fire-and-forget — neither blocks app readiness.
+  // Heap watchdog and debug-storage retention run as early as possible:
+  // the watchdog so any pre-toolchain startup stall has forensic coverage,
+  // and the retention sweep so stale debug artifacts are off disk before
+  // fresh writers start appending. Retention is deliberately fire-and-forget:
+  // losing a prune race is acceptable; blocking app boot on a large cache
+  // traversal would make the diagnostic system harm the product again.
   startMainHeapWatchdog()
   // Dictation debug logs grow per-press. The pruner trims files older
   // than 14 days at startup; fire-and-forget — a slow or failing
@@ -119,14 +121,7 @@ async function startApp(): Promise<void> {
   void pruneOldDictationDebugLogs().catch(err => {
     console.warn('[dictation] prune failed (non-fatal):', err)
   })
-  void pruneStaleFeedDebugLogs().then(result => {
-    if (result.removed > 0) {
-      // eslint-disable-next-line no-console
-      console.info(
-        `[feed-debug] pruned ${result.removed} stale logs (${(result.bytesFreed / 1024 / 1024).toFixed(1)} MiB)`,
-      )
-    }
-  })
+  scheduleDebugStoragePrune('startup')
   await initializeToolchain()
   await cleanupClaudeImageCacheDir().catch(err => {
     console.warn('[images] failed to clean Claude image cache:', err)

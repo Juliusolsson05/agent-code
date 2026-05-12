@@ -1,7 +1,7 @@
 import { readFile, readdir, stat } from 'node:fs/promises'
-import { homedir } from 'os'
 import { join } from 'path'
 
+import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
 
 // Reader for the on-disk proxy-events.jsonl files.
@@ -32,7 +32,7 @@ import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
 //   without bringing in the bundle's disk-write logic, and the
 //   reader's tests (when we have them) don't need the bundle harness.
 
-const PROXY_ROOT = join(homedir(), '.config', 'cc-shell', 'proxy')
+const PROXY_ROOT = PROXY_EVENTS_DIR
 
 // Cap on the proxy-events.jsonl content shipped into a bundle. Long
 // sessions can produce 100+ MB of wire log; bundles aren't the right

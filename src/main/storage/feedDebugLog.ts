@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { FEED_DEBUG_DIR } from '@main/storage/paths.js'
+import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 
 // Per-session feed-debug log writer.
 //
@@ -76,6 +77,7 @@ export function queueFeedDebugAppend(
         sessionId,
         Math.max(lastWritten, ...freshEntries.map(entry => entry.id)),
       )
+      scheduleDebugStoragePrune('feed-debug-append')
     })
   feedDebugWriteQueues.set(sessionId, next)
 
