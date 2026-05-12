@@ -1,4 +1,5 @@
 import type { Entry } from '@shared/types/transcript'
+import { asRecord } from '@shared/lib/asRecord'
 
 import {
   codexAssistantTextEntry,
@@ -9,7 +10,6 @@ import {
   parseCodexJson,
   stripCodexExecWrapper,
 } from '@renderer/workspace/codex/entries'
-import { asRecord } from '@shared/lib/asRecord'
 
 // Codex rollout → feed entry mapping.
 //

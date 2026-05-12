@@ -7,9 +7,8 @@ import type {
   SessionMeta,
   Tab,
   TabId,
-  TileNode,
 } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { reinsertPane } from '@renderer/lib/undoClose'
 
 import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
@@ -109,15 +108,7 @@ export function useUndoCloseAction(
 
       if (idMap.size === 0) return // nothing survived
 
-      const remapNode = (n: TileNode): TileNode => {
-        if (n.type === 'leaf') {
-          const mapped = idMap.get(n.sessionId)
-          return mapped ? { type: 'leaf', sessionId: mapped } : n
-        }
-        return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
-      }
-
-      const restoredRoot = remapNode(entry.tab.root)
+      const restoredRoot = remapTileTreeSessionIds(entry.tab.root, idMap)
       const leaves = collectLeaves(restoredRoot)
       if (leaves.length === 0) return
 

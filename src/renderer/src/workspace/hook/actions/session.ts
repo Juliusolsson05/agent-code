@@ -1,8 +1,8 @@
 import { useCallback } from 'react'
 
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
-import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
-import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import type { SessionId, SessionKind, SessionMeta } from '@renderer/workspace/types'
+import { closeLeaf, collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import type { Tab } from '@renderer/workspace/types'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
 import {
@@ -356,14 +356,7 @@ export function useSessionActions(
       // Swap the sessionId wherever this live session is placed. Grid sessions
       // live in one tile-tree leaf; detached Dispatch sessions live in
       // detachedSessions with no leaf at all.
-      const remapNode = (n: TileNode): TileNode => {
-        if (n.type === 'leaf') {
-          return n.sessionId === oldId
-            ? { type: 'leaf', sessionId: newId }
-            : n
-        }
-        return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
-      }
+      const idMap = new Map<SessionId, SessionId>([[oldId, newId]])
 
       setState(prev => {
         const sessions = { ...prev.sessions }
@@ -399,7 +392,7 @@ export function useSessionActions(
             if (!collectLeaves(t.root).includes(oldId)) return t
             return {
               ...t,
-              root: remapNode(t.root),
+              root: remapTileTreeSessionIds(t.root, idMap),
               focusedSessionId:
                 t.focusedSessionId === oldId ? newId : t.focusedSessionId,
             }
@@ -487,14 +480,6 @@ export function useSessionActions(
 
       if (idMap.size === 0 && failedIds.size === 0) return
 
-      const remapNode = (node: TileNode): TileNode => {
-        if (node.type === 'leaf') {
-          const mapped = idMap.get(node.sessionId)
-          return mapped ? { type: 'leaf', sessionId: mapped } : node
-        }
-        return { ...node, a: remapNode(node.a), b: remapNode(node.b) }
-      }
-
       setRuntimes(prev => {
         const next: Record<SessionId, SessionRuntime> = { ...prev }
         for (const [oldId] of agentEntries) delete next[oldId]
@@ -541,7 +526,7 @@ export function useSessionActions(
 
         const nextTabs = prev.tabs
           .map(tab => {
-            let root: TileNode | null = remapNode(tab.root)
+            let root = remapTileTreeSessionIds(tab.root, idMap)
             for (const failedId of failedIds) {
               root = closeLeaf(root!, failedId)
               if (root === null) break

@@ -28,6 +28,30 @@ export function collectLeaves(node: TileNode): SessionId[] {
 }
 
 /**
+ * Replace leaf session ids according to a caller-owned mapping.
+ *
+ * WHY this lives with tree ops: session reload, undo-close restore,
+ * and provider replacement all need the same structural walk. Keeping
+ * copies at those call sites made it easy for one flow to preserve a
+ * split node differently from another. This helper is intentionally
+ * narrow: it only remaps leaf ids and leaves split geometry untouched.
+ */
+export function remapTileTreeSessionIds(
+  node: TileNode,
+  idMap: ReadonlyMap<SessionId, SessionId>,
+): TileNode {
+  if (node.type === 'leaf') {
+    const mapped = idMap.get(node.sessionId)
+    return mapped ? { type: 'leaf', sessionId: mapped } : node
+  }
+  return {
+    ...node,
+    a: remapTileTreeSessionIds(node.a, idMap),
+    b: remapTileTreeSessionIds(node.b, idMap),
+  }
+}
+
+/**
  * Clamp a ratio into the safe range. Used everywhere splits are
  * created or resized so a pane can never become invisibly small.
  */
