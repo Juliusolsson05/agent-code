@@ -29,9 +29,10 @@ import {
 //
 // We also gate on media type (Claude supports PNG/JPEG/GIF/WebP)
 // and a 5 MB size cap — both enforced with a toast on violation
-// and a short-circuit return. The caller owns `appendDraftImages`
-// (usually the draft-images hook); we hand the validated payload
-// over at the end.
+// and a short-circuit return. Validated images are appended into
+// the draft-images store via setDraftImages; the hook does the
+// append internally so callers only need to consume handlePaste
+// and removeDraftImage (paste-only ingress).
 //
 // `e.preventDefault()` is called whenever we handle the paste so
 // the default "paste as text" behavior doesn't leak data URL blobs
@@ -118,5 +119,5 @@ export function useClaudeImagePaste({
     [appendDraftImages, provider, showToast],
   )
 
-  return { handlePaste, removeDraftImage, appendDraftImages }
+  return { handlePaste, removeDraftImage }
 }

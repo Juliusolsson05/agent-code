@@ -17,9 +17,17 @@ import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
 // All three return the same `ClaudeDraftImage[]` so the caller can
 // concat + dedupe uniformly.
 
-export const MAX_CLAUDE_IMAGE_BYTES = 5 * 1024 * 1024
+// WHY only SUPPORTED_CLAUDE_IMAGE_FORMATS_TEXT, the two predicates,
+// and the public ingress helpers below are exported: every other
+// constant and helper in this file (MAX_CLAUDE_IMAGE_BYTES, the
+// media-type Set, fileToDataUrl, parseDataUrl, estimateBase64...) is
+// an internal implementation detail used only inside this module's
+// predicates and ingress functions. The user-facing format-text
+// string is exported because the composer toast needs it; the two
+// predicates are exported because the paste hook gates on them.
+const MAX_CLAUDE_IMAGE_BYTES = 5 * 1024 * 1024
 
-export const SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES = new Set([
+const SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES = new Set([
   'image/png',
   'image/jpeg',
   'image/gif',
@@ -36,7 +44,7 @@ export function exceedsClaudeImageSizeLimit(image: ClaudeDraftImage): boolean {
   return estimateBase64DecodedBytes(image.base64Data) > MAX_CLAUDE_IMAGE_BYTES
 }
 
-export function fileToDataUrl(file: File): Promise<string> {
+function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(reader.error ?? new Error('failed to read file'))
@@ -48,7 +56,7 @@ export function fileToDataUrl(file: File): Promise<string> {
   })
 }
 
-export function parseDataUrl(dataUrl: string): { mediaType: string; base64Data: string } {
+function parseDataUrl(dataUrl: string): { mediaType: string; base64Data: string } {
   const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl)
   if (!match) {
     throw new Error('unsupported image data url')
@@ -63,7 +71,7 @@ export function parseDataUrl(dataUrl: string): { mediaType: string; base64Data: 
 // 1 byte per `=` pad char. We only use this for the size-limit gate,
 // so approximate is fine — a 5 MB cap enforced at ±16 bytes is still
 // effectively a 5 MB cap.
-export function estimateBase64DecodedBytes(base64Data: string): number {
+function estimateBase64DecodedBytes(base64Data: string): number {
   const normalized = base64Data.trim()
   if (normalized.length === 0) return 0
   const padding = normalized.endsWith('==') ? 2 : normalized.endsWith('=') ? 1 : 0

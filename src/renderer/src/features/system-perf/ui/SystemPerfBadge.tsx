@@ -1,4 +1,5 @@
 import type { SystemPerformanceStats } from '@shared/performance/types'
+import { formatBytes } from '@renderer/features/system-perf/formatBytes'
 
 // Color zones for the heap badge.
 //
@@ -64,17 +65,6 @@ function strokeFor(zone: Zone): string {
     case 'green':
       return '#34d399'
   }
-}
-
-// "1.23 GB" / "456 MB". We always use SI multiples (1e9 / 1e6) to
-// match Activity Monitor's display rather than Chrome's binary
-// (GiB) units. Off by ~7% from GiB but in line with what users
-// see in the OS-level monitor.
-function formatBytes(bytes: number): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`
-  if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(0)} KB`
-  return `${bytes} B`
 }
 
 type Props = {

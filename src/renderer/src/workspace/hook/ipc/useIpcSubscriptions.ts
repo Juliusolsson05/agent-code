@@ -30,6 +30,10 @@ import {
   stampCodexTurnId,
 } from '@renderer/workspace/codex/rollout'
 import {
+  codexEventType,
+  codexTurnIdFromEventPayload,
+} from '@renderer/workspace/codex/eventCursor'
+import {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
 } from '@renderer/workspace/claude/history'
@@ -75,16 +79,6 @@ import * as perf from '@renderer/performance/client'
 // Terminal Codex events and session exit clear the cursor so a new task cannot
 // inherit the previous task's turn id.
 const codexCurrentTurnIdBySession = new Map<SessionId, string>()
-
-function codexTurnIdFromEventPayload(raw: Record<string, unknown>): string | null {
-  const payload = raw.payload as Record<string, unknown> | undefined
-  return typeof payload?.turn_id === 'string' ? payload.turn_id : null
-}
-
-function codexEventType(raw: Record<string, unknown>): string | null {
-  const payload = raw.payload as Record<string, unknown> | undefined
-  return typeof payload?.type === 'string' ? payload.type : null
-}
 
 type WorktreeCacheEntry = {
   worktrees: WorktreeIdentity[]

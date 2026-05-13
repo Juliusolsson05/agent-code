@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 
 import type { SystemPerformanceStats } from '@shared/performance/types'
+import { formatBytes } from '@renderer/features/system-perf/formatBytes'
 
 // Popover dimensions — mirror PerformancePanel's outer chrome so
 // the two diagnostic surfaces look like siblings.
@@ -21,18 +22,6 @@ const CHART_WIDTH = 398 // 430 - 2*16 padding
 const CHART_HEIGHT = 140
 const CHART_PAD_TOP = 8
 const CHART_PAD_BOTTOM = 16
-
-// "1.23 GB" / "456 MB" — duplicated from SystemPerfBadge so the
-// popover doesn't import from a UI sibling. Keeping the helper
-// local also means we can change one's formatting without
-// accidentally shifting the other (the badge is space-constrained
-// in the header; the popover has room for more precision).
-function formatBytes(bytes: number, fractionDigits = 2): string {
-  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(fractionDigits)} GB`
-  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`
-  if (bytes >= 1e3) return `${(bytes / 1e3).toFixed(0)} KB`
-  return `${bytes} B`
-}
 
 // Growth rate: bytes/sec over the last `seconds` window. Returns
 // positive for growth, negative for shrinkage, null if there's

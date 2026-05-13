@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SessionIndexEntry, SessionIndexPrompt } from '@preload/index'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { relativeTime } from '@renderer/lib/relativeTime'
+import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 
 // PromptSearchModal — cross-session prompt search.
 //
@@ -52,41 +54,10 @@ const SEARCH_DEBOUNCE_MS = 150
 // see the full prompt.
 const PROMPT_PREVIEW_MAX_CHARS = 180
 
-function relativeTime(ts: number): string {
-  const diffMs = Date.now() - ts
-  if (diffMs < 0) return 'in the future'
-  const secs = Math.floor(diffMs / 1000)
-  if (secs < 60) return `${secs}s ago`
-  const mins = Math.floor(secs / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  if (days < 7) return `${days}d ago`
-  const weeks = Math.floor(days / 7)
-  if (weeks < 5) return `${weeks}w ago`
-  const months = Math.floor(days / 30)
-  if (months < 12) return `${months}mo ago`
-  const years = Math.floor(days / 365)
-  return `${years}y ago`
-}
-
 function truncatePreview(text: string): string {
   const firstLine = text.split('\n').find(l => l.trim()) ?? text
   if (firstLine.length <= PROMPT_PREVIEW_MAX_CHARS) return firstLine
   return firstLine.slice(0, PROMPT_PREVIEW_MAX_CHARS) + '…'
-}
-
-function providerGlyph(kind: 'claude' | 'codex'): string {
-  // Match the feed's existing markers (⏺ for Claude, › for Codex).
-  return kind === 'claude' ? '⏺' : '›'
-}
-
-function cwdBasename(cwd: string): string {
-  if (!cwd) return ''
-  const trimmed = cwd.replace(/\/+$/, '')
-  const idx = trimmed.lastIndexOf('/')
-  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed
 }
 
 export function PromptSearchModal({ open, workspace, onClose }: Props) {

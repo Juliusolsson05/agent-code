@@ -8,7 +8,6 @@ import {
   ClaudeCodeHeadless,
   createProxyServer,
   spawnClaudeWithProxy,
-  terminalToMarkdown,
   type CompactionState,
   type ClaudeConditionSnapshot,
   type JsonlEntry,
@@ -19,8 +18,13 @@ import {
   type TrustDialogState,
 } from 'claude-code-headless'
 
-// Re-export terminalToMarkdown so existing callers keep working.
-export { terminalToMarkdown }
+// HISTORICAL: this file used to `export { terminalToMarkdown }` as a
+// compat shim left over from when the function was inlined here before
+// being moved into the headless package. The shim has zero callers in
+// the repo today — consumers either import directly from
+// claude-code-headless or from src/shared/runtime/ptyScreen — so the
+// re-export is gone. If a future caller needs it, import it where it
+// actually lives.
 
 export type ClaudeSessionOptions = {
   cwd?: string

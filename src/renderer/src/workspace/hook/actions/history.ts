@@ -26,16 +26,10 @@ import {
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
-
-function codexTurnIdFromEventPayload(raw: Record<string, unknown>): string | null {
-  const payload = raw.payload as Record<string, unknown> | undefined
-  return typeof payload?.turn_id === 'string' ? payload.turn_id : null
-}
-
-function codexEventType(raw: Record<string, unknown>): string | null {
-  const payload = raw.payload as Record<string, unknown> | undefined
-  return typeof payload?.type === 'string' ? payload.type : null
-}
+import {
+  codexEventType,
+  codexTurnIdFromEventPayload,
+} from '@renderer/workspace/codex/eventCursor'
 
 // Older history loader — called by Feed's scroll handler when the
 // user scrolls near the top.
