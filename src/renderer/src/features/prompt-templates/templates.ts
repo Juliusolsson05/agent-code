@@ -1,6 +1,7 @@
 import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { detachedDispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import {
   LEGACY_PROMPT_TEMPLATES_STORAGE_KEY,
@@ -54,12 +55,45 @@ function activeTabAgentTranscriptRequests(workspace: Workspace): AgentTranscript
   const tab = workspace.activeTab
   if (!tab) return []
 
-  // The template is explicitly active-tab scoped, so the visible tile
-  // tree is the source of truth. `state.sessions` can contain buried
-  // panes and other live sessions from other tabs; pulling those in
-  // would make the generated prompt leak unrelated work and confuse
-  // the receiving agent about what context it should inspect.
-  return collectLeaves(tab.root).flatMap(sessionId => {
+  // The template is active-tab scoped, but "in this tab" means BOTH the
+  // visible tile tree AND the detached Dispatch agents owned by this tab.
+  //
+  // We used to only walk `collectLeaves(tab.root)` here, which silently
+  // dropped every agent the user had moved into Dispatch Mode for this
+  // tab. The symptom was running the template with ten agents present
+  // and getting two in the output (only the panes left in the grid).
+  // Detached agents are still "in" the tab — they share its
+  // `projectTabId` and show up in that tab's Dispatch view — so they
+  // belong in the prompt context too.
+  //
+  // We intentionally compose the two atomic selectors instead of going
+  // through `dispatchSessionIdsForTab`. That higher-level selector
+  // routes through `buildDispatchGroups`, which strips pinned sessions
+  // out of their project group so the Pinned section can render them
+  // exclusively at the top of the dispatch UI. That exclusion is a
+  // display concern, not a scoping concern — if we reused it here, a
+  // pinned agent that visibly lives in this tab would be missing from
+  // the generated prompt with no obvious reason why.
+  //
+  // We deliberately do NOT include `state.buried` entries even when
+  // `sourceTabId === tab.id`. Burying a pane is the user's signal that
+  // they have put it away; surfacing it back into an LLM context
+  // without prompting would defeat that.
+  //
+  // The types-level invariant (see `WorkspaceState.sessions` doc in
+  // workspace/types.ts) is that a session is in the tile tree OR in
+  // `detachedSessions`, never both — so we don't strictly need to
+  // dedupe, but a Set guard is cheap insurance against a future bug
+  // that violates that invariant producing duplicate entries in the
+  // generated prompt.
+  const seen = new Set<string>()
+  const sessionIds = [
+    ...collectLeaves(tab.root),
+    ...detachedDispatchSessionIdsForTab(workspace.state, tab.id),
+  ]
+  return sessionIds.flatMap(sessionId => {
+    if (seen.has(sessionId)) return []
+    seen.add(sessionId)
     const meta = workspace.state.sessions[sessionId]
     const kind = meta?.kind ?? 'claude'
     if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) {
@@ -159,7 +193,7 @@ export const builtinPromptTemplates: PromptTemplate[] = [
   {
     id: 'builtin:active-tab-agent-transcripts',
     title: 'Active Tab Agent Transcripts',
-    description: 'Insert transcript paths and read instructions for every visible agent in this tab.',
+    description: 'Insert transcript paths and read instructions for every agent in this tab (grid + Dispatch).',
     scope: 'builtin',
     body: 'Please read the active-tab agent transcripts and use them as context.',
     buildBody: async ({ workspace }) => {
