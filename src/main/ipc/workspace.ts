@@ -32,8 +32,7 @@ export function registerWorkspaceIpc(): void {
   // Renderer calls this on first launch when there's no saved state
   // and no user-picked cwd yet. AGENT_CODE_CWD overrides — useful in
   // dev for launching the app pointed at a specific test project.
-  // Keep CC_SHELL_CWD as a compatibility fallback for existing scripts.
   ipcMain.handle('workspace:defaultCwd', () => {
-    return process.env.AGENT_CODE_CWD || process.env.CC_SHELL_CWD || process.cwd()
+    return process.env.AGENT_CODE_CWD || process.cwd()
   })
 }

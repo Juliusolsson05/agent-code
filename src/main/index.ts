@@ -33,10 +33,6 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
 import { getToolPath, initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
-import {
-  migrateLegacyStateDir,
-  migrateLegacyUserDataDirs,
-} from '@main/storage/stateMigration.js'
 
 // Main process — thin Electron host.
 //
@@ -104,12 +100,6 @@ if (!hasSingleInstanceLock) {
 // ---------- App lifecycle ----------
 
 async function startApp(): Promise<void> {
-  await migrateLegacyStateDir().catch(err => {
-    console.warn('[state] legacy state migration failed (continuing with current path):', err)
-  })
-  await migrateLegacyUserDataDirs(app.getPath('userData')).catch(err => {
-    console.warn('[state] legacy userData migration failed (continuing with current path):', err)
-  })
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
   })

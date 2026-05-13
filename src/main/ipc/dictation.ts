@@ -25,9 +25,7 @@ import { wrapWithSttTag, type SpeechTraceEvent } from 'agent-voice-dictation'
 // surface, even if we trust the host machine. To use:
 //   AGENT_CODE_DICTATION_DUMP=1 npm run dev
 // then the path is logged at session start and finalize.
-const DICTATION_DUMP_ENABLED =
-  process.env.AGENT_CODE_DICTATION_DUMP === '1' ||
-  process.env.CC_SHELL_DICTATION_DUMP === '1'
+const DICTATION_DUMP_ENABLED = process.env.AGENT_CODE_DICTATION_DUMP === '1'
 const dictationDumpPath = (id: string) => join(app.getPath('temp'), `agent-code-dictation-${id}.webm`)
 
 type ActiveDictationSession = {
@@ -35,7 +33,7 @@ type ActiveDictationSession = {
   // Renderer-minted debug-session UUID. Threaded in via the start-stream
   // params and used by this file's `emit(...)` helper to route every
   // CHUNK / PROVIDER / OUTCOME event into the right per-session JSONL.
-  // Null only when the renderer didn't send one (legacy callers); the
+  // Null only when the renderer didn't send one (older callers); the
   // composer hook always sends it.
   debugSessionId: string | null
   provider: DictationProvider

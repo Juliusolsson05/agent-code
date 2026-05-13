@@ -4,7 +4,6 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { detachedDispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import {
-  LEGACY_PROMPT_TEMPLATES_STORAGE_KEY,
   PROMPT_TEMPLATES_STORAGE_KEY,
 } from '@renderer/app-state/localStorageMigration'
 
@@ -236,9 +235,7 @@ function saveCustomPromptTemplates(templates: PromptTemplate[]): void {
 
 export function loadCustomPromptTemplates(): PromptTemplate[] {
   try {
-    const raw =
-      window.localStorage.getItem(CUSTOM_TEMPLATES_KEY) ??
-      window.localStorage.getItem(LEGACY_PROMPT_TEMPLATES_STORAGE_KEY)
+    const raw = window.localStorage.getItem(CUSTOM_TEMPLATES_KEY)
     if (!raw) return []
     return normalizeCustomTemplates(JSON.parse(raw))
       .sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0))

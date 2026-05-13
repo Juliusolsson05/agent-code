@@ -7,13 +7,8 @@ import { createWorkspaceSlice } from '@renderer/app-state/workspace/slice'
 import type { AppStore } from '@renderer/app-state/types'
 import type { Settings } from '@renderer/app-state/settings/types'
 import { coerceSettings } from '@renderer/app-state/settings/persistence'
-import {
-  APP_STORE_STORAGE_KEY,
-  migrateLegacyLocalStorageKeys,
-} from '@renderer/app-state/localStorageMigration'
+import { APP_STORE_STORAGE_KEY } from '@renderer/app-state/localStorageMigration'
 import { APP_DISPLAY_NAME } from '@shared/appIdentity'
-
-migrateLegacyLocalStorageKeys()
 
 export const useAppStore = create<AppStore>()(
   devtools(
