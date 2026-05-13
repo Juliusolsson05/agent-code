@@ -87,7 +87,7 @@ export function renderWorkspaceLeaf(
 ) {
   const meta = workspace.state.sessions[sessionId]
   const kind = meta?.kind ?? 'claude'
-  const paneLabel = paneLabelForSession(workspace.state.tabs, tabId, sessionId)
+  const paneLabel = paneLabelForSession(workspace.state, tabId, sessionId)
 
   if (kind === 'terminal') {
     return (

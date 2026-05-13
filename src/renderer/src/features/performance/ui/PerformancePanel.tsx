@@ -87,7 +87,7 @@ export function PerformancePanel({ open, workspace }: Props) {
                     className="grid grid-cols-[44px_58px_72px_74px_1fr] gap-2 px-3 py-1.5 border-b border-border/70 last:border-b-0 text-[10px] tabular-nums"
                   >
                     <span className="font-semibold text-ink">
-                      {paneLabelForSession(workspace.state.tabs, tab.id, sessionId)}
+                      {paneLabelForSession(workspace.state, tab.id, sessionId)}
                     </span>
                     <span>{formatCpu(stat?.cpuPercent)}</span>
                     <span>{formatMemory(stat?.memoryBytes)}</span>

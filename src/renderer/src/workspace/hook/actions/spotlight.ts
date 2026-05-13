@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
   buildDispatchGroups,
   flattenDispatchRows,
@@ -63,18 +64,36 @@ export function useSpotlightActions(
             }
           : prev
       ))
-      setState(prev => ({
-        ...prev,
-        activeTabId: dispatchRow?.tabId ?? prev.activeTabId,
-        dispatchMode: prev.dispatchMode && dispatchRow
-          ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-          : prev.dispatchMode,
-        tabs: prev.dispatchMode
-          ? prev.tabs
-          : prev.tabs.map(t =>
-              t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
-            ),
-      }))
+      setState(prev => {
+        // Tab.focusedSessionId has a hard invariant: it must be a
+        // leaf in `tab.root`. The non-Dispatch Spotlight view now
+        // surfaces detached agents (via resolveTabSessions), so a
+        // detached id can land here. Writing it into focusedSessionId
+        // would corrupt the tab — every downstream surface that
+        // reads tab.focusedSessionId (resize, split, bury, command
+        // target fallback) assumes it points at an actual tile. So
+        // we only mirror to focusedSessionId when the id is provably
+        // a grid leaf for the active tab. The Spotlight surface
+        // itself already holds the chosen id; the grid-focus mirror
+        // is just a convenience for the "Spotlight off → land on
+        // this pane" handoff, which is moot for a detached session.
+        const activeTab = prev.tabs.find(t => t.id === prev.activeTabId) ?? null
+        const isGridLeaf = activeTab ? collectLeaves(activeTab.root).includes(sessionId) : false
+        return {
+          ...prev,
+          activeTabId: dispatchRow?.tabId ?? prev.activeTabId,
+          dispatchMode: prev.dispatchMode && dispatchRow
+            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+            : prev.dispatchMode,
+          tabs: prev.dispatchMode
+            ? prev.tabs
+            : prev.tabs.map(t =>
+                t.id === prev.activeTabId && isGridLeaf
+                  ? { ...t, focusedSessionId: sessionId }
+                  : t,
+              ),
+        }
+      })
     },
     [refs.stateRef, setSpotlight, setState],
   )

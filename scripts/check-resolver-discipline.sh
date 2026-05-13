@@ -19,9 +19,19 @@
 #      Object.{values,keys,entries}(state.detachedSessions) — direct
 #      detached-bucket access. Should use a named query in
 #      workspace/queries.ts (resolveTabSessions, isDetached) instead.
+#   3. const|let|var { ...detachedSessions... } = state — destructuring
+#      the bucket out of state so subsequent `detachedSessions[id]`
+#      bypasses pattern #2. Cover the back door too.
 #
 # Comment lines (`//`, ` *`) are skipped so the explainer prose can
 # reference the literal pattern without tripping the check.
+#
+# Known limitation: patterns are matched line-by-line. A forbidden
+# call wrapped across multiple lines
+#   `collectLeaves(\n   tab.root\n)` would slip through. That's an
+# acceptable trade — the patterns we forbid are short enough that
+# wrapping is unusual, and the cost of a multi-line matcher
+# (introducing pcre2grep or a Node script) is higher than the value.
 #
 # If you genuinely need one of these patterns in a new file, add the
 # file to ALLOWED_FILES below with a brief comment explaining why
@@ -45,14 +55,28 @@ cd "$ROOT"
 #   - commandTargetSessionId.ts    (Dispatch-aware focus reader)
 #
 # Tree mutation / persistence — grid-only is correct by design:
-#   - hook/actions/*.ts            (split/close/move/duplicate panes)
+#   - hook/actions/*.ts            (split/close/move/duplicate panes,
+#                                   plus reader/spotlight action layer
+#                                   which deliberately uses
+#                                   collectLeaves to gate
+#                                   tab.focusedSessionId writes on
+#                                   grid-leaf membership)
 #   - hook/persistence/*.ts        (rehydrate)
-#   - hook/invalidation/effects.ts (purge runtime maps)
 #   - layout/helpers.ts            (geometry from tile tree)
 #   - persistence.ts               (workspace.json migrations)
-#   - tile-tree/paneLabels.ts      (label numbering walks tree only)
 #   - tile-tree/TileTree.tsx       (renders the tree)
 #   - tile-tree/useKeybinds.ts     (arrow-key navigation walks tree)
+#
+# DELIBERATELY NOT ALLOWLISTED (used to be, removed after review of
+# PR #107):
+#   - hook/invalidation/effects.ts — the Reader/Spotlight focus
+#     validator MUST match the view source-of-truth, which is
+#     resolveTabSessions (not collectLeaves). Allowlisting this dir
+#     hid a real bug where a detached focus was reset to the first
+#     grid pane.
+#   - tile-tree/paneLabels.ts — labels for grid AND detached sessions;
+#     the new implementation uses resolveTabSessions so it doesn't
+#     need an exemption.
 ALLOWED_FILES=(
   "src/renderer/src/workspace/queries.ts"
   "src/renderer/src/workspace/dispatch/dispatchSelectors.ts"
@@ -61,10 +85,8 @@ ALLOWED_FILES=(
   "src/renderer/src/workspace/hook/selectors/commandTargetSessionId.ts"
   "src/renderer/src/workspace/hook/actions/"
   "src/renderer/src/workspace/hook/persistence/"
-  "src/renderer/src/workspace/hook/invalidation/"
   "src/renderer/src/workspace/layout/helpers.ts"
   "src/renderer/src/workspace/persistence.ts"
-  "src/renderer/src/workspace/tile-tree/paneLabels.ts"
   "src/renderer/src/workspace/tile-tree/TileTree.tsx"
   "src/renderer/src/workspace/tile-tree/useKeybinds.ts"
 )
@@ -118,6 +140,17 @@ check_pattern \
 check_pattern \
   "Object.{values,keys,entries}(...detachedSessions) outside the resolver layer" \
   'Object\.(values|keys|entries)\([^)]*detachedSessions'
+
+# Destructuring back door — without this, a writer could route around
+# the subscript check via
+#   const { detachedSessions } = state
+#   detachedSessions[id]
+# and the next reviewer would see only `detachedSessions[id]` (no
+# `state.` prefix). Forbid destructuring the bucket out of state in
+# the first place.
+check_pattern \
+  "destructuring detachedSessions out of state outside the resolver layer" \
+  '\b(const|let|var)\s+\{[^}]*\bdetachedSessions\b[^}]*\}\s*='
 
 if [ "$violations" -gt 0 ]; then
   echo ""
