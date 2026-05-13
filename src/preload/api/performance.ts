@@ -26,4 +26,11 @@ export const performanceApi = {
 
   getSystemPerformanceStats: (): Promise<SystemPerformanceStats> =>
     ipcRenderer.invoke('performance:system-stats'),
+
+  writeHeapSnapshot: (): Promise<
+    { ok: true; path: string } | { ok: false; error: string }
+  > => ipcRenderer.invoke('performance:write-heap-snapshot'),
+
+  revealPath: (path: string): Promise<void> =>
+    ipcRenderer.invoke('performance:reveal-path', path),
 }
