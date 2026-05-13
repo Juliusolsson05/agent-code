@@ -1,0 +1,26 @@
+name: resolver-discipline
+
+# WHY this workflow exists: see scripts/check-resolver-discipline.sh
+# header. In short — the grid-vs-dispatch session-set divergence bug
+# class (nine PRs + issue #104) is closed at the resolver layer, and
+# this CI lock prevents anyone from re-introducing the broken pattern
+# outside an explicit allowlist.
+#
+# Submodules are intentionally not checked out: the check only reads
+# renderer source files, which all live in this repo proper.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Run resolver-discipline check
+        run: bash scripts/check-resolver-discipline.sh
