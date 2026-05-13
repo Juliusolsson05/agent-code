@@ -47,14 +47,14 @@ import {
 } from '@renderer/workspace/ghosts'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
-import type { WorktreeIdentity } from '@renderer/workspace/work-context/types'
+import type { WorktreeIdentity } from '@shared/work-context/types'
 import {
   canonicalizeWorktreeActivity,
   deriveAgentWorkContext,
   ingestWorktreeRawEvent,
   withFallbackWorktreeActivity,
-} from '@renderer/workspace/work-context/tracker'
-import { summarizeWorktreeActivity } from '@renderer/workspace/work-context/debug'
+} from '@shared/work-context/tracker'
+import { summarizeWorktreeActivity } from '@shared/work-context/debug'
 
 import type {
   WorkspaceSetRuntimes,

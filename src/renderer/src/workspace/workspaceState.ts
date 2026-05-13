@@ -12,7 +12,7 @@ import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import type {
   AgentWorkContext,
   WorktreeActivityState,
-} from '@renderer/workspace/work-context/types'
+} from '@shared/work-context/types'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 
 export type PickerItem = {

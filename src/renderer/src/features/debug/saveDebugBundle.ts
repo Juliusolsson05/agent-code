@@ -7,7 +7,7 @@ import {
   recordHtmlTraceSnapshot,
   recordScreenTailSnapshot,
 } from '@renderer/features/debug/renderTrace'
-import { summarizeWorktreeActivity } from '@renderer/workspace/work-context/debug'
+import { summarizeWorktreeActivity } from '@shared/work-context/debug'
 
 // saveDebugBundle — assemble-and-ship side of the "Save Debug Logs"
 // command. Runs in the renderer because every data source the

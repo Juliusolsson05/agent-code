@@ -11,7 +11,7 @@ import {
 import {
   resetWorktreeBadgeColorAssignmentsForTest,
   worktreeBadgeColor,
-} from '../src/renderer/src/workspace/work-context/colors'
+} from '../src/renderer/src/workspace/tile-tree/TileLeaf/worktreeBadgeColor'
 import type { WorktreeIdentity } from '../src/shared/types/git'
 import type { WorktreeActivityState } from '../src/shared/work-context/types'
 

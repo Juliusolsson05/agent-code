@@ -3,8 +3,8 @@ import type { SessionKind } from '@renderer/workspace/types'
 import type {
   AgentWorkContext,
   WorktreeActivityState,
-} from '@renderer/workspace/work-context/types'
-import { worktreeBadgeColor } from '@renderer/workspace/work-context/colors'
+} from '@shared/work-context/types'
+import { worktreeBadgeColor } from '@renderer/workspace/tile-tree/TileLeaf/worktreeBadgeColor'
 
 export function WorktreeBadge({
   context,

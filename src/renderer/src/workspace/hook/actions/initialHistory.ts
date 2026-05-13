@@ -26,7 +26,7 @@ import {
 import {
   deriveAgentWorkContext,
   ingestWorktreeRawEvent,
-} from '@renderer/workspace/work-context/tracker'
+} from '@shared/work-context/tracker'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
