@@ -3,7 +3,7 @@ import type { SessionKind } from '@renderer/workspace/types'
 import type {
   AgentWorkContext,
   WorktreeActivityState,
-} from '@renderer/workspace/work-context/types'
+} from '@shared/work-context/types'
 
 // Scroll position indicator — sits just above the composer,
 // right-aligned. Shows which entry you're looking at out of the
