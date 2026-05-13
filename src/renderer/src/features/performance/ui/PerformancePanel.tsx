@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import type { PanePerformanceStats } from '@shared/performance/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 
 type Props = {
@@ -23,8 +23,8 @@ export function PerformancePanel({ open, workspace }: Props) {
     [workspace.activeTab, workspace.state.tabs, workspace.tileTabs],
   )
   const visibleIds = useMemo(
-    () => visible.flatMap(tab => collectLeaves(tab.root)),
-    [visible],
+    () => visible.flatMap(tab => resolveTabSessions(workspace.state, tab.id)),
+    [visible, workspace.state],
   )
   const [enabled, setEnabled] = useState<boolean | null>(null)
   const [stats, setStats] = useState<PanePerformanceStats[]>([])
@@ -79,7 +79,7 @@ export function PerformancePanel({ open, workspace }: Props) {
         ) : (
           <div className="max-h-[260px] overflow-auto">
             {visible.flatMap(tab =>
-              collectLeaves(tab.root).map(sessionId => {
+              resolveTabSessions(workspace.state, tab.id).map(sessionId => {
                 const stat = bySession.get(sessionId)
                 return (
                   <div

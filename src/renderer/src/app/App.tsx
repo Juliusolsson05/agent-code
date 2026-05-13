@@ -37,7 +37,7 @@ import { applyTheme } from '@renderer/app-state/settings/theme'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 
 // App — thin shell around the workspace hook.
@@ -207,9 +207,27 @@ export default function App() {
     if (pathPickerDefault) return
 
     let cancelled = false
-    const mostRecent = Object.values(workspace.state.sessions).pop()
-    if (mostRecent?.cwd) {
-      setPathPickerDefault(mostRecent.cwd)
+    // Pre-fill from the active tab's context, not a global "most
+    // recent session" walk. The old code did
+    // `Object.values(state.sessions).pop()` which returns the last
+    // inserted session across ALL tabs — once Dispatch Mode landed,
+    // that's frequently a background detached agent in a different
+    // project, and the user opens the new-tab picker pre-filled with
+    // a directory they aren't standing in. Prefer (a) the active
+    // tab's focused session, (b) the first session resolved for the
+    // active tab by the canonical resolver. Falls through to
+    // window.api.defaultCwd() when the active tab has no sessions.
+    const activeTabId = workspace.activeTab?.id
+    let fallbackCwd: string | undefined
+    if (activeTabId) {
+      const focusedId = workspace.activeTab?.focusedSessionId ?? null
+      const candidateId = focusedId ?? resolveTabSessions(workspace.state, activeTabId)[0] ?? null
+      if (candidateId) {
+        fallbackCwd = workspace.state.sessions[candidateId]?.cwd
+      }
+    }
+    if (fallbackCwd) {
+      setPathPickerDefault(fallbackCwd)
       return
     }
     void window.api.defaultCwd().then(cwd => {
@@ -218,7 +236,7 @@ export default function App() {
     return () => {
       cancelled = true
     }
-  }, [pathPickerDefault, pathPickerOpen, setPathPickerDefault, workspace.state.sessions])
+  }, [pathPickerDefault, pathPickerOpen, setPathPickerDefault, workspace.activeTab, workspace.state])
 
   // New tab flow: show the path modal. On accept it calls workspace.newTab
   // with the expanded absolute path and closes the modal.
@@ -315,32 +333,26 @@ export default function App() {
       })
     }
 
-    // Pass 1: pinned ids, in pin order.
+    // Pass 1: pinned ids, in pin order. Owner-tab lookup goes through
+    // resolveTabSessions so it sees BOTH grid leaves and detached
+    // agents owned by the tab. The previous code branched on
+    // `state.detachedSessions[sessionId]` before falling back to a
+    // grid-only `collectLeaves` walk — the same divergence pattern
+    // this whole PR is closing.
     for (const sessionId of state.pinnedSessionIds) {
-      const detached = state.detachedSessions[sessionId]
-      if (detached) {
-        pushRow(sessionId, detached.projectTabId)
-        continue
-      }
-      const owner = state.tabs.find(tab => collectLeaves(tab.root).includes(sessionId))
+      const owner = state.tabs.find(tab => resolveTabSessions(state, tab.id).includes(sessionId))
       if (owner) pushRow(sessionId, owner.id)
     }
 
-    // Pass 2: every other agent, tab-by-tab (grid leaves then
-    // detached ordered oldest-first). The pinnedSet check is
-    // belt-and-suspenders — seen would catch it too, but the
-    // explicit set makes the intent obvious to a future reader.
+    // Pass 2: every other agent, tab-by-tab. resolveTabSessions
+    // already yields grid leaves first (in tile-tree order) then
+    // detached agents oldest-first — exactly the order this modal
+    // wants — so no manual interleaving is needed. The pinnedSet
+    // check is belt-and-suspenders since `seen` would also catch
+    // double-adds, but it makes the intent obvious to a future
+    // reader.
     for (const tab of state.tabs) {
-      const gridIds = collectLeaves(tab.root)
-      for (const sessionId of gridIds) {
-        if (pinnedSet.has(sessionId)) continue
-        pushRow(sessionId, tab.id)
-      }
-      const detachedIds = Object.values(state.detachedSessions)
-        .filter(entry => entry.projectTabId === tab.id)
-        .sort((a, b) => a.detachedAt - b.detachedAt)
-        .map(entry => entry.sessionId)
-      for (const sessionId of detachedIds) {
+      for (const sessionId of resolveTabSessions(state, tab.id)) {
         if (pinnedSet.has(sessionId)) continue
         pushRow(sessionId, tab.id)
       }

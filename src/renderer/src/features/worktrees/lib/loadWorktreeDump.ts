@@ -1,7 +1,7 @@
 import type { WorktreeActivityIndexStatus, WorktreeActivitySummary } from '@preload/index'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { matchWorktree } from '@shared/work-context/matching'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -105,8 +105,14 @@ export function collectLiveAgentsByWorktree(
     detached: w.detached,
   }))
   const byPath = new Map<string, WorktreeLiveAgent[]>()
+  // resolveTabSessions covers BOTH grid leaves and detached Dispatch
+  // agents for the tab. The previous implementation walked grid only,
+  // so a Claude/Codex agent running in a worktree but parked in
+  // Dispatch was missing from this tab's row — even though it was
+  // genuinely live and consuming the worktree. The "live agents per
+  // worktree" view needs the union, not the visible-grid subset.
   workspace.state.tabs.forEach((tab: Tab) => {
-    for (const sessionId of collectLeaves(tab.root)) {
+    for (const sessionId of resolveTabSessions(workspace.state, tab.id)) {
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
       if (kind !== 'claude' && kind !== 'codex') continue

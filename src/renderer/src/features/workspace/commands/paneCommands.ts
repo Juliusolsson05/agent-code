@@ -1,6 +1,10 @@
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import {
+  commandTargetSessionId,
+  commandTargetSessionIdForState,
+} from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { isDetached } from '@renderer/workspace/queries'
 import {
   detachedDispatchSessionIdsForTab,
   buildDispatchGroups,
@@ -58,13 +62,13 @@ export const paneCommands: CommandDef[] = [
       if (!workspace.dispatchMode) return false
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      return Boolean(workspace.state.detachedSessions[sessionId])
+      return isDetached(workspace.state, sessionId)
     },
     run: ({ workspace, ui }) => {
       if (!workspace.dispatchMode) return
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
-      if (!workspace.state.detachedSessions[sessionId]) return
+      if (!isDetached(workspace.state, sessionId)) return
       ui.openDispatchAttach(sessionId)
     },
   },
@@ -157,9 +161,17 @@ export const paneCommands: CommandDef[] = [
     description: '**What it does:** Moves a grid agent into **Dispatch** without killing it.\n\n**Use when:** You want to park work in the background.\n\n**Notes:** Terminals and the last pane in a tab cannot be detached.',
     keywords: ['detach', 'dispatch', 'park', 'background', 'unpin'],
     when: ({ workspace }) => {
-      const tab = workspace.activeTab
-      if (!tab) return false
-      const sessionId = tab.focusedSessionId
+      // Use the Dispatch-aware target resolver, not tab.focusedSessionId.
+      // tab.focusedSessionId has a "must be a leaf in tab.root" invariant
+      // — i.e. it's grid-only. In Dispatch Mode the user has a row
+      // selected, not a grid focus, and reading tab.focusedSessionId
+      // silently misses that selection: the command would either gate
+      // off entirely or target a stale grid leaf. The action itself
+      // (`workspace.detachFocusedToDispatch`) already routes through
+      // the Dispatch-aware target; this gate must agree or the palette
+      // shows/hides the command for the wrong reason.
+      if (!workspace.activeTab) return false
+      const sessionId = commandTargetSessionIdForState(workspace.state)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       return Boolean(meta) && meta.kind !== 'terminal'

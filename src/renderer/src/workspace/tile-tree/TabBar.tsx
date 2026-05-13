@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-import type { TileNode } from '@renderer/workspace/types'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // TabBar — one row of tab chrome at the top of the window. Each tab has
@@ -18,12 +18,6 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 type Props = {
   workspace: Workspace
   onNewTabRequest: () => void
-}
-
-/** Collect every leaf session ID from a tile tree. */
-function collectSessionIds(node: TileNode): string[] {
-  if (node.type === 'leaf') return [node.sessionId]
-  return [...collectSessionIds(node.a), ...collectSessionIds(node.b)]
 }
 
 export function TabBar({ workspace, onNewTabRequest }: Props) {
@@ -58,7 +52,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
           const active = tab.id === state.activeTabId
           // Derive active/total pane counts from the tile tree +
           // runtimes. Pure derivation — no extra state needed.
-          const sessionIds = collectSessionIds(tab.root)
+          const sessionIds = resolveTabSessions(state, tab.id)
           const total = sessionIds.length
           const alive = sessionIds.filter(id => {
             const rt = runtimes[id]
