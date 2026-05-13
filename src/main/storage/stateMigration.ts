@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, rename, stat } from 'node:fs/promises'
+import { cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import { LEGACY_STATE_DIR, STATE_DIR } from '@main/storage/paths.js'
@@ -9,6 +9,23 @@ const USER_DATA_SUBDIRS_TO_MIGRATE = [
   'dictation-debug',
   'paste-debug',
   'native-helpers',
+]
+
+// Chromium-owned renderer storage needs whole-directory replacement, not a
+// recursive "copy missing files" merge.
+//
+// WHY: Local Storage / Session Storage are LevelDB-ish stores. They contain
+// manifest/log files whose names intentionally overlap between two separate
+// app identities. Merging file-by-file can pair a legacy MANIFEST with a fresh
+// CURRENT pointer and corrupt both the migrated settings and the new store.
+// For this temporary conversion branch, we replace the target only when it is
+// still a fresh Chromium bootstrap. If the target already has real data, we
+// leave the legacy directory in place and log loudly rather than deleting the
+// only copy of the old renderer state.
+const USER_DATA_SUBDIRS_TO_REPLACE_IF_FRESH = [
+  'Local Storage',
+  'Session Storage',
+  'WebStorage',
 ]
 
 async function exists(path: string): Promise<boolean> {
@@ -37,6 +54,33 @@ async function copyMissingEntries(fromDir: string, toDir: string): Promise<void>
   }
 }
 
+async function isFreshChromiumStore(dir: string): Promise<boolean> {
+  if (!(await exists(dir))) return true
+
+  const leveldbDir = join(dir, 'leveldb')
+  if (await exists(leveldbDir)) {
+    const entries = await readdir(leveldbDir).catch(() => [] as string[])
+    for (const name of entries) {
+      if (name.endsWith('.ldb')) return false
+      if (/^[0-9]+\.log$/i.test(name)) return false
+    }
+    return true
+  }
+
+  const entries = await readdir(dir).catch(() => [] as string[])
+  return entries.length === 0
+}
+
+async function replaceIfTargetFresh(fromDir: string, toDir: string): Promise<boolean> {
+  if (!(await exists(fromDir))) return false
+  if (!(await isFreshChromiumStore(toDir))) return false
+  if (await exists(toDir)) {
+    await rm(toDir, { recursive: true, force: true })
+  }
+  await cp(fromDir, toDir, { recursive: true, force: false, errorOnExist: false })
+  return true
+}
+
 export async function migrateLegacyStateDir(): Promise<void> {
   if (STATE_DIR === LEGACY_STATE_DIR) {
     await mkdir(STATE_DIR, { recursive: true })
@@ -61,12 +105,13 @@ export async function migrateLegacyStateDir(): Promise<void> {
     return
   }
 
-  // Both directories existing means the user has already launched a newer
-  // build, or manually created the Agent Code state dir. In that case we merge
-  // only entries that do not already exist, preserving the newer directory as
-  // the source of truth. We intentionally leave the legacy directory behind:
-  // deleting user state after a partial merge would make rollback impossible.
+  // Temporary conversion branch: once both dirs exist, merge anything that only
+  // exists in the old cc-shell tree and then remove the legacy tree. PR #82
+  // intentionally left it behind for rollback. That made sense during the
+  // rename window; it is now exactly the noise this branch is meant to flush
+  // out before the final "delete legacy support" commit.
   await copyMissingEntries(LEGACY_STATE_DIR, STATE_DIR)
+  await rm(LEGACY_STATE_DIR, { recursive: true, force: true })
 }
 
 export async function migrateLegacyUserDataDirs(currentUserDataDir: string): Promise<void> {
@@ -76,18 +121,34 @@ export async function migrateLegacyUserDataDirs(currentUserDataDir: string): Pro
   for (const legacyName of LEGACY_USER_DATA_DIR_NAMES) {
     const legacyDir = join(supportDir, legacyName)
     if (legacyDir === currentUserDataDir || !(await exists(legacyDir))) continue
+    let fullyConverted = true
 
     for (const subdir of USER_DATA_SUBDIRS_TO_MIGRATE) {
       const from = join(legacyDir, subdir)
       if (!(await exists(from))) continue
 
-      // WHY copy subdirectories instead of renaming the whole legacy userData
-      // tree: Electron's userData location also contains framework-owned cache
-      // and per-build files whose shape can differ between dev and packaged
-      // runs. The Agent Code-owned durable pieces are known and small enough
-      // to merge safely, and leaving the old directory intact keeps rollback to
-      // pre-rename builds possible.
+      // These are Agent Code-owned append-only/runtime dirs, so "copy missing
+      // entries into the current identity" is a real conversion. Unlike PR #82,
+      // this temporary branch does not preserve the source dir for rollback
+      // after the known durable pieces have moved.
       await copyMissingEntries(from, join(currentUserDataDir, subdir))
+    }
+
+    for (const subdir of USER_DATA_SUBDIRS_TO_REPLACE_IF_FRESH) {
+      const from = join(legacyDir, subdir)
+      if (!(await exists(from))) continue
+      const replaced = await replaceIfTargetFresh(from, join(currentUserDataDir, subdir))
+      if (!replaced) {
+        fullyConverted = false
+        console.warn(
+          `[state] could not safely convert ${legacyName}/${subdir}; ` +
+          'target store already has data, leaving legacy userData dir in place',
+        )
+      }
+    }
+
+    if (fullyConverted) {
+      await rm(legacyDir, { recursive: true, force: true })
     }
   }
 }

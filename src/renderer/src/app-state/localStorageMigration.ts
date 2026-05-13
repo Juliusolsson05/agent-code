@@ -22,14 +22,22 @@ const MIGRATED_KEYS: StorageKeyPair[] = [
 ]
 
 export function migrateLegacyLocalStorageKeys(): void {
-  // WHY copy instead of move: localStorage is small, and keeping the legacy
-  // values makes rollback to a pre-rename build painless. The new keys become
-  // authoritative as soon as Agent Code writes them; old keys are just a
-  // read-once compatibility bridge for existing pre-rename installs.
+  // TEMPORARY cc-shell conversion pass:
+  //
+  // PR #82 intentionally copied legacy keys and kept the originals so a
+  // pre-rename build could roll back cleanly. That was right while the rename
+  // was fresh. This branch is deliberately different: the dev team is the only
+  // legacy user base and has mostly moved to the Agent Code shape, so we want a
+  // checkout where navigating the app stops finding live cc-shell state.
+  //
+  // Move semantics here are load-bearing for the next cleanup commit: after a
+  // few launches with this code, remaining LEGACY_* readers should be removable
+  // without silently stranding settings/templates under old key names.
   for (const { current, legacy } of MIGRATED_KEYS) {
-    if (window.localStorage.getItem(current) !== null) continue
     const value = window.localStorage.getItem(legacy)
-    if (value === null) continue
-    window.localStorage.setItem(current, value)
+    if (value !== null && window.localStorage.getItem(current) === null) {
+      window.localStorage.setItem(current, value)
+    }
+    window.localStorage.removeItem(legacy)
   }
 }
