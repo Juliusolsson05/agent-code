@@ -1,5 +1,5 @@
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -13,9 +13,14 @@ export function SpotlightView({ workspace }: Props) {
   const tab = workspace.state.tabs.find(item => item.id === spotlight.tabId)
   if (!tab) return null
 
+  // Dispatch mode uses the dispatch-UI selector (which strips pinned
+  // rows because they render in a separate Pinned section). The
+  // non-Dispatch path used to walk grid leaves only — now uses the
+  // canonical resolver so Spotlight covers detached agents owned by
+  // this tab whenever Dispatch mode is off.
   const sessionIds = workspace.dispatchMode
     ? dispatchSessionIdsForTab(workspace.state, tab.id)
-    : collectLeaves(tab.root)
+    : resolveTabSessions(workspace.state, tab.id)
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(spotlight.focusedSessionId)

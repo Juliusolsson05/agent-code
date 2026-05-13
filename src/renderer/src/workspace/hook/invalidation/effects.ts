@@ -7,7 +7,7 @@ import type {
   TileTabsState,
 } from '@renderer/workspace/workspaceState'
 import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import {
   buildDispatchGroups,
   flattenDispatchRows,
@@ -90,18 +90,28 @@ function validFocusSessionIdsForMode(
   const tab = state.tabs.find(t => t.id === tabId)
   if (!tab) return null
 
-  // Reader/Spotlight sanity used to validate only tile-tree leaves. That is
-  // correct in the normal grid, but wrong in Dispatch: detached agents are
-  // intentionally outside `tab.root` and still must be legal reader/spotlight
-  // targets. Reusing the Dispatch row builder keeps this invariant tied to the
-  // same scoped, terminal-filtered list the user can actually see and select.
+  // Reader/Spotlight sanity must validate against the SAME set of
+  // session ids the view renders, or focus drifts. The view source-
+  // of-truth has shifted twice now:
+  //   - Originally grid leaves only (collectLeaves(tab.root)).
+  //   - Then Dispatch added detached agents; we routed Dispatch mode
+  //     through buildDispatchGroups so dispatch-row selections were
+  //     legal here too.
+  //   - Then ReaderView/SpotlightView migrated to resolveTabSessions
+  //     for the non-Dispatch fallback (this PR), so the non-Dispatch
+  //     case must also include detached agents.
+  //
+  // Using a different set than the view causes spurious resets:
+  // user clicks a detached row in non-Dispatch Reader → validator
+  // sees the id isn't a grid leaf → forces focus back to the first
+  // grid pane → user's selection silently disappears.
   if (state.dispatchMode) {
     return flattenDispatchRows(buildDispatchGroups(state))
       .filter(row => row.tabId === tabId)
       .map(row => row.sessionId)
   }
 
-  return collectLeaves(tab.root)
+  return resolveTabSessions(state, tabId)
 }
 
 // Picker invalidation. If the selected uuid is no longer present in

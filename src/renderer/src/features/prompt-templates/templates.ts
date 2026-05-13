@@ -1,7 +1,6 @@
 import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import { detachedDispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import {
   PROMPT_TEMPLATES_STORAGE_KEY,
@@ -79,20 +78,22 @@ function activeTabAgentTranscriptRequests(workspace: Workspace): AgentTranscript
   // they have put it away; surfacing it back into an LLM context
   // without prompting would defeat that.
   //
-  // The types-level invariant (see `WorkspaceState.sessions` doc in
-  // workspace/types.ts) is that a session is in the tile tree OR in
-  // `detachedSessions`, never both — so we don't strictly need to
-  // dedupe, but a Set guard is cheap insurance against a future bug
-  // that violates that invariant producing duplicate entries in the
-  // generated prompt.
-  const seen = new Set<string>()
-  const sessionIds = [
-    ...collectLeaves(tab.root),
-    ...detachedDispatchSessionIdsForTab(workspace.state, tab.id),
-  ]
+  // resolveTabSessions composes the same union (grid leaves ∪
+  // detached Dispatch agents owned by this tab) the manual concat
+  // used to do. It deliberately does NOT strip pinned sessions, which
+  // is what we want here — the dispatch-UI selector strips pinned for
+  // a display concern (Pinned section renders them exclusively at the
+  // top of the Dispatch list); the generated prompt is content, not
+  // display, so a pinned agent that visibly lives in this tab must
+  // still appear.
+  //
+  // We deliberately do NOT include `state.buried` entries even when
+  // `sourceTabId === tab.id`. Burying a pane is the user's signal
+  // that they have put it away; surfacing it back into an LLM context
+  // without prompting would defeat that. resolveTabSessions already
+  // excludes buried entries.
+  const sessionIds = resolveTabSessions(workspace.state, tab.id)
   return sessionIds.flatMap(sessionId => {
-    if (seen.has(sessionId)) return []
-    seen.add(sessionId)
     const meta = workspace.state.sessions[sessionId]
     const kind = meta?.kind ?? 'claude'
     if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) {

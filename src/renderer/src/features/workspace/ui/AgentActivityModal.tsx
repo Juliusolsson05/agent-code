@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
@@ -116,7 +116,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
 
     const built: Row[] = []
     workspace.state.tabs.forEach((tab: Tab, tabIndex: number) => {
-      const leaves = collectLeaves(tab.root)
+      const leaves = resolveTabSessions(workspace.state, tab.id)
       for (const sessionId of leaves) {
         const meta = workspace.state.sessions[sessionId]
         if (!meta) continue

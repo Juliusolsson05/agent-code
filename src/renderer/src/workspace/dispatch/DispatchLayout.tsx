@@ -141,7 +141,7 @@ export function DispatchLayout({
             <TerminalLeaf
               sessionId={terminalSessionId}
               paneLabel={paneLabelForSession(
-                workspace.state.tabs,
+                workspace.state,
                 activeTab.id,
                 terminalSessionId,
               )}

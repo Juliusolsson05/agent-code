@@ -195,9 +195,23 @@ export function CommandPalette({
     setSessionsLoading(false)
   }, [focusedCwd, focusedProvider])
 
+  // Buried panes are scoped to the ACTIVE TAB. The natural temptation
+  // is to show every buried pane in the workspace ("they're paused
+  // work, the user might want any of them") but that mixes contexts:
+  // a buried Codex agent from project A appears alongside a buried
+  // Claude agent from project B with no surface-level indication
+  // they're cross-project. Scoping by sourceTabId matches the rest of
+  // the workspace's per-tab discipline and prevents revive-into-wrong-
+  // tab footguns (revive places the pane back into the tab the user
+  // is currently in, not the tab it was buried from).
+  //
+  // Buried panes from other tabs are not lost — switching to that tab
+  // surfaces them in its palette.
+  const activeTabId = workspace.state.activeTabId
   const buried = useMemo<BuriedPaneInfo[]>(
     () =>
       [...workspace.state.buried]
+        .filter(entry => entry.sourceTabId === activeTabId)
         .sort((a, b) => b.buriedAt - a.buriedAt)
         .map(entry => {
           const kind = entry.sessionMeta.kind ?? 'claude'
@@ -211,7 +225,7 @@ export function CommandPalette({
             buriedAt: entry.buriedAt,
           }
         }),
-    [workspace.state.buried],
+    [activeTabId, workspace.state.buried],
   )
 
   const enterBuriedMode = useCallback(() => {

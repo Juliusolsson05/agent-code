@@ -1,5 +1,5 @@
-import type { SessionId, Tab, TabId } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 
 export function tabIndexLabel(index: number): string {
   if (index < 0) return '?'
@@ -12,14 +12,27 @@ export function tabIndexLabel(index: number): string {
   return label
 }
 
+// Stable label for a session inside a tab. Format: `<TabLetter><Index>`,
+// e.g. "A1", "B3". The index is 1-based and stable across grid +
+// detached sessions in the tab — resolveTabSessions yields grid leaves
+// first (tile-tree order), then detached agents (oldest-detached
+// first). For a grid-leaf session this matches the historical
+// `collectLeaves(tab.root)` indexing exactly, so existing callers
+// (TileTree, DispatchLayout) keep producing the same strings; detached
+// sessions surfaced by the Performance Panel after the grid-vs-dispatch
+// migration now get a meaningful label instead of "?".
+//
+// The `state` parameter exists because resolveTabSessions needs the
+// full WorkspaceState (it composes grid leaves with
+// state.detachedSessions). Pass `workspace.state` at the call site.
 export function paneLabelForSession(
-  tabs: Tab[],
+  state: WorkspaceState,
   tabId: TabId,
   sessionId: SessionId,
 ): string {
+  const tabs: Tab[] = state.tabs
   const tabIndex = tabs.findIndex(tab => tab.id === tabId)
-  const tab = tabIndex >= 0 ? tabs[tabIndex] : null
-  if (!tab) return '?'
-  const paneIndex = collectLeaves(tab.root).indexOf(sessionId)
+  if (tabIndex < 0) return '?'
+  const paneIndex = resolveTabSessions(state, tabId).indexOf(sessionId)
   return `${tabIndexLabel(tabIndex)}${paneIndex >= 0 ? paneIndex + 1 : '?'}`
 }

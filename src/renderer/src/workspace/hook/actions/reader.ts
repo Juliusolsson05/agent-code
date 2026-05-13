@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
   buildDispatchGroups,
   flattenDispatchRows,
@@ -74,18 +75,35 @@ export function useReaderActions(
             }
           : prev
       ))
-      setState(prev => ({
-        ...prev,
-        activeTabId: dispatchRow?.tabId ?? prev.activeTabId,
-        dispatchMode: prev.dispatchMode && dispatchRow
-          ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-          : prev.dispatchMode,
-        tabs: prev.dispatchMode
-          ? prev.tabs
-          : prev.tabs.map(t =>
-              t.id === prev.activeTabId ? { ...t, focusedSessionId: sessionId } : t,
-            ),
-      }))
+      setState(prev => {
+        // Tab.focusedSessionId is a grid-only field (its invariant:
+        // must be a leaf in `tab.root`). Non-Dispatch Reader now
+        // surfaces detached agents in its session list (via
+        // resolveTabSessions), so a detached id can reach this
+        // handler. The pre-existing comment above already explained
+        // the Dispatch case; the same reasoning applies to detached
+        // sessions clicked from a non-Dispatch Reader view — only
+        // mirror to focusedSessionId when the id is actually a leaf.
+        // For a detached selection, Reader's own focusedSessionId
+        // holds the choice; we don't need to (and must not) mirror
+        // it to the grid-only field.
+        const activeTab = prev.tabs.find(t => t.id === prev.activeTabId) ?? null
+        const isGridLeaf = activeTab ? collectLeaves(activeTab.root).includes(sessionId) : false
+        return {
+          ...prev,
+          activeTabId: dispatchRow?.tabId ?? prev.activeTabId,
+          dispatchMode: prev.dispatchMode && dispatchRow
+            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+            : prev.dispatchMode,
+          tabs: prev.dispatchMode
+            ? prev.tabs
+            : prev.tabs.map(t =>
+                t.id === prev.activeTabId && isGridLeaf
+                  ? { ...t, focusedSessionId: sessionId }
+                  : t,
+              ),
+        }
+      })
     },
     [refs.stateRef, setReaderMode, setState],
   )

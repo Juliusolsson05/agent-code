@@ -6,7 +6,7 @@ import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/copyAssistant'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -95,7 +95,7 @@ export function ReaderView({ workspace }: Props) {
 
   const sessionIds = workspace.dispatchMode
     ? dispatchSessionIdsForTab(workspace.state, tab.id)
-    : collectLeaves(tab.root)
+    : resolveTabSessions(workspace.state, tab.id)
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(reader.focusedSessionId)
