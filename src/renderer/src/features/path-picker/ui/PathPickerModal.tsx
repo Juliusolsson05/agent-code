@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { PathInput } from '@renderer/ui/PathInput'
+import { relativeTime } from '@renderer/lib/relativeTime'
 
 // Duplicate of the SessionInfo shape preload exposes. Inlined here so
 // the renderer's tsconfig doesn't need to reach across into src/preload
@@ -391,26 +392,3 @@ function ResumeRow({
   )
 }
 
-/**
- * Render a timestamp as a short relative string: `3m`, `2h`, `4d`,
- * `3w`. Matches the vibe of git log / GitHub timestamps. Used in the
- * resume picker where exact dates would cost space and not add info.
- */
-function relativeTime(ms: number): string {
-  const delta = Date.now() - ms
-  if (delta < 0) return 'now'
-  const s = Math.floor(delta / 1000)
-  if (s < 60) return `${s}s ago`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  if (d < 7) return `${d}d ago`
-  const w = Math.floor(d / 7)
-  if (w < 5) return `${w}w ago`
-  const mo = Math.floor(d / 30)
-  if (mo < 12) return `${mo}mo ago`
-  const y = Math.floor(d / 365)
-  return `${y}y ago`
-}

@@ -47,10 +47,6 @@ function pushTrafficLightInset(): void {
   }
 }
 
-export function getMainWindow(): BrowserWindow | null {
-  return mainWindow
-}
-
 export function focusMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) return
   if (mainWindow.isMinimized()) mainWindow.restore()

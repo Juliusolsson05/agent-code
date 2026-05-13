@@ -36,7 +36,13 @@ import type { ProviderConditionSnapshot } from '@shared/types/providerConditions
 
 export type SessionKind = 'claude' | 'codex' | 'terminal'
 
-export type ManagerEvents = {
+// WHY private: this is the EventEmitter event map for SessionManager.
+// It's used internally to type `on()`/`off()`/`emit()` overloads (see
+// the `SessionManager` interface below), but no external file imports
+// the bare type. Keeping it module-private documents the API surface:
+// callers consume the manager through the `SessionManager` interface,
+// not via direct event-map type access.
+type ManagerEvents = {
   started: [{ sessionId: string; kind: SessionKind; projectDir?: string }]
   'pty-data': [{ sessionId: string; data: string }]
   /** Raw PTY bytes for an attached agent inline terminal. Emitted
@@ -87,7 +93,12 @@ export type ManagerEvents = {
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
 }
 
-export type SpawnOptions = {
+// WHY private: SpawnOptions is the argument shape for the spawn()
+// method on this class. No external file types its own spawn() wrapper
+// in terms of this — IPC handlers convert from their JSON-RPC payload
+// shapes inline. Privatizing prevents accidental cross-module coupling
+// to a type that will keep evolving alongside spawn() internals.
+type SpawnOptions = {
   /** Which kind of session to spawn. Defaults to 'claude' so the
    *  pre-existing call sites keep working without a kind arg. */
   kind?: SessionKind
@@ -115,7 +126,10 @@ export type SpawnOptions = {
   recoverTmuxName?: string
 }
 
-export type SpawnResult = {
+// WHY private: same reasoning as SpawnOptions — the IPC handler that
+// returns this to the renderer flattens it into a JSON payload at the
+// boundary, so external code never sees the named type.
+type SpawnResult = {
   sessionId: string
   /** Set only when a tmux-backed terminal was spawned (or recovered).
    *  Renderer must persist this so a subsequent launch can recover

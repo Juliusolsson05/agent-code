@@ -5,6 +5,8 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { Entry } from '@shared/types/transcript'
+import { relativeTime } from '@renderer/lib/relativeTime'
+import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 
 // AgentActivityModal — overview of every visible pane grouped by tab
 // with a last-activity indicator per row.
@@ -59,29 +61,6 @@ type TabGroup = {
   rows: Array<{ row: Row; idx: number }>
 }
 
-// Relative-time renderer copy-pasted from PromptSearchModal.tsx. We
-// didn't extract to a shared util because the other component is the
-// only other caller right now — when a third surface wants it, hoist.
-function relativeTime(ts: number): string {
-  const diffMs = Date.now() - ts
-  if (diffMs < 0) return 'in the future'
-  const secs = Math.floor(diffMs / 1000)
-  if (secs < 5) return 'just now'
-  if (secs < 60) return `${secs}s ago`
-  const mins = Math.floor(secs / 60)
-  if (mins < 60) return `${mins}m ago`
-  const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs}h ago`
-  const days = Math.floor(hrs / 24)
-  if (days < 7) return `${days}d ago`
-  const weeks = Math.floor(days / 7)
-  if (weeks < 5) return `${weeks}w ago`
-  const months = Math.floor(days / 30)
-  if (months < 12) return `${months}mo ago`
-  const years = Math.floor(days / 365)
-  return `${years}y ago`
-}
-
 function absoluteTime(ts: number): string {
   const d = new Date(ts)
   if (Number.isNaN(d.getTime())) return ''
@@ -106,18 +85,6 @@ function extractLatestEntryTs(entries: Entry[]): number | null {
     if (!Number.isNaN(parsed)) return parsed
   }
   return null
-}
-
-function cwdBasename(cwd: string): string {
-  if (!cwd) return ''
-  const parts = cwd.split('/').filter(Boolean)
-  return parts[parts.length - 1] ?? cwd
-}
-
-function providerGlyph(kind: 'claude' | 'codex' | 'terminal'): string {
-  if (kind === 'claude') return '⏺'
-  if (kind === 'codex') return '›'
-  return '$'
 }
 
 export function AgentActivityModal({ open, workspace, onClose }: Props) {

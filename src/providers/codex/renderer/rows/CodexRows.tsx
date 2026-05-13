@@ -8,10 +8,15 @@ import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' ? value as Record<string, unknown> : null
-}
+import { asRecord } from '@shared/lib/asRecord'
+// WHY the import switch matters here: the local copy this replaced
+// did NOT exclude arrays — it returned `value as Record<...>` for
+// any non-null object including arrays. The shared helper rejects
+// arrays. Every call site below was using `.raw` / `.input` style
+// property reads on what should always be a plain object, so the
+// stricter check is a free safety improvement, not a regression.
+// If a future caller wants array-as-record they should use a
+// different helper or do the cast inline.
 
 function textFromContent(content: unknown): string {
   if (typeof content === 'string') return content

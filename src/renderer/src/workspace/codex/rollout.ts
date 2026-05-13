@@ -9,6 +9,7 @@ import {
   parseCodexJson,
   stripCodexExecWrapper,
 } from '@renderer/workspace/codex/entries'
+import { asRecord } from '@shared/lib/asRecord'
 
 // Codex rollout → feed entry mapping.
 //
@@ -512,12 +513,6 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
   }
 
   return []
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
 }
 
 /** Build the history marker for a Codex rollout entry. The format is
