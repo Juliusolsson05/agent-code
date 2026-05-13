@@ -112,11 +112,10 @@ export function registerPerformanceIpc(manager: SessionManager): void {
   //    for no win.
   //
   // WHY gated on performanceService.getConfig().enabled (which
-  // mirrors AGENT_CODE_PERF, with CC_SHELL_PERF kept as a legacy
-  // alias): the badge is an opt-in diagnostic, not a feature for end
-  // users. When disabled we still respond with a valid shape so the
-  // renderer hook can detect the gate on its first probe without
-  // throwing. The poller stops after seeing enabled=false;
+  // mirrors AGENT_CODE_PERF): the badge is an opt-in diagnostic, not
+  // a feature for end users. When disabled we still respond with a
+  // valid shape so the renderer hook can detect the gate on its first
+  // probe without throwing. The poller stops after seeing enabled=false;
   // subsequent ticks never fire so the zero values are never
   // displayed.
   ipcMain.handle('performance:system-stats', (): SystemPerformanceStats => {

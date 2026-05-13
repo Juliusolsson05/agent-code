@@ -1,7 +1,7 @@
 import { join } from 'path'
 import { homedir } from 'os'
 
-import { APP_SLUG, LEGACY_APP_SLUG } from '@shared/appIdentity.js'
+import { APP_SLUG } from '@shared/appIdentity.js'
 
 // Disk paths for persisted state.
 //
@@ -11,7 +11,6 @@ import { APP_SLUG, LEGACY_APP_SLUG } from '@shared/appIdentity.js'
 // Everything persisted by Agent Code lives under this one directory.
 
 export const STATE_DIR = join(homedir(), '.config', APP_SLUG)
-export const LEGACY_STATE_DIR = join(homedir(), '.config', LEGACY_APP_SLUG)
 
 // Tile tree + session metadata, written atomically by workspace:save.
 // The renderer owns the JSON shape; main is a byte mover.
@@ -40,6 +39,5 @@ export const DEBUG_BUNDLE_DIR = join(STATE_DIR, 'debug-bundles')
 export const PROXY_EVENTS_DIR = join(STATE_DIR, 'proxy')
 
 // Environment-gated app performance traces. One folder per app run,
-// written only when AGENT_CODE_PERF=1. CC_SHELL_PERF remains accepted
-// as a legacy compatibility alias.
+// written only when AGENT_CODE_PERF=1.
 export const PERFORMANCE_RUNS_DIR = join(STATE_DIR, 'performance', 'runs')

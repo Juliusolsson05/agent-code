@@ -20,22 +20,17 @@ export type TmuxRegistryOptions = {
    *  prefix. Production uses 'agentcode-'; tests use a different
    *  prefix so they never touch the user's real sessions. */
   namePrefix?: string
-  /** Previous production prefixes that should still be treated as ours
-   *  during recovery. Used for the cc-shell -> Agent Code rename. */
-  legacyNamePrefixes?: string[]
   /** Override for the tmux binary path. Defaults to 'tmux' on PATH. */
   tmuxBinary?: string
 }
 
 export class TmuxRegistry {
   private readonly namePrefix: string
-  private readonly managedPrefixes: string[]
   private readonly tmuxBinary: string
   private availability: boolean | null = null
 
   constructor(options: TmuxRegistryOptions = {}) {
     this.namePrefix = options.namePrefix ?? 'agentcode-'
-    this.managedPrefixes = [this.namePrefix, ...(options.legacyNamePrefixes ?? ['ccshell-'])]
     this.tmuxBinary = options.tmuxBinary ?? 'tmux'
   }
 
@@ -148,7 +143,7 @@ export class TmuxRegistry {
         const [name, createdStr] = line.split('|')
         return { name, createdAt: Number(createdStr) * 1000 }
       })
-      .filter(s => this.managedPrefixes.some(prefix => s.name.startsWith(prefix)))
+      .filter(s => s.name.startsWith(this.namePrefix))
   }
 
   /** Run a tmux command, resolving with stdout. Reject on non-zero. */
