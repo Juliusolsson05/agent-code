@@ -1,11 +1,10 @@
-import { readFile } from 'fs/promises'
-
 import type {
   WorktreeActivityEvent,
 } from '@shared/work-context/types.js'
 import {
   extractWorktreeActivityEvents,
 } from '@shared/work-context/extractors.js'
+import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import type {
   IndexedTranscript,
   TranscriptCandidate,
@@ -19,18 +18,23 @@ export async function parseTranscriptForActivity(
   // privacy/blast-radius sane: the raw Claude/Codex JSONL files remain
   // where the providers wrote them, while Agent Code stores enough
   // metadata to answer workspace orchestration questions quickly.
-  const text = await readFile(candidate.file, 'utf8')
+  //
+  // WHY streaming instead of `readFile(...).then(t => t.split('\n'))`:
+  // this function is called once per transcript inside the
+  // WorktreeActivityIndex 60s background refresh loop. With heavy
+  // users carrying 5+ MB transcripts, the whole-file pattern allocated
+  // 3-4x the file size transiently (Buffer + string + split array +
+  // parsed objects), producing the 100-200 MB spike pattern visible in
+  // the system-perf popover every ~60 seconds. Streaming line-by-line
+  // drops the transient peak to one line at a time (~tens of KB even
+  // for large tool_use entries) at no semantic cost.
   const events: WorktreeActivityEvent[] = []
   let discoveredCwd = candidate.cwd
 
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
-    let raw: Record<string, unknown>
-    try {
-      raw = JSON.parse(line) as Record<string, unknown>
-    } catch {
-      continue
-    }
+  for await (const raw of streamJsonl<Record<string, unknown>>(candidate.file)) {
+    // streamJsonl yields null for malformed lines (partial writes,
+    // truncations). Skip them — matches the prior catch-and-continue.
+    if (raw === null) continue
     if (!discoveredCwd) discoveredCwd = extractCwd(raw)
     events.push(...extractWorktreeActivityEvents(raw, candidate.mtimeMs))
   }
