@@ -1,7 +1,7 @@
 import { ipcMain } from 'electron'
 import { homedir } from 'os'
 import { join, resolve } from 'path'
-import { readdir, stat } from 'fs/promises'
+import { mkdir, readdir, stat } from 'fs/promises'
 
 import { saveClaudeImage } from '@main/storage/claudeImageCache.js'
 
@@ -97,7 +97,16 @@ export function registerFsIpc(): void {
     async (
       _evt,
       raw: string,
-    ): Promise<{ ok: true; path: string } | { ok: false; error: string }> => {
+    ): Promise<
+      | { ok: true; path: string }
+      // resolvedPath rides on the error variant so the picker can show a
+      // "Will create: <abs>" hint when the user is about to commit a
+      // create-and-open. The path expansion succeeded — only the on-disk
+      // existence check failed — so the absolute path is well-defined and
+      // safe to surface. Adding the field as optional keeps every existing
+      // caller (which only branches on `ok` vs `error`) backward compatible.
+      | { ok: false; error: string; resolvedPath?: string }
+    > => {
       const trimmed = raw.trim()
       if (!trimmed) return { ok: false, error: 'path is empty' }
       let expanded: string
@@ -112,14 +121,78 @@ export function registerFsIpc(): void {
       try {
         const s = await stat(abs)
         if (!s.isDirectory()) {
-          return { ok: false, error: 'not a directory' }
+          return { ok: false, error: 'not a directory', resolvedPath: abs }
         }
         return { ok: true, path: abs }
       } catch (err) {
         const e = err as NodeJS.ErrnoException
-        if (e.code === 'ENOENT') return { ok: false, error: 'does not exist' }
-        if (e.code === 'EACCES') return { ok: false, error: 'permission denied' }
-        return { ok: false, error: e.message ?? 'stat failed' }
+        if (e.code === 'ENOENT') return { ok: false, error: 'does not exist', resolvedPath: abs }
+        if (e.code === 'EACCES') return { ok: false, error: 'permission denied', resolvedPath: abs }
+        return { ok: false, error: e.message ?? 'stat failed', resolvedPath: abs }
+      }
+    },
+  )
+
+  // Create a directory the user just typed into the path picker.
+  //
+  // WHY this is a peer of fs:expandCwd instead of a flag on it:
+  //   `expandCwd` is the validation gate the rest of the new-tab flow
+  //   has always depended on — it returns a discriminated "ok | error"
+  //   shape and the caller uses that exact result to gate session
+  //   spawning. Folding `mkdir` into `expandCwd` would silently change
+  //   that gate's semantics (every call would suddenly have the side
+  //   effect of creating missing paths) and turn an idempotent
+  //   read-only IPC into a write. Keeping the create step explicit and
+  //   caller-driven means PathPickerModal still re-validates the path
+  //   through `expandCwd` after creation, so session spawning never
+  //   feeds an "as typed" string into the spawn path.
+  //
+  // WHY mkdir is recursive:
+  //   The user-facing affordance is "type a path that doesn't exist
+  //   yet, hit Create & Open". That phrasing applies whether one or
+  //   five segments are missing. mkdir { recursive: true } makes both
+  //   cases work identically and matches what a developer at a shell
+  //   prompt would do (`mkdir -p`). The picker shows the resolved
+  //   absolute path in a hint line before the user commits, so a typo
+  //   deep in the path is visible before it materialises on disk.
+  //
+  // WHY EEXIST is treated as the "path exists but is not a directory"
+  // error and not as success:
+  //   A successful `mkdir -p` against an already-existing directory
+  //   does not throw at all (recursive: true is idempotent on dirs).
+  //   The only way to land in the EEXIST branch is if the existing
+  //   entry is a file or symlink to a non-directory — which is what
+  //   the user-facing error should say.
+  ipcMain.handle(
+    'fs:createDirectory',
+    async (
+      _evt,
+      raw: string,
+    ): Promise<{ ok: true; path: string } | { ok: false; error: string }> => {
+      const trimmed = raw.trim()
+      if (!trimmed) return { ok: false, error: 'path is empty' }
+      let expanded: string
+      if (trimmed === '~') {
+        expanded = homedir()
+      } else if (trimmed.startsWith('~/')) {
+        expanded = join(homedir(), trimmed.slice(2))
+      } else {
+        expanded = trimmed
+      }
+      const abs = resolve(expanded)
+      try {
+        await mkdir(abs, { recursive: true })
+        return { ok: true, path: abs }
+      } catch (err) {
+        const e = err as NodeJS.ErrnoException
+        if (e.code === 'EACCES' || e.code === 'EPERM') {
+          return { ok: false, error: 'permission denied' }
+        }
+        if (e.code === 'EEXIST' || e.code === 'ENOTDIR') {
+          return { ok: false, error: 'path exists but is not a directory' }
+        }
+        if (e.code === 'EROFS') return { ok: false, error: 'filesystem is read-only' }
+        return { ok: false, error: e.message ?? 'mkdir failed' }
       }
     },
   )

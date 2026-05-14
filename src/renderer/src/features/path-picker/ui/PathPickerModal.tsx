@@ -74,6 +74,14 @@ export function PathPickerModal({
   // Latest resolved absolute path. Tracked separately from `value` so
   // actions use the validated form rather than re-running expand.
   const [resolvedPath, setResolvedPath] = useState<string | null>(null)
+  // Absolute path that will be created if the user submits while the
+  // typed path doesn't exist on disk yet. Non-null whenever the debounced
+  // expandCwd call reported `does not exist` and the picker is therefore
+  // in "Create & Open" mode. Distinct from resolvedPath because we want
+  // ResumeSection / session listing to stay quiet for paths that don't
+  // exist yet — there are no sessions to list for a directory that
+  // hasn't been created.
+  const [pendingCreatePath, setPendingCreatePath] = useState<string | null>(null)
   // Debounce token for the session list refresh — see the effect below.
   const reqVersion = useRef(0)
 
@@ -87,6 +95,7 @@ export function PathPickerModal({
     setSessions([])
     setSessionsLoading(false)
     setResolvedPath(null)
+    setPendingCreatePath(null)
     setProvider('claude')
   }, [open, defaultValue])
 
@@ -106,8 +115,21 @@ export function PathPickerModal({
         // resolved path so the list doesn't lie.
         setResolvedPath(null)
         setSessions([])
+        // If the path simply doesn't exist yet, surface the create-and-open
+        // affordance. Other errors (`not a directory`, `permission denied`,
+        // `path is empty`) deliberately don't get this treatment — we don't
+        // want to offer "Create" when the user typed a path that points at
+        // a file, or one they can't traverse.
+        if (result.error === 'does not exist' && result.resolvedPath) {
+          setPendingCreatePath(result.resolvedPath)
+        } else {
+          setPendingCreatePath(null)
+        }
         return
       }
+      // Path exists — clear any prior pending-create state from a path
+      // that was just tab-completed into an existing directory.
+      setPendingCreatePath(null)
       setResolvedPath(result.path)
       setSessionsLoading(true)
       const list = await window.api.listSessionsForCwd(result.path, 20, provider)
@@ -125,12 +147,36 @@ export function PathPickerModal({
     setBusy(true)
     setError(null)
     try {
+      // First pass: try to validate the typed path as-is. If it exists,
+      // open it. If it specifically "does not exist", create it and then
+      // re-validate so the cwd we hand to session spawning is the same
+      // canonical absolute path expandCwd would produce — never the raw
+      // user input.
       const result = await window.api.expandCwd(value)
-      if (!result.ok) {
+      if (result.ok) {
+        await onAccept(result.path, provider)
+        return
+      }
+      if (result.error !== 'does not exist') {
         setError(result.error)
         return
       }
-      await onAccept(result.path, provider)
+      const created = await window.api.createDirectory(value)
+      if (!created.ok) {
+        setError(created.error)
+        return
+      }
+      // Re-run expandCwd to get the canonical resolved path and to
+      // defend against the (vanishingly unlikely) case where something
+      // races between mkdir and the spawn — if validation now fails for
+      // any reason, we'd rather surface that error than hand a possibly-
+      // stale path to onAccept.
+      const reValidated = await window.api.expandCwd(value)
+      if (!reValidated.ok) {
+        setError(reValidated.error)
+        return
+      }
+      await onAccept(reValidated.path, provider)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -239,10 +285,20 @@ export function PathPickerModal({
           />
         </div>
 
-        {/* Error slot */}
+        {/* Error / create-hint slot.
+            Error wins over the create-hint when both could apply: the
+            user only sees "Will create:" when the underlying state is
+            actually creatable (does-not-exist), so once they submit and
+            get an error back, that error is the more urgent thing to
+            show. */}
         <div className="min-h-[16px] text-[11px] mb-3 flex-shrink-0">
           {error ? (
             <span className="text-danger">{error}</span>
+          ) : pendingCreatePath ? (
+            <span className="text-accent">
+              Will create:{' '}
+              <span className="text-ink">{pendingCreatePath}</span>
+            </span>
           ) : (
             <span className="text-muted">
               tab completes · ↑↓ to browse · enter to open · esc to cancel
@@ -289,7 +345,7 @@ export function PathPickerModal({
               disabled:opacity-50
             "
           >
-            new session
+            {pendingCreatePath ? 'create & open' : 'new session'}
           </button>
         </div>
       </div>
