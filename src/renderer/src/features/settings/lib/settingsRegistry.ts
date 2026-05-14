@@ -1,8 +1,10 @@
 import {
   ACCENTS,
+  FONT_FAMILIES,
   THEME_MODES,
   WORKSPACE_MODES,
   type AccentId,
+  type FontFamilyId,
   type Settings,
   type ThemeMode,
   type WorkspaceModeId,
@@ -88,6 +90,18 @@ const ACCENT_OPTIONS: ChoiceOption<AccentId>[] = ACCENTS.map(accent => ({
   label: accent.name,
 }))
 
+const FONT_FAMILY_OPTIONS: ChoiceOption<FontFamilyId>[] = FONT_FAMILIES.map(font => ({
+  value: font.id,
+  label: font.label,
+  // Surfaced under each option as a tiny disclosure so the user
+  // understands why one of the choices isn't a "cool" coding font:
+  // the system entries don't carry a network cost AND they always
+  // render even when the Google Fonts CDN is unreachable. Anyone
+  // building offline-first muscle memory needs to know which choice
+  // survives a flaky network.
+  description: font.webFont ? 'Loaded from Google Fonts' : 'System font',
+}))
+
 const WORKSPACE_MODE_OPTIONS: ChoiceOption<WorkspaceModeId>[] = WORKSPACE_MODES.map(mode => ({
   value: mode.id,
   label: mode.label,
@@ -133,6 +147,24 @@ export function getSettingsRegistry(): SettingDefinition[] {
         options: ACCENT_OPTIONS,
         columns: 4,
         onSelect: (ctx, value) => ctx.onChange({ accent: value as AccentId }),
+      },
+    },
+    {
+      // Global font picker. The selected id resolves through
+      // FONT_FAMILIES → applyTheme → --theme-font-code (chrome) +
+      // getActiveCodeFontFamily (xterm). Live-applied — no restart.
+      id: 'font-family',
+      category: 'appearance',
+      title: 'Code Font',
+      description:
+        'Monospace face used across the whole app — UI chrome and terminal panes alike.',
+      keywords: ['font', 'monospace', 'typeface', 'family', 'code', 'terminal', 'mono', 'typography'],
+      control: {
+        type: 'select',
+        getValue: settings => settings.fontFamily,
+        options: FONT_FAMILY_OPTIONS,
+        columns: 2,
+        onSelect: (ctx, value) => ctx.onChange({ fontFamily: value as FontFamilyId }),
       },
     },
     {

@@ -25,7 +25,16 @@
  *     mode/accent changes cascade through the DOM with zero React work.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+/* Curated web fonts available in the settings picker. Each family is
+   declared with the same weight set; Google Fonts only downloads the
+   woff2 files for the family actually used at runtime (the `src:
+   url(…)` rules each font face declares are lazy — the binary is
+   fetched on first match), so this multi-family import costs ~3 KB
+   of CSS at boot regardless of which font the user picked. Adding a
+   new web-font option means extending both this URL AND
+   `FONT_FAMILIES` in `app-state/settings/types.ts` (with
+   `webFont: true`). */
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @import "tailwindcss";
 
@@ -148,7 +157,20 @@
   --theme-diff-add-fg: #4ade80;
   --theme-diff-remove-fg: #f87171;
 
-  --theme-font-code: 'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace;
+  /* --theme-font-code is set at runtime by `applyTheme` in
+     app-state/settings/theme.ts, sourced from the user's `fontFamily`
+     setting. It is deliberately NOT declared statically here:
+       - The inline style applied to <html> by applyTheme always wins
+         specificity-wise, so a static declaration would only be visible
+         during the brief window between first paint and applyTheme
+         running, which is closed by slice.ts calling applyTheme
+         synchronously on store creation.
+       - Carrying a static value would invite future-me to "update" it
+         when adding fonts and forget that the source of truth is the
+         FONT_FAMILIES array.
+     The `:root` fallback for safety lives at the top of the rules
+     block — see CODE_FONT_CSS_VAR / FALLBACK_CODE_FONT_FAMILY in
+     theme.ts for the value used if everything else fails. */
 }
 
 [data-mode="dark-dim"] {
