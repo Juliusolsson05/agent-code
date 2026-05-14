@@ -61,8 +61,8 @@ assert(
 // curated so the validation surface is just "id is in the list".
 assert(defaults.fontFamily === 'jetbrains-mono', 'fontFamily should default to jetbrains-mono')
 
-const firaPick = coerceSettings({ fontFamily: 'fira-code' })
-assert(firaPick.fontFamily === 'fira-code', 'fontFamily should accept a curated id')
+const spaceMonoPick = coerceSettings({ fontFamily: 'space-mono' })
+assert(spaceMonoPick.fontFamily === 'space-mono', 'fontFamily should accept a curated id')
 
 const bogusFont = coerceSettings({ fontFamily: 'comic-sans' })
 assert(bogusFont.fontFamily === 'jetbrains-mono', 'unknown fontFamily should fall back to default')

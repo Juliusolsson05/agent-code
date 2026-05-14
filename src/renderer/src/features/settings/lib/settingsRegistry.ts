@@ -93,13 +93,11 @@ const ACCENT_OPTIONS: ChoiceOption<AccentId>[] = ACCENTS.map(accent => ({
 const FONT_FAMILY_OPTIONS: ChoiceOption<FontFamilyId>[] = FONT_FAMILIES.map(font => ({
   value: font.id,
   label: font.label,
-  // Surfaced under each option as a tiny disclosure so the user
-  // understands why one of the choices isn't a "cool" coding font:
-  // the system entries don't carry a network cost AND they always
-  // render even when the Google Fonts CDN is unreachable. Anyone
-  // building offline-first muscle memory needs to know which choice
-  // survives a flaky network.
-  description: font.webFont ? 'Loaded from Google Fonts' : 'System font',
+  // Surfaced under each option because font names alone are bad UX here:
+  // most monospace family names sound interchangeable, and the previous
+  // picker proved that five "good coding fonts" can be too visually close to
+  // be useful. The short texture labels make the intended variation explicit.
+  description: font.description,
 }))
 
 const WORKSPACE_MODE_OPTIONS: ChoiceOption<WorkspaceModeId>[] = WORKSPACE_MODES.map(mode => ({
@@ -150,14 +148,14 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
-      // Global font picker. The selected id resolves through
-      // FONT_FAMILIES → applyTheme → --theme-font-code (chrome) +
-      // getActiveCodeFontFamily (xterm). Live-applied — no restart.
+      // Global app font picker. The selected id resolves through
+      // FONT_FAMILIES → applyTheme → --theme-app-font (DOM chrome) +
+      // getActiveAppFontFamily (xterm/Monaco). Live-applied — no restart.
       id: 'font-family',
       category: 'appearance',
-      title: 'Code Font',
+      title: 'App Font',
       description:
-        'Monospace face used across the whole app — UI chrome and terminal panes alike.',
+        'Monospace face used across the whole app — UI chrome, code blocks, and terminal panes alike.',
       keywords: ['font', 'monospace', 'typeface', 'family', 'code', 'terminal', 'mono', 'typography'],
       control: {
         type: 'select',

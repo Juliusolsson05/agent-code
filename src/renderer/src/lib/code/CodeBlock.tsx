@@ -7,6 +7,10 @@ import {
   supportsLsp,
 } from '@shared/code/language'
 import { APP_PROTOCOL_SCHEME } from '@shared/appIdentity'
+import {
+  THEME_CHANGED_EVENT,
+  getActiveAppFontFamily,
+} from '@renderer/app-state/settings/theme'
 
 type Props = {
   code: string
@@ -101,6 +105,20 @@ export const CodeBlock = memo(function CodeBlock({
         model,
         readOnly: true,
         domReadOnly: true,
+        // Monaco is not normal DOM text. Its editor CSS owns a private
+        // `--monaco-monospace-font` fallback and its layout engine caches
+        // font metrics, so inheriting `font-code` on `.code-block-shell`
+        // is not enough. This must be passed as an editor option or the
+        // global settings picker appears broken exactly where users look
+        // for font changes most often: syntax-highlighted tool output.
+        //
+        // WHY read through `getActiveAppFontFamily()` instead of
+        // importing settings here: `applyTheme` already resolves the
+        // curated id to the final CSS font-family declaration and writes
+        // the authoritative variable. Keeping Monaco on that same read
+        // path prevents a second resolver from drifting when fonts are
+        // added, removed, or reordered.
+        fontFamily: getActiveAppFontFamily(),
         minimap: { enabled: false },
         lineNumbers: 'off',
         folding: false,
@@ -143,6 +161,20 @@ export const CodeBlock = memo(function CodeBlock({
       syncHeight()
       const sizeSub = editor.onDidContentSizeChange(syncHeight)
       cleanups.push(() => sizeSub.dispose())
+
+      const onThemeChanged = () => {
+        // Monaco only remeasures/repaints its text layer when options are
+        // updated through the editor API. Mutating the CSS variable alone
+        // updates static <pre> blocks and chrome immediately, but Monaco
+        // keeps rendering with its previous measured font until told
+        // otherwise. `updateOptions` is deliberately scoped to
+        // `fontFamily`; theme colors are handled globally in
+        // monacoRuntime's THEME_CHANGED_EVENT listener.
+        editor.updateOptions({ fontFamily: getActiveAppFontFamily() })
+        syncHeight()
+      }
+      window.addEventListener(THEME_CHANGED_EVENT, onThemeChanged)
+      cleanups.push(() => window.removeEventListener(THEME_CHANGED_EVENT, onThemeChanged))
 
       if (workspaceRoot && supportsLsp(normalizedLanguage)) {
         await window.api.openLspDocument({

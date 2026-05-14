@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 
 import {
   THEME_CHANGED_EVENT,
-  getActiveCodeFontFamily,
+  getActiveAppFontFamily,
 } from '@renderer/app-state/settings/theme'
 
 type Props = {
@@ -58,7 +58,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
         // to a canvas and can't read CSS variables, so we resolve the
         // user-picked font through the settings/theme layer and re-
         // apply via the THEME_CHANGED_EVENT listener below.
-        fontFamily: getActiveCodeFontFamily(),
+        fontFamily: getActiveAppFontFamily(),
         fontSize: 10,
         scrollback: 2000,
         theme: {
@@ -115,10 +115,10 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
 
       // Live font updates — see TerminalLeaf.tsx for the rationale.
       // applyTheme dispatches THEME_CHANGED_EVENT after mutating the
-      // CSS variable, so re-reading via getActiveCodeFontFamily here
+      // CSS variable, so re-reading via getActiveAppFontFamily here
       // always sees the new value.
       onThemeChangedListener = (): void => {
-        if (term) term.options.fontFamily = getActiveCodeFontFamily()
+        if (term) term.options.fontFamily = getActiveAppFontFamily()
       }
       window.addEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
     } catch (err) {
