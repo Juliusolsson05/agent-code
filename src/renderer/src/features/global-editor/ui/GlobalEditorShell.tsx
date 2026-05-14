@@ -9,6 +9,7 @@ import { EditorTabs } from '@renderer/features/editor/ui/EditorTabs'
 import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
 
 import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
 
 // Splitter geometry. SPLITTER_PX is the visual width of the
 // draggable bar between the editor and the workspace. We avoid
@@ -60,32 +61,34 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     useShallow(state => ({ open: state.globalEditorOpen })),
   )
 
-  // Tab id + the cwd of *that tab's* currently-focused session, NOT
-  // a globally-derived "command target" cwd. WHY:
+  // Active tab id + the cwd of whatever command-target the user is
+  // pointing at right now. WHY both:
   //
-  // The original sync derived from `commandTargetSessionId`, which
-  // reflects every pane-focus change within the active tab. That
-  // meant switching focus between two grid panes inside one tab
-  // would fire the cwd swap effect below, and the editor would
+  // The original sync derived from `commandTargetSessionId` AS A DEP,
+  // which reflects every focus change (pane-to-pane in grid, row-
+  // to-row in dispatch). That meant moving focus inside the same
+  // tab would fire the cwd-sync effect below, and the editor would
   // throw away its open tabs and reload the explorer — even though
   // the user hadn't actually moved between projects. The complaint
   // ("changing agents in the same tab reloaded the editor,
   // completely useless") is exactly that loop.
   //
-  // The new contract: the editor only re-derives its cwd when the
-  // ACTIVE TAB itself changes. Within-tab pane focus is ignored for
-  // the editor's purposes. If a user wants the editor to switch
-  // projects while staying in the same tab, they can close + re-open
-  // the overlay (rare; the common case is "I'm reading code, leave
-  // it alone").
+  // The new contract: read `focusedCwd` here on every render (cheap;
+  // we already need workspace state), but only COMMIT it to the
+  // editor store when `activeTabId` changes — see the
+  // lastSyncedTabIdRef effect below. Within-tab focus shifts (grid
+  // or dispatch) don't appear in the effect's dep list, so they
+  // don't trigger anything.
+  //
+  // WHY we use `useFocusedAgentCwd` rather than reading
+  // `tab.focusedSessionId` directly: a tab in dispatch mode has
+  // `tab.focusedSessionId === null` (focus lives on
+  // `dispatchMode.focusedSessionId` instead). Reading the raw tab
+  // field would make the editor look empty for any dispatch-mode
+  // user. The hook goes through `commandTargetSessionId`, which
+  // already handles both surfaces correctly.
   const activeTabId = workspace.state.activeTabId
-  const activeTabFocusedCwd = (() => {
-    if (!activeTabId) return null
-    const tab = workspace.state.tabs.find(t => t.id === activeTabId)
-    const focusedId = tab?.focusedSessionId ?? null
-    if (!focusedId) return null
-    return workspace.state.sessions[focusedId]?.cwd ?? null
-  })()
+  const focusedCwd = useFocusedAgentCwd(workspace)
 
   const { splitterRatio, setSplitterRatio } = useGlobalEditorStore(
     useShallow(state => ({
@@ -139,12 +142,14 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     if (!open) return
     if (lastSyncedTabIdRef.current === activeTabId) return
     lastSyncedTabIdRef.current = activeTabId ?? null
-    if (activeTabFocusedCwd === activeCwd) return
-    setActiveCwd(activeTabFocusedCwd)
-    // activeTabFocusedCwd is intentionally read here rather than
-    // listed as a dep — it changes on every within-tab focus shift,
-    // which is exactly the noise this effect is designed to ignore.
-    // We only want to react to activeTabId transitions.
+    if (focusedCwd === activeCwd) return
+    setActiveCwd(focusedCwd)
+    // focusedCwd is intentionally read here rather than listed as a
+    // dep — it changes on every within-tab focus shift, which is
+    // exactly the noise this effect is designed to ignore. We only
+    // want to react to activeTabId transitions (and to `open`
+    // changing, which captures the first-mount-of-the-overlay case
+    // where activeTabId hadn't yet been synced).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeTabId, setActiveCwd])
 
