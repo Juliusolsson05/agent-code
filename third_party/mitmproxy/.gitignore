@@ -1,0 +1,6 @@
+# Never commit downloaded archives or extracted apps. The manifest +
+# verifier script are the source of truth; the cache is reproducible
+# from those plus the upstream download server. Committing binaries
+# would break the "version bump is a one-file PR" property the
+# bundling plan relies on.
+cache/

@@ -36,7 +36,13 @@ export function SetupGate() {
 
   const missingOptional = useMemo(() => {
     if (!check) return []
-    return Object.values(check.tools).filter(tool => !tool.required && !tool.found)
+    // Bundled tools never appear here even when not yet extracted —
+    // they ship with the app, so prompting the user to "install
+    // tmux/mitmproxy" via Homebrew would be misleading. The bundled
+    // archive resolves on first session spawn instead.
+    return Object.values(check.tools).filter(
+      tool => !tool.required && !tool.found && tool.source !== 'bundled',
+    )
   }, [check])
 
   const shouldShow = Boolean(
@@ -145,27 +151,43 @@ function SetupRow({
 }) {
   const target = OPTIONAL_INSTALL_TARGET[tool.id]
   const installing = target ? busy === target : false
+  const isBundled = tool.source === 'bundled'
+  // Bundled tools always show as "Bundled" regardless of their
+  // required/optional metadata — that's the whole point of shipping
+  // them with the app, and the install button must never appear for
+  // them even if Homebrew is also present on the machine.
+  const statusLabel = isBundled
+    ? 'Bundled'
+    : tool.found
+      ? 'Found'
+      : tool.required
+        ? 'Required'
+        : tool.skipped
+          ? 'Skipped'
+          : 'Optional'
+  const statusBorder = isBundled
+    ? 'border-accent text-accent'
+    : tool.found
+      ? 'border-accent text-accent'
+      : tool.required
+        ? 'border-danger text-danger'
+        : 'border-border text-muted'
+  const detail = isBundled
+    ? 'Shipped with Agent Code; no install required.'
+    : (tool.path ?? tool.detail ?? 'Not found')
   return (
     <div className="flex items-center justify-between gap-4 px-5 py-3">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-[12px] text-ink">{tool.label}</span>
-          <span className={`border px-1.5 py-0.5 text-[10px] ${
-            tool.found
-              ? 'border-accent text-accent'
-              : tool.required
-                ? 'border-danger text-danger'
-                : 'border-border text-muted'
-          }`}>
-            {tool.found ? 'Found' : tool.required ? 'Required' : tool.skipped ? 'Skipped' : 'Optional'}
+          <span className={`border px-1.5 py-0.5 text-[10px] ${statusBorder}`}>
+            {statusLabel}
           </span>
         </div>
-        <div className="mt-1 truncate text-[11px] text-muted">
-          {tool.path ?? tool.detail ?? 'Not found'}
-        </div>
+        <div className="mt-1 truncate text-[11px] text-muted">{detail}</div>
       </div>
 
-      {!tool.found && target && tool.installable ? (
+      {!isBundled && !tool.found && target && tool.installable ? (
         <button
           type="button"
           disabled={busy !== null}
