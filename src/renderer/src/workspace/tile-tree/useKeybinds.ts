@@ -85,6 +85,7 @@ export function useKeybinds(
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
+  const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   // The placement overlay is opened from TWO independent flows:
   // - newAgentPlacementOpen: the cmd+T / new-agent-placement flow
   // - dispatchAttachIntent: attach-detached-to-grid
@@ -180,6 +181,20 @@ export function useKeybinds(
       if (cmd && shift && k.toLowerCase() === 'p' && !alt) {
         e.preventDefault()
         onCommandPalette?.()
+        return
+      }
+
+      // --- Cmd+Shift+E: Global Editor toggle ---
+      //
+      // WHY this specific chord: ⌘E is taken by tile-resize, ⌘⇧E was
+      // unused, and it mirrors VS Code's "Explorer" muscle memory for
+      // users coming from an IDE. The toggle is global — no `when`
+      // guard, no mode dependence — because Global Editor is
+      // orthogonal to dispatch / tile / spotlight (it WRAPS them
+      // rather than replacing them).
+      if (cmd && shift && k.toLowerCase() === 'e' && !alt) {
+        e.preventDefault()
+        toggleGlobalEditor()
         return
       }
 
@@ -577,6 +592,7 @@ export function useKeybinds(
     pinAgentsOpen,
     reorderTabsOpen,
     settingsPageOpen,
+    toggleGlobalEditor,
     workspace,
   ])
 }

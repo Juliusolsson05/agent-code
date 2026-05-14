@@ -25,6 +25,7 @@ import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
+import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
 import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
 import {
   AUTO_DEBUG_BUNDLE_INTERVAL_MS,
@@ -81,6 +82,7 @@ export default function App() {
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
+  const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const useProxyStreaming = settings.useProxyStreaming
@@ -121,6 +123,7 @@ export default function App() {
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
+  const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
   const closePromptSearch = useAppStore(state => state.closePromptSearch)
@@ -474,6 +477,7 @@ export default function App() {
       */}
       <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
         <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
+          <GlobalEditorShell workspace={workspace}>
           {settingsPageOpen ? (
             <SettingsPage
               onClose={closeSettingsPage}
@@ -522,6 +526,7 @@ export default function App() {
           ) : (
             <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
           )}
+          </GlobalEditorShell>
         </main>
 
         {gitBarOpen && (
@@ -606,6 +611,7 @@ export default function App() {
         toggleHtmlDebugPanel={toggleHtmlDebugPanel}
         toggleDevDebugPanel={toggleDevDebugPanel}
         togglePerformancePanel={togglePerformancePanel}
+        toggleGlobalEditor={toggleGlobalEditor}
         enterDispatchMode={workspace.enterDispatchMode}
         enterGlobalDispatch={() =>
           workspace.setDispatchScope(
@@ -639,6 +645,7 @@ export default function App() {
         devDebugEnabled={devDebugEnabled}
         devDebugPanelOpen={devDebugPanelOpen}
         performancePanelOpen={performancePanelOpen}
+        globalEditorOpen={globalEditorOpen}
         dispatchModeEnabled={workspace.dispatchMode !== null}
         globalDispatchEnabled={workspace.dispatchMode?.scope === 'global'}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
