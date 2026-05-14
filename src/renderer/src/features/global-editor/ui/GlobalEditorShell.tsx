@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { useAppStore } from '@renderer/app-state/store'
@@ -10,6 +10,7 @@ import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
 
 import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
+import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 
 // Splitter geometry. SPLITTER_PX is the visual width of the
 // draggable bar between the editor and the workspace. We avoid
@@ -17,6 +18,14 @@ import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedA
 // reliably grabbable regardless of viewport width.
 const SPLITTER_PX = 6
 const SPLITTER_HIT_PX = 12 // wider hit-area than visible bar
+
+// Inner file-tree splitter geometry. We use a slightly thinner
+// visible bar than the outer splitter (4 vs 6px) so the inner
+// boundary reads visually as a sub-divider rather than a peer of
+// the editor/workspace split. The hit area is still generous —
+// pixel-perfect aim shouldn't be required to grab a 4px bar.
+const FT_SPLITTER_PX = 4
+const FT_SPLITTER_HIT_PX = 10
 
 type Props = {
   /** Render slot for the existing workspace UI (dispatch / tile /
@@ -56,6 +65,7 @@ type Props = {
 // drags fast enough the cursor outpaces the splitter and onMouseMove
 // stops firing on the element. window-level mouse capture
 // guarantees we keep receiving move events until mouseup.
+// `useResizableSplitter` encapsulates that mechanic; see its docs.
 export function GlobalEditorShell({ children, workspace }: Props) {
   const { open } = useAppStore(
     useShallow(state => ({ open: state.globalEditorOpen })),
@@ -90,10 +100,19 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const activeTabId = workspace.state.activeTabId
   const focusedCwd = useFocusedAgentCwd(workspace)
 
-  const { splitterRatio, setSplitterRatio } = useGlobalEditorStore(
+  const {
+    splitterRatio,
+    setSplitterRatio,
+    fileTreeWidthPx,
+    setFileTreeWidthPx,
+    fileTreeVisible,
+  } = useGlobalEditorStore(
     useShallow(state => ({
       splitterRatio: state.splitterRatio,
       setSplitterRatio: state.setSplitterRatio,
+      fileTreeWidthPx: state.fileTreeWidthPx,
+      setFileTreeWidthPx: state.setFileTreeWidthPx,
+      fileTreeVisible: state.fileTreeVisible,
     })),
   )
   const {
@@ -153,41 +172,48 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeTabId, setActiveCwd])
 
-  // Splitter drag handling. We track in a ref so the move handler
-  // doesn't re-create on every ratio change (which would tear
-  // down + re-add the window listener mid-drag).
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const [dragging, setDragging] = useState(false)
+  // Outer splitter (editor pane ↔ workspace pane). Ratio-based.
+  // We measure against the OUTER container's bounding rect so the
+  // ratio means "fraction of full overlay width allocated to the
+  // editor side."
+  const outerContainerRef = useRef<HTMLDivElement | null>(null)
+  const outerSplitter = useResizableSplitter({
+    onDrag: useCallback(
+      (clientX: number) => {
+        const el = outerContainerRef.current
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        if (rect.width <= 0) return
+        setSplitterRatio((clientX - rect.left) / rect.width)
+      },
+      [setSplitterRatio],
+    ),
+  })
 
-  const onSplitterMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      setDragging(true)
-    },
-    [],
-  )
-
-  useEffect(() => {
-    if (!dragging) return
-    const onMove = (e: MouseEvent) => {
-      const el = containerRef.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      if (rect.width <= 0) return
-      const ratio = (e.clientX - rect.left) / rect.width
-      setSplitterRatio(ratio)
-    }
-    const onUp = () => setDragging(false)
-    // capture: true so we win against any drag-prevention on the
-    // wrapped workspace pane underneath (e.g. xterm.js panes that
-    // mouse-capture aggressively).
-    window.addEventListener('mousemove', onMove, true)
-    window.addEventListener('mouseup', onUp, true)
-    return () => {
-      window.removeEventListener('mousemove', onMove, true)
-      window.removeEventListener('mouseup', onUp, true)
-    }
-  }, [dragging, setSplitterRatio])
+  // Inner splitter (file tree ↔ Monaco area), only used while the
+  // tree is visible. Pixel-based, not ratio-based, because the
+  // file tree wants a stable absolute width — narrower or wider
+  // feels off depending on the user, but the tree never wants to
+  // scale with the outer pane in a way that changes the number of
+  // visible chars per filename row whenever the user touches the
+  // outer splitter.
+  //
+  // Measure against the EDITOR-HALF container (the left side of the
+  // outer split), not the overall overlay, because clientX − tree's
+  // left edge gives us the user-intended width directly.
+  const editorHalfRef = useRef<HTMLDivElement | null>(null)
+  const treeSplitter = useResizableSplitter({
+    enabled: fileTreeVisible,
+    onDrag: useCallback(
+      (clientX: number) => {
+        const el = editorHalfRef.current
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        setFileTreeWidthPx(clientX - rect.left)
+      },
+      [setFileTreeWidthPx],
+    ),
+  })
 
   // Save handler — wired into MonacoFileEditor's Cmd+S. Validates
   // we have an active cwd + active file, reads the buffer, writes
@@ -246,6 +272,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     ? cwdState.openFiles[cwdState.activeFilePath] ?? null
     : null
 
+  // While ANY splitter is dragging, lock the cursor globally. Both
+  // hooks render their own `cursorLock` style tag — combining them
+  // is fine; React will dedupe at the DOM level.
   return (
     // WHY h-full w-full instead of `flex-1`:
     //   The parent here is App.tsx's `<main>`, which has
@@ -260,22 +289,64 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     //   was visible. `h-full w-full` fills <main> directly so the
     //   inner flex-row layout has real dimensions to distribute.
     <div
-      ref={containerRef}
+      ref={outerContainerRef}
       className="relative flex h-full w-full min-h-0 min-w-0 overflow-hidden"
     >
       <div
+        ref={editorHalfRef}
         className="flex flex-col min-h-0 overflow-hidden border-r border-border"
         style={{ width: `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)` }}
       >
         {activeCwd ? (
           <div className="flex flex-1 min-h-0 overflow-hidden">
-            <div className="w-[240px] flex-shrink-0 border-r border-border overflow-hidden">
-              <ExplorerPane
-                root={activeCwd}
-                activeFilePath={cwdState.activeFilePath}
-                onOpenFile={openFileFromTree}
-              />
-            </div>
+            {/*
+              File tree. Conditionally rendered — when
+              `fileTreeVisible` is false the Monaco area expands to
+              fill the editor half. Width is driven by
+              `fileTreeWidthPx` (clamped in the store), NOT by
+              `flex-1` or a percentage of the outer split, so the
+              tree's column width feels stable as the user drags
+              the outer splitter. `flex-shrink-0` is load-bearing:
+              without it the tree would shrink when the editor half
+              gets narrow, defeating the point of pixel-locking.
+            */}
+            {fileTreeVisible ? (
+              <>
+                <div
+                  className="flex-shrink-0 overflow-hidden"
+                  style={{ width: `${fileTreeWidthPx}px` }}
+                >
+                  <ExplorerPane
+                    root={activeCwd}
+                    activeFilePath={cwdState.activeFilePath}
+                    onOpenFile={openFileFromTree}
+                  />
+                </div>
+                {/*
+                  Inner splitter. Same structure as the outer
+                  splitter but thinner. Hit area wider than visible
+                  bar (FT_SPLITTER_HIT_PX > FT_SPLITTER_PX) so it
+                  can be grabbed without pixel-perfect aim. We don't
+                  use a real <separator role> child because the
+                  outer splitter already declares one and we want
+                  this to read as a secondary divider, not a peer.
+                */}
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  onMouseDown={treeSplitter.onMouseDown}
+                  className="relative flex-shrink-0 cursor-col-resize select-none"
+                  style={{ width: `${FT_SPLITTER_HIT_PX}px` }}
+                >
+                  <div
+                    className={`absolute left-1/2 top-0 h-full -translate-x-1/2 ${
+                      treeSplitter.dragging ? 'bg-accent' : 'bg-border'
+                    } transition-colors`}
+                    style={{ width: `${FT_SPLITTER_PX}px` }}
+                  />
+                </div>
+              </>
+            ) : null}
             <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
               <EditorTabs
                 fileOrder={cwdState.fileOrder}
@@ -303,32 +374,29 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         )}
       </div>
       {/*
-        Splitter. The visual bar is SPLITTER_PX wide; the hit area
-        (cursor and event surface) is wider so it's grabbable
-        without pixel-perfect aim. While dragging we apply a
-        cursor on the whole window via a sibling style block so
-        the cursor doesn't flicker as the splitter moves under it.
+        Outer splitter. The visual bar is SPLITTER_PX wide; the hit
+        area (cursor and event surface) is wider so it's grabbable
+        without pixel-perfect aim. While dragging we apply a cursor
+        on the whole window via a sibling style block (rendered by
+        the hook) so the cursor doesn't flicker as the splitter
+        moves under it.
       */}
       <div
         role="separator"
         aria-orientation="vertical"
-        onMouseDown={onSplitterMouseDown}
+        onMouseDown={outerSplitter.onMouseDown}
         className="relative flex-shrink-0 cursor-col-resize select-none"
         style={{ width: `${SPLITTER_HIT_PX}px` }}
       >
         <div
           className={`absolute left-1/2 top-0 h-full -translate-x-1/2 ${
-            dragging ? 'bg-accent' : 'bg-border'
+            outerSplitter.dragging ? 'bg-accent' : 'bg-border'
           } transition-colors`}
           style={{ width: `${SPLITTER_PX}px` }}
         />
       </div>
-      {dragging ? (
-        // While dragging, force the col-resize cursor everywhere
-        // so the user doesn't see it change when the pointer
-        // crosses pane boundaries. Removed when dragging ends.
-        <style>{`* { cursor: col-resize !important; }`}</style>
-      ) : null}
+      {outerSplitter.cursorLock}
+      {treeSplitter.cursorLock}
       <div
         className="flex flex-col min-h-0 overflow-hidden"
         style={{ width: `calc(${rightPercent}% - ${SPLITTER_PX / 2}px)` }}

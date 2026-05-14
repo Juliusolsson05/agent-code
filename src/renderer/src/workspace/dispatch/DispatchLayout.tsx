@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
@@ -75,6 +76,36 @@ export function DispatchLayout({
   // flag suffered from. Toggle is in Settings → Workspace.
   const terminalVisible = useAppStore(state => state.settings.dispatchProjectTerminal)
 
+  // Resizable list/active-agent split. The ratio is owned by uiShell
+  // (see UiShellState.dispatchListRatio) so it survives mode toggles
+  // without being re-derived from workspace state. We measure against
+  // the outer flex row's bounding rect, NOT the viewport, because the
+  // dispatch layout can be wrapped by the Global Editor overlay — at
+  // which point its "100% width" is much narrower than the screen.
+  //
+  // The clamp in setDispatchListRatio (0.15..0.5) is the real bound;
+  // we deliberately do NOT keep the previous `min-w-[220px]
+  // max-w-[420px]` Tailwind classes on the list — they would override
+  // the user's drag and create a visual disconnect between the
+  // splitter handle and the actual list edge at narrow / wide
+  // viewports. If a user manages to get the list unreadably narrow at
+  // a tiny viewport, the 15% floor still applies.
+  const dispatchListRatio = useAppStore(state => state.dispatchListRatio)
+  const setDispatchListRatio = useAppStore(state => state.setDispatchListRatio)
+  const layoutRowRef = useRef<HTMLDivElement | null>(null)
+  const listSplitter = useResizableSplitter({
+    onDrag: useCallback(
+      (clientX: number) => {
+        const el = layoutRowRef.current
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        if (rect.width <= 0) return
+        setDispatchListRatio((clientX - rect.left) / rect.width)
+      },
+      [setDispatchListRatio],
+    ),
+  })
+
   useEffect(() => {
     if (!activeRow) return
     if (
@@ -108,18 +139,57 @@ export function DispatchLayout({
     void workspace.ensureDispatchTerminal(activeTab.id)
   }, [activeTab?.id, terminalVisible, workspace.ensureDispatchTerminal])
 
-  return (
-    <div className="h-full min-h-0 min-w-0 flex overflow-hidden bg-canvas">
-      <DispatchAgentList
-        groups={groups}
-        pinnedRows={pinnedRows}
-        activeSessionId={activeRow?.sessionId ?? null}
-        dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
-        focusSessionInTab={workspace.focusDispatchSession}
-        showWorktreeBadges={showWorktreeBadges}
-      />
+  // List width is the ratio * row width. Active-agent pane absorbs
+  // the remainder via `flex-1`. When the project terminal is on, we
+  // give it a fixed-percentage column (25%) that doesn't move with
+  // the splitter — the splitter only controls the list/active
+  // boundary, never the terminal column.
+  const listWidthPct = (dispatchListRatio * 100).toFixed(2)
 
-      <div className={`${terminalVisible ? 'basis-1/2' : 'basis-3/4'} min-w-0 min-h-0 border-r border-border`}>
+  return (
+    <div
+      ref={layoutRowRef}
+      className="h-full min-h-0 min-w-0 flex overflow-hidden bg-canvas"
+    >
+      <div
+        className="flex-shrink-0 min-h-0 border-r border-border"
+        style={{ width: `${listWidthPct}%` }}
+      >
+        <DispatchAgentList
+          groups={groups}
+          pinnedRows={pinnedRows}
+          activeSessionId={activeRow?.sessionId ?? null}
+          dispatchScope={workspace.state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
+          focusSessionInTab={workspace.focusDispatchSession}
+          showWorktreeBadges={showWorktreeBadges}
+        />
+      </div>
+
+      {/*
+        List/active splitter. Visible bar is 4px; hit area is 10px so
+        the bar can be grabbed without pixel-perfect aim. We render
+        between the list wrapper and the active-agent pane; the
+        wrapper takes the inline width, the splitter is fixed
+        (flex-shrink-0), and the active pane uses flex-1 to absorb
+        the remainder.
+      */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={listSplitter.onMouseDown}
+        className="relative flex-shrink-0 cursor-col-resize select-none"
+        style={{ width: '10px' }}
+      >
+        <div
+          className={`absolute left-1/2 top-0 h-full -translate-x-1/2 ${
+            listSplitter.dragging ? 'bg-accent' : 'bg-border'
+          } transition-colors`}
+          style={{ width: '4px' }}
+        />
+      </div>
+      {listSplitter.cursorLock}
+
+      <div className="flex-1 min-w-0 min-h-0 border-r border-border">
         {activeRow ? (
           renderWorkspaceLeaf(
             activeRow.sessionId,
@@ -136,7 +206,7 @@ export function DispatchLayout({
       </div>
 
       {terminalVisible && (
-        <div className="basis-1/4 min-w-0 min-h-0">
+        <div className="basis-1/4 min-w-0 min-h-0 flex-shrink-0">
           {activeTab && terminalSessionId ? (
             <TerminalLeaf
               sessionId={terminalSessionId}

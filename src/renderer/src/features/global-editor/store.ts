@@ -50,6 +50,21 @@ type GlobalEditorStore = {
   /** Splitter ratio in [0.2, 0.8]. Global (not per-cwd) — feels
    *  like an IDE setting, not project-specific data. */
   splitterRatio: number
+  /** Width of the in-editor file tree, in pixels. Distinct from
+   *  splitterRatio (which controls editor-vs-workspace) because the
+   *  file-tree pane wants a stable absolute width — narrower or
+   *  wider feels off depending on the user, but the tree never
+   *  wants to scale with the editor pane in a way that changes the
+   *  number of visible chars per row on every workspace resize.
+   *  Default 260px (matches the previous-hardcoded value); clamped
+   *  in setFileTreeWidthPx to a usable range. */
+  fileTreeWidthPx: number
+  /** Whether the in-editor file tree is rendered at all. When
+   *  false the Monaco area expands to fill the editor half of the
+   *  split. Flipped by the "File Tree" palette command. Global,
+   *  not per-cwd — once a user has decided they want a hidden tree
+   *  they want it hidden across all projects. */
+  fileTreeVisible: boolean
   /** Drives the cwd→cwd transition. Most actions are keyed by
    *  cwd; this also fronts the "active cwd" so callers don't
    *  need to thread it through. */
@@ -57,6 +72,8 @@ type GlobalEditorStore = {
 
   setActiveCwd: (cwd: string | null) => void
   setSplitterRatio: (ratio: number) => void
+  setFileTreeWidthPx: (px: number) => void
+  toggleFileTreeVisible: () => void
 
   openFile: (params: {
     cwd: string
@@ -124,13 +141,33 @@ function clampSplitter(ratio: number): number {
   return ratio
 }
 
+// File-tree width clamp. 180 is roughly the point where one column
+// of file-name text still fits without ellipsizing every entry; 500
+// is "the tree is now larger than the editor in a typical pane and
+// the user is probably resizing by accident." Loosen if real usage
+// shows the bounds are wrong.
+const FILE_TREE_MIN_PX = 180
+const FILE_TREE_MAX_PX = 500
+
+function clampFileTreeWidth(px: number): number {
+  if (!Number.isFinite(px)) return 260
+  if (px < FILE_TREE_MIN_PX) return FILE_TREE_MIN_PX
+  if (px > FILE_TREE_MAX_PX) return FILE_TREE_MAX_PX
+  return px
+}
+
 export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   byCwd: {},
   splitterRatio: 0.5,
+  fileTreeWidthPx: 260,
+  fileTreeVisible: true,
   activeCwd: null,
 
   setActiveCwd: cwd => set({ activeCwd: cwd }),
   setSplitterRatio: ratio => set({ splitterRatio: clampSplitter(ratio) }),
+  setFileTreeWidthPx: px => set({ fileTreeWidthPx: clampFileTreeWidth(px) }),
+  toggleFileTreeVisible: () =>
+    set(state => ({ fileTreeVisible: !state.fileTreeVisible })),
 
   openFile: ({ cwd, path, text, mtimeMs }) =>
     set(state => {

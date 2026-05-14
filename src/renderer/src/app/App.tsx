@@ -26,6 +26,7 @@ import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
 import {
   AUTO_DEBUG_BUNDLE_INTERVAL_MS,
@@ -124,6 +125,13 @@ export default function App() {
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
   const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
+  // File-tree visibility lives on the global-editor store, not on
+  // uiShell, because it's editor-scoped state — the rest of the
+  // workspace has no concept of "the file tree." We subscribe here
+  // only to thread the flag + action to the command palette, which
+  // shows the toggle when the Global Editor is open.
+  const fileTreeVisible = useGlobalEditorStore(state => state.fileTreeVisible)
+  const toggleFileTreeVisible = useGlobalEditorStore(state => state.toggleFileTreeVisible)
   const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
   const closePromptSearch = useAppStore(state => state.closePromptSearch)
@@ -612,6 +620,7 @@ export default function App() {
         toggleDevDebugPanel={toggleDevDebugPanel}
         togglePerformancePanel={togglePerformancePanel}
         toggleGlobalEditor={toggleGlobalEditor}
+        toggleFileTreeVisible={toggleFileTreeVisible}
         enterDispatchMode={workspace.enterDispatchMode}
         enterGlobalDispatch={() =>
           workspace.setDispatchScope(
@@ -646,6 +655,7 @@ export default function App() {
         devDebugPanelOpen={devDebugPanelOpen}
         performancePanelOpen={performancePanelOpen}
         globalEditorOpen={globalEditorOpen}
+        fileTreeVisible={fileTreeVisible}
         dispatchModeEnabled={workspace.dispatchMode !== null}
         globalDispatchEnabled={workspace.dispatchMode?.scope === 'global'}
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}

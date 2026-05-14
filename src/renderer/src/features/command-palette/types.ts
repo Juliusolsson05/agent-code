@@ -26,6 +26,12 @@ export type CommandContext = {
     toggleDevDebugPanel: () => void
     togglePerformancePanel: () => void
     toggleGlobalEditor: () => void
+    /** Toggle visibility of the Global Editor's in-editor file tree.
+     *  Only meaningful when the overlay is open — the command's
+     *  `when` guard enforces that. The flag lives on the
+     *  global-editor store (not uiShell) because it's editor-scoped
+     *  state, not workspace chrome. */
+    toggleFileTreeVisible: () => void
     enterDispatchMode: () => Promise<void> | void
     enterGlobalDispatch: () => Promise<void> | void
     exitDispatchMode: () => void
@@ -66,6 +72,10 @@ export type CommandContext = {
     devDebugPanelOpen: boolean
     performancePanelOpen: boolean
     globalEditorOpen: boolean
+    /** Whether the Global Editor's in-editor file tree is rendered.
+     *  Only consulted while the overlay is open; otherwise it has no
+     *  visible effect. Source of truth is the global-editor store. */
+    fileTreeVisible: boolean
     dispatchModeEnabled: boolean
     globalDispatchEnabled: boolean
   }
