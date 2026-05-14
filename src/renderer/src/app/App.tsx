@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
 import { PinAgentsModal, type PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
@@ -6,6 +6,7 @@ import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
 import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
 import { HtmlDebugPanel } from '@renderer/features/debug/ui/HtmlDebugPanel'
 import { ProxyDebugPanel } from '@renderer/features/debug/ui/ProxyDebugPanel'
+import { DevDebugPanel } from '@renderer/features/debug/ui/DevDebugPanel'
 import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
@@ -78,6 +79,7 @@ export default function App() {
   const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
+  const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
@@ -117,6 +119,7 @@ export default function App() {
   const toggleFeedDebugPanel = useAppStore(state => state.toggleFeedDebugPanel)
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
+  const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
   const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
@@ -127,10 +130,25 @@ export default function App() {
   const rewindPromptSessionId = useAppStore(state => state.rewindPromptSessionId)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
+  const [devDebugEnabled, setDevDebugEnabled] = useState(false)
 
   useEffect(() => {
     applyTheme(settings)
   }, [settings])
+
+  useEffect(() => {
+    let cancelled = false
+    void window.api.getDevDebugConfig()
+      .then(config => {
+        if (!cancelled) setDevDebugEnabled(config.enabled)
+      })
+      .catch(() => {
+        if (!cancelled) setDevDebugEnabled(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     // The default dictation trigger is bare Fn, which Chromium does not expose
@@ -529,6 +547,16 @@ export default function App() {
             onClose={toggleHtmlDebugPanel}
           />
         )}
+
+        {devDebugEnabled && devDebugPanelOpen && commandTargetId && (
+          <DevDebugPanel
+            sessionId={commandTargetId}
+            runtime={workspace.getRuntime(commandTargetId)}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
+            workspace={workspace}
+            onClose={toggleDevDebugPanel}
+          />
+        )}
       </div>
 
       <CommandPalette
@@ -543,6 +571,7 @@ export default function App() {
         toggleFeedDebugPanel={toggleFeedDebugPanel}
         toggleProxyDebugPanel={toggleProxyDebugPanel}
         toggleHtmlDebugPanel={toggleHtmlDebugPanel}
+        toggleDevDebugPanel={toggleDevDebugPanel}
         togglePerformancePanel={togglePerformancePanel}
         enterDispatchMode={workspace.enterDispatchMode}
         enterGlobalDispatch={() =>
@@ -574,6 +603,8 @@ export default function App() {
         feedDebugPanelOpen={feedDebugPanelOpen}
         proxyDebugPanelOpen={proxyDebugPanelOpen}
         htmlDebugPanelOpen={htmlDebugPanelOpen}
+        devDebugEnabled={devDebugEnabled}
+        devDebugPanelOpen={devDebugPanelOpen}
         performancePanelOpen={performancePanelOpen}
         dispatchModeEnabled={workspace.dispatchMode !== null}
         globalDispatchEnabled={workspace.dispatchMode?.scope === 'global'}
