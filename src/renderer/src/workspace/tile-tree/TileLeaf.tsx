@@ -422,6 +422,7 @@ export function TileLeaf({
 
       <ScrollIndicator
         entryCount={runtime.entries.length}
+        totalEntries={runtime.totalEntries}
         scrollFraction={scrollFraction}
         tailMode={runtime.tailMode}
         sessionKind={workspace.state.sessions[sessionId]?.kind}

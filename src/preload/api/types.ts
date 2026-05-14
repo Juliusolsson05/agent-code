@@ -186,6 +186,11 @@ export type SessionIndexEntry = {
 export type SessionHistoryChunk = {
   entries: JsonlEntry[]
   hasMore: boolean
+  // Only set on initial-load chunks. See `HistoryChunk.totalEntries`
+  // in src/main/sessions/historyLoader.ts for the full WHY. Renderers
+  // should treat absence as "unknown / not provided" and avoid using
+  // it as a denominator unless it's a positive number.
+  totalEntries?: number
 }
 
 export type TranscriptPathRequest = {
