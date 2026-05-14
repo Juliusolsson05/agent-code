@@ -1,0 +1,19 @@
+{
+  "tool": "mitmproxy",
+  "version": "12.2.3",
+  "urlBase": "https://downloads.mitmproxy.org/{version}",
+  "archiveFormat": "tar.gz",
+  "executableInsideArchive": "mitmproxy.app/Contents/MacOS/mitmdump",
+  "platforms": {
+    "darwin-arm64": {
+      "filename": "mitmproxy-{version}-macos-arm64.tar.gz",
+      "sha256": "0a09ee3b82569e8985aff8186e4792618b8e5d0c766098db093d09a87d4b013a",
+      "bytes": 54227612
+    },
+    "darwin-x86_64": {
+      "filename": "mitmproxy-{version}-macos-x86_64.tar.gz",
+      "sha256": "7998187f5a0d399ab796af4523d3ad830ebe690726a41bc3e1df47a8e477a641",
+      "bytes": 54688006
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# Never commit downloaded sources, intermediate build output, or the
+# final static binary. The manifest + build script are the source of
+# truth; the cache is reproducible from those plus the upstream source
+# servers. Committing binaries would break the "version bump is a
+# one-file PR" property the bundling plan relies on.
+cache/
+build/

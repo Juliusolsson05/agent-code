@@ -25,6 +25,12 @@
     "test:dictation": "tsx --tsconfig tsconfig.node.json scripts/test-dictation-imports.ts",
     "proxy-demo-bootstrap": "npm --prefix packages/claude-code-headless run proxy-test-bootstrap",
     "proxy-demo": "npm --prefix packages/claude-code-headless run build && electron experiments/claude-proxy-stream-app/main.mjs",
+    "runtime:fetch:mitmproxy": "node scripts/runtime-tools/fetch-mitmproxy.mjs",
+    "runtime:verify:mitmproxy": "node scripts/runtime-tools/verify-mitmproxy.mjs",
+    "runtime:build:tmux": "node scripts/runtime-tools/build-tmux.mjs",
+    "runtime:verify:tmux": "node scripts/runtime-tools/verify-tmux.mjs",
+    "runtime:verify": "npm run runtime:verify:mitmproxy && npm run runtime:verify:tmux",
+    "runtime:prepare:mac": "npm run runtime:fetch:mitmproxy -- --all && node scripts/runtime-tools/verify-mitmproxy.mjs --strict",
     "postinstall": "electron-rebuild -f -w node-pty"
   },
   "dependencies": {

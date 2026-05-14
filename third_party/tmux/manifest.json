@@ -1,0 +1,31 @@
+{
+  "tool": "tmux",
+  "version": "3.6a",
+  "build": "static",
+  "sources": {
+    "tmux": {
+      "version": "3.6a",
+      "url": "https://github.com/tmux/tmux/releases/download/3.6a/tmux-3.6a.tar.gz",
+      "sha256": "TBD-PR3"
+    },
+    "libevent": {
+      "version": "2.1.12-stable",
+      "url": "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz",
+      "sha256": "TBD-PR3"
+    },
+    "ncurses": {
+      "version": "6.5",
+      "url": "https://invisible-mirror.net/archives/ncurses/ncurses-6.5.tar.gz",
+      "sha256": "TBD-PR3"
+    },
+    "utf8proc": {
+      "version": "2.10.0",
+      "url": "https://github.com/JuliaStrings/utf8proc/releases/download/v2.10.0/utf8proc-2.10.0.tar.gz",
+      "sha256": "TBD-PR3"
+    }
+  },
+  "platforms": {
+    "darwin-arm64": { "sha256": "TBD-PR3" },
+    "darwin-x86_64": { "sha256": "TBD-PR3" }
+  }
+}
