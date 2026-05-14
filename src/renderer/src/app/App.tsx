@@ -485,7 +485,39 @@ export default function App() {
       */}
       <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
         <main className="flex-1 min-h-0 min-w-0 overflow-hidden">
-          <GlobalEditorShell workspace={workspace}>
+          {/*
+            Mode routing — focus-takeover surfaces (Settings, Reader,
+            Spotlight) render OUTSIDE the GlobalEditorShell. The shell
+            only wraps surfaces that are meant to coexist with the
+            editor (TileTabs, Dispatch, TileTree, WelcomeEmpty).
+
+            WHY this split:
+              Reader Mode and Spotlight Mode exist to give the user a
+              full-bleed, distraction-free view of a single agent's
+              transcript. Putting them inside the shell crammed them
+              into the right half of the screen whenever the editor
+              overlay was on — defeating the entire point of "focus
+              mode." Settings is the same shape of surface (full-
+              screen takeover; the user is configuring, not watching
+              agents), so it bypasses too.
+
+              The globalEditorOpen flag is deliberately NOT cleared
+              when entering a focus mode. When the user exits Reader/
+              Spotlight, the editor reappears automatically — that's
+              the desired behaviour: focus modes are a temporary
+              context, not a "close the editor" instruction.
+
+            WHY TileTabs / Dispatch / TileTree stay inside the shell:
+              These ARE the workspace. The point of the editor overlay
+              is to be alongside them, so reading code does not require
+              leaving the current mode.
+
+            Keep the GlobalEditorShell mounted (rather than rendering
+            it conditionally inside one branch) so the editor's
+            in-memory state — open tabs, dirty buffers, scroll
+            positions — survives toggling between Dispatch / TileTree
+            and Welcome.
+          */}
           {settingsPageOpen ? (
             <SettingsPage
               onClose={closeSettingsPage}
@@ -498,43 +530,46 @@ export default function App() {
             <ReaderView workspace={workspace} />
           ) : activeTab && workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
             <SpotlightView workspace={workspace} />
-          ) : workspace.tileTabs ? (
-            <TileTabsView workspace={workspace} />
-          ) : activeTab && workspace.dispatchMode ? (
-            <div className="relative h-full min-h-0 min-w-0">
-              <DispatchLayout
-                workspace={workspace}
-                showStatusMode={settings.showStatusMode}
-                showWorktreeBadges={settings.showWorktreeBadges}
-              />
-              <NewAgentPlacementOverlay
-                open={placementOverlayOpen}
-                workspace={workspace}
-                onClose={closePlacementOverlay}
-                attachDetachedSessionId={dispatchAttachIntent}
-              />
-            </div>
-          ) : activeTab ? (
-            <div className="relative h-full min-h-0 min-w-0">
-              <TileTree
-                tabId={activeTab.id}
-                node={activeTab.root}
-                focusedSessionId={activeTab.focusedSessionId}
-                workspace={workspace}
-                showStatusMode={settings.showStatusMode}
-                showWorktreeBadges={settings.showWorktreeBadges}
-              />
-              <NewAgentPlacementOverlay
-                open={placementOverlayOpen}
-                workspace={workspace}
-                onClose={closePlacementOverlay}
-                attachDetachedSessionId={dispatchAttachIntent}
-              />
-            </div>
           ) : (
-            <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
+            <GlobalEditorShell workspace={workspace}>
+              {workspace.tileTabs ? (
+                <TileTabsView workspace={workspace} />
+              ) : activeTab && workspace.dispatchMode ? (
+                <div className="relative h-full min-h-0 min-w-0">
+                  <DispatchLayout
+                    workspace={workspace}
+                    showStatusMode={settings.showStatusMode}
+                    showWorktreeBadges={settings.showWorktreeBadges}
+                  />
+                  <NewAgentPlacementOverlay
+                    open={placementOverlayOpen}
+                    workspace={workspace}
+                    onClose={closePlacementOverlay}
+                    attachDetachedSessionId={dispatchAttachIntent}
+                  />
+                </div>
+              ) : activeTab ? (
+                <div className="relative h-full min-h-0 min-w-0">
+                  <TileTree
+                    tabId={activeTab.id}
+                    node={activeTab.root}
+                    focusedSessionId={activeTab.focusedSessionId}
+                    workspace={workspace}
+                    showStatusMode={settings.showStatusMode}
+                    showWorktreeBadges={settings.showWorktreeBadges}
+                  />
+                  <NewAgentPlacementOverlay
+                    open={placementOverlayOpen}
+                    workspace={workspace}
+                    onClose={closePlacementOverlay}
+                    attachDetachedSessionId={dispatchAttachIntent}
+                  />
+                </div>
+              ) : (
+                <WelcomeEmpty onNewTabRequest={onNewTabRequest} />
+              )}
+            </GlobalEditorShell>
           )}
-          </GlobalEditorShell>
         </main>
 
         {gitBarOpen && (
