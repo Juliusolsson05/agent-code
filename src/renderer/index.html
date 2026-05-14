@@ -3,9 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      WHY https://cdn.jsdelivr.net is in img-src:
+      The Global Editor's ExplorerPane uses vscode-icons-js to pick
+      per-extension file icons; the actual SVG files live in the
+      `vscode-icons/vscode-icons` GitHub repo and are served via
+      jsDelivr. Without this allowance, every <img> in the file
+      tree is blocked by CSP, leaving the explorer with text rows
+      but no icons. The wrapper in
+      src/renderer/src/features/editor/lib/fileIcon.tsx documents
+      this dependency and points back at this CSP line. If/when we
+      bundle the icons into the app (one of the "out of scope"
+      items in PR #129), flip the single ICON_BASE_URL constant in
+      fileIcon.tsx AND drop this CDN entry — both ends should move
+      together so the CSP doesn't stay needlessly permissive.
+    -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'"
+      content="default-src 'self'; img-src 'self' data: blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'"
     />
     <title>Agent Code</title>
   </head>
