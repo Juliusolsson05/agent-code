@@ -9,7 +9,6 @@ const TOOL_COMMAND: Record<SetupToolId, string> = {
   claude: 'claude',
   codex: 'codex',
   git: 'git',
-  tmux: 'tmux',
   mitmdump: 'mitmdump',
 }
 

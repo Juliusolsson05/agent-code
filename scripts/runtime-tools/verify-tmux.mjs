@@ -1,19 +1,31 @@
 #!/usr/bin/env node
-// Verify the built static tmux binary against manifest.json.
+// Verify the cached tmux binary in
+//   third_party/tmux/cache/<platform>-<arch>/tmux
+// against manifest.json without re-downloading.
 //
-// Until PR 3 lands the static build, the manifest contains TBD-PR3
-// placeholders and the cache is empty. In that state this script
-// exits 0 with a "skipped" warning so the bundling pipeline can
-// continue (mitmproxy still verifies normally) and so `npm run
-// runtime:verify` does not block PR 1 review.
+// Usage:
+//   node scripts/runtime-tools/verify-tmux.mjs            # warn on missing
+//   node scripts/runtime-tools/verify-tmux.mjs --strict   # fail on missing or broken
 //
-// Once PR 3 lands real hashes, CI can switch to `--strict` and this
-// script will fail when the cache is missing or corrupted.
+// "Verify" here means three things:
+//   1. The binary file exists and is executable.
+//   2. `tmux -V` reports the version pinned in manifest.json (cheap
+//      sanity that the right artifact landed at the right path).
+//   3. `otool -L` on macOS confirms the binary does NOT link any
+//      Homebrew dylib — the whole point of bundling is that we
+//      don't rely on the user's Homebrew install.
+//
+// Steps 2 and 3 are the load-bearing checks. A future change that
+// silently swaps the upstream source for the Homebrew binary would
+// pass a sha256 hash check (because we don't store one for the
+// extracted binary), but it would fail (3). That's the regression
+// gate this script exists to enforce.
 
-import { createHash } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { access, readFile, stat } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
@@ -24,43 +36,53 @@ async function main() {
   const strict = process.argv.includes('--strict')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
 
-  if (manifestHasPlaceholders(manifest)) {
-    const msg =
-      '[verify-tmux] manifest contains TBD-PR3 placeholders; skipping (tracked in issue #120).'
-    if (strict) {
-      console.error(msg)
-      process.exit(1)
-    } else {
-      console.warn(msg)
-      return
-    }
-  }
-
   let problems = 0
-  for (const [platformKey, platform] of Object.entries(manifest.platforms)) {
-    const file = join(cacheRoot, platformKey, 'tmux')
+  for (const [platformKey] of Object.entries(manifest.platforms)) {
+    const binary = join(cacheRoot, platformKey, manifest.executableInsideArchive)
+
     try {
-      await stat(file)
+      await access(binary, fsConstants.X_OK)
     } catch {
-      const msg = `[verify-tmux] missing cache: ${platformKey} (${file})`
-      if (strict) {
-        console.error(msg)
-        problems++
-      } else {
-        console.warn(`${msg} — run \`npm run runtime:build:tmux\``)
-      }
+      const msg = `[verify-tmux] missing or not executable: ${platformKey} (${binary})`
+      if (strict) { console.error(msg); problems++ }
+      else { console.warn(`${msg} — run \`npm run runtime:fetch:tmux\``) }
       continue
     }
-    const buf = await readFile(file)
-    const digest = createHash('sha256').update(buf).digest('hex')
-    if (digest !== platform.sha256) {
+
+    if (platformKey !== currentPlatformKey()) {
+      // We can't `tmux -V` a cross-arch binary. The sha256 hash on
+      // the manifest covers the *archive*, not the extracted binary,
+      // so there is no manifest hash to compare against for the
+      // extracted file. Cross-platform validation is therefore
+      // limited to "file exists and is executable" — the build host
+      // gets the full version + linkage check for its native arch,
+      // and that's the case that matters most.
+      console.log(`[verify-tmux] OK ${platformKey} (presence only; cross-arch)`)
+      continue
+    }
+
+    const versionOk = await binaryReportsVersion(binary, manifest.version)
+    if (!versionOk) {
       console.error(
-        `[verify-tmux] hash mismatch for ${platformKey}: ${digest} != ${platform.sha256}`,
+        `[verify-tmux] ${platformKey}: \`tmux -V\` did not contain "${manifest.version}"`,
       )
       problems++
       continue
     }
-    console.log(`[verify-tmux] OK ${platformKey} (${digest.slice(0, 12)})`)
+
+    if (process.platform === 'darwin') {
+      const homebrewLinkage = await detectHomebrewLinkage(binary)
+      if (homebrewLinkage.length > 0) {
+        console.error(
+          `[verify-tmux] ${platformKey}: binary links Homebrew dylibs:\n  ` +
+            homebrewLinkage.join('\n  '),
+        )
+        problems++
+        continue
+      }
+    }
+
+    console.log(`[verify-tmux] OK ${platformKey} (${manifest.version}, no Homebrew linkage)`)
   }
 
   if (problems > 0) {
@@ -69,8 +91,38 @@ async function main() {
   }
 }
 
-function manifestHasPlaceholders(manifest) {
-  return JSON.stringify(manifest).includes('TBD-PR3')
+function currentPlatformKey() {
+  const archMap = { x64: 'x86_64', arm64: 'arm64' }
+  const arch = archMap[process.arch]
+  if (!arch) return ''
+  return `${process.platform}-${arch}`
+}
+
+function binaryReportsVersion(path, expectedVersion) {
+  return new Promise(res => {
+    let out = ''
+    const child = spawn(path, ['-V'])
+    child.stdout.on('data', b => (out += b))
+    child.stderr.on('data', b => (out += b))
+    child.on('error', () => res(false))
+    child.on('exit', code => res(code === 0 && out.includes(expectedVersion)))
+  })
+}
+
+function detectHomebrewLinkage(path) {
+  return new Promise(res => {
+    let stdout = ''
+    const child = spawn('/usr/bin/otool', ['-L', path])
+    child.stdout.on('data', b => (stdout += b))
+    child.on('error', () => res([]))
+    child.on('exit', () => {
+      const hits = stdout
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.startsWith('/opt/homebrew') || line.includes('/Cellar/'))
+      res(hits)
+    })
+  })
 }
 
 main().catch(err => {

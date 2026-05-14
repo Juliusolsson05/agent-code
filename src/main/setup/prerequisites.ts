@@ -58,13 +58,12 @@ const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = 
     installable: false,
     detail: 'Used by Git Bar, worktree badges, and repository metadata.',
   },
-  tmux: {
-    id: 'tmux',
-    label: 'tmux',
-    required: false,
-    installable: true,
-    detail: 'Keeps terminal panes alive across app restarts.',
-  },
+  // NOTE: tmux is intentionally absent. The SetupGate is for tools
+  // the user might need to install themselves; tmux is now a bundled
+  // runtime artifact (see issue #120 and third_party/tmux/). It has
+  // no install story for users to participate in. The runtime
+  // resolver (`src/main/setup/runtimeTools.ts`) is the single
+  // authority on tmux availability now.
   mitmdump: {
     id: 'mitmdump',
     label: 'Claude Proxy Helper',
@@ -74,7 +73,7 @@ const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = 
   },
 }
 
-const CHECK_ORDER: SetupToolId[] = ['brew', 'claude', 'codex', 'git', 'tmux', 'mitmdump']
+const CHECK_ORDER: SetupToolId[] = ['brew', 'claude', 'codex', 'git', 'mitmdump']
 
 export async function checkPrerequisites(): Promise<SetupCheckResult> {
   const state = await loadSetupState()

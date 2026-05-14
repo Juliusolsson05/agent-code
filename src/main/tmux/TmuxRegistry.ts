@@ -60,6 +60,18 @@ export class TmuxRegistry {
     return this.availability
   }
 
+  /** Absolute path / bare command name of the tmux binary the
+   *  registry uses. SessionManager forwards this into TerminalSession
+   *  so attach-as-child-PTY spawns the exact same binary the registry
+   *  used to create the session — important when the registry was
+   *  pointed at the bundled tmux while PATH would resolve a
+   *  user-installed Homebrew tmux of a different version. Returning
+   *  the resolved string keeps TerminalSession ignorant of the
+   *  bundled-vs-system policy: it just spawns what it's handed. */
+  getBinary(): string {
+    return this.tmuxBinary
+  }
+
   /** Generate a fresh, unique session name in this registry's namespace. */
   generateName(): string {
     return `${this.namePrefix}${randomUUID()}`

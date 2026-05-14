@@ -1,31 +1,19 @@
 {
   "tool": "tmux",
   "version": "3.6a",
-  "build": "static",
-  "sources": {
-    "tmux": {
-      "version": "3.6a",
-      "url": "https://github.com/tmux/tmux/releases/download/3.6a/tmux-3.6a.tar.gz",
-      "sha256": "TBD-PR3"
-    },
-    "libevent": {
-      "version": "2.1.12-stable",
-      "url": "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz",
-      "sha256": "TBD-PR3"
-    },
-    "ncurses": {
-      "version": "6.5",
-      "url": "https://invisible-mirror.net/archives/ncurses/ncurses-6.5.tar.gz",
-      "sha256": "TBD-PR3"
-    },
-    "utf8proc": {
-      "version": "2.10.0",
-      "url": "https://github.com/JuliaStrings/utf8proc/releases/download/v2.10.0/utf8proc-2.10.0.tar.gz",
-      "sha256": "TBD-PR3"
-    }
-  },
+  "urlBase": "https://github.com/tmux/tmux-builds/releases/download/v{version}",
+  "archiveFormat": "tar.gz",
+  "executableInsideArchive": "tmux",
   "platforms": {
-    "darwin-arm64": { "sha256": "TBD-PR3" },
-    "darwin-x86_64": { "sha256": "TBD-PR3" }
+    "darwin-arm64": {
+      "filename": "tmux-{version}-macos-arm64.tar.gz",
+      "sha256": "12b5b9f8696e1286897d946649c0a80d0169dd76e018d34476a1fbd34de89a0f",
+      "bytes": 623838
+    },
+    "darwin-x86_64": {
+      "filename": "tmux-{version}-macos-x86_64.tar.gz",
+      "sha256": "b9b12eaeba43acf5671acf3857d947525440b544185a8db34ea557199a090251",
+      "bytes": 650501
+    }
   }
 }

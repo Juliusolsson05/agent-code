@@ -6,7 +6,9 @@ import { runLoginShell } from '@main/setup/shell.js'
 import { checkPrerequisites } from '@main/setup/prerequisites.js'
 
 const INSTALL_COMMAND: Record<SetupInstallTarget, string> = {
-  tmux: 'brew list tmux >/dev/null 2>&1 || brew install tmux',
+  // tmux was removed when bundled tmux (#120) became the only source
+  // Agent Code spawns from. mitmproxy is on the same track and will
+  // be dropped in a follow-up cleanup PR.
   mitmproxy: 'brew list mitmproxy >/dev/null 2>&1 || brew install mitmproxy',
 }
 
