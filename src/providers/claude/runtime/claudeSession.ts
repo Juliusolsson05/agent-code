@@ -4,6 +4,8 @@ import { spawn as ptySpawn } from 'node-pty'
 
 import type { SlashPickerState } from '@preload/index.js'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
+import { resolveBundledTool } from '@main/setup/runtimeTools.js'
+import { getToolPath } from '@main/setup/toolchain.js'
 import {
   ClaudeCodeHeadless,
   createProxyServer,
@@ -192,6 +194,31 @@ export class ClaudeSession extends EventEmitter {
       // open. That polluted repos with `proxy-events.jsonl`, mitmproxy CA
       // state, and other runtime artifacts. Agent Code owns the storage policy
       // and passes its concrete app-state root into the reusable package.
+      // Resolve which mitmdump binary the proxy runtime should
+      // spawn. Order of preference:
+      //
+      //   1. process.env.CLAUDE_HEADLESS_MITMDUMP — handled inside
+      //      claude-code-headless' createProxyServer; we never look at
+      //      it here so the env-override semantics stay in exactly
+      //      one place.
+      //   2. Bundled artifact unpacked from the packaged app (#119).
+      //      Resolves lazily; first call extracts the .app into
+      //      userData, subsequent calls return the cached path.
+      //   3. Setup-cached PATH path (e.g. user's Homebrew mitmdump).
+      //   4. claude-code-headless' own fallback chain (homebrew /
+      //      /usr/local lookup) when we pass nothing.
+      //
+      // WHY we resolve here and not inside claude-code-headless:
+      //   The reusable package must stay Electron-agnostic — it must
+      //   not know about app.asar.unpacked or app.getPath('userData').
+      //   Agent Code main owns the bundled-helper policy; the package
+      //   just spawns whatever path it's handed.
+      const bundledMitmDump = await resolveBundledTool('mitmdump')
+      const setupMitmDump = bundledMitmDump
+        ? null
+        : getToolPath('mitmdump', '') || null
+      const mitmDumpPath = bundledMitmDump ?? setupMitmDump ?? undefined
+
       const proxy = await createProxyServer({
         storageRoot: PROXY_EVENTS_DIR,
         confDir: join(PROXY_EVENTS_DIR, '_shared-conf'),
@@ -199,6 +226,7 @@ export class ClaudeSession extends EventEmitter {
         sessionKey: this.resumeSessionId
           ? `resume-${this.resumeSessionId}`
           : (this.shellSessionId ? `shell-${this.shellSessionId}` : undefined),
+        ...(mitmDumpPath ? { mitmDumpPath } : {}),
       })
       await proxy.start()
       this.proxyServer = proxy

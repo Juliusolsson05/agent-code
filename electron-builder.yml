@@ -6,6 +6,11 @@ directories:
 asar: true
 asarUnpack:
   - out/main/mitmAddon.py
+  # Bundled third-party runtime tools (mitmproxy, tmux, ...). Each is
+  # spawned as a real executable / extracted from a real tar.gz, so
+  # the whole tree must live on the filesystem rather than inside the
+  # asar virtual FS. See third_party/<tool>/README.md and issue #119.
+  - out/main/runtime/**/*
 files:
   - out/**
   - package.json

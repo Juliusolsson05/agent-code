@@ -6,6 +6,15 @@ export type SetupToolId =
   | 'tmux'
   | 'mitmdump'
 
+/**
+ * Where a found tool comes from. 'bundled' = Agent Code ships this
+ * helper inside the app and the user does not need to install it
+ * separately; 'system' = it was discovered on PATH (Homebrew, manual
+ * install, etc.). The renderer uses this to drop the install prompt
+ * for bundled tools and label them clearly.
+ */
+export type SetupToolSource = 'bundled' | 'system'
+
 export type SetupToolStatus = {
   id: SetupToolId
   label: string
@@ -13,6 +22,7 @@ export type SetupToolStatus = {
   found: boolean
   path: string | null
   installable: boolean
+  source?: SetupToolSource
   skipped?: boolean
   detail?: string
 }
