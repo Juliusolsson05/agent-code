@@ -538,6 +538,27 @@ select {
   margin: 12px 0;
   font-size: 12px;
   width: 100%;
+  /*
+   * WHY table-layout: fixed (instead of the browser default `auto`):
+   *
+   * The default `auto` algorithm sizes columns by their preferred
+   * content width — i.e., the widest unbreakable run inside each
+   * cell. When one cell holds a long file path, URL, or identifier
+   * (which is the common case for code-review / comparison tables
+   * Claude and Codex emit), that column expands to its preferred
+   * width and the trailing columns get squeezed to single-digit
+   * pixel widths. The reported failure shape is the last column
+   * collapsing to ~5–10 px and becoming unreadable.
+   *
+   * `fixed` ignores content widths entirely and gives every column
+   * an equal share of the table width. Combined with the cell-side
+   * `overflow-wrap: anywhere` rule below, long content wraps inside
+   * its share of the row rather than stealing space from neighbours.
+   * 20-column tables end up with tall narrow cells, but readable;
+   * the previous behavior was 1-character-wide vertical strips,
+   * which is strictly worse than tall-and-narrow.
+   */
+  table-layout: fixed;
 }
 
 .prose-theme th,
@@ -545,6 +566,18 @@ select {
   border: 1px solid var(--theme-border);
   padding: 5px 9px;
   text-align: left;
+  /*
+   * WHY top alignment + word-break: when table-layout: fixed forces
+   * wrap in long cells, the row's height grows to fit. Without
+   * vertical-align: top, short cells sit centred against the tall
+   * row and look untethered from their header. overflow-wrap and
+   * word-break together let unbreakable tokens (URLs, paths,
+   * camelCaseIdentifiers) break mid-token so the layout doesn't
+   * give up and overflow horizontally.
+   */
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .prose-theme th {
