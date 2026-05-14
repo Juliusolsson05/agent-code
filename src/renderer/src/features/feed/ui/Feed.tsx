@@ -13,6 +13,7 @@ import {
   isConversationEntry,
   type Entry,
 } from '@shared/types/transcript'
+import { asRecord } from '@shared/lib/asRecord'
 
 import type {
   SemanticLiveTurn,
@@ -612,7 +613,7 @@ function FeedImpl({
   // the user reported.
   const visibleDecisions = useMemo<VisibleDecision[]>(() => {
     const startedAt = performance.now()
-    const decisions = entries.map((entry, index) => {
+    const decisions = entries.map<VisibleDecision>((entry, index) => {
         if (isCompactBoundaryEntry(entry)) {
           return {
             key: debugKeyForEntry(entry, index),
@@ -637,7 +638,7 @@ function FeedImpl({
             reason: 'not_conversation',
           }
         }
-        if ((entry as unknown as { isMeta?: boolean }).isMeta === true) {
+        if (asRecord(entry)?.isMeta === true) {
           return {
             key: debugKeyForEntry(entry, index),
             entry,

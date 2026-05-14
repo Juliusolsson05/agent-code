@@ -175,21 +175,14 @@ export interface SessionManager {
 // of truth next to ManagerEvents. The event shape is enforced by the
 // assertions inside the forwarder callbacks.
 interface AgentSessionLike {
-  // Widen `listener` to `(...args: any[])` specifically so arrow
-  // functions with narrow parameter types (e.g. `(snap: ScreenSnapshot)
-  // => void`) remain assignable without casts at every call site.
-  // A strict `(...args: unknown[]) => void` rejects those because
-  // `unknown` is not narrowable to `ScreenSnapshot` — which is
-  // technically correct but useless here, because the event shape
-  // is the provider's responsibility, not the manager's.
-  //
-  // The loss: TypeScript won't verify the listener argument types
-  // against the provider's actual emit payload. The trade: call-sites
-  // stay readable and we don't leak `as unknown as ...` for every
-  // `.on('screen', snap => ...)` in spawn(). Runtime correctness is
-  // enforced by the provider registry contract above.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  on(event: string, listener: (...args: any[]) => void): this
+  // `never[]` is intentional: provider event payloads are validated at
+  // the provider boundary, while this manager only needs a structural
+  // "can subscribe" capability. Using `unknown[]` would force every
+  // narrow listener (`(snap: ScreenSnapshot) => void`) to widen itself;
+  // using `any[]` would leak an actual unsafe type. `never[]` keeps the
+  // subscription surface permissive for callbacks without granting
+  // arbitrary values inside this interface.
+  on(event: string, listener: (...args: never[]) => void): this
   write(data: string): void
   resize(cols: number, rows: number): void
   stop(): Promise<void>
@@ -345,10 +338,8 @@ export class SessionManager extends EventEmitter {
       // 'started'/'pty-data'/'screen'/'jsonl-entry'/'jsonl-error'/
       // 'process-state'/'trust-dialog'/'resume-prompt'/
       // 'compaction-state'/'semantic-event'/'exit' events. We use
-      // `as unknown as` so a provider-specific type that ALSO has
-      // those methods (like ClaudeSession) passes the cast without
-      // TS trying to verify structural equivalence on a wide
-      // EventEmitter.on signature.
+      // a narrow structural cast so provider-specific implementation
+      // details don't leak into the manager.
       const session = provider.createSession({
         cwd: options.cwd,
         binary: getToolPath(kind, kind),
@@ -362,7 +353,7 @@ export class SessionManager extends EventEmitter {
         // mitmproxy path; Codex uses a local Responses proxy via
         // `openai_base_url`.
         useProxy: options.useProxy,
-      }) as unknown as AgentSessionLike
+      }) as AgentSessionLike
       performanceService.record({
         kind: 'span_end',
         process: 'main',
@@ -815,7 +806,7 @@ export class SessionManager extends EventEmitter {
     // structural duck-type so misconfigured Claude provider builds
     // (a future ClaudeSession that loses the method) surface as
     // 'no-session' rather than a TypeError.
-    const session = entry.session as unknown as {
+    const session = entry.session as AgentSessionLike & {
       awaitPastePlaceholder?: (
         opts?: { timeoutMs?: number; pollIntervalMs?: number },
       ) => Promise<

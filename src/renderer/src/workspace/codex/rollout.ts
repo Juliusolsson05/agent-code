@@ -74,6 +74,16 @@ function isCodexBootstrapBlockText(text: string): boolean {
   return isCodexEnvironmentContextText(text) || isCodexAgentsMdPreambleText(text)
 }
 
+function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {
+  const value = record?.[key]
+  return typeof value === 'string' ? value : null
+}
+
+function numberField(record: Record<string, unknown> | null | undefined, key: string): number | null {
+  const value = record?.[key]
+  return typeof value === 'number' ? value : null
+}
+
 function codexConversationEntryFromMessageItem(
   uuid: string,
   timestamp: string | undefined,
@@ -97,7 +107,8 @@ function codexConversationEntryFromMessageItem(
   const content = Array.isArray(payload.content)
     ? payload.content
         .map(block => {
-          const item = block as Record<string, unknown>
+          const item = asRecord(block)
+          if (!item) return null
           if (item.type === 'input_text' || item.type === 'output_text') {
             const text = typeof item.text === 'string' ? item.text : null
             return text ? { type: 'text' as const, text } : null
@@ -185,8 +196,7 @@ function codexCompactSummaryEntry(
  */
 export function codexTurnIdFromRollout(entry: Record<string, unknown>): string | null {
   if (entry.type !== 'turn_context') return null
-  const payload = entry.payload as Record<string, unknown> | undefined
-  return typeof payload?.turn_id === 'string' ? (payload.turn_id as string) : null
+  return stringField(asRecord(entry.payload), 'turn_id')
 }
 
 /**
@@ -202,22 +212,23 @@ export function stampCodexTurnId(entry: Entry, turnId: string | null): Entry {
 }
 
 export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): Entry[] {
+  const payload = asRecord(entry.payload)
   const uuid =
-    `${String(entry.timestamp ?? Date.now())}:${String((entry.payload as Record<string, unknown> | undefined)?.id ?? (entry.payload as Record<string, unknown> | undefined)?.call_id ?? (entry.payload as Record<string, unknown> | undefined)?.type ?? entry.type)}`
+    `${String(entry.timestamp ?? Date.now())}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
   const timestamp =
     typeof entry.timestamp === 'string' ? entry.timestamp : undefined
 
-  const payload = entry.payload as Record<string, unknown> | undefined
   if (!payload || typeof payload.type !== 'string') return []
 
   if (entry.type === 'event_msg') {
-    const atp = entry._atp as { origin?: string; source?: Record<string, unknown> } | undefined
+    const atp = asRecord(entry._atp)
+    const atpSource = asRecord(atp?.source)
     if (
       payload.type === 'user_message' &&
       atp?.origin === 'claude' &&
-      atp.source?.isCompactSummary === true
+      atpSource?.isCompactSummary === true
     ) {
-      const sourceMessage = atp.source.message as { content?: unknown } | undefined
+      const sourceMessage = asRecord(atpSource.message)
       const sourceText =
         typeof sourceMessage?.content === 'string'
           ? sourceMessage.content
@@ -293,9 +304,7 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
           {
             kind: 'patch_apply_end',
             success: payload.success === true,
-            changes: payload.changes && typeof payload.changes === 'object'
-              ? payload.changes as Record<string, unknown>
-              : {},
+            changes: asRecord(payload.changes) ?? {},
           },
         ),
       ]
@@ -314,11 +323,12 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       out.push(codexCompactSummaryEntry(`${uuid}:compact-summary`, timestamp, message))
     }
 
-    const replacementHistory = Array.isArray(payload.replacement_history)
+  const replacementHistory = Array.isArray(payload.replacement_history)
       ? payload.replacement_history
       : []
     for (let i = 0; i < replacementHistory.length; i += 1) {
-      const item = replacementHistory[i] as Record<string, unknown>
+      const item = asRecord(replacementHistory[i])
+      if (!item) continue
       const mapped = codexConversationEntryFromMessageItem(
         `${uuid}:replacement:${i}`,
         timestamp,
@@ -373,10 +383,7 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
     const normalized =
       typeof parsed?.output === 'string' ? parsed.output : output
     const metadata = parsed?.metadata
-    const exitCode =
-      metadata && typeof metadata === 'object' && typeof (metadata as Record<string, unknown>).exit_code === 'number'
-        ? (metadata as Record<string, unknown>).exit_code as number
-        : 0
+    const exitCode = numberField(asRecord(metadata), 'exit_code') ?? 0
     if (
       typeof normalized === 'string' &&
       normalized.startsWith('Success. Updated the following files:')
@@ -413,11 +420,11 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       typeof payload.id === 'string' ? payload.id : `web_search:${uuid}`
     const action = asRecord(payload.action)
     const query =
-      typeof action?.query === 'string' ? action.query as string : null
+      stringField(action, 'query')
     const url =
-      typeof action?.url === 'string' ? action.url as string : null
+      stringField(action, 'url')
     const kind =
-      typeof action?.type === 'string' ? action.type as string : 'search'
+      stringField(action, 'type') ?? 'search'
     // `description` is the field headlineForTool falls back to when
     // the tool has no `command` / `path` / `arguments`. Pack a
     // human-readable label so CodexToolRow shows something useful.
@@ -444,11 +451,9 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
     const callId =
       typeof payload.id === 'string' ? payload.id : `image_gen:${uuid}`
     const revisedPrompt =
-      typeof payload.revised_prompt === 'string'
-        ? payload.revised_prompt as string
-        : null
+      stringField(payload, 'revised_prompt')
     const status =
-      typeof payload.status === 'string' ? payload.status as string : 'unknown'
+      stringField(payload, 'status') ?? 'unknown'
     return [
       codexToolUseEntry(uuid, timestamp, callId, 'image_generation', {
         description: revisedPrompt
@@ -470,11 +475,9 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       .filter((part): part is string => typeof part === 'string')
       .join(' ')
     const workdir =
-      typeof action?.working_directory === 'string'
-        ? action!.working_directory as string
-        : null
+      stringField(action, 'working_directory')
     const status =
-      typeof payload.status === 'string' ? payload.status as string : 'unknown'
+      stringField(payload, 'status') ?? 'unknown'
     return [
       codexToolUseEntry(uuid, timestamp, payload.call_id, 'local_shell', {
         command: command || '(no command)',
@@ -488,7 +491,7 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
     const callId =
       typeof payload.id === 'string' ? payload.id : `tool_search:${uuid}`
     const status =
-      typeof payload.status === 'string' ? payload.status as string : 'unknown'
+      stringField(payload, 'status') ?? 'unknown'
     return [
       codexToolUseEntry(uuid, timestamp, callId, 'tool_search', {
         description: `Tool search (${status})`,
@@ -520,6 +523,6 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
  *  uuid used by mapCodexRolloutToFeedEntries so the older-history
  *  loader and the dedup path see the same identity. */
 export function codexHistoryMarker(entry: Record<string, unknown>): string {
-  const payload = entry.payload as Record<string, unknown> | undefined
+  const payload = asRecord(entry.payload)
   return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
 }

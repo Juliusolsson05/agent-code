@@ -106,11 +106,13 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
 
       void window.api.attachAgentPty(sessionId).then(buffer => {
         if (disposed || termRef.current !== term) return
-        if (buffer) term.write(buffer)
-        for (const d of backlogQueue) term.write(d)
+        const liveTerm = term
+        if (!liveTerm) return
+        if (buffer) liveTerm.write(buffer)
+        for (const d of backlogQueue) liveTerm.write(d)
         backlogQueue.length = 0
         attachedBackfillDone = true
-        term.focus()
+        liveTerm.focus()
       })
 
       // Live font updates — see TerminalLeaf.tsx for the rationale.

@@ -1,4 +1,5 @@
 import type { Entry } from '@shared/types/transcript'
+import { asRecord } from '@shared/lib/asRecord'
 
 // Codex rollout primitives + conversion helpers.
 //
@@ -49,8 +50,7 @@ export function isOptimisticCodexUserEntry(entry: Entry | undefined): boolean {
  *  text" rather than throwing. */
 export function parseCodexJson(input: string): Record<string, unknown> | null {
   try {
-    const parsed = JSON.parse(input) as unknown
-    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null
+    return asRecord(JSON.parse(input))
   } catch {
     return null
   }

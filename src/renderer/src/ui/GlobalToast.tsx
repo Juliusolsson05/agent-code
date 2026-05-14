@@ -22,7 +22,7 @@ export const useGlobalToast = () => useContext(GlobalToastContext)
 
 export function GlobalToastProvider({ children }: { children: React.ReactNode }) {
   const [toast, setToast] = useState<string | null>(null)
-  const timerRef = useRef<ReturnType<typeof setTimeout>>(null)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const showToast = useCallback((message: string, durationMs = 2500) => {
     if (timerRef.current) clearTimeout(timerRef.current)

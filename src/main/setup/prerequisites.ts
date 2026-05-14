@@ -16,7 +16,7 @@ import { refreshToolchainFromState } from '@main/setup/toolchain.js'
 // land. Whitelisting the IDs that participate in the runtime-bundling
 // pipeline makes the relationship explicit and keeps `prerequisites`
 // from importing the resolver for irrelevant tools.
-const BUNDLED_TOOL_IDS: ReadonlySet<SetupToolId> = new Set<BundledToolId>([
+const BUNDLED_TOOL_IDS: ReadonlySet<SetupToolId> = new Set<SetupToolId>([
   'mitmdump',
 ])
 
