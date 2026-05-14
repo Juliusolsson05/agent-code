@@ -395,4 +395,16 @@ export const sessionCommands: CommandDef[] = [
     }),
     run: ({ ui }) => ui.toggleHtmlDebugPanel(),
   },
+  {
+    id: 'toggle-dev-debug-panel',
+    title: 'Dev Debug Panel',
+    description: '**What it does:** Shows or hides the temporary **Dev Debug Panel** module host.\n\n**Use when:** You need a bug-specific workbench for focused runtime state, regex probes, IPC experiments, or other short-lived diagnostics.\n\n**Notes:** Only appears when `AGENT_CODE_DEV_DEBUG=1` is set.',
+    keywords: ['dev', 'debug', 'module', 'probe', 'regex', 'headless', 'snapshot', 'temporary'],
+    when: ({ flags }) => flags.devDebugEnabled,
+    getState: ({ flags }) => ({
+      label: flags.devDebugPanelOpen ? 'On' : 'Off',
+      tone: flags.devDebugPanelOpen ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleDevDebugPanel(),
+  },
 ]

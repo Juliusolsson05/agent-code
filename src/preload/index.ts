@@ -30,6 +30,7 @@ export type { Api }
 // preload bundle.
 export type {
   FeedDebugPersistEntry,
+  DevDebugConfig,
   JsonlEntry,
   LspDiagnostic,
   LspDiagnosticsEvent,

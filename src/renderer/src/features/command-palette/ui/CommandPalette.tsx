@@ -73,6 +73,7 @@ type Props = {
   toggleFeedDebugPanel: () => void
   toggleProxyDebugPanel: () => void
   toggleHtmlDebugPanel: () => void
+  toggleDevDebugPanel: () => void
   togglePerformancePanel: () => void
   enterDispatchMode: () => Promise<void> | void
   enterGlobalDispatch: () => Promise<void> | void
@@ -93,6 +94,8 @@ type Props = {
   feedDebugPanelOpen: boolean
   proxyDebugPanelOpen: boolean
   htmlDebugPanelOpen: boolean
+  devDebugEnabled: boolean
+  devDebugPanelOpen: boolean
   performancePanelOpen: boolean
   dispatchModeEnabled: boolean
   globalDispatchEnabled: boolean
@@ -129,6 +132,7 @@ export function CommandPalette({
   toggleFeedDebugPanel,
   toggleProxyDebugPanel,
   toggleHtmlDebugPanel,
+  toggleDevDebugPanel,
   togglePerformancePanel,
   enterDispatchMode,
   enterGlobalDispatch,
@@ -149,6 +153,8 @@ export function CommandPalette({
   feedDebugPanelOpen,
   proxyDebugPanelOpen,
   htmlDebugPanelOpen,
+  devDebugEnabled,
+  devDebugPanelOpen,
   performancePanelOpen,
   dispatchModeEnabled,
   globalDispatchEnabled,
@@ -289,6 +295,7 @@ export function CommandPalette({
         toggleFeedDebugPanel,
         toggleProxyDebugPanel,
         toggleHtmlDebugPanel,
+        toggleDevDebugPanel,
         togglePerformancePanel,
         enterDispatchMode,
         enterGlobalDispatch,
@@ -319,6 +326,8 @@ export function CommandPalette({
         feedDebugPanelOpen,
         proxyDebugPanelOpen,
         htmlDebugPanelOpen,
+        devDebugEnabled,
+        devDebugPanelOpen,
         performancePanelOpen,
         dispatchModeEnabled,
         globalDispatchEnabled,
@@ -341,6 +350,7 @@ export function CommandPalette({
       toggleFeedDebugPanel,
       toggleProxyDebugPanel,
       toggleHtmlDebugPanel,
+      toggleDevDebugPanel,
       togglePerformancePanel,
       enterDispatchMode,
       enterGlobalDispatch,
@@ -369,6 +379,8 @@ export function CommandPalette({
       feedDebugPanelOpen,
       proxyDebugPanelOpen,
       htmlDebugPanelOpen,
+      devDebugEnabled,
+      devDebugPanelOpen,
       performancePanelOpen,
       dispatchModeEnabled,
       globalDispatchEnabled,

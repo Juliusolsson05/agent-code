@@ -62,6 +62,12 @@ export type UiShellState = {
    *  Lives on the uiShell slice alongside the other three debug panels
    *  and follows the same toggle pattern. */
   htmlDebugPanelOpen: boolean
+  /** When true, the .env-gated Dev Debug Panel is mounted. Unlike the
+   *  stable debug panels above, this is a temporary module host for
+   *  one-off investigations. Its modules are intentionally freeform:
+   *  they may poll, render custom UI, or call IPC while a bug is being
+   *  understood, and then disappear after the fix lands. */
+  devDebugPanelOpen: boolean
   performancePanelOpen: boolean
   /** When true, the Search Conversation Prompts modal is open. Lives
    *  on the uiShell slice (not the workspace slice) because it's

@@ -14,6 +14,10 @@ export type { ProviderConditionSnapshot } from '@shared/types/providerConditions
 
 export type Unsub = () => void
 
+export type DevDebugConfig = {
+  enabled: boolean
+}
+
 export type DictationProvider = 'deepgram' | 'assemblyai' | 'openai' | 'gladia' | 'elevenlabs'
 
 export type DictationStartResult =

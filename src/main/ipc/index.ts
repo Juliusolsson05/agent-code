@@ -18,6 +18,7 @@ import { registerSetupIpc } from '@main/ipc/setup.js'
 import { registerWorktreeActivityIpc } from '@main/ipc/worktreeActivity.js'
 import { registerDictationIpc } from '@main/ipc/dictation.js'
 import { registerPasteDebugIpc } from '@main/ipc/pasteDebug.js'
+import { registerDevDebugIpc } from '@main/ipc/devDebug.js'
 import { installPerformanceIpcInstrumentation } from '@main/performance/instrumentIpc.js'
 import type { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 
@@ -55,4 +56,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerSetupIpc()
   registerDictationIpc({ dictationDebugJournals: deps.dictationDebugJournals })
   registerPasteDebugIpc({ pasteDebugJournals: deps.pasteDebugJournals })
+  registerDevDebugIpc()
 }

@@ -23,6 +23,7 @@ export type CommandContext = {
     toggleFeedDebugPanel: () => void
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
+    toggleDevDebugPanel: () => void
     togglePerformancePanel: () => void
     enterDispatchMode: () => Promise<void> | void
     enterGlobalDispatch: () => Promise<void> | void
@@ -60,6 +61,8 @@ export type CommandContext = {
     feedDebugPanelOpen: boolean
     proxyDebugPanelOpen: boolean
     htmlDebugPanelOpen: boolean
+    devDebugEnabled: boolean
+    devDebugPanelOpen: boolean
     performancePanelOpen: boolean
     dispatchModeEnabled: boolean
     globalDispatchEnabled: boolean
