@@ -14,12 +14,23 @@
 //   For mitmproxy we ship the full .tar.gz inside the packaged app
 //   and extract on first launch because the contents are a multi-file
 //   .app bundle. tmux is a single 1.6 MB binary — extracting it once
-//   at fetch time and committing nothing keeps the runtime resolver
-//   in `src/main/setup/runtimeTools.ts` trivial: it just returns the
+//   at fetch time keeps the runtime resolver in
+//   `src/main/setup/runtimeTools.ts` trivial: it just returns the
 //   already-extracted binary's path from app.asar.unpacked, no
 //   userData copy, no marker, no atomic rename. Two different
 //   resolution shapes for the two tools is fine; the underlying
 //   manifest schema stays identical.
+//
+// WHY we pin BOTH the archive sha256 AND the extracted binarySha256:
+//   The archive hash verifies what we downloaded. The binary hash
+//   verifies what gets shipped — and lets us validate the cache
+//   without spawning the binary. Spawning would require Rosetta when
+//   the build host is arm64 and the target is x86_64 (or vice
+//   versa); on a clean Apple-Silicon CI runner without Rosetta the
+//   non-native binary fails with "Bad CPU type in executable" and
+//   the fetch would error out. Hash-based identity is platform-
+//   agnostic and stronger: a swapped binary that happens to print
+//   `tmux 3.6a` for `-V` would still fail a hash check.
 //
 // WHY this is NOT a postinstall hook:
 //   Same rule as fetch-mitmproxy: dev contributors must not pay a
@@ -62,6 +73,13 @@ async function main() {
           `Known platforms: ${Object.keys(manifest.platforms).join(', ')}`,
       )
     }
+    if (!platform.binarySha256) {
+      throw new Error(
+        `Manifest is missing binarySha256 for ${platformKey}. ` +
+          `Compute it with \`shasum -a 256 third_party/tmux/cache/${platformKey}/tmux\` ` +
+          `after a fresh download, then pin the value in third_party/tmux/manifest.json.`,
+      )
+    }
     await fetchOne(manifest, platformKey, platform)
   }
 }
@@ -90,12 +108,14 @@ async function fetchOne(manifest, platformKey, platform) {
   const targetDir = join(cacheRoot, platformKey)
   const targetBinary = join(targetDir, manifest.executableInsideArchive)
 
-  // Idempotency: if the cached binary already runs and reports the
-  // expected version, skip the whole download+extract. This lets CI
-  // re-runs and local re-fetches finish in milliseconds.
-  if (await binaryMatchesVersion(targetBinary, manifest.version)) {
+  // Cache-hit detection by content hash. Trusting the on-disk binary
+  // because `tmux -V` reports the right version is too loose: a
+  // corrupted or swapped binary that happens to print the version
+  // string would pass. The binary hash is platform-agnostic and
+  // cheap.
+  if (await fileMatchesHash(targetBinary, platform.binarySha256)) {
     process.stdout.write(
-      `[fetch-tmux] cache hit for ${platformKey} (${manifest.executableInsideArchive} reports ${manifest.version})\n`,
+      `[fetch-tmux] cache hit for ${platformKey} (binary sha256 ${platform.binarySha256.slice(0, 12)})\n`,
     )
     return
   }
@@ -110,25 +130,25 @@ async function fetchOne(manifest, platformKey, platform) {
     throw new Error(`HTTP ${res.status} ${res.statusText} for ${url}`)
   }
 
-  const hash = createHash('sha256')
+  const archiveHash = createHash('sha256')
   await pipeline(
     res.body,
     async function* (source) {
       for await (const chunk of source) {
-        hash.update(chunk)
+        archiveHash.update(chunk)
         yield chunk
       }
     },
     createWriteStream(archivePath),
   )
 
-  const digest = hash.digest('hex')
-  if (digest !== platform.sha256) {
+  const archiveDigest = archiveHash.digest('hex')
+  if (archiveDigest !== platform.sha256) {
     await safeUnlink(archivePath)
     throw new Error(
       `Archive hash mismatch for ${platformKey}.\n` +
         `  manifest: ${platform.sha256}\n` +
-        `  download: ${digest}\n` +
+        `  download: ${archiveDigest}\n` +
         `  refusing to extract; manifest must be updated or download retried.`,
     )
   }
@@ -153,6 +173,20 @@ async function fetchOne(manifest, platformKey, platform) {
 
   const stageBinary = join(stageDir, manifest.executableInsideArchive)
   await stat(stageBinary) // throws if missing
+
+  // Verify the EXTRACTED binary's content hash before moving it into
+  // the canonical cache path. This is the load-bearing identity
+  // check: the binary we ship out of `out/main/runtime/tmux/...` is
+  // whatever lives at the cache path, so a tamper-or-corruption
+  // window between extraction and move would otherwise be invisible.
+  if (!(await fileMatchesHash(stageBinary, platform.binarySha256))) {
+    await rm(stageDir, { recursive: true, force: true }).catch(() => {})
+    await safeUnlink(archivePath)
+    throw new Error(
+      `Extracted binary hash mismatch for ${platformKey}; refusing to commit it to the cache.`,
+    )
+  }
+
   await copyFile(stageBinary, targetBinary)
   await chmod(targetBinary, 0o755)
 
@@ -163,15 +197,17 @@ async function fetchOne(manifest, platformKey, platform) {
   await rm(stageDir, { recursive: true, force: true })
   await rm(tmpRoot, { recursive: true, force: true }).catch(() => {})
 
-  // Final sanity: the just-extracted binary must run and report the
-  // pinned version. We don't ship a manifest hash for the inner
-  // binary (upstream may rebuild without bumping the version label),
-  // so the cheapest check that confirms the right artifact landed is
-  // `tmux -V`.
-  if (!(await binaryMatchesVersion(targetBinary, manifest.version))) {
-    throw new Error(
-      `Extracted ${manifest.executableInsideArchive} did not report version ${manifest.version}; refusing to leave a broken cache.`,
-    )
+  // Native-arch sanity: confirm the binary actually runs and reports
+  // the pinned version. This catches "binary hash matches but the
+  // file is corrupted in a way the OS rejects at exec time" failures
+  // — and only fires on the build host's native arch because spawn
+  // would otherwise need Rosetta to run a cross-arch binary.
+  if (platformKey === currentPlatformKey()) {
+    if (!(await binaryReportsVersion(targetBinary, manifest.version))) {
+      throw new Error(
+        `Extracted ${manifest.executableInsideArchive} did not report version ${manifest.version}; refusing to leave a broken cache.`,
+      )
+    }
   }
 
   process.stdout.write(
@@ -179,7 +215,16 @@ async function fetchOne(manifest, platformKey, platform) {
   )
 }
 
-async function binaryMatchesVersion(path, expectedVersion) {
+async function fileMatchesHash(path, expected) {
+  try {
+    const buf = await readFile(path)
+    return createHash('sha256').update(buf).digest('hex') === expected
+  } catch {
+    return false
+  }
+}
+
+async function binaryReportsVersion(path, expectedVersion) {
   try {
     const st = await stat(path)
     if (!st.isFile()) return false
@@ -187,18 +232,12 @@ async function binaryMatchesVersion(path, expectedVersion) {
     return false
   }
   return await new Promise(res => {
-    let stdout = ''
-    let stderr = ''
+    let out = ''
     const child = spawn(path, ['-V'])
-    child.stdout.on('data', b => (stdout += b))
-    child.stderr.on('data', b => (stderr += b))
+    child.stdout.on('data', b => (out += b))
+    child.stderr.on('data', b => (out += b))
     child.on('error', () => res(false))
-    child.on('exit', code => {
-      if (code !== 0) return res(false)
-      const out = (stdout + stderr).trim()
-      // `tmux -V` prints exactly: `tmux 3.6a`
-      res(out.includes(expectedVersion))
-    })
+    child.on('exit', code => res(code === 0 && out.trim().includes(expectedVersion)))
   })
 }
 

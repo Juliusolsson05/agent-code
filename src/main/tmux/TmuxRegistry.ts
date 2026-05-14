@@ -20,18 +20,36 @@ export type TmuxRegistryOptions = {
    *  prefix. Production uses 'agentcode-'; tests use a different
    *  prefix so they never touch the user's real sessions. */
   namePrefix?: string
-  /** Override for the tmux binary path. Defaults to 'tmux' on PATH. */
+  /**
+   * Absolute path to the tmux binary the registry should spawn.
+   * Undefined means "no bundled tmux is available" — the registry
+   * resolves `detectAvailability()` to false WITHOUT spawning
+   * anything, and terminals fall back to direct-PTY mode. This is
+   * the bundled-only policy from #120: we never go looking for a
+   * PATH tmux even as a last resort, because a user's Homebrew tmux
+   * could be a different version with an incompatible session
+   * format.
+   */
   tmuxBinary?: string
 }
 
 export class TmuxRegistry {
   private readonly namePrefix: string
-  private readonly tmuxBinary: string
+  private readonly tmuxBinary: string | null
   private availability: boolean | null = null
 
   constructor(options: TmuxRegistryOptions = {}) {
     this.namePrefix = options.namePrefix ?? 'agentcode-'
-    this.tmuxBinary = options.tmuxBinary ?? 'tmux'
+    // WHY we store `null` instead of falling back to `'tmux'`:
+    //   A bare command name would get PATH-searched by node-pty /
+    //   child_process.spawn. The bundled-only policy says: if we
+    //   could not resolve a bundled tmux, do not run any tmux. A
+    //   sentinel like `'tmux-bundled-missing'` would still get
+    //   PATH-searched (and in the unlikely case of a name collision
+    //   would invoke whatever happened to be on PATH). Storing null
+    //   and short-circuiting at every call site is the clean
+    //   version.
+    this.tmuxBinary = options.tmuxBinary ?? null
   }
 
   /**
@@ -39,11 +57,20 @@ export class TmuxRegistry {
    * lifetime of the registry — tmux doesn't get installed mid-session
    * in any realistic scenario, and re-checking on every spawn would
    * add latency to every terminal open.
+   *
+   * Returns false immediately without spawning anything when no
+   * tmuxBinary was supplied at construction — that path encodes the
+   * "bundled tmux unavailable" outcome from the runtime resolver.
    */
   async detectAvailability(): Promise<boolean> {
     if (this.availability !== null) return this.availability
+    if (this.tmuxBinary === null) {
+      this.availability = false
+      return false
+    }
+    const binary = this.tmuxBinary
     this.availability = await new Promise<boolean>(resolve => {
-      const proc = childSpawn(this.tmuxBinary, ['-V'], { stdio: 'ignore' })
+      const proc = childSpawn(binary, ['-V'], { stdio: 'ignore' })
       proc.on('error', () => resolve(false))
       proc.on('exit', code => resolve(code === 0))
     })
@@ -60,15 +87,14 @@ export class TmuxRegistry {
     return this.availability
   }
 
-  /** Absolute path / bare command name of the tmux binary the
-   *  registry uses. SessionManager forwards this into TerminalSession
-   *  so attach-as-child-PTY spawns the exact same binary the registry
-   *  used to create the session — important when the registry was
-   *  pointed at the bundled tmux while PATH would resolve a
-   *  user-installed Homebrew tmux of a different version. Returning
-   *  the resolved string keeps TerminalSession ignorant of the
-   *  bundled-vs-system policy: it just spawns what it's handed. */
-  getBinary(): string {
+  /** Absolute path of the tmux binary the registry uses, or null
+   *  when no bundled tmux was available at construction. SessionManager
+   *  forwards this into TerminalSession so attach-as-child-PTY spawns
+   *  the exact same binary the registry used to create the session.
+   *  Callers should only invoke this AFTER `isAvailable()` returned
+   *  true; the registry's null path is paired with `availability ===
+   *  false`, so a non-null return is the practical guarantee here. */
+  getBinary(): string | null {
     return this.tmuxBinary
   }
 

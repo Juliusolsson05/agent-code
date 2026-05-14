@@ -263,12 +263,15 @@ async function installMitmproxy(
 //   do. Two different shapes for two different artifact kinds is
 //   fine; the manifest schema and the public API stay identical.
 //
-// WHY we chmod even though `copyFile` should preserve mode:
-//   electron-builder repacks asarUnpack content during signing on
-//   macOS; in past Electron forum threads this has been observed to
-//   drop the executable bit on nested binaries. A defensive `chmod
-//   0o755` on first resolution is cheap and rules out an entire class
-//   of "works in dev, broken in DMG" reports.
+// WHY we chmod defensively even though `copyFile` should preserve mode:
+//   `fs.copyFile` preserves POSIX mode bits, and electron-builder's
+//   asarUnpack pathway has not been observed to drop the exec bit on
+//   our own builds. But this resolver is called once at app startup,
+//   the cost is one syscall, and chmod-on-the-canonical-bundled-path
+//   is the kind of safety net that's much easier to keep than to
+//   re-add after a confusing "works in dev, broken in signed DMG"
+//   bug report. If we ever measure this as hot, drop it; until
+//   then, keep it cheap.
 type TmuxManifest = {
   tool: 'tmux'
   version: string

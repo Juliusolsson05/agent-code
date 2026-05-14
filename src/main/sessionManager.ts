@@ -551,19 +551,26 @@ export class SessionManager extends EventEmitter {
     // WHY we thread the registry's binary through to TerminalSession:
     //   TerminalSession's tmux runtime spawns `tmux attach -t <name>`,
     //   so it needs to point at the SAME binary the registry just
-    //   used to `new-session` the target. Once the bundled-only
-    //   policy lands (see src/main/index.ts), PATH-resolved `tmux`
-    //   could be a different version with an incompatible session
-    //   format — using one tmux to create and another to attach
-    //   would silently fail or worse, partially work. The registry
-    //   is the source of truth.
+    //   used to `new-session` the target. Under the bundled-only
+    //   policy (see src/main/index.ts), PATH-resolved `tmux` could be
+    //   a different version with an incompatible session format —
+    //   using one tmux to create and another to attach would
+    //   silently fail or, worse, partially work. The registry is the
+    //   source of truth.
+    //
+    //   When useTmux is true the registry must have a binary (the
+    //   `isAvailable()` gate above only flips true after
+    //   `detectAvailability()` confirmed one), so the null coalesce
+    //   below is defensive against future code paths that bypass
+    //   that gate.
+    const registryBinary = this.tmuxRegistry?.getBinary() ?? undefined
     const session = new TerminalSession({
       cwd: options.cwd,
       cols: initialSize.cols,
       rows: initialSize.rows,
       runtime: useTmux ? 'tmux' : 'direct',
       tmuxSessionName: tmuxSessionName ?? undefined,
-      tmuxBinary: useTmux ? this.tmuxRegistry?.getBinary() : undefined,
+      tmuxBinary: useTmux ? registryBinary : undefined,
     })
 
     // Initialize an empty buffer entry NOW, before start() fires any

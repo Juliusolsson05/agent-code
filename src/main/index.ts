@@ -136,14 +136,17 @@ async function startApp(): Promise<void> {
   //   third_party/tmux/). Falling back to whatever `tmux` resolves on
   //   PATH would re-introduce the exact "works on my machine"
   //   pathology that bundling was meant to fix — different versions,
-  //   incompatible session formats, Homebrew dylib drift. If the
-  //   bundled binary can't be resolved (dev build without
-  //   `runtime:prepare:mac`, or a corrupted asar.unpacked), tmux
-  //   availability resolves to false and terminals fall back to
-  //   direct PTY mode — the same behaviour as a machine without tmux
-  //   installed. No silent system-tmux usage.
+  //   incompatible session formats, Homebrew dylib drift.
+  //
+  //   When the bundled binary cannot be resolved (dev build without
+  //   `runtime:prepare:mac`, or a corrupted asar.unpacked), we pass
+  //   `tmuxBinary: undefined` to TmuxRegistry. The registry then
+  //   short-circuits `detectAvailability()` to `false` WITHOUT
+  //   spawning anything — terminals fall back to direct-PTY mode,
+  //   same as a machine without tmux installed. No silent
+  //   system-tmux usage, no PATH lookup, no sentinel-string trickery.
   const bundledTmux = await resolveBundledTool('tmux')
-  tmuxRegistry = new TmuxRegistry({ tmuxBinary: bundledTmux ?? 'tmux-bundled-missing' })
+  tmuxRegistry = new TmuxRegistry({ tmuxBinary: bundledTmux ?? undefined })
   const tmuxDetectStarted = performance.now()
   const tmuxAvailable = await tmuxRegistry.detectAvailability()
   performanceService.record({

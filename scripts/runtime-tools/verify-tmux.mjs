@@ -7,20 +7,35 @@
 //   node scripts/runtime-tools/verify-tmux.mjs            # warn on missing
 //   node scripts/runtime-tools/verify-tmux.mjs --strict   # fail on missing or broken
 //
-// "Verify" here means three things:
-//   1. The binary file exists and is executable.
-//   2. `tmux -V` reports the version pinned in manifest.json (cheap
-//      sanity that the right artifact landed at the right path).
-//   3. `otool -L` on macOS confirms the binary does NOT link any
-//      Homebrew dylib — the whole point of bundling is that we
-//      don't rely on the user's Homebrew install.
+// Strict verification has three layers:
 //
-// Steps 2 and 3 are the load-bearing checks. A future change that
-// silently swaps the upstream source for the Homebrew binary would
-// pass a sha256 hash check (because we don't store one for the
-// extracted binary), but it would fail (3). That's the regression
-// gate this script exists to enforce.
+//   1. Content identity (every arch): sha256 of the cached binary
+//      must equal `manifest.platforms.<key>.binarySha256`. This is
+//      the load-bearing check and the only one that works
+//      cross-arch — a release builder on arm64 still gets real
+//      tamper detection for the x86_64 binary it just fetched,
+//      without needing Rosetta to spawn it.
+//
+//   2. Runtime smoke test (native arch only): `tmux -V` must include
+//      the pinned version string. Catches "hash matches but the OS
+//      refuses to exec" failures. Skipped on non-native because
+//      spawning a cross-arch Mach-O on a clean macOS without Rosetta
+//      fails with "Bad CPU type in executable".
+//
+//   3. Linkage gate (darwin, native arch only): `otool -L` must
+//      report no Homebrew dylib references. The whole point of
+//      bundling is that we never link against the user's Homebrew
+//      install; a future change that silently swapped the upstream
+//      source for the Homebrew binary would pass (1) only if its
+//      hash happened to match, which it would not, and would also
+//      fail this check.
+//
+// The presence-only mode the previous version used for non-native
+// arch was a hole: a corrupted or swapped x86_64 binary on an arm64
+// builder would slip past strict verification. Hash-checking closes
+// that.
 
+import { createHash } from 'node:crypto'
 import { access, readFile, stat } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -37,7 +52,7 @@ async function main() {
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
 
   let problems = 0
-  for (const [platformKey] of Object.entries(manifest.platforms)) {
+  for (const [platformKey, platform] of Object.entries(manifest.platforms)) {
     const binary = join(cacheRoot, platformKey, manifest.executableInsideArchive)
 
     try {
@@ -49,15 +64,36 @@ async function main() {
       continue
     }
 
+    if (!platform.binarySha256) {
+      console.error(
+        `[verify-tmux] ${platformKey}: manifest is missing binarySha256. ` +
+          `Compute and pin it before this script can validate the cache.`,
+      )
+      problems++
+      continue
+    }
+
+    const buf = await readFile(binary)
+    const digest = createHash('sha256').update(buf).digest('hex')
+    if (digest !== platform.binarySha256) {
+      console.error(
+        `[verify-tmux] ${platformKey}: binary hash mismatch:\n` +
+          `  manifest: ${platform.binarySha256}\n` +
+          `  on-disk:  ${digest}`,
+      )
+      problems++
+      continue
+    }
+
     if (platformKey !== currentPlatformKey()) {
-      // We can't `tmux -V` a cross-arch binary. The sha256 hash on
-      // the manifest covers the *archive*, not the extracted binary,
-      // so there is no manifest hash to compare against for the
-      // extracted file. Cross-platform validation is therefore
-      // limited to "file exists and is executable" — the build host
-      // gets the full version + linkage check for its native arch,
-      // and that's the case that matters most.
-      console.log(`[verify-tmux] OK ${platformKey} (presence only; cross-arch)`)
+      // Cross-arch: we trust the hash check above and skip the spawn
+      // + linkage checks because they require executing the binary,
+      // which a clean Apple-Silicon host cannot do for an x86_64
+      // Mach-O (and vice versa) without Rosetta. The hash gate is
+      // sufficient: a swapped or corrupted cross-arch binary would
+      // not match the pinned hash regardless of whether we can run
+      // it.
+      console.log(`[verify-tmux] OK ${platformKey} (hash matches; cross-arch)`)
       continue
     }
 
@@ -82,7 +118,7 @@ async function main() {
       }
     }
 
-    console.log(`[verify-tmux] OK ${platformKey} (${manifest.version}, no Homebrew linkage)`)
+    console.log(`[verify-tmux] OK ${platformKey} (${manifest.version}, hash + linkage clean)`)
   }
 
   if (problems > 0) {

@@ -8,12 +8,14 @@
     "darwin-arm64": {
       "filename": "tmux-{version}-macos-arm64.tar.gz",
       "sha256": "12b5b9f8696e1286897d946649c0a80d0169dd76e018d34476a1fbd34de89a0f",
-      "bytes": 623838
+      "bytes": 623838,
+      "binarySha256": "222c271765051c8c9131584ce3ead1725d51f6a53ba173b9fa035ef1b4f782f8"
     },
     "darwin-x86_64": {
       "filename": "tmux-{version}-macos-x86_64.tar.gz",
       "sha256": "b9b12eaeba43acf5671acf3857d947525440b544185a8db34ea557199a090251",
-      "bytes": 650501
+      "bytes": 650501,
+      "binarySha256": "3dab537348573b371bfc70bda07a75557d85edc0c5a630def04c86308fb9fd41"
     }
   }
 }
