@@ -76,6 +76,7 @@ type Props = {
   toggleDevDebugPanel: () => void
   togglePerformancePanel: () => void
   toggleGlobalEditor: () => void
+  toggleFileTreeVisible: () => void
   enterDispatchMode: () => Promise<void> | void
   enterGlobalDispatch: () => Promise<void> | void
   exitDispatchMode: () => void
@@ -99,6 +100,7 @@ type Props = {
   devDebugPanelOpen: boolean
   performancePanelOpen: boolean
   globalEditorOpen: boolean
+  fileTreeVisible: boolean
   dispatchModeEnabled: boolean
   globalDispatchEnabled: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
@@ -137,6 +139,7 @@ export function CommandPalette({
   toggleDevDebugPanel,
   togglePerformancePanel,
   toggleGlobalEditor,
+  toggleFileTreeVisible,
   enterDispatchMode,
   enterGlobalDispatch,
   exitDispatchMode,
@@ -160,6 +163,7 @@ export function CommandPalette({
   devDebugPanelOpen,
   performancePanelOpen,
   globalEditorOpen,
+  fileTreeVisible,
   dispatchModeEnabled,
   globalDispatchEnabled,
   setDangerousAgentsEnabled,
@@ -302,6 +306,7 @@ export function CommandPalette({
         toggleDevDebugPanel,
         togglePerformancePanel,
         toggleGlobalEditor,
+        toggleFileTreeVisible,
         enterDispatchMode,
         enterGlobalDispatch,
         exitDispatchMode,
@@ -335,6 +340,7 @@ export function CommandPalette({
         devDebugPanelOpen,
         performancePanelOpen,
         globalEditorOpen,
+        fileTreeVisible,
         dispatchModeEnabled,
         globalDispatchEnabled,
       },
@@ -359,6 +365,7 @@ export function CommandPalette({
       toggleDevDebugPanel,
       togglePerformancePanel,
       toggleGlobalEditor,
+      toggleFileTreeVisible,
       enterDispatchMode,
       enterGlobalDispatch,
       exitDispatchMode,
@@ -390,6 +397,7 @@ export function CommandPalette({
       devDebugPanelOpen,
       performancePanelOpen,
       globalEditorOpen,
+      fileTreeVisible,
       dispatchModeEnabled,
       globalDispatchEnabled,
     ],

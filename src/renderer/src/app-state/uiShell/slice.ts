@@ -32,6 +32,11 @@ export const createUiShellSlice: StateCreator<
   promptSearchOpen: false,
   agentActivityOpen: false,
   rewindPromptSessionId: null,
+  // Default keeps the dispatch list at 25% (matching the
+  // previous-hardcoded `basis-1/4`) so the migration is visually a
+  // no-op. The clamp range in setDispatchListRatio is what enforces
+  // sane bounds when the user actually drags the splitter.
+  dispatchListRatio: 0.25,
 
   openCommandPalette: () =>
     set({ commandPaletteOpen: true }, false, 'uiShell/openCommandPalette'),
@@ -143,6 +148,23 @@ export const createUiShellSlice: StateCreator<
       state => ({ globalEditorOpen: !state.globalEditorOpen }),
       false,
       'uiShell/toggleGlobalEditor',
+    ),
+
+  // WHY clamp range [0.15, 0.5]:
+  //   Below 0.15 the dispatch row titles are unreadably truncated
+  //   (the existing min-w on each row is 220px, so percentages below
+  //   that just push the agent pane horizontally without giving the
+  //   list more usable space). Above 0.5 the agent pane — the thing
+  //   the user is actually working in — gets squeezed below half the
+  //   screen, which defeats the purpose of dispatch mode. The cap
+  //   isn't a moral judgment, it's a "this stops being useful"
+  //   threshold; loosen it later if real usage shows the bounds are
+  //   wrong.
+  setDispatchListRatio: ratio =>
+    set(
+      { dispatchListRatio: Math.min(0.5, Math.max(0.15, ratio)) },
+      false,
+      'uiShell/setDispatchListRatio',
     ),
 
   openPromptSearch: () =>

@@ -52,6 +52,7 @@ export type UiShellSlice = UiShellState & {
   openGlobalEditor: () => void
   closeGlobalEditor: () => void
   toggleGlobalEditor: () => void
+  setDispatchListRatio: (ratio: number) => void
   openPromptSearch: () => void
   closePromptSearch: () => void
   openAgentActivity: () => void

@@ -99,4 +99,22 @@ export type UiShellState = {
    *  See `RewindToPromptModal` + the parent plan doc for the full
    *  contract. */
   rewindPromptSessionId: SessionId | null
+  /** Splitter ratio between the dispatch agent list and the active
+   *  agent pane in `DispatchLayout`. 0..1, where 0.25 means the list
+   *  is 25% of the available width. Clamped to [0.15, 0.5] when the
+   *  setter is called so the user can't drag the list narrower than
+   *  ~15% (rows would be unreadably truncated) or wider than half
+   *  (the agent pane is what the user is actually working with;
+   *  letting the list take more space defeats the purpose of
+   *  dispatch).
+   *
+   *  WHY uiShell instead of workspace state: the ratio is transient
+   *  UI chrome — like splitter positions in any editor, it belongs
+   *  to "how the user has the window laid out right now," not to
+   *  the saved workspace contents. In-memory only; lost on app
+   *  reload, same policy as `globalEditor.splitterRatio` and the
+   *  other panel-open flags here. If we ever want to persist it,
+   *  this comment is the single load-bearing place that decision
+   *  was made. */
+  dispatchListRatio: number
 }

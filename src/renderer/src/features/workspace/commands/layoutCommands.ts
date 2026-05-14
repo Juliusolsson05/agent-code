@@ -99,4 +99,30 @@ export const layoutCommands: CommandDef[] = [
     }),
     run: ({ ui }) => ui.toggleGlobalEditor(),
   },
+  {
+    // WHY a dedicated command rather than a setting:
+    //   The file tree is THE most prominent piece of editor chrome
+    //   and the one most-likely-to-be-toggled (some users live in
+    //   tabs-only, opening files via Cmd+P; others want the tree
+    //   always-on as a project map). Surfacing the toggle in the
+    //   palette puts it one keystroke from any state instead of
+    //   buried under Settings.
+    //
+    // WHY gated by `globalEditorOpen`:
+    //   The command only does anything when the overlay is mounted.
+    //   Showing it in the palette while the overlay is off would be
+    //   a dead command — the user toggles it, nothing visible
+    //   happens, they assume it broke. Gating it via `when` makes
+    //   the command appear only in contexts where it's actionable.
+    id: 'toggle-file-tree',
+    title: 'File Tree',
+    description: '**What it does:** Shows or hides the file tree inside the **Global Editor** overlay.\n\n**Use when:** You want more horizontal room for the code area, or you prefer to open files via tabs / search rather than browsing.\n\n**Notes:** Only available while **Global Editor** is on. The choice is global (not per-project) — once hidden, the tree stays hidden across every project until you turn it back on.',
+    keywords: ['file tree', 'explorer', 'sidebar', 'editor', 'tree'],
+    when: ({ flags }) => flags.globalEditorOpen,
+    getState: ({ flags }) => ({
+      label: flags.fileTreeVisible ? 'On' : 'Off',
+      tone: flags.fileTreeVisible ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleFileTreeVisible(),
+  },
 ]
