@@ -268,6 +268,33 @@ export type SessionRuntime = {
   recentScreenMarkdown: string
   streamingBaseline: string | null
   entries: Entry[]
+  /** Total count of JSONL records this session has produced — the
+   *  denominator the ScrollIndicator above the composer shows.
+   *
+   *  WHY this lives separately from `entries.length`:
+   *  `entries` is the lazy-load window. It holds the current eager
+   *  tail plus whatever older history has been paged in by the
+   *  user's upward scroll, capped well below the on-disk total in
+   *  long conversations. Reading the indicator off `entries.length`
+   *  would make it jitter every time the feed pages old entries in
+   *  or out — the exact failure shape that drove #93. `totalEntries`
+   *  is "how big is the conversation on disk", which is what the
+   *  user actually wants the indicator to answer.
+   *
+   *  Lifecycle: seeded from `loadInitialHistory.totalEntries` at
+   *  initial-load time, then incremented by `appended.length` on
+   *  every live `jsonl-entries` IPC burst that produces real new
+   *  entries (the `seen` UUID set in useIpcSubscriptions filters
+   *  out replay-of-already-known entries, so `appended.length` is
+   *  exactly "entries newly committed to disk since we last looked").
+   *  Older-history pagination does NOT change this — those entries
+   *  were already in the total at resume time. Optimistic user
+   *  rows do NOT change this — they are transient UI placeholders;
+   *  the real entry's later JSONL append will bump the count.
+   *
+   *  0 for terminal panes and fresh sessions; the indicator falls
+   *  back to a single number when this is 0. */
+  totalEntries: number
   awaitingAssistant: boolean
   queuedMessages: QueuedMessage[]
   exited: number | null
@@ -478,6 +505,7 @@ export function emptyRuntime(): SessionRuntime {
     recentScreenMarkdown: '',
     streamingBaseline: null,
     entries: [],
+    totalEntries: 0,
     awaitingAssistant: false,
     queuedMessages: [],
     exited: null,

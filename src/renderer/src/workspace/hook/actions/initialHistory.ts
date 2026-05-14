@@ -208,6 +208,14 @@ export async function loadInitialHistoryForSession({
           entries: initialEntries.length > 0
             ? [...initialEntries, ...current.entries]
             : current.entries,
+          // Seed totalEntries from the loader. The loader counts every
+          // usable JSONL record at read time (parsed.entries.length
+          // before the tail slice), so this is the honest denominator
+          // for "you are at entry X of Y" the moment the session opens.
+          // Falls back to the visible-buffer length when the loader
+          // didn't supply a count — e.g. when initial-history was
+          // called for a session with no on-disk transcript yet.
+          totalEntries: chunk.totalEntries ?? initialEntries.length,
           historyOldestMarker: initialOldestMarker ?? current.historyOldestMarker,
           hasOlderHistory: chunk.hasMore,
           transcriptStatus: 'ready',

@@ -1235,6 +1235,22 @@ export function useIpcSubscriptions(
               entries: appended.length > 0 || reconciledOptimisticText !== null
                 ? [...baseEntries, ...appended]
                 : current.entries,
+              // Bump totalEntries by however many real entries just
+              // landed via this burst. `appended` is already deduped
+              // against the `seen` UUID set seeded from the initial
+              // history chunk, so it specifically excludes replay of
+              // entries we already counted. The optimistic-reconcile
+              // case doesn't need adjustment either: we never counted
+              // the optimistic toward totalEntries when it was first
+              // pushed (it's a transient UI placeholder), so when the
+              // real entry lands and replaces it the total grows by
+              // exactly one. The whole point of this field is "how
+              // much work has happened on disk" — the ScrollIndicator
+              // above the composer reads it as the denominator so the
+              // user can tell at a glance how much further the
+              // conversation has progressed while they were focused
+              // on another pane.
+              totalEntries: current.totalEntries + appended.length,
               historyOldestMarker: oldestMarker,
               bootstrapping: true,
               pendingCompaction,

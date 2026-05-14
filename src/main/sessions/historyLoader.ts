@@ -33,6 +33,22 @@ export type InitialHistoryChunkRequest = Omit<HistoryChunkRequest, 'beforeMarker
 export type HistoryChunk = {
   entries: Record<string, unknown>[]
   hasMore: boolean
+  // Total count of usable JSONL records in the on-disk transcript at
+  // the moment this chunk was read. Set on initial-load chunks (where
+  // we parse the whole file anyway to slice the tail), omitted on
+  // older-history pagination (which intentionally walks just the
+  // window the renderer asked for and doesn't have the full count
+  // handy — the renderer keeps its own running total from the
+  // initial load + live appends).
+  //
+  // WHY it lives on the chunk and not as a separate IPC: the renderer
+  // already round-trips through this shape, and `readTranscriptEntries`
+  // already pays the cost of parsing every line to pick the tail
+  // window. Adding an explicit count IPC would re-read the file for
+  // no benefit. If/when this loader moves to a streaming reader (per
+  // PR #87's streamJsonl utility) the field becomes a streamed line
+  // counter — same contract, cheaper implementation.
+  totalEntries?: number
 }
 
 function extractClaudeHistoryMarker(entry: Record<string, unknown>): string | null {
@@ -224,11 +240,11 @@ export async function loadInitialHistoryChunk(
     const parsed = await readTranscriptEntries(params)
     if (!parsed.filePath) {
       span.end({ result: 'missing-file' })
-      return { entries: [], hasMore: false }
+      return { entries: [], hasMore: false, totalEntries: 0 }
     }
     if (parsed.entries.length === 0) {
       span.end({ result: 'empty-or-read-failed', filePath: parsed.filePath })
-      return { entries: [], hasMore: false }
+      return { entries: [], hasMore: false, totalEntries: 0 }
     }
 
     const start = Math.max(0, parsed.entries.length - params.limit)
@@ -241,7 +257,11 @@ export async function loadInitialHistoryChunk(
       returned: entries.length,
       hasMore: start > 0,
     })
-    return { entries, hasMore: start > 0 }
+    // totalEntries is the count of every usable JSONL record in the
+    // file at this moment — what the renderer uses as the denominator
+    // for "you are at entry X of Y". This is the same value `parsed`
+    // already produced; we just stop throwing it away after slicing.
+    return { entries, hasMore: start > 0, totalEntries: parsed.entries.length }
   } catch (err) {
     span.fail(err)
     throw err
