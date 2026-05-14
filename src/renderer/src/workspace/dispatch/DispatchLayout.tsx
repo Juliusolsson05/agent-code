@@ -273,9 +273,23 @@ const DispatchAgentList = memo(function DispatchAgentList({
   }, [activeSessionId, groups])
 
   return (
+    // WHY h-full w-full instead of `basis-1/4 min-w-[220px]
+    // max-w-[420px] border-r`:
+    //   The aside used to be the flex child that owned its own
+    //   width (basis-1/4 plus a 220..420px clamp) AND drew the
+    //   right border between itself and the active-agent pane.
+    //   After the splitter rewrite, the wrapping <div> in
+    //   DispatchLayout sets the resolved width (style.width =
+    //   dispatchListRatio * 100%) and owns the right border —
+    //   keeping the basis/max-width here capped the rendered rows
+    //   at 420px even when the user dragged the splitter past that
+    //   threshold (visible symptom: empty canvas to the right of
+    //   the rows with the inner aside's right border floating mid
+    //   pane). The ratio clamp in setDispatchListRatio [0.15, 0.5]
+    //   is the real bound now; the aside just fills its parent.
     <aside
       ref={listRef}
-      className="basis-1/4 min-w-[220px] max-w-[420px] min-h-0 border-r border-border bg-surface overflow-y-auto [contain:layout_paint]"
+      className="h-full w-full min-h-0 bg-surface overflow-y-auto [contain:layout_paint]"
     >
       <div
         data-dispatch-list-header="true"
