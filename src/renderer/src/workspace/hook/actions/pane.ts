@@ -31,6 +31,7 @@ import {
   flattenDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 
 import type {
@@ -867,12 +868,21 @@ export function usePaneActions(
   // Bury: remove the focused pane from the visible layout without
   // killing the underlying session. The session keeps running in
   // the background and remains eligible for revive.
+  //
+  // WHY commandTargetSessionIdForState instead of tab.focusedSessionId:
+  // tab.focusedSessionId has a "must be a leaf in tab.root" invariant —
+  // it's grid-only. In Dispatch Mode the user has a row selected, not
+  // a grid focus, and reading tab.focusedSessionId silently opens the
+  // bury prompt on whatever grid pane is focused underneath the
+  // visible dispatch row — exactly the bug class issue #94 tracks.
+  // Routing through commandTargetSessionIdForState makes Bury agree
+  // with every other "act on the visible thing" command (close,
+  // copy-assistant, scroll-to-latest, switch-provider, reload, rewind,
+  // soft-reload-view — all already use this resolver).
   const requestBuryFocused = useCallback(() => {
-    const tab = refs.stateRef.current.tabs.find(
-      t => t.id === refs.stateRef.current.activeTabId,
-    )
-    if (!tab) return
-    openBuryPrompt(tab.focusedSessionId)
+    const sessionId = commandTargetSessionIdForState(refs.stateRef.current)
+    if (!sessionId) return
+    openBuryPrompt(sessionId)
   }, [openBuryPrompt, refs.stateRef])
 
   const buryFocused = useCallback(
@@ -886,6 +896,16 @@ export function usePaneActions(
       // Resolve the owning tab from the target session instead.
       const snapshot = refs.stateRef.current
       const activeTab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+      // The `?? activeTab?.focusedSessionId` fallback is intentionally
+      // defensive belt-and-suspenders: every current caller passes an
+      // explicit `targetSessionId` (the bury-prompt modal in App.tsx
+      // owns the resolved id at confirm time; requestBuryFocused
+      // resolves it via commandTargetSessionIdForState before opening
+      // the prompt). The fallback exists so a future caller that
+      // forgets to pass an id doesn't no-op silently — but it MUST
+      // NOT become the primary path, because activeTab.focusedSessionId
+      // is grid-only and would re-introduce the Dispatch-misses-target
+      // bug from #94.
       const targetId = targetSessionId ?? activeTab?.focusedSessionId
       if (!targetId) return
 
