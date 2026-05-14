@@ -500,20 +500,63 @@ export function useComposerKeybinds({
       return
     }
 
-    // Fallback: any other Up/Down (not cycling, not at top/bottom
-    // row, or with a modifier) falls through to the old PTY-
-    // forward path so CC's own history / caret navigation still
-    // reaches it when appropriate.
-    if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      if (!backendReady) { blockBackendWrite(); return }
-      await send('\x1b[A')
-      return
-    }
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      if (!backendReady) { blockBackendWrite(); return }
-      await send('\x1b[B')
+    // ---- Up/Down fallback after the prompt-history gates ----
+    //
+    // History cycling above is intentionally gated on an empty
+    // composer (#116 design note: the bash-style "cycle into past
+    // prompts even with a partial draft" was rejected as confusing —
+    // see the cycling block above). The OLD fallback here forwarded
+    // every plain ArrowUp/Down to the PTY as `\x1b[A` / `\x1b[B`,
+    // which meant typing into a multi-line draft and trying to move
+    // the caret up didn't move the caret — it sent an arrow escape
+    // to the backend instead, while the textarea sat motionless. The
+    // composer behaved like a one-line input model even though the
+    // textarea was perfectly capable of multi-line editing.
+    //
+    // The new shape preserves three real use cases and drops the
+    // fourth (vestigial) one:
+    //
+    //   1. Blocking conditions (approval overlay etc.) still need
+    //      arrows to reach the backend, because the overlay UX is
+    //      driven by the TUI selection menu underneath. Same
+    //      preventDefault + send as before.
+    //   2. Empty composer + ArrowUp/Down (and not cycling, e.g.
+    //      because history is empty) → forward to backend. Some
+    //      providers care; we never want to fight them when there's
+    //      literally nothing in the composer to navigate within.
+    //   3. Modifier combos (Shift/Ctrl/Cmd/Alt + Up/Down) are
+    //      deliberately NOT handled here anymore. The previous code
+    //      forwarded them to the PTY under the theory of "OS line-
+    //      navigation shortcuts reaching CC." In practice that broke
+    //      the OS expectation that Cmd+ArrowUp jumps the caret to
+    //      the top of the textarea on macOS, which is exactly what
+    //      a user editing a long draft expects. Letting the browser
+    //      handle modifier combos restores both that expectation
+    //      and the rest of the standard caret-navigation suite.
+    //   4. (Dropped) plain ArrowUp/Down with content present → no
+    //      longer preventDefault'd. Browser handles it natively, so
+    //      the caret moves up/down within the multi-line draft.
+    //
+    // We can re-add modifier-forwarding later if a specific provider
+    // breaks, but for the current Claude/Codex headless backends the
+    // PTY is not consuming arrow escapes from the composer at all.
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      const seq = e.key === 'ArrowUp' ? '\x1b[A' : '\x1b[B'
+      if (hasBlockingCondition) {
+        e.preventDefault()
+        if (!backendReady) { blockBackendWrite(); return }
+        await send(seq)
+        return
+      }
+      if (input === '' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault()
+        if (!backendReady) { blockBackendWrite(); return }
+        await send(seq)
+        return
+      }
+      // Composer has content (or a modifier is held): let the
+      // browser handle it — caret moves up/down within the textarea,
+      // Cmd+ArrowUp jumps to the start, etc.
       return
     }
     if (e.key === 'Tab') {
