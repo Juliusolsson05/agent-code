@@ -56,4 +56,15 @@ assert(
   'unknown defaultWorkspaceMode should fall back to grid',
 )
 
+// fontFamily: default + valid pick + bogus fallback. Same shape as
+// the existing mode/accent/workspace-mode coverage; the field is
+// curated so the validation surface is just "id is in the list".
+assert(defaults.fontFamily === 'jetbrains-mono', 'fontFamily should default to jetbrains-mono')
+
+const firaPick = coerceSettings({ fontFamily: 'fira-code' })
+assert(firaPick.fontFamily === 'fira-code', 'fontFamily should accept a curated id')
+
+const bogusFont = coerceSettings({ fontFamily: 'comic-sans' })
+assert(bogusFont.fontFamily === 'jetbrains-mono', 'unknown fontFamily should fall back to default')
+
 console.log('settings coercion ok')

@@ -2,6 +2,11 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
+import {
+  THEME_CHANGED_EVENT,
+  getActiveCodeFontFamily,
+} from '@renderer/app-state/settings/theme'
+
 type Props = {
   sessionId: string
   active: boolean
@@ -41,13 +46,19 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
     let resizeObserver: ResizeObserver | null = null
     let rafId: number | null = null
     let disposed = false
+    // Tracked outside the try so cleanup detaches the listener whether
+    // or not mount made it past Terminal construction.
+    let onThemeChangedListener: ((e: Event) => void) | null = null
 
     try {
       term = new Terminal({
         cursorBlink: true,
         convertEol: false,
-        fontFamily:
-          '"JetBrains Mono", ui-monospace, Menlo, Monaco, monospace',
+        // See TerminalLeaf.tsx for the full rationale — xterm renders
+        // to a canvas and can't read CSS variables, so we resolve the
+        // user-picked font through the settings/theme layer and re-
+        // apply via the THEME_CHANGED_EVENT listener below.
+        fontFamily: getActiveCodeFontFamily(),
         fontSize: 10,
         scrollback: 2000,
         theme: {
@@ -101,6 +112,15 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
         attachedBackfillDone = true
         term.focus()
       })
+
+      // Live font updates — see TerminalLeaf.tsx for the rationale.
+      // applyTheme dispatches THEME_CHANGED_EVENT after mutating the
+      // CSS variable, so re-reading via getActiveCodeFontFamily here
+      // always sees the new value.
+      onThemeChangedListener = (): void => {
+        if (term) term.options.fontFamily = getActiveCodeFontFamily()
+      }
+      window.addEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[AgentInlineTerminal] xterm init failed:', err)
@@ -112,6 +132,9 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offPtyData?.()
+      if (onThemeChangedListener) {
+        window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
+      }
       void window.api.detachAgentPty(sessionId)
       term?.dispose()
       termRef.current = null

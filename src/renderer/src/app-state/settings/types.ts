@@ -75,6 +75,93 @@ export const WORKSPACE_MODES: WorkspaceModeMeta[] = [
 
 export type DictationProviderId = 'deepgram'
 
+// Font choice for the chrome AND the xterm panes. This is the single
+// source of truth for "what monospace face does Agent Code render in"
+// — both the CSS variable `--theme-font-code` (consumed via the
+// `font-code` Tailwind utility across every component) and the
+// xterm.js `fontFamily` config (consumed by TerminalLeaf and
+// AgentInlineTerminal) read from this setting through
+// `applyTheme` / `getActiveCodeFontFamily`.
+//
+// WHY a curated id union instead of a free-text font-family string:
+//   1. Validates cleanly at the persistence boundary — `coerceSettings`
+//      just checks membership in `FONT_FAMILIES` and falls back to the
+//      default on garbage / typo.
+//   2. Each entry carries its own fallback chain in `family`, so a
+//      user-chosen webfont that fails to load (offline, blocked CDN,
+//      stale cache) degrades to a sensible system mono instead of the
+//      browser's default proportional font.
+//   3. Lets us declare which entries need the Google Fonts `@import`
+//      bundle without runtime hacks — the `webFont` flag exists so a
+//      future maintainer who adds an entry knows whether they also
+//      need to add it to the `@import` URL in `styles.css`.
+//
+// Adding a new font: pick an id, write the meta below, AND add the
+// family to the Google Fonts @import URL in `styles.css:28` if
+// `webFont: true`.
+export type FontFamilyId =
+  | 'jetbrains-mono'
+  | 'fira-code'
+  | 'ibm-plex-mono'
+  | 'sf-mono'
+  | 'menlo'
+
+export type FontFamilyMeta = {
+  id: FontFamilyId
+  /** User-visible name in the picker. */
+  label: string
+  /** Exact value assigned to `--theme-font-code`. The leading family
+   *  is the preferred face; the trailing chain is the fallback so a
+   *  webfont that hasn't finished loading (or isn't available because
+   *  the user is offline / CDN-blocked) still renders monospace text
+   *  instead of falling all the way back to the browser's default
+   *  proportional font.
+   *
+   *  Quoting style note: family names that contain whitespace are
+   *  single-quoted; CSS keywords (ui-monospace, monospace) are
+   *  unquoted. xterm.js parses this same string verbatim, so the
+   *  format MUST be a valid CSS `font-family` declaration. */
+  family: string
+  /** True when the font is loaded from the Google Fonts CDN @import in
+   *  `styles.css`. Useful for the picker to surface a "requires
+   *  network" note, and as documentation for future-me about which
+   *  entries are tied to the @import URL. */
+  webFont: boolean
+}
+
+export const FONT_FAMILIES: FontFamilyMeta[] = [
+  {
+    id: 'jetbrains-mono',
+    label: 'JetBrains Mono',
+    family: "'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace",
+    webFont: true,
+  },
+  {
+    id: 'fira-code',
+    label: 'Fira Code',
+    family: "'Fira Code', ui-monospace, Menlo, Monaco, monospace",
+    webFont: true,
+  },
+  {
+    id: 'ibm-plex-mono',
+    label: 'IBM Plex Mono',
+    family: "'IBM Plex Mono', ui-monospace, Menlo, Monaco, monospace",
+    webFont: true,
+  },
+  {
+    id: 'sf-mono',
+    label: 'System (SF Mono)',
+    family: "ui-monospace, 'SF Mono', Menlo, Monaco, monospace",
+    webFont: false,
+  },
+  {
+    id: 'menlo',
+    label: 'Menlo',
+    family: "Menlo, ui-monospace, Monaco, monospace",
+    webFont: false,
+  },
+]
+
 export type Settings = {
   mode: ThemeMode
   contrast: boolean
@@ -136,6 +223,17 @@ export type Settings = {
   *  controls and removes the "terminal always mounted even when turned
   *  off" failure mode. */
   dispatchProjectTerminal: boolean
+  /** Monospace face used across the whole app — chrome (via the
+   *  `--theme-font-code` CSS variable consumed by the `font-code`
+   *  Tailwind utility) AND xterm panes (read via
+   *  `getActiveCodeFontFamily` in `theme.ts`). Applied live by
+   *  `applyTheme` on every settings change; no restart required.
+   *
+   *  Curated id union (see `FONT_FAMILIES`) rather than a free-text
+   *  family string so typos / corrupted localStorage can't break
+   *  rendering — `coerceSettings` falls back to the default on any
+   *  unknown id. */
+  fontFamily: FontFamilyId
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -153,4 +251,5 @@ export const DEFAULT_SETTINGS: Settings = {
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
   dispatchProjectTerminal: false,
+  fontFamily: 'jetbrains-mono',
 }

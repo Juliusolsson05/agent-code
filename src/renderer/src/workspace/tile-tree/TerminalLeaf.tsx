@@ -4,6 +4,10 @@ import { FitAddon } from '@xterm/addon-fit'
 
 import type { SessionId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import {
+  THEME_CHANGED_EVENT,
+  getActiveCodeFontFamily,
+} from '@renderer/app-state/settings/theme'
 
 // TerminalLeaf — one pane that hosts a plain shell session.
 //
@@ -94,6 +98,10 @@ export function TerminalLeaf({
     let onDataDisposable: { dispose(): void } | null = null
     let offTerminalData: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
+    // Tracked here (not inside the try block) so cleanup can detach
+    // the global event listener whether mount succeeded or failed
+    // before the listener was attached.
+    let onThemeChangedListenerRef: ((e: Event) => void) | null = null
 
     try {
       // Theme choice: leave xterm's default palette alone. The
@@ -110,8 +118,15 @@ export function TerminalLeaf({
       term = new Terminal({
         cursorBlink: true,
         convertEol: true,
-        fontFamily:
-          '"JetBrains Mono", ui-monospace, Menlo, Monaco, monospace',
+        // Pull the user-picked font from the central settings layer.
+        // xterm.js renders to a canvas, so it cannot read the
+        // `--theme-font-code` CSS variable directly — getActiveCodeFontFamily
+        // reads the variable's computed value (which applyTheme keeps in
+        // sync with `settings.fontFamily`) and returns a complete CSS
+        // font-family declaration including fallback chain. The live
+        // event listener below keeps this in sync if the user changes
+        // the font while the terminal is mounted.
+        fontFamily: getActiveCodeFontFamily(),
         fontSize: 13,
       })
       fit = new FitAddon()
@@ -238,6 +253,24 @@ export function TerminalLeaf({
         }
       })
       resizeObserver.observe(container)
+
+      // Live-update the xterm fontFamily when the user changes the
+      // global font setting. applyTheme dispatches THEME_CHANGED_EVENT
+      // AFTER mutating the CSS variable, so re-reading via
+      // getActiveCodeFontFamily here always sees the new value.
+      // xterm.js exposes `term.options.fontFamily` as a setter that
+      // triggers an internal re-measure + re-render — no manual fit
+      // needed because the cell-size change is what fit() responds to
+      // and the existing ResizeObserver covers any container resize
+      // that follows.
+      const onThemeChanged = (): void => {
+        if (term) term.options.fontFamily = getActiveCodeFontFamily()
+      }
+      window.addEventListener(THEME_CHANGED_EVENT, onThemeChanged)
+      // Capture the handler reference for the cleanup return below.
+      // We assign through the outer closure rather than a new local
+      // because the existing return () runs after this try block.
+      onThemeChangedListenerRef = onThemeChanged
     } catch (err) {
       // Defensive: if xterm.js initialization throws for any
       // reason (missing CSS, API mismatch, renderer misconfig,
@@ -255,6 +288,9 @@ export function TerminalLeaf({
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offTerminalData?.()
+      if (onThemeChangedListenerRef) {
+        window.removeEventListener(THEME_CHANGED_EVENT, onThemeChangedListenerRef)
+      }
       term?.dispose()
       termRef.current = null
       fitRef.current = null

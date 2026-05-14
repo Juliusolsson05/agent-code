@@ -1,9 +1,11 @@
 import {
   ACCENTS,
   DEFAULT_SETTINGS,
+  FONT_FAMILIES,
   THEME_MODES,
   WORKSPACE_MODES,
   type AccentId,
+  type FontFamilyId,
   type Settings,
 } from '@renderer/app-state/settings/types'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
@@ -52,6 +54,12 @@ export function coerceSettings(value: unknown): Settings {
     defaultWorkspaceMode: WORKSPACE_MODES.some(m => m.id === parsed.defaultWorkspaceMode)
       ? (parsed.defaultWorkspaceMode as Settings['defaultWorkspaceMode'])
       : DEFAULT_SETTINGS.defaultWorkspaceMode,
+    // Same membership-check pattern as accent/mode: garbage / typo / a
+    // removed font id from a future migration falls back to the default
+    // rather than crashing applyTheme with an undefined family string.
+    fontFamily: FONT_FAMILIES.some(f => f.id === parsed.fontFamily)
+      ? (parsed.fontFamily as FontFamilyId)
+      : DEFAULT_SETTINGS.fontFamily,
   }
 }
 
