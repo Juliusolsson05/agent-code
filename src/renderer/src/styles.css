@@ -22,7 +22,7 @@
  *     and focus ring pulls from this one token.
  *   - Tailwind v4 @theme inline binds utility classes (`bg-canvas`,
  *     `text-ink`, `text-accent`, `font-code`, …) to the tokens, so
- *     mode/accent changes cascade through the DOM with zero React work.
+ *     mode/accent/font changes cascade through the DOM with zero React work.
  */
 
 /* Curated web fonts available in the settings picker. Each family is
@@ -34,7 +34,7 @@
    new web-font option means extending both this URL AND
    `FONT_FAMILIES` in `app-state/settings/types.ts` (with
    `webFont: true`). */
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&family=JetBrains+Mono:wght@400;500;600;700&family=Roboto+Mono:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Ubuntu+Mono:wght@400;700&display=swap');
 
 @import "tailwindcss";
 
@@ -96,7 +96,12 @@
   --color-diff-add-fg: var(--theme-diff-add-fg);
   --color-diff-remove-fg: var(--theme-diff-remove-fg);
 
-  --font-code: var(--theme-font-code);
+  /* Historical name, global behavior. The app is monospace everywhere, so the
+     setting named "App Font" still feeds Tailwind's old `font-code` utility.
+     Keeping this alias means existing classes don't need a noisy rename while
+     the source-of-truth token (`--theme-app-font`) accurately says "whole app",
+     not "code blocks only". */
+  --font-code: var(--theme-app-font);
 
   /* Kill the default radius scale — we want sharp everywhere, so
      if anyone does reach for `rounded-*` by accident, it still collapses
@@ -157,9 +162,9 @@
   --theme-diff-add-fg: #4ade80;
   --theme-diff-remove-fg: #f87171;
 
-  /* --theme-font-code is set at runtime by `applyTheme` in
-     app-state/settings/theme.ts, sourced from the user's `fontFamily`
-     setting. It is deliberately NOT declared statically here:
+  /* --theme-app-font is set at runtime by `applyTheme` in
+     app-state/settings/theme.ts, sourced from the user's global
+     `fontFamily` setting. It is deliberately NOT declared statically here:
        - The inline style applied to <html> by applyTheme always wins
          specificity-wise, so a static declaration would only be visible
          during the brief window between first paint and applyTheme
@@ -169,7 +174,7 @@
          when adding fonts and forget that the source of truth is the
          FONT_FAMILIES array.
      The `:root` fallback for safety lives at the top of the rules
-     block — see CODE_FONT_CSS_VAR / FALLBACK_CODE_FONT_FAMILY in
+     block — see APP_FONT_CSS_VAR / FALLBACK_APP_FONT_FAMILY in
      theme.ts for the value used if everything else fails. */
 }
 
@@ -345,7 +350,7 @@ body,
   height: 100%;
   background: var(--theme-canvas);
   color: var(--theme-ink);
-  font-family: var(--theme-font-code);
+  font-family: var(--theme-app-font);
   font-feature-settings: 'ss01' on, 'cv11' on; /* JetBrains Mono alternates */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;

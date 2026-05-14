@@ -75,13 +75,11 @@ export const WORKSPACE_MODES: WorkspaceModeMeta[] = [
 
 export type DictationProviderId = 'deepgram'
 
-// Font choice for the chrome AND the xterm panes. This is the single
-// source of truth for "what monospace face does Agent Code render in"
-// — both the CSS variable `--theme-font-code` (consumed via the
-// `font-code` Tailwind utility across every component) and the
-// xterm.js `fontFamily` config (consumed by TerminalLeaf and
-// AgentInlineTerminal) read from this setting through
-// `applyTheme` / `getActiveCodeFontFamily`.
+// Font choice for the entire app. This is the single source of truth for
+// "what monospace face does Agent Code render in" — normal DOM inherits
+// `--theme-app-font`, old `font-code` Tailwind classes alias to that same
+// token, and canvas/metric-cached renderers (xterm.js + Monaco) read from
+// this setting through `applyTheme` / `getActiveAppFontFamily`.
 //
 // WHY a curated id union instead of a free-text font-family string:
 //   1. Validates cleanly at the persistence boundary — `coerceSettings`
@@ -101,16 +99,21 @@ export type DictationProviderId = 'deepgram'
 // `webFont: true`.
 export type FontFamilyId =
   | 'jetbrains-mono'
-  | 'fira-code'
-  | 'ibm-plex-mono'
-  | 'sf-mono'
-  | 'menlo'
+  | 'roboto-mono'
+  | 'space-mono'
+  | 'ubuntu-mono'
+  | 'courier-prime'
 
 export type FontFamilyMeta = {
   id: FontFamilyId
   /** User-visible name in the picker. */
   label: string
-  /** Exact value assigned to `--theme-font-code`. The leading family
+  /** Short picker hint that explains why this option exists. The font list is
+   *  intentionally tiny, so each face needs to earn its slot by offering a
+   *  visibly different texture instead of being yet another near-identical
+   *  modern coding mono. */
+  description: string
+  /** Exact value assigned to `--theme-app-font`. The leading family
    *  is the preferred face; the trailing chain is the fallback so a
    *  webfont that hasn't finished loading (or isn't available because
    *  the user is offline / CDN-blocked) still renders monospace text
@@ -133,32 +136,37 @@ export const FONT_FAMILIES: FontFamilyMeta[] = [
   {
     id: 'jetbrains-mono',
     label: 'JetBrains Mono',
+    description: 'Modern coding default',
     family: "'JetBrains Mono', ui-monospace, Menlo, Monaco, monospace",
     webFont: true,
   },
   {
-    id: 'fira-code',
-    label: 'Fira Code',
-    family: "'Fira Code', ui-monospace, Menlo, Monaco, monospace",
+    id: 'roboto-mono',
+    label: 'Roboto Mono',
+    description: 'Neutral and compact',
+    family: "'Roboto Mono', ui-monospace, Menlo, Monaco, monospace",
     webFont: true,
   },
   {
-    id: 'ibm-plex-mono',
-    label: 'IBM Plex Mono',
-    family: "'IBM Plex Mono', ui-monospace, Menlo, Monaco, monospace",
+    id: 'space-mono',
+    label: 'Space Mono',
+    description: 'Wide geometric',
+    family: "'Space Mono', ui-monospace, Menlo, Monaco, monospace",
     webFont: true,
   },
   {
-    id: 'sf-mono',
-    label: 'System (SF Mono)',
-    family: "ui-monospace, 'SF Mono', Menlo, Monaco, monospace",
-    webFont: false,
+    id: 'ubuntu-mono',
+    label: 'Ubuntu Mono',
+    description: 'Rounded humanist',
+    family: "'Ubuntu Mono', ui-monospace, Menlo, Monaco, monospace",
+    webFont: true,
   },
   {
-    id: 'menlo',
-    label: 'Menlo',
-    family: "Menlo, ui-monospace, Monaco, monospace",
-    webFont: false,
+    id: 'courier-prime',
+    label: 'Courier Prime',
+    description: 'Classic typewriter',
+    family: "'Courier Prime', ui-monospace, Menlo, Monaco, monospace",
+    webFont: true,
   },
 ]
 
@@ -223,11 +231,11 @@ export type Settings = {
   *  controls and removes the "terminal always mounted even when turned
   *  off" failure mode. */
   dispatchProjectTerminal: boolean
-  /** Monospace face used across the whole app — chrome (via the
-   *  `--theme-font-code` CSS variable consumed by the `font-code`
-   *  Tailwind utility) AND xterm panes (read via
-   *  `getActiveCodeFontFamily` in `theme.ts`). Applied live by
-   *  `applyTheme` on every settings change; no restart required.
+  /** Monospace face used across the whole app: inherited DOM text,
+   *  existing `font-code` Tailwind classes, Monaco code blocks, and
+   *  xterm panes all resolve through the same `--theme-app-font`
+   *  value. Applied live by `applyTheme` on every settings change; no
+   *  restart required.
    *
    *  Curated id union (see `FONT_FAMILIES`) rather than a free-text
    *  family string so typos / corrupted localStorage can't break
