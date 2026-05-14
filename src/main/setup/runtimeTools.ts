@@ -45,6 +45,7 @@ import { spawn } from 'node:child_process'
 import { constants as fsConstants } from 'node:fs'
 import {
   access,
+  chmod,
   mkdir,
   readFile,
   readdir,
@@ -101,40 +102,49 @@ export function getPlatformKey(): string | null {
 }
 
 /**
- * Cheap "do we ship a bundled archive for this tool on this platform"
+ * Cheap "do we ship a bundled artifact for this tool on this platform"
  * check. Used by the setup gate so it can hide the install prompt
- * without paying the cost of extracting the .app on every check.
+ * without paying the cost of any extraction work.
  *
  * Side-effect free except for the disk reads on the manifest +
- * archive paths.
+ * artifact paths.
  */
 export async function isBundledArchiveAvailable(
   tool: BundledToolId,
 ): Promise<boolean> {
-  if (tool !== 'mitmdump') return false
-  const platformKey = getPlatformKey()
-  if (!platformKey) return false
-  const manifest = await loadMitmproxyManifest()
-  if (!manifest) return false
-  const platform = manifest.platforms[platformKey]
-  if (!platform) return false
-  const archivePath = mitmproxyArchivePath(manifest, platformKey, platform)
-  return fileExists(archivePath)
+  if (tool === 'mitmdump') {
+    const platformKey = getPlatformKey()
+    if (!platformKey) return false
+    const manifest = await loadMitmproxyManifest()
+    if (!manifest) return false
+    const platform = manifest.platforms[platformKey]
+    if (!platform) return false
+    return fileExists(mitmproxyArchivePath(manifest, platformKey, platform))
+  }
+  if (tool === 'tmux') {
+    const platformKey = getPlatformKey()
+    if (!platformKey) return false
+    const manifest = await loadTmuxManifest()
+    if (!manifest) return false
+    if (!manifest.platforms[platformKey]) return false
+    return fileExists(tmuxBinaryPath(manifest, platformKey))
+  }
+  return false
 }
 
 /**
  * Resolve the absolute path to a bundled runtime tool's spawnable
- * executable, extracting the archive lazily on first call if needed.
+ * executable. For tools shipped as multi-file archives (mitmdump),
+ * extract lazily on first call. For single-binary tools (tmux), no
+ * extraction is needed — we return the asar-unpacked path directly.
  * Returns null when no bundled artifact exists for the current
  * platform/arch.
- *
- * PR 2 wires mitmdump end-to-end here. PR 3 will branch on `tool` and
- * route 'tmux' to a sibling single-binary copy path.
  */
 export async function resolveBundledTool(
   tool: BundledToolId,
 ): Promise<string | null> {
   if (tool === 'mitmdump') return resolveMitmdump()
+  if (tool === 'tmux') return resolveTmux()
   return null
 }
 
@@ -236,6 +246,100 @@ async function installMitmproxy(
     return null
   }
 }
+
+// ---------------------------------------------------------------------------
+// tmux resolver
+//
+// WHY tmux's path looks nothing like mitmproxy's despite both being
+// "bundled runtime tools":
+//   tmux is a single 1.6 MB Mach-O that links only to system dylibs
+//   guaranteed present on every macOS install (libSystem, libresolv —
+//   verified with `otool -L`). There is no nested .app, no Python
+//   framework, no PyInstaller symlinks. Once electron-builder
+//   asarUnpack drops the binary at a real filesystem path, that path
+//   is directly spawnable: there is nothing to "install" into
+//   userData. So `resolveTmux` is a plain "find + chmod + return"
+//   rather than the temp+rename+marker dance `resolveMitmdump` has to
+//   do. Two different shapes for two different artifact kinds is
+//   fine; the manifest schema and the public API stay identical.
+//
+// WHY we chmod defensively even though `copyFile` should preserve mode:
+//   `fs.copyFile` preserves POSIX mode bits, and electron-builder's
+//   asarUnpack pathway has not been observed to drop the exec bit on
+//   our own builds. But this resolver is called once at app startup,
+//   the cost is one syscall, and chmod-on-the-canonical-bundled-path
+//   is the kind of safety net that's much easier to keep than to
+//   re-add after a confusing "works in dev, broken in signed DMG"
+//   bug report. If we ever measure this as hot, drop it; until
+//   then, keep it cheap.
+type TmuxManifest = {
+  tool: 'tmux'
+  version: string
+  urlBase: string
+  archiveFormat: 'tar.gz'
+  executableInsideArchive: string
+  platforms: Record<
+    string,
+    { filename: string; sha256: string; bytes?: number }
+  >
+}
+
+async function resolveTmux(): Promise<string | null> {
+  const platformKey = getPlatformKey()
+  if (!platformKey) return null
+  const manifest = await loadTmuxManifest()
+  if (!manifest) return null
+  if (!manifest.platforms[platformKey]) return null
+
+  const binary = tmuxBinaryPath(manifest, platformKey)
+  if (!(await fileExists(binary))) return null
+
+  // chmod is cheap and idempotent; we don't bother caching whether
+  // we've already done it for this process. Skipping the chmod when
+  // the bit is already set would be a micro-optimization not worth
+  // the extra stat.
+  try {
+    await chmod(binary, 0o755)
+  } catch {
+    // If chmod fails (read-only filesystem in some sandboxed test
+    // environment?), fall through; the access check below will catch
+    // a genuinely non-executable file.
+  }
+  if (!(await isExecutable(binary))) return null
+  return binary
+}
+
+async function loadTmuxManifest(): Promise<TmuxManifest | null> {
+  const manifestPath = unpackAsarPath(
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'tmux', 'manifest.json'),
+  )
+  try {
+    const text = await readFile(manifestPath, 'utf8')
+    return JSON.parse(text) as TmuxManifest
+  } catch {
+    return null
+  }
+}
+
+function tmuxBinaryPath(
+  manifest: TmuxManifest,
+  platformKey: string,
+): string {
+  return unpackAsarPath(
+    join(
+      app.getAppPath(),
+      'out',
+      'main',
+      'runtime',
+      'tmux',
+      platformKey,
+      manifest.executableInsideArchive,
+    ),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// mitmproxy helpers (below)
 
 async function loadMitmproxyManifest(): Promise<MitmproxyManifest | null> {
   const manifestPath = unpackAsarPath(

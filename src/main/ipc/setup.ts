@@ -11,7 +11,12 @@ export function registerSetupIpc(): void {
   })
 
   ipcMain.handle('setup:install', async (_evt, target: SetupInstallTarget) => {
-    if (target !== 'tmux' && target !== 'mitmproxy') {
+    // tmux was dropped from the install pathway when bundled tmux
+    // (#120) became the only supported source. The remaining target
+    // is mitmproxy, which follows the same cleanup track and will
+    // disappear shortly. Keep this validation in step with
+    // SetupInstallTarget so renderer-side type checks remain useful.
+    if (target !== 'mitmproxy') {
       return {
         ok: false,
         target,

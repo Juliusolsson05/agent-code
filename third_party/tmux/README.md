@@ -1,81 +1,85 @@
 # third_party/tmux
 
-Pinned runtime artifact: a fully **static** `tmux` binary, shipped with
-packaged Agent Code builds so terminal-persistence (tmux-backed terminal
-panes) works on user machines without any Homebrew install.
+Pinned runtime artifact: a `tmux` binary, shipped with packaged
+Agent Code so terminal-pane persistence works on user machines
+without any Homebrew install.
 
-See issue [#120](https://github.com/Juliusolsson05/agent-code/issues/120) for
-the full plan.
+See issue [#120](https://github.com/Juliusolsson05/agent-code/issues/120)
+for the bundling plan; companion to [#119](https://github.com/Juliusolsson05/agent-code/issues/119)
+which did the same thing for `mitmdump`.
 
-## Why static, not Homebrew
+## Source
 
-The Homebrew `tmux` binary dynamically links three Homebrew dylibs
-(`libevent_core`, `libncursesw`, `libutf8proc`). Copying `/opt/homebrew/bin/tmux`
-into the app would fail to launch on a user machine that doesn't have those
-exact Homebrew paths. The two reasonable options are:
+Upstream [`tmux/tmux-builds`](https://github.com/tmux/tmux-builds) —
+the official prebuilt-binary repo maintained by the tmux project
+itself. macOS builds link only to `/usr/lib/libSystem.B.dylib` and
+`/usr/lib/libresolv.9.dylib`, which are guaranteed present on every
+macOS install. No Homebrew dependencies.
 
-1. Build static (chosen) — single ~1.5–2 MB binary, no external deps.
-2. Copy Homebrew binary + dylibs and rewrite `install_name`s — bigger, more
-   moving parts, fragile under codesigning.
+We deliberately do NOT roll our own static build:
 
-This directory captures option 1.
+- The upstream project already maintains a tested build pipeline.
+- Their builds are reproducible from their CI.
+- A custom build would mean owning libevent + ncurses + utf8proc
+  source pins, configure flags, terminfo data handling, and codesign
+  — all for a 1.6 MB binary that already exists upstream.
+
+The lifecycle proof script that originally motivated the static-build
+investigation (`tmux -V`, `new-session`, `send-keys`, `capture-pane`,
+`kill-session` all work without external dependencies, and `tput
+cols` inside the session returns a real number proving terminfo is
+healthy) passed cleanly against the upstream binary, so we adopt it
+as-is.
 
 ## What is committed
 
 ```
 third_party/tmux/
-  manifest.json   pinned tmux + libevent + ncurses + utf8proc versions
+  manifest.json   pinned version, per-arch archive sha256 + bytes
   README.md       this file
-  LICENSE.md      tmux ISC license (plus deps' license summary)
-  .gitignore      keeps cache/ and build/ out of git
+  LICENSE.md      tmux ISC license
+  .gitignore      keeps cache/ out of git
 ```
 
 ## What is NOT committed
 
-```
-third_party/tmux/cache/   final static tmux binary per platform/arch
-third_party/tmux/build/   transient build inputs/outputs during a static build
-```
+The downloaded archive and the extracted binary live under
+`third_party/tmux/cache/<platform>-<arch>/` and are produced on
+demand by `scripts/runtime-tools/fetch-tmux.mjs`. Binaries never
+enter git; the manifest plus the fetch script is the single source
+of truth.
 
-## Status (PR 1: scaffolding)
-
-The manifest currently has `sha256` placeholders set to `TBD-PR3`. The actual
-static build script and source-archive hashes land in PR 3 (issue #120).
-PR 1 only establishes the layout, manifest schema, and verifier scaffolding so
-PR 3 doesn't have to bikeshed any of that.
-
-## How it will work after PR 3
+## How to fetch / verify locally
 
 ```
-npm run runtime:build:tmux
+npm run runtime:fetch:tmux
 npm run runtime:verify
 ```
 
-`build-tmux.mjs` will:
+`fetch-tmux.mjs` downloads the pinned archive into a temp location,
+verifies the sha256 against `manifest.json`, extracts the inner
+`tmux` executable into `third_party/tmux/cache/<platform>-<arch>/tmux`,
+sets the executable bit, and discards the archive. The verify
+script re-checks the cache without re-downloading.
 
-1. Download pinned source tarballs for tmux + libevent + ncurses + utf8proc.
-2. Verify each source against `manifest.sources.<name>.sha256`.
-3. Configure each with `--enable-static --disable-shared`, build, and link
-   tmux against the static libs.
-4. Verify the final binary contains no Homebrew dylib references
-   (`otool -L bundled/tmux` must show only system libraries).
-5. Write the binary to `cache/<platform>-<arch>/tmux` and compute its sha256.
+## How version bumps work
 
-Before declaring success it also runs a lifecycle proof:
+A version bump is a single-file PR to `manifest.json`:
 
-```
-tmux -V
-otool -L cache/<platform>-<arch>/tmux        # must show no /opt/homebrew paths
-tmux -L agent-code-build-test -f /dev/null new-session -d -s t /bin/zsh
-tmux -L agent-code-build-test send-keys -t t 'echo $TERM; tput cols' Enter
-tmux -L agent-code-build-test capture-pane -t t -p
-tmux -L agent-code-build-test kill-session -t t
-```
+1. Edit `version`.
+2. Recompute each archive sha256 from the corresponding
+   `tmux-<ver>-macos-<arch>.tar.gz` asset on the matching
+   `tmux/tmux-builds` release.
+3. Update `bytes` to match.
+4. CI re-runs `fetch` + `verify` against the new hashes.
 
-If any of those fail, the build fails — we never ship a broken static tmux.
+That keeps the binary out of git history while making upgrades
+trivial to review.
 
 ## License
 
-tmux is ISC licensed. `libevent`, `ncurses`, and `utf8proc` ship under
-BSD-style / MIT-style licenses. All upstream license texts are reproduced in
-`LICENSE.md` so Agent Code's distribution complies with attribution.
+tmux is ISC licensed; the full text is reproduced in `LICENSE.md`.
+The upstream `tmux/tmux-builds` releases also ship a
+`LICENSES.tar.gz` covering the build-dependency licenses (libevent,
+ncurses, utf8proc); when we update the bundled binary we re-vet
+those licenses match what we ship.

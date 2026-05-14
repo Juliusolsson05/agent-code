@@ -31,7 +31,8 @@ import { registerAllIpc } from '@main/ipc/index.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
-import { getToolPath, initializeToolchain } from '@main/setup/toolchain.js'
+import { resolveBundledTool } from '@main/setup/runtimeTools.js'
+import { initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 
 // Main process — thin Electron host.
@@ -130,7 +131,22 @@ async function startApp(): Promise<void> {
   // child-process roundtrip on `tmux -V` — cheap enough to await
   // before any IPC is wired. Result is cached on the registry; call
   // sites use isAvailable() synchronously thereafter.
-  tmuxRegistry = new TmuxRegistry({ tmuxBinary: getToolPath('tmux', 'tmux') })
+  // WHY bundled-only with no PATH fallback:
+  //   Agent Code ships its own tmux 3.6a (see issue #120 and
+  //   third_party/tmux/). Falling back to whatever `tmux` resolves on
+  //   PATH would re-introduce the exact "works on my machine"
+  //   pathology that bundling was meant to fix — different versions,
+  //   incompatible session formats, Homebrew dylib drift.
+  //
+  //   When the bundled binary cannot be resolved (dev build without
+  //   `runtime:prepare:mac`, or a corrupted asar.unpacked), we pass
+  //   `tmuxBinary: undefined` to TmuxRegistry. The registry then
+  //   short-circuits `detectAvailability()` to `false` WITHOUT
+  //   spawning anything — terminals fall back to direct-PTY mode,
+  //   same as a machine without tmux installed. No silent
+  //   system-tmux usage, no PATH lookup, no sentinel-string trickery.
+  const bundledTmux = await resolveBundledTool('tmux')
+  tmuxRegistry = new TmuxRegistry({ tmuxBinary: bundledTmux ?? undefined })
   const tmuxDetectStarted = performance.now()
   const tmuxAvailable = await tmuxRegistry.detectAvailability()
   performanceService.record({

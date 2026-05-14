@@ -7,8 +7,11 @@ import type {
   SetupToolStatus,
 } from '@shared/types/setup'
 
+// tmux is no longer listed in the SetupGate because it ships as a
+// bundled runtime artifact (#120). mitmdump will follow when its
+// cleanup PR lands. Keep this map narrowly typed so a future type
+// change to SetupToolId/SetupInstallTarget surfaces here too.
 const OPTIONAL_INSTALL_TARGET: Partial<Record<SetupToolId, SetupInstallTarget>> = {
-  tmux: 'tmux',
   mitmdump: 'mitmproxy',
 }
 
