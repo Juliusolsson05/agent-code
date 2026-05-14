@@ -117,6 +117,12 @@ export function ComposerInput({
         <textarea
           ref={inputRef}
           rows={1}
+          // overflow-y is driven inline by useComposerAutoGrow: 'hidden'
+          // while the textarea is below its height cap, 'auto' once it
+          // hits the cap so the user can scroll inside their own long
+          // draft. We intentionally don't set overflow-hidden in the
+          // className anymore — that used to win against the inline
+          // style and trap long pastes invisibly.
           className={`
             w-full bg-canvas border
             ${focused ? 'border-accent' : 'border-border'}
@@ -124,7 +130,7 @@ export function ComposerInput({
             pl-6 ${showDictationActivity ? 'pr-16' : 'pr-2'} py-2 outline-none
             placeholder:text-muted
             transition-colors duration-150
-            resize-none overflow-hidden leading-[1.4]
+            resize-none leading-[1.4]
             font-code
           `}
           value={input}
