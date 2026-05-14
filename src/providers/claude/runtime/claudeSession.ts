@@ -197,10 +197,11 @@ export class ClaudeSession extends EventEmitter {
       // Resolve which mitmdump binary the proxy runtime should
       // spawn. Order of preference:
       //
-      //   1. process.env.CLAUDE_HEADLESS_MITMDUMP — handled inside
-      //      claude-code-headless' createProxyServer; we never look at
-      //      it here so the env-override semantics stay in exactly
-      //      one place.
+      //   1. process.env.CLAUDE_HEADLESS_MITMDUMP (or the legacy
+      //      CC_PROXY_TEST_MITMDUMP alias) — debug / instrumented
+      //      builds. Must win over everything else so contributors can
+      //      point this at a hand-built mitmdump without first un-
+      //      installing the bundled helper.
       //   2. Bundled artifact unpacked from the packaged app (#119).
       //      Resolves lazily; first call extracts the .app into
       //      userData, subsequent calls return the cached path.
@@ -208,15 +209,32 @@ export class ClaudeSession extends EventEmitter {
       //   4. claude-code-headless' own fallback chain (homebrew /
       //      /usr/local lookup) when we pass nothing.
       //
+      // WHY we check the env var here even though claude-code-headless
+      // also checks it: the package's check only runs when its caller
+      // (us) does NOT pass `mitmDumpPath`. If we eagerly resolved the
+      // bundled helper and passed it through, the env override would
+      // be silently shadowed — exactly the contract violation flagged
+      // in the runtimeTools.ts module header. We short-circuit here so
+      // bundled resolution and setup-cached lookup are both skipped
+      // whenever the env override is set; the package then sees no
+      // `mitmDumpPath`, falls into its own fallback chain, and uses
+      // the env override.
+      //
       // WHY we resolve here and not inside claude-code-headless:
       //   The reusable package must stay Electron-agnostic — it must
       //   not know about app.asar.unpacked or app.getPath('userData').
       //   Agent Code main owns the bundled-helper policy; the package
       //   just spawns whatever path it's handed.
-      const bundledMitmDump = await resolveBundledTool('mitmdump')
-      const setupMitmDump = bundledMitmDump
+      const envOverrideSet = Boolean(
+        process.env.CLAUDE_HEADLESS_MITMDUMP || process.env.CC_PROXY_TEST_MITMDUMP,
+      )
+      const bundledMitmDump = envOverrideSet
         ? null
-        : getToolPath('mitmdump', '') || null
+        : await resolveBundledTool('mitmdump')
+      const setupMitmDump =
+        envOverrideSet || bundledMitmDump
+          ? null
+          : getToolPath('mitmdump', '') || null
       const mitmDumpPath = bundledMitmDump ?? setupMitmDump ?? undefined
 
       const proxy = await createProxyServer({

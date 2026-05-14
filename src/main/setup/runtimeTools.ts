@@ -48,6 +48,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   writeFile,
@@ -182,13 +183,45 @@ async function installMitmproxy(
   const archivePath = mitmproxyArchivePath(manifest, platformKey, platform)
   if (!(await fileExists(archivePath))) return null
 
+  // Atomic extract: untar into a sibling tmp directory, then rename
+  // into place.
+  //
+  // WHY we don't extract straight into `installDir`:
+  //   mitmproxy.app's PyInstaller layout contains symlinks (Python
+  //   framework `Versions/3.X/Current` → `Current`, etc.). BSD
+  //   `/usr/bin/tar -xzf` on top of a half-extracted directory can
+  //   leave a mixed state — a regular file where a symlink should be,
+  //   or vice versa — that the next launch then trusts because the
+  //   marker check only proves "marker present", not "tree shape
+  //   correct". The marker-last pattern stops us from trusting a
+  //   half-extract, but it does NOT stop the half-extract from
+  //   poisoning the next attempt. Extracting into a fresh tmp dir and
+  //   atomically renaming on success means the canonical
+  //   `mitmproxy-<ver>/` directory is only ever a fully-populated
+  //   tree or absent. The rename is atomic on macOS because both
+  //   paths live on the same volume (userData).
+  const tmpDir = `${installDir}.tmp-${process.pid}-${Date.now()}`
   try {
-    await mkdir(installDir, { recursive: true })
-    await extractTarGz(archivePath, installDir)
-    if (!(await isExecutable(finalExe))) return null
-    // Marker is the LAST thing written. A crash mid-extract leaves
-    // no marker, so the next launch re-extracts cleanly instead of
-    // trusting a half-populated directory.
+    // Clear any leftover tmp from a previously-interrupted attempt.
+    // Two same-process callers can't race here because the per-
+    // version mutex in resolveMitmdump() serialises this whole block.
+    await rm(tmpDir, { recursive: true, force: true })
+    await mkdir(tmpDir, { recursive: true })
+    await extractTarGz(archivePath, tmpDir)
+    const tmpExe = join(tmpDir, manifest.executableInsideArchive)
+    if (!(await isExecutable(tmpExe))) {
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+      return null
+    }
+    // Replace any existing install in one go: rm-rf the old dir
+    // (could be a half-extracted leftover from a prior crash), then
+    // rename our verified tmp dir into place.
+    await rm(installDir, { recursive: true, force: true })
+    await rename(tmpDir, installDir)
+    // Marker is the LAST thing written. A crash before this point
+    // either leaves no tmpDir (we cleaned it on failure) or a renamed
+    // install dir with no marker; next launch sees no marker, drops
+    // it, and re-extracts cleanly.
     await writeFile(
       marker,
       `${manifest.version}\n${new Date().toISOString()}\n`,
@@ -199,6 +232,7 @@ async function installMitmproxy(
     return finalExe
   } catch (err) {
     console.warn('[runtimeTools] mitmdump install failed:', err)
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
     return null
   }
 }
@@ -295,6 +329,18 @@ function extractTarGz(archive: string, destDir: string): Promise<void> {
 async function cleanupOldMitmproxyVersions(
   currentVersion: string,
 ): Promise<void> {
+  // KNOWN LIMITATION: this cleanup is same-userData, best-effort,
+  // with no cross-process lock. If two Agent Code installs (e.g. a
+  // packaged production app + a `npm run start` dev instance pointed
+  // at different bundled mitmproxy versions) share one userData
+  // directory, the newer build will rm-rf the older build's runtime
+  // dir on its first proxy session. The outcome is wasted I/O on the
+  // older build's next session (it just re-extracts from its own
+  // bundled archive), not data loss or a broken running session — a
+  // live mitmdump process keeps running fine after its on-disk image
+  // is unlinked, per Unix open-file semantics. We will add a per-
+  // userData advisory lock if this surfaces in practice; v1 ships
+  // without it because the multi-version scenario is unusual.
   try {
     const root = join(app.getPath('userData'), 'runtime')
     const entries = await readdir(root).catch(() => [])

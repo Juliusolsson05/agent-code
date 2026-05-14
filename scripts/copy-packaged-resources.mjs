@@ -1,6 +1,7 @@
 import { access, copyFile, mkdir, readFile, readdir, stat } from 'node:fs/promises'
 import { constants as fsConstants } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 // Files staged into out/ that need to land inside the packaged app at
 // runtime. Anything copied here MUST also be listed in
@@ -16,7 +17,18 @@ const staticResources = [
   },
 ]
 
-const repoRoot = resolve(dirname(new URL(import.meta.url).pathname), '..')
+// WHY fileURLToPath and not `new URL(import.meta.url).pathname`:
+//   URL.pathname keeps spaces percent-encoded — a contributor whose
+//   checkout lives under e.g. `/Users/some user/Development/...` would
+//   get `repoRoot = '/Users/some%20user/...'`, every subsequent
+//   `fs/promises` call would ENOENT, the optional bundled-archive
+//   copy would silently no-op (see the `if (!(await fileExists(...)))
+//   continue` short-circuit below), and the packaged DMG would ship
+//   without the bundled mitmproxy. fileURLToPath performs the
+//   percent-decoding that filesystem APIs require. Pattern matches
+//   `resolveAddonPath` in claude-code-headless' proxyServer.ts and
+//   the sibling scripts under scripts/runtime-tools/*.mjs.
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 for (const resource of staticResources) {
   const from = resolve(repoRoot, resource.from)
