@@ -22,7 +22,7 @@ import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
 import { useAutoSave } from '@renderer/workspace/hook/persistence/useAutoSave'
-import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
+import { useBootstrap, type WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
 import { useFeedDebugPersist } from '@renderer/workspace/hook/persistence/useFeedDebugPersist'
 import {
   usePickerSanity,
@@ -98,6 +98,12 @@ export function useWorkspace(
   //      reads it as a dep) ----
   const [draftVersion, setDraftVersion] = useState(0)
   const [bootstrapComplete, setBootstrapComplete] = useState(false)
+  // Surfaces the bootstrap outcome to the UI so it can render a banner
+  // when the workspace is in a partial-restore / persisted-fallback
+  // state. Lives outside `bootstrapComplete` because that boolean only
+  // says "are we past the once-only effect", not "is the on-disk state
+  // intact". See useBootstrap for the four possible terminal values.
+  const [restoreStatus, setRestoreStatus] = useState<WorkspaceRestoreStatus>('pending')
 
   // ---- Runtime helpers (updateRuntime / appendFeedDebug / getRuntime / etc) ----
   const { updateRuntime, appendFeedDebug, acknowledgeSession, getRuntime, toggleTailMode, scrollFocusedToLatest } =
@@ -258,6 +264,7 @@ export function useWorkspace(
     setTileTabs,
     tabActions.newTab as unknown as (cwd: string) => Promise<unknown>,
     setBootstrapComplete,
+    setRestoreStatus,
     defaultWorkspaceMode,
     dispatchActions.enterDispatchMode,
   )
@@ -287,6 +294,7 @@ export function useWorkspace(
     tileTabs,
     readerMode,
     dispatchMode: state.dispatchMode,
+    restoreStatus,
     toggleReaderMode,
     setReaderModeSession,
     latestScreenRef: refs.latestScreenRef,
