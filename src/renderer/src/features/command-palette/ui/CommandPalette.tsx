@@ -75,6 +75,7 @@ type Props = {
   toggleHtmlDebugPanel: () => void
   toggleDevDebugPanel: () => void
   togglePerformancePanel: () => void
+  toggleGlobalEditor: () => void
   enterDispatchMode: () => Promise<void> | void
   enterGlobalDispatch: () => Promise<void> | void
   exitDispatchMode: () => void
@@ -97,6 +98,7 @@ type Props = {
   devDebugEnabled: boolean
   devDebugPanelOpen: boolean
   performancePanelOpen: boolean
+  globalEditorOpen: boolean
   dispatchModeEnabled: boolean
   globalDispatchEnabled: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
@@ -134,6 +136,7 @@ export function CommandPalette({
   toggleHtmlDebugPanel,
   toggleDevDebugPanel,
   togglePerformancePanel,
+  toggleGlobalEditor,
   enterDispatchMode,
   enterGlobalDispatch,
   exitDispatchMode,
@@ -156,6 +159,7 @@ export function CommandPalette({
   devDebugEnabled,
   devDebugPanelOpen,
   performancePanelOpen,
+  globalEditorOpen,
   dispatchModeEnabled,
   globalDispatchEnabled,
   setDangerousAgentsEnabled,
@@ -297,6 +301,7 @@ export function CommandPalette({
         toggleHtmlDebugPanel,
         toggleDevDebugPanel,
         togglePerformancePanel,
+        toggleGlobalEditor,
         enterDispatchMode,
         enterGlobalDispatch,
         exitDispatchMode,
@@ -329,6 +334,7 @@ export function CommandPalette({
         devDebugEnabled,
         devDebugPanelOpen,
         performancePanelOpen,
+        globalEditorOpen,
         dispatchModeEnabled,
         globalDispatchEnabled,
       },
@@ -352,6 +358,7 @@ export function CommandPalette({
       toggleHtmlDebugPanel,
       toggleDevDebugPanel,
       togglePerformancePanel,
+      toggleGlobalEditor,
       enterDispatchMode,
       enterGlobalDispatch,
       exitDispatchMode,
@@ -382,6 +389,7 @@ export function CommandPalette({
       devDebugEnabled,
       devDebugPanelOpen,
       performancePanelOpen,
+      globalEditorOpen,
       dispatchModeEnabled,
       globalDispatchEnabled,
     ],

@@ -9,6 +9,7 @@ import { systemApi } from '@preload/api/system.js'
 import { gitApi } from '@preload/api/git.js'
 import { ghostApi } from '@preload/api/ghost.js'
 import { performanceApi } from '@preload/api/performance.js'
+import { editorFsApi } from '@preload/api/editorFs.js'
 import { setupApi } from '@preload/api/setup.js'
 import { dictationApi } from '@preload/api/dictation.js'
 import { dictationDebugApi } from '@preload/api/dictationDebug.js'
@@ -42,6 +43,7 @@ export const api = {
   ...gitApi,
   ...ghostApi,
   ...performanceApi,
+  ...editorFsApi,
   ...setupApi,
   ...dictationApi,
   ...dictationDebugApi,

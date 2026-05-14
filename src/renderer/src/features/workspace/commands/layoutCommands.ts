@@ -88,4 +88,15 @@ export const layoutCommands: CommandDef[] = [
     }),
     run: ({ ui }) => ui.togglePerformancePanel(),
   },
+  {
+    id: 'toggle-global-editor',
+    title: 'Global Editor',
+    description: '**What it does:** Splits the screen in half — file tree + code editor on the left, the normal workspace UI (dispatch / tile / spotlight / whatever) on the right.\n\n**Use when:** You want to read or edit project files alongside the focused agent without leaving the current mode.\n\n**Notes:** The editor\'s workspace tracks the *active tab*\'s project — switching tabs to a different project flips the file tree. Switching panes within the same tab does NOT change the editor (the editor was deliberately decoupled from per-pane focus so reading code doesn\'t blow up when you move between agents in the same project). Open tabs are remembered per project (in memory; not persisted across app restarts).\n\n**Shortcut:** ⌘⇧E.',
+    keywords: ['editor', 'code', 'files', 'global', 'workspace', 'monaco'],
+    getState: ({ flags }) => ({
+      label: flags.globalEditorOpen ? 'On' : 'Off',
+      tone: flags.globalEditorOpen ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleGlobalEditor(),
+  },
 ]

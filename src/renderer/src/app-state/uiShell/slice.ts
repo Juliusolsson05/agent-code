@@ -28,6 +28,7 @@ export const createUiShellSlice: StateCreator<
   htmlDebugPanelOpen: false,
   devDebugPanelOpen: false,
   performancePanelOpen: false,
+  globalEditorOpen: false,
   promptSearchOpen: false,
   agentActivityOpen: false,
   rewindPromptSessionId: null,
@@ -131,6 +132,17 @@ export const createUiShellSlice: StateCreator<
       state => ({ performancePanelOpen: !state.performancePanelOpen }),
       false,
       'uiShell/togglePerformancePanel',
+    ),
+
+  openGlobalEditor: () =>
+    set({ globalEditorOpen: true }, false, 'uiShell/openGlobalEditor'),
+  closeGlobalEditor: () =>
+    set({ globalEditorOpen: false }, false, 'uiShell/closeGlobalEditor'),
+  toggleGlobalEditor: () =>
+    set(
+      state => ({ globalEditorOpen: !state.globalEditorOpen }),
+      false,
+      'uiShell/toggleGlobalEditor',
     ),
 
   openPromptSearch: () =>
