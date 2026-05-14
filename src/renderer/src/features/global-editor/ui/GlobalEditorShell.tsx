@@ -247,9 +247,21 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     : null
 
   return (
+    // WHY h-full w-full instead of `flex-1`:
+    //   The parent here is App.tsx's `<main>`, which has
+    //   `flex-1 min-h-0 min-w-0 overflow-hidden` but is NOT itself a
+    //   flex container — its parent (the screen-fill wrapper) is
+    //   `flex` row, so <main> gets a row-cell with real height, but
+    //   nothing inside <main> can size with `flex-1` because <main>
+    //   has no flex-direction of its own. The original PR #77 code
+    //   used `flex flex-1` here and the shell collapsed to zero
+    //   height — visible symptom was the file tree and editor
+    //   rendering as empty black columns even though the splitter
+    //   was visible. `h-full w-full` fills <main> directly so the
+    //   inner flex-row layout has real dimensions to distribute.
     <div
       ref={containerRef}
-      className="relative flex flex-1 min-h-0 min-w-0 overflow-hidden"
+      className="relative flex h-full w-full min-h-0 min-w-0 overflow-hidden"
     >
       <div
         className="flex flex-col min-h-0 overflow-hidden border-r border-border"
