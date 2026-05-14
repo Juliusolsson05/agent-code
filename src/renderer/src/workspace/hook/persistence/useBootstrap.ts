@@ -47,6 +47,7 @@ export function useBootstrap(
     refs.bootRef.current = true
     void (async () => {
       const bootstrapSpan = perf.span('workspace.bootstrap')
+      let canAutosaveBootState = false
       try {
         const json = await perf.measure('workspace.bootstrap.loadWorkspace', () =>
           window.api.loadWorkspace(),
@@ -58,6 +59,7 @@ export function useBootstrap(
           )
           try {
             await perf.measure('workspace.bootstrap.initialNewTab', () => newTab(cwd))
+            canAutosaveBootState = refs.latestStateRef.current.tabs.length > 0
             // WHY apply the default mode here, after newTab resolves:
             //
             // `enterDispatchMode` triggers `ensureDispatchTerminal`, which
@@ -96,7 +98,7 @@ export function useBootstrap(
           // catch below and start fresh. No migrations, no version
           // gates.
           const parsed = JSON.parse(json) as { workspace: PersistedWorkspace }
-          await perf.measure(
+          const restoreResult = await perf.measure(
             'workspace.bootstrap.rehydrate',
             () =>
               rehydrateWorkspace(
@@ -112,6 +114,26 @@ export function useBootstrap(
               sessions: Object.keys(parsed.workspace.sessions).length,
             },
           )
+          canAutosaveBootState =
+            restoreResult.complete && refs.latestStateRef.current.tabs.length > 0
+          if (!restoreResult.complete) {
+            // WHY partial rehydrate is treated as "view-only until fixed":
+            //
+            // Rehydrate commits useful partial UI as soon as each session
+            // respawns so users are not staring at a blank app while one
+            // provider/proxy is wedged. That incremental rendering is good for
+            // diagnosis, but it is poisonous as a persistence source: saving a
+            // partial layout permanently deletes every pane that failed to
+            // respawn during this launch. The packaged app hit exactly that
+            // case when proxy startup failed and autosave wrote a 7-session
+            // subset over a 13-session workspace.
+            //
+            // Complete restore is the only moment where the in-memory model is
+            // allowed to become authoritative for disk. Until then the previous
+            // workspace.json is still the source of truth, and the user can
+            // restart after fixing the underlying spawn/proxy problem.
+            console.warn('[workspace] rehydrate incomplete; autosave remains disabled:', restoreResult)
+          }
           bootstrapSpan.end({ mode: 'rehydrate' })
         } catch (err) {
           bootstrapSpan.fail(err, { mode: 'rehydrate' })
@@ -122,6 +144,15 @@ export function useBootstrap(
           )
           try {
             await perf.measure('workspace.bootstrap.fallbackNewTab', () => newTab(cwd))
+            // WHY this intentionally does NOT unlock autosave:
+            //
+            // We only reach this path after a persisted workspace existed but
+            // could not be parsed or restored. A fallback tab is a recovery UI,
+            // not the user's actual workspace. Saving it would replace the
+            // previous file with a one-tab workspace and make a transient load
+            // failure durable. Fresh installs unlock autosave above because
+            // there is no previous disk state to protect; persisted-workspace
+            // fallback must leave disk untouched.
           } catch (spawnErr) {
             console.warn('[workspace] fallback session spawn failed:', spawnErr)
           }
@@ -130,7 +161,27 @@ export function useBootstrap(
         bootstrapSpan.fail(err, { mode: 'bootstrap' })
         console.warn('[workspace] bootstrap failed:', err)
       } finally {
-        setBootstrapComplete(true)
+        // Autosave is deliberately locked behind "we have something real to
+        // save", not merely "the bootstrap async function returned".
+        //
+        // Why this guard exists:
+        //   A packaged-app launch can fail every session restore (for example
+        //   when Proxy Streaming is enabled but mitmproxy cannot start in the
+        //   GUI app environment). Before this guard, bootstrap caught the
+        //   restore failure, tried a fallback fresh tab, caught that failure
+        //   too, and still marked bootstrap complete in `finally`. That
+        //   unlocked useAutoSave while Zustand still held the initial empty
+        //   workspace (`tabs: []`), overwriting the user's real
+        //   ~/.config/agent-code/workspace.json with an empty file.
+        //
+        // We would rather leave the previous disk state untouched and show a
+        // broken in-memory launch than make a transient startup failure
+        // durable. Once at least one tab exists, autosave can resume normally.
+        if (canAutosaveBootState) {
+          setBootstrapComplete(true)
+        } else {
+          console.warn('[workspace] bootstrap produced no tabs; autosave remains disabled')
+        }
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -290,13 +290,18 @@ export class ClaudeSession extends EventEmitter {
             //     it for the pattern test, never as an authoritative
             //     model id.
             //
+            // Only the current Agent Code env name is honored here. The
+            // one-time conversion PR removed the old app env aliases; keeping
+            // retired names in runtime code makes future debugging ambiguous
+            // because shell state can silently override behavior from a name
+            // the app no longer exposes or documents.
+            //
             // TODO(model-from-screen): replace this constant default
             // with parsing of Claude Code's header line ("Opus 4.7
             // (1M context) …") so we always know the actual primary
             // model and the env-var escape hatch becomes redundant.
             getSessionModel: () =>
               process.env.AGENT_CODE_PRIMARY_MODEL ??
-              process.env.CC_SHELL_PRIMARY_MODEL ??
               'claude-opus-4-7',
           }
         : undefined,

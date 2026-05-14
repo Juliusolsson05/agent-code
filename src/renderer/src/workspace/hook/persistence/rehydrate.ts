@@ -59,7 +59,7 @@ export async function rehydrateWorkspace(
   setRuntimes: WorkspaceSetRuntimes,
   setTileTabs: WorkspaceSetTileTabs,
   newTab: (cwd: string) => Promise<unknown>,
-): Promise<void> {
+): Promise<{ restoredSessions: number; expectedSessions: number; complete: boolean }> {
   perf.mark('workspace.rehydrate.start', {
     tabs: persisted.tabs.length,
     sessions: Object.keys(persisted.sessions).length,
@@ -393,7 +393,15 @@ export async function rehydrateWorkspace(
     const cwd = await window.api.defaultCwd()
     await newTab(cwd)
   }
+  const restoredSessions = Object.keys(freshSessions).length
+  const expectedSessions = ownedIds.size
   perf.mark('workspace.rehydrate.complete', {
-    restoredSessions: Object.keys(freshSessions).length,
+    restoredSessions,
+    expectedSessions,
   })
+  return {
+    restoredSessions,
+    expectedSessions,
+    complete: restoredSessions === expectedSessions,
+  }
 }

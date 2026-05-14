@@ -24,7 +24,20 @@ export function registerWorkspaceIpc(): void {
 
   ipcMain.handle('workspace:save', async (_evt, json: string) => {
     await mkdir(STATE_DIR, { recursive: true })
-    const tmp = STATE_FILE + '.tmp'
+    // WHY this temp file is unique per IPC call:
+    //
+    // The renderer can legitimately issue overlapping autosaves during a busy
+    // restore: session spawns finish, debug state settles, dispatch focus moves,
+    // and each transition wants to persist the workspace. A single shared
+    // `workspace.json.tmp` makes those saves race each other. Save A can write
+    // the temp file and rename it while Save B is still between write and
+    // rename, leaving B to fail with ENOENT because the shared temp path no
+    // longer exists. That looked like random state corruption after the
+    // packaged-app/proxy failure, but it was just non-atomic concurrency. The
+    // final destination is still one file; only the scratch path needs a nonce.
+    const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
+      .toString(36)
+      .slice(2)}.tmp`
     await writeFile(tmp, json, 'utf8')
     await rename(tmp, STATE_FILE)
   })
