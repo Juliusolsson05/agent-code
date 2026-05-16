@@ -16,7 +16,7 @@ This note is scoped to the current Agent Code renderer as inspected in the `code
 
 `Feed` currently receives three owner classes:
 
-- Committed entries from `selectMergedEntries(runtime, currentTurnId)`.
+- Committed entries plus orphan fallback from `selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null)`.
 - Archived and current semantic turns from `runtime.semantic.history` and `runtime.semantic.currentTurn`.
 - Work indicator state from `runtime.streamPhase`.
 
@@ -46,11 +46,11 @@ Claude conversation entries and compact entries enter through the JSONL branch a
 
 `live assistant output` belongs to semantic ownership.
 
-The live current turn should render through `SemanticStreamingTurn`, not screen scraping and not ghosts. The current selector already hides ghosts for the current semantic turn id, and `shouldShowSemanticStreaming` is simply "there is a current turn." The new renderer should keep that split: committed transcript rows own durable history, semantic owns current live output, and work indicator owns non-row activity.
+The live current turn should render through `SemanticStreamingTurn`, not screen scraping and not ghosts. The current selector hides ghosts for semantic current/history turn ids, and the caller now passes `runtime.semantic.currentTurn` directly. The new renderer should keep that split: committed transcript rows own durable history, semantic owns current live output/history catch-up, and work indicator owns non-row activity.
 
 `ghost` belongs only to orphan recovery.
 
-`selectMergedEntries` allows ghost rows only when they are not superseded, orphaned, not the current semantic turn, newer than the JSONL tail, and not sidecar-shaped. The rewrite should not use ghosts as the normal live path. Ghosts are a forensic fallback for proxy-past-JSONL stalls or crash recovery.
+`selectMergedEntries` allows ghost rows only when they are not superseded, orphaned, not already owned by semantic current/history, newer than the JSONL tail, and not sidecar-shaped. The rewrite should not use ghosts as the normal live path. Ghosts are a forensic fallback for proxy-past-JSONL stalls or crash recovery.
 
 ## Current debug evidence
 

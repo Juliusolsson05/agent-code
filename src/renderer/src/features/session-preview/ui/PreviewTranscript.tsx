@@ -59,10 +59,11 @@ export const PreviewTranscript = memo(function PreviewTranscript({
       <ToolUseIndexContext.Provider value={model.toolUseIndex}>
         <ToolResultIndexContext.Provider value={model.toolResultIndex}>
           <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
-            {/* `px-8` is load-bearing, not cosmetic: UserBand / ToolBand
-                pull themselves edge-to-edge with `-mx-8 px-8`, assuming
-                an 8-unit gutter. Match it here or the bands overflow.
-                Mirrors the feed column's own `px-8` (Feed.tsx). */}
+            {/* `px-8` is load-bearing, not cosmetic: UserBand pulls
+                itself edge-to-edge with `-mx-8 px-8`, assuming an
+                8-unit gutter. Match it here or user prompt bands
+                overflow. Mirrors the feed column's own `px-8`
+                (Feed.tsx). */}
             <div className="px-8 py-5 flex flex-col gap-4">
               {model.entries.map((entry, i) => {
                 const uuid = (entry as { uuid?: string }).uuid

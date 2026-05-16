@@ -8,7 +8,6 @@ import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/P
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
   selectMergedEntries,
-  shouldShowSemanticStreaming,
 } from '@renderer/workspace/mergedEntries'
 import type { SessionId } from '@renderer/workspace/types'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
@@ -360,10 +359,11 @@ export function TileLeaf({
           // The layered predicate in selectMergedEntries renders
           // a ghost only when JSONL has stalled past the proxy
           // AND the ghost is not sidecar-shaped (title-gen /
-          // predict-next-prompt fingerprint). The live current
-          // turn is owned by `SemanticStreamingTurn` below; the
-          // `currentTurnId` argument hides any ghost for that
-          // turn so the two surfaces never double-render.
+          // predict-next-prompt fingerprint). SemanticStreamingTurn
+          // owns the live current turn and bounded completed
+          // semantic history; selectMergedEntries suppresses ghosts
+          // for those turn ids so the two surfaces never
+          // double-render.
           // See docs/design/ghost-system.md for the canonical
           // explanation of the predicate and the dual-owner
           // model.
@@ -390,12 +390,10 @@ export function TileLeaf({
           streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
           turnStartedAt={runtime.turnStartedAt}
           // Live-turn ownership: SemanticStreamingTurn renders the
-          // current turn end-to-end off the semantic channel.
-          // Ghosts for the same turnId are filtered out of the
-          // merged feed by selectMergedEntries (currentTurnId
-          // argument), so there is no double-render risk.
-          // shouldShowSemanticStreaming collapses to "is there a
-          // current turn?".
+          // current turn end-to-end off the semantic channel. Ghosts
+          // for semantic current/history turn ids are filtered out of
+          // the merged feed, so semantic rows and orphan fallback rows
+          // cannot both own the same visible turn.
           //
           // Completed semantic history is passed separately because
           // MCP/Codex tool execution can advance through several
@@ -405,11 +403,7 @@ export function TileLeaf({
           // durable transcript catches up — the exact "conversation
           // clears while the agent is working" failure.
           semanticHistory={runtime.semantic.history}
-          semanticTurn={
-            shouldShowSemanticStreaming(runtime)
-              ? runtime.semantic.currentTurn
-              : null
-          }
+          semanticTurn={runtime.semantic.currentTurn}
           tailMode={runtime.tailMode}
           pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
           codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
