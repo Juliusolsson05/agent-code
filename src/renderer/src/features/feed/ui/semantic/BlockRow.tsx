@@ -7,6 +7,7 @@ import {
 } from '@renderer/workspace/workspaceState'
 
 import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
+import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
@@ -244,6 +245,34 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         ? parseSemanticTodos(block.parsedInput)
         : []
     const hasResult = block.resultAt != null || block.resultContent != null
+
+    // Live `Write` preview. While a Write tool_use streams, the only
+    // data we have is `block.inputJson` — partial, unparseable JSON.
+    // Dumping it raw means the user watches a 200-line file scroll by
+    // as one escaped JSON blob (`{"file_path":"…","content":"# …\n\n…`).
+    // `extractStreamingWriteInput` does a single linear scan of that
+    // buffer and pulls out the path + the in-flight content, decoded.
+    // When it yields a filePath we render the path + a plain code
+    // preview of the content as it arrives.
+    //
+    // This is a LIVE preview, deliberately NOT pixel-identical to the
+    // committed WriteRow that replaces it once the block finalizes:
+    //   - the committed row uses `FileToolHeader` with a line count;
+    //     the live row shows just the path on a `⎿` marker line.
+    //   - the live preview passes `highlight={false}` (see below);
+    //     the committed row is syntax-highlighted.
+    // So there IS a one-time visual change at the commit boundary —
+    // the header gains a line count and the code gains highlighting.
+    // The content text is identical across the transition; the goal
+    // here is "show the file taking shape", not a frozen final card.
+    //
+    // If the buffer doesn't match Write's expected shape the
+    // extractor returns nulls and we fall through to the raw <pre> —
+    // never worse than the pre-feature behaviour.
+    const writeStream =
+      block.toolName === 'Write'
+        ? extractStreamingWriteInput(block.inputJson)
+        : null
     return (
       <MarkerRow marker="⏺">
         <div>
@@ -269,6 +298,32 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
           </div>
           {block.toolName === 'TodoWrite' ? (
             <SemanticTodoList todos={todos} />
+          ) : writeStream && writeStream.filePath ? (
+            <div className="mt-1 flex flex-col gap-1">
+              <MarkerRow marker="⎿" tone="muted">
+                <span className="font-code text-[12px] leading-[1.55] text-ink-dim break-all">
+                  {writeStream.filePath}
+                </span>
+              </MarkerRow>
+              {/*
+                `highlight={false}` is load-bearing for performance.
+                highlight.js re-highlights the WHOLE code string on
+                every change; this CodeBlock is fed a growing buffer
+                that re-renders on every `input_json_delta`, so
+                highlighting here would cost O(streamed bytes²) over
+                a long write. The plain preview is cheap; the
+                committed WriteRow does the one-shot highlight after
+                the stream ends. `codeId` is keyed by blockIndex so
+                the component stays mounted across the many delta
+                re-renders rather than remounting.
+              */}
+              <CodeBlock
+                code={writeStream.partialContent ?? ''}
+                path={writeStream.filePath}
+                codeId={`write-live:${block.blockIndex}`}
+                highlight={false}
+              />
+            </div>
           ) : (
             <MarkerRow marker="⎿" tone="muted">
               <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
