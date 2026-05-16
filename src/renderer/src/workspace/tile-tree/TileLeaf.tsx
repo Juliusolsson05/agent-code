@@ -87,7 +87,6 @@ export function TileLeaf({
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { showToast } = useGlobalToast()
-  const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
@@ -397,6 +396,15 @@ export function TileLeaf({
           // argument), so there is no double-render risk.
           // shouldShowSemanticStreaming collapses to "is there a
           // current turn?".
+          //
+          // Completed semantic history is passed separately because
+          // MCP/Codex tool execution can advance through several
+          // Responses turns before JSONL commits rows for the earlier
+          // turns. Without this bounded bridge, archiving the current
+          // semantic turn makes the visible feed shrink until the
+          // durable transcript catches up — the exact "conversation
+          // clears while the agent is working" failure.
+          semanticHistory={runtime.semantic.history}
           semanticTurn={
             shouldShowSemanticStreaming(runtime)
               ? runtime.semantic.currentTurn
@@ -419,7 +427,21 @@ export function TileLeaf({
           scrollToLatestRequest={runtime.scrollToLatestRequest}
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
-          onDebugLog={feedDebugPanelOpen && focused ? appendRenderDebug : undefined}
+          // Keep render-decision logging tied to mounted feeds, not
+          // to the debug panel or the transient focus flag. The
+          // state/semantic layers already persist aggressively in
+          // normal sessions, but `Feed` used to log `visible_rows`
+          // only when the panel was mounted. A later focus-gated
+          // version still missed MCP/tool-call traces because focus
+          // can move while the same pane keeps receiving streamed
+          // state. That left the exact haunted class of bugs
+          // invisible in the saved trace: optimistic user row added,
+          // MCP semantic turn advanced, JSONL reconciled, and then
+          // no record of whether the feed actually rendered those
+          // rows. `Feed` logs only row/count changes and the debug
+          // store is capped, so all-mounted logging is the correct
+          // diagnostic boundary.
+          onDebugLog={appendRenderDebug}
         />
       </div>
 

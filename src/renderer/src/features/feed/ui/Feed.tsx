@@ -142,6 +142,7 @@ type Props = {
   hasOlderHistory?: boolean
   loadingOlderHistory?: boolean
   onLoadOlderHistory?: () => Promise<void>
+  semanticHistory?: SemanticLiveTurn[]
   semanticTurn?: SemanticLiveTurn | null
   /** True while the owning session is replaying a bulk bootstrap
    *  burst. Feed uses it to suspend auto-scroll pinning and the
@@ -253,6 +254,7 @@ function FeedImpl({
   hasOlderHistory = false,
   loadingOlderHistory = false,
   onLoadOlderHistory,
+  semanticHistory = [],
   semanticTurn = null,
   bootstrapping = false,
   scrollToLatestRequest = 0,
@@ -475,6 +477,9 @@ function FeedImpl({
   const semanticTurnSignal = semanticTurn
     ? `${semanticTurn.turnId}:${semanticTurn.text.length}:${Object.keys(semanticTurn.blocks).length}`
     : ''
+  const semanticHistorySignal = semanticHistory
+    .map(turn => `${turn.turnId}:${turn.text.length}:${Object.keys(turn.blocks).length}`)
+    .join('|')
   useEffect(() => {
     // During a bulk bootstrap burst we skip per-append auto-scroll.
     // The pin-once-on-transition effect below lands us at the bottom
@@ -489,7 +494,7 @@ function FeedImpl({
     // no animation frames.
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [entries.length, tailMode, semanticTurnSignal, bootstrapping])
+  }, [entries.length, tailMode, semanticTurnSignal, semanticHistorySignal, bootstrapping])
 
   // Pin-once on the bootstrap → live transition. Runs exactly once per
   // transition thanks to the previous-value ref: we read the prior
@@ -746,12 +751,38 @@ function FeedImpl({
     [visibleDecisions],
   )
 
+  const committedClaudeMessageTurnIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const entry of entries) {
+      const record = asRecord(entry)
+      const message = asRecord(record?.message)
+      const messageId = message?.id
+      if (typeof messageId === 'string') ids.add(messageId)
+    }
+    return ids
+  }, [entries])
+
   // Live view is owned 1:1 by `semanticTurn` now — the old Codex-only
   // suppression helper (`shouldSuppressSemanticTurnForCommittedTail`)
   // was deleted in 2026-04-20 because the ghost reducer handles the
   // duplicate-render class at its source. See Feed.tsx history and
   // docs/superpowers/plans/2026-04-20-rendering-fixes.md Task 6.
   const renderedSemanticTurn = semanticTurn
+  // Only Claude message ids suppress an entire archived semantic
+  // turn. Claude commits one assistant message whose message.id is
+  // the turn id, so the durable row owns the whole archived live
+  // copy. Codex is different: rollout commits one response_item at a
+  // time and every mapped entry can carry the same codexTurnId. If a
+  // single tool_use response_item suppressed the whole archived turn,
+  // MCP/client-tool sequences would drop the assistant text and
+  // later tool rows until JSONL fully caught up. Codex duplicate
+  // prevention is therefore per-block inside SemanticStreamingTurn
+  // (committed tool ids + committed assistant text keys), not a
+  // turn-level filter here.
+  const renderedSemanticHistory = useMemo(
+    () => semanticHistory.filter(turn => !committedClaudeMessageTurnIds.has(turn.turnId)),
+    [committedClaudeMessageTurnIds, semanticHistory],
+  )
 
   // Index EVERY tool_use block (not just the visible set) so tool_result
   // lookups still resolve even when some synthetic entries have been
@@ -770,7 +801,8 @@ function FeedImpl({
     [entries, toolResultIndexProp],
   )
 
-  const hasSemanticStreaming = renderedSemanticTurn !== null
+  const hasSemanticStreaming =
+    renderedSemanticTurn !== null || renderedSemanticHistory.length > 0
   const shouldShowWorkIndicator = streamPhase !== 'idle'
 
   const renderedRows = useMemo<DebugVisibleRow[]>(() => {
@@ -796,6 +828,13 @@ function FeedImpl({
         slot: 'entry',
         label: debugLabelForEntry(item.entry),
       }))
+    for (const turn of renderedSemanticHistory) {
+      rows.push({
+        key: `semantic-history:${turn.turnId}`,
+        slot: 'semantic',
+        label: `semantic history ${turn.turnId.slice(0, 12)} · ${turn.source ?? 'unknown'}`,
+      })
+    }
     if (renderedSemanticTurn != null) {
       rows.push({
         key: `semantic:${renderedSemanticTurn.turnId}`,
@@ -833,6 +872,7 @@ function FeedImpl({
     hasSemanticStreaming,
     provider,
     renderedSemanticTurn,
+    renderedSemanticHistory,
     sessionId,
     shouldShowWorkIndicator,
     streamPhase,
@@ -843,10 +883,18 @@ function FeedImpl({
   ])
 
   const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
+  const previousRenderDebugSignatureRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (!onDebugLog) return
     const previous = previousRenderedRowsRef.current
+    const renderDebugSignature = JSON.stringify({
+      entryCount: entries.length,
+      visibleEntryCount: visible.length,
+      semanticTurnId: semanticTurn?.turnId ?? null,
+      semanticHistoryTurnIds: renderedSemanticHistory.map(turn => turn.turnId),
+      streamPhase,
+    })
     const prevKeys = new Set(previous?.map(row => row.key) ?? [])
     const nextKeys = new Set(renderedRows.map(row => row.key))
     const added = renderedRows.filter(row => !prevKeys.has(row.key))
@@ -861,6 +909,7 @@ function FeedImpl({
       }))
     const changed =
       previous === null ||
+      previousRenderDebugSignatureRef.current !== renderDebugSignature ||
       added.length > 0 ||
       removed.length > 0 ||
       previous.length !== renderedRows.length ||
@@ -881,11 +930,13 @@ function FeedImpl({
         entryCount: entries.length,
         visibleEntryCount: visible.length,
         semanticTurnId: semanticTurn?.turnId ?? null,
+        semanticHistoryTurnIds: renderedSemanticHistory.map(turn => turn.turnId),
         streamPhase,
       },
     })
     previousRenderedRowsRef.current = renderedRows
-  }, [entries.length, onDebugLog, renderedRows, semanticTurn?.turnId, streamPhase, visible.length, visibleDecisions])
+    previousRenderDebugSignatureRef.current = renderDebugSignature
+  }, [entries.length, onDebugLog, renderedRows, renderedSemanticHistory, semanticTurn?.turnId, streamPhase, visible.length, visibleDecisions])
 
   if (visible.length === 0 && !hasSemanticStreaming) {
     // Empty-feed branch: no committed entries yet AND no live
@@ -987,6 +1038,13 @@ function FeedImpl({
            * `source: 'screen'`) on the same channel, gated by a
            * baseline so they don't emit the previous turn's buffered
            * text as the first delta of a new turn. */}
+          {renderedSemanticHistory.map(turn => (
+            <SemanticStreamingTurn
+              key={`semantic-history:${turn.turnId}`}
+              turn={turn}
+              committedEntries={entries}
+            />
+          ))}
           {renderedSemanticTurn != null && (
             <SemanticStreamingTurn
               turn={renderedSemanticTurn}
