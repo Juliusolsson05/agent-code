@@ -7,6 +7,7 @@ import {
 } from '@renderer/workspace/workspaceState'
 
 import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
+import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
@@ -244,6 +245,23 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         ? parseSemanticTodos(block.parsedInput)
         : []
     const hasResult = block.resultAt != null || block.resultContent != null
+
+    // Live `Write` preview. While a Write tool_use streams, the only
+    // data we have is `block.inputJson` — partial, unparseable JSON.
+    // Dumping it raw means the user watches a 200-line file scroll by
+    // as one escaped JSON blob (`{"file_path":"…","content":"# …\n\n…`).
+    // `extractStreamingWriteInput` does a single linear scan of that
+    // buffer and pulls out the path + the in-flight content, decoded.
+    // When it yields a filePath we render the same header + CodeBlock
+    // shape the committed WriteRow uses, so there's no visual jump
+    // when the block finalizes and the committed transcript takes
+    // over. If the buffer doesn't match Write's expected shape the
+    // extractor returns nulls and we fall through to the raw <pre> —
+    // never worse than today.
+    const writeStream =
+      block.toolName === 'Write'
+        ? extractStreamingWriteInput(block.inputJson)
+        : null
     return (
       <MarkerRow marker="⏺">
         <div>
@@ -269,6 +287,30 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
           </div>
           {block.toolName === 'TodoWrite' ? (
             <SemanticTodoList todos={todos} />
+          ) : writeStream && writeStream.filePath ? (
+            <div className="mt-1 flex flex-col gap-1">
+              <MarkerRow marker="⎿" tone="muted">
+                <span className="font-code text-[12px] leading-[1.55] text-ink-dim break-all">
+                  {writeStream.filePath}
+                </span>
+              </MarkerRow>
+              {/*
+                Static highlight engine, not Monaco — this matches the
+                committed WriteRow (which also defaults to engine
+                'static'), so the preview and the final card render
+                identically and there is zero flicker when the live
+                turn is replaced by the committed transcript. `path`
+                drives both language detection and the file-link, the
+                same as the committed row. `codeId` is keyed by
+                blockIndex so it stays stable across the many
+                input_json_delta re-renders.
+              */}
+              <CodeBlock
+                code={writeStream.partialContent ?? ''}
+                path={writeStream.filePath}
+                codeId={`write-live:${block.blockIndex}`}
+              />
+            </div>
           ) : (
             <MarkerRow marker="⎿" tone="muted">
               <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
