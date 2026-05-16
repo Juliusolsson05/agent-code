@@ -91,15 +91,17 @@ export function useKeybinds(
   // The placement overlay is opened from TWO independent flows:
   // - newAgentPlacementOpen: the cmd+T / new-agent-placement flow
   // - dispatchAttachIntent: attach-detached-to-grid
+  // - linkedAgentParentId: linked-agent kind picker
   // App.tsx already unifies them as `placementOverlayOpen` and
   // closes them together via `closePlacementOverlay`. We must
-  // subscribe to BOTH here — an earlier revision only checked
+  // subscribe to all three here — an earlier revision only checked
   // newAgentPlacementOpen, so cmd+W / cmd+1..9 / alt+d still
-  // mutated the workspace under the attach overlay before the
-  // overlay's own listener could stop propagation. See PR #75
-  // review.
+  // mutated the workspace under sibling overlay modes before the
+  // overlay's own listener could stop propagation. See PR #75 review.
   const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
   const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
+  const linkedAgentParentId = useAppStore(state => state.linkedAgentParentId)
+  const closeLinkedAgent = useAppStore(state => state.closeLinkedAgent)
   // Reorder Tabs and Pin Agents are modal overlays with their own
   // internal onKeyDown handlers. Without bailing out here, the
   // global capture-phase handler still fires cmd+1..9 / cmd+t /
@@ -141,14 +143,17 @@ export function useKeybinds(
       const alt = e.altKey
       const shift = e.shiftKey
       const k = e.key
-      // Unified placement-overlay predicate — matches App.tsx:112
-      // (`placementOverlayOpen = newAgentPlacementOpen ||
-      // dispatchAttachIntent !== null`) so create-mode and
-      // attach-mode share one bailout.
-      const placementOverlayOpen = newAgentPlacementOpen || dispatchAttachIntent !== null
+      // Unified placement-overlay predicate — matches App.tsx's
+      // `placementOverlayOpen` so create, attach, and linked-agent
+      // modes share one keyboard bailout.
+      const placementOverlayOpen =
+        newAgentPlacementOpen ||
+        dispatchAttachIntent !== null ||
+        linkedAgentParentId !== null
 
-      // Placement overlay (create-new or attach-detached) and the
-      // two draft modals (reorder / pin) all share the same shape:
+      // Placement overlay (create-new, attach-detached, or linked
+      // agent) and the two draft modals (reorder / pin) all share
+      // the same shape:
       // a transient UI with its own onKeyDown that owns Enter /
       // Space / Arrow / j / k, plus Escape-to-cancel. Three things
       // we must do here in the global capture handler:
@@ -169,6 +174,7 @@ export function useKeybinds(
           e.preventDefault()
           if (newAgentPlacementOpen) closeNewAgentPlacement()
           if (dispatchAttachIntent !== null) closeDispatchAttach()
+          if (linkedAgentParentId !== null) closeLinkedAgent()
           if (reorderTabsOpen) closeReorderTabs()
           if (pinAgentsOpen) closePinAgents()
           return
@@ -645,6 +651,7 @@ export function useKeybinds(
     closeBuryPrompt,
     closeNewAgentPlacement,
     closeDispatchAttach,
+    closeLinkedAgent,
     closeReorderTabs,
     closePinAgents,
     onCommandPalette,
@@ -652,6 +659,7 @@ export function useKeybinds(
     onResumeRequest,
     buryPromptSessionId,
     dispatchAttachIntent,
+    linkedAgentParentId,
     newAgentPlacementOpen,
     pinAgentsOpen,
     reorderTabsOpen,

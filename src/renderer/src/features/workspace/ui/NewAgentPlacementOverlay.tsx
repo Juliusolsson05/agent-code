@@ -27,6 +27,14 @@ type Props = {
    * Escape, click-outside, and post-commit close all converge there.
    */
   attachDetachedSessionId: SessionId | null
+  /**
+   * Non-null = "Linked Agent" mode. The value is the parent session
+   * id. The overlay shows ONLY the Claude/Codex kind picker — no
+   * placement step — and on pick calls
+   * `createLinkedAgent(kind, parentId)`. Like attach mode this is a
+   * uiShell-level intent passed in, so App.tsx owns the close path.
+   */
+  linkedAgentParentId: SessionId | null
 }
 
 const KIND_OPTIONS: Array<{ kind: SessionKind; label: string; description: string }> = [
@@ -42,12 +50,22 @@ const ARROW_TO_DIRECTION = {
   ArrowDown: 'down',
 } as const
 
-export function NewAgentPlacementOverlay({ open, workspace, onClose, attachDetachedSessionId }: Props) {
+export function NewAgentPlacementOverlay({
+  open,
+  workspace,
+  onClose,
+  attachDetachedSessionId,
+  linkedAgentParentId,
+}: Props) {
   // Attach mode is "user wants to move this existing detached session
   // into the grid." The overlay still does placement, just no spawn.
   // We compute it once at the top so every downstream branch reads
   // from the same value rather than null-checking the prop everywhere.
   const attachMode = attachDetachedSessionId !== null
+  // Linked mode is "spawn a new agent linked to a parent." Kind-only:
+  // no placement step at all (the linked agent is always a detached
+  // dispatch agent in the parent's tab — see createLinkedAgent).
+  const linkedMode = linkedAgentParentId !== null
   const overlayRef = useRef<HTMLDivElement>(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [selectedKind, setSelectedKind] = useState<SessionKind | null>(null)
@@ -66,14 +84,46 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose, attachDetac
   const activeTab = workspace.activeTab
   const anchorSessionId = activeTab?.focusedSessionId ?? null
   const dispatchMode = workspace.dispatchMode !== null
+  // Both dispatch mode and linked mode are "kind only": pick Claude
+  // or Codex, no placement, no terminal option.
+  const kindOnly = dispatchMode || linkedMode
   const kindOptions = useMemo(
-    () => dispatchMode
+    () => kindOnly
       ? KIND_OPTIONS.filter((option): option is Extract<typeof KIND_OPTIONS[number], { kind: 'claude' | 'codex' }> =>
           option.kind === 'claude' || option.kind === 'codex',
         )
       : KIND_OPTIONS,
-    [dispatchMode],
+    [kindOnly],
   )
+
+  // Commit a chosen kind. In kind-only modes this spawns immediately;
+  // in ordinary create mode it advances to the placement step. Shared
+  // by the Enter keybind and the click handler so both paths behave
+  // identically (the click path used to just `setSelectedKind`, which
+  // silently did nothing in dispatch mode).
+  const commitKind = (kind: SessionKind) => {
+    if (linkedMode && linkedAgentParentId) {
+      if (kind !== 'claude' && kind !== 'codex') return
+      if (committingRef.current) return
+      committingRef.current = true
+      void workspace.createLinkedAgent(kind, linkedAgentParentId)
+      // createLinkedAgent does not own the overlay lifecycle (the
+      // linked intent lives in uiShell); close it ourselves.
+      onClose()
+      return
+    }
+    if (dispatchMode) {
+      if (kind !== 'claude' && kind !== 'codex') return
+      if (committingRef.current) return
+      committingRef.current = true
+      // Dispatch Mode creates detached agents on the active tab; there
+      // is intentionally no placement step. createDetachedDispatchAgent
+      // owns its own overlay close.
+      void workspace.createDetachedDispatchAgent(kind)
+      return
+    }
+    setSelectedKind(kind)
+  }
 
   useEffect(() => {
     if (!open) return
@@ -170,23 +220,7 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose, attachDetac
           event.preventDefault()
           const option = kindOptions[selectedIndex]
           if (!option) return
-          if (dispatchMode) {
-            // kindOptions is filtered above to exclude 'terminal' in
-            // dispatch mode, so this guard is structurally guaranteed
-            // — but the typechecker can't infer that from the runtime
-            // filter, so re-narrow at the call site to satisfy the
-            // 'claude' | 'codex' constraint on createDetachedDispatchAgent.
-            if (option.kind !== 'claude' && option.kind !== 'codex') return
-            if (committingRef.current) return
-            committingRef.current = true
-            // Dispatch Mode creates detached agents associated with the active
-            // project tab. There is intentionally no placement step here:
-            // inserting into the grid would recreate the broken ten-agent
-            // layout when the user exits the command-center surface.
-            void workspace.createDetachedDispatchAgent(option.kind)
-            return
-          }
-          setSelectedKind(option.kind)
+          commitKind(option.kind)
         }
         return
       }
@@ -357,7 +391,7 @@ export function NewAgentPlacementOverlay({ open, workspace, onClose, attachDetac
                     type="button"
                     onClick={() => {
                       setSelectedIndex(index)
-                      setSelectedKind(option.kind)
+                      commitKind(option.kind)
                     }}
                     className={`flex w-full items-center justify-between border px-3 py-2 text-left ${
                       active

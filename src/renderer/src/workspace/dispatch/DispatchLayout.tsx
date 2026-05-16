@@ -428,6 +428,20 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
         ${activityClasses.row}
       `}
     >
+      {/* Linked-agent indent. A linked agent (row.depth > 0) renders
+          one level in from its parent: a fixed-width connector cell
+          with a left rail + a `↳` corner glyph signals "belongs to
+          the row above." depth is only ever 0 or 1 (linked agents
+          don't chain), so a single cell is enough — no depth
+          multiplier needed. */}
+      {row.depth > 0 && (
+        <span
+          className="flex w-5 flex-shrink-0 items-start justify-center border-l border-border pt-1 text-[10px] leading-none text-muted select-none"
+          aria-hidden="true"
+        >
+          ↳
+        </span>
+      )}
       <span className={`flex w-9 flex-shrink-0 items-center justify-center text-[10px] font-semibold tabular-nums ${activityClasses.index}`}>
         {row.label}
       </span>

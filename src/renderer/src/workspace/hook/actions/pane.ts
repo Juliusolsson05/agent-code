@@ -75,6 +75,10 @@ export function usePaneActions(
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
   createDetachedDispatchAgent: (kind: Exclude<SessionKind, 'terminal'>) => Promise<void>
+  createLinkedAgent: (
+    kind: Exclude<SessionKind, 'terminal'>,
+    parentId: SessionId,
+  ) => Promise<void>
   attachDetachedToGrid: (sessionId: SessionId, target: PlacementTarget) => void
   attachAllDetachedForTab: (tabId: string) => void
   detachFocusedToDispatch: () => void
@@ -273,6 +277,119 @@ export function usePaneActions(
     },
     [closeNewAgentPlacement, refs.stateRef, sessionActions, setState, showToast],
   )
+
+  // Spawn a "linked agent" — a normal detached dispatch agent that
+  // records `parentId` as its `linkedParentId`. It lands in the
+  // PARENT's project tab (not necessarily the active tab), which is
+  // what lets the dispatch list render it indented under the parent;
+  // and the close path cascade-closes it when the parent goes away.
+  //
+  // WHY this is a sibling of createDetachedDispatchAgent rather than
+  // a flag on it: createDetachedDispatchAgent always targets the
+  // ACTIVE tab and the active dispatch focus. A linked agent is
+  // anchored to wherever its PARENT lives — possibly a background
+  // tab, possibly a grid pane — so the tab resolution and the
+  // linkedParentId stamp are enough extra logic to warrant their own
+  // action. Closing the overlay is the caller's job (the overlay
+  // owns its own lifecycle via closeLinkedAgent).
+  const createLinkedAgent = useCallback(
+    async (kind: Exclude<SessionKind, 'terminal'>, parentId: SessionId) => {
+      const snapshot = refs.stateRef.current
+      const parentMeta = snapshot.sessions[parentId]
+      if (!parentMeta) {
+        showToast('Could not create linked agent: parent agent is gone')
+        return
+      }
+      // If the parent is ITSELF a linked agent, anchor the new agent
+      // to the same top-level parent — linked agents never chain, so
+      // the dispatch nesting stays exactly one level deep (see the
+      // note on SessionMeta.linkedParentId).
+      const rootParentId = parentMeta.linkedParentId ?? parentId
+      const rootParentMeta = snapshot.sessions[rootParentId] ?? parentMeta
+
+      // Resolve the parent's tab: a detached parent carries its tab
+      // id on the detachedSessions record; a grid parent is found by
+      // the tab whose tile tree contains its leaf.
+      const parentDetached = snapshot.detachedSessions[rootParentId]
+      const parentTab = parentDetached
+        ? snapshot.tabs.find(t => t.id === parentDetached.projectTabId)
+        : snapshot.tabs.find(t => collectLeaves(t.root).includes(rootParentId))
+      if (!parentTab) {
+        showToast('Could not create linked agent: parent tab not found')
+        return
+      }
+
+      let sessionId: SessionId
+      try {
+        sessionId = await sessionActions.spawn(rootParentMeta.cwd, { kind })
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Failed to create linked agent',
+        )
+        return
+      }
+
+      setState(prev => {
+        const latestTab = prev.tabs.find(t => t.id === parentTab.id)
+        const projectTabIndex = prev.tabs.findIndex(t => t.id === parentTab.id)
+        if (!latestTab) return prev
+        return {
+          ...prev,
+          activeTabId: latestTab.id,
+          // Stamp the parent link onto the freshly-spawned child's
+          // meta. spawn() already inserted sessions[sessionId]; we
+          // patch that entry rather than racing spawn's own setState.
+          sessions: {
+            ...prev.sessions,
+            [sessionId]: {
+              ...(prev.sessions[sessionId] ?? { cwd: rootParentMeta.cwd, kind }),
+              linkedParentId: rootParentId,
+            },
+          },
+          // A linked agent is a detached dispatch agent — same record
+          // shape as createDetachedDispatchAgent, just anchored to the
+          // parent's tab instead of the active one.
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [sessionId]: {
+              sessionId,
+              surface: 'dispatch',
+              projectTabId: latestTab.id,
+              projectTabTitle: latestTab.title,
+              projectTabIndex: projectTabIndex >= 0 ? projectTabIndex : 0,
+              detachedAt: Date.now(),
+            },
+          },
+          // Focus the new agent in dispatch — the user spawned it to
+          // immediately hand it a prompt (typically a review prompt).
+          dispatchMode: prev.dispatchMode
+            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+            : prev.dispatchMode,
+        }
+      })
+    },
+    [refs.stateRef, sessionActions, setState, showToast],
+  )
+
+  // Close every linked child of `parentId`, recursively. Linked
+  // agents are lifecycle-bound to their parent: when the parent is
+  // closed, every session that named it as `linkedParentId` is
+  // closed too. Recursion via closeSessionRef means a (rare) chain
+  // unwinds fully even though createLinkedAgent never builds one.
+  // Called from BOTH close paths — closeSession (explicit / dispatch
+  // / modal closes) and closeFocused's grid path — because a parent
+  // can be either a detached dispatch agent or a grid pane.
+  const closeLinkedChildren = useCallback(async (parentId: SessionId) => {
+    const sessions = refs.stateRef.current.sessions
+    const childIds = Object.keys(sessions).filter(
+      id => sessions[id]?.linkedParentId === parentId,
+    )
+    for (const childId of childIds) {
+      await closeSessionRef.current?.(childId)
+    }
+  }, [refs.stateRef])
 
   // Promote a detached dispatch session into the grid at a chosen
   // placement target.
@@ -606,6 +723,13 @@ export function usePaneActions(
     const targetId = tab.focusedSessionId
     const sessionMeta = state.sessions[targetId]
 
+    // Cascade-close any linked agents whose parent is this grid pane.
+    // The dispatch close path above already routes through
+    // closeSession (which cascades on its own); this covers the
+    // case where the parent is an ordinary grid pane closed from the
+    // normal grid layout.
+    await closeLinkedChildren(targetId)
+
     // Capture undo info BEFORE mutating the tree. Two cases:
     //   1. Pane inside a split → record the parent split's geometry
     //      and the surviving sibling's anchor leaf so we can
@@ -691,6 +815,7 @@ export function usePaneActions(
       return { ...prev, tabs, sessions }
     })
   }, [
+    closeLinkedChildren,
     refs.latestScreenRef,
     refs.seenUuidsRef,
     refs.stateRef,
@@ -719,6 +844,11 @@ export function usePaneActions(
       const sessionMeta = snapshot.sessions[targetId]
       const detached = snapshot.detachedSessions[targetId]
       if (!owningTab && !detached) return
+
+      // Linked agents are lifecycle-bound to their parent — close
+      // any session that named `targetId` as its linkedParentId
+      // before we close the parent itself.
+      await closeLinkedChildren(targetId)
 
       if (!owningTab && detached) {
         await window.api.killSession(targetId)
@@ -854,6 +984,7 @@ export function usePaneActions(
       })
     },
     [
+      closeLinkedChildren,
       refs.latestScreenRef,
       refs.seenUuidsRef,
       refs.stateRef,
@@ -1227,6 +1358,7 @@ export function usePaneActions(
     startNewAgentPlacement,
     commitNewAgentPlacement,
     createDetachedDispatchAgent,
+    createLinkedAgent,
     attachDetachedToGrid,
     attachAllDetachedForTab,
     detachFocusedToDispatch,
