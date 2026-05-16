@@ -69,6 +69,11 @@ export type {
   TranscriptPathRequest,
   TranscriptPathResult,
 } from '@preload/api/types.js'
+export type {
+  OrchestrationAgentRecord,
+  OrchestrationRendererRequest,
+  OrchestrationRendererResponse,
+} from '@mcp/shared/orchestrationTypes.js'
 
 export type {
   SetupCheckResult,

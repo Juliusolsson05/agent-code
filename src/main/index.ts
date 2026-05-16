@@ -35,6 +35,7 @@ import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 
 // Main process — thin Electron host.
 //
@@ -79,6 +80,7 @@ const dictationDebugJournals = new DictationDebugJournalRegistry()
 const pasteDebugJournals = new PasteDebugJournalRegistry()
 const worktreeActivityIndex = new WorktreeActivityIndex()
 const builtInMcpHost = new BuiltInMcpHttpHost()
+const orchestrationBridge = new OrchestrationBridge()
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -210,10 +212,22 @@ async function startApp(): Promise<void> {
 
   await builtInMcpHost.start()
   manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost)
+  builtInMcpHost.setDependencies({
+    orchestrationBridge,
+    sessionManager: manager,
+  })
   performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
-  registerAllIpc({ manager, lspManager, ghostJournals, dictationDebugJournals, pasteDebugJournals, worktreeActivityIndex })
+  registerAllIpc({
+    manager,
+    lspManager,
+    ghostJournals,
+    dictationDebugJournals,
+    pasteDebugJournals,
+    worktreeActivityIndex,
+    orchestrationBridge,
+  })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()
   performanceService.mark('app.main.window.created')
