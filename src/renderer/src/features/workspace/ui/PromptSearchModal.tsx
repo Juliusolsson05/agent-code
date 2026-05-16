@@ -5,6 +5,11 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
+import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
+import {
+  SessionPreviewPane,
+  type PreviewTarget,
+} from '@renderer/features/session-preview/ui/SessionPreviewPane'
 
 // PromptSearchModal — cross-session prompt search.
 //
@@ -70,6 +75,20 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
 
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+
+  // Splitter between the results list and the conversation preview.
+  // Width-based, in-memory only — the modal is transient, so a drag
+  // doesn't need to survive a close (same policy as PathPickerModal).
+  const modalRef = useRef<HTMLDivElement>(null)
+  const [listWidth, setListWidth] = useState(480)
+  const splitter = useResizableSplitter({
+    onDrag: clientX => {
+      const rect = modalRef.current?.getBoundingClientRect()
+      if (!rect) return
+      // Clamp so neither pane can be dragged shut.
+      setListWidth(Math.max(360, Math.min(760, clientX - rect.left)))
+    },
+  })
 
   // Scope results to the visibly commanded pane's cwd. Searching
   // across every workspace on disk surfaces sessions from unrelated
@@ -228,6 +247,18 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
     return 'Recent Conversations'
   }, [query, sessions.length])
 
+  // The preview pane appears as soon as there's a list to preview.
+  // It mirrors whichever row keyboard nav / hover has selected.
+  const previewVisible = sessions.length > 0
+  const selectedEntry = sessions[selectedIdx] ?? null
+  const previewTarget: PreviewTarget | null = selectedEntry
+    ? {
+        kind: selectedEntry.kind,
+        cwd: selectedEntry.cwd,
+        providerSessionId: selectedEntry.providerSessionId,
+      }
+    : null
+
   if (!open) return null
 
   return (
@@ -238,7 +269,8 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
       }}
     >
       <div
-        className="w-[min(820px,94vw)] max-h-[82vh] flex flex-col overflow-hidden bg-surface border border-border-hi"
+        ref={modalRef}
+        className={`${previewVisible ? 'w-[min(1200px,96vw)]' : 'w-[min(820px,94vw)]'} max-h-[82vh] flex flex-col overflow-hidden bg-surface border border-border-hi`}
         onKeyDown={onKeyDown}
       >
         {/* Search input */}
@@ -277,29 +309,57 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
           </div>
         ) : null}
 
-        {/* Results list */}
-        <div ref={listRef} className="flex-1 overflow-y-auto">
-          {sessions.length === 0 && !loading ? (
-            <div className="py-12 text-center text-[12px] text-muted">
-              {query.trim()
-                ? `No conversations match "${query.trim()}". Try fewer words.`
-                : 'No conversations recorded yet.'}
-            </div>
-          ) : (
-            sessions.map((entry, idx) => (
-              <SessionCard
-                key={`${entry.kind}:${entry.providerSessionId}`}
-                entry={entry}
-                selected={idx === selectedIdx}
-                resuming={resuming === entry.providerSessionId}
-                queryLower={query.trim().toLowerCase()}
-                onHover={() => setSelectedIdx(idx)}
-                onSelect={() => void resume(entry)}
-                dataIdx={idx}
+        {/* Results list + conversation preview.
+            The list keeps its own scroll container (listRef — the
+            keyboard scroll-into-view effect queries inside it); the
+            preview pane mirrors the selected row. */}
+        <div className="flex-1 flex min-h-0">
+          <div
+            ref={listRef}
+            className="overflow-y-auto min-h-0"
+            style={
+              previewVisible ? { width: listWidth, flexShrink: 0 } : { flex: 1 }
+            }
+          >
+            {sessions.length === 0 && !loading ? (
+              <div className="py-12 text-center text-[12px] text-muted">
+                {query.trim()
+                  ? `No conversations match "${query.trim()}". Try fewer words.`
+                  : 'No conversations recorded yet.'}
+              </div>
+            ) : (
+              sessions.map((entry, idx) => (
+                <SessionCard
+                  key={`${entry.kind}:${entry.providerSessionId}`}
+                  entry={entry}
+                  selected={idx === selectedIdx}
+                  resuming={resuming === entry.providerSessionId}
+                  queryLower={query.trim().toLowerCase()}
+                  onHover={() => setSelectedIdx(idx)}
+                  onSelect={() => void resume(entry)}
+                  dataIdx={idx}
+                />
+              ))
+            )}
+          </div>
+
+          {previewVisible && (
+            <>
+              <div
+                onMouseDown={splitter.onMouseDown}
+                className={`
+                  w-1 flex-shrink-0 cursor-col-resize
+                  transition-colors duration-120
+                  ${splitter.dragging ? 'bg-accent' : 'bg-border hover:bg-border-hi'}
+                `}
               />
-            ))
+              <div className="flex-1 min-w-0 border-l border-border">
+                <SessionPreviewPane target={previewTarget} />
+              </div>
+            </>
           )}
         </div>
+        {splitter.cursorLock}
       </div>
     </div>
   )

@@ -13,6 +13,10 @@ import {
 } from '@renderer/features/prompt-templates/templates'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import {
+  SessionPreviewPane,
+  type PreviewTarget,
+} from '@renderer/features/session-preview/ui/SessionPreviewPane'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -663,6 +667,25 @@ export function CommandPalette({
     ],
   )
 
+  // In resume mode, the conversation preview pane mirrors the
+  // highlighted row. `selectedIndex` is driven by both keyboard (↑/↓)
+  // and hover (onMouseEnter on each row), so the preview follows
+  // either. A session's own cwd wins over the focused pane's cwd
+  // because the list can surface sessions from the focused project's
+  // history — same-cwd in practice, but be exact.
+  const resumePreviewTarget: PreviewTarget | null = (() => {
+    if (mode !== 'resume') return null
+    const session = filtered[selectedIndex] as SessionInfo | undefined
+    if (!session) return null
+    const cwd = session.cwd ?? focusedCwd
+    if (!cwd) return null
+    return {
+      kind: focusedProvider === 'codex' ? 'codex' : 'claude',
+      cwd,
+      providerSessionId: session.sessionId,
+    }
+  })()
+
   if (!open) return null
 
   return (
@@ -673,13 +696,15 @@ export function CommandPalette({
       aria-label="Command palette"
     >
       <div
-        className="
-          mt-[12vh] w-[min(900px,92vw)]
-          max-h-[60vh] flex flex-col
+        className={`
+          mt-[12vh] flex flex-col
           bg-surface border border-border
           shadow-lg shadow-black/30
           overflow-hidden
-        "
+          ${mode === 'resume'
+            ? 'w-[min(1180px,95vw)] max-h-[80vh]'
+            : 'w-[min(900px,92vw)] max-h-[60vh]'}
+        `}
         onClick={e => e.stopPropagation()}
       >
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
@@ -759,7 +784,9 @@ export function CommandPalette({
               min-h-0 py-1
               ${mode === 'commands'
                 ? 'flex-1 min-w-0 overflow-y-auto md:basis-[70%] md:border-r md:border-border'
-                : 'flex-1 overflow-y-auto'}
+                : mode === 'resume'
+                  ? 'flex-1 min-w-0 overflow-y-auto md:flex-none md:w-[42%] md:border-r md:border-border'
+                  : 'flex-1 overflow-y-auto'}
             `}
           >
           {(mode === 'save-prompt-template' || mode === 'edit-prompt-template') && (
@@ -1022,6 +1049,20 @@ export function CommandPalette({
 
           {mode === 'commands' && (
             <CommandDescriptionPanel command={selectedCommand} />
+          )}
+
+          {/* Resume mode — conversation preview for the highlighted
+              session, rendered with the real feed rows. Hidden below
+              md (same breakpoint policy as the command description
+              panel) so the narrow layout stays list-only. */}
+          {mode === 'resume' && (
+            <aside
+              role="region"
+              aria-label="Session preview"
+              className="hidden md:block md:flex-1 md:min-w-0 min-h-0"
+            >
+              <SessionPreviewPane target={resumePreviewTarget} />
+            </aside>
           )}
         </div>
       </div>
