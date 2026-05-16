@@ -23,9 +23,10 @@ export const ImageBlockRow = memo(function ImageBlockRow({
   role: 'user' | 'assistant'
 }) {
   const src = imageDataUrl(block)
+  const source = (block as { source?: { media_type?: unknown } }).source
   const mediaType =
-    typeof (block as { source?: { media_type?: unknown } }).source?.media_type === 'string'
-      ? (block as { source: { media_type: string } }).source.media_type
+    typeof source?.media_type === 'string'
+      ? source.media_type
       : 'image'
   const alt = role === 'user' ? 'Pasted image' : 'Image'
   const row = (

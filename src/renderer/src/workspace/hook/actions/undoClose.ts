@@ -194,8 +194,5 @@ export function useUndoCloseAction(
   // show/hide the "Undo Close" command.
   const undoCloseCount = refs.undoStackRef.current.length
 
-  // Silence TabId unused import.
-  void (null as unknown as TabId)
-
   return { undoClose, undoCloseCount }
 }

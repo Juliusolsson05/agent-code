@@ -19,7 +19,6 @@
 import {
   createDeepgramStreamingProvider,
   isSpeechProviderSelectable,
-  polishTranscriptWithOpenRouter,
   STT_PROVIDER_SUPPORT,
   transcribeAssemblyAi,
   transcribeDeepgram,
@@ -29,7 +28,8 @@ import {
   type SpeechProviderId,
   type SpeechTraceEvent,
   type SpeechTranscript,
-} from 'agent-voice-dictation'
+} from 'agent-voice-dictation/speech'
+import { polishTranscriptWithOpenRouter } from 'agent-voice-dictation/openrouter'
 
 export type DictationProvider = SpeechProviderId
 

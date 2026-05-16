@@ -23,6 +23,20 @@ export type AnchoredUserPrompt = LatestUserPrompt & {
     | { kind: 'codex'; userMessageIndex: number }
 }
 
+type UserPromptMeta = {
+  permissionMode?: string
+  isMeta?: boolean
+  uuid?: string
+}
+
+function userPromptMeta(entry: Entry): UserPromptMeta {
+  // These fields are provider-specific extensions on Claude user
+  // entries. Keep the cast behind a named helper so the filtering
+  // invariant is visible at each call site without repeating the
+  // broad "Entry plus loose metadata" assertion three times.
+  return entry as Entry & UserPromptMeta
+}
+
 function extractPromptText(entry: Entry): string {
   if (!isConversationEntry(entry)) return ''
   const content = entry.message.content
@@ -48,10 +62,7 @@ export function extractLatestUserPrompts(
     if (entry.message.role !== 'user') continue
     if (isCompactSummaryEntry(entry)) continue
 
-    const meta = entry as unknown as {
-      permissionMode?: string
-      isMeta?: boolean
-    }
+    const meta = userPromptMeta(entry)
     if (meta.isMeta === true) continue
     if (sessionKind !== 'codex' && meta.permissionMode === undefined) continue
 
@@ -83,10 +94,7 @@ export function extractLatestUserPrompt(
     if (entry.message.role !== 'user') continue
     if (isCompactSummaryEntry(entry)) continue
 
-    const meta = entry as unknown as {
-      permissionMode?: string
-      isMeta?: boolean
-    }
+    const meta = userPromptMeta(entry)
     if (meta.isMeta === true) continue
     if (sessionKind !== 'codex' && meta.permissionMode === undefined) continue
 
@@ -135,11 +143,7 @@ export function extractAnchoredUserPrompts(
     if (entry.message.role !== 'user') continue
     if (isCompactSummaryEntry(entry)) continue
 
-    const meta = entry as unknown as {
-      permissionMode?: string
-      isMeta?: boolean
-      uuid?: string
-    }
+    const meta = userPromptMeta(entry)
     if (meta.isMeta === true) continue
     if (sessionKind !== 'codex' && meta.permissionMode === undefined) continue
 

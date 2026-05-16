@@ -54,9 +54,14 @@
     "src/core/**/*",
     "src/shared/**/*",
     "src/providers/**/*",
-    "testing/**/*",
     "packages/agent-transcript-parser/src/**/*",
-    "packages/agent-voice-dictation/src/**/*",
+    // Pull only the Node-safe dictation package surfaces into the app
+    // typecheck. The package root also exports browser recording helpers, and
+    // those need the package-local DOM-enabled tsconfig instead of this
+    // Node-only project.
+    "packages/agent-voice-dictation/src/composer/**/*",
+    "packages/agent-voice-dictation/src/openrouter/**/*",
+    "packages/agent-voice-dictation/src/speech/**/*",
     "packages/claude-code-headless/src/**/*",
     "packages/codex-headless/src/**/*"
   ],
@@ -91,6 +96,7 @@
     // ~420 "Cannot use JSX" errors on files that aren't ours to
     // type-check. Exclude the whole subtree.
     "testing/rendering/renderer/**/*",
-    "testing/rendering/out/**/*"
+    "testing/rendering/out/**/*",
+    "packages/agent-voice-dictation/src/**/*.test.ts"
   ]
 }

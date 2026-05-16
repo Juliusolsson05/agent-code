@@ -259,7 +259,7 @@ export function useWorkspace(
     setState,
     setRuntimes,
     setTileTabs,
-    tabActions.newTab as unknown as (cwd: string) => Promise<unknown>,
+    tabActions.newTab,
     setBootstrapComplete,
     setRestoreStatus,
     defaultWorkspaceMode,

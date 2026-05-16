@@ -84,7 +84,7 @@ const worktreeActivityIndex = new WorktreeActivityIndex()
 // detection requires a child-process roundtrip. The 'let' is
 // load-bearing: every other module-scope reference is inside
 // callbacks that fire after the assignment.
-let manager: SessionManager = null as unknown as SessionManager
+let manager: SessionManager | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 

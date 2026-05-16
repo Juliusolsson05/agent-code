@@ -2,6 +2,7 @@ import {
   parseSemanticTodos,
   type SemanticLiveTurn,
   type SemanticRuntimeState,
+  type SemanticTodoItem,
   type SessionRuntime,
   type SessionStatus,
   type SessionStatusSource,
@@ -84,7 +85,9 @@ export function semanticHistoryRow(
  *  status derivation and the foldSemanticEvent branch that decides
  *  whether to archive a turn or keep it open across a pending
  *  tool_result. */
-export function isSemanticTurnRunning(turn: SemanticLiveTurn | null): boolean {
+export function isSemanticTurnRunning(
+  turn: SemanticLiveTurn | null,
+): turn is SemanticLiveTurn {
   return turn !== null && turn.endedAt === null
 }
 
@@ -226,7 +229,7 @@ export function deriveSemanticTaskSnapshot(
   const erroredToolUseIds: string[] = []
   const toolUseIdsInOrder: string[] = []
   const toolCallsById: SemanticLiveTurn['lookups']['toolCallsById'] = {}
-  let todos = emptySemanticTaskSnapshot().todos
+  let todos: SemanticTodoItem[] = emptySemanticTaskSnapshot().todos
 
   const orderedBlocks = Object.values(blocks).sort((a, b) => a.blockIndex - b.blockIndex)
   for (const block of orderedBlocks) {

@@ -173,7 +173,7 @@ export function selectMergedEntries(
   // belongs at the very end.
   return mergeWithUpstream(entries, visible, {
     trustSupersededFlag: true,
-  }) as Entry[]
+  })
 }
 
 /**

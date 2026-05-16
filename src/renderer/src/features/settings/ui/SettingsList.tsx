@@ -84,6 +84,7 @@ function SettingRow({
   actionContext: SettingActionContext
 }) {
   const context = { ...actionContext, settings }
+  const control = definition.control
 
   return (
     <div className="border-b border-border px-4 py-4 last:border-b-0">
@@ -94,21 +95,21 @@ function SettingRow({
         </div>
 
         <div className="w-full max-w-[420px] shrink-0">
-          {definition.control.type === 'toggle' ? (
+          {control.type === 'toggle' ? (
             <button
               type="button"
               onClick={() =>
-                void definition.control.onToggle(
+                void control.onToggle(
                   context,
-                  !definition.control.getValue(settings),
+                  !control.getValue(settings),
                 )
               }
               className="flex w-full items-center justify-between border border-border px-3 py-2 text-left text-[12px] text-ink-dim hover:border-border-hi hover:text-ink"
             >
-              <span>{definition.control.getValue(settings) ? 'Enabled' : 'Disabled'}</span>
+              <span>{control.getValue(settings) ? 'Enabled' : 'Disabled'}</span>
               <span
                 className={`flex h-3.5 w-3.5 border ${
-                  definition.control.getValue(settings)
+                  control.getValue(settings)
                     ? 'border-accent bg-accent'
                     : 'border-border-hi bg-transparent'
                 }`}
@@ -116,20 +117,20 @@ function SettingRow({
             </button>
           ) : null}
 
-          {definition.control.type === 'select' ? (
+          {control.type === 'select' ? (
             <div
               className="grid gap-1.5"
               style={{
-                gridTemplateColumns: `repeat(${definition.control.columns ?? 1}, minmax(0, 1fr))`,
+                gridTemplateColumns: `repeat(${control.columns ?? 1}, minmax(0, 1fr))`,
               }}
             >
-              {definition.control.options.map(option => {
-                const active = definition.control.getValue(settings) === option.value
+              {control.options.map(option => {
+                const active = control.getValue(settings) === option.value
                 return (
                   <button
                     key={option.value}
                     type="button"
-                    onClick={() => void definition.control.onSelect(context, option.value)}
+                    onClick={() => void control.onSelect(context, option.value)}
                     className={`border px-3 py-2 text-left ${
                       active
                         ? 'border-accent bg-accent text-accent-fg'
@@ -148,24 +149,24 @@ function SettingRow({
             </div>
           ) : null}
 
-          {definition.control.type === 'hotkey' ? (
+          {control.type === 'hotkey' ? (
             <HotkeyInput
-              value={definition.control.getValue(settings)}
-              onChange={value => definition.control.onChange(context, value)}
+              value={control.getValue(settings)}
+              onChange={value => control.onChange(context, value)}
             />
           ) : null}
 
-          {definition.control.type === 'action' ? (
+          {control.type === 'action' ? (
             <button
               type="button"
-              onClick={() => void definition.control.onTrigger(context)}
+              onClick={() => void control.onTrigger(context)}
               className={`w-full border px-3 py-2 text-left text-[12px] ${
-                definition.control.tone === 'danger'
+                control.tone === 'danger'
                   ? 'border-danger text-danger hover:bg-danger/10'
                   : 'border-border text-ink-dim hover:border-border-hi hover:text-ink'
               }`}
             >
-              {definition.control.label}
+              {control.label}
             </button>
           ) : null}
         </div>

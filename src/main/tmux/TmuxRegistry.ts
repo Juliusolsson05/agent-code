@@ -105,9 +105,10 @@ export class TmuxRegistry {
 
   /** True iff a tmux session with the given name exists. */
   async sessionExists(name: string): Promise<boolean> {
+    const binary = this.requireBinary()
     return new Promise(resolve => {
       const proc = childSpawn(
-        this.tmuxBinary,
+        binary,
         ['has-session', '-t', name],
         { stdio: 'ignore' },
       )
@@ -186,8 +187,9 @@ export class TmuxRegistry {
 
   /** Run a tmux command, resolving with stdout. Reject on non-zero. */
   private runTmuxCapture(args: string[]): Promise<string> {
+    const binary = this.requireBinary()
     return new Promise((resolve, reject) => {
-      const proc = childSpawn(this.tmuxBinary, args)
+      const proc = childSpawn(binary, args)
       let stdout = ''
       proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString('utf8') })
       proc.on('error', reject)
@@ -200,13 +202,21 @@ export class TmuxRegistry {
 
   /** Run a tmux command, resolving once it exits 0; reject on non-zero. */
   private runTmux(args: string[]): Promise<void> {
+    const binary = this.requireBinary()
     return new Promise((resolve, reject) => {
-      const proc = childSpawn(this.tmuxBinary, args, { stdio: 'ignore' })
+      const proc = childSpawn(binary, args, { stdio: 'ignore' })
       proc.on('error', reject)
       proc.on('exit', code => {
         if (code === 0) resolve()
         else reject(new Error(`tmux ${args.join(' ')} exited ${code}`))
       })
     })
+  }
+
+  private requireBinary(): string {
+    if (this.tmuxBinary === null) {
+      throw new Error('TmuxRegistry: bundled tmux binary is unavailable')
+    }
+    return this.tmuxBinary
   }
 }

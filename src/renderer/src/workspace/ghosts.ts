@@ -94,6 +94,12 @@ import type {
   SemanticLiveTurn,
 } from '@renderer/workspace/workspaceState'
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
 // -----------------------------------------------------------------------------
 // Semantic block → Claude content blocks
 // -----------------------------------------------------------------------------
@@ -397,18 +403,20 @@ export function reconcileUpstream(
   if (!realUuid) return prev as Map<string, GhostEntry>
 
   const message = entry.message
+  const messageRecord = asRecord(message)
   const messageId =
-    typeof (message as { id?: string }).id === 'string'
-      ? (message as { id: string }).id
+    typeof messageRecord?.id === 'string'
+      ? messageRecord.id
       : null
   // Codex rollout-sourced entries don't carry message.id (the Codex
   // response id lives elsewhere on the rollout payload). Plumbing it
   // through the mapper to this matcher is Task 6 of the rendering-
   // fixes plan; the field is read defensively here so the match path
   // lights up the moment `mapCodexRolloutToFeedEntries` stamps it.
+  const codexRecord = asRecord(entry)
   const codexTurnId =
-    typeof (entry as { codexTurnId?: string }).codexTurnId === 'string'
-      ? (entry as { codexTurnId: string }).codexTurnId
+    typeof codexRecord?.codexTurnId === 'string'
+      ? codexRecord.codexTurnId
       : null
 
   // Gather tool_use ids carried by this upstream entry — used for
@@ -416,7 +424,7 @@ export function reconcileUpstream(
   const toolUseIdsInEntry = new Set<string>()
   if (Array.isArray(message.content)) {
     for (const block of message.content) {
-      const rec = block as Record<string, unknown>
+      const rec = asRecord(block)
       if (rec?.type === 'tool_use' && typeof rec.id === 'string') {
         toolUseIdsInEntry.add(rec.id)
       }

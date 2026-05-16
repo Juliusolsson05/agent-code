@@ -1,11 +1,14 @@
 import { app } from 'electron'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn, type ChildProcessByStdio } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, chmod, mkdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import type { Readable } from 'node:stream'
 
-let child: ChildProcessWithoutNullStreams | null = null
+type HotkeyHelperProcess = ChildProcessByStdio<null, Readable, Readable>
+
+let child: HotkeyHelperProcess | null = null
 
 export async function startMacDictationHotkeyHelper(
   binding: string,
@@ -17,12 +20,13 @@ export async function startMacDictationHotkeyHelper(
 
   try {
     const binary = await ensureHelperBinary()
-    child = spawn(binary, [binding], {
+    const helper = spawn(binary, [binding], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+    child = helper
 
-    child.stdout.setEncoding('utf8')
-    child.stdout.on('data', chunk => {
+    helper.stdout.setEncoding('utf8')
+    helper.stdout.on('data', chunk => {
       for (const line of String(chunk).split('\n')) {
         if (!line.trim()) continue
         try {
@@ -40,8 +44,8 @@ export async function startMacDictationHotkeyHelper(
       }
     })
 
-    child.stderr.setEncoding('utf8')
-    child.stderr.on('data', chunk => {
+    helper.stderr.setEncoding('utf8')
+    helper.stderr.on('data', chunk => {
       // Accessibility prompts and unsupported binding errors come from the
       // helper process, not the renderer. Keep them in main where the user can
       // see the operational problem during local development.
@@ -49,14 +53,14 @@ export async function startMacDictationHotkeyHelper(
       console.warn(String(chunk).trim())
     })
 
-    child.on('exit', (code, signal) => {
-      if (child) {
+    helper.on('exit', (code, signal) => {
+      if (child === helper) {
         // eslint-disable-next-line no-console
         console.warn(
           `[dictation:hotkey] mac helper exited code=${code ?? 'null'} signal=${signal ?? 'null'}`,
         )
       }
-      child = null
+      if (child === helper) child = null
     })
 
     return true
