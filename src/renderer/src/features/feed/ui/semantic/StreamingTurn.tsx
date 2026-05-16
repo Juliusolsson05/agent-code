@@ -9,7 +9,10 @@ import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import { ToolUseIndexContext } from '@renderer/features/feed/context'
 import { SemanticCollapsedActivityRow } from '@renderer/features/feed/ui/semantic/CollapsedActivityRow'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
-import { buildSemanticRenderUnits } from '@renderer/features/feed/ui/semantic/renderUnits'
+import {
+  buildSemanticRenderUnits,
+  type CommittedAssistantText,
+} from '@renderer/features/feed/ui/semantic/renderUnits'
 
 // WHY render the semantic turn block-by-block instead of just dumping
 // `turn.text` through markdown:
@@ -48,8 +51,9 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   // of-feed dupe where the live turn keeps rendering tool rounds
   // that the committed transcript already painted above.
   const committedToolUseIndex = useContext(ToolUseIndexContext)
-  const committedAssistantTextKeys = useMemo(() => {
+  const committedAssistantText = useMemo<CommittedAssistantText>(() => {
     const keys = new Set<string>()
+    const texts = new Set<string>()
     for (const entry of committedEntries) {
       if (entry.type !== 'assistant') continue
       const assistantEntry = entry as {
@@ -67,17 +71,18 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
       for (const block of content) {
         const item = block as Record<string, unknown>
         if (item.type !== 'text' || typeof item.text !== 'string' || !item.text) continue
+        texts.add(item.text)
         for (const turnId of turnIds) {
           keys.add(`${turnId}\u0000${item.text}`)
         }
       }
     }
-    return keys
+    return { keys, texts }
   }, [committedEntries])
   const units = buildSemanticRenderUnits(
     turn,
     committedToolUseIndex,
-    committedAssistantTextKeys,
+    committedAssistantText,
   )
   const hasBlocks = blocks.length > 0
 
@@ -106,7 +111,7 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   // moving it earlier would break Rules of Hooks because the hook
   // count would differ between compaction and non-compaction renders
   // of the same component instance. The wasted hook work is cheap —
-  // `committedAssistantTextKeys` memoizes on `committedEntries` which
+  // `committedAssistantText` memoizes on `committedEntries` which
   // doesn't grow during the compaction window.
   if (turn.isCompactionSynthesis) {
     return (
@@ -136,7 +141,10 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
     // carries the "agent is working" signal on its own. See
     // docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
     if (!turn.text) return null
-    if (committedAssistantTextKeys.has(`${turn.turnId}\u0000${turn.text}`)) {
+    if (
+      committedAssistantText.keys.has(`${turn.turnId}\u0000${turn.text}`) ||
+      committedAssistantText.texts.has(turn.text)
+    ) {
       return null
     }
     return (
