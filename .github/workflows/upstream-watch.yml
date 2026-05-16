@@ -1,0 +1,53 @@
+name: Upstream drift watch
+
+# Detects when Claude Code / Codex publish a release newer than the
+# version this repo has explicitly accepted in
+# support/upstream-versions.json, and opens a maintenance issue.
+#
+# It ONLY detects drift. It never edits runtime code and never bumps
+# the accepted version — that is a human PR after a compatibility pass.
+# See docs/superpowers/plans/2026-05-16-upstream-drift-tracker.md.
+
+on:
+  schedule:
+    # Daily at 06:17 UTC. Claude Code ships ~daily, so daily polling is
+    # the right cadence. Off-the-hour to dodge cron congestion on the
+    # hour. Scheduled workflows run on the default branch only — this
+    # trigger does nothing until the file is merged to main.
+    - cron: '17 6 * * *'
+  workflow_dispatch: {}
+
+# Scoped to exactly what is needed: read the checkout, write issues in
+# THIS repo. No cross-repo scope — each repo watches its own upstream
+# with its own GITHUB_TOKEN, so there is no PAT or GitHub App that can
+# silently expire and kill the detector.
+permissions:
+  contents: read
+  issues: write
+
+# A slow run must never overlap the next scheduled run.
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Detect upstream drift
+        id: detect
+        run: node scripts/check-upstream.mjs
+
+      - name: Sync maintenance issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ steps.detect.outputs.result }}
+        run: bash .github/scripts/sync-upstream-issues.sh
