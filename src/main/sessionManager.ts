@@ -11,6 +11,8 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -124,6 +126,10 @@ type SpawnOptions = {
    *  (see Task 8 / tmuxRecovery). When the named session no longer
    *  exists, falls back to creating a fresh one. */
   recoverTmuxName?: string
+  /** Agent sessions only: built-in Agent Code MCP domains to expose
+   *  to this provider process. Main converts these stable domain names
+   *  into per-session loopback URLs + bearer tokens at spawn time. */
+  builtInMcpDomains?: BuiltInMcpDomain[]
 }
 
 // WHY private: same reasoning as SpawnOptions — the IPC handler that
@@ -243,7 +249,10 @@ export class SessionManager extends EventEmitter {
   // accept a registry that is known to be usable, so a non-null value
   // here means tmux IS installed. When null, terminal sessions fall
   // back to direct PTY spawn (no persistence).
-  constructor(private readonly tmuxRegistry: TmuxRegistry | null = null) {
+  constructor(
+    private readonly tmuxRegistry: TmuxRegistry | null = null,
+    private readonly builtInMcpHost: BuiltInMcpHttpHost | null = null,
+  ) {
     super()
   }
 
@@ -330,6 +339,17 @@ export class SessionManager extends EventEmitter {
         cols: options.cols ?? 120,
         rows: options.rows ?? 40,
       }
+      let builtInMcpServers: BuiltInMcpServerConfig[] = []
+      if (options.builtInMcpDomains && options.builtInMcpDomains.length > 0) {
+        if (!this.builtInMcpHost) {
+          throw new Error('Built-in MCP host is not available')
+        }
+        builtInMcpServers = this.builtInMcpHost.registerSession({
+          sessionId,
+          cwd: options.cwd,
+          domains: options.builtInMcpDomains,
+        })
+      }
       const provider = getMainProvider(kind)
       const createStartedAt = performance.now()
       // `session` here structurally conforms to AgentSessionLike —
@@ -353,6 +373,7 @@ export class SessionManager extends EventEmitter {
         // mitmproxy path; Codex uses a local Responses proxy via
         // `openai_base_url`.
         useProxy: options.useProxy,
+        builtInMcpServers,
       }) as AgentSessionLike
       performanceService.record({
         kind: 'span_end',
@@ -437,6 +458,7 @@ export class SessionManager extends EventEmitter {
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
         this.markActivity(sessionId)
         this.emit('exit', { sessionId, exitCode, signal })
+        this.builtInMcpHost?.revokeSession(sessionId)
         this.sessions.delete(sessionId)
         this.agentPtyBuffers.delete(sessionId)
         this.agentPtyAttached.delete(sessionId)
@@ -476,6 +498,7 @@ export class SessionManager extends EventEmitter {
         this.agentPtyAttached.delete(sessionId)
         this.agentPtyRestoreSizes.delete(sessionId)
         this.sessionSizes.delete(sessionId)
+        this.builtInMcpHost?.revokeSession(sessionId)
         performanceService.error('session.spawn.providerStart.error', err, {
           sessionId,
           kind,
@@ -877,6 +900,7 @@ export class SessionManager extends EventEmitter {
     // orphan and kills it. This is the explicit "buffer for undo"
     // behavior the user asked for in the P1 brainstorm.
     this.sessions.delete(sessionId)
+    this.builtInMcpHost?.revokeSession(sessionId)
     if (entry.kind === 'claude' || entry.kind === 'codex') {
       this.agentPtyBuffers.delete(sessionId)
       this.agentPtyAttached.delete(sessionId)

@@ -136,6 +136,45 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'enable-built-in-mcp-ping',
+    title: 'Enable Built-in MCP Ping',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code built-in MCP access.\n\n**Use when:** You want to verify the new MCP bridge for this pane.\n\n**Notes:** Adds the ping domain only; orchestration tools are implemented separately.',
+    keywords: ['mcp', 'server', 'built-in', 'ping', 'reload', 'agent', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'ping' as const]))
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(newSessionId, 'Reloaded with built-in MCP ping')
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Built-in MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
     id: 'reload-agent',
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **Claude or Codex agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',

@@ -44,7 +44,8 @@
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
       "@shared/*": ["./src/shared/*"],
-      "@providers/*": ["./src/providers/*"]
+      "@providers/*": ["./src/providers/*"],
+      "@mcp/*": ["./src/mcp/*"]
     }
   },
   "include": [
@@ -54,6 +55,7 @@
     "src/core/**/*",
     "src/shared/**/*",
     "src/providers/**/*",
+    "src/mcp/**/*",
     "packages/agent-transcript-parser/src/**/*",
     // Pull only the Node-safe dictation package surfaces into the app
     // typecheck. The package root also exports browser recording helpers, and
