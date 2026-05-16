@@ -702,7 +702,14 @@ export function CommandPalette({
   // history — same-cwd in practice, but be exact.
   const resumePreviewTarget: PreviewTarget | null = (() => {
     if (mode !== 'resume') return null
-    const session = filtered[selectedIndex] as SessionInfo | undefined
+    // `filteredSessions` is the resume-mode list `selectedIndex` indexes
+    // into (same array the keyboard handler and the rendered rows use).
+    // An earlier draft of this block referenced a `filtered` variable
+    // that a concurrent command-palette refactor had already renamed —
+    // the two changes merged cleanly as text but left this reference
+    // dangling. `filteredSessions` is typed `SessionInfo[]`, so the
+    // cast is belt-and-suspenders against noUncheckedIndexedAccess.
+    const session = filteredSessions[selectedIndex] as SessionInfo | undefined
     if (!session) return null
     const cwd = session.cwd ?? focusedCwd
     if (!cwd) return null
