@@ -20,6 +20,7 @@ import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useC
 import { useComposerKeybinds } from '@renderer/workspace/tile-tree/TileLeaf/useComposerKeybinds'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { useTypeToFocus } from '@renderer/workspace/tile-tree/TileLeaf/useTypeToFocus'
+import { usePasteToFocus } from '@renderer/workspace/tile-tree/TileLeaf/usePasteToFocus'
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
@@ -211,6 +212,22 @@ export function TileLeaf({
     sessionId,
     setDraftImages,
     showToast,
+  })
+
+  // Paste-to-focus — document-level paste listener that routes the
+  // clipboard into the composer when the pane is focused but DOM
+  // focus drifted off the textarea. The paste sibling of
+  // useTypeToFocus above; it shares `handlePaste` so pasted images
+  // go through the exact same gates as a textarea paste. Hook in
+  // ./TileLeaf/usePasteToFocus.ts. Declared here (not next to
+  // useTypeToFocus) because it depends on `handlePaste`.
+  usePasteToFocus({
+    focused,
+    sessionId,
+    inputRef,
+    setDraftInput,
+    onUserEngagement: acknowledgeSession,
+    handlePaste,
   })
 
   // Composer keybinds — slash-mode + normal-mode + prompt-history
