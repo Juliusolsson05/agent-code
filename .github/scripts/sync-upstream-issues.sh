@@ -12,6 +12,19 @@
 # bump is a deliberate human PR after a compatibility review.
 set -euo pipefail
 
+# Fail red if the detector produced no usable result. An empty or
+# malformed $RESULT means the `result=` output from the detect step
+# never wired through (a renamed step id, a crashed script, a GitHub
+# Actions output-format change). Without this guard the loop below
+# would iterate ZERO providers and the whole run would go GREEN having
+# opened, updated, and closed nothing — silently masking a broken
+# detector, which is the one failure mode this whole system exists to
+# prevent. Checked before label creation so a broken run is inert.
+if ! jq -e '.results | type == "array" and length > 0' >/dev/null 2>&1 <<<"${RESULT:-}"; then
+  echo "ERROR: \$RESULT is empty or has no providers — the detect step likely failed" >&2
+  exit 1
+fi
+
 # Ensure the two generic labels exist. --force is create-or-update, so
 # this is safe against a repo that has never seen these labels.
 gh label create upstream-update --color FBCA04 \

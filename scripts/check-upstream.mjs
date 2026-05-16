@@ -54,6 +54,31 @@ function isNewer(a, b) {
   return false
 }
 
+// Strict release-version guard.
+//
+// `isNewer` is a plain numeric major.minor.patch sort. That is correct
+// ONLY for normal release versions. A prerelease tag ("2.1.0-rc.1"), an
+// extra segment ("1.2.3.4"), or a non-numeric segment ("1.2.x") would
+// all slip through `core()` and produce a silently WRONG drift verdict
+// (e.g. `2.1.0` would not be seen as newer than `2.1.0-rc.1`).
+//
+// npm's `latest` dist-tag points at a stable release by convention, and
+// an `accepted` value is a release the repo shipped against — so a
+// non-release version here means a broken assumption upstream or a typo
+// in support/upstream-versions.json. Fail red rather than compare
+// wrong: a red Actions run gets a human's attention; a wrong verdict
+// silently masks real drift. This is why the detector does not pull in
+// the `semver` package — it deliberately refuses anything that is not a
+// plain release, instead of trying to order prereleases.
+function assertReleaseVersion(version, context) {
+  if (!/^\d+\.\d+\.\d+$/.test(String(version).trim())) {
+    throw new Error(
+      `${context} is not a plain release version: "${version}". ` +
+        'This detector only compares major.minor.patch releases.',
+    )
+  }
+}
+
 // Fetch npm's ABBREVIATED registry metadata. The
 // `application/vnd.npm.install-v1+json` Accept header returns the small
 // abbreviated document — it still carries `dist-tags`, so we get
@@ -80,7 +105,11 @@ async function main() {
   const results = []
 
   for (const [provider, entry] of Object.entries(support.providers)) {
+    // Validate the support-file value before spending a network call —
+    // a typo there should fail fast and obviously.
+    assertReleaseVersion(entry.accepted, `accepted version for ${entry.label}`)
     const latest = await fetchLatest(entry.pkg)
+    assertReleaseVersion(latest, `latest version for ${entry.label}`)
     results.push({
       provider,
       label: entry.label,
