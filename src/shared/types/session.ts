@@ -1,3 +1,5 @@
+import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+
 // Base session types that all providers implement. The shell and main
 // process only interact with sessions through these types — never
 // through provider-specific session classes directly.
@@ -26,6 +28,11 @@ export type SessionOptions = {
    *  visible to every provider and TypeScript doesn't silently lose
    *  the field the next time the spawn shape changes. */
   useProxy?: boolean
+  /** Per-process MCP server configs minted by main for built-in Agent Code
+   *  domains. Providers only receive concrete launch material (URL + headers),
+   *  never the long-lived domain policy; the renderer/session metadata remains
+   *  the source of truth for which domains should be enabled. */
+  builtInMcpServers?: BuiltInMcpServerConfig[]
 }
 
 export type SessionInfo = {

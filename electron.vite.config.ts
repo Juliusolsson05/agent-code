@@ -36,6 +36,7 @@ const projectAlias = {
   '@renderer': resolve(__dirname, 'src/renderer/src'),
   '@shared': resolve(__dirname, 'src/shared'),
   '@providers': resolve(__dirname, 'src/providers'),
+  '@mcp': resolve(__dirname, 'src/mcp'),
 }
 
 const headlessExclude = ['claude-code-headless', 'codex-headless', 'agent-transcript-parser', 'agent-voice-dictation']

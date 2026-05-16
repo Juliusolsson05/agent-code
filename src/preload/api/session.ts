@@ -19,6 +19,7 @@ import type {
   SessionResumePromptEvent,
   SessionCompactionStateEvent,
   SessionConditionsEvent,
+  BuiltInMcpDomain,
   TranscriptPathRequest,
   TranscriptPathResult,
   Unsub,
@@ -51,6 +52,7 @@ export const sessionApi = {
      *  mitmproxy installed (see claude-code-headless/PROXY_STREAMING.md).
      *  Default false — session behavior is unchanged. */
     useProxy?: boolean
+    builtInMcpDomains?: BuiltInMcpDomain[]
     /** Terminal + tmux only: when set AND tmux is available, attach
      *  to this existing tmux session instead of creating a new one.
      *  Used by the workspace reload path to recover persistent
