@@ -5,6 +5,31 @@ import { classifySemanticToolActivity } from '@renderer/features/feed/lib/helper
 
 import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/types'
 
+export type CommittedAssistantText = {
+  /** Turn-scoped keys for the clean case where live semantic turn id
+   *  and committed transcript turn id agree. Claude normally lands
+   *  here via message.id; Codex sometimes lands here via codexTurnId. */
+  keys: ReadonlySet<string>
+  /** Exact committed assistant text, independent of turn id.
+   *
+   * WHY this fallback exists:
+   * Codex can expose two ids for one user-visible response. The proxy
+   * semantic stream uses the Responses API id (`resp_*`); committed
+   * rollout rows are stamped with the task/turn id (`019e...`) because
+   * response_item rows do not carry the proxy response id. The debug
+   * bundle `2026-05-16T17-51-43-433-f2395303` has exactly that shape:
+   * committed row `2026-05-16T17:51:37.605Z:message` plus live
+   * semantic row `resp_009dff...` rendered the same paragraph in raw
+   * HTML. A turn-key-only filter cannot see they are the same visible
+   * block.
+   *
+   * This is intentionally exact-string and committed-only. We do not
+   * fuzzy match prefixes, and the render-unit guard only applies to
+   * finalized/completed live text blocks, so active streaming text is
+   * not hidden just because an older committed answer shares a prefix. */
+  texts: ReadonlySet<string>
+}
+
 // WHY add a derived render-unit pass before painting semantic blocks:
 //
 // Claude Code does not render raw transcript/tool rows directly for
@@ -49,7 +74,7 @@ import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/typ
 export function buildSemanticRenderUnits(
   turn: SemanticLiveTurn,
   committedToolUseIndex?: Map<string, ToolUseBlock>,
-  committedAssistantTextKeys?: ReadonlySet<string>,
+  committedAssistantText?: CommittedAssistantText,
 ): SemanticRenderUnit[] {
   const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
   const units: SemanticRenderUnit[] = []
@@ -67,7 +92,10 @@ export function buildSemanticRenderUnits(
       text &&
       (block.kind === 'text' || block.kind === 'message') &&
       (block.finalized || block.status === 'completed') &&
-      committedAssistantTextKeys?.has(`${turn.turnId}\u0000${text}`)
+      (
+        committedAssistantText?.keys.has(`${turn.turnId}\u0000${text}`) ||
+        committedAssistantText?.texts.has(text)
+      )
     ) {
       continue
     }
