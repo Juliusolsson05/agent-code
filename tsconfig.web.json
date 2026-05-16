@@ -55,8 +55,7 @@
     // needs the file explicitly. (The node project *excludes* this
     // file — see tsconfig.node.json — because it transitively pulls
     // the entire renderer subtree in.)
-    "src/providers/registry.renderer.ts",
-    "testing/**/*"
+    "src/providers/registry.renderer.ts"
   ],
   // Project reference: tell tsc to resolve preload imports via node's
   // emitted declarations, not by walking the source tree. Without

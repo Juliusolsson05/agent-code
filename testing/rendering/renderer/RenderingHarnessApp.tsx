@@ -307,7 +307,7 @@ export function RenderingHarnessApp() {
             let kept = 0
             const dropped: string[] = []
             for (const feedEntry of mapped) {
-              const uuid = (feedEntry as { uuid?: unknown }).uuid
+              const uuid = entryUuid(feedEntry)
               if (typeof uuid === 'string') {
                 if (seen.has(uuid)) {
                   dropped.push('dedup')
@@ -350,7 +350,7 @@ export function RenderingHarnessApp() {
             })
             continue
           }
-          const uuid = (feedEntry as { uuid?: unknown }).uuid
+          const uuid = entryUuid(feedEntry)
           if (typeof uuid === 'string') {
             if (seen.has(uuid)) {
               pushDebug({
@@ -393,7 +393,7 @@ export function RenderingHarnessApp() {
     offs.push(
       window.api.onSessionSemanticEvent(evt => {
         if (activeSessionIdRef.current && evt.sessionId !== activeSessionIdRef.current) return
-        const ev = (evt.event ?? {}) as Record<string, unknown>
+        const ev = asRecord(evt.event) ?? {}
         const type = typeof ev.type === 'string' ? ev.type : 'unknown'
         const item: SemanticLogItem = {
           id: ++semanticCounter.current,
@@ -611,7 +611,7 @@ export function RenderingHarnessApp() {
                 oldestMarker = marker
               }
               for (const entry of mapped) {
-                const uuid = (entry as { uuid?: unknown }).uuid
+                const uuid = entryUuid(entry)
                 if (typeof uuid === 'string') {
                   if (seen.has(uuid)) continue
                   seen.add(uuid)
@@ -633,7 +633,7 @@ export function RenderingHarnessApp() {
             if (marker && oldestMarker === originalMarker) {
               oldestMarker = marker
             }
-            const uuid = (feedEntry as { uuid?: unknown }).uuid
+            const uuid = entryUuid(feedEntry)
             if (typeof uuid === 'string') {
               if (seen.has(uuid)) continue
               seen.add(uuid)
@@ -1367,6 +1367,21 @@ function ComposerBar({
 // Helpers
 // -----------------------------------------------------------------------------
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringField(record: Record<string, unknown> | null | undefined, key: string): string | undefined {
+  const value = record?.[key]
+  return typeof value === 'string' ? value : undefined
+}
+
+function entryUuid(entry: Entry): string | undefined {
+  return typeof entry.uuid === 'string' ? entry.uuid : undefined
+}
+
 function safeStringify(value: unknown): string {
   try {
     return JSON.stringify(value, null, 2)
@@ -1376,20 +1391,21 @@ function safeStringify(value: unknown): string {
 }
 
 function oneLineSummary(entry: Record<string, unknown>): string {
-  const msg = entry.message as Record<string, unknown> | undefined
+  const msg = asRecord(entry.message)
   if (msg) {
     const content = msg.content
     if (typeof content === 'string') return content.replace(/\s+/g, ' ').slice(0, 140)
     if (Array.isArray(content)) {
       for (const block of content) {
-        const b = block as Record<string, unknown>
-        if (typeof b.text === 'string') return b.text.replace(/\s+/g, ' ').slice(0, 140)
+        const b = asRecord(block)
+        const text = stringField(b, 'text')
+        if (text) return text.replace(/\s+/g, ' ').slice(0, 140)
         if (b.type === 'tool_use' && typeof b.name === 'string') return `tool_use: ${b.name}`
         if (b.type === 'tool_result') return 'tool_result'
       }
     }
   }
-  const payload = entry.payload as Record<string, unknown> | undefined
+  const payload = asRecord(entry.payload)
   if (payload) {
     if (typeof payload.type === 'string') return `payload.${payload.type}`
   }
@@ -1437,15 +1453,15 @@ function jsonlShapeSummary(
 function describeClaudeRaw(raw: Record<string, unknown>): string {
   const t = String(raw.type ?? 'unknown')
   if (t === 'progress') {
-    const data = raw.data as Record<string, unknown> | undefined
-    const embedded = data?.message as Record<string, unknown> | undefined
+    const data = asRecord(raw.data)
+    const embedded = asRecord(data?.message)
     if (embedded) {
       const role = String(embedded.type ?? '')
       return `progress[${role}]`
     }
     return 'progress'
   }
-  const message = raw.message as Record<string, unknown> | undefined
+  const message = asRecord(raw.message)
   if (message) {
     const role = String(message.role ?? '')
     const content = message.content
@@ -1454,15 +1470,15 @@ function describeClaudeRaw(raw: Record<string, unknown>): string {
       blockSummary = `text(${content.length})`
     } else if (Array.isArray(content)) {
       const kinds = content.map(b => {
-        const block = b as Record<string, unknown>
-        if (block.type === 'text') {
-          const txt = typeof block.text === 'string' ? block.text : ''
+        const block = asRecord(b)
+        if (block?.type === 'text') {
+          const txt = stringField(block, 'text') ?? ''
           return `text(${txt.length})`
         }
-        if (block.type === 'tool_use') return `tool_use:${String(block.name ?? '?')}`
-        if (block.type === 'tool_result') return 'tool_result'
-        if (block.type === 'thinking') return 'thinking'
-        return String(block.type ?? '?')
+        if (block?.type === 'tool_use') return `tool_use:${String(block.name ?? '?')}`
+        if (block?.type === 'tool_result') return 'tool_result'
+        if (block?.type === 'thinking') return 'thinking'
+        return String(block?.type ?? '?')
       })
       blockSummary = kinds.join('+')
     }
@@ -1479,7 +1495,7 @@ function describeClaudeRaw(raw: Record<string, unknown>): string {
 
 function describeCodexRaw(raw: Record<string, unknown>): string {
   const envelopeType = String(raw.type ?? 'unknown')
-  const payload = raw.payload as Record<string, unknown> | undefined
+  const payload = asRecord(raw.payload)
   if (!payload) return envelopeType
   const payloadType = String(payload.type ?? '?')
   if (envelopeType === 'response_item') {
@@ -1487,12 +1503,12 @@ function describeCodexRaw(raw: Record<string, unknown>): string {
       const role = String(payload.role ?? '?')
       const content = Array.isArray(payload.content) ? payload.content : []
       const kinds = content.map(b => {
-        const block = b as Record<string, unknown>
-        if (block.type === 'input_text' || block.type === 'output_text') {
-          const txt = typeof block.text === 'string' ? block.text : ''
+        const block = asRecord(b)
+        if (block?.type === 'input_text' || block?.type === 'output_text') {
+          const txt = stringField(block, 'text') ?? ''
           return `text(${txt.length})`
         }
-        return String(block.type ?? '?')
+        return String(block?.type ?? '?')
       })
       return `response_item.message[${role}] ${kinds.join('+')}`
     }
@@ -1523,12 +1539,12 @@ function feedEntrySignature(entry: Entry): string {
   } else if (Array.isArray(content)) {
     blocks = content
       .map(b => {
-        const block = b as Record<string, unknown>
-        if (block.type === 'text') return `text(${(typeof block.text === 'string' ? block.text : '').length})`
-        if (block.type === 'tool_use') return `tool_use:${String(block.name ?? '?')}`
-        if (block.type === 'tool_result') return 'tool_result'
-        if (block.type === 'thinking') return 'thinking'
-        return String(block.type ?? '?')
+        const block = asRecord(b)
+        if (block?.type === 'text') return `text(${(stringField(block, 'text') ?? '').length})`
+        if (block?.type === 'tool_use') return `tool_use:${String(block.name ?? '?')}`
+        if (block?.type === 'tool_result') return 'tool_result'
+        if (block?.type === 'thinking') return 'thinking'
+        return String(block?.type ?? '?')
       })
       .join('+')
   }
@@ -1560,10 +1576,10 @@ function describeRenderForEntry(entry: Entry, provider: 'claude' | 'codex'): str
   }
   const renderers: string[] = []
   for (const b of content) {
-    const block = b as Record<string, unknown>
-    const t = block.type
+    const block = asRecord(b)
+    const t = block?.type
     if (t === 'text') {
-      const txt = typeof block.text === 'string' ? block.text : ''
+      const txt = stringField(block, 'text') ?? ''
       renderers.push(`TextProse(${txt.length})`)
     } else if (t === 'thinking') {
       renderers.push('ThinkingDetails')
@@ -1596,9 +1612,7 @@ function describeRenderForEntry(entry: Entry, provider: 'claude' | 'codex'): str
       renderers.push(`UnknownBlock(${String(t ?? '?')})`)
     }
   }
-  const uuid = typeof (entry as { uuid?: unknown }).uuid === 'string'
-    ? (entry as { uuid: string }).uuid.slice(0, 8)
-    : '?'
+  const uuid = entryUuid(entry)?.slice(0, 8) ?? '?'
   return `${role} uuid=${uuid} → ${renderers.join(' + ')}`
 }
 
@@ -1634,7 +1648,7 @@ function semanticDebugSummary(type: string, ev: Record<string, unknown>): string
         ev.isError === true ? ' ERROR' : ''
       }`
     case 'usage_updated': {
-      const u = ev.usage as Record<string, unknown> | undefined
+      const u = asRecord(ev.usage)
       const inTok = u?.['input_tokens'] ?? u?.['inputTokens'] ?? '?'
       const outTok = u?.['output_tokens'] ?? u?.['outputTokens'] ?? '?'
       return `usage ${tag} in=${inTok} out=${outTok}`

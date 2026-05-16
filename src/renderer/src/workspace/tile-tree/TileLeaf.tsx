@@ -293,7 +293,7 @@ export function TileLeaf({
     const node = paneRef.current
     if (!node) return
 
-    let timer: ReturnType<typeof window.setTimeout> | null = null
+    let timer: number | null = null
     const capture = (reason: 'initial' | 'mutation') => {
       recordHtmlTraceSnapshot(sessionId, node.outerHTML, reason)
     }

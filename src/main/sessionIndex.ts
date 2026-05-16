@@ -5,6 +5,7 @@ import { listSessionsForCwd } from '@providers/claude/runtime/sessionList.js'
 import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
 import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
+import { asRecord } from '@shared/lib/asRecord.js'
 
 // Session Prompt Index — power source for the "Search Conversation
 // Prompts" command.
@@ -112,6 +113,19 @@ const promptCache = new Map<string, CacheEntry>()
 
 function cacheKey(kind: 'claude' | 'codex', id: string): string {
   return `${kind}:${id}`
+}
+
+function parseJsonRecord(line: string): Record<string, unknown> | null {
+  try {
+    return asRecord(JSON.parse(line))
+  } catch {
+    return null
+  }
+}
+
+function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {
+  const value = record?.[key]
+  return typeof value === 'string' ? value : null
 }
 
 // ---------------------------------------------------------------------------
@@ -328,12 +342,8 @@ function extractClaudePromptsAndCwd(
   const lines = jsonl.split('\n')
   for (const line of lines) {
     if (!line.trim()) continue
-    let obj: Record<string, unknown>
-    try {
-      obj = JSON.parse(line) as Record<string, unknown>
-    } catch {
-      continue
-    }
+    const obj = parseJsonRecord(line)
+    if (!obj) continue
 
     // Capture cwd from the first entry that carries one. Claude
     // stamps cwd on conversation entries (user / assistant) but NOT
@@ -343,7 +353,7 @@ function extractClaudePromptsAndCwd(
     // bootstrap content). Scanning the full file is the only
     // reliable way to find cwd for those sessions.
     if (!cwd && typeof obj.cwd === 'string' && obj.cwd.length > 0) {
-      cwd = obj.cwd as string
+      cwd = obj.cwd
     }
 
     const type = typeof obj.type === 'string' ? obj.type : ''
@@ -357,7 +367,7 @@ function extractClaudePromptsAndCwd(
     // latestUserPrompts helper.
     if (obj.permissionMode === undefined) continue
 
-    const message = obj.message as Record<string, unknown> | undefined
+    const message = asRecord(obj.message)
     if (!message) continue
     if (message.role !== 'user') continue
 
@@ -383,10 +393,10 @@ function extractClaudeUserText(content: unknown): string {
   if (typeof content === 'string') return content.trim()
   if (!Array.isArray(content)) return ''
   for (const block of content) {
-    if (!block || typeof block !== 'object') continue
-    const b = block as Record<string, unknown>
-    if (b.type === 'text' && typeof b.text === 'string') {
-      return (b.text as string).trim()
+    const b = asRecord(block)
+    const text = stringField(b, 'text')
+    if (b?.type === 'text' && text) {
+      return text.trim()
     }
   }
   return ''
@@ -406,12 +416,8 @@ function extractCodexPromptsAndCwd(
   const lines = jsonl.split('\n')
   for (const line of lines) {
     if (!line.trim()) continue
-    let obj: Record<string, unknown>
-    try {
-      obj = JSON.parse(line) as Record<string, unknown>
-    } catch {
-      continue
-    }
+    const obj = parseJsonRecord(line)
+    if (!obj) continue
 
     // Codex puts cwd on the session_meta entry (first rollout line)
     // at `payload.cwd`. Older schemas sometimes stored it at the
@@ -420,7 +426,7 @@ function extractCodexPromptsAndCwd(
       const topCwd = obj.cwd
       if (typeof topCwd === 'string' && topCwd.length > 0) cwd = topCwd
       else {
-        const metaPayload = obj.payload as Record<string, unknown> | undefined
+        const metaPayload = asRecord(obj.payload)
         const payloadCwd = metaPayload?.cwd
         if (typeof payloadCwd === 'string' && payloadCwd.length > 0) cwd = payloadCwd
       }
@@ -431,10 +437,10 @@ function extractCodexPromptsAndCwd(
     // Prefer response_item messages — those are the canonical user
     // turns. event_msg user_message is a fallback for older formats.
     const type = typeof obj.type === 'string' ? obj.type : ''
-    const payload = obj.payload as Record<string, unknown> | undefined
+    const payload = asRecord(obj.payload)
 
     if (type === 'response_item') {
-      const item = payload ?? (obj as Record<string, unknown>)
+      const item = payload ?? obj
       const itemType = typeof item.type === 'string' ? item.type : ''
       const role = typeof item.role === 'string' ? item.role : ''
       if (itemType !== 'message' || role !== 'user') continue
@@ -479,11 +485,11 @@ function flattenCodexContent(content: unknown): string {
   if (!Array.isArray(content)) return ''
   const parts: string[] = []
   for (const entry of content) {
-    if (!entry || typeof entry !== 'object') continue
-    const obj = entry as Record<string, unknown>
-    const t = obj.type as string | undefined
-    if ((t === 'input_text' || t === 'text') && typeof obj.text === 'string') {
-      parts.push(obj.text as string)
+    const obj = asRecord(entry)
+    const t = stringField(obj, 'type')
+    const text = stringField(obj, 'text')
+    if ((t === 'input_text' || t === 'text') && text) {
+      parts.push(text)
     } else if (t === 'input_image') {
       parts.push('[image]')
     }

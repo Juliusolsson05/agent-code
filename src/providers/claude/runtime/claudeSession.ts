@@ -11,7 +11,6 @@ import {
   createProxyServer,
   spawnClaudeWithProxy,
   type CompactionState,
-  type ClaudeConditionSnapshot,
   type JsonlEntry,
   type PermissionPromptState,
   type ProxyServer,
@@ -76,7 +75,6 @@ export type ClaudeSessionEvents = {
   'resume-prompt': [ResumePromptState]
   'permission-prompt': [PermissionPromptState]
   'compaction-state': [CompactionState]
-  conditions: [ClaudeConditionSnapshot]
   /** New. The flat union of semantic-channel events (see
    *  claude-code-headless EVENT_SPEC.md). Forwarded verbatim so the
    *  renderer can treat it as the authoritative live-turn stream —
@@ -418,9 +416,6 @@ export class ClaudeSession extends EventEmitter {
     )
     this.headless.on('compaction-state', state =>
       this.emit('compaction-state', state),
-    )
-    this.headless.on('conditions', snapshot =>
-      this.emit('conditions', snapshot),
     )
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true

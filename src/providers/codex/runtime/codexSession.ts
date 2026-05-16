@@ -314,7 +314,7 @@ export class CodexSession extends EventEmitter {
 
     // Forward rollout entries as jsonl-entry (matches Claude's event name).
     this.headless.on('rollout-entry', (line, file) => {
-      this.emit('jsonl-entry', line as unknown as CodexRolloutLine, file)
+      this.emit('jsonl-entry', line, file)
     })
 
     this.headless.on('rollout-error', err => {

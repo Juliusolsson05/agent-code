@@ -413,49 +413,70 @@ export function CommandPalette({
     [customPromptTemplates],
   )
 
-  const filtered = useMemo(() => {
-    if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
-      return []
-    }
-    if (mode === 'resume') {
-      if (!query.trim()) return sessions
-      return sessions.filter(
-        s =>
-          fuzzyMatch(s.summary, query) ||
-          fuzzyMatch(s.firstPrompt ?? '', query) ||
-          fuzzyMatch(s.gitBranch ?? '', query),
-      )
-    }
-    if (mode === 'buried' || mode === 'kill-buried') {
-      if (!query.trim()) return buried
-      return buried.filter(
-        item =>
-          fuzzyMatch(item.label, query) ||
-          fuzzyMatch(item.description, query) ||
-          fuzzyMatch(item.note ?? '', query),
-      )
-    }
-    if (mode === 'prompt-template') {
-      if (!query.trim()) return promptTemplates
-      return promptTemplates.filter(
-        template =>
-          fuzzyMatch(template.title, query) ||
-          fuzzyMatch(template.description, query) ||
-          fuzzyMatch(template.body, query),
-      )
-    }
-    if (!query.trim()) return commands
-    return commands.filter(
-      command =>
-        fuzzyMatch(command.title, query) ||
-        command.keywords.some(keyword => fuzzyMatch(keyword, query)),
-    )
-  }, [mode, buried, commands, sessions, promptTemplates, query])
+  const queryText = query.trim()
+  const filteredSessions = useMemo(
+    () =>
+      queryText
+        ? sessions.filter(
+            s =>
+              fuzzyMatch(s.summary, queryText) ||
+              fuzzyMatch(s.firstPrompt ?? '', queryText) ||
+              fuzzyMatch(s.gitBranch ?? '', queryText),
+          )
+        : sessions,
+    [sessions, queryText],
+  )
+  const filteredBuried = useMemo(
+    () =>
+      queryText
+        ? buried.filter(
+            item =>
+              fuzzyMatch(item.label, queryText) ||
+              fuzzyMatch(item.description, queryText) ||
+              fuzzyMatch(item.note ?? '', queryText),
+          )
+        : buried,
+    [buried, queryText],
+  )
+  const filteredPromptTemplates = useMemo(
+    () =>
+      queryText
+        ? promptTemplates.filter(
+            template =>
+              fuzzyMatch(template.title, queryText) ||
+              fuzzyMatch(template.description, queryText) ||
+              fuzzyMatch(template.body, queryText),
+          )
+        : promptTemplates,
+    [promptTemplates, queryText],
+  )
+  const filteredCommands = useMemo(
+    () =>
+      queryText
+        ? commands.filter(
+            command =>
+              fuzzyMatch(command.title, queryText) ||
+              command.keywords.some(keyword => fuzzyMatch(keyword, queryText)),
+          )
+        : commands,
+    [commands, queryText],
+  )
+
+  const filteredLength =
+    mode === 'resume'
+      ? filteredSessions.length
+      : mode === 'buried' || mode === 'kill-buried'
+        ? filteredBuried.length
+        : mode === 'prompt-template'
+          ? filteredPromptTemplates.length
+          : mode === 'commands'
+            ? filteredCommands.length
+            : 0
 
   const selectedCommand = useMemo(() => {
     if (mode !== 'commands') return null
-    return filtered[selectedIndex] as ResolvedCommand | undefined ?? null
-  }, [filtered, mode, selectedIndex])
+    return filteredCommands[selectedIndex] ?? null
+  }, [filteredCommands, mode, selectedIndex])
 
   useEffect(() => {
     if (open) {
@@ -470,13 +491,15 @@ export function CommandPalette({
   }, [open])
 
   useEffect(() => {
-    setSelectedIndex(prev => Math.min(prev, Math.max(0, filtered.length - 1)))
-  }, [filtered.length])
+    setSelectedIndex(prev => Math.min(prev, Math.max(0, filteredLength - 1)))
+  }, [filteredLength])
 
   useEffect(() => {
     if (!listRef.current) return
-    const el = listRef.current.children[selectedIndex] as HTMLElement | undefined
-    el?.scrollIntoView({ block: 'nearest' })
+    const el = listRef.current.children[selectedIndex]
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ block: 'nearest' })
+    }
   }, [selectedIndex])
 
   const executeCommand = useCallback(
@@ -513,7 +536,7 @@ export function CommandPalette({
 
   const executeKillBuried = useCallback(
     (item: BuriedPaneInfo) => {
-      const remainingCount = (filtered as BuriedPaneInfo[])
+      const remainingCount = filteredBuried
         .filter(candidate => candidate.id !== item.id)
         .length
       void workspace.killBuried(item.id).then(() => {
@@ -521,7 +544,7 @@ export function CommandPalette({
         else setSelectedIndex(i => Math.max(0, Math.min(i, remainingCount - 1)))
       })
     },
-    [filtered, onClose, workspace],
+    [filteredBuried, onClose, workspace],
   )
 
   const executePromptTemplate = useCallback(
@@ -619,7 +642,7 @@ export function CommandPalette({
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setSelectedIndex(prev => Math.min(prev + 1, filtered.length - 1))
+        setSelectedIndex(prev => Math.min(prev + 1, filteredLength - 1))
         return
       }
       if (e.key === 'ArrowUp') {
@@ -632,26 +655,30 @@ export function CommandPalette({
         if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
           savePromptTemplateForm()
         } else if (mode === 'resume') {
-          const session = filtered[selectedIndex] as SessionInfo | undefined
+          const session = filteredSessions[selectedIndex]
           if (session) executeResume(session)
         } else if (mode === 'buried') {
-          const item = filtered[selectedIndex] as BuriedPaneInfo | undefined
+          const item = filteredBuried[selectedIndex]
           if (item) executeBuried(item)
         } else if (mode === 'kill-buried') {
-          const item = filtered[selectedIndex] as BuriedPaneInfo | undefined
+          const item = filteredBuried[selectedIndex]
           if (item) executeKillBuried(item)
         } else if (mode === 'prompt-template') {
-          const template = filtered[selectedIndex] as PromptTemplate | undefined
+          const template = filteredPromptTemplates[selectedIndex]
           if (template) void executePromptTemplate(template)
         } else {
-          const command = filtered[selectedIndex] as ResolvedCommand | undefined
+          const command = filteredCommands[selectedIndex]
           if (command) executeCommand(command)
         }
       }
     },
     [
       mode,
-      filtered,
+      filteredLength,
+      filteredBuried,
+      filteredCommands,
+      filteredPromptTemplates,
+      filteredSessions,
       selectedIndex,
       executeBuried,
       executeCommand,
@@ -808,12 +835,12 @@ export function CommandPalette({
           )}
 
           {mode === 'commands' &&
-            (filtered.length === 0 ? (
+            (filteredCommands.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
                 No matching commands
               </div>
             ) : (
-              (filtered as ResolvedCommand[]).map((command, i) => (
+              filteredCommands.map((command, i) => (
                 <div
                   key={command.id}
                   className={`
@@ -858,12 +885,12 @@ export function CommandPalette({
               <div className="px-3 py-4 text-muted text-[12px] text-center">
                 Loading sessions…
               </div>
-            ) : filtered.length === 0 ? (
+            ) : filteredSessions.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
                 No matching sessions
               </div>
             ) : (
-              (filtered as SessionInfo[]).map((session, i) => (
+              filteredSessions.map((session, i) => (
                 <div
                   key={session.sessionId}
                   className={`
@@ -891,12 +918,12 @@ export function CommandPalette({
             ))}
 
           {mode === 'buried' &&
-            (filtered.length === 0 ? (
+            (filteredBuried.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
                 No buried panes
               </div>
             ) : (
-              (filtered as BuriedPaneInfo[]).map((item, i) => (
+              filteredBuried.map((item, i) => (
                 <div
                   key={item.id}
                   className={`
@@ -926,12 +953,12 @@ export function CommandPalette({
             ))}
 
           {mode === 'kill-buried' &&
-            (filtered.length === 0 ? (
+            (filteredBuried.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
                 No buried panes
               </div>
             ) : (
-              (filtered as BuriedPaneInfo[]).map((item, i) => (
+              filteredBuried.map((item, i) => (
                 <div
                   key={item.id}
                   className={`
@@ -961,12 +988,12 @@ export function CommandPalette({
             ))}
 
           {mode === 'prompt-template' &&
-            (filtered.length === 0 ? (
+            (filteredPromptTemplates.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
                 No matching templates
               </div>
             ) : (
-              (filtered as PromptTemplate[]).map((template, i) => (
+              filteredPromptTemplates.map((template, i) => (
                 <div
                   key={template.id}
                   className={`

@@ -59,6 +59,7 @@ import {
   withFallbackWorktreeActivity,
 } from '@shared/work-context/tracker'
 import { summarizeWorktreeActivity } from '@shared/work-context/debug'
+import { asRecord } from '@shared/lib/asRecord'
 
 import type {
   WorkspaceSetRuntimes,
@@ -79,6 +80,15 @@ import * as perf from '@renderer/performance/client'
 // Terminal Codex events and session exit clear the cursor so a new task cannot
 // inherit the previous task's turn id.
 const codexCurrentTurnIdBySession = new Map<SessionId, string>()
+
+function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {
+  const value = record?.[key]
+  return typeof value === 'string' ? value : null
+}
+
+function entryUuid(entry: Entry): string | null {
+  return typeof entry.uuid === 'string' ? entry.uuid : null
+}
 
 type WorktreeCacheEntry = {
   worktrees: WorktreeIdentity[]
@@ -620,7 +630,7 @@ export function useIpcSubscriptions(
         spanClosed = true
         span.end(data)
       }
-      const semanticEvent = event as Record<string, unknown>
+      const semanticEvent = asRecord(event) ?? {}
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         // WHY `?? 'claude'` default: Claude is the pre-fix
@@ -661,13 +671,9 @@ export function useIpcSubscriptions(
             const now = Date.now()
             streamPhase = nextPhase
             streamPhasePendingToolName =
-              typeof semanticEvent.toolName === 'string'
-                ? (semanticEvent.toolName as string)
-                : null
+              stringField(semanticEvent, 'toolName')
             streamPhasePendingToolUseId =
-              typeof semanticEvent.toolUseId === 'string'
-                ? (semanticEvent.toolUseId as string)
-                : null
+              stringField(semanticEvent, 'toolUseId')
             phaseChangedAt = now
             if (nextPhase === 'idle') {
               turnStartedAt = null
@@ -687,13 +693,9 @@ export function useIpcSubscriptions(
             streamPhase !== 'idle'
           ) {
             streamPhasePendingToolName =
-              typeof semanticEvent.toolName === 'string'
-                ? (semanticEvent.toolName as string)
-                : streamPhasePendingToolName
+              stringField(semanticEvent, 'toolName') ?? streamPhasePendingToolName
             streamPhasePendingToolUseId =
-              typeof semanticEvent.toolUseId === 'string'
-                ? (semanticEvent.toolUseId as string)
-                : streamPhasePendingToolUseId
+              stringField(semanticEvent, 'toolUseId') ?? streamPhasePendingToolUseId
           }
         } else if (eventType === 'tool_result') {
           // Tool result arrived. If it matches the pending tool
@@ -704,9 +706,7 @@ export function useIpcSubscriptions(
           // message_start) will overwrite; this is the
           // gap-filler.
           const resultToolUseId =
-            typeof semanticEvent.toolUseId === 'string'
-              ? (semanticEvent.toolUseId as string)
-              : null
+            stringField(semanticEvent, 'toolUseId')
           if (
             streamPhase === 'awaiting-tool' &&
             resultToolUseId !== null &&
@@ -982,7 +982,6 @@ export function useIpcSubscriptions(
 
           // ---- Codex rollout branch ----
           if (isCodexRolloutEntry(raw)) {
-            const payload = raw.payload as Record<string, unknown> | undefined
             const turnContextId = codexTurnIdFromRollout(raw)
             if (turnContextId !== null) codexCurrentTurnId = turnContextId
             const payloadTurnId = codexTurnIdFromEventPayload(raw)
@@ -1049,7 +1048,7 @@ export function useIpcSubscriptions(
             }
 
             for (const e of mapped) {
-              const u = (e as { uuid?: string }).uuid
+              const u = entryUuid(e)
               if (u) {
                 if (seen.has(u)) continue
                 seen.add(u)
@@ -1105,12 +1104,13 @@ export function useIpcSubscriptions(
           }
 
           // ---- Claude conversation entry branch ----
+          const rawRecord = asRecord(raw) ?? {}
           const feedEntry =
-            extractEmbeddedClaudeProgressEntry(raw as Record<string, unknown>) ??
+            extractEmbeddedClaudeProgressEntry(rawRecord) ??
             (raw as Entry)
-          const marker = claudeHistoryMarker(raw as Record<string, unknown>)
+          const marker = claudeHistoryMarker(rawRecord)
           if (marker && !oldestMarker) oldestMarker = marker
-          const uuid = (feedEntry as { uuid?: string }).uuid
+          const uuid = entryUuid(feedEntry)
           if (uuid) {
             if (seen.has(uuid)) continue
             seen.add(uuid)
@@ -1383,9 +1383,10 @@ export function useIpcSubscriptions(
             reconciled.push('awaitingAssistant')
           }
 
+          const currentTurn = next.semantic.currentTurn
           if (
             !hasLiveSignal &&
-            isSemanticTurnRunning(next.semantic.currentTurn)
+            isSemanticTurnRunning(currentTurn)
           ) {
             // Mirror the turn_completed close path in foldEvent.ts —
             // archive into history with endedAt stamped, then clear
@@ -1396,8 +1397,8 @@ export function useIpcSubscriptions(
             // signal, any pending tool result has already been
             // missed and there's no value in keeping the turn open.
             const closedTurn = {
-              ...next.semantic.currentTurn!,
-              endedAt: next.semantic.currentTurn!.endedAt ?? Date.now(),
+              ...currentTurn,
+              endedAt: currentTurn.endedAt ?? Date.now(),
             }
             next = {
               ...next,

@@ -258,6 +258,7 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? 'claude'
+      if (kind !== 'claude' && kind !== 'codex') return
       if (!meta?.providerSessionId) return
       try {
         const { newProviderSessionId } = await window.api.duplicateSession({

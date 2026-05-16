@@ -1,4 +1,4 @@
-import type { RefObject } from 'react'
+import type { MutableRefObject } from 'react'
 
 import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
 import type { ClaudeDraftImage, SlashPickerState } from '@renderer/workspace/workspaceState'
@@ -42,7 +42,7 @@ export function ComposerInput({
   removeDraftImage,
   dictation,
 }: {
-  inputRef: RefObject<HTMLTextAreaElement | null>
+  inputRef: MutableRefObject<HTMLTextAreaElement | null>
   input: string
   focused: boolean
   slashMode: boolean
@@ -68,7 +68,7 @@ export function ComposerInput({
       {/* SlashCommandPicker is absolutely positioned relative to this
           composer container so it floats above the input without
           shifting layout. */}
-      <SlashCommandPicker state={pickerState} />
+      <SlashCommandPicker state={pickerState ?? { visible: false, items: [] }} />
 
       {/* The composer is a <textarea> (not <input>) so the box can
           grow vertically to fit a multi-line prompt. See

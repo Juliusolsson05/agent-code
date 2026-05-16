@@ -142,6 +142,17 @@ export const CodeRenderContext = createContext<{
   workspaceRoot: null,
 })
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function stringField(record: Record<string, unknown> | null | undefined, key: string): string | undefined {
+  const value = record?.[key]
+  return typeof value === 'string' ? value : undefined
+}
+
 /**
  * Custom <pre> renderer: strips the default <pre> wrapper and lets
  * our MarkdownCode component handle ALL the rendering for fenced
@@ -284,7 +295,7 @@ function buildToolResultIndex(entries: Entry[]): Map<string, ToolResultBlock> {
  *  as `input.command: string`. Codex passes `input.cmd` which may
  *  be a string OR a pre-split array (for the actual argv form). */
 function extractToolCommand(block: ToolUseBlock): string | null {
-  const input = block.input as Record<string, unknown> | undefined
+  const input = asRecord(block.input)
   if (!input) return null
   if (typeof input.command === 'string') return input.command
   if (typeof input.cmd === 'string') return input.cmd
@@ -800,7 +811,7 @@ function FeedImpl({
     if (isCompactBoundaryEntry(e)) return true
     if (isCompactSummaryEntry(e)) return true
     if (!isConversationEntry(e)) return false
-    if ((e as unknown as { isMeta?: boolean }).isMeta === true) return false
+    if (asRecord(e)?.isMeta === true) return false
     return true
   })
 
@@ -2036,14 +2047,12 @@ function truncateBashCommand(cmd: string): { text: string; truncated: boolean } 
 const ToolUseRow = memo(function ToolUseRow({ block }: { block: ToolUseBlock }) {
   // Extract the command / description for Bash-like tools. For tools
   // without a `command` field we fall back to stringified input.
-  const input = block.input as Record<string, unknown> | undefined
-  const rawHeadline = typeof input?.command === 'string'
-    ? input.command
-    : typeof input?.description === 'string'
-      ? input.description
-      : typeof input?.path === 'string'
-        ? input.path
-        : null
+  const input = asRecord(block.input)
+  const rawHeadline =
+    stringField(input, 'command') ??
+    stringField(input, 'description') ??
+    stringField(input, 'path') ??
+    null
 
   // Bash commands get the same 2-line / 160-char cap claude-code's
   // Ink UI enforces. `description` and `path` headlines are already
@@ -2271,9 +2280,9 @@ const SystemRow = memo(function SystemRow({ entry }: { entry: Entry }) {
 })
 
 function attachmentLabel(entry: Entry): string {
-  const a = (entry as { attachment?: Record<string, unknown> }).attachment ?? {}
-  if (a.hookEvent) return `hook: ${(a.hookName as string) ?? (a.hookEvent as string)}`
-  if (a.type) return `attachment: ${a.type as string}`
+  const a = asRecord(asRecord(entry)?.attachment) ?? {}
+  if (a.hookEvent) return `hook: ${stringField(a, 'hookName') ?? stringField(a, 'hookEvent') ?? ''}`
+  if (a.type) return `attachment: ${String(a.type)}`
   return 'attachment'
 }
 

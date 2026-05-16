@@ -16,7 +16,8 @@ import {
 import { sendToMainWindow } from '@main/window/mainWindow.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 import type { DictationDebugEventInput } from '@preload/api/types.js'
-import { wrapWithSttTag, type SpeechTraceEvent } from 'agent-voice-dictation'
+import { wrapWithSttTag } from 'agent-voice-dictation/composer'
+import type { SpeechTraceEvent } from 'agent-voice-dictation/speech'
 
 // Opt-in chunk dump for diagnosing recorder/provider audio issues. Writes a
 // `.webm` per session under Electron's app temp dir so we don't pollute
@@ -146,7 +147,6 @@ export function registerDictationIpc(deps: {
             emit(debugSessionId, 'PROVIDER', event.phase, {
               streamId: id,
               streamingId,
-              provider: event.provider,
               ...event,
             })
           },

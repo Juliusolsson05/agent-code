@@ -18,6 +18,7 @@ import {
   semanticToIndex,
 } from '@renderer/workspace/semantic/helpers'
 import { summarizeSemanticEvent } from '@renderer/workspace/semantic/summarize'
+import { asRecord } from '@shared/lib/asRecord'
 
 // ---------------------------------------------------------------------------
 // foldSemanticEvent — the one-session-one-reducer contract
@@ -441,10 +442,7 @@ export function foldSemanticEvent(
             ...block,
             inputJson: typeof ev.inputJson === 'string' ? ev.inputJson : block.inputJson,
             inputJsonValid: Boolean(ev.parsed),
-            parsedInput:
-              ev.parsed && typeof ev.parsed === 'object'
-                ? ev.parsed as Record<string, unknown>
-                : block.parsedInput,
+            parsedInput: asRecord(ev.parsed) ?? block.parsedInput,
             parseError:
               typeof ev.parseError === 'string' ? ev.parseError : block.parseError,
             finalized: true,
@@ -467,11 +465,9 @@ export function foldSemanticEvent(
       // slot; `inputJson` (Claude) and `argumentsJson` (Codex) populate
       // the same `inputJson` slot.
       const parsedObj =
-        ev.parsed && typeof ev.parsed === 'object'
-          ? (ev.parsed as Record<string, unknown>)
-          : ev.parsedArguments && typeof ev.parsedArguments === 'object'
-            ? (ev.parsedArguments as Record<string, unknown>)
-            : block.parsedInput
+        asRecord(ev.parsed) ??
+        asRecord(ev.parsedArguments) ??
+        block.parsedInput
       const argsRaw =
         typeof ev.inputJson === 'string'
           ? ev.inputJson
@@ -479,6 +475,10 @@ export function foldSemanticEvent(
             ? ev.argumentsJson
             : block.inputJson
       const callId = typeof ev.callId === 'string' ? ev.callId : block.callId
+      const rawRecord = asRecord(ev.raw)
+      const rawCitations = Array.isArray(rawRecord?.citations)
+        ? rawRecord.citations
+        : null
       currentTurn = {
         ...currentTurn,
         blocks: {
@@ -504,10 +504,7 @@ export function foldSemanticEvent(
               typeof ev.parseError === 'string' ? ev.parseError : block.parseError,
             status: typeof ev.status === 'string' ? ev.status : block.status,
             finalized: true,
-            citations:
-              ev.raw && typeof ev.raw === 'object' && Array.isArray((ev.raw as { citations?: unknown[] }).citations)
-                ? [...((ev.raw as { citations: unknown[] }).citations)]
-                : block.citations,
+            citations: rawCitations ? [...rawCitations] : block.citations,
             // Codex-specific typed variant payloads. Forward as-is;
             // the renderer picks the right one based on `kind`.
             output: ev.output !== undefined ? ev.output : block.output,
@@ -714,7 +711,7 @@ export function foldSemanticEvent(
     case 'usage_updated': {
       if (!currentTurn) break
       if (eventTargetsDifferentTurn(ev, currentTurn)) break
-      const usage = ev.usage as Record<string, unknown> | undefined
+      const usage = asRecord(ev.usage)
       if (!usage) break
       currentTurn = { ...currentTurn, usage: flattenSemanticUsage(usage) }
       break

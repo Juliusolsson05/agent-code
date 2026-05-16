@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 
-import type { SessionId, SplitDirection, TabId } from '@renderer/workspace/types'
+import type { SplitDirection, TabId } from '@renderer/workspace/types'
 import { equalRatios, normalizeRatios } from '@renderer/workspace/layout/helpers'
 
 import type {
@@ -140,9 +140,6 @@ export function useTileTabsActions(
     },
     [setTileTabs],
   )
-
-  // Keep sessionId param reference for downstream hook-level deps.
-  void (null as unknown as SessionId)
 
   return {
     openTileTabs,

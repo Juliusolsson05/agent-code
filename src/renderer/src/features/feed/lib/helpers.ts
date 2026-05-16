@@ -8,6 +8,19 @@ import {
   type ToolUseBlock,
 } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
+import { asRecord } from '@shared/lib/asRecord'
+
+function isToolUseBlock(block: ContentBlock): block is ToolUseBlock {
+  return (
+    block.type === 'tool_use' &&
+    typeof block.id === 'string' &&
+    typeof block.name === 'string'
+  )
+}
+
+function isToolResultBlock(block: ContentBlock): block is ToolResultBlock {
+  return block.type === 'tool_result' && typeof block.tool_use_id === 'string'
+}
 
 // -----------------------------------------------------------------------------
 // Feed pure helpers — no React, no state, no side effects.
@@ -25,9 +38,8 @@ export function buildToolUseIndex(entries: Entry[]): Map<string, ToolUseBlock> {
     const content = e.message.content
     if (!Array.isArray(content)) continue
     for (const b of content) {
-      if (b.type === 'tool_use') {
-        const tu = b as ToolUseBlock
-        map.set(tu.id, tu)
+      if (isToolUseBlock(b)) {
+        map.set(b.id, b)
       }
     }
   }
@@ -48,9 +60,8 @@ export function buildToolResultIndex(entries: Entry[]): Map<string, ToolResultBl
     const content = e.message.content
     if (!Array.isArray(content)) continue
     for (const b of content) {
-      if (b.type === 'tool_result') {
-        const tr = b as ToolResultBlock
-        map.set(tr.tool_use_id, tr)
+      if (isToolResultBlock(b)) {
+        map.set(b.tool_use_id, b)
       }
     }
   }
@@ -62,7 +73,7 @@ export function buildToolResultIndex(entries: Entry[]): Map<string, ToolResultBl
  *  as `input.command: string`. Codex passes `input.cmd` which may
  *  be a string OR a pre-split array (for the actual argv form). */
 export function extractToolCommand(block: ToolUseBlock): string | null {
-  const input = block.input as Record<string, unknown> | undefined
+  const input = asRecord(block.input)
   if (!input) return null
   if (typeof input.command === 'string') return input.command
   if (typeof input.cmd === 'string') return input.cmd
@@ -77,7 +88,7 @@ export function toolResultText(block: ToolResultBlock): string {
   if (Array.isArray(block.content)) {
     return block.content
       .map(item => typeof item === 'string' ? item
-                 : typeof (item as { text?: unknown }).text === 'string' ? (item as { text: string }).text
+                 : typeof item.text === 'string' ? item.text
                  : '')
       .join('\n')
   }
@@ -129,7 +140,7 @@ export function stripLineNumberPrefix(text: string): string {
  *  entry's uuid; falls back to a type+index composite so entries
  *  without a uuid (synthetic system rows) still get a unique key. */
 export function debugKeyForEntry(entry: Entry, index: number): string {
-  const uuid = (entry as Entry).uuid
+  const uuid = entry.uuid
   return uuid ?? `${entry.type}:${index}`
 }
 
@@ -137,10 +148,10 @@ export function debugKeyForEntry(entry: Entry, index: number): string {
  *  first text block's content; falls back to the first block's type
  *  name when no text is present (tool_use, image, etc.). */
 export function debugLabelForEntry(entry: Entry): string {
-  if (entry.type === 'user' || entry.type === 'assistant') {
-    const message = (entry as ConversationEntry).message
+  if (isConversationEntry(entry)) {
+    const message = entry.message
     const content = Array.isArray(message.content) ? message.content : []
-    const first = content[0] as Record<string, unknown> | undefined
+    const first = asRecord(content[0])
     if (first?.type === 'text' && typeof first.text === 'string') {
       return `${entry.type}: ${first.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`
     }
@@ -197,9 +208,8 @@ export function splitStreamingCodeFence(text: string): {
  *  'image/png' when the block omits it — that's the most common
  *  case for CC-pasted screenshots. */
 export function imageDataUrl(block: ContentBlock): string | null {
-  const source = (block as { source?: unknown }).source
-  if (!source || typeof source !== 'object') return null
-  const rec = source as Record<string, unknown>
+  const rec = asRecord(asRecord(block)?.source)
+  if (!rec) return null
   if (rec.type !== 'base64') return null
   const mediaType = typeof rec.media_type === 'string' ? rec.media_type : 'image/png'
   const data = typeof rec.data === 'string' ? rec.data : null
@@ -262,9 +272,9 @@ export function truncateCompactSummary(text: string): string {
  *  row is a one-line summary and the event name alone ("PreToolUse")
  *  is opaque — prefixing makes it obvious this came from a hook. */
 export function attachmentLabel(entry: Entry): string {
-  const a = (entry as { attachment?: Record<string, unknown> }).attachment ?? {}
-  if (a.hookEvent) return `hook: ${(a.hookName as string) ?? (a.hookEvent as string)}`
-  if (a.type) return `attachment: ${a.type as string}`
+  const a = asRecord(asRecord(entry)?.attachment) ?? {}
+  if (a.hookEvent) return `hook: ${String(a.hookName ?? a.hookEvent)}`
+  if (a.type) return `attachment: ${String(a.type)}`
   return 'attachment'
 }
 
