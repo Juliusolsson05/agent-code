@@ -193,7 +193,7 @@ export type Settings = {
    *  semantic source and no proxy process is spawned.
    *
    *  Opt-in because it requires mitmproxy installed locally (the
-   *  user must run `npm run proxy-demo-bootstrap` once) and because
+   *  user must run `npm run runtime:fetch:mitmproxy` once) and because
    *  the feature is still experimental. Toggle is per-Claude-session
    *  at spawn time — flipping it mid-session has no effect; the next
    *  new session picks up the new value. */

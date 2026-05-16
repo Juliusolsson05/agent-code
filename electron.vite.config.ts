@@ -43,7 +43,16 @@ const headlessExclude = ['claude-code-headless', 'codex-headless', 'agent-transc
 function copyMainRuntimeResourcesPlugin(): Plugin {
   const resources = [
     {
-      from: resolve(__dirname, 'packages/claude-code-headless/src/testing/proxy-testing/mitmAddon.py'),
+      // WHY this copies from `src/proxy`, not the older
+      // `src/testing/proxy-testing` harness path:
+      //
+      // claude-code-headless promoted the MITM addon into the production proxy
+      // module so the package build can copy it beside `dist/proxyServer.js`.
+      // Agent Code aliases that package from source, bypassing the package's
+      // own build script, so this Vite hook is the app-level equivalent of
+      // that copy. Pointing at the retired testing harness makes preview/dist
+      // fail before Electron even launches on fresh submodule checkouts.
+      from: resolve(__dirname, 'packages/claude-code-headless/src/proxy/mitmAddon.py'),
       to: resolve(__dirname, 'out/main/mitmAddon.py'),
     },
   ]
