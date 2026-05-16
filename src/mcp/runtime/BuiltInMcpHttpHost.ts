@@ -4,6 +4,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
 import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
+import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
+import type { SessionManager } from '@main/sessionManager.js'
 import {
   normalizeBuiltInMcpDomains,
   type BuiltInMcpDomain,
@@ -16,11 +18,21 @@ type SessionRegistration = {
   scope: McpSessionScope
 }
 
+export type BuiltInMcpDependencies = {
+  orchestrationBridge?: OrchestrationBridge
+  sessionManager?: SessionManager
+}
+
 export class BuiltInMcpHttpHost {
   private server: Server | null = null
   private port: number | null = null
   private readonly registrations = new Map<string, SessionRegistration>()
   private readonly tokensBySession = new Map<string, string>()
+  private dependencies: BuiltInMcpDependencies = {}
+
+  setDependencies(dependencies: BuiltInMcpDependencies): void {
+    this.dependencies = dependencies
+  }
 
   async start(): Promise<void> {
     if (this.server) return
@@ -138,7 +150,7 @@ export class BuiltInMcpHttpHost {
       return
     }
 
-    const mcpServer = createBuiltInMcpServer(registration.scope)
+    const mcpServer = createBuiltInMcpServer(registration.scope, this.dependencies)
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     })

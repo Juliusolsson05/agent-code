@@ -33,6 +33,11 @@ import {
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type {
+  OrchestrationAgentKind,
+  OrchestrationAgentRecord,
+} from '@mcp/shared/orchestrationTypes'
 
 import type {
   WorkspaceSetRuntimes,
@@ -79,6 +84,15 @@ export function usePaneActions(
     kind: Exclude<SessionKind, 'terminal'>,
     parentId: SessionId,
   ) => Promise<void>
+  createOrchestrationAgent: (params: {
+    parentId: SessionId
+    kind: OrchestrationAgentKind
+    cwd?: string
+    title?: string
+    role?: string
+    runId?: string
+    builtInMcpDomains?: BuiltInMcpDomain[]
+  }) => Promise<OrchestrationAgentRecord>
   attachDetachedToGrid: (sessionId: SessionId, target: PlacementTarget) => void
   attachAllDetachedForTab: (tabId: string) => void
   detachFocusedToDispatch: () => void
@@ -371,6 +385,91 @@ export function usePaneActions(
       })
     },
     [refs.stateRef, sessionActions, setState, showToast],
+  )
+
+  const createOrchestrationAgent = useCallback(
+    async (params: {
+      parentId: SessionId
+      kind: OrchestrationAgentKind
+      cwd?: string
+      title?: string
+      role?: string
+      runId?: string
+      builtInMcpDomains?: BuiltInMcpDomain[]
+    }): Promise<OrchestrationAgentRecord> => {
+      const snapshot = refs.stateRef.current
+      const parentMeta = snapshot.sessions[params.parentId]
+      if (!parentMeta) {
+        throw new Error('Could not create orchestration agent: parent agent is gone')
+      }
+
+      const rootParentId = parentMeta.orchestrationRootId ?? params.parentId
+      const rootParentMeta = snapshot.sessions[rootParentId] ?? parentMeta
+      const parentDetached = snapshot.detachedSessions[rootParentId]
+      const parentTab = parentDetached
+        ? snapshot.tabs.find(t => t.id === parentDetached.projectTabId)
+        : snapshot.tabs.find(t => collectLeaves(t.root).includes(rootParentId))
+      if (!parentTab) {
+        throw new Error('Could not create orchestration agent: parent tab not found')
+      }
+
+      const cwd = params.cwd ?? rootParentMeta.cwd
+      const sessionId = await sessionActions.spawn(cwd, {
+        kind: params.kind,
+        builtInMcpDomains: params.builtInMcpDomains,
+      })
+
+      const agent: OrchestrationAgentRecord = {
+        sessionId,
+        kind: params.kind,
+        cwd,
+        ...(params.title ? { title: params.title } : {}),
+        orchestrationParentId: params.parentId,
+        orchestrationRootId: rootParentId,
+        ...(params.runId ? { orchestrationRunId: params.runId } : {}),
+        ...(params.role ? { orchestrationRole: params.role } : {}),
+      }
+
+      setState(prev => {
+        const latestTab = prev.tabs.find(t => t.id === parentTab.id)
+        const projectTabIndex = prev.tabs.findIndex(t => t.id === parentTab.id)
+        if (!latestTab) return prev
+        return {
+          ...prev,
+          activeTabId: latestTab.id,
+          sessions: {
+            ...prev.sessions,
+            [sessionId]: {
+              ...(prev.sessions[sessionId] ?? { cwd, kind: params.kind }),
+              cwd,
+              kind: params.kind,
+              ...(params.title ? { title: params.title } : {}),
+              orchestrationParentId: params.parentId,
+              orchestrationRootId: rootParentId,
+              ...(params.runId ? { orchestrationRunId: params.runId } : {}),
+              ...(params.role ? { orchestrationRole: params.role } : {}),
+            },
+          },
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [sessionId]: {
+              sessionId,
+              surface: 'dispatch',
+              projectTabId: latestTab.id,
+              projectTabTitle: latestTab.title,
+              projectTabIndex: projectTabIndex >= 0 ? projectTabIndex : 0,
+              detachedAt: Date.now(),
+            },
+          },
+          dispatchMode: prev.dispatchMode
+            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
+            : prev.dispatchMode,
+        }
+      })
+
+      return agent
+    },
+    [refs.stateRef, sessionActions, setState],
   )
 
   // Close every linked child of `parentId`, recursively. Linked
@@ -1359,6 +1458,7 @@ export function usePaneActions(
     commitNewAgentPlacement,
     createDetachedDispatchAgent,
     createLinkedAgent,
+    createOrchestrationAgent,
     attachDetachedToGrid,
     attachAllDetachedForTab,
     detachFocusedToDispatch,

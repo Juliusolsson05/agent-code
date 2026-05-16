@@ -32,6 +32,7 @@ import {
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
+import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -229,6 +230,72 @@ export function useWorkspace(
     sessionActions,
   )
 
+  useEffect(() => {
+    const off = window.api.onOrchestrationRequest(async request => {
+      try {
+        if (request.type === 'create-agent') {
+          const agent = await paneActions.createOrchestrationAgent({
+            parentId: request.parentSessionId,
+            kind: request.kind,
+            cwd: request.cwd,
+            title: request.title,
+            role: request.role,
+            runId: request.runId,
+            builtInMcpDomains: request.builtInMcpDomains,
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'create-agent',
+            agent,
+          })
+          return
+        }
+
+        const snapshot = refs.stateRef.current
+        const agents: OrchestrationAgentRecord[] = Object.entries(snapshot.sessions)
+          .filter(([, meta]) => {
+            const kind = meta.kind ?? 'claude'
+            if (kind !== 'claude' && kind !== 'codex') return false
+            const matchesParent =
+              meta.orchestrationParentId === request.parentSessionId ||
+              meta.orchestrationRootId === request.parentSessionId
+            if (!matchesParent) return false
+            return request.runId
+              ? meta.orchestrationRunId === request.runId
+              : true
+          })
+          .map(([sessionId, meta]) => ({
+            sessionId,
+            kind: (meta.kind ?? 'claude') as 'claude' | 'codex',
+            cwd: meta.cwd,
+            ...(meta.title ? { title: meta.title } : {}),
+            orchestrationParentId: meta.orchestrationParentId ?? request.parentSessionId,
+            orchestrationRootId: meta.orchestrationRootId ?? request.parentSessionId,
+            ...(meta.orchestrationRunId ? { orchestrationRunId: meta.orchestrationRunId } : {}),
+            ...(meta.orchestrationRole ? { orchestrationRole: meta.orchestrationRole } : {}),
+          }))
+
+        await window.api.resolveOrchestrationRequest({
+          requestId: request.requestId,
+          ok: true,
+          type: 'list-agents',
+          agents,
+        })
+      } catch (err) {
+        await window.api.resolveOrchestrationRequest({
+          requestId: request.requestId,
+          ok: false,
+          type: request.type,
+          message: err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Orchestration request failed',
+        })
+      }
+    })
+    return off
+  }, [paneActions, refs.stateRef])
+
   const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
@@ -306,6 +373,7 @@ export function useWorkspace(
     commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
     createLinkedAgent: paneActions.createLinkedAgent,
+    createOrchestrationAgent: paneActions.createOrchestrationAgent,
     attachDetachedToGrid: paneActions.attachDetachedToGrid,
     attachAllDetachedForTab: paneActions.attachAllDetachedForTab,
     detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
