@@ -8,12 +8,8 @@ import {
 } from 'react'
 
 import {
-  isCompactBoundaryEntry,
-  isCompactSummaryEntry,
-  isConversationEntry,
   type Entry,
 } from '@shared/types/transcript'
-import { asRecord } from '@shared/lib/asRecord'
 
 import type {
   SemanticLiveTurn,
@@ -30,16 +26,15 @@ import {
 import {
   type AgentProvider,
   type ScrollInfo,
-  type VisibleDecision,
   type DebugVisibleRow,
 } from '@renderer/features/feed/types'
 import { scrollPositions } from '@renderer/features/feed/scroll'
 import {
   buildToolUseIndex,
   buildToolResultIndex,
-  debugKeyForEntry,
   debugLabelForEntry,
 } from '@renderer/features/feed/lib/helpers'
+import { deriveFeedRenderModel } from '@renderer/features/feed/model/renderModel'
 import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
 import {
   EAGER_TAIL,
@@ -683,107 +678,6 @@ function FeedImpl({
     if (onScrollInfo) onScrollInfo({ fraction: 0 })
   }, [onScrollInfo, scrollToLatestRequest, sessionId])
 
-  // Visible entries skip system/meta noise by default. isMeta entries are
-  // CC's system-injected user-role
-  // messages: task-notification results from subagents, auto-continue
-  // hints ("Continue from where you left off."), system-reminder
-  // payloads, etc. They carry `isMeta: true` on the entry but pass
-  // the isConversationEntry check because they have type='user' and
-  // a real message object. Without this filter, a background agent's
-  // completion notification would render as a full UserBand in the
-  // feed with raw <task-notification> XML visible — exactly the bug
-  // the user reported.
-  const visibleDecisions = useMemo<VisibleDecision[]>(() => {
-    const startedAt = performance.now()
-    const decisions = entries.map<VisibleDecision>((entry, index) => {
-        if (isCompactBoundaryEntry(entry)) {
-          return {
-            key: debugKeyForEntry(entry, index),
-            entry,
-            visible: true,
-            reason: 'compact_boundary',
-          }
-        }
-        if (isCompactSummaryEntry(entry)) {
-          return {
-            key: debugKeyForEntry(entry, index),
-            entry,
-            visible: true,
-            reason: 'compact_summary',
-          }
-        }
-        if (!isConversationEntry(entry)) {
-          return {
-            key: debugKeyForEntry(entry, index),
-            entry,
-            visible: false,
-            reason: 'not_conversation',
-          }
-        }
-        if (asRecord(entry)?.isMeta === true) {
-          return {
-            key: debugKeyForEntry(entry, index),
-            entry,
-            visible: false,
-            reason: 'meta_filtered',
-          }
-        }
-        return {
-          key: debugKeyForEntry(entry, index),
-          entry,
-          visible: true,
-          reason: 'conversation',
-        }
-      })
-    const durationMs = performance.now() - startedAt
-    if (durationMs >= 10 || entries.length >= 500) {
-      perf.metric('feed.visibleDecisions.build', durationMs, 'sample', {
-        sessionId,
-        entries: entries.length,
-        decisions: decisions.length,
-      })
-    }
-    return decisions
-  }, [entries, sessionId])
-
-  const visible = useMemo(
-    () => visibleDecisions.filter(item => item.visible).map(item => item.entry),
-    [visibleDecisions],
-  )
-
-  const committedClaudeMessageTurnIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const entry of entries) {
-      const record = asRecord(entry)
-      const message = asRecord(record?.message)
-      const messageId = message?.id
-      if (typeof messageId === 'string') ids.add(messageId)
-    }
-    return ids
-  }, [entries])
-
-  // Live view is owned 1:1 by `semanticTurn` now — the old Codex-only
-  // suppression helper (`shouldSuppressSemanticTurnForCommittedTail`)
-  // was deleted in 2026-04-20 because the ghost reducer handles the
-  // duplicate-render class at its source. See Feed.tsx history and
-  // docs/superpowers/plans/2026-04-20-rendering-fixes.md Task 6.
-  const renderedSemanticTurn = semanticTurn
-  // Only Claude message ids suppress an entire archived semantic
-  // turn. Claude commits one assistant message whose message.id is
-  // the turn id, so the durable row owns the whole archived live
-  // copy. Codex is different: rollout commits one response_item at a
-  // time and every mapped entry can carry the same codexTurnId. If a
-  // single tool_use response_item suppressed the whole archived turn,
-  // MCP/client-tool sequences would drop the assistant text and
-  // later tool rows until JSONL fully caught up. Codex duplicate
-  // prevention is therefore per-block inside SemanticStreamingTurn
-  // (committed tool ids + committed assistant text keys), not a
-  // turn-level filter here.
-  const renderedSemanticHistory = useMemo(
-    () => semanticHistory.filter(turn => !committedClaudeMessageTurnIds.has(turn.turnId)),
-    [committedClaudeMessageTurnIds, semanticHistory],
-  )
-
   // Index EVERY tool_use block (not just the visible set) so tool_result
   // lookups still resolve even when some synthetic entries have been
   // filtered out. The index is cheap to
@@ -801,86 +695,48 @@ function FeedImpl({
     [entries, toolResultIndexProp],
   )
 
-  const hasSemanticStreaming =
-    renderedSemanticTurn !== null || renderedSemanticHistory.length > 0
-  const shouldShowWorkIndicator = streamPhase !== 'idle'
-
-  const renderedRows = useMemo<DebugVisibleRow[]>(() => {
+  const renderModel = useMemo(() => {
     const startedAt = performance.now()
-    if (visible.length === 0 && !hasSemanticStreaming) {
-      const rows: DebugVisibleRow[] = [{
-        key: 'empty',
-        slot: 'empty',
-        label: provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…',
-      }]
-      perf.metric('feed.renderedRows.build', performance.now() - startedAt, 'sample', {
-        sessionId,
-        entries: entries.length,
-        visible: visible.length,
-        rows: rows.length,
-      })
-      return rows
-    }
-    const rows: DebugVisibleRow[] = visibleDecisions
-      .filter(item => item.visible)
-      .map(item => ({
-        key: `entry:${item.key}`,
-        slot: 'entry',
-        label: debugLabelForEntry(item.entry),
-      }))
-    for (const turn of renderedSemanticHistory) {
-      rows.push({
-        key: `semantic-history:${turn.turnId}`,
-        slot: 'semantic',
-        label: `semantic history ${turn.turnId.slice(0, 12)} · ${turn.source ?? 'unknown'}`,
-      })
-    }
-    if (renderedSemanticTurn != null) {
-      rows.push({
-        key: `semantic:${renderedSemanticTurn.turnId}`,
-        slot: 'semantic',
-        label: `semantic turn ${renderedSemanticTurn.turnId.slice(0, 12)} · ${renderedSemanticTurn.source ?? 'unknown'}`,
-      })
-    }
-    if (shouldShowWorkIndicator) {
-      rows.push({
-        key: `work:${streamPhase}:${streamPhasePendingToolUseId ?? 'none'}`,
-        slot: 'work',
-        label:
-          streamPhasePendingToolName && (
-            streamPhase === 'tool-input' ||
-            streamPhase === 'tool-use' ||
-            streamPhase === 'awaiting-tool'
-          )
-            ? `work ${streamPhase} · ${streamPhasePendingToolName}`
-            : `work ${streamPhase}`,
-      })
-    }
+    const model = deriveFeedRenderModel({
+      provider,
+      entries,
+      semanticHistory,
+      semanticTurn,
+      streamPhase,
+      streamPhasePendingToolName,
+      streamPhasePendingToolUseId,
+      committedToolUseIndex: toolUseIndex,
+    })
     const durationMs = performance.now() - startedAt
     if (durationMs >= 10 || entries.length >= 500) {
-      perf.metric('feed.renderedRows.build', durationMs, 'sample', {
+      perf.metric('feed.renderModel.build', durationMs, 'sample', {
         sessionId,
         entries: entries.length,
-        visible: visible.length,
-        rows: rows.length,
-        hasSemanticStreaming,
+        visible: model.visibleEntries.length,
+        rows: model.debugRows.length,
+        hasSemanticStreaming: model.hasSemanticStreaming,
       })
     }
-    return rows
+    return model
   }, [
-    entries.length,
-    hasSemanticStreaming,
+    entries,
     provider,
-    renderedSemanticTurn,
-    renderedSemanticHistory,
+    semanticHistory,
+    semanticTurn,
     sessionId,
-    shouldShowWorkIndicator,
     streamPhase,
     streamPhasePendingToolName,
     streamPhasePendingToolUseId,
-    visible.length,
-    visibleDecisions,
+    toolUseIndex,
   ])
+
+  const visibleDecisions = renderModel.visibleDecisions
+  const visible = renderModel.visibleEntries
+  const renderedSemanticHistory = renderModel.renderedSemanticHistory
+  const renderedSemanticTurn = renderModel.renderedSemanticTurn
+  const hasSemanticStreaming = renderModel.hasSemanticStreaming
+  const shouldShowWorkIndicator = renderModel.shouldShowWorkIndicator
+  const renderedRows = renderModel.debugRows
 
   const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
   const previousRenderDebugSignatureRef = useRef<string | null>(null)
@@ -1047,6 +903,7 @@ function FeedImpl({
           ))}
           {renderedSemanticTurn != null && (
             <SemanticStreamingTurn
+              key={`semantic:${renderedSemanticTurn.turnId}`}
               turn={renderedSemanticTurn}
               committedEntries={entries}
             />

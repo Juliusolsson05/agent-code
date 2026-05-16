@@ -75,6 +75,41 @@ function codexCanReplaceEndedTurn(currentTurn: SemanticLiveTurn): boolean {
   return currentTurn.endedAt != null
 }
 
+function isTerminalProxyBlock(block: SemanticLiveBlock): boolean {
+  // WHY status/finalized are treated as equivalent here:
+  // Codex proxy message items usually reach us as
+  // `block_completed` with `finalized: true`, but the upstream
+  // Responses item also carries `status: "completed"`. The
+  // 2026-05-16T18:42 persistent log showed the dangerous hybrid:
+  // a final_answer message block had both terminal block markers,
+  // while the turn-level `turn_completed` was missing because the
+  // strict headless lifecycle had rejected the finish. If we only
+  // trust `endedAt`, that old final answer squats in `currentTurn`
+  // forever and every later proxy `resp_*` is dropped as a supposed
+  // racing producer.
+  return block.finalized === true || block.status === 'completed'
+}
+
+function isCompletedProxyTurnWithoutPendingTools(
+  currentTurn: SemanticLiveTurn,
+): boolean {
+  // WHY this is deliberately narrower than "has any finalized block":
+  // the original strict Codex gate exists because two live producers
+  // can emit different turn ids for the same user-visible moment
+  // (proxy stream vs screen/rollout fallback). Replacing a live turn
+  // on a stray mismatched event recreated the 0/1/0/1 semantic row
+  // flicker. This helper is only for a proxy-owned turn where every
+  // block we know about is already terminal and there are no pending
+  // client tools to keep mounted. That is a completed transcript row
+  // missing its turn-level seal, not an active stream.
+  if (currentTurn.source !== 'proxy') return false
+  if (currentTurn.endedAt != null) return false
+  const blocks = Object.values(currentTurn.blocks)
+  if (blocks.length === 0) return false
+  if (hasPendingSemanticTools(currentTurn)) return false
+  return blocks.every(isTerminalProxyBlock)
+}
+
 function isEmptyNonProxyShellTurn(currentTurn: SemanticLiveTurn): boolean {
   return (
     currentTurn.source !== 'proxy' &&
@@ -90,6 +125,9 @@ function codexCanReplaceTurn(
   ev: Record<string, unknown>,
 ): boolean {
   if (codexCanReplaceEndedTurn(currentTurn)) return true
+  if (ev.source === 'proxy' && isCompletedProxyTurnWithoutPendingTools(currentTurn)) {
+    return true
+  }
   // WHY proxy can replace an empty rollout/screen shell:
   // rollout can open a placeholder Codex turn immediately after
   // submit, before the proxy emits the real Responses turn carrying
@@ -300,8 +338,20 @@ export function foldSemanticEvent(
       break
     }
     case 'block_started': {
-      if (!currentTurn) break
-      if (eventTargetsDifferentTurn(ev, currentTurn)) {
+      const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
+      if (!currentTurn) {
+        // WHY block_started can soft-open a turn:
+        // Codex proxy blocks are the render-critical source, and the
+        // 2026-05-16 failure class proved the stricter headless
+        // lifecycle can lose a ceremonial turn opener/closer while
+        // still delivering block_started/text/tool events. Keep this
+        // recovery Codex-proxy-only. Claude and fallback producers
+        // have older late-event failure modes where opening from a
+        // stray block after currentTurn was already archived would
+        // resurrect stale semantic rows.
+        if (sessionKind !== 'codex' || ev.source !== 'proxy' || !turnId) break
+        currentTurn = semanticTurnFromEvent(ev, now, turnId)
+      } else if (eventTargetsDifferentTurn(ev, currentTurn)) {
         const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
         if (sessionKind === 'codex' && turnId && codexCanReplaceTurn(currentTurn, ev)) {
           if (shouldArchiveReplacedTurn(currentTurn)) {

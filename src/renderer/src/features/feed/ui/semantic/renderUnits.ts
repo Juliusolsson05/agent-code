@@ -1,4 +1,4 @@
-import type { ToolUseBlock } from '@shared/types/transcript'
+import type { Entry, ToolUseBlock } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
 import { classifySemanticToolActivity } from '@renderer/features/feed/lib/helpers'
@@ -28,6 +28,102 @@ export type CommittedAssistantText = {
    * finalized/completed live text blocks, so active streaming text is
    * not hidden just because an older committed answer shares a prefix. */
   texts: ReadonlySet<string>
+  /** Same ownership check as `texts`, but after display-normalizing
+   *  whitespace and unicode form.
+   *
+   * WHY this has to exist:
+   * Codex can commit a response through rollout while the live
+   * semantic history row was built from a different stream. Those
+   * streams can preserve line wrapping / spacing differently even
+   * when the user-visible sentence is the same. Exact string
+   * suppression is still the safest first check, but the recurring
+   * "old assistant sentence stuck at the bottom" failure is caused by
+   * an archived semantic row surviving committed catch-up because the
+   * two copies are textually equivalent rather than byte-identical.
+   * Normalize only whitespace/unicode, not prefixes or fuzzy
+   * substrings, so active streaming text is not hidden by a merely
+   * similar older answer. */
+  normalizedTexts: ReadonlySet<string>
+}
+
+export function normalizeCommittedAssistantText(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function buildCommittedAssistantText(entries: Entry[]): CommittedAssistantText {
+  const keys = new Set<string>()
+  const texts = new Set<string>()
+  const normalizedTexts = new Set<string>()
+  for (const entry of entries) {
+    if (entry.type !== 'assistant') continue
+    const assistantEntry = entry as {
+      codexTurnId?: unknown
+      message?: { id?: unknown; content?: unknown }
+    }
+    const turnIds = [
+      typeof assistantEntry.message?.id === 'string' ? assistantEntry.message.id : null,
+      typeof assistantEntry.codexTurnId === 'string' ? assistantEntry.codexTurnId : null,
+    ].filter((id): id is string => Boolean(id))
+    const content = assistantEntry.message?.content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      const item = block as Record<string, unknown>
+      if (item.type !== 'text' || typeof item.text !== 'string' || !item.text) continue
+      // WHY text ownership does not require a committed turn id:
+      // Codex rollout rows can be perfectly good visible assistant
+      // transcript entries while still lacking both `message.id` and
+      // `codexTurnId`. The 2026-05-16T18:49 bundle reproduced the
+      // bottom-stuck row with exactly that shape: committed text was
+      // visible above, but `buildCommittedAssistantText` skipped it
+      // before adding it to `texts`, so the archived rollout semantic
+      // copy survived as `semantic-history:*`. Turn ids are needed
+      // only for the stricter key check; exact/normalized text
+      // ownership must include every visible committed assistant
+      // text block.
+      texts.add(item.text)
+      const normalized = normalizeCommittedAssistantText(item.text)
+      if (normalized) normalizedTexts.add(normalized)
+      for (const turnId of turnIds) {
+        keys.add(`${turnId}\u0000${item.text}`)
+      }
+    }
+  }
+  return { keys, texts, normalizedTexts }
+}
+
+export function semanticTurnHasRenderableContent(
+  turn: SemanticLiveTurn,
+  committedToolUseIndex?: Map<string, ToolUseBlock>,
+  committedAssistantText?: CommittedAssistantText,
+): boolean {
+  // Compaction synthesis deliberately paints a placeholder instead
+  // of its raw XML body. That placeholder is real user-visible UI,
+  // so the render model must count the turn as renderable even if
+  // all semantic blocks are otherwise filtered.
+  if (turn.isCompactionSynthesis) return true
+
+  const blocks = Object.values(turn.blocks)
+  if (blocks.length === 0) {
+    if (!turn.text) return false
+    const normalizedText = normalizeCommittedAssistantText(turn.text)
+    return !(
+      committedAssistantText?.keys.has(`${turn.turnId}\u0000${turn.text}`) ||
+      committedAssistantText?.texts.has(turn.text) ||
+      (
+        normalizedText !== '' &&
+        committedAssistantText?.normalizedTexts.has(normalizedText)
+      )
+    )
+  }
+
+  return buildSemanticRenderUnits(
+    turn,
+    committedToolUseIndex,
+    committedAssistantText,
+  ).length > 0
 }
 
 // WHY add a derived render-unit pass before painting semantic blocks:
@@ -94,7 +190,8 @@ export function buildSemanticRenderUnits(
       (block.finalized || block.status === 'completed') &&
       (
         committedAssistantText?.keys.has(`${turn.turnId}\u0000${text}`) ||
-        committedAssistantText?.texts.has(text)
+        committedAssistantText?.texts.has(text) ||
+        committedAssistantText?.normalizedTexts?.has(normalizeCommittedAssistantText(text))
       )
     ) {
       continue
