@@ -99,18 +99,29 @@ export function useClaudeImagePaste({
       const clipboardData = e.clipboardData
       if (!clipboardData) return { handledImages: false }
 
-      try {
-        // Read everything off `clipboardData` SYNCHRONOUSLY before
-        // the first `await`. A ClipboardEvent's data is only
-        // reliably readable during synchronous dispatch — once we
-        // await, `items` / `getData` may come back empty. The
-        // `File` objects from `getAsFile()` stay valid after the
-        // await; the live `clipboardData` accessor does not.
-        const itemFiles = Array.from(clipboardData.items)
-          .map(item => item.type.startsWith('image/') ? item.getAsFile() : null)
-          .filter((file): file is File => Boolean(file && file.type.startsWith('image/')))
-        const htmlImages = parseImagesFromHtml(clipboardData.getData('text/html'))
+      // Read everything off `clipboardData` SYNCHRONOUSLY before the
+      // first `await`. A ClipboardEvent's data is only reliably
+      // readable during synchronous dispatch — once we await,
+      // `items` / `getData` may come back empty. The `File` objects
+      // from `getAsFile()` stay valid after the await; the live
+      // `clipboardData` accessor does not. These reads sit OUTSIDE
+      // the try so `hadImageEvidence` is visible to the catch below.
+      const itemFiles = Array.from(clipboardData.items)
+        .map(item => item.type.startsWith('image/') ? item.getAsFile() : null)
+        .filter((file): file is File => Boolean(file && file.type.startsWith('image/')))
+      const htmlImages = parseImagesFromHtml(clipboardData.getData('text/html'))
 
+      // Whether the clipboard SYNCHRONOUSLY showed an image. This
+      // decides the catch-block's return value below: a throw on a
+      // paste that never had an image must NOT report
+      // `handledImages: true`, or `usePasteToFocus` would drop the
+      // user's plain text. (`readImagesFromClipboard()` — the async
+      // fallback — only runs when there is no such evidence, so a
+      // throw there means "probe failed", not "image handling
+      // failed".)
+      const hadImageEvidence = itemFiles.length > 0 || htmlImages.length > 0
+
+      try {
         let images: ClaudeDraftImage[] = htmlImages
         if (itemFiles.length > 0) {
           e.preventDefault()
@@ -121,6 +132,19 @@ export function useClaudeImagePaste({
             ...fileImages.filter(image => !existing.has(image.previewUrl)),
           ]
         } else if (images.length === 0) {
+          // Async fallback for clipboards that don't surface an
+          // image synchronously. NOTE: the `preventDefault()` here
+          // lands AFTER the await, by which point the browser's
+          // native paste has already run — so this branch cannot
+          // reliably suppress native paste. In practice an image
+          // paste carries no useful `text/plain`, so nothing
+          // visible leaks; only synchronous item/html image paths
+          // (above / below) suppress native paste reliably. This is
+          // a pre-existing limitation, called out here rather than
+          // fixed so the behaviour isn't silently relied upon.
+          // `usePasteToFocus` never reaches this branch — it only
+          // calls handlePaste when a synchronous image candidate
+          // exists.
           images = await readImagesFromClipboard()
           if (images.length > 0) {
             e.preventDefault()
@@ -154,10 +178,16 @@ export function useClaudeImagePaste({
         return { handledImages: true }
       } catch (err) {
         console.warn('[TileLeaf] image paste failed', err)
-        showToast('Image paste failed.')
-        // Treat a thrown image path as handled — we don't want to
-        // silently dump a data-URL blob into the composer as text.
-        return { handledImages: true }
+        // Report `handledImages` by EVIDENCE, not unconditionally.
+        // If there was a real image (sync evidence) and decoding it
+        // threw, count it handled — a toast explained the failure
+        // and we must not also dump a data-URL blob as text. But if
+        // there was NO image evidence (the throw came from the
+        // async `readImagesFromClipboard()` probe on a plain-text
+        // paste), report `false` so the caller still appends the
+        // user's text instead of silently swallowing it.
+        if (hadImageEvidence) showToast('Image paste failed.')
+        return { handledImages: hadImageEvidence }
       }
     },
     [appendDraftImages, provider, showToast],

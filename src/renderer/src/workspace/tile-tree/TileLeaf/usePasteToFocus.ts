@@ -2,6 +2,7 @@ import { useEffect, type RefObject } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
 import type { ImagePasteResult } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
+import { clipboardHasImageCandidate } from '@renderer/workspace/tile-tree/TileLeaf/claudeImages'
 
 // Paste-to-focus: when the user pastes anywhere in the focused pane
 // — feed area, a stray button, the pane root — the clipboard
@@ -33,21 +34,40 @@ import type { ImagePasteResult } from '@renderer/workspace/tile-tree/TileLeaf/us
 //   - A `role="dialog"` modal is open: it owns keyboard/clipboard
 //     focus while visible.
 //
-// Payload routing:
-//   - Images (Claude only) go through the SAME `handlePaste` the
-//     textarea uses, so the format / 5 MB gates and the draft-image
-//     strip behave identically. `handlePaste` reports back whether
-//     it consumed images.
-//   - Text (`text/plain`) is appended to the composer draft only if
-//     no image was consumed — this mirrors the textarea's existing
-//     "images win over text on a mixed paste" behaviour.
+// Payload routing — the order here is deliberate:
 //
-// WHY the text is read synchronously, before awaiting handlePaste:
-//   A ClipboardEvent's `clipboardData` is only reliably readable
-//   during synchronous event dispatch. `handlePaste` is async; once
-//   it awaits, a later `clipboardData.getData('text/plain')` can
-//   come back empty. So we snapshot the text up front and only then
-//   await the image path.
+//   1. Snapshot `text/plain` synchronously. A ClipboardEvent's data
+//      is only reliably readable during synchronous dispatch; after
+//      any `await` it can read back empty.
+//
+//   2. Decide SYNCHRONOUSLY whether this paste carries an image,
+//      via `clipboardHasImageCandidate` (image item OR data-URL in
+//      text/html).
+//
+//   3a. NO image candidate → append the text to the composer NOW,
+//       synchronously. This is the common case. The earlier version
+//       always routed through the async `handlePaste`, which for a
+//       Claude session runs `navigator.clipboard.read()` even for
+//       plain text — that (a) delayed every text paste, (b) could
+//       resolve out of order so two quick pastes appended reversed,
+//       and (c) if the async probe threw, dropped the text entirely.
+//       Deciding synchronously and appending immediately removes all
+//       three problems for the overwhelmingly common plain-text case.
+//
+//   3b. Image candidate present → hand off to the SAME `handlePaste`
+//       the composer textarea uses, so the format / 5 MB gates and
+//       the draft-image strip behave identically. Only an actual
+//       image paste pays the async cost. If `handlePaste` reports it
+//       did NOT consume an image, the snapshotted text is appended
+//       (mixed image+text paste — images win, then text follows).
+//
+// Tradeoff: an image that surfaces ONLY through the async
+// `navigator.clipboard.read()` fallback (no synchronous item /
+// html signal) is treated as a non-image paste here and won't be
+// captured by paste-to-focus. That fallback exists for the textarea
+// path; for paste-to-focus the rare miss is preferable to delaying
+// and reordering every ordinary text paste. See
+// `clipboardHasImageCandidate`.
 export function usePasteToFocus({
   focused,
   sessionId,
@@ -68,6 +88,29 @@ export function usePasteToFocus({
 }): void {
   useEffect(() => {
     if (!focused) return
+
+    // Append `text` to the composer draft, focus the textarea, and
+    // park the caret at the end. The composer is not mid-edit if it
+    // does not even hold focus, so there is no meaningful selection
+    // to insert into — appending is the predictable behaviour and
+    // matches useTypeToFocus. The rAF is load-bearing: setting
+    // `selectionStart` synchronously targets the textarea's OLD
+    // React-bound value (the new value hasn't re-rendered yet) and
+    // parks the caret at a stale index.
+    const appendText = (text: string) => {
+      const live = inputRef.current
+      if (!live || !text) return
+      onUserEngagement?.()
+      setDraftInput(sessionId, live.value + text)
+      live.focus()
+      requestAnimationFrame(() => {
+        const el2 = inputRef.current
+        if (!el2) return
+        el2.selectionStart = el2.value.length
+        el2.selectionEnd = el2.value.length
+      })
+    }
+
     const onPaste = (e: ClipboardEvent) => {
       if (e.defaultPrevented) return
       const target = e.target as HTMLElement | null
@@ -81,35 +124,28 @@ export function usePasteToFocus({
       const el = inputRef.current
       if (!el) return
 
-      // Snapshot text synchronously — see WHY note above.
+      // Snapshot text synchronously — clipboardData goes stale after
+      // any await.
       const text = e.clipboardData?.getData('text/plain') ?? ''
 
-      // Kick off the image path. `handlePaste` runs synchronously up
-      // to its first await (where it reads `clipboardData.items` /
-      // `getData`), so calling it now captures the clipboard before
-      // it goes stale; we await only the async image decoding.
+      // No synchronous image evidence → plain-text paste. Append now,
+      // synchronously: no await, so no delay, no reorder race, and no
+      // chance of an async failure swallowing the text.
+      if (!clipboardHasImageCandidate(e.clipboardData)) {
+        appendText(text)
+        return
+      }
+
+      // Image candidate present → route through the shared image
+      // handler. `handlePaste` runs synchronously up to its first
+      // await (it reads `clipboardData` items/html at the top), so
+      // calling it now captures the clipboard before it goes stale.
+      // If it reports no image was actually consumed, fall back to
+      // appending the snapshotted text (mixed paste, or a candidate
+      // that didn't resolve to a usable image).
       void handlePaste(e).then(({ handledImages }) => {
         if (handledImages) return
-        if (!text) return
-        const live = inputRef.current
-        if (!live) return
-        onUserEngagement?.()
-        // Append at end + caret to end. The composer is not mid-edit
-        // if it does not even hold focus, so there's no meaningful
-        // selection to insert into — appending is the predictable
-        // behaviour and matches useTypeToFocus.
-        setDraftInput(sessionId, live.value + text)
-        live.focus()
-        // rAF is load-bearing: setting selectionStart synchronously
-        // targets the textarea's OLD React-bound value (the new
-        // value hasn't re-rendered yet) and parks the caret at a
-        // stale index. Same fix as useTypeToFocus.
-        requestAnimationFrame(() => {
-          const el2 = inputRef.current
-          if (!el2) return
-          el2.selectionStart = el2.value.length
-          el2.selectionEnd = el2.value.length
-        })
+        appendText(text)
       })
     }
     document.addEventListener('paste', onPaste)
