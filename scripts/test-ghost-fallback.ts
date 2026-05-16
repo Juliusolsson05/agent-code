@@ -140,7 +140,28 @@ function toolUseGhost(turnId: string, now: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Orphan ghost OLDER than lastJsonlEntryAt → hidden. This is the
+// 5. Orphan ghost for a semantic-history turn → hidden.
+//    Completed semantic history is still rendered by
+//    SemanticStreamingTurn while JSONL catches up. A ghost for the
+//    same turn is not fallback data; it is the same assistant/tool
+//    content trying to tail-append itself again after the orphan TTL.
+// ---------------------------------------------------------------------------
+{
+  const runtime = emptyRuntime()
+  runtime.entries = [baseEntry('real-1')]
+  runtime.lastJsonlEntryAt = T_OLD_JSONL
+  runtime.semantic.history = [{ turnId: 'turn-a' }] as typeof runtime.semantic.history
+  const ghost = orphanGhost(
+    longTextGhost('turn-a', T_GHOST_NEWER),
+    T_GHOST_NEWER + 1,
+  )
+  runtime.ghosts = new Map([[ghost.uuid, ghost]])
+  const merged = selectMergedEntries(runtime, null)
+  assert.equal(merged, runtime.entries, 'semantic-history ghost must not render')
+}
+
+// ---------------------------------------------------------------------------
+// 6. Orphan ghost OLDER than lastJsonlEntryAt → hidden. This is the
 //    "stale orphan from earlier in the session, JSONL kept writing
 //    past it" case: a sidecar leak that happened before later real
 //    JSONL entries. Predicate-4 catches it structurally.
@@ -159,7 +180,7 @@ function toolUseGhost(turnId: string, now: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Orphan ghost NEWER than lastJsonlEntryAt with sidecar shape
+// 7. Orphan ghost NEWER than lastJsonlEntryAt with sidecar shape
 //    (single short text block, ≤200 chars) → hidden. This is the
 //    tail-sidecar case the timestamp predicate alone cannot
 //    catch: predict-next-prompt fires after the last real JSONL
@@ -180,7 +201,7 @@ function toolUseGhost(turnId: string, now: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Orphan ghost NEWER than lastJsonlEntryAt with substantive text
+// 8. Orphan ghost NEWER than lastJsonlEntryAt with substantive text
 //    (>200 chars) → renders. This is the main case ghost was built
 //    for: JSONL stopped writing while proxy kept going for an
 //    in-flight assistant turn.
@@ -200,7 +221,7 @@ function toolUseGhost(turnId: string, now: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Orphan tool_use ghost NEWER than lastJsonlEntryAt → renders
+// 9. Orphan tool_use ghost NEWER than lastJsonlEntryAt → renders
 //    even though short. tool_use is structurally not a sidecar
 //    shape — Claude Code's auxiliary calls all return text-only
 //    bodies, never tool_use blocks.
@@ -220,7 +241,7 @@ function toolUseGhost(turnId: string, now: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. lastJsonlEntryAt === null (fresh session, no JSONL ever) AND
+// 10. lastJsonlEntryAt === null (fresh session, no JSONL ever) AND
 //    orphan ghost present → render decision falls through the
 //    timestamp gate (rule 4 only fires when lastJsonlEntryAt is
 //    non-null). The shape filter still applies, so the ghost
@@ -241,7 +262,7 @@ function toolUseGhost(turnId: string, now: number) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. orphanStale TTL behavior. Confirms the helper still produces
+// 11. orphanStale TTL behavior. Confirms the helper still produces
 //     reference-stable no-ops and that an orphan flag is set when
 //     the threshold elapses.
 // ---------------------------------------------------------------------------

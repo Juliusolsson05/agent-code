@@ -25,6 +25,7 @@
     "test:feed-render-model": "tsx --tsconfig tsconfig.web.json scripts/test-feed-render-model.ts",
     "test:semantic-committed-text": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-committed-text.ts",
     "test:semantic-fold-codex-replace": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-fold-codex-replace.ts",
+    "test:codex-semantic-channel": "tsx --tsconfig tsconfig.node.json scripts/test-codex-semantic-channel.ts",
     "test:dictation": "tsx --tsconfig tsconfig.node.json scripts/test-dictation-imports.ts",
     "proxy-demo": "npm --prefix packages/claude-code-headless run build && electron experiments/claude-proxy-stream-app/main.mjs",
     "runtime:fetch:mitmproxy": "node scripts/runtime-tools/fetch-mitmproxy.mjs",

@@ -1045,6 +1045,16 @@ export function useIpcSubscriptions(
               ) {
                 reconciledOptimisticText = mappedText
               }
+              // Mid-turn Codex submits are intentionally kept in
+              // queuedMessages instead of appended to entries (see
+              // addOptimisticCodexUserEntry). The authoritative rollout
+              // user row is the point where that local "queued" surface
+              // must disappear; otherwise the queue strip becomes the new
+              // stale-bottom duplicate after the transcript catches up.
+              if (queuedMessages.some(q => q.content === mappedText)) {
+                queuedMessages = queuedMessages.filter(q => q.content !== mappedText)
+                reconciledOptimisticText = mappedText
+              }
             }
 
             for (const e of mapped) {
