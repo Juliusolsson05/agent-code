@@ -131,6 +131,23 @@ export type SessionMeta = {
    */
   linkedParentId?: SessionId
   /**
+   * Set on an agent created by the Orchestration MCP server.
+   *
+   * WHY this is intentionally separate from `linkedParentId`:
+   * linked agents are a user-facing manual affordance with existing Dispatch
+   * indentation and cascade-close semantics. Orchestration agents are created
+   * programmatically by an MCP tool and need their own lifecycle, grouping, and
+   * future controls. Reusing `linkedParentId` would make the first
+   * implementation look convenient while quietly coupling two different
+   * product concepts; future "show orchestration run", "review worker diff",
+   * or "stop this run" features would then inherit linked-agent behavior by
+   * accident.
+   */
+  orchestrationParentId?: SessionId
+  orchestrationRootId?: SessionId
+  orchestrationRunId?: string
+  orchestrationRole?: string
+  /**
    * Built-in MCP domains this agent should receive when it is spawned.
    *
    * WHY this is session metadata, not only a transient spawn option:
