@@ -175,6 +175,45 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'enable-orchestration-mcp',
+    title: 'Enable Orchestration MCP',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
+    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'reload', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'orchestration' as const]))
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(newSessionId, 'Reloaded with orchestration MCP')
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Orchestration MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
     id: 'reload-agent',
     title: 'Reload Agent',
     description: '**What it does:** Restarts the focused **Claude or Codex agent**.\n\n**Use when:** The agent is stuck, exited, or needs reconnecting.\n\n**Notes:** Requires a resumable provider session.',
