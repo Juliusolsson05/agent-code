@@ -136,6 +136,9 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
     // carries the "agent is working" signal on its own. See
     // docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
     if (!turn.text) return null
+    if (committedAssistantTextKeys.has(`${turn.turnId}\u0000${turn.text}`)) {
+      return null
+    }
     return (
       <MarkerRow marker="⏺">
         <StreamingProse text={turn.text} />

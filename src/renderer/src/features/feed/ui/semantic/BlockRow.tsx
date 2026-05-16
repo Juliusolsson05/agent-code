@@ -271,7 +271,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // never worse than the pre-feature behaviour.
     const writeStream =
       block.toolName === 'Write'
-        ? extractStreamingWriteInput(block.inputJson)
+        ? extractStreamingWriteInput(block.inputJson ?? '')
         : null
     return (
       <MarkerRow marker="⏺">

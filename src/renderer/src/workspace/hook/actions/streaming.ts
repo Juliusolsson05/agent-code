@@ -102,7 +102,19 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
               layer: 'STATE',
               kind: 'optimistic_user_add',
               summary: `optimistic user row added · ${trimmed.slice(0, 80)}`,
-              data: { text: trimmed },
+              // WHY include counts here:
+              // the visible symptom is "the agent reacts to my
+              // message, but my message never renders." The old log
+              // proved only that the submit path ran; it did not
+              // prove the runtime entries array grew. Pairing this
+              // with the JSONL reconcile counts below gives the next
+              // trace an exact ownership chain for the user row.
+              data: {
+                text: trimmed,
+                entryCountBefore: current.entries.length,
+                entryCountAfter: current.entries.length + 1,
+                uuid: optimistic.uuid,
+              },
             },
           ),
         }

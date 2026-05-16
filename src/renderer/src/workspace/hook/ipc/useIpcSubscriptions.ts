@@ -1228,13 +1228,14 @@ export function useIpcSubscriptions(
           return prev
         }
 
+        const nextEntries = appended.length > 0 || reconciledOptimisticText !== null
+          ? [...baseEntries, ...appended]
+          : current.entries
         const nextRuntimeBase = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
               ...current,
-              entries: appended.length > 0 || reconciledOptimisticText !== null
-                ? [...baseEntries, ...appended]
-                : current.entries,
+              entries: nextEntries,
               // Bump totalEntries by however many real entries just
               // landed via this burst. `appended` is already deduped
               // against the `seen` UUID set seeded from the initial
@@ -1276,6 +1277,20 @@ export function useIpcSubscriptions(
                 burstSize: entries.length,
                 appendedCount: appended.length,
                 reconciledOptimisticUser: reconciledOptimisticText !== null,
+                // WHY these counts are more important than they look:
+                // optimistic Codex user rows intentionally disappear
+                // when the durable rollout user message arrives. In
+                // the haunted failure mode, the UI symptom is exactly
+                // the same as a correct reconcile ("my optimistic row
+                // went away") except the replacement row is missing
+                // or filtered. Logging the before/base/appended/after
+                // counts lets the next debug trace distinguish a
+                // healthy handoff from a removal gap without needing
+                // to reproduce under a debugger.
+                entryCountBefore: current.entries.length,
+                entryCountBaseAfterOptimisticReconcile: baseEntries.length,
+                entryCountAfter: nextEntries.length,
+                reconciledOptimisticText,
                 appended: appended.slice(-8).map(summarizeEntryForDebug),
                 queuedMessages: queuedMessages.length,
                 workContext,

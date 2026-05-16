@@ -64,19 +64,45 @@ export function flattenSemanticUsage(
   return out
 }
 
-/** Project a completed live turn into a history row — the summary
- *  shape that survives after the turn archives. History rows lose
- *  the per-block map to keep memory bounded; consumers that need
- *  block detail for a past turn must read from the raw transcript. */
+/** Project a completed live turn into the short semantic history
+ *  buffer.
+ *
+ *  WHY keep the full block map instead of the old tiny summary row:
+ *  the feed has two asynchronous owners for a just-finished turn.
+ *  The semantic stream knows immediately that a Codex/MCP tool round
+ *  completed, while durable JSONL can lag by one or more Responses
+ *  turns. If we archive only `{ turnId, text }`, the renderer has
+ *  nothing to paint during that gap and the visible conversation
+ *  appears to clear after each MCP call. Keeping the bounded full
+ *  turn lets Feed bridge that gap and drop the semantic copy as soon
+ *  as a committed entry with the same turn id arrives.
+ *
+ *  The cap remains small (`SEMANTIC_HISTORY_CAP`), and the clone here
+ *  makes the archive immutable enough for React memo/debug use
+ *  without deep-copying large parsed tool payloads. If this ever
+ *  becomes memory-sensitive, the right fix is a purpose-built
+ *  render-history shape, not returning to text-only summaries. */
 export function semanticHistoryRow(
   turn: SemanticLiveTurn,
-): Pick<SemanticLiveTurn, 'turnId' | 'text' | 'stopReason' | 'startedAt' | 'endedAt'> {
+): SemanticLiveTurn {
   return {
-    turnId: turn.turnId,
-    text: turn.text,
-    stopReason: turn.stopReason,
-    startedAt: turn.startedAt,
-    endedAt: turn.endedAt,
+    ...turn,
+    blocks: { ...turn.blocks },
+    blockOrder: [...turn.blockOrder],
+    task: {
+      ...turn.task,
+      todos: [...turn.task.todos],
+      inProgressToolUseIds: [...turn.task.inProgressToolUseIds],
+      activeToolNames: [...turn.task.activeToolNames],
+    },
+    lookups: {
+      ...turn.lookups,
+      toolCallsById: { ...turn.lookups.toolCallsById },
+      toolUseIdsInOrder: [...turn.lookups.toolUseIdsInOrder],
+      resolvedToolUseIds: [...turn.lookups.resolvedToolUseIds],
+      erroredToolUseIds: [...turn.lookups.erroredToolUseIds],
+    },
+    usage: turn.usage ? { ...turn.usage } : null,
   }
 }
 

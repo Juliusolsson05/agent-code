@@ -232,7 +232,7 @@ export type FeedDebugEntry = {
 
 export type SemanticRuntimeState = {
   currentTurn: SemanticLiveTurn | null
-  history: Array<Pick<SemanticLiveTurn, 'turnId' | 'text' | 'stopReason' | 'startedAt' | 'endedAt'>>
+  history: SemanticLiveTurn[]
   flows: Record<string, SemanticFlow>
   errors: SemanticErrorEntry[]
   log: SemanticLogEntry[]
