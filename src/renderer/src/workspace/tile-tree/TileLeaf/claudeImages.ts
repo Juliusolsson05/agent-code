@@ -105,6 +105,31 @@ export function parseImagesFromHtml(html: string): ClaudeDraftImage[] {
   return images
 }
 
+// Synchronous "does this clipboard plausibly carry an image?" check.
+//
+// WHY this exists separately from `handlePaste`: `usePasteToFocus`
+// needs to decide — synchronously, during paste-event dispatch —
+// whether to take the async image path or just append text now. The
+// two SYNCHRONOUSLY-knowable image signals are (1) a `clipboardData`
+// item with an `image/*` type and (2) a data-URL `<img>` inside the
+// `text/html` representation. This deliberately does NOT cover the
+// `navigator.clipboard.read()` fallback `handlePaste` uses — that
+// fallback is inherently async and cannot inform a synchronous
+// decision. A paste whose image surfaces ONLY through that async
+// API will be treated as non-image by paste-to-focus; that is an
+// accepted, rare gap (the alternative — awaiting a clipboard probe
+// on every plain-text paste — delays and can reorder ordinary text
+// pastes, which is the common case and matters more).
+export function clipboardHasImageCandidate(
+  clipboardData: DataTransfer | null,
+): boolean {
+  if (!clipboardData) return false
+  for (const item of Array.from(clipboardData.items)) {
+    if (item.type.startsWith('image/')) return true
+  }
+  return parseImagesFromHtml(clipboardData.getData('text/html')).length > 0
+}
+
 export async function filesToDraftImages(files: File[]): Promise<ClaudeDraftImage[]> {
   return Promise.all(
     files.map(async file => {
