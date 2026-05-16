@@ -20,6 +20,20 @@ type Props = {
   codeId?: string
   engine?: 'static' | 'monaco'
   allowAutoDetect?: boolean
+  /** When false, skip syntax highlighting and render the code as
+   *  plain monospace text. Default true.
+   *
+   *  WHY this exists: highlight.js re-highlights the WHOLE `code`
+   *  string every time it changes. That's fine for static content,
+   *  but a caller that feeds a growing buffer — e.g. the live
+   *  streaming `Write` preview, which re-renders on every
+   *  `input_json_delta` — pays O(total bytes²) of highlighting over
+   *  the stream. Such callers pass `highlight={false}` so the live
+   *  preview stays cheap; the fully-highlighted view is rendered
+   *  once by the committed transcript after the stream finishes.
+   *  Only consulted by the static engine — Monaco does its own
+   *  incremental tokenization and isn't affected. */
+  highlight?: boolean
 }
 
 function inferClientUri(
@@ -42,6 +56,7 @@ export const CodeBlock = memo(function CodeBlock({
   codeId,
   engine = 'static',
   allowAutoDetect = false,
+  highlight = true,
 }: Props) {
   const normalizedLanguage = useMemo(
     () => normalizeCodeLanguage(language, path),
@@ -57,6 +72,10 @@ export const CodeBlock = memo(function CodeBlock({
   // with allowAutoDetect where the language resolves after first render).
   const highlighted = useMemo(() => {
     if (!code) return ''
+    // Caller opted out of highlighting (e.g. a live streaming
+    // preview) — return null so the static path renders a plain
+    // <code> with no per-render hljs cost.
+    if (!highlight) return null
     if (normalizedLanguage !== 'plaintext' && hljs.getLanguage(normalizedLanguage)) {
       return hljs.highlight(code, { language: normalizedLanguage }).value
     }
@@ -64,7 +83,7 @@ export const CodeBlock = memo(function CodeBlock({
       return hljs.highlightAuto(code).value
     }
     return null
-  }, [code, normalizedLanguage, allowAutoDetect])
+  }, [code, normalizedLanguage, allowAutoDetect, highlight])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const reactId = useId().replace(/:/g, '_')

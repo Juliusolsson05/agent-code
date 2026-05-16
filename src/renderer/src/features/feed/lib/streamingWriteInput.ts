@@ -131,16 +131,6 @@ function skipWs(raw: string, i: number): number {
   return i
 }
 
-// Match a literal token at `i` after skipping leading whitespace.
-// Returns the index past the token, or -1 if it doesn't match (or
-// the buffer ends before the token completes — a mid-stream state
-// the caller treats as "not there yet").
-function expect(raw: string, i: number, token: string): number {
-  i = skipWs(raw, i)
-  if (raw.startsWith(token, i)) return i + token.length
-  return -1
-}
-
 export function extractStreamingWriteInput(inputJson: string): StreamingWriteInput {
   const raw = inputJson
   if (!raw) return EMPTY
@@ -150,31 +140,67 @@ export function extractStreamingWriteInput(inputJson: string): StreamingWriteInp
   if (raw[i] !== '{') return EMPTY
   i += 1
 
-  // `"file_path"`
-  i = expect(raw, i, '"file_path"')
-  if (i < 0) return EMPTY
-  i = expect(raw, i, ':')
-  if (i < 0) return EMPTY
-  i = skipWs(raw, i)
-  if (raw[i] !== '"') return EMPTY
-  const fp = decodeJsonStringBody(raw, i + 1)
-  // file_path is only meaningful once its literal is fully closed —
-  // a half path would flicker in the header on every delta.
-  if (!fp.closed) return { filePath: null, partialContent: null }
-  const filePath = fp.text
-  i = fp.end
+  // Walk object members in WHATEVER ORDER they arrive. The earlier
+  // version of this scanner hard-required `"file_path"` before
+  // `"content"` — a positional assumption. JSON object key order is
+  // not a contract: the partial-JSON buffer happens to arrive in
+  // schema-declaration order today (verified against real proxy
+  // dumps), but a positional scanner would silently fall back to
+  // raw JSON for an ENTIRE stream if the model ever reordered the
+  // keys. Scanning by key name removes that fragility — order no
+  // longer matters, and an unexpected extra string-valued key is
+  // simply ignored.
+  let filePath: string | null = null
+  let partialContent: string | null = null
 
-  // `, "content"` — if `content` hasn't started, we still have the
-  // path; partialContent stays null.
-  i = expect(raw, i, ',')
-  if (i < 0) return { filePath, partialContent: null }
-  i = expect(raw, i, '"content"')
-  if (i < 0) return { filePath, partialContent: null }
-  i = expect(raw, i, ':')
-  if (i < 0) return { filePath, partialContent: null }
-  i = skipWs(raw, i)
-  if (raw[i] !== '"') return { filePath, partialContent: null }
+  while (i < raw.length) {
+    i = skipWs(raw, i)
+    if (i >= raw.length) break
+    const ch = raw[i]
+    if (ch === '}') break
+    // Tolerate the comma between members (and a stray leading one).
+    if (ch === ',') {
+      i += 1
+      continue
+    }
+    // Anything that isn't the start of a `"key"` here means the
+    // buffer is mid-key or malformed — nothing useful past this
+    // point yet. Stop; the next delta will carry more.
+    if (ch !== '"') break
 
-  const body = decodeJsonStringBody(raw, i + 1)
-  return { filePath, partialContent: body.text }
+    const key = decodeJsonStringBody(raw, i + 1)
+    // Key literal still streaming → can't know what member this is.
+    if (!key.closed) break
+    i = key.end
+
+    i = skipWs(raw, i)
+    if (raw[i] !== ':') break
+    i += 1
+    i = skipWs(raw, i)
+
+    // Write's only two args (`file_path`, `content`) are both
+    // strings, so a value that doesn't open with `"` is either not
+    // here yet or a key we don't care about with a non-string
+    // value. Either way we can't reliably skip an arbitrary JSON
+    // value with this minimal scanner — stop.
+    if (raw[i] !== '"') break
+
+    const value = decodeJsonStringBody(raw, i + 1)
+    if (key.text === 'file_path') {
+      // file_path is only surfaced once its literal is fully closed
+      // — a half path would flicker in the header on every delta.
+      if (value.closed) filePath = value.text
+    } else if (key.text === 'content') {
+      // content is surfaced PARTIAL on purpose — the in-flight value
+      // is the whole point of the live preview.
+      partialContent = value.text
+    }
+
+    // Value still streaming → it's the last member in the buffer;
+    // nothing after it to scan.
+    if (!value.closed) break
+    i = value.end
+  }
+
+  return { filePath, partialContent }
 }
