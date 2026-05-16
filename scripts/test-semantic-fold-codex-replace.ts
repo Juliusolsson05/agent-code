@@ -1,0 +1,194 @@
+import assert from 'node:assert/strict'
+
+import { foldSemanticEvent } from '../src/renderer/src/workspace/semantic/foldEvent'
+import { emptySemanticRuntime } from '../src/renderer/src/workspace/workspaceState'
+
+function foldMany(
+  events: Array<Record<string, unknown>>,
+  state = emptySemanticRuntime(),
+) {
+  return events.reduce(
+    (next, event) => foldSemanticEvent(next, event, 'codex'),
+    state,
+  )
+}
+
+function completedProxyMessageTurn() {
+  return foldMany([
+    {
+      type: 'block_started',
+      turnId: 'resp_old',
+      blockIndex: 0,
+      itemId: 'msg_old',
+      kind: 'message',
+      messagePhase: 'final_answer',
+      status: 'in_progress',
+      source: 'proxy',
+    },
+    {
+      type: 'text_delta',
+      turnId: 'resp_old',
+      blockIndex: 0,
+      itemId: 'msg_old',
+      textDelta: 'old',
+      textSoFar: 'old',
+      source: 'proxy',
+    },
+    {
+      type: 'block_completed',
+      turnId: 'resp_old',
+      blockIndex: 0,
+      itemId: 'msg_old',
+      kind: 'message',
+      text: 'old',
+      status: 'completed',
+      source: 'proxy',
+    },
+  ])
+}
+
+{
+  const state = completedProxyMessageTurn()
+  assert.equal(state.currentTurn?.turnId, 'resp_old')
+  assert.equal(state.currentTurn?.endedAt, null)
+  assert.equal(state.currentTurn?.blocks[0]?.finalized, true)
+
+  const next = foldSemanticEvent(
+    state,
+    {
+      type: 'block_started',
+      turnId: 'resp_new',
+      blockIndex: 0,
+      itemId: 'rs_new',
+      kind: 'reasoning',
+      source: 'proxy',
+    },
+    'codex',
+  )
+
+  assert.equal(next.currentTurn?.turnId, 'resp_new')
+  assert.equal(next.currentTurn?.blocks[0]?.kind, 'reasoning')
+  assert.equal(next.history.at(-1)?.turnId, 'resp_old')
+}
+
+{
+  const live = foldMany([
+    {
+      type: 'block_started',
+      turnId: 'resp_live',
+      blockIndex: 0,
+      itemId: 'msg_live',
+      kind: 'message',
+      status: 'in_progress',
+      source: 'proxy',
+    },
+    {
+      type: 'text_delta',
+      turnId: 'resp_live',
+      blockIndex: 0,
+      itemId: 'msg_live',
+      textDelta: 'still streaming',
+      textSoFar: 'still streaming',
+      source: 'proxy',
+    },
+  ])
+
+  const next = foldSemanticEvent(
+    live,
+    {
+      type: 'block_started',
+      turnId: 'resp_stray',
+      blockIndex: 0,
+      itemId: 'rs_stray',
+      kind: 'reasoning',
+      source: 'proxy',
+    },
+    'codex',
+  )
+
+  assert.equal(next.currentTurn?.turnId, 'resp_live')
+  assert.equal(next.history.length, 0)
+}
+
+{
+  const pendingTool = foldMany([
+    {
+      type: 'block_started',
+      turnId: 'resp_tool',
+      blockIndex: 0,
+      itemId: 'fc_tool',
+      kind: 'function_call',
+      toolName: 'exec_command',
+      callId: 'call_tool',
+      status: 'in_progress',
+      source: 'proxy',
+    },
+    {
+      type: 'block_completed',
+      turnId: 'resp_tool',
+      blockIndex: 0,
+      itemId: 'fc_tool',
+      kind: 'function_call',
+      toolName: 'exec_command',
+      callId: 'call_tool',
+      argumentsJson: '{}',
+      status: 'completed',
+      source: 'proxy',
+    },
+  ])
+
+  const next = foldSemanticEvent(
+    pendingTool,
+    {
+      type: 'block_started',
+      turnId: 'resp_followup',
+      blockIndex: 0,
+      itemId: 'rs_followup',
+      kind: 'reasoning',
+      source: 'proxy',
+    },
+    'codex',
+  )
+
+  assert.equal(next.currentTurn?.turnId, 'resp_tool')
+  assert.equal(next.history.length, 0)
+}
+
+{
+  const next = foldSemanticEvent(
+    emptySemanticRuntime(),
+    {
+      type: 'block_started',
+      turnId: 'resp_block_first',
+      blockIndex: 0,
+      itemId: 'msg_block_first',
+      kind: 'message',
+      status: 'in_progress',
+      source: 'proxy',
+    },
+    'codex',
+  )
+
+  assert.equal(next.currentTurn?.turnId, 'resp_block_first')
+  assert.equal(next.currentTurn?.blocks[0]?.kind, 'message')
+}
+
+{
+  const next = foldSemanticEvent(
+    emptySemanticRuntime(),
+    {
+      type: 'block_started',
+      turnId: 'msg_late',
+      blockIndex: 0,
+      itemId: 'msg_late',
+      kind: 'message',
+      status: 'in_progress',
+      source: 'proxy',
+    },
+    'claude',
+  )
+
+  assert.equal(next.currentTurn, null)
+}
+
+console.log('semantic fold Codex replacement tests passed')
