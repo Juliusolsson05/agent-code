@@ -387,6 +387,7 @@ export function TileLeaf({
           }
           tailMode={runtime.tailMode}
           pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
+          codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
           onScrollInfo={onScrollInfo}
           onUserEngagement={acknowledgeSession}
           hasOlderHistory={runtime.hasOlderHistory}

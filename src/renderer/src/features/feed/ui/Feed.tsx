@@ -124,6 +124,13 @@ type Props = {
    * auto-scrolls into view when the value changes.
    */
   pickerSelectedUuid?: string | null
+  /**
+   * Instance id (`data-code-block-id`) of the code block currently
+   * highlighted by the "Copy Code Block" picker. Null when that
+   * picker is not active. Drives an accent outline on the matching
+   * CodeBlock and auto-scrolls it into view when the value changes.
+   */
+  codeBlockSelectedId?: string | null
   workspaceRoot?: string | null
   /** Called on every scroll tick with the current position. */
   onScrollInfo?: (info: ScrollInfo) => void
@@ -238,6 +245,7 @@ function FeedImpl({
   turnStartedAt = null,
   tailMode = false,
   pickerSelectedUuid = null,
+  codeBlockSelectedId = null,
   workspaceRoot = null,
   onScrollInfo,
   onUserEngagement,
@@ -581,6 +589,75 @@ function FeedImpl({
       }
     }
   }, [pickerSelectedUuid])
+
+  // Copy Code Block picker — highlight + scroll the selected block.
+  //
+  // WHY a separate effect from the assistant-entry one above, and why
+  // the outline is applied imperatively here rather than as a JSX
+  // class: the assistant picker highlights an ENTRY, and Feed already
+  // renders a wrapper <div data-entry-uuid> per entry that it can add
+  // an outline class to in JSX. A code block is a `CodeBlock` buried
+  // deep inside rendered markdown / tool rows — there is no per-block
+  // wrapper Feed controls. So we locate the block by its
+  // `data-code-block-id` and toggle the outline classes on the node
+  // directly; the cleanup removes them.
+  //
+  // The outline class list is the SAME tokens the entry picker uses
+  // (line ~881) — keeping them identical means Tailwind's static
+  // scan already emits the CSS, so `classList.add` is safe.
+  //
+  // Shares `scrollAnimFrameRef` with the assistant-picker scroll so a
+  // tween from one picker is cancelled if the other starts; only one
+  // picker is ever active at a time, so they never genuinely race.
+  useEffect(() => {
+    if (!codeBlockSelectedId) return
+    const root = scrollerRef.current
+    if (!root) return
+    const target = root.querySelector(
+      `[data-code-block-id="${codeBlockSelectedId}"]`,
+    ) as HTMLElement | null
+    if (!target) return
+
+    const outline = ['outline', 'outline-2', 'outline-accent', 'outline-offset-2']
+    target.classList.add(...outline)
+
+    // Center the block in the scroller — same rAF tween as the
+    // assistant-picker scroll effect (native smooth-scroll fought the
+    // feed's own scroll listener; see the long note on that effect).
+    const targetCenter = target.offsetTop + target.offsetHeight / 2
+    const desired = targetCenter - root.clientHeight / 2
+    const maxScroll = root.scrollHeight - root.clientHeight
+    const to = Math.max(0, Math.min(maxScroll, desired))
+    const from = root.scrollTop
+    const distance = to - from
+    if (Math.abs(distance) >= 1) {
+      if (scrollAnimFrameRef.current !== null) {
+        cancelAnimationFrame(scrollAnimFrameRef.current)
+        scrollAnimFrameRef.current = null
+      }
+      const duration = 180
+      const startTime = performance.now()
+      const ease = (t: number) => 1 - Math.pow(1 - t, 3)
+      const step = (now: number) => {
+        const t = Math.min(1, (now - startTime) / duration)
+        root.scrollTop = from + distance * ease(t)
+        if (t < 1) {
+          scrollAnimFrameRef.current = requestAnimationFrame(step)
+        } else {
+          scrollAnimFrameRef.current = null
+        }
+      }
+      scrollAnimFrameRef.current = requestAnimationFrame(step)
+    }
+
+    return () => {
+      target.classList.remove(...outline)
+      if (scrollAnimFrameRef.current !== null) {
+        cancelAnimationFrame(scrollAnimFrameRef.current)
+        scrollAnimFrameRef.current = null
+      }
+    }
+  }, [codeBlockSelectedId])
 
   useEffect(() => {
     if (scrollToLatestRequest === 0) return

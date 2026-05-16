@@ -8,6 +8,8 @@ import {
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
+import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
 
 // Keybinds: global window-level listeners. The handler is attached to
 // `document` in a single useEffect, which captures the key BEFORE the
@@ -235,6 +237,68 @@ export function useKeybinds(
         // Other keys fall through — typing into the composer doesn't
         // cancel the picker. If we want "any keystroke cancels",
         // that's a one-line follow-up.
+      }
+
+      // --- Copy Code Block picker (Up/Down/Enter/Esc) ---
+      //
+      // Parallel to the Copy Assistant picker above, but the ordered
+      // list of selectable items is enumerated from the DOM, not the
+      // transcript: code blocks have no transcript identity, so
+      // `enumerateCodeBlockIds` reads `[data-code-block-id]` nodes
+      // within the focused pane in document order. The store only
+      // parks the current `selectedId`. Only one picker is ever
+      // active at a time (each command toggles its own), so this
+      // block and the assistant block can't both fire.
+      const cbPicker = focusedSessionId
+        ? workspace.runtimes[focusedSessionId]?.codeBlockPicker
+        : null
+      if (cbPicker && focusedSessionId) {
+        if (k === 'ArrowUp' || k === 'ArrowDown') {
+          e.preventDefault()
+          const ids = enumerateCodeBlockIds(focusedSessionId)
+          if (ids.length === 0) {
+            // Every block unmounted under the picker — close it
+            // rather than leave a selection pointing at nothing.
+            workspace.setCodeBlockPicker(focusedSessionId, null)
+            return
+          }
+          const cur = ids.indexOf(cbPicker.selectedId)
+          // Down = toward newer (document order runs oldest→newest,
+          // so the last id is the most recent block). If the selected
+          // block vanished mid-pick, snap to the newest available —
+          // same recovery the assistant picker does for a stale uuid.
+          const dir = k === 'ArrowDown' ? 1 : -1
+          const nextIdx =
+            cur === -1
+              ? ids.length - 1
+              : Math.max(0, Math.min(ids.length - 1, cur + dir))
+          workspace.setCodeBlockPicker(focusedSessionId, {
+            selectedId: ids[nextIdx],
+          })
+          return
+        }
+        if (k === 'Enter') {
+          e.preventDefault()
+          const code = getCodeBlockCode(cbPicker.selectedId)
+          // Clear the picker first so the UI returns to normal even
+          // if the clipboard write rejects (mirrors pickerConfirm).
+          workspace.setCodeBlockPicker(focusedSessionId, null)
+          if (code == null) {
+            workspace.showPaneToast(focusedSessionId, 'Nothing to copy')
+          } else {
+            void navigator.clipboard.writeText(code).then(
+              () => workspace.showPaneToast(focusedSessionId, 'Copied code block'),
+              () => workspace.showPaneToast(focusedSessionId, 'Clipboard write failed'),
+            )
+          }
+          return
+        }
+        if (k === 'Escape') {
+          e.preventDefault()
+          workspace.setCodeBlockPicker(focusedSessionId, null)
+          return
+        }
+        // Other keys fall through, same as the assistant picker.
       }
 
       if (k === 'Escape' && workspace.spotlight) {

@@ -23,6 +23,14 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 // pickerConfirm    — copies the selected entry's text to clipboard,
 //                    shows a pane toast, clears the picker.
 // pickerCancel     — clears the picker without copying.
+//
+// setCodeBlockPicker — bare setter for the Copy Code Block picker.
+//                    Unlike the assistant picker above, this one has
+//                    no Enter/Move logic in the store: code blocks
+//                    have no transcript identity, so enumeration and
+//                    navigation are DOM-driven and live in the
+//                    copy-code-block feature + useKeybinds. The store
+//                    only parks the current `selectedId` (or null).
 
 export function usePickerActions(
   setRuntimes: WorkspaceSetRuntimes,
@@ -33,6 +41,10 @@ export function usePickerActions(
   pickerMove: (sessionId: SessionId, direction: -1 | 1) => void
   pickerCancel: (sessionId: SessionId) => void
   pickerConfirm: (sessionId: SessionId) => Promise<void>
+  setCodeBlockPicker: (
+    sessionId: SessionId,
+    picker: { selectedId: string } | null,
+  ) => void
 } {
   const pickerEnter = useCallback(
     (sessionId: SessionId) => {
@@ -133,5 +145,22 @@ export function usePickerActions(
     [refs.latestRuntimesRef, setRuntimes, showPaneToast],
   )
 
-  return { pickerEnter, pickerMove, pickerCancel, pickerConfirm }
+  const setCodeBlockPicker = useCallback(
+    (sessionId: SessionId, picker: { selectedId: string } | null) => {
+      setRuntimes(prev => {
+        const c = prev[sessionId]
+        if (!c) return prev
+        // No-op guard: avoid a runtimes object churn (and the Feed
+        // re-render it triggers) when the selection didn't actually
+        // change — Up/Down at a clamp end calls this with the same id.
+        if ((c.codeBlockPicker?.selectedId ?? null) === (picker?.selectedId ?? null)) {
+          return prev
+        }
+        return { ...prev, [sessionId]: { ...c, codeBlockPicker: picker } }
+      })
+    },
+    [setRuntimes],
+  )
+
+  return { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker }
 }
