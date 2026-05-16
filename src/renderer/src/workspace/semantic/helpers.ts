@@ -106,6 +106,24 @@ export function semanticHistoryRow(
   }
 }
 
+export function appendSemanticHistory(
+  history: SemanticRuntimeState['history'],
+  turn: SemanticLiveTurn,
+): SemanticRuntimeState['history'] {
+  const row = semanticHistoryRow(turn)
+  // WHY this replaces by turnId instead of blindly appending:
+  // semantic history is the latest renderable snapshot per turn while
+  // JSONL catches up. Codex rollout replay can emit repeated tiny
+  // bootstrap fragments with the same fallback turn id; appending all
+  // of them creates duplicate React keys and repeated rows. Replacing
+  // the older copy preserves the bridge without making history an
+  // accidental event log.
+  return [
+    ...history.filter(existing => existing.turnId !== row.turnId),
+    row,
+  ].slice(-SEMANTIC_HISTORY_CAP)
+}
+
 /** True when the turn is still live — hasn't received its
  *  terminal `turn_stopped`/`turn_completed` yet. Used by session-
  *  status derivation and the foldSemanticEvent branch that decides

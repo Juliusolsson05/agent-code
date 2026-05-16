@@ -7,14 +7,13 @@ import type {
 
 import {
   SEMANTIC_ERROR_CAP,
-  SEMANTIC_HISTORY_CAP,
   SEMANTIC_LOG_CAP,
+  appendSemanticHistory,
   deriveSemanticTaskSnapshot,
   emptySemanticLookupSnapshot,
   emptySemanticTaskSnapshot,
   flattenSemanticUsage,
   hasPendingSemanticTools,
-  semanticHistoryRow,
   semanticToIndex,
 } from '@renderer/workspace/semantic/helpers'
 import { summarizeSemanticEvent } from '@renderer/workspace/semantic/summarize'
@@ -74,6 +73,56 @@ function codexCanReplaceEndedTurn(currentTurn: SemanticLiveTurn): boolean {
   // separates the safe sequential case from the unsafe concurrent
   // streaming case; live, unended turns still reject mismatched ids.
   return currentTurn.endedAt != null
+}
+
+function isEmptyNonProxyShellTurn(currentTurn: SemanticLiveTurn): boolean {
+  return (
+    currentTurn.source !== 'proxy' &&
+    currentTurn.endedAt === null &&
+    currentTurn.text.length === 0 &&
+    currentTurn.blockOrder.length === 0 &&
+    Object.keys(currentTurn.blocks).length === 0
+  )
+}
+
+function codexCanReplaceTurn(
+  currentTurn: SemanticLiveTurn,
+  ev: Record<string, unknown>,
+): boolean {
+  if (codexCanReplaceEndedTurn(currentTurn)) return true
+  // WHY proxy can replace an empty rollout/screen shell:
+  // rollout can open a placeholder Codex turn immediately after
+  // submit, before the proxy emits the real Responses turn carrying
+  // reasoning/message blocks. The strict mismatch guard then drops
+  // every proxy block, so the feed shows no streaming. Keep the guard
+  // for live content, but let proxy claim ownership while the current
+  // non-proxy turn is still empty.
+  return ev.source === 'proxy' && isEmptyNonProxyShellTurn(currentTurn)
+}
+
+function shouldArchiveReplacedTurn(currentTurn: SemanticLiveTurn): boolean {
+  return !isEmptyNonProxyShellTurn(currentTurn)
+}
+
+function semanticTurnFromEvent(
+  ev: Record<string, unknown>,
+  now: number,
+  turnId: string,
+): SemanticLiveTurn {
+  return {
+    turnId,
+    text: '',
+    source: typeof ev.source === 'string' ? ev.source : null,
+    blocks: {},
+    blockOrder: [],
+    stopReason: null,
+    usage: null,
+    task: emptySemanticTaskSnapshot(),
+    lookups: emptySemanticLookupSnapshot(),
+    startedAt: now,
+    endedAt: null,
+    ...(ev.isCompactionSynthesis === true ? { isCompactionSynthesis: true } : {}),
+  }
 }
 
 export function foldSemanticEvent(
@@ -185,26 +234,15 @@ export function foldSemanticEvent(
           source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
           ...(isCompactionSynthesis ? { isCompactionSynthesis: true } : {}),
         }
-      } else if (sessionKind === 'claude' || codexCanReplaceEndedTurn(currentTurn)) {
-        history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
-        currentTurn = {
-          turnId,
-          text: '',
-          source: typeof ev.source === 'string' ? ev.source : null,
-          blocks: {},
-          blockOrder: [],
-          stopReason: null,
-          usage: null,
-          task: emptySemanticTaskSnapshot(),
-          lookups: emptySemanticLookupSnapshot(),
-          startedAt: now,
-          endedAt: null,
-          ...(isCompactionSynthesis ? { isCompactionSynthesis: true } : {}),
+      } else if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+        if (shouldArchiveReplacedTurn(currentTurn)) {
+          history = appendSemanticHistory(history, currentTurn)
         }
+        currentTurn = semanticTurnFromEvent(ev, now, turnId)
       }
       // Codex: live mismatched turnId falls through — drop the event.
       // Already-ended pending-tool turns are archived/replaced above;
-      // see codexCanReplaceEndedTurn for the MCP/function_call_output
+      // see codexCanReplaceTurn for the MCP/function_call_output
       // lifecycle that requires that exception.
       break
     }
@@ -245,21 +283,11 @@ export function foldSemanticEvent(
           endedAt: null,
         }
       } else if (currentTurn.turnId !== turnId) {
-        if (sessionKind === 'claude' || codexCanReplaceEndedTurn(currentTurn)) {
-          history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
-          currentTurn = {
-            turnId,
-            text: '',
-            source: typeof ev.source === 'string' ? ev.source : null,
-            blocks: {},
-            blockOrder: [],
-            stopReason: null,
-            usage: null,
-            task: emptySemanticTaskSnapshot(),
-            lookups: emptySemanticLookupSnapshot(),
-            startedAt: now,
-            endedAt: null,
+        if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+          if (shouldArchiveReplacedTurn(currentTurn)) {
+            history = appendSemanticHistory(history, currentTurn)
           }
+          currentTurn = semanticTurnFromEvent(ev, now, turnId)
         } else {
           break
         }
@@ -273,7 +301,17 @@ export function foldSemanticEvent(
     }
     case 'block_started': {
       if (!currentTurn) break
-      if (eventTargetsDifferentTurn(ev, currentTurn)) break
+      if (eventTargetsDifferentTurn(ev, currentTurn)) {
+        const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
+        if (sessionKind === 'codex' && turnId && codexCanReplaceTurn(currentTurn, ev)) {
+          if (shouldArchiveReplacedTurn(currentTurn)) {
+            history = appendSemanticHistory(history, currentTurn)
+          }
+          currentTurn = semanticTurnFromEvent(ev, now, turnId)
+        } else {
+          break
+        }
+      }
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       // Codex emits `callId` where Claude emits `toolUseId`. Both feed
@@ -592,10 +630,7 @@ export function foldSemanticEvent(
           lookups: derived.lookups,
         }
         if (nextTurn.endedAt != null && !hasPendingSemanticTools(nextTurn)) {
-          history = [
-            ...history,
-            semanticHistoryRow(nextTurn),
-          ].slice(-SEMANTIC_HISTORY_CAP)
+          history = appendSemanticHistory(history, nextTurn)
           currentTurn = null
         } else {
           currentTurn = nextTurn
@@ -633,21 +668,11 @@ export function foldSemanticEvent(
           endedAt: null,
         }
       } else if (currentTurn.turnId !== turnId) {
-        if (sessionKind === 'claude' || codexCanReplaceEndedTurn(currentTurn)) {
-          history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
-          currentTurn = {
-            turnId,
-            text: '',
-            source: typeof ev.source === 'string' ? ev.source : null,
-            blocks: {},
-            blockOrder: [],
-            stopReason: null,
-            usage: null,
-            task: emptySemanticTaskSnapshot(),
-            lookups: emptySemanticLookupSnapshot(),
-            startedAt: now,
-            endedAt: null,
+        if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+          if (shouldArchiveReplacedTurn(currentTurn)) {
+            history = appendSemanticHistory(history, currentTurn)
           }
+          currentTurn = semanticTurnFromEvent(ev, now, turnId)
         } else {
           break
         }
@@ -754,10 +779,7 @@ export function foldSemanticEvent(
           lookups: derived.lookups,
         }
         if (completedTurn.endedAt != null && !hasPendingSemanticTools(completedTurn)) {
-          history = [
-            ...history,
-            semanticHistoryRow(completedTurn),
-          ].slice(-SEMANTIC_HISTORY_CAP)
+          history = appendSemanticHistory(history, completedTurn)
           currentTurn = null
         } else {
           currentTurn = completedTurn
@@ -790,10 +812,7 @@ export function foldSemanticEvent(
       if (hasPendingSemanticTools(completedTurn)) {
         currentTurn = completedTurn
       } else {
-        history = [
-          ...history,
-          semanticHistoryRow(completedTurn),
-        ].slice(-SEMANTIC_HISTORY_CAP)
+        history = appendSemanticHistory(history, completedTurn)
         currentTurn = null
       }
       break
