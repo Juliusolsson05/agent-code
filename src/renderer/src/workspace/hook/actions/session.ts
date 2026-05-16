@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { Tab } from '@renderer/workspace/types'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
@@ -49,12 +50,13 @@ export type SessionActions = {
       kind?: SessionKind
       dangerousMode?: boolean
       recoverTmuxName?: string
+      builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
   killSession: (sessionId: SessionId) => Promise<void>
   replaceSession: (
     cwd: string,
-    opts?: { resumeSessionId?: string; kind?: SessionKind },
+    opts?: { resumeSessionId?: string; kind?: SessionKind; builtInMcpDomains?: BuiltInMcpDomain[] },
   ) => Promise<SessionId | undefined>
   reloadAgentSessions: (dangerousMode?: boolean) => Promise<void>
   softReloadAgentView: (sessionId?: SessionId) => Promise<SessionId | null>
@@ -134,6 +136,7 @@ export function useSessionActions(
         kind?: SessionKind
         dangerousMode?: boolean
         recoverTmuxName?: string
+        builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? 'claude'
@@ -155,6 +158,7 @@ export function useSessionActions(
           dangerousMode,
           useProxy,
           recoverTmuxName: opts?.recoverTmuxName,
+          builtInMcpDomains: opts?.builtInMcpDomains,
         })
         sessionId = result.sessionId
         tmuxName = result.tmuxName
@@ -167,6 +171,9 @@ export function useSessionActions(
         ...(tmuxName ? { tmuxName } : {}),
         ...(kind !== 'terminal' && opts?.resumeSessionId
           ? { providerSessionId: opts.resumeSessionId }
+          : {}),
+        ...(kind !== 'terminal' && opts?.builtInMcpDomains && opts.builtInMcpDomains.length > 0
+          ? { builtInMcpDomains: opts.builtInMcpDomains }
           : {}),
       }
       setState(prev => ({
@@ -320,7 +327,7 @@ export function useSessionActions(
   const replaceSession = useCallback(
     async (
       cwd: string,
-      opts?: { resumeSessionId?: string; kind?: SessionKind },
+      opts?: { resumeSessionId?: string; kind?: SessionKind; builtInMcpDomains?: BuiltInMcpDomain[] },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
       // WHY this reads Dispatch focus before tab focus:
@@ -386,6 +393,7 @@ export function useSessionActions(
           cwd,
           kind: nextKind,
           ...(opts?.resumeSessionId ? { providerSessionId: opts.resumeSessionId } : {}),
+          ...(opts?.builtInMcpDomains ? { builtInMcpDomains: opts.builtInMcpDomains } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }
         const detached = detachedSessions[oldId]
@@ -477,6 +485,7 @@ export function useSessionActions(
             resumeSessionId: meta.providerSessionId,
             dangerousMode,
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
+            builtInMcpDomains: meta.builtInMcpDomains,
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = { ...meta }

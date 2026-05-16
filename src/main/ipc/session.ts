@@ -11,6 +11,7 @@ import {
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
+import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 
 // Session lifecycle + I/O IPC.
 //
@@ -42,6 +43,7 @@ export function registerSessionIpc(
         dangerousMode?: boolean
         useProxy?: boolean
         recoverTmuxName?: string
+        builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ) => {
       return await manager.spawn(options)

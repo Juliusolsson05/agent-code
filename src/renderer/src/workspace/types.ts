@@ -1,3 +1,5 @@
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
+
 // Tile tree data model.
 //
 // Design constraints (captured during brainstorming with the user):
@@ -128,6 +130,18 @@ export type SessionMeta = {
    * parent, so the depth is always at most one.
    */
   linkedParentId?: SessionId
+  /**
+   * Built-in MCP domains this agent should receive when it is spawned.
+   *
+   * WHY this is session metadata, not only a transient spawn option:
+   * enabling an Agent Code MCP server is a property of the live agent
+   * contract. Reloading dangerous-mode settings, restoring a workspace,
+   * switching focus, or duplicating UI placement should not silently strip
+   * those tools from the provider process. Persisting the domain names keeps
+   * the renderer as the source of truth for "this pane is MCP-augmented" while
+   * the main process owns the short-lived URL/token material.
+   */
+  builtInMcpDomains?: BuiltInMcpDomain[]
 }
 
 export type BuriedPaneRecord = {

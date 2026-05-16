@@ -34,6 +34,7 @@ import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/h
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
+import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 
 // Main process — thin Electron host.
 //
@@ -77,6 +78,7 @@ const dictationDebugJournals = new DictationDebugJournalRegistry()
 // harness-findings-and-fix.md for context.
 const pasteDebugJournals = new PasteDebugJournalRegistry()
 const worktreeActivityIndex = new WorktreeActivityIndex()
+const builtInMcpHost = new BuiltInMcpHttpHost()
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -206,7 +208,8 @@ async function startApp(): Promise<void> {
     }
   }
 
-  manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null)
+  await builtInMcpHost.start()
+  manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost)
   performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
@@ -222,6 +225,7 @@ async function startApp(): Promise<void> {
 
 app.on('window-all-closed', () => {
   void manager?.killAll()
+  void builtInMcpHost.stop()
   void lspManager.dispose()
   if (process.platform !== 'darwin') app.quit()
 })
@@ -229,6 +233,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   performanceService.mark('app.main.beforeQuit')
   void manager?.killAll()
+  void builtInMcpHost.stop()
   void lspManager.dispose()
   cleanupDictationIpcResources()
   stopMainHeapWatchdog()

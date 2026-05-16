@@ -6,6 +6,7 @@ import type { SlashPickerState } from '@preload/index.js'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { getToolPath } from '@main/setup/toolchain.js'
+import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import {
   ClaudeCodeHeadless,
   createProxyServer,
@@ -49,6 +50,7 @@ export type ClaudeSessionOptions = {
    *  spawned. This keeps the default user path zero-dependency on
    *  mitmproxy while letting opted-in users get the richer stream. */
   useProxy?: boolean
+  builtInMcpServers?: BuiltInMcpServerConfig[]
 }
 
 export type ScreenSnapshot = {
@@ -137,6 +139,7 @@ export class ClaudeSession extends EventEmitter {
   private readonly dangerousMode: boolean
   private readonly useProxy: boolean
   private readonly shellSessionId: string | null
+  private readonly builtInMcpServers: BuiltInMcpServerConfig[]
 
   constructor(options: ClaudeSessionOptions = {}) {
     super()
@@ -149,6 +152,7 @@ export class ClaudeSession extends EventEmitter {
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
     this.useProxy = options.useProxy === true
     this.shellSessionId = options.shellSessionId ?? null
+    this.builtInMcpServers = options.builtInMcpServers ?? []
 
     const env: Record<string, string | undefined> = {}
     for (const [k, v] of Object.entries(process.env)) {
@@ -166,6 +170,20 @@ export class ClaudeSession extends EventEmitter {
 
   async start(): Promise<void> {
     const args: string[] = []
+    if (this.builtInMcpServers.length > 0) {
+      args.push('--mcp-config', JSON.stringify({
+        mcpServers: Object.fromEntries(
+          this.builtInMcpServers.map(server => [
+            server.name,
+            {
+              type: 'http',
+              url: server.url,
+              headers: server.headers,
+            },
+          ]),
+        ),
+      }))
+    }
     if (this.resumeSessionId) args.push('--resume', this.resumeSessionId)
     if (this.dangerousMode) args.push('--dangerously-skip-permissions')
 
