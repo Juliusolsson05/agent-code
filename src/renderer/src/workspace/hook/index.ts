@@ -305,6 +305,7 @@ export function useWorkspace(
     startNewAgentPlacement: paneActions.startNewAgentPlacement,
     commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
+    createLinkedAgent: paneActions.createLinkedAgent,
     attachDetachedToGrid: paneActions.attachDetachedToGrid,
     attachAllDetachedForTab: paneActions.attachAllDetachedForTab,
     detachFocusedToDispatch: paneActions.detachFocusedToDispatch,

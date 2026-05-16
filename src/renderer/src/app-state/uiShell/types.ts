@@ -43,6 +43,22 @@ export type UiShellState = {
    * the call stack instead of at the top.
    */
   dispatchAttachIntent: SessionId | null
+  /**
+   * Non-null when the placement overlay is open in "Linked Agent"
+   * mode. The value is the PARENT session id — the agent that was
+   * focused when the Linked Agent command ran. The overlay reads
+   * this to show only the Claude/Codex kind picker (no placement
+   * step) and, on pick, calls `createLinkedAgent(kind, parentId)`.
+   *
+   * WHY a third overlay intent alongside newAgentPlacementOpen and
+   * dispatchAttachIntent rather than overloading either: like
+   * dispatchAttachIntent, the linked flow commits through its own
+   * action and skips placement. Conflating it with the create flow
+   * would force every overlay branch to disambiguate; a dedicated
+   * field keeps each flow's intent legible at the top of the call
+   * stack. See uiShell/slice.ts for the same reasoning on attach.
+   */
+  linkedAgentParentId: SessionId | null
   gitBarOpen: boolean
   worktreesBarOpen: boolean
   debugPanelOpen: boolean

@@ -49,6 +49,25 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => workspace.requestBuryFocused(),
   },
   {
+    id: 'linked-agent',
+    title: 'Linked Agent…',
+    description: '**What it does:** Starts a new Claude or Codex agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is a normal Dispatch agent. It renders directly under the parent and closes automatically when the parent closes.',
+    keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const kind = workspace.state.sessions[sessionId]?.kind
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const kind = workspace.state.sessions[sessionId]?.kind
+      if (kind !== 'claude' && kind !== 'codex') return
+      ui.openLinkedAgent(sessionId)
+    },
+  },
+  {
     // Promote the dispatch-focused detached agent into the active
     // tab's grid via the existing placement-target picker. Available
     // only when Dispatch Mode is active AND its current focus is on a

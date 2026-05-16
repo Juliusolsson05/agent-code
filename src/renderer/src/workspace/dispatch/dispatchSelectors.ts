@@ -13,6 +13,10 @@ export type DispatchAgentRow = {
   kind: SessionKind | undefined
   title: string
   placement: 'grid' | 'detached'
+  /** Nesting depth in the dispatch list. 0 = ordinary row; 1 = a
+   *  linked agent rendered indented directly under its parent row.
+   *  Linked agents never chain, so this is only ever 0 or 1. */
+  depth: number
 }
 
 export type DispatchTabGroup = {
@@ -52,26 +56,69 @@ export function buildDispatchGroups(
       const detachedSessionIds = detachedDispatchSessionIdsForTab(state, tab.id)
         .filter(sessionId => !pinnedSet.has(sessionId))
 
-      const rows = [
+      const entries = [
         ...gridSessionIds.map(sessionId => ({ sessionId, placement: 'grid' as const })),
         ...detachedSessionIds.map(sessionId => ({ sessionId, placement: 'detached' as const })),
       ]
-        .map(({ sessionId, placement }) => {
-          const meta = state.sessions[sessionId]
-          const rowIndex = globalIndex++
-          return {
-            key: `${tab.id}:${placement}:${sessionId}`,
-            label: `${tabIndexLabel(tabIndex)}${rowIndex}`,
-            globalIndex: rowIndex,
-            tabId: tab.id,
-            tabTitle: tab.title,
-            tabIndex,
-            sessionId,
-            kind: meta?.kind,
-            title: sessionTitle(meta),
-            placement,
-          } satisfies DispatchAgentRow
-        })
+
+      // Nesting pass: a linked agent (SessionMeta.linkedParentId)
+      // renders indented immediately under its parent's row rather
+      // than at the bottom of the tab group. We index children by
+      // parent, then walk the natural order emitting each non-child
+      // row followed by its children.
+      //
+      // WHY the parent must also be in `entries` (same tab group):
+      // the linked agent always lands in its parent's tab, so the
+      // parent is normally present — but scope filters, a closed
+      // parent, or a pinned parent (pinned rows are pulled into
+      // their own section) can leave the child "orphaned" here. In
+      // that case the child is emitted as an ordinary depth-0 row
+      // in its natural position rather than vanishing.
+      const entryIds = new Set(entries.map(e => e.sessionId))
+      const childrenByParent = new Map<SessionId, typeof entries>()
+      for (const e of entries) {
+        const parentId = state.sessions[e.sessionId]?.linkedParentId
+        if (parentId && entryIds.has(parentId)) {
+          const arr = childrenByParent.get(parentId) ?? []
+          arr.push(e)
+          childrenByParent.set(parentId, arr)
+        }
+      }
+      const ordered: Array<{
+        sessionId: SessionId
+        placement: 'grid' | 'detached'
+        depth: number
+      }> = []
+      for (const e of entries) {
+        const parentId = state.sessions[e.sessionId]?.linkedParentId
+        // Children are emitted under their parent below — skip here.
+        if (parentId && entryIds.has(parentId)) continue
+        ordered.push({ ...e, depth: 0 })
+        for (const child of childrenByParent.get(e.sessionId) ?? []) {
+          ordered.push({ ...child, depth: 1 })
+        }
+      }
+
+      // globalIndex is assigned in the FINAL (post-nesting) order so
+      // the A1/A2/A3 labels run top-to-bottom exactly as the rows
+      // render — a linked child takes the number of its visual slot.
+      const rows = ordered.map(({ sessionId, placement, depth }) => {
+        const meta = state.sessions[sessionId]
+        const rowIndex = globalIndex++
+        return {
+          key: `${tab.id}:${placement}:${sessionId}`,
+          label: `${tabIndexLabel(tabIndex)}${rowIndex}`,
+          globalIndex: rowIndex,
+          tabId: tab.id,
+          tabTitle: tab.title,
+          tabIndex,
+          sessionId,
+          kind: meta?.kind,
+          title: sessionTitle(meta),
+          placement,
+          depth,
+        } satisfies DispatchAgentRow
+      })
       return { tab, tabIndex, rows } satisfies DispatchTabGroup
     })
     .filter(group => group.rows.length > 0)
@@ -202,6 +249,8 @@ export function buildPinnedDispatchRows(
       kind: meta.kind,
       title: sessionTitle(meta),
       placement,
+      // Pinned rows live in their own flat section — never nested.
+      depth: 0,
     })
     pinnedIndex += 1
   }

@@ -75,6 +75,7 @@ export default function App() {
   const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
+  const linkedAgentParentId = useAppStore(state => state.linkedAgentParentId)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
   const worktreesBarOpen = useAppStore(state => state.worktreesBarOpen)
   const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
@@ -108,14 +109,20 @@ export default function App() {
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
   const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
-  // Both create-mode and attach-mode share the same overlay; the close
-  // handler must clear both store flags so re-opening one mode after
-  // the other doesn't inherit stale state.
+  const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
+  const closeLinkedAgent = useAppStore(state => state.closeLinkedAgent)
+  // Create, attach, and linked-agent flows share the same overlay
+  // shell. The close handler clears every intent so re-opening one
+  // mode after another never inherits stale state from a sibling flow.
   const closePlacementOverlay = useCallback(() => {
     closeNewAgentPlacement()
     closeDispatchAttach()
-  }, [closeDispatchAttach, closeNewAgentPlacement])
-  const placementOverlayOpen = newAgentPlacementOpen || dispatchAttachIntent !== null
+    closeLinkedAgent()
+  }, [closeDispatchAttach, closeLinkedAgent, closeNewAgentPlacement])
+  const placementOverlayOpen =
+    newAgentPlacementOpen ||
+    dispatchAttachIntent !== null ||
+    linkedAgentParentId !== null
   const toggleGitBar = useAppStore(state => state.toggleGitBar)
   const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
   const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
@@ -546,6 +553,7 @@ export default function App() {
                     workspace={workspace}
                     onClose={closePlacementOverlay}
                     attachDetachedSessionId={dispatchAttachIntent}
+                    linkedAgentParentId={linkedAgentParentId}
                   />
                 </div>
               ) : activeTab ? (
@@ -563,6 +571,7 @@ export default function App() {
                     workspace={workspace}
                     onClose={closePlacementOverlay}
                     attachDetachedSessionId={dispatchAttachIntent}
+                    linkedAgentParentId={linkedAgentParentId}
                   />
                 </div>
               ) : (
@@ -664,6 +673,7 @@ export default function App() {
         }
         exitDispatchMode={workspace.exitDispatchMode}
         openDispatchAttach={openDispatchAttach}
+        openLinkedAgent={openLinkedAgent}
         openPinAgents={openPinAgents}
         onTileTabsRequest={onTileTabsRequest}
         onReorderTabsRequest={openReorderTabs}

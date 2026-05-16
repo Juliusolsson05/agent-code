@@ -107,6 +107,27 @@ export type SessionMeta = {
    * and for agent sessions (P3 may extend this; not in P1).
    */
   tmuxName?: string
+  /**
+   * Set on a "Linked Agent" — an agent spawned via the Linked Agent
+   * command with another agent as its parent. Two consequences:
+   *
+   *  1. Dispatch list: the linked agent renders indented directly
+   *     under its parent's row (see buildDispatchGroups) instead of
+   *     at the bottom of the tab group like an ordinary detached
+   *     dispatch agent.
+   *  2. Lifecycle: closing the parent session cascade-closes every
+   *     session that names it here (see closeLinkedChildren in
+   *     pane.ts). The link is the child's property — the parent
+   *     holds no list — so the cascade is a scan of `sessions`.
+   *
+   * Absent for every ordinary agent. The id points at another
+   * session in the same workspace; if that session is already gone
+   * the field is simply inert (the child becomes a normal top-level
+   * dispatch row). We deliberately do NOT chain — a linked agent
+   * created off another linked agent points at the SAME top-level
+   * parent, so the depth is always at most one.
+   */
+  linkedParentId?: SessionId
 }
 
 export type BuriedPaneRecord = {

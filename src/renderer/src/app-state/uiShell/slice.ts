@@ -20,6 +20,7 @@ export const createUiShellSlice: StateCreator<
   viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
   dispatchAttachIntent: null,
+  linkedAgentParentId: null,
   gitBarOpen: false,
   worktreesBarOpen: false,
   debugPanelOpen: false,
@@ -97,6 +98,11 @@ export const createUiShellSlice: StateCreator<
     set({ dispatchAttachIntent: sessionId }, false, 'uiShell/openDispatchAttach'),
   closeDispatchAttach: () =>
     set({ dispatchAttachIntent: null }, false, 'uiShell/closeDispatchAttach'),
+
+  openLinkedAgent: sessionId =>
+    set({ linkedAgentParentId: sessionId }, false, 'uiShell/openLinkedAgent'),
+  closeLinkedAgent: () =>
+    set({ linkedAgentParentId: null }, false, 'uiShell/closeLinkedAgent'),
 
   toggleGitBar: () =>
     set(state => ({ gitBarOpen: !state.gitBarOpen }), false, 'uiShell/toggleGitBar'),
