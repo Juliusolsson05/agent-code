@@ -8,8 +8,10 @@ import {
 } from '@providers/claude/renderer/rows/ClaudeRows'
 import {
   CodexApplyPatchRow,
+  CodexExecCommandRow,
   CodexToolRow,
   CodexToolResultRow,
+  CodexWriteStdinRow,
 } from '@providers/codex/renderer/rows/CodexRows'
 import type {
   ContentBlock,
@@ -150,6 +152,12 @@ export const Block = memo(function Block({
       if (currentProvider === 'codex') {
         if (tu.name === 'apply_patch') {
           return <ToolBand><CodexApplyPatchRow block={tu} /></ToolBand>
+        }
+        if (tu.name === 'exec_command') {
+          return <ToolBand><CodexExecCommandRow block={tu} /></ToolBand>
+        }
+        if (tu.name === 'write_stdin') {
+          return <CodexWriteStdinRow block={tu} />
         }
         return <CodexToolRow block={tu} />
       }

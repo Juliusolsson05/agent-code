@@ -11,6 +11,7 @@ import {
   entryTextContent,
 } from '@renderer/workspace/entries/utils'
 import { isOptimisticCodexUserEntry } from '@renderer/workspace/codex/entries'
+import { isSemanticTurnRunning } from '@renderer/workspace/semantic/helpers'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 
@@ -80,6 +81,50 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
         const last = current.entries[current.entries.length - 1]
         if (isOptimisticCodexUserEntry(last) && entryTextContent(last) === trimmed) {
           return prev
+        }
+        const activeSemanticTurn = isSemanticTurnRunning(current.semantic.currentTurn)
+        const activeStreamPhase = current.streamPhase !== 'idle'
+        if (activeSemanticTurn || activeStreamPhase) {
+          const alreadyQueued = current.queuedMessages.some(q => q.content === trimmed)
+          if (alreadyQueued) return prev
+          const queued = {
+            content: trimmed,
+            timestamp: String(Date.now()),
+          }
+          return {
+            ...prev,
+            [sessionId]: appendFeedDebugLog(
+              {
+                ...current,
+                queuedMessages: [...current.queuedMessages, queued],
+                awaitingAssistant: true,
+              },
+              {
+                layer: 'STATE',
+                kind: 'optimistic_user_queue',
+                summary: `optimistic user queued during live turn · ${trimmed.slice(0, 80)}`,
+                // WHY queue instead of appending a normal feed row:
+                // Codex lets the user submit follow-up prompts while the
+                // previous assistant/tool turn is still live. Appending a
+                // synthetic user Entry to `entries` during that window puts
+                // it in Feed's committed plane, which renders before
+                // semantic history/current turn. The 2026-05-16T19-21
+                // bundle captured the result: the future user prompt
+                // appeared one level too high, above the active apply_patch
+                // plane. QueueStrip is the existing "about to happen"
+                // surface; keeping mid-turn optimistic prompts there avoids
+                // lying about transcript order while still making submit
+                // visible immediately.
+                data: {
+                  text: trimmed,
+                  queueLengthBefore: current.queuedMessages.length,
+                  queueLengthAfter: current.queuedMessages.length + 1,
+                  activeSemanticTurn,
+                  streamPhase: current.streamPhase,
+                },
+              },
+            ),
+          }
         }
         const optimistic: Entry = {
           type: 'user',

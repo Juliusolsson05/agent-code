@@ -111,7 +111,7 @@ function completedProxyMessageTurn() {
 }
 
 {
-  const pendingTool = foldMany([
+  const completedToolWithoutTurnSeal = foldMany([
     {
       type: 'block_started',
       turnId: 'resp_tool',
@@ -138,7 +138,7 @@ function completedProxyMessageTurn() {
   ])
 
   const next = foldSemanticEvent(
-    pendingTool,
+    completedToolWithoutTurnSeal,
     {
       type: 'block_started',
       turnId: 'resp_followup',
@@ -150,7 +150,46 @@ function completedProxyMessageTurn() {
     'codex',
   )
 
-  assert.equal(next.currentTurn?.turnId, 'resp_tool')
+  // WHY a completed function_call without turn_completed must yield:
+  // the 2026-05-16T19:08 debug bundle showed exactly this shape. The
+  // old `resp_*` turn had completed message/function_call blocks but
+  // no turn seal, so the strict Codex mismatch guard treated every
+  // later response as a racing producer and dropped all live streaming.
+  // A terminal proxy turn is safe to archive when the next proxy turn
+  // starts; keeping it mounted is worse than losing a pending spinner.
+  assert.equal(next.currentTurn?.turnId, 'resp_followup')
+  assert.equal(next.history.at(-1)?.turnId, 'resp_tool')
+}
+
+{
+  const liveTool = foldMany([
+    {
+      type: 'block_started',
+      turnId: 'resp_live_tool',
+      blockIndex: 0,
+      itemId: 'fc_live_tool',
+      kind: 'function_call',
+      toolName: 'exec_command',
+      callId: 'call_live_tool',
+      status: 'in_progress',
+      source: 'proxy',
+    },
+  ])
+
+  const next = foldSemanticEvent(
+    liveTool,
+    {
+      type: 'block_started',
+      turnId: 'resp_stray_tool',
+      blockIndex: 0,
+      itemId: 'rs_stray_tool',
+      kind: 'reasoning',
+      source: 'proxy',
+    },
+    'codex',
+  )
+
+  assert.equal(next.currentTurn?.turnId, 'resp_live_tool')
   assert.equal(next.history.length, 0)
 }
 

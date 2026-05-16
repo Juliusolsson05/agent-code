@@ -29,7 +29,8 @@
 // A ghost is render-eligible iff ALL of:
 //   1. Not superseded.
 //   2. Orphaned (TTL has elapsed without a JSONL match).
-//   3. `turnId !== currentTurnId` (SemanticStreamingTurn owns that).
+//   3. `turnId` is not owned by semantic current/history
+//      (SemanticStreamingTurn owns those).
 //   4. `_atp.updatedAt > lastJsonlEntryAt` (proxy state is past the
 //      JSONL tail; structurally distinguishes the live-stuck case
 //      from "ghost from earlier in the session that JSONL kept
@@ -152,10 +153,16 @@ export function selectMergedEntries(
   if (ghosts.size === 0) return entries
 
   const visible = new Map<string, GhostEntry>()
+  const semanticOwnedTurnIds = new Set(
+    [
+      currentTurnId,
+      ...runtime.semantic.history.map(turn => turn.turnId),
+    ].filter((turnId): turnId is string => typeof turnId === 'string' && turnId.length > 0),
+  )
   for (const [uuid, ghost] of ghosts) {
     if (ghost._atp.supersededBy !== undefined) continue
     if (ghost._atp.orphanedAt === undefined) continue
-    if (currentTurnId !== null && ghost._atp.turnId === currentTurnId) continue
+    if (semanticOwnedTurnIds.has(ghost._atp.turnId)) continue
     // Rule 4: only ghosts past the JSONL tail. Null
     // lastJsonlEntryAt (fresh session, never observed any JSONL
     // entry) falls through — rule 5 still applies, and the rest

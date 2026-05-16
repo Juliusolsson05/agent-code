@@ -90,23 +90,28 @@ function isTerminalProxyBlock(block: SemanticLiveBlock): boolean {
   return block.finalized === true || block.status === 'completed'
 }
 
-function isCompletedProxyTurnWithoutPendingTools(
+function isCompletedProxyTurnReadyToYield(
   currentTurn: SemanticLiveTurn,
 ): boolean {
-  // WHY this is deliberately narrower than "has any finalized block":
+  // WHY this ignores `hasPendingSemanticTools` on purpose:
   // the original strict Codex gate exists because two live producers
   // can emit different turn ids for the same user-visible moment
   // (proxy stream vs screen/rollout fallback). Replacing a live turn
   // on a stray mismatched event recreated the 0/1/0/1 semantic row
-  // flicker. This helper is only for a proxy-owned turn where every
-  // block we know about is already terminal and there are no pending
-  // client tools to keep mounted. That is a completed transcript row
-  // missing its turn-level seal, not an active stream.
+  // flicker. The 2026-05-16T19:08 bundle proved the opposite failure:
+  // a proxy turn with a completed message + completed function_call
+  // never received turn_completed, so `hasPendingSemanticTools`
+  // treated the completed function_call as "pending" forever and the
+  // strict mismatch guard dropped every later `resp_*` block. From the
+  // renderer's perspective, "all known blocks are terminal" is the
+  // decisive yield signal. If Codex later sends the tool output in a
+  // new Responses turn, that new turn must be allowed to become the
+  // live owner; keeping the stale function_call mounted is what breaks
+  // streaming.
   if (currentTurn.source !== 'proxy') return false
   if (currentTurn.endedAt != null) return false
   const blocks = Object.values(currentTurn.blocks)
   if (blocks.length === 0) return false
-  if (hasPendingSemanticTools(currentTurn)) return false
   return blocks.every(isTerminalProxyBlock)
 }
 
@@ -125,7 +130,7 @@ function codexCanReplaceTurn(
   ev: Record<string, unknown>,
 ): boolean {
   if (codexCanReplaceEndedTurn(currentTurn)) return true
-  if (ev.source === 'proxy' && isCompletedProxyTurnWithoutPendingTools(currentTurn)) {
+  if (ev.source === 'proxy' && isCompletedProxyTurnReadyToYield(currentTurn)) {
     return true
   }
   // WHY proxy can replace an empty rollout/screen shell:
