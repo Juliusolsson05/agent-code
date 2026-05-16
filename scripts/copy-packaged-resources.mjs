@@ -12,7 +12,15 @@ import { fileURLToPath } from 'node:url'
 
 const staticResources = [
   {
-    from: 'packages/claude-code-headless/src/testing/proxy-testing/mitmAddon.py',
+    // WHY this mirrors electron.vite.config.ts instead of using the historical
+    // testing harness path:
+    //
+    // The addon is now a production proxy resource in claude-code-headless.
+    // This script runs for packaged app staging, while the Vite plugin runs for
+    // preview/dev main builds; both must copy the same source file or one path
+    // will pass while the other ships a broken Claude proxy. Keeping the source
+    // as `src/proxy/mitmAddon.py` also matches the package's own build script.
+    from: 'packages/claude-code-headless/src/proxy/mitmAddon.py',
     to: 'out/main/mitmAddon.py',
   },
 ]

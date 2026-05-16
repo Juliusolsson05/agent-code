@@ -19,7 +19,7 @@ import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
 
 /** Allocate a per-session run directory and return the path of its
  *  proxy-events.jsonl. Mirrors the layout claude-code-headless'
- *  ProxyServer / createWorkDir produces (see proxy-testing/proxyServer.ts
+ *  ProxyServer / createWorkDir produces (see proxy/proxyServer.ts
  *  createWorkDir) so a single bundle-inspection tool can read either
  *  provider's proxy events without branching.
  *
@@ -42,7 +42,7 @@ async function allocateProxyEventsFile(opts: {
   sessionKey: string
 }): Promise<string> {
   // Path layout MUST match the Claude proxy's createWorkDir
-  // (packages/claude-code-headless/src/testing/proxy-testing/proxyServer.ts)
+  // (packages/claude-code-headless/src/proxy/proxyServer.ts)
   // so a single bundle-inspection tool can read either provider's
   // proxy-events.jsonl with one path resolver. The sanitisation
   // strategy comes from the shared sanitizePath helper — Claude uses
@@ -205,7 +205,7 @@ export class CodexSession extends EventEmitter {
       //
       // The path discipline is identical to what
       // claude-code-headless' createProxyServer does (see ProxyServer
-      // in proxy-testing/proxyServer.ts createWorkDir). Codex's
+      // in proxy/proxyServer.ts createWorkDir). Codex's
       // ResponsesProxy doesn't own that allocation today (the
       // testing harness used to construct it without disk
       // persistence at all), so we compute it here and pass it as
