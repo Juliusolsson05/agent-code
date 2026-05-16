@@ -370,6 +370,27 @@ export type SessionRuntime = {
   tailMode: boolean
   scrollToLatestRequest: number
   assistantPicker: { selectedUuid: string } | null
+  // Copy Code Block picker. Non-null while the "Copy Code Block…"
+  // command is active. `selectedId` is a CodeBlock instance id (the
+  // `data-code-block-id` attribute the renderer stamps on every
+  // CodeBlock root).
+  //
+  // WHY id-based and not index-based, unlike the obvious "Nth code
+  // block" model: the feed streams. Code blocks appear, grow, and
+  // re-order while a turn is live, so an index would silently point
+  // at a different block between two Up presses. An id stays glued
+  // to one block; if that block unmounts the keybind handler snaps
+  // to the nearest surviving id (see useKeybinds).
+  //
+  // WHY this is NOT navigated by a pure workspace action the way
+  // assistantPicker is: assistant entries have transcript uuids and
+  // `assistantUuidsWithText(entries)` is a pure function of state.
+  // Code blocks have no transcript identity — they're nested inside
+  // rendered markdown and tool rows. The ordered list only exists in
+  // the DOM, so enumeration/navigation lives renderer-side (the
+  // copy-code-block feature + useKeybinds); the store only parks the
+  // current selection.
+  codeBlockPicker: { selectedId: string } | null
   processActive: boolean
   sessionStatus: SessionStatus
   sessionStatusSource: SessionStatusSource
@@ -534,6 +555,7 @@ export function emptyRuntime(): SessionRuntime {
     tailMode: false,
     scrollToLatestRequest: 0,
     assistantPicker: null,
+    codeBlockPicker: null,
     processActive: false,
     sessionStatus: 'idle',
     sessionStatusSource: 'none',

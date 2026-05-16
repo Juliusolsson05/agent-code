@@ -165,11 +165,8 @@ export function useWorkspace(
   )
   const { setStreamingBaseline, addOptimisticCodexUserEntry, removeOptimisticCodexUserEntry } =
     useStreamingActions(setRuntimes)
-  const { pickerEnter, pickerMove, pickerCancel, pickerConfirm } = usePickerActions(
-    setRuntimes,
-    refs,
-    showPaneToast,
-  )
+  const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
+    usePickerActions(setRuntimes, refs, showPaneToast)
   const { toggleSpotlight, setSpotlightSession } = useSpotlightActions(
     setSpotlight,
     setState,
@@ -363,6 +360,7 @@ export function useWorkspace(
     pickerMove,
     pickerConfirm,
     pickerCancel,
+    setCodeBlockPicker,
     enterDispatchMode: dispatchActions.enterDispatchMode,
     exitDispatchMode: dispatchActions.exitDispatchMode,
     setDispatchScope: dispatchActions.setDispatchScope,

@@ -11,6 +11,10 @@ import {
   THEME_CHANGED_EVENT,
   getActiveAppFontFamily,
 } from '@renderer/app-state/settings/theme'
+import {
+  registerCodeBlock,
+  unregisterCodeBlock,
+} from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
 
 type Props = {
   code: string
@@ -247,11 +251,28 @@ export const CodeBlock = memo(function CodeBlock({
     }
   }, [useMonaco, clientUri, code, engine, normalizedLanguage, path, workspaceRoot])
 
+  // Register this block's exact source in the code-block registry so
+  // the "Copy Code Block…" picker can copy it verbatim regardless of
+  // render engine (a Monaco block has no DOM text node to scrape).
+  // Keyed by `reactId`, the same unique id stamped on the root as
+  // `data-code-block-id`. Re-runs when `code` changes (the streaming
+  // Write preview grows its `code` on every delta); unregisters on
+  // unmount — the unmount cleanup is the load-bearing half (a leaked
+  // entry is a slow memory leak). Unconditional hook, placed with the
+  // others so call order is stable across the static/Monaco branch.
+  useEffect(() => {
+    registerCodeBlock(reactId, code)
+    return () => unregisterCodeBlock(reactId)
+  }, [reactId, code])
+
   // Static/fallback early return — placed AFTER all hooks so the hook
   // call order is identical on every render regardless of code path.
   if (!useMonaco) {
     return (
-      <pre className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink">
+      <pre
+        data-code-block-id={reactId}
+        className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink"
+      >
         {highlighted == null ? (
           <code>{code}</code>
         ) : (
@@ -264,5 +285,11 @@ export const CodeBlock = memo(function CodeBlock({
     )
   }
 
-  return <div ref={containerRef} className="code-block-shell w-full overflow-hidden" />
+  return (
+    <div
+      ref={containerRef}
+      data-code-block-id={reactId}
+      className="code-block-shell w-full overflow-hidden"
+    />
+  )
 })

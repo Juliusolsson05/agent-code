@@ -7,6 +7,7 @@ import { spotlightCommands } from '@renderer/features/spotlight/commands/spotlig
 import { tileTabsCommands } from '@renderer/features/tile-tabs/commands/tileTabsCommands'
 import { readerCommands } from '@renderer/features/reader/commands/readerCommands'
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
+import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
 import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
 import type { CommandContext, CommandDef, ResolvedCommand } from '@renderer/features/command-palette/types'
 
@@ -20,6 +21,7 @@ const commandDefs: CommandDef[] = [
   ...tileTabsCommands,
   ...settingsCommands,
   ...copyAssistantCommands,
+  ...copyCodeBlockCommands,
   ...promptTemplateCommands,
 ]
 
