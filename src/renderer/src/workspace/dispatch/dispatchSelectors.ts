@@ -61,23 +61,29 @@ export function buildDispatchGroups(
         ...detachedSessionIds.map(sessionId => ({ sessionId, placement: 'detached' as const })),
       ]
 
-      // Nesting pass: a linked agent (SessionMeta.linkedParentId)
-      // renders indented immediately under its parent's row rather
-      // than at the bottom of the tab group. We index children by
-      // parent, then walk the natural order emitting each non-child
-      // row followed by its children.
+      // Nesting pass: manual linked agents and MCP-created orchestration
+      // agents render indented immediately under their parent row rather than
+      // at the bottom of the tab group. We index children by parent, then walk
+      // the natural order emitting each non-child row followed by its children.
       //
       // WHY the parent must also be in `entries` (same tab group):
-      // the linked agent always lands in its parent's tab, so the
-      // parent is normally present — but scope filters, a closed
-      // parent, or a pinned parent (pinned rows are pulled into
-      // their own section) can leave the child "orphaned" here. In
-      // that case the child is emitted as an ordinary depth-0 row
-      // in its natural position rather than vanishing.
+      // both child types land in their parent's tab, so the parent is normally
+      // present — but scope filters, a closed parent, or a pinned parent
+      // (pinned rows are pulled into their own section) can leave the child
+      // "orphaned" here. In that case the child is emitted as an ordinary
+      // depth-0 row in its natural position rather than vanishing.
+      //
+      // WHY orchestration has its own parent field but shares this visual
+      // nesting: the user experience is the same "this agent belongs under
+      // that parent" shape, but the lifecycle and future controls are not the
+      // same as manual Linked Agents. Keeping `linkedParentId` and
+      // `orchestrationParentId` separate prevents accidental semantic coupling
+      // while still reusing the established Dispatch row indentation.
       const entryIds = new Set(entries.map(e => e.sessionId))
       const childrenByParent = new Map<SessionId, typeof entries>()
       for (const e of entries) {
-        const parentId = state.sessions[e.sessionId]?.linkedParentId
+        const meta = state.sessions[e.sessionId]
+        const parentId = meta?.linkedParentId ?? meta?.orchestrationParentId
         if (parentId && entryIds.has(parentId)) {
           const arr = childrenByParent.get(parentId) ?? []
           arr.push(e)
@@ -90,7 +96,8 @@ export function buildDispatchGroups(
         depth: number
       }> = []
       for (const e of entries) {
-        const parentId = state.sessions[e.sessionId]?.linkedParentId
+        const meta = state.sessions[e.sessionId]
+        const parentId = meta?.linkedParentId ?? meta?.orchestrationParentId
         // Children are emitted under their parent below — skip here.
         if (parentId && entryIds.has(parentId)) continue
         ordered.push({ ...e, depth: 0 })
