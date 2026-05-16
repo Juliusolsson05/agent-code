@@ -15,6 +15,7 @@ import {
   type CodexSemanticEvent,
 } from 'codex-headless'
 import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
+import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 
 
 /** Allocate a per-session run directory and return the path of its
@@ -95,6 +96,7 @@ export type CodexSessionOptions = {
   resumeSessionId?: string
   dangerousMode?: boolean
   useProxy?: boolean
+  builtInMcpServers?: BuiltInMcpServerConfig[]
 }
 
 export type CodexScreenSnapshot = {
@@ -159,6 +161,7 @@ export class CodexSession extends EventEmitter {
   private readonly resumeSessionId: string | null
   private readonly dangerousMode: boolean
   private readonly useProxy: boolean
+  private readonly builtInMcpServers: BuiltInMcpServerConfig[]
   private proxyServer: ResponsesProxy | null = null
   private proxyAdapter: CodexResponsesAdapter | null = null
 
@@ -171,6 +174,7 @@ export class CodexSession extends EventEmitter {
     this.resumeSessionId = options.resumeSessionId ?? null
     this.dangerousMode = options.dangerousMode === true
     this.useProxy = options.useProxy === true
+    this.builtInMcpServers = options.builtInMcpServers ?? []
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
 
     // Build env: start from process.env so PATH, HOME, API keys
@@ -194,8 +198,22 @@ export class CodexSession extends EventEmitter {
     if (this.dangerousMode) {
       args.push('--dangerously-bypass-approvals-and-sandbox')
     }
-    if (this.resumeSessionId) {
-      args.push('resume', this.resumeSessionId)
+    for (const server of this.builtInMcpServers) {
+      // WHY this uses Codex `--config` overrides instead of a temporary
+      // CODEX_HOME/config.toml overlay:
+      //
+      // Codex explicitly documents dotted `-c/--config` paths for nested
+      // values, and Agent Code already uses that path for the Responses proxy.
+      // Keeping MCP injection in argv makes the scope visibly tied to this one
+      // provider process. A temp config directory would be harder to inspect
+      // and easier to accidentally reuse across unrelated sessions.
+      args.push('--config', `mcp_servers.${server.name}.url=${JSON.stringify(server.url)}`)
+      for (const [key, value] of Object.entries(server.headers)) {
+        args.push(
+          '--config',
+          `mcp_servers.${server.name}.http_headers.${key}=${JSON.stringify(value)}`,
+        )
+      }
     }
     if (this.useProxy) {
       // Mirror the Claude proxy's on-disk layout so a single
@@ -231,6 +249,9 @@ export class CodexSession extends EventEmitter {
       const proxy = await ResponsesProxy.create({ eventsFile })
       this.proxyServer = proxy
       args.push('--config', `openai_base_url=${JSON.stringify(proxy.info.proxyBaseUrl)}`)
+    }
+    if (this.resumeSessionId) {
+      args.push('resume', this.resumeSessionId)
     }
 
     // Filter undefined env entries — node-pty expects strings only.
