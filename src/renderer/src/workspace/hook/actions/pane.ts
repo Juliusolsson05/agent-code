@@ -436,7 +436,6 @@ export function usePaneActions(
         if (!latestTab) return prev
         return {
           ...prev,
-          activeTabId: latestTab.id,
           sessions: {
             ...prev.sessions,
             [sessionId]: {
@@ -461,9 +460,15 @@ export function usePaneActions(
               detachedAt: Date.now(),
             },
           },
-          dispatchMode: prev.dispatchMode
-            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-            : prev.dispatchMode,
+          // WHY orchestration agents intentionally do not steal focus:
+          // the MCP caller already gets `sessionId` back as the control handle,
+          // and the user may be reading or editing the parent while the new
+          // worker boots. Reusing Dispatch's visual nesting is correct, but
+          // reusing its manual "new agent means jump to it" focus semantics is
+          // wrong for orchestration because one prompt can create many agents.
+          // Keeping the active tab and focused dispatch row unchanged preserves
+          // the user's review surface while still linking the child into the
+          // same project tree.
         }
       })
 
