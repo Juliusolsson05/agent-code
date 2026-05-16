@@ -79,14 +79,29 @@ type PaneState =
 export function SessionPreviewPane({ target }: { target: PreviewTarget | null }) {
   const [state, setState] = useState<PaneState>({ status: 'idle' })
 
-  // Monotonic request id. Every fetch captures the value at dispatch
-  // time; a resolved fetch whose id no longer matches is stale (the
-  // user moved on) and drops its result. Without this, fast scrubbing
-  // could let an older, slower disk read overwrite a newer one.
+  // Monotonic request id. Every target change bumps it (see the effect
+  // below); a fetch captures the value at dispatch time, and a resolved
+  // fetch whose id no longer matches is stale — the user moved on — so
+  // it drops its result. Without this, fast scrubbing, or moving onto a
+  // cached session mid-read, could let an older slower disk read
+  // overwrite newer state.
   const reqRef = useRef(0)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    // Bump the request token FIRST, before any branch below. Every
+    // target change must supersede a previous in-flight fetch — and so
+    // must the early-return paths (no target, or a cache hit), not just
+    // the fetch path. A fetch whose debounce timer has already fired is
+    // in flight on the disk read; the cleanup's clearTimeout cannot
+    // cancel it. If an early return ran without bumping this token, that
+    // stale read's .then() would still match the id guard and overwrite
+    // the state we just set — painting the wrong transcript for the
+    // highlighted row (and feeding PaneBody A's entries under B's
+    // sessionId/workspaceRoot). Bumping here, unconditionally, is what
+    // makes every code path invalidate the one before it.
+    const reqId = ++reqRef.current
+
     if (!target) {
       setState({ status: 'idle' })
       return
@@ -105,7 +120,6 @@ export function SessionPreviewPane({ target }: { target: PreviewTarget | null })
     }
 
     setState({ status: 'loading' })
-    const reqId = ++reqRef.current
     const timer = setTimeout(() => {
       window.api
         .loadInitialHistory({
