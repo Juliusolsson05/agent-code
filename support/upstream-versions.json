@@ -5,14 +5,14 @@
       "label": "Claude Code",
       "pkg": "@anthropic-ai/claude-code",
       "changelog": "https://github.com/anthropics/claude-code/releases",
-      "accepted": "0.0.0",
+      "accepted": "2.1.143",
       "checkedAt": "2026-05-16"
     },
     "codex": {
       "label": "Codex",
       "pkg": "@openai/codex",
       "changelog": "https://github.com/openai/codex/releases",
-      "accepted": "0.0.0",
+      "accepted": "0.130.0",
       "checkedAt": "2026-05-16"
     }
   }
