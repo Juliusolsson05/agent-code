@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import { readFileSync, rmSync } from 'node:fs'
 import { open, mkdir, readFile, rm, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import { STATE_DIR } from '@main/storage/paths.js'
 
@@ -20,7 +22,7 @@ type AcquireOptions = {
   pid?: number
   argv0?: string
   now?: () => Date
-  isPidRunning?: (pid: number) => boolean
+  isLockOwnerActive?: (owner: StateProcessLockOwner) => boolean
 }
 
 export type StateProcessLock =
@@ -29,6 +31,7 @@ export type StateProcessLock =
       path: string
       token: string
       release: () => Promise<void>
+      releaseSync: () => void
     }
   | {
       acquired: false
@@ -49,6 +52,34 @@ function defaultIsPidRunning(pid: number): boolean {
     // be exactly the cross-process stomp this guard exists to prevent.
     return code === 'EPERM'
   }
+}
+
+function commandLineForPid(pid: number): string | null {
+  try {
+    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return null
+  }
+}
+
+function defaultIsLockOwnerActive(owner: StateProcessLockOwner): boolean {
+  if (!defaultIsPidRunning(owner.pid)) return false
+  const commandLine = commandLineForPid(owner.pid)
+  if (!commandLine) return true
+  const ownerExecutable = basename(owner.argv0)
+  // WHY PID liveness is not enough:
+  //
+  // Lock files intentionally survive crashes so the next launch can decide
+  // whether the recorded owner is still alive. PIDs are recycled, though; a
+  // random unrelated process can inherit the old number after reboot and make
+  // `kill(pid, 0)` succeed forever. The command-line check is not a security
+  // boundary, but it is a practical stale-lock discriminator: a live Agent
+  // Code/Electron owner still advertises the executable that wrote the lock,
+  // while a recycled PID almost certainly does not.
+  return ownerExecutable.length === 0 || commandLine.includes(owner.argv0) || commandLine.includes(ownerExecutable)
 }
 
 function parseLock(raw: string): StateProcessLockOwner | null {
@@ -75,6 +106,7 @@ function parseLock(raw: string): StateProcessLockOwner | null {
 
 async function readExistingLock(
   lockPath: string,
+  now: () => Date,
 ): Promise<{ owner: StateProcessLockOwner | null; invalidAgeMs: number | null }> {
   const [raw, fileStat] = await Promise.all([
     readFile(lockPath, 'utf8').catch(() => null),
@@ -84,7 +116,7 @@ async function readExistingLock(
   const owner = parseLock(raw)
   if (owner) return { owner, invalidAgeMs: null }
   if (!fileStat) return { owner: null, invalidAgeMs: null }
-  return { owner: null, invalidAgeMs: Date.now() - fileStat.mtimeMs }
+  return { owner: null, invalidAgeMs: now().getTime() - fileStat.mtimeMs }
 }
 
 export async function acquireStateProcessLock(
@@ -94,7 +126,7 @@ export async function acquireStateProcessLock(
   const pid = options.pid ?? process.pid
   const argv0 = options.argv0 ?? process.argv[0] ?? 'unknown'
   const now = options.now ?? (() => new Date())
-  const isPidRunning = options.isPidRunning ?? defaultIsPidRunning
+  const isLockOwnerActive = options.isLockOwnerActive ?? defaultIsLockOwnerActive
   const lockPath = join(stateDir, LOCK_FILE_NAME)
   const token = randomUUID()
 
@@ -114,10 +146,23 @@ export async function acquireStateProcessLock(
       } finally {
         await handle.close()
       }
+      const releaseSync = () => {
+        try {
+          const existing = parseLock(readFileSync(lockPath, 'utf8'))
+          if (existing?.token === token) {
+            rmSync(lockPath, { force: true })
+          }
+        } catch {
+          // Missing/unreadable at shutdown means another cleanup path already
+          // won or the file is gone. Release is best-effort; acquisition is the
+          // strict side of this protocol.
+        }
+      }
       return {
         acquired: true,
         path: lockPath,
         token,
+        releaseSync,
         release: async () => {
           const existing = parseLock(await readFile(lockPath, 'utf8').catch(() => ''))
           // WHY compare the token before removing the file:
@@ -136,8 +181,8 @@ export async function acquireStateProcessLock(
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
 
-      const existing = await readExistingLock(lockPath)
-      if (existing.owner && isPidRunning(existing.owner.pid)) {
+      const existing = await readExistingLock(lockPath, now)
+      if (existing.owner && isLockOwnerActive(existing.owner)) {
         return {
           acquired: false,
           path: lockPath,

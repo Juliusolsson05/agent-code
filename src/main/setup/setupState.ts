@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from 'fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { STATE_DIR } from '@main/storage/paths.js'
@@ -60,8 +60,13 @@ export async function saveSetupState(
       const tmp = `${SETUP_STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
         .toString(36)
         .slice(2)}.tmp`
-      await writeFile(tmp, JSON.stringify(snapshot, null, 2), 'utf8')
-      await rename(tmp, SETUP_STATE_FILE)
+      try {
+        await writeFile(tmp, JSON.stringify(snapshot, null, 2), 'utf8')
+        await rename(tmp, SETUP_STATE_FILE)
+      } catch (err) {
+        await rm(tmp, { force: true }).catch(() => undefined)
+        throw err
+      }
     })
   await writeQueue
   return cache

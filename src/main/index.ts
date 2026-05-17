@@ -4,7 +4,7 @@
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
 
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { readFile } from 'fs/promises'
 import { performance } from 'perf_hooks'
 
@@ -138,6 +138,10 @@ async function startApp(): Promise<void> {
         ownerPid: lock.owner?.pid ?? null,
         ownerStartedAt: lock.owner?.startedAt ?? null,
       },
+    )
+    dialog.showErrorBox(
+      'Agent Code is already running',
+      'Another Agent Code process appears to own the shared app state. Close the existing app window before starting a second copy.',
     )
     app.quit()
     return
@@ -315,8 +319,6 @@ app.on('before-quit', () => {
   void dictationDebugJournals.flushAll()
   void pasteDebugJournals.flushAll()
   performanceService.stop()
-  void stateProcessLock?.release().catch(err => {
-    console.warn('[app] failed to release state process lock:', err)
-  })
+  stateProcessLock?.releaseSync()
   stateProcessLock = null
 })

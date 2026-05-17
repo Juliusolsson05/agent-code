@@ -19,7 +19,7 @@ await withTempDir(async dir => {
     stateDir: dir,
     pid: 111,
     argv0: 'first',
-    isPidRunning: pid => pid === 111,
+    isLockOwnerActive: owner => owner.pid === 111,
   })
   assert.equal(first.acquired, true)
 
@@ -27,7 +27,7 @@ await withTempDir(async dir => {
     stateDir: dir,
     pid: 222,
     argv0: 'second',
-    isPidRunning: pid => pid === 111,
+    isLockOwnerActive: owner => owner.pid === 111,
   })
   assert.equal(blocked.acquired, false)
   assert.equal(blocked.reason, 'active-owner')
@@ -39,7 +39,7 @@ await withTempDir(async dir => {
     stateDir: dir,
     pid: 222,
     argv0: 'second',
-    isPidRunning: pid => pid === 222,
+    isLockOwnerActive: owner => owner.pid === 222,
   })
   assert.equal(second.acquired, true)
 
@@ -47,6 +47,33 @@ await withTempDir(async dir => {
   assert.match(lockText, /"pid": 222/)
 
   await second.release()
+})
+
+await withTempDir(async dir => {
+  const lockPath = join(dir, 'agent-code.process-lock.json')
+  await writeFile(
+    lockPath,
+    JSON.stringify({
+      token: 'reused-pid',
+      pid: 555,
+      startedAt: new Date(0).toISOString(),
+      argv0: 'old-agent-code',
+    }),
+    'utf8',
+  )
+
+  const acquired = await acquireStateProcessLock({
+    stateDir: dir,
+    pid: 666,
+    argv0: 'replacement',
+    // Models PID reuse: something exists at pid 555, but the owner-level
+    // identity check says it is not the Agent Code process that wrote the lock.
+    isLockOwnerActive: () => false,
+  })
+  assert.equal(acquired.acquired, true)
+  const lockText = await readFile(acquired.path, 'utf8')
+  assert.match(lockText, /"pid": 666/)
+  acquired.releaseSync()
 })
 
 await withTempDir(async dir => {
@@ -66,7 +93,7 @@ await withTempDir(async dir => {
     stateDir: dir,
     pid: 444,
     argv0: 'replacement',
-    isPidRunning: () => false,
+    isLockOwnerActive: () => false,
   })
   assert.equal(acquired.acquired, true)
   const lockText = await readFile(acquired.path, 'utf8')
