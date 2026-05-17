@@ -13,6 +13,7 @@ import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
 
 type Props = {
   workspaceId: string
+  onClose: () => void
 }
 
 function fileTitle(entry: AiWorkspaceFileEntry): string {
@@ -43,7 +44,7 @@ function bufferFromEntry(
   }
 }
 
-export function AiWorkspaceEditor({ workspaceId }: Props) {
+export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
   const [workspace, setWorkspace] = useState<AiWorkspaceRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -166,15 +167,24 @@ export function AiWorkspaceEditor({ workspaceId }: Props) {
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
       <aside className="flex h-full w-[280px] flex-shrink-0 flex-col border-r border-border bg-surface font-code text-[12px]">
-        <div className="flex h-8 flex-shrink-0 items-center justify-between border-b border-border px-2 text-[10px] uppercase tracking-wider text-muted">
-          <span className="truncate">{workspace?.name ?? 'AI Workspace'}</span>
-          <button
-            type="button"
-            onClick={() => void loadWorkspace()}
-            className="text-muted hover:text-ink"
-          >
-            refresh
-          </button>
+        <div className="flex h-8 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-2 text-[10px] uppercase tracking-wider text-muted">
+          <span className="min-w-0 flex-1 truncate">{workspace?.name ?? 'AI Workspace'}</span>
+          <div className="flex flex-shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void loadWorkspace()}
+              className="text-muted hover:text-ink"
+            >
+              refresh
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="border border-border bg-surface-hi px-1.5 py-0.5 text-muted hover:border-accent hover:text-ink"
+            >
+              close
+            </button>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto py-1">
           {loading ? (

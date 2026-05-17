@@ -108,6 +108,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     setFileTreeWidthPx,
     fileTreeVisible,
     aiWorkspaceId,
+    closeAiWorkspace,
   } = useGlobalEditorStore(
     useShallow(state => ({
       splitterRatio: state.splitterRatio,
@@ -116,6 +117,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       setFileTreeWidthPx: state.setFileTreeWidthPx,
       fileTreeVisible: state.fileTreeVisible,
       aiWorkspaceId: state.aiWorkspaceId,
+      closeAiWorkspace: state.closeAiWorkspace,
     })),
   )
   const {
@@ -301,7 +303,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         style={{ width: `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)` }}
       >
         {aiWorkspaceId ? (
-          <AiWorkspaceEditor workspaceId={aiWorkspaceId} />
+          <AiWorkspaceEditor workspaceId={aiWorkspaceId} onClose={closeAiWorkspace} />
         ) : activeCwd ? (
           <div className="flex flex-1 min-h-0 overflow-hidden">
             {/*
