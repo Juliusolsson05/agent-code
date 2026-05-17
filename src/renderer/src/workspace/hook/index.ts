@@ -33,6 +33,13 @@ import {
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
+import {
+  closeOrchestrationAgent,
+  closeOrchestrationRun,
+  listOrchestrationAgents,
+  readOrchestrationAgent,
+  readOrchestrationRunOutputs,
+} from '@renderer/workspace/orchestrationMcp'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -253,34 +260,85 @@ export function useWorkspace(
         }
 
         const snapshot = refs.stateRef.current
-        const agents: OrchestrationAgentRecord[] = Object.entries(snapshot.sessions)
-          .filter(([, meta]) => {
-            const kind = meta.kind ?? 'claude'
-            if (kind !== 'claude' && kind !== 'codex') return false
-            const matchesParent =
-              meta.orchestrationParentId === request.parentSessionId ||
-              meta.orchestrationRootId === request.parentSessionId
-            if (!matchesParent) return false
-            return request.runId
-              ? meta.orchestrationRunId === request.runId
-              : true
+        const runtimes = refs.latestRuntimesRef.current
+        if (request.type === 'list-agents') {
+          const agents: OrchestrationAgentRecord[] = listOrchestrationAgents({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            runId: request.runId,
           })
-          .map(([sessionId, meta]) => ({
-            sessionId,
-            kind: (meta.kind ?? 'claude') as 'claude' | 'codex',
-            cwd: meta.cwd,
-            ...(meta.title ? { title: meta.title } : {}),
-            orchestrationParentId: meta.orchestrationParentId ?? request.parentSessionId,
-            orchestrationRootId: meta.orchestrationRootId ?? request.parentSessionId,
-            ...(meta.orchestrationRunId ? { orchestrationRunId: meta.orchestrationRunId } : {}),
-            ...(meta.orchestrationRole ? { orchestrationRole: meta.orchestrationRole } : {}),
-          }))
 
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'list-agents',
+            agents,
+          })
+          return
+        }
+
+        if (request.type === 'read-agent') {
+          const output = readOrchestrationAgent({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            maxMessages: request.maxMessages,
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'read-agent',
+            output,
+          })
+          return
+        }
+
+        if (request.type === 'read-run-outputs') {
+          const outputs = readOrchestrationRunOutputs({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            runId: request.runId,
+            maxMessagesPerAgent: request.maxMessagesPerAgent,
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'read-run-outputs',
+            outputs,
+          })
+          return
+        }
+
+        if (request.type === 'close-agent') {
+          const result = await closeOrchestrationAgent({
+            state: snapshot,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            closeSession: paneActions.closeSession,
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'close-agent',
+            result,
+          })
+          return
+        }
+
+        const result = await closeOrchestrationRun({
+          state: snapshot,
+          parentSessionId: request.parentSessionId,
+          runId: request.runId,
+          closeSession: paneActions.closeSession,
+        })
         await window.api.resolveOrchestrationRequest({
           requestId: request.requestId,
           ok: true,
-          type: 'list-agents',
-          agents,
+          type: 'close-run',
+          result,
         })
       } catch (err) {
         await window.api.resolveOrchestrationRequest({
