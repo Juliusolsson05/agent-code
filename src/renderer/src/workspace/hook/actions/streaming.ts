@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime } from '@renderer/workspace/workspaceState'
+import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import {
@@ -33,6 +33,25 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 // the feed blank after submit. We add a local user row immediately
 // and reconcile it away when the real rollout user message shows up
 // (see ipc/handleBulkJsonl.ts for the reconciliation side).
+
+export function shouldQueueOptimisticCodexUserEntry(
+  current: Pick<SessionRuntime, 'semantic' | 'streamPhase'>,
+): boolean {
+  // WHY this deliberately ignores `streamPhase`:
+  // TileLeaf calls setStreamingBaseline() and addOptimisticCodexUserEntry()
+  // in the same submit handler. setStreamingBaseline moves streamPhase to
+  // "submitting" before this function runs, so treating any non-idle
+  // streamPhase as "previous turn is live" queues the *first* prompt of an
+  // idle Codex session and makes the optimistic feed row path unreachable.
+  //
+  // The ordering bug we are preventing is narrower: a follow-up prompt
+  // while an existing semantic assistant/tool turn is still visibly live.
+  // That is the reliable ownership signal. Stream phase is useful for the
+  // work indicator, but it is polluted by the current submit and cannot
+  // answer "is there older live feed content this prompt must not jump
+  // above?"
+  return isSemanticTurnRunning(current.semantic.currentTurn)
+}
 
 export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
   setStreamingBaseline: (sessionId: SessionId, baseline: string | null) => void
@@ -82,9 +101,8 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
         if (isOptimisticCodexUserEntry(last) && entryTextContent(last) === trimmed) {
           return prev
         }
-        const activeSemanticTurn = isSemanticTurnRunning(current.semantic.currentTurn)
-        const activeStreamPhase = current.streamPhase !== 'idle'
-        if (activeSemanticTurn || activeStreamPhase) {
+        const queueForLiveSemanticTurn = shouldQueueOptimisticCodexUserEntry(current)
+        if (queueForLiveSemanticTurn) {
           const alreadyQueued = current.queuedMessages.some(q => q.content === trimmed)
           if (alreadyQueued) return prev
           const queued = {
@@ -119,7 +137,7 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
                   text: trimmed,
                   queueLengthBefore: current.queuedMessages.length,
                   queueLengthAfter: current.queuedMessages.length + 1,
-                  activeSemanticTurn,
+                  activeSemanticTurn: queueForLiveSemanticTurn,
                   streamPhase: current.streamPhase,
                 },
               },
