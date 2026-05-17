@@ -65,6 +65,7 @@ type GlobalEditorStore = {
    *  not per-cwd — once a user has decided they want a hidden tree
    *  they want it hidden across all projects. */
   fileTreeVisible: boolean
+  aiWorkspaceId: string | null
   /** Drives the cwd→cwd transition. Most actions are keyed by
    *  cwd; this also fronts the "active cwd" so callers don't
    *  need to thread it through. */
@@ -74,6 +75,8 @@ type GlobalEditorStore = {
   setSplitterRatio: (ratio: number) => void
   setFileTreeWidthPx: (px: number) => void
   toggleFileTreeVisible: () => void
+  openAiWorkspace: (workspaceId: string) => void
+  closeAiWorkspace: () => void
 
   openFile: (params: {
     cwd: string
@@ -161,6 +164,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   splitterRatio: 0.5,
   fileTreeWidthPx: 260,
   fileTreeVisible: true,
+  aiWorkspaceId: null,
   activeCwd: null,
 
   setActiveCwd: cwd => set({ activeCwd: cwd }),
@@ -168,6 +172,8 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   setFileTreeWidthPx: px => set({ fileTreeWidthPx: clampFileTreeWidth(px) }),
   toggleFileTreeVisible: () =>
     set(state => ({ fileTreeVisible: !state.fileTreeVisible })),
+  openAiWorkspace: workspaceId => set({ aiWorkspaceId: workspaceId }),
+  closeAiWorkspace: () => set({ aiWorkspaceId: null }),
 
   openFile: ({ cwd, path, text, mtimeMs }) =>
     set(state => {
