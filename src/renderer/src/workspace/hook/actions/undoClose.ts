@@ -17,6 +17,8 @@ import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
+type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
+
 // Undo-close action. Pops the most recent entry from the undo stack
 // and restores it.
 //
@@ -39,12 +41,12 @@ export function useUndoCloseAction(
   undoCloseCount: number
 } {
   const restorePaneEntry = useCallback(
-    async (entry: ClosedPane): Promise<boolean> => {
+    async (entry: ClosedPane): Promise<RestoreResult> => {
       // Find which tab the sibling leaf is in now.
       const targetTab = refs.stateRef.current.tabs.find(t =>
         collectLeaves(t.root).includes(entry.siblingLeafId),
       )
-      if (!targetTab) return false // sibling was also closed — stale undo
+      if (!targetTab) return 'stale' // sibling was also closed — stale undo
 
       // Probe before spawning because a pane entry's only trustworthy
       // placement is its sibling anchor. If that anchor cannot produce
@@ -61,7 +63,7 @@ export function useUndoCloseAction(
         entry.ratio,
         entry.side,
       )
-      if (!probeRoot) return false
+      if (!probeRoot) return 'stale'
 
       // Respawn the session.
       //   - Claude/Codex with providerSessionId → pass --resume so
@@ -80,9 +82,10 @@ export function useUndoCloseAction(
           recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
         })
       } catch {
-        return false
+        return 'retryable-failure'
       }
 
+      let inserted = false
       setState(prev => {
         const tabs = prev.tabs.map(t => {
           if (t.id !== targetTab.id) return t
@@ -95,6 +98,7 @@ export function useUndoCloseAction(
             entry.side,
           )
           if (!newRoot) return t // anchor not found — bail
+          inserted = true
           return {
             ...t,
             root: newRoot,
@@ -103,18 +107,42 @@ export function useUndoCloseAction(
         })
         return { ...prev, tabs }
       })
-      return true
+
+      if (!inserted) {
+        // WHY we kill the just-spawned session here:
+        //
+        // The preflight probe above catches the normal stale-anchor case, but
+        // React/Zustand state can still change between the probe and the
+        // updater. If the anchor vanishes in that window, the session was
+        // successfully created but has no visible tile-tree owner. Leaving it
+        // alive would produce a hidden process that cannot be focused or
+        // closed from the UI, so failed insertion must undo the spawn before
+        // the undo loop walks to older entries.
+        await sessionActions.killSession(newSessionId).catch(() => undefined)
+        return 'stale'
+      }
+
+      return 'restored'
     },
     [refs.stateRef, sessionActions, setState],
   )
 
   const restoreTabEntry = useCallback(
-    async (entry: ClosedTab): Promise<boolean> => {
+    async (entry: ClosedTab): Promise<RestoreResult> => {
       // Tab undo: respawn every session and remap the tree.
       const idMap = new Map<SessionId, SessionId>()
       const freshSessions: Record<SessionId, SessionMeta> = {}
+      const spawnedIds: SessionId[] = []
+      const requiredLeafIds = collectLeaves(entry.tab.root)
 
-      for (const [oldId, meta] of Object.entries(entry.sessionMetas)) {
+      for (const oldId of requiredLeafIds) {
+        const meta = entry.sessionMetas[oldId]
+        if (!meta) {
+          for (const spawnedId of spawnedIds) {
+            await sessionActions.killSession(spawnedId).catch(() => undefined)
+          }
+          return 'retryable-failure'
+        }
         try {
           const kind: SessionKind = meta.kind ?? 'claude'
           // Same per-kind recover hint as the pane-undo branch
@@ -127,25 +155,40 @@ export function useUndoCloseAction(
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = meta
+          spawnedIds.push(newId)
         } catch {
-          // If one session fails to spawn, skip it — restore what
-          // we can.
+          // WHY grid leaves are all-or-nothing while detached entries below
+          // remain best-effort:
+          //
+          // A tab's tile tree cannot contain missing leaves. Leaving an old
+          // session id in the restored tree creates a phantom pane with no
+          // runtime, which is worse than not restoring. Detached dispatch
+          // sessions are outside the tree, so they can still be restored
+          // opportunistically after the tab itself is valid.
+          for (const spawnedId of spawnedIds) {
+            await sessionActions.killSession(spawnedId).catch(() => undefined)
+          }
+          return 'retryable-failure'
         }
       }
 
-      if (idMap.size === 0) return false // nothing survived
+      if (idMap.size === 0) return 'retryable-failure' // nothing survived
 
       const remapNode = (n: TileNode): TileNode => {
         if (n.type === 'leaf') {
           const mapped = idMap.get(n.sessionId)
-          return mapped ? { type: 'leaf', sessionId: mapped } : n
+          // requiredLeafIds are spawned all-or-nothing above, so an unmapped
+          // leaf here means a corrupt undo entry rather than a recoverable
+          // partial restore. Keep the branch explicit to preserve that
+          // invariant for future edits.
+          return { type: 'leaf', sessionId: mapped ?? n.sessionId }
         }
         return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
       }
 
       const restoredRoot = remapNode(entry.tab.root)
       const leaves = collectLeaves(restoredRoot)
-      if (leaves.length === 0) return false
+      if (leaves.length === 0) return 'retryable-failure'
 
       const restoredFocused =
         idMap.get(entry.tab.focusedSessionId) ?? leaves[0]
@@ -213,7 +256,7 @@ export function useUndoCloseAction(
           detachedSessions: { ...prev.detachedSessions, ...restoredDetached },
         }
       })
-      return true
+      return 'restored'
     },
     [sessionActions, setState],
   )
@@ -227,14 +270,20 @@ export function useUndoCloseAction(
     // walking backward so one stale close does not block an older valid
     // tab/pane restore. We still pop stale entries because retaining
     // an entry we already know cannot restore would trap the user on
-    // the same failure every time they press Cmd+Shift+T.
+    // the same failure every time they press Cmd+Shift+T. Transient spawn
+    // failures are different: those keep the entry by pushing it back so a
+    // provider hiccup does not permanently consume the user's recovery slot.
     while (true) {
       const entry = refs.undoStackRef.current.pop()
       if (!entry) return
-      const restored = entry.type === 'pane'
+      const result = entry.type === 'pane'
         ? await restorePaneEntry(entry)
         : await restoreTabEntry(entry)
-      if (restored) return
+      if (result === 'restored') return
+      if (result === 'retryable-failure') {
+        refs.undoStackRef.current.push(entry)
+        return
+      }
     }
   }, [refs.undoStackRef, restorePaneEntry, restoreTabEntry])
 
