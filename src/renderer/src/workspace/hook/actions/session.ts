@@ -3,6 +3,7 @@ import { useCallback } from 'react'
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import { closeLeaf, collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import type { Tab } from '@renderer/workspace/types'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
@@ -148,6 +149,10 @@ export function useSessionActions(
       // proxy via `openai_base_url`.
       const useProxy =
         kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined
+      const builtInMcpDomains =
+        kind !== 'terminal'
+          ? normalizeSessionBuiltInMcpDomains(opts?.builtInMcpDomains)
+          : undefined
       let sessionId: SessionId
       let tmuxName: string | undefined
       try {
@@ -158,7 +163,7 @@ export function useSessionActions(
           dangerousMode,
           useProxy,
           recoverTmuxName: opts?.recoverTmuxName,
-          builtInMcpDomains: opts?.builtInMcpDomains,
+          builtInMcpDomains,
         })
         sessionId = result.sessionId
         tmuxName = result.tmuxName
@@ -172,8 +177,8 @@ export function useSessionActions(
         ...(kind !== 'terminal' && opts?.resumeSessionId
           ? { providerSessionId: opts.resumeSessionId }
           : {}),
-        ...(kind !== 'terminal' && opts?.builtInMcpDomains && opts.builtInMcpDomains.length > 0
-          ? { builtInMcpDomains: opts.builtInMcpDomains }
+        ...(kind !== 'terminal' && builtInMcpDomains
+          ? { builtInMcpDomains }
           : {}),
       }
       setState(prev => ({
@@ -340,9 +345,27 @@ export function useSessionActions(
       // replacement happened to another.
       const oldId = commandTargetSessionIdForState(snapshot)
       if (!oldId) return
-      const nextKind = opts?.kind ?? snapshot.sessions[oldId]?.kind ?? 'claude'
+      const oldMeta = snapshot.sessions[oldId]
+      const nextKind = opts?.kind ?? oldMeta?.kind ?? 'claude'
+      // WHY replaceSession inherits MCP domains by default:
+      //
+      // Reload, provider switch, resume, and rewind all funnel through this
+      // path. Most callers think in terms of "keep this pane, replace the
+      // provider process" and therefore do not know they must restate every
+      // enabled MCP domain. Treating the old session metadata as the default
+      // keeps MCP enablement a durable property of the agent pane instead of a
+      // transient spawn flag that disappears on the next routine reload.
+      const builtInMcpDomains =
+        nextKind !== 'terminal'
+          ? normalizeSessionBuiltInMcpDomains(
+            opts?.builtInMcpDomains ?? oldMeta?.builtInMcpDomains,
+          )
+          : undefined
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
-      const newId = await spawn(cwd, opts)
+      const newId = await spawn(cwd, {
+        ...opts,
+        ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+      })
       setRuntimes(prev => ({
         ...prev,
         [newId]: {
@@ -393,7 +416,7 @@ export function useSessionActions(
           cwd,
           kind: nextKind,
           ...(opts?.resumeSessionId ? { providerSessionId: opts.resumeSessionId } : {}),
-          ...(opts?.builtInMcpDomains ? { builtInMcpDomains: opts.builtInMcpDomains } : {}),
+          ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }
         const detached = detachedSessions[oldId]
@@ -479,16 +502,23 @@ export function useSessionActions(
 
         try {
           const kind: SessionKind = meta.kind ?? 'claude'
+          const builtInMcpDomains =
+            kind !== 'terminal'
+              ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)
+              : undefined
           const { sessionId: newId } = await window.api.spawnSession({
             kind,
             cwd: meta.cwd,
             resumeSessionId: meta.providerSessionId,
             dangerousMode,
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
-            builtInMcpDomains: meta.builtInMcpDomains,
+            builtInMcpDomains,
           })
           idMap.set(oldId, newId)
-          freshSessions[newId] = { ...meta }
+          freshSessions[newId] = {
+            ...meta,
+            ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+          }
         } catch {
           failedIds.add(oldId)
         }
