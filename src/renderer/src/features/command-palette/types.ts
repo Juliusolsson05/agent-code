@@ -58,6 +58,9 @@ export type CommandContext = {
     enterKillBuriedMode: () => void
     enterPromptTemplateMode: () => void
     enterSavePromptTemplateMode: () => void
+    enterAiWorkspaceOpenMode: () => void
+    enterAiWorkspaceCreateMode: () => void
+    enterAiWorkspaceClearMode: () => void
     closePalette: () => void
   }
   flags: {

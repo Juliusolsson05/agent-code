@@ -79,6 +79,7 @@ export function AiWorkspaceEditor({ workspaceId }: Props) {
     if (!entry.status.exists || !entry.status.readable) return
     const result = await window.api.aiWorkspaceReadFile(entry.path)
     if (!result.ok) {
+      setFileOrder(prev => prev.includes(entry.entryId) ? prev : [...prev, entry.entryId])
       setOpenFiles(prev => ({
         ...prev,
         [entry.entryId]: {
@@ -226,6 +227,11 @@ export function AiWorkspaceEditor({ workspaceId }: Props) {
         <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
           <MonacoFileEditor
             file={activeFile}
+            // The AI Workspace editor intentionally opens absolute files from
+            // many roots. MonacoFileEditor only needs this prop as a lifecycle
+            // key for editor/model recreation; the actual file URI comes from
+            // `file.absolutePath`, so the workspace id is the stable identity
+            // for this curated surface.
             projectRoot={workspaceId}
             onChange={updateText}
             onSave={() => void saveActive()}

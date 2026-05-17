@@ -19,8 +19,6 @@
     "test:settings-coerce": "tsx --tsconfig tsconfig.web.json scripts/test-settings-coerce.ts",
     "test:prompt-templates": "tsx --tsconfig tsconfig.web.json scripts/test-prompt-templates.ts",
     "test:work-context": "tsx --tsconfig tsconfig.web.json scripts/test-work-context.ts",
-    "test:mcp-domain-persistence": "tsx --tsconfig tsconfig.web.json scripts/test-mcp-domain-persistence.ts",
-    "test:ai-workspace": "tsx --tsconfig tsconfig.node.json scripts/test-ai-workspace-registry.ts",
     "test:session-ownership": "tsx --tsconfig tsconfig.web.json scripts/test-session-ownership.ts",
     "test:worktree-activity": "tsx --tsconfig tsconfig.node.json scripts/test-worktree-activity-index.ts",
     "test:ghost-fallback": "tsx --tsconfig tsconfig.web.json scripts/test-ghost-fallback.ts",
