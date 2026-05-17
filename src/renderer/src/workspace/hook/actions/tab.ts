@@ -117,7 +117,7 @@ export function useTabActions(
       })
       // Surface a brief undo hint. The label uses the tab title so
       // the user can confirm at a glance which thing they killed.
-      showToast(`Closed “${tab.title}” — ⌘⇧T (Undo Close)`)
+      showToast(`Closed “${tab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
 
       // Kill every session in this tab.
       await Promise.all(idsToKill.map(id => window.api.killSession(id)))
