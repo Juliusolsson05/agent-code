@@ -13,7 +13,17 @@ export const copyAssistantCommands: CommandDef[] = [
     title: 'Copy Assistant Message…',
     description: '**What it does:** Opens a picker to copy a specific **assistant message**.\n\n**Use when:** You need an older response, not just the latest one.\n\n**Notes:** Use arrows, **Enter**, and **Esc** after opening.',
     keywords: ['copy', 'assistant', 'message', 'response', 'pick'],
-    when: ({ workspace }) => commandTargetSessionId(workspace) !== null,
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      // WHY this stays provider-only:
+      // the picker indexes assistant transcript entries, not arbitrary pane
+      // text. Terminal sessions only expose PTY bytes to xterm, so enabling
+      // this on a terminal row would create an empty picker that cannot ever
+      // find a valid assistant message.
+      return kind === 'claude' || kind === 'codex'
+    },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return

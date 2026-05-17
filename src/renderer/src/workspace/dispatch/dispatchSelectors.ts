@@ -51,7 +51,15 @@ export function buildDispatchGroups(
     .map(tab => {
       const tabIndex = state.tabs.findIndex(item => item.id === tab.id)
       const gridSessionIds = collectLeaves(tab.root)
-        .filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
+        // WHY terminals belong in the primary Dispatch row stream now:
+        // Dispatch focus is session-based, not transcript-based. TerminalLeaf
+        // already renders through renderWorkspaceLeaf and uses the same
+        // sessionId-scoped IPC lifecycle as agents, so filtering terminals here
+        // made the list lie about which live sessions the user could command.
+        // Agent-only affordances stay guarded at their command/action sites;
+        // row construction should answer the broader placement question:
+        // "which sessions are in this Dispatch scope?"
+        .filter(sessionId => state.sessions[sessionId] !== undefined)
         .filter(sessionId => !pinnedSet.has(sessionId))
       const detachedSessionIds = detachedDispatchSessionIdsForTab(state, tab.id)
         .filter(sessionId => !pinnedSet.has(sessionId))
@@ -135,6 +143,21 @@ export function flattenDispatchRows(groups: DispatchTabGroup[]): DispatchAgentRo
   return groups.flatMap(group => group.rows)
 }
 
+export function buildVisibleDispatchRows(state: WorkspaceState): DispatchAgentRow[] {
+  // WHY this helper exists instead of having every caller concatenate
+  // pinned + grouped rows itself:
+  // Dispatch now has multiple row classes (pinned agents, grid sessions,
+  // detached sessions, and terminals). Keyboard navigation, command
+  // targeting, close-after-delete focus, and the rendered list must agree on
+  // the same linear order or the highlighted row and the acted-on session
+  // drift apart. Keeping the visible row list here makes the selector layer
+  // the single source of truth for "row N" semantics.
+  return [
+    ...buildPinnedDispatchRows(state),
+    ...flattenDispatchRows(buildDispatchGroups(state)),
+  ]
+}
+
 export function dispatchSessionIdsForTab(
   state: WorkspaceState,
   tabId: TabId,
@@ -149,15 +172,15 @@ export function detachedDispatchSessionIdsForTab(
   tabId: TabId,
 ): SessionId[] {
   // Keep this ordering in one place so the list UI and bulk attach agree on
-  // what "all Dispatch agents for this tab" means. Detached rows are displayed
-  // oldest-first in buildDispatchGroups; bulk attach should preserve that same
-  // user-visible sequence inside the normalized incoming subtree.
+  // what "all detached Dispatch sessions for this tab" means. Detached rows
+  // are displayed oldest-first in buildDispatchGroups; bulk attach should
+  // preserve that same user-visible sequence inside the normalized incoming
+  // subtree.
   return Object.values(state.detachedSessions)
     .filter(entry => (
       entry.surface === 'dispatch' &&
       entry.projectTabId === tabId &&
-      state.sessions[entry.sessionId] !== undefined &&
-      state.sessions[entry.sessionId]?.kind !== 'terminal'
+      state.sessions[entry.sessionId] !== undefined
     ))
     .sort((a, b) => a.detachedAt - b.detachedAt)
     .map(entry => entry.sessionId)

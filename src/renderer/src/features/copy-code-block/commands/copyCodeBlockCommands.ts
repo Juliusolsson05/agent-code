@@ -22,7 +22,17 @@ export const copyCodeBlockCommands: CommandDef[] = [
     title: 'Copy Code Block…',
     description: '**What it does:** Opens a picker to copy a specific **code block** from the focused pane.\n\n**Use when:** You want one fenced block — a command, a snippet, a generated file — without copying the whole message.\n\n**Notes:** Use arrows to move between blocks, **Enter** to copy, **Esc** to cancel. Starts on the most recent block.',
     keywords: ['copy', 'code', 'block', 'snippet', 'fenced', 'pick'],
-    when: ({ workspace }) => commandTargetSessionId(workspace) !== null,
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      // WHY terminal rows are excluded:
+      // code-block picking walks rendered feed DOM nodes with
+      // data-code-block-id. Terminal output is painted by xterm, not the feed
+      // renderer, so there is no stable code-block identity to enumerate or
+      // highlight.
+      return kind === 'claude' || kind === 'codex'
+    },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return

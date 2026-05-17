@@ -40,8 +40,10 @@ import type {
  *     surface === 'dispatch' — Dispatch Mode agents that live
  *     outside the grid but belong to this project
  *
- * Excludes terminals from the detached side because terminals are
- * always grid by design (Dispatch never holds a terminal).
+ * Includes detached terminals as well as detached agents. Dispatch rows are
+ * session rows now; terminals can be parked out of the grid and attached
+ * back later just like provider sessions. Agent-only surfaces must filter by
+ * kind at their own boundary instead of baking that policy into membership.
  *
  * Excludes `state.buried` deliberately: burying a pane is the
  * user's signal to put it away. Surfaces that ask "what's in this
@@ -64,8 +66,7 @@ export function resolveTabSessions(
     .filter(entry => (
       entry.surface === 'dispatch' &&
       entry.projectTabId === tabId &&
-      state.sessions[entry.sessionId] !== undefined &&
-      state.sessions[entry.sessionId]?.kind !== 'terminal'
+      state.sessions[entry.sessionId] !== undefined
     ))
     .sort((a, b) => a.detachedAt - b.detachedAt)
     .map(entry => entry.sessionId)
