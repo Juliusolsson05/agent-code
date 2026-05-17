@@ -13,6 +13,7 @@ type Props = {
   projectRoot: string | null
   onChange: (path: string, text: string) => void
   onSave: () => void
+  onSelectionRevealed?: (path: string) => void
 }
 
 export function MonacoFileEditor({
@@ -20,6 +21,7 @@ export function MonacoFileEditor({
   projectRoot,
   onChange,
   onSave,
+  onSelectionRevealed,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
@@ -83,6 +85,7 @@ export function MonacoFileEditor({
           column: file.selection.column,
         })
         editor.revealLineInCenter(file.selection.line)
+        onSelectionRevealed?.(file.path)
       }
       editor.focus()
     })()
@@ -101,7 +104,7 @@ export function MonacoFileEditor({
       if (model && !model.isDisposed()) model.dispose()
       if (editorRef.current === editor) editorRef.current = null
     }
-  }, [file?.path, projectRoot])
+  }, [file?.path, projectRoot, onSelectionRevealed])
 
   useEffect(() => {
     const editor = editorRef.current
@@ -130,7 +133,8 @@ export function MonacoFileEditor({
     })
     editor.revealLineInCenter(file.selection.line)
     editor.focus()
-  }, [file?.path, file?.selection?.line, file?.selection?.column])
+    onSelectionRevealed?.(file.path)
+  }, [file?.path, file?.selection?.line, file?.selection?.column, onSelectionRevealed])
 
   if (!file) {
     return (

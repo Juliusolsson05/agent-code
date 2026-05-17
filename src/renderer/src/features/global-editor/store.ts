@@ -87,6 +87,7 @@ type GlobalEditorStore = {
   }) => void
   setActiveFile: (cwd: string, path: string | null) => void
   updateFileText: (cwd: string, path: string, text: string) => void
+  clearFileSelection: (cwd: string, path: string) => void
   markFileSaved: (cwd: string, path: string, text: string, mtimeMs: number) => void
   closeFile: (cwd: string, path: string) => boolean
 }
@@ -240,6 +241,35 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
                 ...current,
                 currentText: text,
                 dirty: text !== current.savedText,
+              },
+            },
+          },
+        },
+      }
+    }),
+
+  clearFileSelection: (cwd, path) =>
+    set(state => {
+      const prev = state.byCwd[cwd]
+      const current = prev?.openFiles[path]
+      if (!prev || !current?.selection) return state
+      return {
+        byCwd: {
+          ...state.byCwd,
+          [cwd]: {
+            ...prev,
+            openFiles: {
+              ...prev.openFiles,
+              [path]: {
+                ...current,
+                // WHY reveal selection is one-shot:
+                // A clicked `path:line` should jump the user to that location
+                // once. Keeping the selection on the durable buffer makes every
+                // tab switch or Monaco remount snap back to the old clicked
+                // line, overriding normal editor navigation. Cursor state is an
+                // editor concern after the initial reveal, so clear the request
+                // as soon as Monaco acknowledges it.
+                selection: null,
               },
             },
           },

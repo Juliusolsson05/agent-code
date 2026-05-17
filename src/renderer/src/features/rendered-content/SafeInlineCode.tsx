@@ -1,6 +1,6 @@
 import { useCallback, useContext, type MouseEvent, type ReactNode } from 'react'
 
-import { classifyRenderedTarget } from '@shared/renderedContent/targets'
+import { classifyInlineCodeFileTarget } from '@shared/renderedContent/targets'
 
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
@@ -10,7 +10,7 @@ export function SafeInlineCode({ children }: { children?: ReactNode }) {
   const { workspaceRoot } = useContext(CodeRenderContext)
   const { showToast } = useGlobalToast()
   const text = String(children ?? '')
-  const target = classifyRenderedTarget(text, { workspaceRoot })
+  const target = classifyInlineCodeFileTarget(text, { workspaceRoot })
 
   const activate = useCallback(
     async (event: MouseEvent<HTMLButtonElement>) => {

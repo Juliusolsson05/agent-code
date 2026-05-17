@@ -126,6 +126,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     setActiveCwd,
     setActiveFile,
     updateFileText,
+    clearFileSelection,
     markFileSaved,
     closeFileAction,
     cwdState,
@@ -144,6 +145,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         setActiveCwd: state.setActiveCwd,
         setActiveFile: state.setActiveFile,
         updateFileText: state.updateFileText,
+        clearFileSelection: state.clearFileSelection,
         markFileSaved: state.markFileSaved,
         closeFileAction: state.closeFile,
         cwdState: (aCwd && byCwd[aCwd]) || EMPTY_CWD_STATE,
@@ -254,6 +256,14 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     [activeCwd],
   )
 
+  const clearRevealedSelection = useCallback(
+    (path: string) => {
+      if (!activeCwd) return
+      clearFileSelection(activeCwd, path)
+    },
+    [activeCwd, clearFileSelection],
+  )
+
   // When the overlay is closed, render the workspace area
   // full-bleed. This is the "off" state — zero overhead, no extra
   // DOM, no event listeners.
@@ -362,6 +372,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                     updateFileText(activeCwd, path, text)
                   }
                   onSave={() => void saveActive()}
+                  onSelectionRevealed={clearRevealedSelection}
                 />
               </div>
             </div>

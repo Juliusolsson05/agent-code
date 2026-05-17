@@ -30,6 +30,36 @@ export type RenderedTargetContext = {
   workspaceRoot?: string | null
 }
 
+const INLINE_CODE_FILE_EXTENSIONS = new Set([
+  'c',
+  'cc',
+  'cpp',
+  'css',
+  'go',
+  'h',
+  'hpp',
+  'html',
+  'java',
+  'js',
+  'json',
+  'jsx',
+  'kt',
+  'md',
+  'py',
+  'rs',
+  'scss',
+  'sh',
+  'sql',
+  'swift',
+  'toml',
+  'ts',
+  'tsx',
+  'txt',
+  'yaml',
+  'yml',
+  'zsh',
+])
+
 export function normalizeAllowedExternalUrl(rawUrl: string): string | null {
   try {
     const url = new URL(rawUrl)
@@ -99,6 +129,29 @@ function looksLikeRelativeFilePath(path: string): boolean {
   return /^[^/\s]+\.[^/\s.]+$/.test(path)
 }
 
+function fileExtension(path: string): string | null {
+  const last = path.split('/').pop() ?? ''
+  const idx = last.lastIndexOf('.')
+  if (idx <= 0 || idx === last.length - 1) return null
+  return last.slice(idx + 1).toLowerCase()
+}
+
+function looksLikeInlineCodeFilePath(path: string): boolean {
+  // WHY inline code is stricter than markdown href classification:
+  //
+  // Markdown links already carry explicit author intent in `href`. Inline
+  // code does not: agents wrap package names, version numbers, shell
+  // fragments, ratios, and prose tokens in backticks constantly. Treating any
+  // slash or dotted token as clickable made `Node.js`, `1.2.3`, `and/or`,
+  // and `read/write` look like broken file links. For backticks, require a
+  // path-shaped token plus a known file extension so the affordance appears
+  // only where it is very likely to be useful.
+  if (/\s/.test(path)) return false
+  if (!(path.startsWith('./') || path.includes('/'))) return false
+  const ext = fileExtension(path)
+  return ext !== null && INLINE_CODE_FILE_EXTENSIONS.has(ext)
+}
+
 function isKnownUnsafeScheme(raw: string): boolean {
   return /^(?:javascript|data|file|mailto|tel|blob|about|chrome|devtools|vscode):/i.test(raw)
 }
@@ -156,6 +209,56 @@ export function classifyRenderedTarget(
 
   if (!workspaceRoot) return { kind: 'unsupported', reason: 'missing-workspace-root' }
   if (!looksLikeRelativeFilePath(parsed.path)) {
+    return { kind: 'unsupported', reason: 'not-a-file-path' }
+  }
+  const normalized = normalizeRelativeCandidate(parsed.path)
+  if (!normalized) return { kind: 'unsupported', reason: 'not-a-file-path' }
+  return {
+    kind: 'local-file',
+    path: normalized,
+    line: parsed.line,
+    column: parsed.column,
+  }
+}
+
+export function classifyInlineCodeFileTarget(
+  rawTarget: string | null | undefined,
+  context: RenderedTargetContext = {},
+): RenderedTarget {
+  const raw = (rawTarget ?? '').trim()
+  if (!raw) return { kind: 'unsupported', reason: 'empty' }
+  if (
+    /^https?:\/\//i.test(raw) ||
+    isKnownUnsafeScheme(raw) ||
+    hasExplicitUrlScheme(raw) ||
+    raw.startsWith('#') ||
+    raw.startsWith('?') ||
+    raw.startsWith('//')
+  ) {
+    return { kind: 'unsupported', reason: 'not-a-file-path' }
+  }
+
+  const parsed = parsePathLineColumnSuffix(raw)
+  const workspaceRoot = normalizeWorkspaceRoot(context.workspaceRoot)
+  if (!workspaceRoot) return { kind: 'unsupported', reason: 'missing-workspace-root' }
+
+  if (parsed.path.startsWith('/')) {
+    const relative = stripWorkspaceRoot(parsed.path, workspaceRoot)
+    if (relative === null) return { kind: 'unsupported', reason: 'outside-workspace' }
+    if (!looksLikeInlineCodeFilePath(relative)) {
+      return { kind: 'unsupported', reason: 'not-a-file-path' }
+    }
+    const normalized = normalizeRelativeCandidate(relative)
+    if (!normalized) return { kind: 'unsupported', reason: 'not-a-file-path' }
+    return {
+      kind: 'local-file',
+      path: normalized,
+      line: parsed.line,
+      column: parsed.column,
+    }
+  }
+
+  if (!looksLikeInlineCodeFilePath(parsed.path)) {
     return { kind: 'unsupported', reason: 'not-a-file-path' }
   }
   const normalized = normalizeRelativeCandidate(parsed.path)

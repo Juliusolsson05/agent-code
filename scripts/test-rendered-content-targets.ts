@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  classifyInlineCodeFileTarget,
   classifyRenderedTarget,
   normalizeAllowedExternalUrl,
   parsePathLineColumnSuffix,
@@ -123,6 +124,39 @@ assert.deepEqual(classifyRenderedTarget('src/missing.ts', { workspaceRoot: root 
   path: 'src/missing.ts',
   line: null,
   column: null,
+})
+
+assert.deepEqual(classifyInlineCodeFileTarget('src/app.ts:42', { workspaceRoot: root }), {
+  kind: 'local-file',
+  path: 'src/app.ts',
+  line: 42,
+  column: null,
+})
+assert.deepEqual(classifyInlineCodeFileTarget('./README.md', { workspaceRoot: root }), {
+  kind: 'local-file',
+  path: 'README.md',
+  line: null,
+  column: null,
+})
+assert.deepEqual(classifyInlineCodeFileTarget('Node.js', { workspaceRoot: root }), {
+  kind: 'unsupported',
+  reason: 'not-a-file-path',
+})
+assert.deepEqual(classifyInlineCodeFileTarget('1.2.3', { workspaceRoot: root }), {
+  kind: 'unsupported',
+  reason: 'not-a-file-path',
+})
+assert.deepEqual(classifyInlineCodeFileTarget('and/or', { workspaceRoot: root }), {
+  kind: 'unsupported',
+  reason: 'not-a-file-path',
+})
+assert.deepEqual(classifyInlineCodeFileTarget('read/write', { workspaceRoot: root }), {
+  kind: 'unsupported',
+  reason: 'not-a-file-path',
+})
+assert.deepEqual(classifyInlineCodeFileTarget('kg/m2', { workspaceRoot: root }), {
+  kind: 'unsupported',
+  reason: 'not-a-file-path',
 })
 
 console.log('rendered content target classification ok')
