@@ -99,7 +99,17 @@ export async function saveWorktreeActivityIndex(
     version: INDEX_VERSION,
     updatedAt: Date.now(),
   }
-  const tmp = INDEX_FILE + '.tmp'
+  // WHY the temp path is unique even though the index is only a derived cache:
+  //
+  // The app policy is one primary process, but this index is refreshed in the
+  // background and is cheap to make robust against accidental overlap. A fixed
+  // `.tmp` sibling lets two refreshes from identity-split dev/prod processes
+  // steal each other's scratch file and surface noisy ENOENT failures. The
+  // final file can remain last-writer-wins because raw provider transcripts are
+  // the source of truth; the scratch file just needs to be owned by one write.
+  const tmp = `${INDEX_FILE}.${process.pid}.${Date.now()}.${Math.random()
+    .toString(36)
+    .slice(2)}.tmp`
   await writeFile(tmp, JSON.stringify(next), 'utf8')
   await rename(tmp, INDEX_FILE)
 }

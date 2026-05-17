@@ -25,6 +25,7 @@ import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js
 import { STATE_FILE } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
+import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
 import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
@@ -92,6 +93,26 @@ const aiWorkspaceRegistry = new AiWorkspaceRegistry()
 // callbacks that fire after the assignment.
 let manager: SessionManager | null = null
 let tmuxRegistry: TmuxRegistry | null = null
+let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
+
+// WHY Agent Code is intentionally single-primary-process:
+//
+// The renderer persists the whole workspace as one `workspace.json` snapshot,
+// main keeps AI Workspace and worktree-index state in process-local maps, and
+// provider resume starts real Claude/Codex processes that tail native
+// transcripts. Making 2+ Electron mains safe would require database-style
+// revision/merge semantics and provider-session ownership across all of those
+// surfaces. The current product shape is one primary process with one window;
+// a future multi-window UI should add windows to THIS process, not launch more
+// mains against the same `~/.config/agent-code` state root.
+//
+// Electron's single-instance lock handles the normal "user opened the app
+// again" path and lets us focus the existing window. The state-process lock in
+// `startApp()` is a second belt for dev/prod or app-identity splits where
+// Electron might consider the processes different but our STATE_DIR is still
+// shared. If that lock ever feels too strict, the storage model must be changed
+// first; deleting the guard alone would make last-writer-wins corruption
+// possible again.
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -107,6 +128,22 @@ if (!hasSingleInstanceLock) {
 // ---------- App lifecycle ----------
 
 async function startApp(): Promise<void> {
+  const lock = await acquireStateProcessLock()
+  if (!lock.acquired) {
+    console.warn(
+      '[app] refusing to start a second Agent Code main process for shared state:',
+      {
+        lockPath: lock.path,
+        reason: lock.reason,
+        ownerPid: lock.owner?.pid ?? null,
+        ownerStartedAt: lock.owner?.startedAt ?? null,
+      },
+    )
+    app.quit()
+    return
+  }
+  stateProcessLock = lock
+
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
   })
@@ -278,4 +315,8 @@ app.on('before-quit', () => {
   void dictationDebugJournals.flushAll()
   void pasteDebugJournals.flushAll()
   performanceService.stop()
+  void stateProcessLock?.release().catch(err => {
+    console.warn('[app] failed to release state process lock:', err)
+  })
+  stateProcessLock = null
 })

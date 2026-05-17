@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { STATE_DIR } from '@main/storage/paths.js'
@@ -49,7 +49,19 @@ export async function saveSetupState(
     .catch(() => {})
     .then(async () => {
       await mkdir(STATE_DIR, { recursive: true })
-      await writeFile(SETUP_STATE_FILE, JSON.stringify(snapshot, null, 2), 'utf8')
+      // WHY setup state uses the same temp+rename discipline as workspace
+      // state even though the single-process lock should prevent concurrent
+      // app mains:
+      //
+      // Setup paths are user-visible configuration. A crash mid-write should
+      // not leave `setup.json` truncated and force the user through tool
+      // discovery again. The process lock is the multi-instance policy; this
+      // atomic write is the separate crash-safety layer for a tiny JSON file.
+      const tmp = `${SETUP_STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
+        .toString(36)
+        .slice(2)}.tmp`
+      await writeFile(tmp, JSON.stringify(snapshot, null, 2), 'utf8')
+      await rename(tmp, SETUP_STATE_FILE)
     })
   await writeQueue
   return cache
