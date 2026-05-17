@@ -4,6 +4,9 @@ import { readFile, readdir, stat } from 'fs/promises'
 import { getMainProvider } from '@providers/registry.main.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 
+const CODEX_ROLLOUT_RE =
+  /^rollout-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
+
 // Loader for older history chunks.
 //
 // When the user scrolls up past the bootstrapTail window in a resumed
@@ -69,9 +72,17 @@ function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
 /**
  * Codex sessions are stored under year/month/day/<timestamp>-<threadId>.jsonl.
  * The renderer hands us only a threadId, so we walk the tree newest-
- * first (dirs sorted reverse) and pick the first file whose name
- * contains the id. Cheap for any reasonable session age; if we ever
- * need a full scan we'll index at boot.
+ * first (dirs sorted reverse) and pick the first file whose parsed
+ * rollout UUID exactly equals the provider id.
+ *
+ * WHY exact parse instead of substring matching:
+ *
+ * Codex's rollout tree is global, not per pane or per cwd. Any helper
+ * that accepts "filename contains threadId" makes transcript ownership
+ * depend on an accidental substring relationship in shared storage.
+ * The provider id is the UUID suffix in the structured rollout
+ * filename, so older-history loading must use that exact field or
+ * return nothing.
  */
 async function findCodexRolloutPathByThreadId(
   sessionsDir: string,
@@ -94,7 +105,10 @@ async function findCodexRolloutPathByThreadId(
           const dStat = await stat(dayDir).catch(() => null)
           if (!dStat?.isDirectory()) continue
           const files = await readdir(dayDir)
-          const match = files.find(f => f.includes(threadId) && f.endsWith('.jsonl'))
+          const match = files.find(f => {
+            const parsed = CODEX_ROLLOUT_RE.exec(f)
+            return parsed?.[2] === threadId
+          })
           if (match) return join(dayDir, match)
         }
       }
