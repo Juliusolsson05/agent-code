@@ -49,6 +49,9 @@ import {
   orphanStale,
   reconcileUpstream,
 } from '@renderer/workspace/ghosts'
+import {
+  codexPromptsMatchForOwnership,
+} from '@renderer/workspace/hook/actions/streaming'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import type { WorktreeIdentity } from '@shared/work-context/types'
@@ -1052,8 +1055,21 @@ export function useIpcSubscriptions(
               // user row is the point where that local "queued" surface
               // must disappear; otherwise the queue strip becomes the new
               // stale-bottom duplicate after the transcript catches up.
-              if (queuedMessages.some(q => q.content === mappedText)) {
-                queuedMessages = queuedMessages.filter(q => q.content !== mappedText)
+              if (queuedMessages.some(q => codexPromptsMatchForOwnership(q.content, mappedText))) {
+                // WHY queued prompt reconciliation is normalized:
+                // queuedMessages is only a temporary local surface for
+                // a mid-turn submit. The authoritative user row comes
+                // from Codex rollout, and rollout can differ from the
+                // original submit by CRLF normalization, unicode form,
+                // or block-join whitespace. Exact matching leaves the
+                // QueueStrip stuck after the real transcript row has
+                // arrived, recreating the stale-bottom artifact this
+                // renderer rewrite is meant to eliminate. Preserve the
+                // original displayed text in the queue, but compare by
+                // the same ownership key we use for render dedupe.
+                queuedMessages = queuedMessages.filter(q =>
+                  !codexPromptsMatchForOwnership(q.content, mappedText),
+                )
                 reconciledOptimisticText = mappedText
               }
             }
