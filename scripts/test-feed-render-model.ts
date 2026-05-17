@@ -13,7 +13,7 @@
 
 import assert from 'node:assert/strict'
 
-import type { Entry } from '../src/shared/types/transcript'
+import type { Entry, ToolResultBlock, ToolUseBlock } from '../src/shared/types/transcript'
 import type { SemanticLiveTurn } from '../src/renderer/src/workspace/workspaceState'
 import { deriveFeedRenderModel } from '../src/renderer/src/features/feed/model/renderModel'
 
@@ -122,6 +122,44 @@ function toolBlockTurn(turnId: string, callId: string): SemanticLiveTurn {
         toolName: 'exec_command',
         callId,
         inputJson: '{}',
+      },
+    },
+    blockOrder: [0],
+  }
+}
+
+function toolOutputTurn(turnId: string, callId: string): SemanticLiveTurn {
+  return {
+    ...liveTurn(turnId),
+    text: '',
+    blocks: {
+      0: {
+        blockIndex: 0,
+        kind: 'function_call_output',
+        callId,
+        output: 'live stdout still streaming',
+        finalized: true,
+        status: 'completed',
+      },
+    },
+    blockOrder: [0],
+  }
+}
+
+function writeStdinTurn(turnId: string, chars: string): SemanticLiveTurn {
+  return {
+    ...liveTurn(turnId),
+    text: '',
+    blocks: {
+      0: {
+        blockIndex: 0,
+        kind: 'function_call',
+        toolName: 'write_stdin',
+        callId: 'stdin-call',
+        inputJson: JSON.stringify({ chars }),
+        parsedInput: { chars },
+        finalized: true,
+        status: 'completed',
       },
     },
     blockOrder: [0],
@@ -333,7 +371,7 @@ function toolBlockTurn(turnId: string, callId: string): SemanticLiveTurn {
 }
 
 {
-  const committedToolUseIndex = new Map([
+  const committedToolUseIndex = new Map<string, ToolUseBlock>([
     ['tool-1', { type: 'tool_use', id: 'tool-1', name: 'exec_command', input: {} }],
   ])
   const model = deriveFeedRenderModel({
@@ -357,6 +395,126 @@ function toolBlockTurn(turnId: string, callId: string): SemanticLiveTurn {
     ['empty', 'work'],
     'work remains visible even when the duplicate live semantic tool unit is suppressed',
   )
+}
+
+{
+  const committedToolUseIndex = new Map<string, ToolUseBlock>([
+    ['tool-1', { type: 'tool_use', id: 'tool-1', name: 'exec_command', input: {} }],
+  ])
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [],
+    semanticHistory: [],
+    semanticTurn: toolOutputTurn('live-output-turn', 'tool-1'),
+    streamPhase: 'tool-use',
+    streamPhasePendingToolName: 'exec_command',
+    streamPhasePendingToolUseId: 'tool-1',
+    committedToolUseIndex,
+    committedToolResultIndex: new Map(),
+  })
+
+  assert.notEqual(
+    model.renderedSemanticTurn,
+    null,
+    'committed tool_use alone must not hide live tool output before the committed tool_result lands',
+  )
+  assert.deepEqual(
+    model.debugRows.map(row => row.slot),
+    ['semantic', 'work'],
+    'live output remains the render owner during tool_result JSONL lag',
+  )
+}
+
+{
+  const committedToolUseIndex = new Map<string, ToolUseBlock>([
+    ['tool-1', { type: 'tool_use', id: 'tool-1', name: 'exec_command', input: {} }],
+  ])
+  const committedToolResultIndex = new Map<string, ToolResultBlock>([
+    ['tool-1', { type: 'tool_result', tool_use_id: 'tool-1', content: 'committed stdout' }],
+  ])
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [],
+    semanticHistory: [],
+    semanticTurn: toolOutputTurn('live-output-turn', 'tool-1'),
+    streamPhase: 'tool-use',
+    streamPhasePendingToolName: 'exec_command',
+    streamPhasePendingToolUseId: 'tool-1',
+    committedToolUseIndex,
+    committedToolResultIndex,
+  })
+
+  assert.equal(
+    model.renderedSemanticTurn,
+    null,
+    'committed tool_result ownership must suppress the duplicate live output block',
+  )
+  assert.deepEqual(
+    model.debugRows.map(row => row.slot),
+    ['empty', 'work'],
+    'after committed result catch-up, only the independent work state remains',
+  )
+}
+
+{
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [],
+    semanticHistory: [],
+    semanticTurn: writeStdinTurn('empty-stdin-turn', ''),
+    streamPhase: 'tool-use',
+    streamPhasePendingToolName: 'write_stdin',
+    streamPhasePendingToolUseId: 'stdin-call',
+  })
+
+  assert.equal(
+    model.renderedSemanticTurn,
+    null,
+    'empty write_stdin must not count as renderable semantic content when the row renderer paints null',
+  )
+  assert.deepEqual(
+    model.debugRows.map(row => row.slot),
+    ['empty', 'work'],
+    'debug rows must not claim an invisible write_stdin block owns the feed',
+  )
+}
+
+{
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [],
+    semanticHistory: [],
+    semanticTurn: writeStdinTurn('stdin-turn', 'y\n'),
+    streamPhase: 'tool-use',
+    streamPhasePendingToolName: 'write_stdin',
+    streamPhasePendingToolUseId: 'stdin-call',
+  })
+
+  assert.notEqual(
+    model.renderedSemanticTurn,
+    null,
+    'non-empty write_stdin must still render as live semantic tool content',
+  )
+}
+
+{
+  const duplicated = liveTurn('same-turn-id', 'proxy')
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [],
+    semanticHistory: [duplicated],
+    semanticTurn: duplicated,
+    streamPhase: 'thinking',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+  })
+
+  assert.equal(
+    model.renderedSemanticHistory.length,
+    0,
+    'semantic history must defensively drop the current turn id so history/current cannot double-own one turn',
+  )
+  assert.notEqual(model.renderedSemanticTurn, null)
 }
 
 {

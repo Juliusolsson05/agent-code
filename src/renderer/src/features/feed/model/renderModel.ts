@@ -3,6 +3,7 @@ import {
   isCompactSummaryEntry,
   isConversationEntry,
   type Entry,
+  type ToolResultBlock,
   type ToolUseBlock,
 } from '@shared/types/transcript'
 import { asRecord } from '@shared/lib/asRecord'
@@ -34,6 +35,7 @@ export type FeedRenderModelInput = {
   streamPhasePendingToolName: string | null
   streamPhasePendingToolUseId: string | null
   committedToolUseIndex?: Map<string, ToolUseBlock>
+  committedToolResultIndex?: Map<string, ToolResultBlock>
 }
 
 export type FeedRenderModel = {
@@ -108,6 +110,7 @@ export function deriveFeedRenderModel({
   streamPhasePendingToolName,
   streamPhasePendingToolUseId,
   committedToolUseIndex,
+  committedToolResultIndex,
 }: FeedRenderModelInput): FeedRenderModel {
   const visibleDecisions = entries.map(visibleDecisionForEntry)
   const visibleEntries = visibleDecisions
@@ -131,10 +134,12 @@ export function deriveFeedRenderModel({
   // precise item identity.
   const renderedSemanticHistory = semanticHistory.filter(
     turn =>
+      turn.turnId !== semanticTurn?.turnId &&
       !committedClaudeMessageTurnIds.has(turn.turnId) &&
       semanticTurnHasRenderableContent(
         turn,
         committedToolUseIndex,
+        committedToolResultIndex,
         committedAssistantText,
       ),
   )
@@ -143,6 +148,7 @@ export function deriveFeedRenderModel({
     semanticTurnHasRenderableContent(
       semanticTurn,
       committedToolUseIndex,
+      committedToolResultIndex,
       committedAssistantText,
     )
       ? semanticTurn

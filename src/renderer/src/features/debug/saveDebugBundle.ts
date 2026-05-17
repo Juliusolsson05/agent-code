@@ -99,9 +99,15 @@ function semanticTurnDiagnostics(
   turn: SessionRuntime['semantic']['currentTurn'],
   committedText: ReturnType<typeof buildCommittedAssistantText>,
   committedToolUseIndex: SessionRuntime['toolUseIndex'],
+  committedToolResultIndex: SessionRuntime['toolResultIndex'],
 ): Record<string, unknown> | null {
   if (!turn) return null
-  const units = buildSemanticRenderUnits(turn, committedToolUseIndex, committedText)
+  const units = buildSemanticRenderUnits(
+    turn,
+    committedToolUseIndex,
+    committedToolResultIndex,
+    committedText,
+  )
   const fallbackText = turn.text ?? ''
   const normalizedFallbackText = normalizeCommittedAssistantText(fallbackText)
 
@@ -146,6 +152,7 @@ function semanticTurnDiagnostics(
             ),
           toolId,
           toolOwnedByCommitted: toolId ? committedToolUseIndex.has(toolId) : false,
+          toolResultOwnedByCommitted: toolId ? committedToolResultIndex.has(toolId) : false,
         }
       }),
   }
@@ -210,6 +217,7 @@ function buildRenderDiagnostics(runtime: SessionRuntime, kind: string): Record<s
       committedAssistantTextNormalized: committedText.normalizedTexts.size,
       committedAssistantTextKeys: committedText.keys.size,
       committedToolUseIndex: runtime.toolUseIndex.size,
+      committedToolResultIndex: runtime.toolResultIndex.size,
       semanticHistory: runtime.semantic.history.length,
     },
     committedAssistantRows,
@@ -222,9 +230,15 @@ function buildRenderDiagnostics(runtime: SessionRuntime, kind: string): Record<s
       runtime.semantic.currentTurn,
       committedText,
       runtime.toolUseIndex,
+      runtime.toolResultIndex,
     ),
     semanticHistory: runtime.semantic.history.map(turn =>
-      semanticTurnDiagnostics(turn, committedText, runtime.toolUseIndex),
+      semanticTurnDiagnostics(
+        turn,
+        committedText,
+        runtime.toolUseIndex,
+        runtime.toolResultIndex,
+      ),
     ),
   }
 }

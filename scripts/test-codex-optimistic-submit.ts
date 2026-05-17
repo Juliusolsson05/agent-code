@@ -13,7 +13,10 @@
 
 import assert from 'node:assert/strict'
 
-import { shouldQueueOptimisticCodexUserEntry } from '../src/renderer/src/workspace/hook/actions/streaming'
+import {
+  codexPromptsMatchForOwnership,
+  shouldQueueOptimisticCodexUserEntry,
+} from '../src/renderer/src/workspace/hook/actions/streaming'
 import { emptyRuntime } from '../src/renderer/src/workspace/workspaceState'
 
 // The bug this guards was brutally simple: submit calls
@@ -102,6 +105,19 @@ import { emptyRuntime } from '../src/renderer/src/workspace/workspaceState'
     shouldQueueOptimisticCodexUserEntry(runtime),
     false,
     'a sealed semantic turn must not keep future Codex prompts stuck in QueueStrip',
+  )
+}
+
+{
+  assert.equal(
+    codexPromptsMatchForOwnership('Fix this\r\nnow  ', 'Fix this\nnow'),
+    true,
+    'queued Codex prompt reconciliation must tolerate rollout whitespace and CRLF normalization',
+  )
+  assert.equal(
+    codexPromptsMatchForOwnership('Fix this now', 'Fix something else now'),
+    false,
+    'prompt ownership normalization must not collapse unrelated queued prompts',
   )
 }
 

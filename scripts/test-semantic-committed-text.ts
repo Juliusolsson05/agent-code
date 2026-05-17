@@ -26,6 +26,7 @@ const DUPED_TEXT =
 function committedAssistantText(entries: Entry[]): CommittedAssistantText {
   const keys = new Set<string>()
   const texts = new Set<string>()
+  const normalizedTexts = new Set<string>()
 
   for (const entry of entries) {
     if (entry.type !== 'assistant') continue
@@ -44,11 +45,12 @@ function committedAssistantText(entries: Entry[]): CommittedAssistantText {
       const item = block as Record<string, unknown>
       if (item.type !== 'text' || typeof item.text !== 'string' || !item.text) continue
       texts.add(item.text)
+      normalizedTexts.add(item.text.normalize('NFKC').replace(/\s+/g, ' ').trim())
       for (const turnId of turnIds) keys.add(`${turnId}\u0000${item.text}`)
     }
   }
 
-  return { keys, texts }
+  return { keys, texts, normalizedTexts }
 }
 
 function liveTurn(turnId: string, text: string): SemanticLiveTurn {
@@ -121,6 +123,7 @@ function liveTurn(turnId: string, text: string): SemanticLiveTurn {
   const units = buildSemanticRenderUnits(
     liveTurn('resp_009dff73e265ae8a016a08aea6841081918e34c47fabb83059', DUPED_TEXT),
     new Map(),
+    new Map(),
     committedAssistantText(committed),
   )
 
@@ -145,6 +148,7 @@ function liveTurn(turnId: string, text: string): SemanticLiveTurn {
   const units = buildSemanticRenderUnits(
     liveTurn('same-turn', DUPED_TEXT),
     new Map(),
+    new Map(),
     committedAssistantText(committed),
   )
 
@@ -168,6 +172,7 @@ function liveTurn(turnId: string, text: string): SemanticLiveTurn {
 
   const units = buildSemanticRenderUnits(
     liveTurn('new-turn', `${DUPED_TEXT} Extra live text still streaming.`),
+    new Map(),
     new Map(),
     committedAssistantText(committed),
   )

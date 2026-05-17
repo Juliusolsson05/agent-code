@@ -6,7 +6,10 @@ import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
-import { ToolUseIndexContext } from '@renderer/features/feed/context'
+import {
+  ToolResultIndexContext,
+  ToolUseIndexContext,
+} from '@renderer/features/feed/context'
 import { SemanticCollapsedActivityRow } from '@renderer/features/feed/ui/semantic/CollapsedActivityRow'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
 import {
@@ -51,6 +54,7 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   // of-feed dupe where the live turn keeps rendering tool rounds
   // that the committed transcript already painted above.
   const committedToolUseIndex = useContext(ToolUseIndexContext)
+  const committedToolResultIndex = useContext(ToolResultIndexContext)
   const committedAssistantText = useMemo(
     () => buildCommittedAssistantText(committedEntries),
     [committedEntries],
@@ -58,6 +62,7 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   const units = buildSemanticRenderUnits(
     turn,
     committedToolUseIndex,
+    committedToolResultIndex,
     committedAssistantText,
   )
   const hasBlocks = blocks.length > 0

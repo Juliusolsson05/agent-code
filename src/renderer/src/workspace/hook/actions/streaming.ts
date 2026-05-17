@@ -53,6 +53,22 @@ export function shouldQueueOptimisticCodexUserEntry(
   return isSemanticTurnRunning(current.semantic.currentTurn)
 }
 
+export function codexPromptOwnershipKey(text: string | null | undefined): string {
+  return String(text ?? '')
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function codexPromptsMatchForOwnership(
+  queuedText: string | null | undefined,
+  committedText: string | null | undefined,
+): boolean {
+  const queuedKey = codexPromptOwnershipKey(queuedText)
+  const committedKey = codexPromptOwnershipKey(committedText)
+  return queuedKey !== '' && queuedKey === committedKey
+}
+
 export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
   setStreamingBaseline: (sessionId: SessionId, baseline: string | null) => void
   addOptimisticCodexUserEntry: (sessionId: SessionId, text: string) => void
@@ -103,7 +119,9 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
         }
         const queueForLiveSemanticTurn = shouldQueueOptimisticCodexUserEntry(current)
         if (queueForLiveSemanticTurn) {
-          const alreadyQueued = current.queuedMessages.some(q => q.content === trimmed)
+          const alreadyQueued = current.queuedMessages.some(q =>
+            codexPromptsMatchForOwnership(q.content, trimmed),
+          )
           if (alreadyQueued) return prev
           const queued = {
             content: trimmed,

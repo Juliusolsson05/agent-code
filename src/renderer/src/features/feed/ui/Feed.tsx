@@ -696,6 +696,7 @@ function FeedImpl({
       streamPhasePendingToolName,
       streamPhasePendingToolUseId,
       committedToolUseIndex: toolUseIndex,
+      committedToolResultIndex: toolResultIndex,
     })
     const durationMs = performance.now() - startedAt
     if (durationMs >= 10 || entries.length >= 500) {
@@ -717,6 +718,7 @@ function FeedImpl({
     streamPhase,
     streamPhasePendingToolName,
     streamPhasePendingToolUseId,
+    toolResultIndex,
     toolUseIndex,
   ])
 
