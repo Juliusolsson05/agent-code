@@ -45,7 +45,17 @@ function sameScope(
   a: AiWorkspaceCreateParams['scope'],
   b: AiWorkspaceCreateParams['scope'],
 ): boolean {
-  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+  return stableStringify(a ?? null) === stableStringify(b ?? null)
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`
+  const record = value as Record<string, unknown>
+  const entries = Object.keys(record)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+  return `{${entries.join(',')}}`
 }
 
 async function gitField(cwd: string, args: string[]): Promise<string | undefined> {
@@ -72,7 +82,7 @@ async function detectGitContext(path: string): Promise<{
 
 export class AiWorkspaceRegistry {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
-  private loaded = false
+  private loadPromise: Promise<void> | null = null
 
   constructor(private readonly stateFile = AI_WORKSPACE_FILE) {}
 
@@ -128,6 +138,16 @@ export class AiWorkspaceRegistry {
   async attachFile(params: AiWorkspaceAttachFileParams): Promise<AiWorkspaceFileEntry> {
     await this.ensureLoaded()
     const workspace = this.requiredWorkspace(params.workspaceId)
+    // WHY AI Workspace accepts absolute paths instead of forcing project-root
+    // containment:
+    //
+    // The feature exists specifically for cross-worktree review. A useful
+    // workspace may contain files from sibling worktrees, generated reports in
+    // /tmp, or artifacts produced by another visible agent in a different cwd.
+    // The registry stores references only and validates "existing readable
+    // file"; it does not grant the model new filesystem authority. The user
+    // still opens the real path explicitly in Agent Code's UI, with stale /
+    // unreadable status visible instead of silently pruning references.
     const path = normalizePath(params.path)
     const fileStat = await stat(path)
     if (!fileStat.isFile()) throw new Error('AI Workspace can only attach files')
@@ -230,8 +250,11 @@ export class AiWorkspaceRegistry {
   }
 
   private async ensureLoaded(): Promise<void> {
-    if (this.loaded) return
-    this.loaded = true
+    this.loadPromise ??= this.load()
+    await this.loadPromise
+  }
+
+  private async load(): Promise<void> {
     try {
       const text = await readFile(this.stateFile, 'utf8')
       const parsed = JSON.parse(text) as PersistedAiWorkspaceState
@@ -311,7 +334,7 @@ export class AiWorkspaceRegistry {
   }
 
   private async save(): Promise<void> {
-    await mkdir(STATE_DIR, { recursive: true })
+    await mkdir(dirname(this.stateFile), { recursive: true })
     const payload: PersistedAiWorkspaceState = {
       workspaces: [...this.workspaces.values()],
     }
