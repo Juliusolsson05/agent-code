@@ -206,8 +206,8 @@ type Props = {
 //
 //   1. `Feed` itself is memoized. When the parent re-renders for a reason
 //      unrelated to feed content (user typing, focus toggle, split resize,
-//      picker visibility change), Feed sees the same `entries` reference,
-//      same `streamingScreen`, etc., and React.memo's default shallow
+//      picker visibility change), Feed sees the same committed-entry
+//      and semantic-turn references, and React.memo's default shallow
 //      compare bails the entire subtree out. Zero markdown work happens.
 //
 //   2. Every row component (`EntryRow`, `ConversationRow`, `TextProse`,
@@ -223,11 +223,10 @@ type Props = {
 // `text` string is the single biggest win because ReactMarkdown itself
 // has no memo and re-parses on every call.
 //
-// What is NOT memoized on purpose: the StreamingRow. It WANTS to re-run
-// on every screen frame — that's literally the streaming preview. But
-// even there, `StreamingProse` is memoed by the extracted text string,
-// so identical consecutive frames (which are common — CC re-renders its
-// screen buffer without the content changing) are free.
+// Live semantic rows are not flattened into committed entries on purpose.
+// They re-render when the semantic reducer changes the active/history
+// turns, but the markdown leaf (`StreamingProse`) is still memoed by
+// text so identical consecutive semantic ticks are cheap.
 
 export const Feed = memo(FeedImpl)
 
@@ -262,18 +261,13 @@ function FeedImpl({
   // reaching up the tree. TileLeaf's wrapper is just a flex cell and
   // no longer sets overflow-auto; see TileLeaf.tsx for the pair.
   //
-  // Why this is load-bearing: during active streaming, `streamingScreen`
-  // updates at ~60Hz. A naive useEffect([streamingScreen]) that calls
-  // scrollIntoView({block:'end'}) every time would yank the viewport
-  // to the bottom on every frame, making it impossible for the user
-  // to scroll up and read earlier content. Even when NOT streaming,
-  // the same effect fires whenever the streaming-ish prop flickers —
-  // which can happen unexpectedly if some other piece of state (e.g.
-  // the queue handler forcing awaitingAssistant=true from a phantom
-  // backlog) keeps the prop live. Worth repeating the user's
-  // diagnosis: "scrolling doesn't even work, it snaps me back to the
-  // bottom super glitchly." That's exactly the behavior the old
-  // effect produced.
+  // Why this is load-bearing: active semantic turns can update many
+  // times per second. A naive "scroll to bottom on every render" effect
+  // yanks the viewport down whenever text/tool deltas arrive, making it
+  // impossible for the user to scroll up and read earlier content.
+  // Worth preserving the original production diagnosis: "scrolling
+  // doesn't even work, it snaps me back to the bottom super glitchly."
+  // That's exactly the behavior the old unconditional effect produced.
   //
   // The fix is two-part:
   //   1. Track "is the user near the bottom right now" in a ref
@@ -457,18 +451,14 @@ function FeedImpl({
   ])
 
   // Auto-scroll on content changes, but ONLY when sticky. The effect
-  // runs on every change that would grow the feed (a new entry) or
-  // move the streaming tail (a new streamingScreen snapshot). If the
+  // runs on every change that would grow the feed (a new committed
+  // entry) or move the semantic streaming tail. If the
   // user is scrolled up, we skip — they're reading earlier content
   // and we don't want to yank them back.
   //
-  // Semantic streaming (the proxy-driven live turn) also grows the
-  // bottom of the feed without touching `streamingScreen` or
-  // `entries`. Include a cheap fingerprint of the current semantic
-  // turn (its text length plus the count of blocks) so the effect
-  // re-runs when semantic deltas land — otherwise a Codex/proxy
-  // session that never populates the legacy screen snapshot won't
-  // follow the tail even when the user is at the bottom.
+  // Include cheap fingerprints of the current semantic turn and
+  // bounded semantic history so the effect re-runs when semantic
+  // deltas land, not only when committed entries append.
   const semanticTurnSignal = semanticTurn
     ? `${semanticTurn.turnId}:${semanticTurn.text.length}:${Object.keys(semanticTurn.blocks).length}`
     : ''
@@ -880,14 +870,11 @@ function FeedImpl({
           {/* ONE owner rule for live assistant text.
            *
            * Live text renders exclusively from the semantic channel
-           * (claude-code-headless / codex-headless). The render-time
-           * regex extractor over the raw TUI screen (`<StreamingRow>`)
-           * was removed because it was a second producer for the same
-           * feed slot — the structural cause of:
-           *   - double-render on resume (EntryRow + StreamingRow both
-           *     showing the last assistant message),
-           *   - stale previous-turn text rendered under the new user
-           *     message for ~seconds after submit.
+           * (claude-code-headless / codex-headless). The old
+           * render-time regex extractor over raw TUI screen paint was
+           * removed because it was a second producer for the same feed
+           * slot — the structural cause of double-render on resume and
+           * stale previous-turn text under new user messages.
            *
            * Non-proxy sessions still get live streaming: the headless
            * packages publish screen-derived semantic deltas (labelled
@@ -948,7 +935,7 @@ function FeedImpl({
 //
 // The entire row surface (LazyEntry, EntryRow, ConversationRow, Block,
 // ImageBlockRow, CompactBoundaryRow, CompactSummaryRow, SystemRow,
-// ToolUseRow, ToolResultRow, TruncatedOutputRow, UserBand, ToolBand,
+// ToolUseRow, ToolResultRow, TruncatedOutputRow, UserBand,
 // plus the EAGER_TAIL constant) moved to ./rows/. Each component lives
 // in its own file, and the long WHY comments (lazy mount rationale,
 // the "CRITICAL: don't wrap tool_results in UserBand" gotcha, the

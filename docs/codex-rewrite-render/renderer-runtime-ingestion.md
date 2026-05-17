@@ -117,11 +117,11 @@ Ghost lifecycle:
 - Periodic 1 s sweep -> `orphanStale` marks stale unsuperseded ghosts after 30 s.
 - Changed ghost snapshots are appended to disk.
 
-`selectMergedEntries(runtime, currentTurnId)` renders a ghost only when all of these hold:
+`selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null)` renders a ghost only when all of these hold:
 
 - It is not superseded.
 - It is orphaned.
-- It does not belong to the live current turn.
+- It does not belong to semantic current/history ownership.
 - Its `_atp.updatedAt` is newer than `lastJsonlEntryAt`, unless no JSONL has ever been observed.
 - It is not sidecar-shaped: assistant, single text block, <= 200 chars.
 
@@ -180,4 +180,3 @@ Useful harnesses:
 - `scripts/proxy-harness-semantic.mts`
 - `scripts/proxy-harness-real.mts`
 - `scripts/proxy-harness.mts`
-

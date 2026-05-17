@@ -175,22 +175,10 @@ export function selectMergedEntries(
   if (visible.size === 0) return entries
 
   // Tail-append is correct for the surviving set: every visible
-  // ghost is by predicate-3 not the active turn and by predicate-4
-  // newer than every committed entry, so chronologically it
-  // belongs at the very end.
+  // ghost is by predicate-3 not already owned by semantic
+  // current/history and by predicate-4 newer than every committed
+  // entry, so chronologically it belongs at the very end.
   return mergeWithUpstream(entries, visible, {
     trustSupersededFlag: true,
   })
-}
-
-/**
- * Whether Feed should render the live `SemanticStreamingTurn`
- * component. True iff there is a current turn — full stop. The
- * merged feed selector (`selectMergedEntries`) hides ghosts whose
- * `turnId === currentTurnId`, so SemanticStreamingTurn has
- * exclusive ownership of the live view and there is no
- * duplicate-render risk.
- */
-export function shouldShowSemanticStreaming(runtime: SessionRuntime): boolean {
-  return runtime.semantic.currentTurn !== null
 }

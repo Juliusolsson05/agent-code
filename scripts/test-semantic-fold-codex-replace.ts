@@ -1,3 +1,16 @@
+// TEMPORARY RENDERING REGRESSION SCRIPT.
+//
+// WHY this file is allowed to exist even though it is not the testing
+// shape we want long-term:
+// these focused scripts were added during the 2026-05 rendering rewrite
+// because we needed executable guards immediately while the feed ownership
+// bugs were still active. They are intentionally small and useful, but
+// they are also messy compared with the proper unit/integration suite we
+// want: no standard runner, no shared fixtures, and too much local test
+// scaffolding per file. Keep them until #182 establishes the app-wide
+// testing suite and #183 migrates/expands the rendering regression coverage
+// into that structure.
+
 import assert from 'node:assert/strict'
 
 import { foldSemanticEvent } from '../src/renderer/src/workspace/semantic/foldEvent'

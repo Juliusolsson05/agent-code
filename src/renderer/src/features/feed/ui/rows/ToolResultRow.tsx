@@ -8,7 +8,6 @@ import { stripLineNumberPrefix } from '@renderer/features/feed/lib/helpers'
 import { CodeRenderContext, ToolUseIndexContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
-import { ToolBand } from '@renderer/features/feed/ui/rows/primitives'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
@@ -128,18 +127,16 @@ export const ToolResultRow = memo(function ToolResultRow({
         ? sourceInput.path
         : null
     return (
-      <ToolBand>
-        <MarkerRow marker="⎿" tone="muted">
-          <CodeBlock
-            code={trimmed}
-            path={filePath}
-            workspaceRoot={codeContext.workspaceRoot}
-            codeId={`grep:${block.tool_use_id}`}
-            engine="monaco"
-            allowAutoDetect
-          />
-        </MarkerRow>
-      </ToolBand>
+      <MarkerRow marker="⎿" tone="muted">
+        <CodeBlock
+          code={trimmed}
+          path={filePath}
+          workspaceRoot={codeContext.workspaceRoot}
+          codeId={`grep:${block.tool_use_id}`}
+          engine="monaco"
+          allowAutoDetect
+        />
+      </MarkerRow>
     )
   }
 

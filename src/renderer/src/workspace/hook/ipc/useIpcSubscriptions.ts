@@ -106,13 +106,14 @@ const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 // With the layered predicate in mergedEntries.ts, an orphan flag
 // merely makes a ghost ELIGIBLE for rendering; rules 4 (timestamp
 // gate) and 5 (sidecar shape) still gate final visibility, and
-// rule 3 hides ghosts whose `turnId === currentTurnId`. So during
-// healthy operation, even a tool that runs tens of seconds doesn't
-// visibly orphan: the semantic reducer keeps `currentTurn` alive
-// across pending tools (see hasPendingSemanticTools in
-// semantic/helpers.ts), and rule 3 hides any ghost whose turn is
-// still active. The TTL here is the failsafe boundary for "how
-// long before we conclude JSONL had its chance" — reachable only
+// rule 3 hides ghosts whose turn id is already owned by semantic
+// current/history. So during healthy operation, even a tool that runs
+// tens of seconds doesn't visibly orphan: the semantic reducer keeps
+// `currentTurn` alive across pending tools (see
+// hasPendingSemanticTools in semantic/helpers.ts), and archived
+// semantic history continues to own completed turns while JSONL
+// catches up. The TTL here is the failsafe boundary for "how long
+// before we conclude JSONL had its chance" — reachable only
 // when currentTurn has cleared and JSONL has genuinely stalled.
 //
 // 30000ms matches atp's library default and is the right balance:
