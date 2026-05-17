@@ -25,7 +25,7 @@ import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js
 import { STATE_FILE } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
-import { createMainWindow, focusMainWindow } from '@main/window/mainWindow.js'
+import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
@@ -36,6 +36,7 @@ import { initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
+import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 
 // Main process — thin Electron host.
 //
@@ -81,6 +82,7 @@ const pasteDebugJournals = new PasteDebugJournalRegistry()
 const worktreeActivityIndex = new WorktreeActivityIndex()
 const builtInMcpHost = new BuiltInMcpHttpHost()
 const orchestrationBridge = new OrchestrationBridge()
+const aiWorkspaceRegistry = new AiWorkspaceRegistry()
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -214,6 +216,18 @@ async function startApp(): Promise<void> {
   manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost)
   builtInMcpHost.setDependencies({
     orchestrationBridge,
+    aiWorkspaceRegistry,
+    openAiWorkspace: workspaceId => {
+      // WHY this is a one-way UI request rather than a main-owned UI state:
+      //
+      // MCP tools run in main because providers talk to the built-in MCP host
+      // there, but the Global Editor overlay is renderer-owned workspace UI.
+      // Main validates the workspace exists through the registry, then emits a
+      // narrow "open this id" request. The renderer decides how to present it,
+      // preserving the existing rule that layout/chrome state stays renderer
+      // local instead of turning main into a second UI store.
+      sendToMainWindow('ai-workspace:open-request', { workspaceId })
+    },
     sessionManager: manager,
   })
   performanceService.mark('app.main.sessionManager.created')
@@ -227,6 +241,7 @@ async function startApp(): Promise<void> {
     pasteDebugJournals,
     worktreeActivityIndex,
     orchestrationBridge,
+    aiWorkspaceRegistry,
   })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()

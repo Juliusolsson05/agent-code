@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
 import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
+import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import {
@@ -20,7 +21,14 @@ type SessionRegistration = {
 
 export type BuiltInMcpDependencies = {
   orchestrationBridge?: OrchestrationBridge
+  aiWorkspaceRegistry?: AiWorkspaceRegistry
+  openAiWorkspace?: (workspaceId: string) => void
   sessionManager?: SessionManager
+}
+
+function envFlag(name: string): boolean {
+  const value = process.env[name]
+  return value === '1' || value === 'true' || value === 'yes'
 }
 
 export class BuiltInMcpHttpHost {
@@ -88,7 +96,18 @@ export class BuiltInMcpHttpHost {
     cwd: string
     domains: readonly BuiltInMcpDomain[] | undefined
   }): BuiltInMcpServerConfig[] {
-    const domains = normalizeBuiltInMcpDomains(scope.domains)
+    const domains = normalizeBuiltInMcpDomains(scope.domains).filter(domain => {
+      if (domain !== 'ping') return true
+      // WHY ping is environment-gated instead of being a normal MCP domain:
+      //
+      // The ping tool is a bridge smoke test, not product behavior. Leaving it
+      // available in ordinary sessions teaches agents a useless capability and
+      // creates a precedent that every diagnostic endpoint is fair game for
+      // model-visible tools. We keep the string in the type system so older
+      // persisted dev sessions deserialize cleanly, but production launches
+      // silently drop it unless a developer opted in for bridge testing.
+      return envFlag('AGENT_CODE_MCP_PING') || envFlag('AGENT_CODE_DEV_DEBUG')
+    })
     if (domains.length === 0) return []
     if (!this.server || this.port === null) {
       throw new Error('Built-in MCP host must be started before registering a session')

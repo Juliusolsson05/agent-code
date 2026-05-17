@@ -140,7 +140,8 @@ export const sessionCommands: CommandDef[] = [
     title: 'Enable Built-in MCP Ping',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code built-in MCP access.\n\n**Use when:** You want to verify the new MCP bridge for this pane.\n\n**Notes:** Adds the ping domain only; orchestration tools are implemented separately.',
     keywords: ['mcp', 'server', 'built-in', 'ping', 'reload', 'agent', 'claude', 'codex'],
-    when: ({ workspace }) => {
+    when: ({ workspace, flags }) => {
+      if (!flags.devDebugEnabled) return false
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
@@ -170,6 +171,45 @@ export const sessionCommands: CommandDef[] = [
           err instanceof Error && err.message.length > 0
             ? err.message
             : 'Built-in MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
+    id: 'enable-ai-workspace-mcp',
+    title: 'Enable AI Workspace MCP',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Adds the AI Workspace domain only; orchestration agents can use it but it remains a separate MCP capability.',
+    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'reload', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'ai_workspace' as const]))
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(newSessionId, 'Reloaded with AI Workspace MCP')
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'AI Workspace MCP reload failed'
         workspace.showPaneToast(sessionId, message)
       }
     },
