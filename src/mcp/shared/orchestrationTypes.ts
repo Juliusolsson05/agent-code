@@ -21,9 +21,59 @@ export type OrchestrationListAgentsRequest = {
   runId?: string
 }
 
+export type OrchestrationReadAgentRequest = {
+  requestId: string
+  type: 'read-agent'
+  parentSessionId: string
+  sessionId: string
+  maxMessages?: number
+}
+
+export type OrchestrationReadRunOutputsRequest = {
+  requestId: string
+  type: 'read-run-outputs'
+  parentSessionId: string
+  runId?: string
+  maxMessagesPerAgent?: number
+}
+
+export type OrchestrationCloseAgentRequest = {
+  requestId: string
+  type: 'close-agent'
+  parentSessionId: string
+  sessionId: string
+}
+
+export type OrchestrationCloseRunRequest = {
+  requestId: string
+  type: 'close-run'
+  parentSessionId: string
+  runId?: string
+}
+
 export type OrchestrationRendererRequest =
   | OrchestrationCreateAgentRequest
   | OrchestrationListAgentsRequest
+  | OrchestrationReadAgentRequest
+  | OrchestrationReadRunOutputsRequest
+  | OrchestrationCloseAgentRequest
+  | OrchestrationCloseRunRequest
+
+export type OrchestrationLifecycleState =
+  | 'created'
+  | 'prompt_sent'
+  | 'running'
+  | 'waiting'
+  | 'completed'
+  | 'failed'
+  | 'closed'
+  | 'interrupted'
+
+export type OrchestrationAgentMessage = {
+  role: 'user' | 'assistant'
+  text: string
+  timestamp?: string
+}
 
 export type OrchestrationAgentRecord = {
   sessionId: string
@@ -34,6 +84,30 @@ export type OrchestrationAgentRecord = {
   orchestrationRootId: string
   orchestrationRunId?: string
   orchestrationRole?: string
+  lifecycleState?: OrchestrationLifecycleState
+  createdAt?: number
+  lastActivityAt?: number
+  completedAt?: number
+  lastPromptSubmittedAt?: number
+  promptSubmissionCount?: number
+  promptSubmitted?: boolean
+  statusSummary?: string
+  errorSummary?: string
+  latestAssistantText?: string
+  finalAssistantText?: string
+  messageCount?: number
+}
+
+export type OrchestrationAgentOutput = {
+  agent: OrchestrationAgentRecord
+  messages: OrchestrationAgentMessage[]
+  latestAssistantText?: string
+  finalAssistantText?: string
+}
+
+export type OrchestrationCloseResult = {
+  closedSessionIds: string[]
+  skippedSessionIds?: string[]
 }
 
 export type OrchestrationRendererResponse =
@@ -48,6 +122,24 @@ export type OrchestrationRendererResponse =
       ok: true
       type: 'list-agents'
       agents: OrchestrationAgentRecord[]
+    }
+  | {
+      requestId: string
+      ok: true
+      type: 'read-agent'
+      output: OrchestrationAgentOutput
+    }
+  | {
+      requestId: string
+      ok: true
+      type: 'read-run-outputs'
+      outputs: OrchestrationAgentOutput[]
+    }
+  | {
+      requestId: string
+      ok: true
+      type: 'close-agent' | 'close-run'
+      result: OrchestrationCloseResult
     }
   | {
       requestId: string

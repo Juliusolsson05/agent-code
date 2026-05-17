@@ -306,11 +306,13 @@ function registerOrchestrationTools(
 
       if (args.prompt && args.prompt.trim().length > 0) {
         await submitPrompt(manager, agent.sessionId, args.prompt)
+        bridge.notePromptSubmitted(agent.sessionId)
       }
 
       return toolText({
         ok: true,
-        agent,
+        agent: (await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }).catch(() => [agent]))
+          .find(item => item.sessionId === agent.sessionId) ?? agent,
         promptSubmitted: Boolean(args.prompt && args.prompt.trim().length > 0),
       })
     },
@@ -337,6 +339,7 @@ function registerOrchestrationTools(
         })
       }
       await submitPrompt(manager, args.sessionId, args.prompt)
+      dependencies.orchestrationBridge?.notePromptSubmitted(args.sessionId)
       return toolText({ ok: true, sessionId: args.sessionId })
     },
   )
@@ -367,6 +370,200 @@ function registerOrchestrationTools(
       return toolText({ ok: true, agents })
     },
   )
+
+  server.registerTool(
+    'orchestration_read_agent',
+    {
+      title: 'Read Orchestration Agent Output',
+      description:
+        'Reads clean user-visible output from one orchestration-created child agent. Returns visible messages and latest/final assistant text without provider-internal event noise.',
+      inputSchema: {
+        sessionId: z.string(),
+        maxMessages: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async args => {
+      const bridge = dependencies.orchestrationBridge
+      if (!bridge) {
+        return toolText({
+          ok: false,
+          error: 'orchestration_unavailable',
+          message: 'Agent Code orchestration services are not available.',
+        })
+      }
+      let readError: unknown = null
+      const output = await bridge.readAgent({
+        parentSessionId: scope.sessionId,
+        sessionId: args.sessionId,
+        maxMessages: args.maxMessages,
+      }).catch(err => {
+        readError = err
+        return null
+      })
+      if (!output) {
+        return toolText({
+          ok: false,
+          error: 'orchestration_read_failed',
+          message: readError instanceof Error && readError.message.length > 0
+            ? readError.message
+            : 'Could not read orchestration agent output.',
+        })
+      }
+      return toolText({ ok: true, output })
+    },
+  )
+
+  server.registerTool(
+    'orchestration_read_run_outputs',
+    {
+      title: 'Read Orchestration Run Outputs',
+      description:
+        'Reads clean user-visible outputs from every orchestration child agent in this parent session, optionally filtered by run id.',
+      inputSchema: {
+        runId: z.string().optional(),
+        maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async args => {
+      const bridge = dependencies.orchestrationBridge
+      if (!bridge) {
+        return toolText({
+          ok: false,
+          error: 'orchestration_unavailable',
+          message: 'Agent Code orchestration services are not available.',
+        })
+      }
+      const outputs = await bridge.readRunOutputs({
+        parentSessionId: scope.sessionId,
+        runId: args.runId,
+        maxMessagesPerAgent: args.maxMessagesPerAgent,
+      })
+      return toolText({ ok: true, outputs })
+    },
+  )
+
+  server.registerTool(
+    'orchestration_wait_agents',
+    {
+      title: 'Wait For Orchestration Agents',
+      description:
+        'Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs.',
+      inputSchema: {
+        runId: z.string().optional(),
+        sessionIds: z.array(z.string()).optional(),
+        timeoutMs: z.number().int().min(1000).max(600000).default(30000),
+        pollIntervalMs: z.number().int().min(250).max(10000).default(1000),
+        maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
+      },
+    },
+    async args => {
+      const bridge = dependencies.orchestrationBridge
+      if (!bridge) {
+        return toolText({
+          ok: false,
+          error: 'orchestration_unavailable',
+          message: 'Agent Code orchestration services are not available.',
+        })
+      }
+      const deadline = Date.now() + args.timeoutMs
+      let agents = await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId })
+      if (args.sessionIds && args.sessionIds.length > 0) {
+        const wanted = new Set(args.sessionIds)
+        agents = agents.filter(agent => wanted.has(agent.sessionId))
+      }
+      while (Date.now() < deadline && agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState))) {
+        await sleep(args.pollIntervalMs)
+        agents = await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId })
+        if (args.sessionIds && args.sessionIds.length > 0) {
+          const wanted = new Set(args.sessionIds)
+          agents = agents.filter(agent => wanted.has(agent.sessionId))
+        }
+      }
+      const outputs = await Promise.all(
+        agents.map(agent =>
+          bridge.readAgent({
+            parentSessionId: scope.sessionId,
+            sessionId: agent.sessionId,
+            maxMessages: args.maxMessagesPerAgent,
+          }).catch(() => null),
+        ),
+      )
+      return toolText({
+        ok: true,
+        done: !agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState)),
+        agents,
+        outputs: outputs.filter(output => output !== null),
+      })
+    },
+  )
+
+  server.registerTool(
+    'orchestration_close_agent',
+    {
+      title: 'Close Orchestration Agent',
+      description:
+        'Closes one orchestration-created child agent owned by this parent session. It cannot close unrelated workspace sessions.',
+      inputSchema: {
+        sessionId: z.string(),
+      },
+    },
+    async args => {
+      const bridge = dependencies.orchestrationBridge
+      if (!bridge) {
+        return toolText({
+          ok: false,
+          error: 'orchestration_unavailable',
+          message: 'Agent Code orchestration services are not available.',
+        })
+      }
+      const result = await bridge.closeAgent({
+        parentSessionId: scope.sessionId,
+        sessionId: args.sessionId,
+      })
+      return toolText({ ok: true, ...result })
+    },
+  )
+
+  server.registerTool(
+    'orchestration_close_run',
+    {
+      title: 'Close Orchestration Run',
+      description:
+        'Closes every orchestration-created child agent owned by this parent session, optionally filtered by run id. It cannot close unrelated workspace sessions.',
+      inputSchema: {
+        runId: z.string().optional(),
+      },
+    },
+    async args => {
+      const bridge = dependencies.orchestrationBridge
+      if (!bridge) {
+        return toolText({
+          ok: false,
+          error: 'orchestration_unavailable',
+          message: 'Agent Code orchestration services are not available.',
+        })
+      }
+      const result = await bridge.closeRun({
+        parentSessionId: scope.sessionId,
+        runId: args.runId,
+      })
+      return toolText({ ok: true, ...result })
+    },
+  )
+}
+
+function isOrchestrationAgentActive(state: string | undefined): boolean {
+  return (
+    state === undefined ||
+    state === 'created' ||
+    state === 'prompt_sent' ||
+    state === 'running' ||
+    state === 'waiting'
+  )
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 async function submitPrompt(
