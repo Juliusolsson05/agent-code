@@ -39,7 +39,9 @@ export function buildDispatchGroups(
   // to the same sessionId) and would lie about the visual hierarchy
   // ("this is in two places at once"). Same exclusivity invariant as
   // detached-vs-grid: each row belongs to exactly one bucket.
-  const pinnedSet = new Set(state.pinnedSessionIds)
+  const pinnedSet = new Set(
+    state.pinnedSessionIds.filter(id => state.sessions[id]?.kind !== 'terminal'),
+  )
 
   // The tab letter answers "which project group owns this row"; the
   // number answers "which visible dispatch item will cmd+N select".

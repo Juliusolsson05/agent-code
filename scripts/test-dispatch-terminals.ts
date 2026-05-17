@@ -124,6 +124,15 @@ assert.deepEqual(
   'Visible Dispatch rows should be the keyboard/command order: pins first, then grouped sessions',
 )
 
+assert.deepEqual(
+  buildDispatchGroups({
+    ...baseState,
+    pinnedSessionIds: ['terminal-grid'],
+  })[0]?.rows.map(row => row.sessionId),
+  ['agent-grid', 'terminal-grid', 'terminal-detached', 'agent-detached', 'agent-pinned'],
+  'A bad persisted terminal pin should not hide the terminal from grouped Dispatch rows',
+)
+
 assert.equal(
   commandTargetSessionIdForState(baseState),
   'terminal-grid',
