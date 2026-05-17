@@ -3,6 +3,7 @@ import { useCallback, useEffect } from 'react'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import { pruneSessionOwnership } from '@renderer/workspace/sessionOwnership'
+import { withNormalizedBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
@@ -76,7 +77,20 @@ export function useAutoSave(
       })),
       activeTabId: s.activeTabId,
       dispatchMode: pruned.dispatchMode,
-      sessions: pruned.sessions,
+      // WHY normalize MCP domains at the persistence boundary:
+      //
+      // The provider process only receives short-lived MCP URLs/tokens, but
+      // the renderer owns the durable domain names that should be re-enabled
+      // for this agent on reload. Normalizing here makes workspace.json a
+      // stable contract: duplicate domains, hand-edited junk, or removed
+      // experimental names cannot become durable state that future launches
+      // keep trying to inject.
+      sessions: Object.fromEntries(
+        Object.entries(pruned.sessions).map(([id, meta]) => [
+          id,
+          withNormalizedBuiltInMcpDomains(meta),
+        ]),
+      ),
       detachedSessions: pruned.detachedSessions,
       buried: pruned.buried,
       pinnedSessionIds: persistedPinnedSessionIds.length > 0

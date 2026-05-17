@@ -65,6 +65,7 @@ export function useProviderActions(
       const newSessionId = await sessionActions.replaceSession(meta.cwd, {
         kind: result.targetKind,
         resumeSessionId: result.targetProviderSessionId,
+        builtInMcpDomains: meta.builtInMcpDomains,
       })
       if (!newSessionId) return
 
@@ -102,6 +103,7 @@ export function useProviderActions(
       const newSessionId = await sessionActions.replaceSession(meta.cwd, {
         kind,
         resumeSessionId: meta.providerSessionId,
+        builtInMcpDomains: meta.builtInMcpDomains,
       })
       if (!newSessionId) return
       showPaneToast(

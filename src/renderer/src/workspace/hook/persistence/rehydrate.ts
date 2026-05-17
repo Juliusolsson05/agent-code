@@ -22,6 +22,7 @@ import type {
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import * as perf from '@renderer/performance/client'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 
@@ -349,10 +350,20 @@ export async function rehydrateWorkspace(
         })
         try {
           const kind: SessionKind = meta.kind ?? 'claude'
+          const builtInMcpDomains =
+            kind !== 'terminal'
+              ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)
+              : undefined
           // For terminal sessions with a persisted tmuxName, pass it
           // as recoverTmuxName so main re-attaches the alive tmux
           // session (or falls back to fresh spawn if it died). Agents
           // ignore recoverTmuxName at the main side; safe to omit.
+          //
+          // WHY MCP domains are threaded through rehydrate:
+          // workspace.json stores durable domain names; main mints fresh
+          // loopback URLs/tokens for every new provider process. If rehydrate
+          // respawns without the saved domains, the pane visually restores but
+          // its tool surface silently changes underneath the user.
           const { sessionId: newId, tmuxName: nextTmuxName } = await window.api.spawnSession({
             kind,
             cwd: meta.cwd,
@@ -360,6 +371,7 @@ export async function rehydrateWorkspace(
             dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+            builtInMcpDomains,
           })
           idMap.set(oldId, newId)
           // Carry the full meta forward — kind + providerSessionId +
@@ -369,6 +381,7 @@ export async function rehydrateWorkspace(
           // (recovered name when alive, fresh name when respawned).
           freshSessions[newId] = {
             ...meta,
+            ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
             ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
           }
           commitRehydratedState()
