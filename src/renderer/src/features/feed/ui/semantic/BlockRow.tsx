@@ -1,5 +1,12 @@
 import { memo } from 'react'
 
+import {
+  CodexApplyPatchRow,
+  CodexExecCommandRow,
+  CodexToolRow,
+  CodexWriteStdinRow,
+} from '@providers/codex/renderer/rows/CodexRows'
+import type { ToolUseBlock } from '@shared/types/transcript'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import {
   parseSemanticTodos,
@@ -12,6 +19,109 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
+
+function parseJsonRecord(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+const SIMPLE_JSON_ESCAPES: Record<string, string> = {
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+}
+
+function decodePartialJsonStringBody(raw: string, start: number): string {
+  let out = ''
+  let i = start
+  while (i < raw.length) {
+    const ch = raw[i]
+    if (ch === '"') return out
+    if (ch === '\\') {
+      if (i + 1 >= raw.length) return out
+      const esc = raw[i + 1]
+      if (esc === 'u') {
+        const hex = raw.slice(i + 2, i + 6)
+        if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) return out
+        out += String.fromCharCode(parseInt(hex, 16))
+        i += 6
+        continue
+      }
+      out += SIMPLE_JSON_ESCAPES[esc] ?? esc
+      i += 2
+      continue
+    }
+    out += ch
+    i += 1
+  }
+  return out
+}
+
+function extractPartialJsonStringMember(raw: string, keys: string[]): string | null {
+  for (const key of keys) {
+    const marker = `"${key}"`
+    const keyAt = raw.indexOf(marker)
+    if (keyAt === -1) continue
+    const colonAt = raw.indexOf(':', keyAt + marker.length)
+    if (colonAt === -1) continue
+    let valueAt = colonAt + 1
+    while (valueAt < raw.length && /\s/.test(raw[valueAt] ?? '')) valueAt += 1
+    if (raw[valueAt] !== '"') continue
+    return decodePartialJsonStringBody(raw, valueAt + 1)
+  }
+  return null
+}
+
+function partialApplyPatchInput(raw: string): Record<string, unknown> {
+  if (raw.includes('*** Begin Patch')) return { raw }
+  const patch = extractPartialJsonStringMember(raw, [
+    'cmd',
+    'patch',
+    'input',
+    'raw',
+    'arguments',
+  ])
+  return patch && patch.includes('*** Begin Patch') ? { raw: patch } : { raw, arguments: raw }
+}
+
+function codexLiveToolInput(block: SemanticLiveTurn['blocks'][number]): unknown {
+  const raw = block.argumentsJson ?? block.inputJson ?? ''
+  if (block.parsedInput) return block.parsedInput
+  const parsed = raw ? parseJsonRecord(raw) : null
+  if (parsed) return parsed
+
+  // WHY apply_patch keeps a raw fallback:
+  // Codex can surface patch application as a custom/freeform tool
+  // call where the payload is the patch grammar itself, not a JSON
+  // object. The committed Codex renderer already knows how to parse
+  // `{ raw: "*** Begin Patch..." }`; feeding the live block through
+  // the same shape gives streaming patch calls the same file/diff
+  // card as committed transcript rows instead of showing a giant raw
+  // preformatted argument blob.
+  if (block.toolName === 'apply_patch' && raw) return partialApplyPatchInput(raw)
+
+  return raw ? { raw, arguments: raw } : {}
+}
+
+function codexLiveToolUseBlock(block: SemanticLiveTurn['blocks'][number]): ToolUseBlock {
+  return {
+    type: 'tool_use',
+    id: block.callId ?? block.toolUseId ?? block.itemId ?? `live:${block.blockIndex}`,
+    name: block.toolName ?? block.kind,
+    input: codexLiveToolInput(block),
+  }
+}
 
 // Single live-block renderer — this is the big dispatch for the
 // semantic streaming path. Each SemanticLiveTurn block is one of a
@@ -83,38 +193,27 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   // gap. Ordered from highest-frequency (function_call) to lowest.
 
   if (block.kind === 'function_call' || block.kind === 'custom_tool_call') {
-    const label = block.toolName ?? block.kind
-    const argsText =
-      block.argumentsJson ?? block.inputJson ?? '(no arguments yet)'
-    const statusBadge = block.status
-      ? block.status.replace(/_/g, ' ')
-      : block.finalized
-        ? 'done'
-        : 'running'
-    return (
-      <MarkerRow marker="⏺">
-        <div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
-            <span className="text-accent font-semibold">{label}</span>
-            <span className="text-muted text-[11px] uppercase tracking-wider">
-              {statusBadge}
-            </span>
-          </div>
-          <MarkerRow marker="⎿" tone="muted">
-            <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
-              {argsText || '(waiting for input…)'}
-            </pre>
-          </MarkerRow>
-          {block.parseError ? (
-            <MarkerRow marker="⎿" tone="muted">
-              <div className="text-danger text-[12px] leading-[1.55]">
-                invalid tool input: {block.parseError}
-              </div>
-            </MarkerRow>
-          ) : null}
-        </div>
-      </MarkerRow>
-    )
+    const liveTool = codexLiveToolUseBlock(block)
+
+    // WHY live Codex calls reuse committed Codex row renderers:
+    // The broken 18:54 transcript showed the live plane rendering
+    // provider internals (`exec_command`, `write_stdin`, raw JSON)
+    // while the committed plane had richer cards for the same work.
+    // That split is exactly how streaming and final rendering drift
+    // apart. Convert the live semantic block into the same
+    // ToolUseBlock shape the committed transcript uses, then delegate
+    // to the committed Codex card. Streaming now means "same card
+    // with partial input" instead of a separate raw-JSON UI.
+    if (liveTool.name === 'apply_patch') {
+      return <CodexApplyPatchRow block={liveTool} />
+    }
+    if (liveTool.name === 'exec_command') {
+      return <CodexExecCommandRow block={liveTool} />
+    }
+    if (liveTool.name === 'write_stdin') {
+      return <CodexWriteStdinRow block={liveTool} />
+    }
+    return <CodexToolRow block={liveTool} />
   }
 
   if (

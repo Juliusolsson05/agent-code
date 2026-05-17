@@ -1,3 +1,16 @@
+// TEMPORARY RENDERING REGRESSION SCRIPT.
+//
+// WHY this file is allowed to exist even though it is not the testing
+// shape we want long-term:
+// these focused scripts were added during the 2026-05 rendering rewrite
+// because we needed executable guards immediately while the feed ownership
+// bugs were still active. They are intentionally small and useful, but
+// they are also messy compared with the proper unit/integration suite we
+// want: no standard runner, no shared fixtures, and too much local test
+// scaffolding per file. Keep them until #182 establishes the app-wide
+// testing suite and #183 migrates/expands the rendering regression coverage
+// into that structure.
+
 import assert from 'node:assert/strict'
 
 import type { Entry } from '../src/shared/types/transcript'
@@ -13,6 +26,7 @@ const DUPED_TEXT =
 function committedAssistantText(entries: Entry[]): CommittedAssistantText {
   const keys = new Set<string>()
   const texts = new Set<string>()
+  const normalizedTexts = new Set<string>()
 
   for (const entry of entries) {
     if (entry.type !== 'assistant') continue
@@ -31,11 +45,12 @@ function committedAssistantText(entries: Entry[]): CommittedAssistantText {
       const item = block as Record<string, unknown>
       if (item.type !== 'text' || typeof item.text !== 'string' || !item.text) continue
       texts.add(item.text)
+      normalizedTexts.add(item.text.normalize('NFKC').replace(/\s+/g, ' ').trim())
       for (const turnId of turnIds) keys.add(`${turnId}\u0000${item.text}`)
     }
   }
 
-  return { keys, texts }
+  return { keys, texts, normalizedTexts }
 }
 
 function liveTurn(turnId: string, text: string): SemanticLiveTurn {
@@ -108,6 +123,7 @@ function liveTurn(turnId: string, text: string): SemanticLiveTurn {
   const units = buildSemanticRenderUnits(
     liveTurn('resp_009dff73e265ae8a016a08aea6841081918e34c47fabb83059', DUPED_TEXT),
     new Map(),
+    new Map(),
     committedAssistantText(committed),
   )
 
@@ -132,6 +148,7 @@ function liveTurn(turnId: string, text: string): SemanticLiveTurn {
   const units = buildSemanticRenderUnits(
     liveTurn('same-turn', DUPED_TEXT),
     new Map(),
+    new Map(),
     committedAssistantText(committed),
   )
 
@@ -155,6 +172,7 @@ function liveTurn(turnId: string, text: string): SemanticLiveTurn {
 
   const units = buildSemanticRenderUnits(
     liveTurn('new-turn', `${DUPED_TEXT} Extra live text still streaming.`),
+    new Map(),
     new Map(),
     committedAssistantText(committed),
   )

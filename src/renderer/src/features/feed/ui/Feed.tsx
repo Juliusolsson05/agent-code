@@ -8,12 +8,8 @@ import {
 } from 'react'
 
 import {
-  isCompactBoundaryEntry,
-  isCompactSummaryEntry,
-  isConversationEntry,
   type Entry,
 } from '@shared/types/transcript'
-import { asRecord } from '@shared/lib/asRecord'
 
 import type {
   SemanticLiveTurn,
@@ -30,16 +26,15 @@ import {
 import {
   type AgentProvider,
   type ScrollInfo,
-  type VisibleDecision,
   type DebugVisibleRow,
 } from '@renderer/features/feed/types'
 import { scrollPositions } from '@renderer/features/feed/scroll'
 import {
   buildToolUseIndex,
   buildToolResultIndex,
-  debugKeyForEntry,
   debugLabelForEntry,
 } from '@renderer/features/feed/lib/helpers'
+import { deriveFeedRenderModel } from '@renderer/features/feed/model/renderModel'
 import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
 import {
   EAGER_TAIL,
@@ -211,8 +206,8 @@ type Props = {
 //
 //   1. `Feed` itself is memoized. When the parent re-renders for a reason
 //      unrelated to feed content (user typing, focus toggle, split resize,
-//      picker visibility change), Feed sees the same `entries` reference,
-//      same `streamingScreen`, etc., and React.memo's default shallow
+//      picker visibility change), Feed sees the same committed-entry
+//      and semantic-turn references, and React.memo's default shallow
 //      compare bails the entire subtree out. Zero markdown work happens.
 //
 //   2. Every row component (`EntryRow`, `ConversationRow`, `TextProse`,
@@ -228,11 +223,10 @@ type Props = {
 // `text` string is the single biggest win because ReactMarkdown itself
 // has no memo and re-parses on every call.
 //
-// What is NOT memoized on purpose: the StreamingRow. It WANTS to re-run
-// on every screen frame — that's literally the streaming preview. But
-// even there, `StreamingProse` is memoed by the extracted text string,
-// so identical consecutive frames (which are common — CC re-renders its
-// screen buffer without the content changing) are free.
+// Live semantic rows are not flattened into committed entries on purpose.
+// They re-render when the semantic reducer changes the active/history
+// turns, but the markdown leaf (`StreamingProse`) is still memoed by
+// text so identical consecutive semantic ticks are cheap.
 
 export const Feed = memo(FeedImpl)
 
@@ -267,18 +261,13 @@ function FeedImpl({
   // reaching up the tree. TileLeaf's wrapper is just a flex cell and
   // no longer sets overflow-auto; see TileLeaf.tsx for the pair.
   //
-  // Why this is load-bearing: during active streaming, `streamingScreen`
-  // updates at ~60Hz. A naive useEffect([streamingScreen]) that calls
-  // scrollIntoView({block:'end'}) every time would yank the viewport
-  // to the bottom on every frame, making it impossible for the user
-  // to scroll up and read earlier content. Even when NOT streaming,
-  // the same effect fires whenever the streaming-ish prop flickers —
-  // which can happen unexpectedly if some other piece of state (e.g.
-  // the queue handler forcing awaitingAssistant=true from a phantom
-  // backlog) keeps the prop live. Worth repeating the user's
-  // diagnosis: "scrolling doesn't even work, it snaps me back to the
-  // bottom super glitchly." That's exactly the behavior the old
-  // effect produced.
+  // Why this is load-bearing: active semantic turns can update many
+  // times per second. A naive "scroll to bottom on every render" effect
+  // yanks the viewport down whenever text/tool deltas arrive, making it
+  // impossible for the user to scroll up and read earlier content.
+  // Worth preserving the original production diagnosis: "scrolling
+  // doesn't even work, it snaps me back to the bottom super glitchly."
+  // That's exactly the behavior the old unconditional effect produced.
   //
   // The fix is two-part:
   //   1. Track "is the user near the bottom right now" in a ref
@@ -462,18 +451,14 @@ function FeedImpl({
   ])
 
   // Auto-scroll on content changes, but ONLY when sticky. The effect
-  // runs on every change that would grow the feed (a new entry) or
-  // move the streaming tail (a new streamingScreen snapshot). If the
+  // runs on every change that would grow the feed (a new committed
+  // entry) or move the semantic streaming tail. If the
   // user is scrolled up, we skip — they're reading earlier content
   // and we don't want to yank them back.
   //
-  // Semantic streaming (the proxy-driven live turn) also grows the
-  // bottom of the feed without touching `streamingScreen` or
-  // `entries`. Include a cheap fingerprint of the current semantic
-  // turn (its text length plus the count of blocks) so the effect
-  // re-runs when semantic deltas land — otherwise a Codex/proxy
-  // session that never populates the legacy screen snapshot won't
-  // follow the tail even when the user is at the bottom.
+  // Include cheap fingerprints of the current semantic turn and
+  // bounded semantic history so the effect re-runs when semantic
+  // deltas land, not only when committed entries append.
   const semanticTurnSignal = semanticTurn
     ? `${semanticTurn.turnId}:${semanticTurn.text.length}:${Object.keys(semanticTurn.blocks).length}`
     : ''
@@ -683,107 +668,6 @@ function FeedImpl({
     if (onScrollInfo) onScrollInfo({ fraction: 0 })
   }, [onScrollInfo, scrollToLatestRequest, sessionId])
 
-  // Visible entries skip system/meta noise by default. isMeta entries are
-  // CC's system-injected user-role
-  // messages: task-notification results from subagents, auto-continue
-  // hints ("Continue from where you left off."), system-reminder
-  // payloads, etc. They carry `isMeta: true` on the entry but pass
-  // the isConversationEntry check because they have type='user' and
-  // a real message object. Without this filter, a background agent's
-  // completion notification would render as a full UserBand in the
-  // feed with raw <task-notification> XML visible — exactly the bug
-  // the user reported.
-  const visibleDecisions = useMemo<VisibleDecision[]>(() => {
-    const startedAt = performance.now()
-    const decisions = entries.map<VisibleDecision>((entry, index) => {
-        if (isCompactBoundaryEntry(entry)) {
-          return {
-            key: debugKeyForEntry(entry, index),
-            entry,
-            visible: true,
-            reason: 'compact_boundary',
-          }
-        }
-        if (isCompactSummaryEntry(entry)) {
-          return {
-            key: debugKeyForEntry(entry, index),
-            entry,
-            visible: true,
-            reason: 'compact_summary',
-          }
-        }
-        if (!isConversationEntry(entry)) {
-          return {
-            key: debugKeyForEntry(entry, index),
-            entry,
-            visible: false,
-            reason: 'not_conversation',
-          }
-        }
-        if (asRecord(entry)?.isMeta === true) {
-          return {
-            key: debugKeyForEntry(entry, index),
-            entry,
-            visible: false,
-            reason: 'meta_filtered',
-          }
-        }
-        return {
-          key: debugKeyForEntry(entry, index),
-          entry,
-          visible: true,
-          reason: 'conversation',
-        }
-      })
-    const durationMs = performance.now() - startedAt
-    if (durationMs >= 10 || entries.length >= 500) {
-      perf.metric('feed.visibleDecisions.build', durationMs, 'sample', {
-        sessionId,
-        entries: entries.length,
-        decisions: decisions.length,
-      })
-    }
-    return decisions
-  }, [entries, sessionId])
-
-  const visible = useMemo(
-    () => visibleDecisions.filter(item => item.visible).map(item => item.entry),
-    [visibleDecisions],
-  )
-
-  const committedClaudeMessageTurnIds = useMemo(() => {
-    const ids = new Set<string>()
-    for (const entry of entries) {
-      const record = asRecord(entry)
-      const message = asRecord(record?.message)
-      const messageId = message?.id
-      if (typeof messageId === 'string') ids.add(messageId)
-    }
-    return ids
-  }, [entries])
-
-  // Live view is owned 1:1 by `semanticTurn` now — the old Codex-only
-  // suppression helper (`shouldSuppressSemanticTurnForCommittedTail`)
-  // was deleted in 2026-04-20 because the ghost reducer handles the
-  // duplicate-render class at its source. See Feed.tsx history and
-  // docs/superpowers/plans/2026-04-20-rendering-fixes.md Task 6.
-  const renderedSemanticTurn = semanticTurn
-  // Only Claude message ids suppress an entire archived semantic
-  // turn. Claude commits one assistant message whose message.id is
-  // the turn id, so the durable row owns the whole archived live
-  // copy. Codex is different: rollout commits one response_item at a
-  // time and every mapped entry can carry the same codexTurnId. If a
-  // single tool_use response_item suppressed the whole archived turn,
-  // MCP/client-tool sequences would drop the assistant text and
-  // later tool rows until JSONL fully caught up. Codex duplicate
-  // prevention is therefore per-block inside SemanticStreamingTurn
-  // (committed tool ids + committed assistant text keys), not a
-  // turn-level filter here.
-  const renderedSemanticHistory = useMemo(
-    () => semanticHistory.filter(turn => !committedClaudeMessageTurnIds.has(turn.turnId)),
-    [committedClaudeMessageTurnIds, semanticHistory],
-  )
-
   // Index EVERY tool_use block (not just the visible set) so tool_result
   // lookups still resolve even when some synthetic entries have been
   // filtered out. The index is cheap to
@@ -801,86 +685,50 @@ function FeedImpl({
     [entries, toolResultIndexProp],
   )
 
-  const hasSemanticStreaming =
-    renderedSemanticTurn !== null || renderedSemanticHistory.length > 0
-  const shouldShowWorkIndicator = streamPhase !== 'idle'
-
-  const renderedRows = useMemo<DebugVisibleRow[]>(() => {
+  const renderModel = useMemo(() => {
     const startedAt = performance.now()
-    if (visible.length === 0 && !hasSemanticStreaming) {
-      const rows: DebugVisibleRow[] = [{
-        key: 'empty',
-        slot: 'empty',
-        label: provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…',
-      }]
-      perf.metric('feed.renderedRows.build', performance.now() - startedAt, 'sample', {
-        sessionId,
-        entries: entries.length,
-        visible: visible.length,
-        rows: rows.length,
-      })
-      return rows
-    }
-    const rows: DebugVisibleRow[] = visibleDecisions
-      .filter(item => item.visible)
-      .map(item => ({
-        key: `entry:${item.key}`,
-        slot: 'entry',
-        label: debugLabelForEntry(item.entry),
-      }))
-    for (const turn of renderedSemanticHistory) {
-      rows.push({
-        key: `semantic-history:${turn.turnId}`,
-        slot: 'semantic',
-        label: `semantic history ${turn.turnId.slice(0, 12)} · ${turn.source ?? 'unknown'}`,
-      })
-    }
-    if (renderedSemanticTurn != null) {
-      rows.push({
-        key: `semantic:${renderedSemanticTurn.turnId}`,
-        slot: 'semantic',
-        label: `semantic turn ${renderedSemanticTurn.turnId.slice(0, 12)} · ${renderedSemanticTurn.source ?? 'unknown'}`,
-      })
-    }
-    if (shouldShowWorkIndicator) {
-      rows.push({
-        key: `work:${streamPhase}:${streamPhasePendingToolUseId ?? 'none'}`,
-        slot: 'work',
-        label:
-          streamPhasePendingToolName && (
-            streamPhase === 'tool-input' ||
-            streamPhase === 'tool-use' ||
-            streamPhase === 'awaiting-tool'
-          )
-            ? `work ${streamPhase} · ${streamPhasePendingToolName}`
-            : `work ${streamPhase}`,
-      })
-    }
+    const model = deriveFeedRenderModel({
+      provider,
+      entries,
+      semanticHistory,
+      semanticTurn,
+      streamPhase,
+      streamPhasePendingToolName,
+      streamPhasePendingToolUseId,
+      committedToolUseIndex: toolUseIndex,
+      committedToolResultIndex: toolResultIndex,
+    })
     const durationMs = performance.now() - startedAt
     if (durationMs >= 10 || entries.length >= 500) {
-      perf.metric('feed.renderedRows.build', durationMs, 'sample', {
+      perf.metric('feed.renderModel.build', durationMs, 'sample', {
         sessionId,
         entries: entries.length,
-        visible: visible.length,
-        rows: rows.length,
-        hasSemanticStreaming,
+        visible: model.visibleEntries.length,
+        rows: model.debugRows.length,
+        hasSemanticStreaming: model.hasSemanticStreaming,
       })
     }
-    return rows
+    return model
   }, [
-    entries.length,
-    hasSemanticStreaming,
+    entries,
     provider,
-    renderedSemanticTurn,
-    renderedSemanticHistory,
+    semanticHistory,
+    semanticTurn,
     sessionId,
-    shouldShowWorkIndicator,
     streamPhase,
     streamPhasePendingToolName,
     streamPhasePendingToolUseId,
-    visible.length,
-    visibleDecisions,
+    toolResultIndex,
+    toolUseIndex,
   ])
+
+  const visibleDecisions = renderModel.visibleDecisions
+  const visible = renderModel.visibleEntries
+  const renderedSemanticHistory = renderModel.renderedSemanticHistory
+  const renderedSemanticTurn = renderModel.renderedSemanticTurn
+  const hasSemanticStreaming = renderModel.hasSemanticStreaming
+  const shouldShowWorkIndicator = renderModel.shouldShowWorkIndicator
+  const renderedRows = renderModel.debugRows
 
   const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
   const previousRenderDebugSignatureRef = useRef<string | null>(null)
@@ -1024,14 +872,11 @@ function FeedImpl({
           {/* ONE owner rule for live assistant text.
            *
            * Live text renders exclusively from the semantic channel
-           * (claude-code-headless / codex-headless). The render-time
-           * regex extractor over the raw TUI screen (`<StreamingRow>`)
-           * was removed because it was a second producer for the same
-           * feed slot — the structural cause of:
-           *   - double-render on resume (EntryRow + StreamingRow both
-           *     showing the last assistant message),
-           *   - stale previous-turn text rendered under the new user
-           *     message for ~seconds after submit.
+           * (claude-code-headless / codex-headless). The old
+           * render-time regex extractor over raw TUI screen paint was
+           * removed because it was a second producer for the same feed
+           * slot — the structural cause of double-render on resume and
+           * stale previous-turn text under new user messages.
            *
            * Non-proxy sessions still get live streaming: the headless
            * packages publish screen-derived semantic deltas (labelled
@@ -1047,6 +892,7 @@ function FeedImpl({
           ))}
           {renderedSemanticTurn != null && (
             <SemanticStreamingTurn
+              key={`semantic:${renderedSemanticTurn.turnId}`}
               turn={renderedSemanticTurn}
               committedEntries={entries}
             />
@@ -1091,7 +937,7 @@ function FeedImpl({
 //
 // The entire row surface (LazyEntry, EntryRow, ConversationRow, Block,
 // ImageBlockRow, CompactBoundaryRow, CompactSummaryRow, SystemRow,
-// ToolUseRow, ToolResultRow, TruncatedOutputRow, UserBand, ToolBand,
+// ToolUseRow, ToolResultRow, TruncatedOutputRow, UserBand,
 // plus the EAGER_TAIL constant) moved to ./rows/. Each component lives
 // in its own file, and the long WHY comments (lazy mount rationale,
 // the "CRITICAL: don't wrap tool_results in UserBand" gotcha, the

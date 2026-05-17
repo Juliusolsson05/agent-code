@@ -1,4 +1,4 @@
-import type { ToolUseBlock } from '@shared/types/transcript'
+import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
 import { classifySemanticToolActivity } from '@renderer/features/feed/lib/helpers'
@@ -28,6 +28,161 @@ export type CommittedAssistantText = {
    * finalized/completed live text blocks, so active streaming text is
    * not hidden just because an older committed answer shares a prefix. */
   texts: ReadonlySet<string>
+  /** Same ownership check as `texts`, but after display-normalizing
+   *  whitespace and unicode form.
+   *
+   * WHY this has to exist:
+   * Codex can commit a response through rollout while the live
+   * semantic history row was built from a different stream. Those
+   * streams can preserve line wrapping / spacing differently even
+   * when the user-visible sentence is the same. Exact string
+   * suppression is still the safest first check, but the recurring
+   * "old assistant sentence stuck at the bottom" failure is caused by
+   * an archived semantic row surviving committed catch-up because the
+   * two copies are textually equivalent rather than byte-identical.
+   * Normalize only whitespace/unicode, not prefixes or fuzzy
+   * substrings, so active streaming text is not hidden by a merely
+   * similar older answer. */
+  normalizedTexts: ReadonlySet<string>
+}
+
+export function normalizeCommittedAssistantText(text: string): string {
+  return text
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function buildCommittedAssistantText(entries: Entry[]): CommittedAssistantText {
+  const keys = new Set<string>()
+  const texts = new Set<string>()
+  const normalizedTexts = new Set<string>()
+  for (const entry of entries) {
+    if (entry.type !== 'assistant') continue
+    const assistantEntry = entry as {
+      codexTurnId?: unknown
+      message?: { id?: unknown; content?: unknown }
+    }
+    const turnIds = [
+      typeof assistantEntry.message?.id === 'string' ? assistantEntry.message.id : null,
+      typeof assistantEntry.codexTurnId === 'string' ? assistantEntry.codexTurnId : null,
+    ].filter((id): id is string => Boolean(id))
+    const content = assistantEntry.message?.content
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      const item = block as Record<string, unknown>
+      if (item.type !== 'text' || typeof item.text !== 'string' || !item.text) continue
+      // WHY text ownership does not require a committed turn id:
+      // Codex rollout rows can be perfectly good visible assistant
+      // transcript entries while still lacking both `message.id` and
+      // `codexTurnId`. The 2026-05-16T18:49 bundle reproduced the
+      // bottom-stuck row with exactly that shape: committed text was
+      // visible above, but `buildCommittedAssistantText` skipped it
+      // before adding it to `texts`, so the archived rollout semantic
+      // copy survived as `semantic-history:*`. Turn ids are needed
+      // only for the stricter key check; exact/normalized text
+      // ownership must include every visible committed assistant
+      // text block.
+      texts.add(item.text)
+      const normalized = normalizeCommittedAssistantText(item.text)
+      if (normalized) normalizedTexts.add(normalized)
+      for (const turnId of turnIds) {
+        keys.add(`${turnId}\u0000${item.text}`)
+      }
+    }
+  }
+  return { keys, texts, normalizedTexts }
+}
+
+export function semanticTurnHasRenderableContent(
+  turn: SemanticLiveTurn,
+  committedToolUseIndex?: Map<string, ToolUseBlock>,
+  committedToolResultIndex?: Map<string, ToolResultBlock>,
+  committedAssistantText?: CommittedAssistantText,
+): boolean {
+  // Compaction synthesis deliberately paints a placeholder instead
+  // of its raw XML body. That placeholder is real user-visible UI,
+  // so the render model must count the turn as renderable even if
+  // all semantic blocks are otherwise filtered.
+  if (turn.isCompactionSynthesis) return true
+
+  const blocks = Object.values(turn.blocks)
+  if (blocks.length === 0) {
+    if (!turn.text) return false
+    const normalizedText = normalizeCommittedAssistantText(turn.text)
+    return !(
+      committedAssistantText?.keys.has(`${turn.turnId}\u0000${turn.text}`) ||
+      committedAssistantText?.texts.has(turn.text) ||
+      (
+        normalizedText !== '' &&
+        committedAssistantText?.normalizedTexts.has(normalizedText)
+      )
+    )
+  }
+
+  return buildSemanticRenderUnits(
+    turn,
+    committedToolUseIndex,
+    committedToolResultIndex,
+    committedAssistantText,
+  ).length > 0
+}
+
+function semanticToolCorrelationId(block: SemanticLiveTurn['blocks'][number]): string | null {
+  return block.toolUseId ?? block.callId ?? null
+}
+
+function isSemanticToolOutputBlock(block: SemanticLiveTurn['blocks'][number]): boolean {
+  return (
+    block.kind === 'function_call_output' ||
+    block.kind === 'custom_tool_call_output' ||
+    block.kind === 'tool_search_output'
+  )
+}
+
+function parseRecord(text: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null
+  } catch {
+    return null
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function writeStdinChars(block: SemanticLiveTurn['blocks'][number]): string {
+  const parsed = asRecord(block.parsedInput)
+  if (typeof parsed?.chars === 'string') return parsed.chars
+  const raw = block.argumentsJson ?? block.inputJson ?? ''
+  const rawParsed = raw ? parseRecord(raw) : null
+  return typeof rawParsed?.chars === 'string' ? rawParsed.chars : ''
+}
+
+function isInvisibleWriteStdinBlock(block: SemanticLiveTurn['blocks'][number]): boolean {
+  if (
+    block.toolName !== 'write_stdin' ||
+    (block.kind !== 'function_call' && block.kind !== 'custom_tool_call')
+  ) {
+    return false
+  }
+  // WHY the selector mirrors the row renderer instead of trusting
+  // "there is a semantic block":
+  // `CodexWriteStdinRow` intentionally returns null when the input
+  // carries no non-empty `chars` payload. If the render-unit layer
+  // still emits a unit for that same block, the model/debug panel
+  // claims semantic content exists while React paints nothing. That
+  // false ownership is how the feed loses its empty/work fallback and
+  // how future duplicate guards get misled. Visibility is decided at
+  // this layer, so the render model and the DOM agree on whether this
+  // block actually owns screen real estate.
+  return writeStdinChars(block).length === 0
 }
 
 // WHY add a derived render-unit pass before painting semantic blocks:
@@ -63,17 +218,16 @@ export type CommittedAssistantText = {
 // suppression when we add it.
 //
 // Output blocks (`function_call_output` / `custom_tool_call_output`
-// / `tool_search_output`) get the same treatment when their
-// `callId` matches a committed tool_use: if the tool_use is
-// already in the committed index, its paired output is rendered
-// by the committed `ToolResultRow` above and the live copy is a
-// duplicate. The rule is "if the tool_use is committed, ALL its
-// associated live blocks are dupes" — simpler than tracking the
-// commit state per output block separately, and matches how the
-// committed feed renders both halves as a pair.
+// / `tool_search_output`) deliberately do NOT use the tool_use
+// index. Codex commits tool_use and tool_result as separate rollout
+// items, so a committed command card does not prove the committed
+// output row exists yet. Output blocks yield only to the
+// ToolResultIndex; until then, the live semantic stream remains the
+// sole visible owner of stdout/stderr.
 export function buildSemanticRenderUnits(
   turn: SemanticLiveTurn,
   committedToolUseIndex?: Map<string, ToolUseBlock>,
+  committedToolResultIndex?: Map<string, ToolResultBlock>,
   committedAssistantText?: CommittedAssistantText,
 ): SemanticRenderUnit[] {
   const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
@@ -94,20 +248,37 @@ export function buildSemanticRenderUnits(
       (block.finalized || block.status === 'completed') &&
       (
         committedAssistantText?.keys.has(`${turn.turnId}\u0000${text}`) ||
-        committedAssistantText?.texts.has(text)
+        committedAssistantText?.texts.has(text) ||
+        committedAssistantText?.normalizedTexts?.has(normalizeCommittedAssistantText(text))
       )
     ) {
       continue
     }
 
+    if (isInvisibleWriteStdinBlock(block)) continue
+
     // Committed-ownership skip. Check both Claude's `toolUseId` and
-    // Codex's `callId` — the committed index is keyed by the
-    // tool_use.id field, which for Codex is the original call_id
-    // (see codexToolUseEntry in workspace/codex/entries.ts). Either
-    // field matching means the committed feed already owns this
-    // block; the live copy is a dupe.
-    const toolId = block.toolUseId ?? block.callId
-    if (toolId && committedToolUseIndex?.has(toolId)) {
+    // Codex's `callId` — the committed indices are keyed by the
+    // tool_use.id / tool_result.tool_use_id fields, which for Codex
+    // are the original call_id (see codexToolUseEntry in
+    // workspace/codex/entries.ts).
+    //
+    // WHY outputs use the result index instead of the use index:
+    // Codex rollout can commit the tool_use row before the paired
+    // tool_result row. During that JSONL lag, the live semantic
+    // output is still the only owner of visible stdout/stderr. The
+    // previous broad rule ("tool_use committed means all associated
+    // live blocks are dupes") created a gap: the command card was
+    // committed, the result was not, and the live output disappeared.
+    // Use blocks yield to committed tool_use ownership; output blocks
+    // yield only after committed tool_result ownership exists.
+    const toolId = semanticToolCorrelationId(block)
+    const toolOwnedByCommitted = toolId
+      ? isSemanticToolOutputBlock(block)
+        ? committedToolResultIndex?.has(toolId) === true
+        : committedToolUseIndex?.has(toolId) === true
+      : false
+    if (toolOwnedByCommitted) {
       // Don't flush() here — a collapsed_activity run should stay
       // open across a committed skip; the next non-skipped block
       // decides whether to continue accumulating or emit the run.

@@ -153,7 +153,7 @@ A ghost is **render-eligible** iff ALL FIVE of the following hold:
 
 1. **Not superseded.** `ghost._atp.supersededBy === undefined`. JSONL has not caught up; the ghost is still potentially the only record.
 2. **Orphaned.** `ghost._atp.orphanedAt !== undefined`. The TTL has elapsed without a JSONL match. JSONL has had its chance for this ghost.
-3. **Not the live current turn.** `ghost._atp.turnId !== currentTurnId`. `SemanticStreamingTurn` owns the live turn render; surfacing a ghost for the same turn would double-render.
+3. **Not already owned by semantic current/history.** `ghost._atp.turnId` must not match the active semantic turn id or any bounded semantic-history turn id. `SemanticStreamingTurn` owns both surfaces while JSONL catches up; surfacing a ghost for the same turn would double-render.
 4. **Past the JSONL tail (when known).** When `lastJsonlEntryAt !== null`, the ghost's `_atp.updatedAt` must be strictly greater than `lastJsonlEntryAt`. When `lastJsonlEntryAt === null` (fresh session, no JSONL entry has ever been observed), this rule does not gate — the ghost falls through to rule 5. The non-null branch structurally distinguishes "JSONL stalled past the proxy" (proxy event newer than every JSONL entry → render) from "JSONL kept writing past this ghost" (sidecar that real JSONL turns have moved past → hide).
 5. **Not sidecar-shaped.** `!ghostHasSidecarShape(ghost)`. The shape predicate matches Claude Code's known auxiliary-call fingerprint: assistant role, single text block, ≤200 chars. This is the backstop for tail-sidecar leaks rule 4 cannot see.
 
@@ -164,7 +164,7 @@ Why rules 4 AND 5, not just rule 4: the timestamp predicate is structurally corr
 
 Both have `ghost.updatedAt > lastJsonlEntryAt`. Rule 5 is the structural shape check that picks (b) out of the tail.
 
-When all five rules pass, surviving ghosts are merged via `mergeWithUpstream` with `trustSupersededFlag: true`. Tail-append is correct here because by predicate-3 these ghosts are not the active turn, and by predicate-4 they are newer than every committed entry — they belong at the very end chronologically.
+When all five rules pass, surviving ghosts are merged via `mergeWithUpstream` with `trustSupersededFlag: true`. Tail-append is correct here because by predicate-3 these ghosts are not already visible through semantic current/history, and by predicate-4 they are newer than every committed entry — they belong at the very end chronologically.
 
 When NO ghost passes, `selectMergedEntries` returns `runtime.entries` *by identity* (not a fresh copy). This is load-bearing for Feed's row memoization (see [Reference stability](#reference-stability)).
 
@@ -221,18 +221,18 @@ A ghost is marked orphaned when `now - updatedAt > TTL` and it isn't already sup
 In practice, during healthy operation the orphan flag rarely fires for a real assistant turn:
 
 - Active streaming bumps `updatedAt` on every `text_delta`, so the TTL never reaches threshold.
-- Long tool execution freezes `updatedAt` on the tool_use ghost between `tool_input_finalized` and `tool_result`, but `currentTurn` stays alive across pending tools (`hasPendingSemanticTools` in `semantic/helpers.ts:158-175`), so rule 3 hides the ghost regardless of orphan state.
+- Long tool execution freezes `updatedAt` on the tool_use ghost between `tool_input_finalized` and `tool_result`, but `currentTurn` stays alive across pending tools (`hasPendingSemanticTools` in `semantic/helpers.ts:158-175`), so rule 3 hides the ghost regardless of orphan state. If the turn completes before JSONL catches up, bounded semantic history continues to own it and rule 3 still hides the ghost.
 
 The TTL does fire reliably in the genuine stuck cases:
 
-- **Live-stuck:** `currentTurn` cleared (without JSONL having caught up), semantic stream went silent → orphan after 30 s, predicate evaluates, ghost may render. Note: if `currentTurn` instead hangs alive with the same `turnId`, rule 3 keeps the ghost hidden and `SemanticStreamingTurn` continues to own visibility — the live-stuck branch only applies once the live owner has released the turn.
+- **Live-stuck:** `currentTurn` cleared (without JSONL having caught up), semantic stream went silent, and the turn is no longer retained in semantic history → orphan after 30 s, predicate evaluates, ghost may render. Note: if `currentTurn` instead hangs alive with the same `turnId`, or if bounded semantic history still contains the completed turn, rule 3 keeps the ghost hidden and `SemanticStreamingTurn` continues to own visibility.
 - **Resume-after-crash:** ghost log loaded from disk, ghost's `updatedAt` is from before the crash → orphan sweep fires within the first second of resume → predicate evaluates against the loaded JSONL tail.
 
 ## Phase 3: deliberately out of scope
 
 The original design intent was for ghost to be the **only** live render path. `SemanticStreamingTurn` would be deleted. The merged feed would render committed entries plus ghosts (in chronological position via ordered insertion in `mergeWithUpstream`), with seamless supersedure on JSONL catch-up.
 
-That deletion never happened. Deferring it is fine — `SemanticStreamingTurn` reliably handles the everyday live-turn case, and the gap that ghost rendering covers is genuinely small (just the JSONL-stalled-past-proxy fallback). The cost is the dual-owner relationship described in [The two visible owners of the live turn](#the-two-visible-owners-of-the-live-turn) and the extra rule 3 in the predicate.
+That deletion never happened. Deferring it is fine — `SemanticStreamingTurn` reliably handles the everyday live-turn and semantic-history catch-up cases, and the gap that ghost rendering covers is genuinely small (just the JSONL-stalled-past-proxy fallback after semantic ownership is gone). The cost is the dual-owner relationship described in [The two visible owners of the live turn](#the-two-visible-owners-of-the-live-turn) and the extra rule 3 in the predicate.
 
 To do Phase 3, atp's `mergeWithUpstream` would need to learn ordered insertion (anchor by `parentUuid` / `turnId` / nearest committed neighbor instead of always tail-appending), and Feed would need to render the merged list as the only source of live blocks. Until that work happens, the predicate's rule 3 keeps the two paths from colliding.
 

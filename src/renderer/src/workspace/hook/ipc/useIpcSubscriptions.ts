@@ -49,6 +49,9 @@ import {
   orphanStale,
   reconcileUpstream,
 } from '@renderer/workspace/ghosts'
+import {
+  codexPromptsMatchForOwnership,
+} from '@renderer/workspace/hook/actions/streaming'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import type { WorktreeIdentity } from '@shared/work-context/types'
@@ -106,13 +109,14 @@ const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 // With the layered predicate in mergedEntries.ts, an orphan flag
 // merely makes a ghost ELIGIBLE for rendering; rules 4 (timestamp
 // gate) and 5 (sidecar shape) still gate final visibility, and
-// rule 3 hides ghosts whose `turnId === currentTurnId`. So during
-// healthy operation, even a tool that runs tens of seconds doesn't
-// visibly orphan: the semantic reducer keeps `currentTurn` alive
-// across pending tools (see hasPendingSemanticTools in
-// semantic/helpers.ts), and rule 3 hides any ghost whose turn is
-// still active. The TTL here is the failsafe boundary for "how
-// long before we conclude JSONL had its chance" — reachable only
+// rule 3 hides ghosts whose turn id is already owned by semantic
+// current/history. So during healthy operation, even a tool that runs
+// tens of seconds doesn't visibly orphan: the semantic reducer keeps
+// `currentTurn` alive across pending tools (see
+// hasPendingSemanticTools in semantic/helpers.ts), and archived
+// semantic history continues to own completed turns while JSONL
+// catches up. The TTL here is the failsafe boundary for "how long
+// before we conclude JSONL had its chance" — reachable only
 // when currentTurn has cleared and JSONL has genuinely stalled.
 //
 // 30000ms matches atp's library default and is the right balance:
@@ -1043,6 +1047,29 @@ export function useIpcSubscriptions(
                   entryTextContent(entry) === mappedText,
                 )
               ) {
+                reconciledOptimisticText = mappedText
+              }
+              // Mid-turn Codex submits are intentionally kept in
+              // queuedMessages instead of appended to entries (see
+              // addOptimisticCodexUserEntry). The authoritative rollout
+              // user row is the point where that local "queued" surface
+              // must disappear; otherwise the queue strip becomes the new
+              // stale-bottom duplicate after the transcript catches up.
+              if (queuedMessages.some(q => codexPromptsMatchForOwnership(q.content, mappedText))) {
+                // WHY queued prompt reconciliation is normalized:
+                // queuedMessages is only a temporary local surface for
+                // a mid-turn submit. The authoritative user row comes
+                // from Codex rollout, and rollout can differ from the
+                // original submit by CRLF normalization, unicode form,
+                // or block-join whitespace. Exact matching leaves the
+                // QueueStrip stuck after the real transcript row has
+                // arrived, recreating the stale-bottom artifact this
+                // renderer rewrite is meant to eliminate. Preserve the
+                // original displayed text in the queue, but compare by
+                // the same ownership key we use for render dedupe.
+                queuedMessages = queuedMessages.filter(q =>
+                  !codexPromptsMatchForOwnership(q.content, mappedText),
+                )
                 reconciledOptimisticText = mappedText
               }
             }

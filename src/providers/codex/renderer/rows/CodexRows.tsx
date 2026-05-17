@@ -56,6 +56,9 @@ function applyPatchText(input: unknown): string {
   const rec = asRecord(input)
   if (typeof rec?.raw === 'string') return rec.raw
   if (typeof rec?.arguments === 'string') return rec.arguments
+  if (typeof rec?.cmd === 'string') return rec.cmd
+  if (typeof rec?.patch === 'string') return rec.patch
+  if (typeof rec?.input === 'string') return rec.input
   return ''
 }
 
@@ -221,6 +224,12 @@ function headlineForTool(block: ToolUseBlock): string | null {
   const input = asRecord(block.input)
   if (!input) return null
 
+  if (block.name === 'write_stdin') {
+    const chars = input.chars
+    if (typeof chars === 'string' && chars.length > 0) return chars
+    return null
+  }
+
   if (block.name === 'exec_command') {
     const cmd = input.cmd
     if (typeof cmd === 'string') return cmd
@@ -244,6 +253,32 @@ const MAX_COMMAND_DISPLAY_LINES = 2
 const MAX_COMMAND_DISPLAY_CHARS = 160
 const RESULT_MAX_LINES = 3
 
+type ExecCommandInput = {
+  command: string
+  workdir: string | null
+  yieldTimeMs: number | null
+  maxOutputTokens: number | null
+}
+
+function execCommandInput(input: unknown): ExecCommandInput | null {
+  const rec = asRecord(input)
+  if (!rec) return null
+  const rawCommand = rec.cmd ?? rec.command
+  const command = Array.isArray(rawCommand)
+    ? rawCommand.map(String).join(' ')
+    : typeof rawCommand === 'string'
+      ? rawCommand
+      : ''
+  if (!command.trim()) return null
+  return {
+    command,
+    workdir: typeof rec.workdir === 'string' ? rec.workdir : null,
+    yieldTimeMs: typeof rec.yield_time_ms === 'number' ? rec.yield_time_ms : null,
+    maxOutputTokens:
+      typeof rec.max_output_tokens === 'number' ? rec.max_output_tokens : null,
+  }
+}
+
 function truncateCommand(text: string): string {
   const lines = text.split('\n')
   const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
@@ -259,6 +294,56 @@ function truncateCommand(text: string): string {
   }
   return truncated.trimEnd() + '…'
 }
+
+export const CodexExecCommandRow = memo(function CodexExecCommandRow({
+  block,
+}: {
+  block: ToolUseBlock
+}) {
+  const { workspaceRoot } = useContext(CodeRenderContext)
+  const parsed = useMemo(() => execCommandInput(block.input), [block.input])
+  if (!parsed) return <CodexToolRow block={block} />
+
+  const displayWorkdir = parsed.workdir
+    ? formatToolFilePath(parsed.workdir, workspaceRoot)
+    : null
+  const meta = [
+    displayWorkdir ? `cwd ${displayWorkdir}` : null,
+    parsed.yieldTimeMs !== null ? `yield ${parsed.yieldTimeMs}ms` : null,
+    parsed.maxOutputTokens !== null ? `max ${parsed.maxOutputTokens} tokens` : null,
+  ].filter((item): item is string => item !== null)
+
+  return (
+    <MarkerRow marker="⏺">
+      <div className="min-w-0">
+        <div className="text-[13px] leading-[1.65] flex items-baseline gap-2 min-w-0">
+          <span className="text-accent font-semibold flex-shrink-0">Run</span>
+          {meta.length > 0 && (
+            <span className="text-muted text-[11px] truncate min-w-0">
+              {meta.join(' · ')}
+            </span>
+          )}
+        </div>
+        {/* WHY this is a command-specific row instead of the generic
+            `exec_command` tool card:
+
+            Codex's semantic name is an implementation detail. The
+            user-facing object is the shell command, and the 2026-05-16
+            HTML bundle showed the old card wasting the first line on
+            `exec_command` while burying the actual command in a nested
+            child row. That made dense debug sessions scan like a list
+            of identical provider internals. Keeping the marker row but
+            promoting the command to the primary surface makes live and
+            committed command calls readable without changing ownership
+            or result pairing. */}
+        <pre className="mt-0.5 font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0">
+          <span className="select-none text-muted">$ </span>
+          {truncateCommand(parsed.command)}
+        </pre>
+      </div>
+    </MarkerRow>
+  )
+})
 
 function detectDiff(text: string): boolean {
   return text.startsWith('diff --git ') || text.startsWith('@@ ')
@@ -408,6 +493,40 @@ export const CodexToolRow = memo(function CodexToolRow({
             </pre>
           </MarkerRow>
         )}
+      </div>
+    </MarkerRow>
+  )
+})
+
+export const CodexWriteStdinRow = memo(function CodexWriteStdinRow({
+  block,
+}: {
+  block: ToolUseBlock
+}) {
+  const input = asRecord(block.input)
+  const chars = typeof input?.chars === 'string' ? input.chars : ''
+
+  // WHY empty write_stdin renders nothing:
+  // Codex uses write_stdin for two very different things: real input
+  // into an ongoing command, and empty/poll continuation calls while
+  // a long-running PTY command is still draining output. The latter
+  // created the ugly one-line `write_stdin` rows visible in the
+  // 2026-05-16T18:54 bundle: no path, no command, no payload, just a
+  // provider implementation detail. Empty stdin has no user-visible
+  // content, so the command/result row remains the owner of the UI.
+  if (!chars) return null
+
+  return (
+    <MarkerRow marker="⏺">
+      <div>
+        <div className="text-[13px] leading-[1.65]">
+          <span className="text-accent font-semibold">stdin</span>
+        </div>
+        <MarkerRow marker="⎿" tone="muted">
+          <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
+            {truncateCommand(chars)}
+          </pre>
+        </MarkerRow>
       </div>
     </MarkerRow>
   )

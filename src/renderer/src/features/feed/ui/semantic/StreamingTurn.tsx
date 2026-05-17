@@ -6,12 +6,15 @@ import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
-import { ToolUseIndexContext } from '@renderer/features/feed/context'
+import {
+  ToolResultIndexContext,
+  ToolUseIndexContext,
+} from '@renderer/features/feed/context'
 import { SemanticCollapsedActivityRow } from '@renderer/features/feed/ui/semantic/CollapsedActivityRow'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
 import {
+  buildCommittedAssistantText,
   buildSemanticRenderUnits,
-  type CommittedAssistantText,
 } from '@renderer/features/feed/ui/semantic/renderUnits'
 
 // WHY render the semantic turn block-by-block instead of just dumping
@@ -51,37 +54,15 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   // of-feed dupe where the live turn keeps rendering tool rounds
   // that the committed transcript already painted above.
   const committedToolUseIndex = useContext(ToolUseIndexContext)
-  const committedAssistantText = useMemo<CommittedAssistantText>(() => {
-    const keys = new Set<string>()
-    const texts = new Set<string>()
-    for (const entry of committedEntries) {
-      if (entry.type !== 'assistant') continue
-      const assistantEntry = entry as {
-        codexTurnId?: unknown
-        message?: { id?: unknown; content?: unknown }
-      }
-      const turnIds = [
-        typeof assistantEntry.message?.id === 'string' ? assistantEntry.message.id : null,
-        typeof assistantEntry.codexTurnId === 'string' ? assistantEntry.codexTurnId : null,
-      ].filter((id): id is string => Boolean(id))
-      if (turnIds.length === 0) continue
-
-      const content = assistantEntry.message?.content
-      if (!Array.isArray(content)) continue
-      for (const block of content) {
-        const item = block as Record<string, unknown>
-        if (item.type !== 'text' || typeof item.text !== 'string' || !item.text) continue
-        texts.add(item.text)
-        for (const turnId of turnIds) {
-          keys.add(`${turnId}\u0000${item.text}`)
-        }
-      }
-    }
-    return { keys, texts }
-  }, [committedEntries])
+  const committedToolResultIndex = useContext(ToolResultIndexContext)
+  const committedAssistantText = useMemo(
+    () => buildCommittedAssistantText(committedEntries),
+    [committedEntries],
+  )
   const units = buildSemanticRenderUnits(
     turn,
     committedToolUseIndex,
+    committedToolResultIndex,
     committedAssistantText,
   )
   const hasBlocks = blocks.length > 0
@@ -159,12 +140,12 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
       {units.map(unit => (
         unit.type === 'collapsed_activity' ? (
           <SemanticCollapsedActivityRow
-            key={`collapsed:${unit.blockIndices.join(',')}`}
+            key={`${turn.turnId}:collapsed:${unit.blockIndices.join(',')}`}
             unit={unit}
           />
         ) : (
           <SemanticLiveBlockRow
-            key={unit.block.blockIndex}
+            key={`${turn.turnId}:block:${unit.block.blockIndex}:${unit.block.itemId ?? unit.block.callId ?? unit.block.toolUseId ?? 'anon'}`}
             block={unit.block}
             toolState={unit.toolState}
           />
