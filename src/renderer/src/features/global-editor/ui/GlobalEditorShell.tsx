@@ -7,6 +7,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { ExplorerPane } from '@renderer/features/editor/ui/ExplorerPane'
 import { EditorTabs } from '@renderer/features/editor/ui/EditorTabs'
 import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
+import { AiWorkspaceEditor } from '@renderer/features/ai-workspace/ui/AiWorkspaceEditor'
 
 import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
@@ -106,6 +107,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     fileTreeWidthPx,
     setFileTreeWidthPx,
     fileTreeVisible,
+    aiWorkspaceId,
   } = useGlobalEditorStore(
     useShallow(state => ({
       splitterRatio: state.splitterRatio,
@@ -113,6 +115,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       fileTreeWidthPx: state.fileTreeWidthPx,
       setFileTreeWidthPx: state.setFileTreeWidthPx,
       fileTreeVisible: state.fileTreeVisible,
+      aiWorkspaceId: state.aiWorkspaceId,
     })),
   )
   const {
@@ -297,7 +300,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         className="flex flex-col min-h-0 overflow-hidden border-r border-border"
         style={{ width: `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)` }}
       >
-        {activeCwd ? (
+        {aiWorkspaceId ? (
+          <AiWorkspaceEditor workspaceId={aiWorkspaceId} />
+        ) : activeCwd ? (
           <div className="flex flex-1 min-h-0 overflow-hidden">
             {/*
               File tree. Conditionally rendered — when

@@ -1,4 +1,18 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+
+async function chooseAiWorkspaceId(): Promise<string | null> {
+  const workspaces = await window.api.aiWorkspaceList()
+  if (workspaces.length === 0) return null
+  if (workspaces.length === 1) return workspaces[0].workspaceId
+  const menu = workspaces
+    .map((workspace, index) => `${index + 1}. ${workspace.name} (${workspace.fileCount} files)`)
+    .join('\n')
+  const answer = window.prompt(`Open which AI Workspace?\n\n${menu}`, '1')
+  if (!answer) return null
+  const index = Number.parseInt(answer, 10) - 1
+  return workspaces[index]?.workspaceId ?? null
+}
 
 export const layoutCommands: CommandDef[] = [
   {
@@ -97,7 +111,51 @@ export const layoutCommands: CommandDef[] = [
       label: flags.globalEditorOpen ? 'On' : 'Off',
       tone: flags.globalEditorOpen ? 'accent' : 'neutral',
     }),
-    run: ({ ui }) => ui.toggleGlobalEditor(),
+    run: ({ ui, flags }) => {
+      const editor = useGlobalEditorStore.getState()
+      if (editor.aiWorkspaceId && flags.globalEditorOpen) {
+        editor.closeAiWorkspace()
+        return
+      }
+      editor.closeAiWorkspace()
+      ui.toggleGlobalEditor()
+    },
+  },
+  {
+    id: 'open-ai-workspace',
+    title: 'Open AI Workspace',
+    description: '**What it does:** Opens a curated **AI Workspace** file set in the Global Editor surface.\n\n**Use when:** An agent has attached plans, notes, or review artifacts from multiple worktrees and you want one focused review view.\n\n**Notes:** If more than one AI Workspace exists, you choose which one to open.',
+    keywords: ['ai workspace', 'mcp', 'workspace', 'files', 'review', 'worktree', 'global editor'],
+    run: async ({ ui, flags }) => {
+      const workspaceId = await chooseAiWorkspaceId()
+      if (!workspaceId) return
+      useGlobalEditorStore.getState().openAiWorkspace(workspaceId)
+      if (!flags.globalEditorOpen) ui.toggleGlobalEditor()
+    },
+  },
+  {
+    id: 'create-ai-workspace',
+    title: 'Create AI Workspace',
+    description: '**What it does:** Creates an empty named **AI Workspace** and opens it in the Global Editor surface.\n\n**Use when:** You want a curated file set ready before an agent starts attaching files.\n\n**Notes:** Agents can also create AI Workspaces through MCP.',
+    keywords: ['ai workspace', 'mcp', 'create', 'workspace', 'review'],
+    run: async ({ ui, flags }) => {
+      const name = window.prompt('AI Workspace name', 'Review workspace')
+      if (!name?.trim()) return
+      const workspace = await window.api.aiWorkspaceCreate({ name: name.trim() })
+      useGlobalEditorStore.getState().openAiWorkspace(workspace.workspaceId)
+      if (!flags.globalEditorOpen) ui.toggleGlobalEditor()
+    },
+  },
+  {
+    id: 'clear-ai-workspace',
+    title: 'Clear AI Workspace',
+    description: '**What it does:** Removes every file reference from an **AI Workspace** without deleting files from disk.\n\n**Use when:** A curated review set is stale but you want to keep the workspace itself.\n\n**Notes:** This only clears Agent Code metadata.',
+    keywords: ['ai workspace', 'mcp', 'clear', 'delete', 'files'],
+    run: async () => {
+      const workspaceId = await chooseAiWorkspaceId()
+      if (!workspaceId) return
+      await window.api.aiWorkspaceClear(workspaceId)
+    },
   },
   {
     // WHY a dedicated command rather than a setting:

@@ -23,7 +23,9 @@ import { registerDevDebugIpc } from '@main/ipc/devDebug.js'
 import { installPerformanceIpcInstrumentation } from '@main/performance/instrumentIpc.js'
 import type { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { registerOrchestrationIpc } from '@main/ipc/orchestration.js'
+import { registerAiWorkspaceIpc } from '@main/ipc/aiWorkspace.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
+import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 
 // IPC registration aggregator.
 //
@@ -42,6 +44,7 @@ export type IpcDeps = {
   pasteDebugJournals: PasteDebugJournalRegistry
   worktreeActivityIndex: WorktreeActivityIndex
   orchestrationBridge: OrchestrationBridge
+  aiWorkspaceRegistry: AiWorkspaceRegistry
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -63,4 +66,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerPasteDebugIpc({ pasteDebugJournals: deps.pasteDebugJournals })
   registerDevDebugIpc()
   registerOrchestrationIpc(deps.orchestrationBridge)
+  registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
 }

@@ -155,6 +155,14 @@ export default function App() {
   }, [settings])
 
   useEffect(() => {
+    const off = window.api.onAiWorkspaceOpenRequest(request => {
+      useGlobalEditorStore.getState().openAiWorkspace(request.workspaceId)
+      useAppStore.getState().openGlobalEditor()
+    })
+    return off
+  }, [])
+
+  useEffect(() => {
     let cancelled = false
     void window.api.getDevDebugConfig()
       .then(config => {
