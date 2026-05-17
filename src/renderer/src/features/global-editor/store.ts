@@ -83,6 +83,7 @@ type GlobalEditorStore = {
     path: string
     text: string
     mtimeMs: number
+    selection?: { line: number; column: number } | null
   }) => void
   setActiveFile: (cwd: string, path: string | null) => void
   updateFileText: (cwd: string, path: string, text: string) => void
@@ -117,6 +118,7 @@ function createBuffer(params: {
   path: string
   text: string
   mtimeMs: number
+  selection?: { line: number; column: number } | null
 }): EditorFileBuffer {
   return {
     path: params.path,
@@ -128,6 +130,7 @@ function createBuffer(params: {
     loading: false,
     error: null,
     mtimeMs: params.mtimeMs,
+    selection: params.selection ?? null,
   }
 }
 
@@ -175,7 +178,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   openAiWorkspace: workspaceId => set({ aiWorkspaceId: workspaceId }),
   closeAiWorkspace: () => set({ aiWorkspaceId: null }),
 
-  openFile: ({ cwd, path, text, mtimeMs }) =>
+  openFile: ({ cwd, path, text, mtimeMs, selection }) =>
     set(state => {
       const prev = state.byCwd[cwd] ?? EMPTY_CWD_STATE
       const existing = prev.openFiles[path]
@@ -186,8 +189,14 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       // useEditorStore semantics so behaviour is consistent
       // between Global Editor and the "Code Editor" mode.
       const buffer: EditorFileBuffer = existing?.dirty
-        ? { ...existing, savedText: text, mtimeMs, error: null }
-        : createBuffer({ root: cwd, path, text, mtimeMs })
+        ? {
+            ...existing,
+            savedText: text,
+            mtimeMs,
+            error: null,
+            selection: selection ?? existing.selection,
+          }
+        : createBuffer({ root: cwd, path, text, mtimeMs, selection })
       const inOrder = prev.fileOrder.includes(path)
       return {
         byCwd: {

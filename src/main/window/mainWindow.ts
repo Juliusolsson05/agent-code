@@ -1,6 +1,8 @@
-import { BrowserWindow, shell } from 'electron'
+import { BrowserWindow } from 'electron'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
+
+import { openAllowedExternalUrl } from '@main/window/externalNavigation.js'
 
 // The main BrowserWindow lives here, and so does the one helper
 // everything else uses to push messages to it (sendToMainWindow). We
@@ -102,8 +104,20 @@ export function createMainWindow(): void {
   mainWindow.on('resize', pushTrafficLightInset)
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    void openAllowedExternalUrl(url).catch(err => {
+      console.warn('[window] blocked or failed external open:', err)
+    })
     return { action: 'deny' }
+  })
+
+  mainWindow.webContents.on('will-navigate', event => {
+    // WHY this blocks even after renderer markdown links call preventDefault:
+    // rendered assistant/provider content is untrusted, and Electron's app
+    // window is not a browser tab. If any future markdown surface forgets the
+    // shared safe-link component, or any raw anchor slips through a regression,
+    // the fallback behavior must be "stay in Agent Code" instead of navigating
+    // the privileged BrowserWindow to arbitrary model-controlled content.
+    event.preventDefault()
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {

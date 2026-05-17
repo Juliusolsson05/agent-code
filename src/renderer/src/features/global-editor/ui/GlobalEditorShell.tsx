@@ -10,6 +10,7 @@ import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
 import { AiWorkspaceEditor } from '@renderer/features/ai-workspace/ui/AiWorkspaceEditor'
 
 import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
 import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 
@@ -123,7 +124,6 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const {
     activeCwd,
     setActiveCwd,
-    openFileAction,
     setActiveFile,
     updateFileText,
     markFileSaved,
@@ -142,7 +142,6 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       return {
         activeCwd: aCwd,
         setActiveCwd: state.setActiveCwd,
-        openFileAction: state.openFile,
         setActiveFile: state.setActiveFile,
         updateFileText: state.updateFileText,
         markFileSaved: state.markFileSaved,
@@ -247,19 +246,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const openFileFromTree = useCallback(
     async (relativePath: string) => {
       if (!activeCwd) return
-      const result = await window.api.editorReadTextFile({
+      await openFileInGlobalEditor({
         root: activeCwd,
         path: relativePath,
       })
-      if (!result.ok) return
-      openFileAction({
-        cwd: activeCwd,
-        path: relativePath,
-        text: result.text,
-        mtimeMs: result.mtimeMs,
-      })
     },
-    [activeCwd, openFileAction],
+    [activeCwd],
   )
 
   // When the overlay is closed, render the workspace area

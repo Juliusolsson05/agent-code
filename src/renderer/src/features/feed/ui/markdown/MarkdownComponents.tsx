@@ -3,6 +3,8 @@ import { useContext, type ReactNode } from 'react'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 
 import { CodeRenderContext } from '@renderer/features/feed/context'
+import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
+import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 
 // react-markdown component overrides used inside the feed.
 //
@@ -81,7 +83,7 @@ export function MarkdownCode({
   // code is accent-colored with no background chip.
   const isInline = !language && !text.includes('\n')
   if (isInline) {
-    return <code>{children}</code>
+    return <SafeInlineCode>{children}</SafeInlineCode>
   }
 
   // Fenced/indented code block inside prose → static highlight.js.
@@ -118,4 +120,5 @@ export function MarkdownCode({
 export const MARKDOWN_COMPONENTS: import('react-markdown').Options['components'] = {
   pre: MarkdownPre,
   code: MarkdownCode,
+  a: SafeMarkdownLink,
 }
