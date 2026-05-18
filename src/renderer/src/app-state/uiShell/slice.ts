@@ -17,6 +17,7 @@ export const createUiShellSlice: StateCreator<
   pinAgentsOpen: false,
   settingsPageOpen: false,
   buryPromptSessionId: null,
+  debugBundleNotePrompt: null,
   viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
   dispatchAttachIntent: null,
@@ -84,6 +85,11 @@ export const createUiShellSlice: StateCreator<
     set({ buryPromptSessionId: sessionId }, false, 'uiShell/openBuryPrompt'),
   closeBuryPrompt: () =>
     set({ buryPromptSessionId: null }, false, 'uiShell/closeBuryPrompt'),
+
+  openDebugBundleNotePrompt: payload =>
+    set({ debugBundleNotePrompt: payload }, false, 'uiShell/openDebugBundleNotePrompt'),
+  closeDebugBundleNotePrompt: () =>
+    set({ debugBundleNotePrompt: null }, false, 'uiShell/closeDebugBundleNotePrompt'),
 
   openViewPrompts: sessionId =>
     set({ viewPromptsSessionId: sessionId }, false, 'uiShell/openViewPrompts'),

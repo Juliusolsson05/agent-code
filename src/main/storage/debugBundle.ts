@@ -3,6 +3,7 @@ import { dirname, join, normalize } from 'path'
 
 import { DEBUG_BUNDLE_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
+import { appendDebugBundleSaved } from '@main/storage/debugBundleLog.js'
 
 // Debug-bundle writer.
 //
@@ -44,6 +45,10 @@ export type SaveDebugBundleParams = {
    *  name — the payload itself already encodes what session it
    *  came from inside manifest.json. */
   sessionId: string
+  kind?: string | null
+  reason?: string | null
+  cwd?: string | null
+  providerSessionId?: string | null
   /** Opaque files list. Main does not look inside `content`. */
   files: DebugBundleFile[]
 }
@@ -131,6 +136,15 @@ export async function saveDebugBundle(
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, file.content, 'utf8')
   }
+
+  await appendDebugBundleSaved({
+    bundlePath,
+    sessionId: params.sessionId,
+    kind: params.kind ?? null,
+    reason: params.reason ?? null,
+    cwd: params.cwd ?? null,
+    providerSessionId: params.providerSessionId ?? null,
+  })
 
   scheduleDebugStoragePrune('debug-bundle-save')
 
