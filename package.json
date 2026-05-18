@@ -29,6 +29,7 @@
     "test:rendered-content-targets": "tsx --tsconfig tsconfig.web.json scripts/test-rendered-content-targets.ts",
     "test:editor-fs-cache": "tsx --tsconfig tsconfig.node.json scripts/test-editor-fs-cache.ts",
     "test:codex-optimistic-submit": "tsx --tsconfig tsconfig.web.json scripts/test-codex-optimistic-submit.ts",
+    "test:codex-ready-for-prompt": "tsx --tsconfig tsconfig.node.json scripts/test-codex-ready-for-prompt.ts",
     "test:agent-status-model": "tsx --tsconfig tsconfig.web.json scripts/test-agent-status-model.ts",
     "test:semantic-committed-text": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-committed-text.ts",
     "test:semantic-fold-codex-replace": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-fold-codex-replace.ts",

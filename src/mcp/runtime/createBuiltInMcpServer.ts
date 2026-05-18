@@ -13,6 +13,7 @@ import {
 import type { OrchestrationAgentKind } from '@mcp/shared/orchestrationTypes.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
+import type { SessionKind } from '@main/sessionManager.js'
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
@@ -435,7 +436,16 @@ function registerOrchestrationTools(
       })
 
       if (args.prompt && args.prompt.trim().length > 0) {
-        await submitPrompt(manager, agent.sessionId, args.prompt)
+        const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, args.prompt)
+        if (!delivery.ok) {
+          return toolText({
+            ok: false,
+            error: 'prompt_delivery_failed',
+            message: delivery.message,
+            agent,
+            promptSubmitted: false,
+          })
+        }
         bridge.notePromptSubmitted(agent.sessionId)
       }
 
@@ -468,7 +478,24 @@ function registerOrchestrationTools(
           message: 'Agent Code session manager is not available.',
         })
       }
-      await submitPrompt(manager, args.sessionId, args.prompt)
+      const kind = manager.getSessionKind(args.sessionId)
+      if (kind !== 'claude' && kind !== 'codex') {
+        return toolText({
+          ok: false,
+          error: 'not_agent_session',
+          message: `Cannot send orchestration prompt to non-agent session ${args.sessionId}`,
+          sessionId: args.sessionId,
+        })
+      }
+      const delivery = await submitPrompt(manager, args.sessionId, kind, args.prompt)
+      if (!delivery.ok) {
+        return toolText({
+          ok: false,
+          error: 'prompt_delivery_failed',
+          message: delivery.message,
+          sessionId: args.sessionId,
+        })
+      }
       dependencies.orchestrationBridge?.notePromptSubmitted(args.sessionId)
       return toolText({ ok: true, sessionId: args.sessionId })
     },
@@ -696,27 +723,60 @@ function sleep(ms: number): Promise<void> {
 async function submitPrompt(
   manager: NonNullable<BuiltInMcpDependencies['sessionManager']>,
   sessionId: string,
+  kind: Extract<SessionKind, 'claude' | 'codex'>,
   prompt: string,
-): Promise<void> {
+): Promise<{ ok: true } | { ok: false; message: string }> {
   // WHY the MCP tool writes bracketed paste instead of plain text:
   //
   // Orchestration prompts are often long, markdown-heavy bootstrap prompts.
   // Sending them as keystrokes would let provider TUIs interpret newlines or
   // escape sequences as interactive input. Bracketed paste is the same
-  // terminal-level contract the composer uses for large prompts. For Claude we
-  // also wait for the paste placeholder when available, matching the
-  // renderer's paste-submit state machine closely enough that MCP-created
-  // agents do not need a hidden composer just to receive their first task.
-  manager.write(sessionId, `\x1b[200~${prompt}\x1b[201~`)
-  const pasteState = await manager.awaitClaudePastePlaceholder(sessionId, {
-    timeoutMs: 2000,
-    pollIntervalMs: 50,
-  })
-  if (pasteState.kind === 'appeared' || pasteState.kind === 'timeout') {
-    manager.write(sessionId, '\r')
-    return
+  // terminal-level contract the composer uses for large prompts.
+  //
+  // WHY Codex waits BEFORE the paste while Claude waits AFTER:
+  //
+  // Claude's known race is paste-commit ordering: the composer is present, but
+  // Enter can arrive before the paste accumulator has replaced the payload
+  // with `[Pasted text #N]`. Codex's issue #211 race is earlier: `spawn()`
+  // has resolved and the PTY exists, but the TUI may still be on startup/trust
+  // chrome. Bytes written in that window disappear and no rollout file is
+  // created. The parent agent must not see `promptSubmitted: true` for that
+  // case, so this helper treats provider readiness and write success as the
+  // delivery boundary.
+  if (kind === 'codex') {
+    const ready = await manager.awaitCodexReadyForPrompt(sessionId, {
+      timeoutMs: 15_000,
+      pollIntervalMs: 50,
+    })
+    if (ready.kind !== 'ready') {
+      return {
+        ok: false,
+        message: `Codex session ${sessionId} was not ready for prompt delivery (${ready.kind})`,
+      }
+    }
   }
-  manager.write(sessionId, '\r')
+
+  if (!manager.write(sessionId, `\x1b[200~${prompt}\x1b[201~`)) {
+    return {
+      ok: false,
+      message: `Could not write orchestration prompt to session ${sessionId}`,
+    }
+  }
+
+  if (kind === 'claude') {
+    await manager.awaitClaudePastePlaceholder(sessionId, {
+      timeoutMs: 2000,
+      pollIntervalMs: 50,
+    })
+  }
+
+  if (!manager.write(sessionId, '\r')) {
+    return {
+      ok: false,
+      message: `Could not submit orchestration prompt to session ${sessionId}`,
+    }
+  }
+  return { ok: true }
 }
 
 function toolText(value: unknown): {

@@ -16,6 +16,7 @@ import {
 } from 'codex-headless'
 import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 
 
 /** Allocate a per-session run directory and return the path of its
@@ -145,6 +146,9 @@ export interface CodexSession {
     event: K,
     ...args: CodexSessionEvents[K]
   ): boolean
+  awaitReadyForPrompt(
+    opts?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<{ kind: 'ready'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }>
 }
 
 export class CodexSession extends EventEmitter {
@@ -409,6 +413,31 @@ export class CodexSession extends EventEmitter {
 
   write(data: string): void {
     this.headless?.write(data)
+  }
+
+  async awaitReadyForPrompt(
+    opts?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<{ kind: 'ready'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }> {
+    const timeoutMs = opts?.timeoutMs ?? 10_000
+    const pollIntervalMs = opts?.pollIntervalMs ?? 50
+    const startedAt = Date.now()
+    if (!this.headless) return { kind: 'no-headless' }
+
+    return await new Promise(resolve => {
+      const tick = (): void => {
+        const screen = this.headless?.getScreen() ?? ''
+        if (isCodexReadyForPromptScreen(screen)) {
+          resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
+          return
+        }
+        if (Date.now() - startedAt >= timeoutMs) {
+          resolve({ kind: 'timeout' })
+          return
+        }
+        setTimeout(tick, pollIntervalMs)
+      }
+      tick()
+    })
   }
 
   resize(cols: number, rows: number): void {
