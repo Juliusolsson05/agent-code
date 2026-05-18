@@ -157,6 +157,7 @@ export function useComposerKeybinds({
         // Commit whatever CC has highlighted. If there's no
         // highlight CC will just send the literal text as a
         // regular prompt.
+        workspace.clearPendingRewindUndo(sessionId)
         await send('\r')
         exitSlashMode()
         return

@@ -57,7 +57,12 @@ export type SessionActions = {
   killSession: (sessionId: SessionId) => Promise<void>
   replaceSession: (
     cwd: string,
-    opts?: { resumeSessionId?: string; kind?: SessionKind; builtInMcpDomains?: BuiltInMcpDomain[] },
+    opts?: {
+      resumeSessionId?: string
+      kind?: SessionKind
+      builtInMcpDomains?: BuiltInMcpDomain[]
+      targetSessionId?: SessionId
+    },
   ) => Promise<SessionId | undefined>
   reloadAgentSessions: (dangerousMode?: boolean) => Promise<void>
   softReloadAgentView: (sessionId?: SessionId) => Promise<SessionId | null>
@@ -332,9 +337,15 @@ export function useSessionActions(
   const replaceSession = useCallback(
     async (
       cwd: string,
-      opts?: { resumeSessionId?: string; kind?: SessionKind; builtInMcpDomains?: BuiltInMcpDomain[] },
+      opts?: {
+        resumeSessionId?: string
+        kind?: SessionKind
+        builtInMcpDomains?: BuiltInMcpDomain[]
+        targetSessionId?: SessionId
+      },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
+      const { targetSessionId: _targetSessionId, ...spawnOpts } = opts ?? {}
       // WHY this reads Dispatch focus before tab focus:
       //
       // `replaceSession` powers resume, reload, provider-switch, and rewind.
@@ -343,10 +354,20 @@ export function useSessionActions(
       // mutate Tab.focusedSessionId. Remapping by the old grid-only focus would
       // make the palette labels talk about one agent while the destructive
       // replacement happened to another.
-      const oldId = commandTargetSessionIdForState(snapshot)
+      // WHY callers may pin the target:
+      // Most command actions should follow the *current* command target at the
+      // moment replacement begins. Rewind is different: main may spend time
+      // cloning a provider transcript before the pane swap, and the user can
+      // legitimately focus another pane during that await. Re-reading focus
+      // after the clone would replace the wrong pane with the rewound provider
+      // id. `targetSessionId` lets those two-phase operations say "replace the
+      // pane I validated before the await" while preserving the default
+      // Dispatch-aware targeting for simple one-shot commands.
+      const oldId = _targetSessionId ?? commandTargetSessionIdForState(snapshot)
       if (!oldId) return
       const oldMeta = snapshot.sessions[oldId]
-      const nextKind = opts?.kind ?? oldMeta?.kind ?? 'claude'
+      if (!oldMeta) return
+      const nextKind = spawnOpts.kind ?? oldMeta?.kind ?? 'claude'
       // WHY replaceSession inherits MCP domains by default:
       //
       // Reload, provider switch, resume, and rewind all funnel through this
@@ -358,12 +379,12 @@ export function useSessionActions(
       const builtInMcpDomains =
         nextKind !== 'terminal'
           ? normalizeSessionBuiltInMcpDomains(
-            opts?.builtInMcpDomains ?? oldMeta?.builtInMcpDomains,
+            spawnOpts.builtInMcpDomains ?? oldMeta?.builtInMcpDomains,
           )
           : undefined
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
       const newId = await spawn(cwd, {
-        ...opts,
+        ...spawnOpts,
         ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
       })
       setRuntimes(prev => ({
@@ -415,7 +436,7 @@ export function useSessionActions(
           ...(sessions[newId] ?? { cwd, kind: nextKind }),
           cwd,
           kind: nextKind,
-          ...(opts?.resumeSessionId ? { providerSessionId: opts.resumeSessionId } : {}),
+          ...(spawnOpts.resumeSessionId ? { providerSessionId: spawnOpts.resumeSessionId } : {}),
           ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }

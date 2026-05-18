@@ -171,7 +171,12 @@ export function useWorkspace(
     updateRuntime,
     setDraftVersion,
   )
-  const { setStreamingBaseline, addOptimisticCodexUserEntry, removeOptimisticCodexUserEntry } =
+  const {
+    setStreamingBaseline,
+    clearPendingRewindUndo,
+    addOptimisticCodexUserEntry,
+    removeOptimisticCodexUserEntry,
+  } =
     useStreamingActions(setRuntimes)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
     usePickerActions(setRuntimes, refs, showPaneToast)
@@ -354,7 +359,7 @@ export function useWorkspace(
     return off
   }, [paneActions, refs.stateRef])
 
-  const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt } =
+  const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
@@ -454,6 +459,7 @@ export function useWorkspace(
     setSplitRatio,
     setSplitRatioInTab,
     setStreamingBaseline,
+    clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,
     addOptimisticCodexUserEntry,
@@ -472,6 +478,7 @@ export function useWorkspace(
     softReloadAgentView,
     switchFocusedProvider,
     rewindFocusedToPrompt,
+    undoLastRewind,
     reloadAgentSessions,
     toggleSpotlight,
     setSpotlightSession,

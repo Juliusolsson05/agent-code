@@ -82,6 +82,47 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Undo Rewind — a runtime-only recovery affordance for the most recent
+    // Rewind-to-Prompt on the focused pane. This deliberately does NOT share
+    // the Undo Close stack: close undo restores tile placement from a LIFO
+    // history, while rewind undo swaps provider transcript identity back via
+    // replaceSession. The command is visible only while the current pane still
+    // points at the rewound provider id; submit-start clearing removes it before
+    // the user can create branch work that an undo would hide.
+    id: 'undo-rewind',
+    title: 'Undo Rewind',
+    description: '**What it does:** Restores the focused **agent session** to the provider transcript it used before the last rewind.\n\n**Use when:** You rewound to the wrong prompt and have not submitted new work from the rewound branch.\n\n**Notes:** Runtime-only. Available until the next submit, pane close, or reload.',
+    keywords: [
+      'undo',
+      'rewind',
+      'restore',
+      'tail',
+      'rollback',
+      'back',
+      'history',
+      'prompt',
+    ],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const runtime = workspace.getRuntime(sessionId)
+      const pending = runtime.pendingRewindUndo
+      const kind = meta?.kind ?? 'claude'
+      return (
+        (kind === 'claude' || kind === 'codex') &&
+        Boolean(pending) &&
+        meta?.providerSessionId === pending?.rewoundProviderSessionId &&
+        !runtime.processActive &&
+        !runtime.semantic.currentTurn
+      )
+    },
+    run: async ({ workspace, ui }) => {
+      ui.closePalette()
+      await workspace.undoLastRewind()
+    },
+  },
+  {
     // Agent Activity — overview of every visible pane/session
     // grouped by tab, sorted by last activity. Primary use case is
     // triaging a long working session: scan which agents have gone

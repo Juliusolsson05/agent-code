@@ -71,9 +71,35 @@ export function codexPromptsMatchForOwnership(
 
 export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
   setStreamingBaseline: (sessionId: SessionId, baseline: string | null) => void
+  clearPendingRewindUndo: (sessionId: SessionId) => void
   addOptimisticCodexUserEntry: (sessionId: SessionId, text: string) => void
   removeOptimisticCodexUserEntry: (sessionId: SessionId, text: string) => void
 } {
+  const clearPendingRewindUndo = useCallback(
+    (sessionId: SessionId) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current?.pendingRewindUndo) return prev
+        // WHY this exists separately from setStreamingBaseline:
+        // Normal composer submits already have a rich optimistic-submit path
+        // that can clear Undo Rewind while updating streaming state. Slash-mode
+        // commits write directly to the provider PTY and may start a real turn
+        // without touching that path. Clearing only this field lets those
+        // alternate submit routes honor the same "undo is gone once you
+        // continue the rewound branch" contract without lying to the feed that
+        // a normal text submit has begun.
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            pendingRewindUndo: null,
+          },
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
   const setStreamingBaseline = useCallback(
     (sessionId: SessionId, baseline: string | null) => {
       const now = Date.now()
@@ -85,6 +111,13 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
               ...current,
               streamingBaseline: baseline,
               awaitingAssistant: true,
+              // Rewind undo is intentionally valid only until the user starts
+              // continuing from the rewound branch. Clearing here, at the same
+              // "submit started" boundary that drives optimistic streaming,
+              // means the command disappears before provider output, JSONL
+              // replay, or a failed write can create an ambiguous state where
+              // Undo Rewind would hide new branch work from the visible pane.
+              pendingRewindUndo: null,
               streamPhase: 'submitting',
               submittedAt: now,
               phaseChangedAt: now,
@@ -237,6 +270,7 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
 
   return {
     setStreamingBaseline,
+    clearPendingRewindUndo,
     addOptimisticCodexUserEntry,
     removeOptimisticCodexUserEntry,
   }
