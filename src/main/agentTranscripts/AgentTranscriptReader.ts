@@ -210,7 +210,7 @@ async function parseTranscript(
     }
   }
 
-  const items: AgentTranscriptItem[] = []
+  const rawItems: AgentTranscriptItem[] = []
   const stats = emptyStats()
   let firstTimestamp: number | undefined
   let lastTimestamp: number | undefined
@@ -231,8 +231,7 @@ async function parseTranscript(
         ? extractClaudeItems(raw, timestamp)
         : extractCodexItems(raw, timestamp)
       for (const item of extracted) {
-        items.push(item)
-        incrementStats(stats, item)
+        rawItems.push(item)
       }
     }
   } catch (err) {
@@ -243,6 +242,10 @@ async function parseTranscript(
     }
   }
 
+  const items = dedupeAdjacentTranscriptItems(rawItems)
+  for (const item of items) {
+    incrementStats(stats, item)
+  }
   markFallbackFinal(items)
 
   return {
@@ -639,6 +642,39 @@ function emptyStats(): AgentTranscriptStats {
     testRuns: 0,
     parseErrors: 0,
   }
+}
+
+function dedupeAdjacentTranscriptItems(items: AgentTranscriptItem[]): AgentTranscriptItem[] {
+  const deduped: AgentTranscriptItem[] = []
+  for (const item of items) {
+    const previous = deduped[deduped.length - 1]
+    if (previous && transcriptItemsEquivalent(previous, item)) {
+      // WHY Codex needs this normalization step:
+      //
+      // A single visible Codex assistant/user message is commonly recorded
+      // twice: once as a high-level `event_msg` used by Agent Code's runtime
+      // feed and once as a canonical `response_item` from the provider
+      // rollout. Both are useful in raw transcript debugging, but this MCP
+      // domain is deliberately a consumption boundary for another agent's work
+      // product. Returning both makes searches look like duplicate findings
+      // and makes `contextItems` echo the same sentence before/after itself.
+      // We only collapse adjacent equivalent normalized items so distinct
+      // repeated messages still survive when the transcript actually contains
+      // separate turns.
+      if (previous.kind === 'assistant_message' && item.kind === 'assistant_message') {
+        previous.final = previous.final || item.final
+      }
+      continue
+    }
+    deduped.push({ ...item })
+  }
+  return deduped
+}
+
+function transcriptItemsEquivalent(left: AgentTranscriptItem, right: AgentTranscriptItem): boolean {
+  if (left.kind !== right.kind) return false
+  if (left.timestamp !== right.timestamp) return false
+  return itemSearchText(left) === itemSearchText(right)
 }
 
 function incrementStats(stats: AgentTranscriptStats, item: AgentTranscriptItem): void {

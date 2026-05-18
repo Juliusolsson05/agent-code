@@ -72,6 +72,15 @@ await writeJsonl(codexPath, [
       content: [{ type: 'output_text', text: 'No findings.' }],
     },
   },
+  {
+    timestamp: '2026-05-18T08:12:00.000Z',
+    type: 'event_msg',
+    payload: {
+      type: 'agent_message',
+      phase: 'final_answer',
+      message: 'No findings.',
+    },
+  },
 ])
 
 {
@@ -118,6 +127,7 @@ await writeJsonl(codexPath, [
   assert.equal(result.items.length, 1)
   assert.equal(result.items[0]?.kind, 'assistant_message')
   assert.equal(result.items[0]?.text, 'No findings.')
+  assert.equal(result.stats.assistantMessages, 1)
 }
 
 {
