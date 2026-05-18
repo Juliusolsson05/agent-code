@@ -366,6 +366,7 @@ export function useSessionActions(
       const oldId = _targetSessionId ?? commandTargetSessionIdForState(snapshot)
       if (!oldId) return
       const oldMeta = snapshot.sessions[oldId]
+      if (!oldMeta) return
       const nextKind = spawnOpts.kind ?? oldMeta?.kind ?? 'claude'
       // WHY replaceSession inherits MCP domains by default:
       //
