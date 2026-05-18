@@ -113,13 +113,22 @@ function stripWorkspaceRoot(absPath: string, workspaceRoot: string): string | nu
 }
 
 function normalizeRelativeCandidate(path: string): string | null {
-  const normalized = path.replace(/^\.\/+/, '').replace(/\/+/g, '/')
-  if (!normalized || normalized === '.') return null
-  if (normalized.startsWith('/')) return null
-  if (normalized.startsWith('../') || normalized === '..') return null
-  if (normalized.includes('/../') || normalized.endsWith('/..')) return null
-  if (normalized.includes('\0')) return null
-  if (normalized.includes(':')) return null
+  if (path.includes('\0')) return null
+  if (path.includes(':')) return null
+  if (path.startsWith('/')) return null
+  // Collapse harmless `.` segments before the editor buffer key is chosen.
+  // Security still rejects `..` outright instead of resolving it because the
+  // renderer classifier is only the first boundary; main repeats containment
+  // checks in editor-fs. The purpose here is UX consistency: `src/./a.ts` and
+  // `src/a.ts` should not create two dirty buffers for the same file.
+  const segments: string[] = []
+  for (const segment of path.split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') return null
+    segments.push(segment)
+  }
+  const normalized = segments.join('/')
+  if (!normalized) return null
   return normalized
 }
 
@@ -153,7 +162,7 @@ function looksLikeInlineCodeFilePath(path: string): boolean {
 }
 
 function isKnownUnsafeScheme(raw: string): boolean {
-  return /^(?:javascript|data|file|mailto|tel|blob|about|chrome|devtools|vscode):/i.test(raw)
+  return /^(?:javascript|data|file|mailto|tel|blob|about|chrome|devtools|vscode|vbscript):/i.test(raw)
 }
 
 function hasExplicitUrlScheme(raw: string): boolean {

@@ -62,6 +62,10 @@ assert.deepEqual(classifyRenderedTarget('data:text/html,hi', { workspaceRoot: ro
   kind: 'unsupported',
   reason: 'unsafe-protocol',
 })
+assert.deepEqual(classifyRenderedTarget('vbscript:msgbox(1)', { workspaceRoot: root }), {
+  kind: 'unsupported',
+  reason: 'unsafe-protocol',
+})
 assert.deepEqual(classifyRenderedTarget('file:///Users/alice/project/src/app.ts', { workspaceRoot: root }), {
   kind: 'unsupported',
   reason: 'unsafe-protocol',
@@ -81,6 +85,12 @@ assert.deepEqual(classifyRenderedTarget('./src/app.ts:42', { workspaceRoot: root
   kind: 'local-file',
   path: 'src/app.ts',
   line: 42,
+  column: null,
+})
+assert.deepEqual(classifyRenderedTarget('src/./nested/./app.ts', { workspaceRoot: root }), {
+  kind: 'local-file',
+  path: 'src/nested/app.ts',
+  line: null,
   column: null,
 })
 assert.deepEqual(classifyRenderedTarget('src/app.ts:42:10', { workspaceRoot: root }), {

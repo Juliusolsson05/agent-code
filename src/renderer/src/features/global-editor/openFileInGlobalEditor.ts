@@ -35,13 +35,21 @@ export async function openFileInGlobalEditor({
   // buffer preservation, tab ordering, and language detection. Reusing that
   // path means a clicked markdown path behaves like a file-tree click rather
   // than becoming a second filesystem policy surface.
-  useGlobalEditorStore.getState().openFile({
+  const editor = useGlobalEditorStore.getState()
+  editor.openFile({
     cwd: root,
     path: result.path,
     text: result.text,
     mtimeMs: result.mtimeMs,
     selection,
   })
+  // A rendered link can come from a non-active pane, a previewed session, or a
+  // workspace different from the editor's current `activeCwd`. Opening the
+  // buffer without switching the active cwd would make the click technically
+  // succeed while leaving the user staring at the previous project. File
+  // activation is a navigation intent, so make the opened file's root the
+  // visible editor root before showing the editor.
+  editor.setActiveCwd(root)
   useAppStore.getState().openGlobalEditor()
   return { ok: true }
 }
