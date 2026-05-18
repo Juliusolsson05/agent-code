@@ -87,6 +87,7 @@ type GlobalEditorStore = {
   }) => void
   setActiveFile: (cwd: string, path: string | null) => void
   updateFileText: (cwd: string, path: string, text: string) => void
+  setFileError: (cwd: string, path: string, error: string | null) => void
   clearFileSelection: (cwd: string, path: string) => void
   markFileSaved: (cwd: string, path: string, text: string, mtimeMs: number) => void
   closeFile: (cwd: string, path: string) => boolean
@@ -241,6 +242,37 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
                 ...current,
                 currentText: text,
                 dirty: text !== current.savedText,
+                // WHY typing clears the stale save error instead of leaving it
+                // pinned until the next successful write: conflicts are tied
+                // to the previous save attempt, not to every future edit. The
+                // next Cmd+S will re-run the authoritative mtime check in main,
+                // so keeping an old "file changed on disk" message after the
+                // user has continued editing is more misleading than helpful.
+                error: null,
+              },
+            },
+          },
+        },
+      }
+    }),
+
+  setFileError: (cwd, path, error) =>
+    set(state => {
+      const prev = state.byCwd[cwd]
+      if (!prev) return state
+      const current = prev.openFiles[path]
+      if (!current) return state
+      if (current.error === error) return state
+      return {
+        byCwd: {
+          ...state.byCwd,
+          [cwd]: {
+            ...prev,
+            openFiles: {
+              ...prev.openFiles,
+              [path]: {
+                ...current,
+                error,
               },
             },
           },

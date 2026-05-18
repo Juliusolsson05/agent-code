@@ -14,18 +14,26 @@ export async function openFileInGlobalEditor({
   line,
   column,
 }: OpenFileInGlobalEditorParams): Promise<{ ok: true } | { ok: false; error: string }> {
-  const result = await window.api.editorReadTextFile({ root, path }).catch(err => ({
-    ok: false as const,
-    error: err instanceof Error ? err.message : 'read failed',
-  }))
-  if (!result.ok) return { ok: false, error: result.error }
-
+  const editor = useGlobalEditorStore.getState()
   const selection = line
     ? {
         line,
         column: column ?? 1,
       }
     : null
+
+  // WHY we still read when the tab is already open and clean: agent writes
+  // commonly happen outside the editor store, and there is no file watcher on
+  // these buffers yet. A click on the tree or rendered path is the user's
+  // explicit "show me this file now" intent, so it must revalidate against
+  // disk instead of assuming the in-memory clean buffer is current. Dirty
+  // buffers remain protected by store.openFile, which refreshes savedText and
+  // mtime while preserving the user's edits.
+  const result = await window.api.editorReadTextFile({ root, path }).catch(err => ({
+    ok: false as const,
+    error: err instanceof Error ? err.message : 'read failed',
+  }))
+  if (!result.ok) return { ok: false, error: result.error }
 
   // WHY rendered-content file activation reuses the Global Editor store
   // instead of opening file: URLs or delegating to the OS: assistant/provider
@@ -35,7 +43,6 @@ export async function openFileInGlobalEditor({
   // buffer preservation, tab ordering, and language detection. Reusing that
   // path means a clicked markdown path behaves like a file-tree click rather
   // than becoming a second filesystem policy surface.
-  const editor = useGlobalEditorStore.getState()
   editor.openFile({
     cwd: root,
     path: result.path,

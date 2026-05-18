@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { basename, dirname } from '@renderer/features/editor/lib/path'
 import { FileIcon, FolderIcon } from '@renderer/features/editor/lib/fileIcon'
@@ -29,35 +29,49 @@ export function ExplorerPane({ root, activeFilePath, onOpenFile }: Props) {
   const [rootEntries, setRootEntries] = useState<EditorFsEntry[]>([])
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']))
   const [error, setError] = useState<string | null>(null)
+  const inFlightLoadsRef = useRef<Map<string, number>>(new Map())
+  const loadGenerationRef = useRef(0)
 
   const loadDirectory = useCallback(async (path: string) => {
+    const generation = loadGenerationRef.current
+    if (inFlightLoadsRef.current.has(path)) return
+    inFlightLoadsRef.current.set(path, generation)
     setNodes(prev => {
       const current = prev[path]
       if (!current) return prev
       return { ...prev, [path]: { ...current, loading: true, error: null } }
     })
-    const result = await window.api.editorListDirectory({ root, path })
-    if (!result.ok) {
-      if (path === '') setError(result.error)
+    try {
+      const result = await window.api.editorListDirectory({ root, path })
+      if (generation !== loadGenerationRef.current) return
+      if (!result.ok) {
+        if (path === '') setError(result.error)
+        setNodes(prev => {
+          const current = prev[path]
+          if (!current) return prev
+          return { ...prev, [path]: { ...current, loading: false, error: result.error } }
+        })
+        return
+      }
+      if (path === '') {
+        setRootEntries(result.entries)
+        setError(null)
+      }
       setNodes(prev => {
         const current = prev[path]
         if (!current) return prev
-        return { ...prev, [path]: { ...current, loading: false, error: result.error } }
+        return { ...prev, [path]: { ...current, children: result.entries, loading: false, error: null } }
       })
-      return
+    } finally {
+      if (inFlightLoadsRef.current.get(path) === generation) {
+        inFlightLoadsRef.current.delete(path)
+      }
     }
-    if (path === '') {
-      setRootEntries(result.entries)
-      setError(null)
-    }
-    setNodes(prev => {
-      const current = prev[path]
-      if (!current) return prev
-      return { ...prev, [path]: { ...current, children: result.entries, loading: false, error: null } }
-    })
   }, [root])
 
   useEffect(() => {
+    loadGenerationRef.current += 1
+    inFlightLoadsRef.current.clear()
     setNodes({
       '': {
         entry: {
@@ -104,7 +118,7 @@ export function ExplorerPane({ root, activeFilePath, onOpenFile }: Props) {
       return next
     })
     const node = nodes[entry.path]
-    if (!node?.children && !node?.loading) {
+    if (!node?.children && !node?.loading && !inFlightLoadsRef.current.has(entry.path)) {
       void loadDirectory(entry.path)
     }
   }, [ensureNode, loadDirectory, nodes])

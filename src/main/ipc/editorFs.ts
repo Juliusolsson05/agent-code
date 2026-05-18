@@ -3,6 +3,8 @@ import { constants } from 'fs'
 import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { basename, dirname, join, relative, resolve } from 'path'
 
+import { EditorFsCache } from './editorFsCache'
+
 // WHY a hardcoded ignore list lives in main rather than the renderer:
 //
 //   The renderer is allowed to ask for any directory inside the project root,
@@ -123,6 +125,8 @@ function toProjectPath(root: string, abs: string): string {
   return rel === '' ? '' : rel
 }
 
+const editorFsCache = new EditorFsCache()
+
 export function registerEditorFsIpc(): void {
   ipcMain.handle(
     'editor-fs:list-directory',
@@ -130,13 +134,25 @@ export function registerEditorFsIpc(): void {
       try {
         const root = resolve(params.root)
         const target = resolveInsideRoot(root, params.path ?? '')
+        const targetPath = toProjectPath(root, target)
+        const itemStat = await stat(target)
+        if (!itemStat.isDirectory()) return { ok: false, error: 'not a directory' }
+        const showHidden = params.showHidden === true
+        const cached = editorFsCache.getDirectory({
+          root,
+          path: targetPath,
+          showHidden,
+          mtimeMs: itemStat.mtimeMs,
+          size: itemStat.size,
+        })
+        if (cached) return { ok: true, root, path: targetPath, entries: cached }
         const entries: EditorFsEntry[] = []
         const dirents = await readdir(target, { withFileTypes: true })
         for (const dirent of dirents) {
           // The hidden gate covers both dotfiles AND the junk ignore list so
           // a single toggle in the UI gives the user the full unfiltered tree
           // rather than two confusingly partial reveals.
-          if (!params.showHidden) {
+          if (!showHidden) {
             if (dirent.name.startsWith('.')) continue
             if (dirent.isDirectory()) {
               if (EDITOR_IGNORED_DIR_NAMES.has(dirent.name)) continue
@@ -164,7 +180,15 @@ export function registerEditorFsIpc(): void {
           if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
           return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
         })
-        return { ok: true, root, path: toProjectPath(root, target), entries }
+        editorFsCache.setDirectory({
+          root,
+          path: targetPath,
+          showHidden,
+          mtimeMs: itemStat.mtimeMs,
+          size: itemStat.size,
+          entries,
+        })
+        return { ok: true, root, path: targetPath, entries }
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
       }
@@ -179,14 +203,23 @@ export function registerEditorFsIpc(): void {
         const target = resolveInsideRoot(root, params.path)
         const itemStat = await stat(target)
         if (!itemStat.isFile()) return { ok: false, error: 'not a file' }
+        const targetPath = toProjectPath(root, target)
+        const cached = editorFsCache.getTextFile({
+          root,
+          path: targetPath,
+          mtimeMs: itemStat.mtimeMs,
+          size: itemStat.size,
+        })
+        if (cached) return { ok: true, ...cached }
         const text = await readFile(target, 'utf8')
-        return {
-          ok: true,
-          path: toProjectPath(root, target),
+        const read = {
+          path: targetPath,
           text,
           mtimeMs: itemStat.mtimeMs,
           size: itemStat.size,
         }
+        editorFsCache.setTextFile({ root, path: targetPath, read })
+        return { ok: true, ...read }
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
       }
@@ -220,9 +253,11 @@ export function registerEditorFsIpc(): void {
         await mkdir(dirname(target), { recursive: true })
         await writeFile(target, params.text, 'utf8')
         const after = await stat(target)
+        const targetPath = toProjectPath(root, target)
+        editorFsCache.invalidatePath(root, targetPath)
         return {
           ok: true,
-          path: toProjectPath(root, target),
+          path: targetPath,
           mtimeMs: after.mtimeMs,
           size: after.size,
         }
@@ -246,7 +281,9 @@ export function registerEditorFsIpc(): void {
           () => undefined,
         )
         await writeFile(target, '', 'utf8')
-        return { ok: true, path: toProjectPath(root, target) }
+        const targetPath = toProjectPath(root, target)
+        editorFsCache.invalidatePath(root, targetPath)
+        return { ok: true, path: targetPath }
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
       }
@@ -260,7 +297,9 @@ export function registerEditorFsIpc(): void {
         const root = resolve(params.root)
         const target = resolveInsideRoot(root, params.path)
         await mkdir(target, { recursive: true })
-        return { ok: true, path: toProjectPath(root, target) }
+        const targetPath = toProjectPath(root, target)
+        editorFsCache.invalidatePath(root, targetPath)
+        return { ok: true, path: targetPath }
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
       }
@@ -276,7 +315,11 @@ export function registerEditorFsIpc(): void {
         const to = resolveInsideRoot(root, params.toPath)
         await mkdir(dirname(to), { recursive: true })
         await rename(from, to)
-        return { ok: true, path: toProjectPath(root, to) }
+        const fromPath = toProjectPath(root, from)
+        const toPath = toProjectPath(root, to)
+        editorFsCache.invalidatePath(root, fromPath)
+        editorFsCache.invalidatePath(root, toPath)
+        return { ok: true, path: toPath }
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
       }
@@ -291,7 +334,9 @@ export function registerEditorFsIpc(): void {
         const target = resolveInsideRoot(root, params.path)
         if (toProjectPath(root, target) === '') return { ok: false, error: 'cannot delete project root' }
         await rm(target, { recursive: true, force: false })
-        return { ok: true, path: toProjectPath(root, target) || basename(target) }
+        const targetPath = toProjectPath(root, target)
+        editorFsCache.invalidatePath(root, targetPath)
+        return { ok: true, path: targetPath || basename(target) }
       } catch (err) {
         return { ok: false, error: errorMessage(err) }
       }
