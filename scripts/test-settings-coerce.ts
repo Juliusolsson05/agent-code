@@ -10,6 +10,10 @@ assert(defaults.showWorktreeBadges === true, 'showWorktreeBadges should default 
 assert(defaults.dangerousAgentsEnabled === false, 'dangerousAgentsEnabled should default off')
 assert(defaults.defaultWorkspaceMode === 'grid', 'defaultWorkspaceMode should default to grid')
 assert(defaults.dictationShortcut === 'Fn', 'dictation shortcut should default to Fn')
+assert(
+  defaults.customAppearanceJson.includes('"canvas"'),
+  'customAppearanceJson should default to a full raw JSON payload',
+)
 
 const coerced = coerceSettings({
   mode: 'not-a-theme',
@@ -66,5 +70,24 @@ assert(spaceMonoPick.fontFamily === 'space-mono', 'fontFamily should accept a cu
 
 const bogusFont = coerceSettings({ fontFamily: 'comic-sans' })
 assert(bogusFont.fontFamily === 'jetbrains-mono', 'unknown fontFamily should fall back to default')
+
+const customTheme = coerceSettings({
+  mode: 'custom',
+  customAppearanceJson: defaults.customAppearanceJson.replace('#0a0a0a', '#101010'),
+})
+assert(customTheme.mode === 'custom', 'theme mode should accept custom')
+assert(
+  customTheme.customAppearanceJson.includes('#101010'),
+  'valid customAppearanceJson should be preserved and normalized',
+)
+
+const invalidCustomTheme = coerceSettings({
+  mode: 'custom',
+  customAppearanceJson: '{"canvas":"#000"}',
+})
+assert(
+  invalidCustomTheme.customAppearanceJson === defaults.customAppearanceJson,
+  'invalid customAppearanceJson should fall back to default payload',
+)
 
 console.log('settings coercion ok')

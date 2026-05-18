@@ -1,14 +1,17 @@
+import { DEFAULT_CUSTOM_APPEARANCE_JSON } from '@renderer/app-state/settings/customAppearance'
+
 export type ThemeMode =
   | 'dark'
   | 'dark-dim'
   | 'dark-tokyonight'
   | 'light'
+  | 'custom'
   | 'light-soft'
 
 export type ThemeModeMeta = {
   id: ThemeMode
   label: string
-  family: 'dark' | 'light'
+  family: 'dark' | 'light' | 'custom'
 }
 
 export const THEME_MODES: ThemeModeMeta[] = [
@@ -16,6 +19,12 @@ export const THEME_MODES: ThemeModeMeta[] = [
   { id: 'dark-dim', label: 'Gray Dark', family: 'dark' },
   { id: 'dark-tokyonight', label: 'Tokyonight', family: 'dark' },
   { id: 'light', label: 'Light', family: 'light' },
+  // WHY Custom sits before Soft Light: the settings UI renders theme modes in
+  // a two-column grid. Adding Custom as the fifth option lands it in the
+  // lower-left cell and Soft Light in the lower-right cell, which gives the
+  // Appearance section an even 3x2 shape without moving the established dark
+  // and light defaults at the top.
+  { id: 'custom', label: 'Custom', family: 'custom' },
   { id: 'light-soft', label: 'Soft Light', family: 'light' },
 ]
 
@@ -174,6 +183,13 @@ export type Settings = {
   mode: ThemeMode
   contrast: boolean
   accent: AccentId
+  /** Raw JSON string for the Custom Appearance mode. It is stored as raw
+   *  user input rather than as a parsed object because the settings UI is a
+   *  JSON editor: users expect formatting, ordering, and comments about parse
+   *  errors to be local to that editor instead of losing their text on every
+   *  keystroke. Persistence still validates/coerces the string on boot, and
+   *  the modal validates before saving. */
+  customAppearanceJson: string
   customRendering: boolean
   showStatusMode: boolean
   showWorktreeBadges: boolean
@@ -248,6 +264,7 @@ export const DEFAULT_SETTINGS: Settings = {
   mode: 'dark',
   contrast: false,
   accent: 'lime',
+  customAppearanceJson: DEFAULT_CUSTOM_APPEARANCE_JSON,
   customRendering: false,
   showStatusMode: true,
   showWorktreeBadges: true,
