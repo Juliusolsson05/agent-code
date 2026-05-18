@@ -149,6 +149,7 @@ export function useWorkspace(
       undoStackRef: refs.undoStackRef,
       bootstrapTimersRef: refs.bootstrapTimersRef,
       persistedFeedDebugIdRef: refs.persistedFeedDebugIdRef,
+      inFlightFeedDebugIdRef: refs.inFlightFeedDebugIdRef,
       paneToastTimers: refs.paneToastTimers,
       saveTimerRef: refs.saveTimerRef,
       bootRef: refs.bootRef,

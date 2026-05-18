@@ -9,40 +9,69 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 // runtime update. The main-side queue writes them to
 // <userData>/feed-debug/<sessionId>.jsonl.
 //
-// The `persistedFeedDebugIdRef` tracks the largest feed-debug entry
-// id we've shipped per session so we don't re-ship entries already
-// on disk.
+// `persistedFeedDebugIdRef` tracks the largest feed-debug entry id
+// main has confirmed as written. `inFlightFeedDebugIdRef` tracks the
+// largest id currently reserved by an unresolved append IPC. We need
+// both cursors: persisted-only preserves retry-on-failure, but it
+// leaves the same pending entries visible to every render while the
+// IPC is still waiting on main-side disk work; in-flight-only would
+// suppress retries after a failure. The pair gives us backpressure
+// without weakening durability.
+
+export type FeedDebugAppendBatch = {
+  entries: SessionRuntime['feedDebugLog']
+  maxPendingId: number
+}
+
+export function selectFeedDebugAppendBatch(
+  runtime: SessionRuntime,
+  lastPersistedId: number,
+  lastInFlightId: number,
+): FeedDebugAppendBatch | null {
+  if (runtime.feedDebugLog.length === 0) return null
+  if (lastInFlightId > lastPersistedId) return null
+  const pending = runtime.feedDebugLog.filter(entry => entry.id > lastPersistedId)
+  if (pending.length === 0) return null
+  return {
+    entries: pending,
+    maxPendingId: pending[pending.length - 1]?.id ?? lastPersistedId,
+  }
+}
 
 export function useFeedDebugPersist(
   runtimes: Record<SessionId, SessionRuntime>,
   refs: WorkspaceRefs,
 ): void {
   useEffect(() => {
-    for (const [sessionId, runtime] of Object.entries(runtimes)) {
-      if (runtime.feedDebugLog.length === 0) continue
+    const flushSession = (sessionId: SessionId, runtime: SessionRuntime): void => {
+      if (runtime.feedDebugLog.length === 0) return
       const lastPersistedId = refs.persistedFeedDebugIdRef.current[sessionId] ?? 0
-      const pending = runtime.feedDebugLog.filter(entry => entry.id > lastPersistedId)
-      if (pending.length === 0) continue
-      const maxPendingId = pending[pending.length - 1]?.id ?? lastPersistedId
-      // Advance the persisted-cursor ONLY after the IPC append
-      // actually resolves. The old ordering advanced the cursor
-      // optimistically before the write, so a transient failure
-      // (disk full, IPC timeout, main-process not ready) would
-      // mark the entries as persisted and the next effect pass
-      // would skip them — permanently dropping that window of
-      // debug logs. Moving the assignment inside `.then()` means
-      // a failed append leaves the cursor at its previous value
-      // and the next runtime update retries those entries.
+      const lastInFlightId = refs.inFlightFeedDebugIdRef.current[sessionId] ?? 0
+      const batch = selectFeedDebugAppendBatch(runtime, lastPersistedId, lastInFlightId)
+      if (!batch) return
+      const { entries: pending, maxPendingId } = batch
+      refs.inFlightFeedDebugIdRef.current[sessionId] = maxPendingId
+      // Advance the durable cursor ONLY after the IPC append actually
+      // resolves. A previous version advanced optimistically before
+      // the write, so a transient failure (disk full, IPC timeout,
+      // main-process not ready) marked entries as persisted and the
+      // next effect pass skipped them forever. The in-flight cursor
+      // above is the separate backpressure mechanism: it reserves the
+      // pending id range while the IPC is unresolved, then this `.then`
+      // makes that reservation durable once main confirms the append.
       //
-      // Re-entrancy note: the effect only fires when the
-      // runtimes object reference changes, and the filter above
-      // skips entries already ≤ lastPersistedId. If two effect
-      // passes fire in quick succession before the first append
-      // resolves, the second pass will re-send the same `pending`
-      // window. That's safe — the main-side appender is
-      // idempotent on (sessionId, id) because entries are written
-      // in append-order with monotonic ids, so duplicate writes
-      // of the same id just no-op at the file layer.
+      // Re-entrancy note: the effect fires on every runtimes object
+      // replacement, which can happen dozens of times per second while
+      // a semantic stream is active. We allow only ONE unresolved
+      // append per session, not just one append per id range. Sending
+      // a newer range while an older range is unresolved would re-open
+      // a subtle data-loss case: if the older disk write failed but
+      // the newer one succeeded, advancing `persisted` to the newer id
+      // would make the failed older entries look durable. Serializing
+      // at the renderer keeps retry semantics simple; the success path
+      // below immediately drains any entries that arrived while the IPC
+      // was in flight, so the one-at-a-time rule does not rely on a
+      // future React render to make progress.
       void window.api
         .appendFeedDebugLog({
           sessionId,
@@ -58,11 +87,30 @@ export function useFeedDebugPersist(
         })
         .then(() => {
           refs.persistedFeedDebugIdRef.current[sessionId] = maxPendingId
+          if (refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId) {
+            delete refs.inFlightFeedDebugIdRef.current[sessionId]
+          }
+          const latestRuntime = refs.latestRuntimesRef.current[sessionId]
+          if (latestRuntime) {
+            flushSession(sessionId, latestRuntime)
+          }
         })
         .catch(err => {
+          if (refs.inFlightFeedDebugIdRef.current[sessionId] === maxPendingId) {
+            delete refs.inFlightFeedDebugIdRef.current[sessionId]
+          }
           // eslint-disable-next-line no-console
           console.warn(`[feed-debug ${sessionId.slice(0, 8)}] append failed`, err)
         })
     }
-  }, [refs.persistedFeedDebugIdRef, runtimes])
+
+    for (const [sessionId, runtime] of Object.entries(runtimes)) {
+      flushSession(sessionId, runtime)
+    }
+  }, [
+    refs.inFlightFeedDebugIdRef,
+    refs.latestRuntimesRef,
+    refs.persistedFeedDebugIdRef,
+    runtimes,
+  ])
 }
