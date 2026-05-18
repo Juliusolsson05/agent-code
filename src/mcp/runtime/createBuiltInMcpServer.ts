@@ -1,6 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
+import {
+  inspectAgentTranscriptFile,
+  readAgentTranscriptFile,
+  searchAgentTranscriptFile,
+} from '@main/agentTranscripts/AgentTranscriptReader.js'
+import {
+  AGENT_TRANSCRIPT_ITEM_KINDS,
+  AGENT_TRANSCRIPT_PROJECTIONS,
+} from '@mcp/shared/agentTranscriptTypes.js'
 import type { OrchestrationAgentKind } from '@mcp/shared/orchestrationTypes.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
@@ -58,7 +67,128 @@ export function createBuiltInMcpServer(
     registerAiWorkspaceTools(server, scope, dependencies)
   }
 
+  if (scope.domains.includes('agent_transcripts')) {
+    registerAgentTranscriptTools(server)
+  }
+
   return server
+}
+
+function registerAgentTranscriptTools(server: McpServer): void {
+  const providerSchema = z.enum(['claude', 'codex', 'auto']).default('auto')
+  const projectionSchema = z.enum(AGENT_TRANSCRIPT_PROJECTIONS)
+  const itemKindSchema = z.enum(AGENT_TRANSCRIPT_ITEM_KINDS)
+  const includeSchema = z.object({
+    userMessages: z.boolean().optional(),
+    assistantMessages: z.boolean().optional(),
+    toolReads: z.boolean().optional(),
+    toolWrites: z.boolean().optional(),
+    shellCommands: z.boolean().optional(),
+    patches: z.boolean().optional(),
+    testRuns: z.boolean().optional(),
+    rawToolOutputs: z.boolean().optional(),
+  }).optional()
+
+  // WHY these tools take an explicit filesystem path instead of trying to
+  // discover "the right" transcript:
+  //
+  // The product use case is controlled consumption of another agent's work
+  // product, not a global transcript browser. The UI, orchestration metadata,
+  // or a handoff prompt already knows which Claude/Codex JSONL file matters.
+  // Discovery would force this MCP boundary to decide ownership, scoping, and
+  // ranking semantics that are unrelated to projection. A path-in API keeps v1
+  // auditable and predictable: the caller names the transcript, then chooses a
+  // bounded projection such as final answer, assistant messages, commands, or
+  // timeline. We intentionally do not provider-root allowlist here because the
+  // local agent/user is already trusted to pass a transcript path on this
+  // machine; invalid paths fail cleanly instead of being policy-blocked.
+  server.registerTool(
+    'agent_transcript_read_file',
+    {
+      title: 'Read Agent Transcript File',
+      description:
+        'Reads one Claude or Codex transcript JSONL file by path and returns a normalized, filtered, bounded projection of user-visible agent context.',
+      inputSchema: {
+        path: z.string(),
+        provider: providerSchema.optional(),
+        projection: projectionSchema,
+        include: includeSchema,
+        tail: z.number().int().min(1).max(10_000).optional(),
+        maxItems: z.number().int().min(1).max(10_000).optional(),
+        maxChars: z.number().int().min(100).max(500_000).optional(),
+        maxCharsPerItem: z.number().int().min(50).max(100_000).optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async args => toolText(await readAgentTranscriptFile({
+      path: args.path,
+      provider: args.provider,
+      projection: args.projection,
+      include: args.include,
+      tail: args.tail,
+      maxItems: args.maxItems,
+      maxChars: args.maxChars,
+      maxCharsPerItem: args.maxCharsPerItem,
+    })),
+  )
+
+  server.registerTool(
+    'agent_transcript_search_file',
+    {
+      title: 'Search Agent Transcript File',
+      description:
+        'Searches one Claude or Codex transcript JSONL file by path and returns bounded normalized matches with optional surrounding context.',
+      inputSchema: {
+        path: z.string(),
+        provider: providerSchema.optional(),
+        query: z.string(),
+        kinds: z.array(itemKindSchema).optional(),
+        maxMatches: z.number().int().min(1).max(1000).optional(),
+        contextItems: z.number().int().min(0).max(20).optional(),
+        maxCharsPerMatch: z.number().int().min(50).max(100_000).optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async args => toolText(await searchAgentTranscriptFile({
+      path: args.path,
+      provider: args.provider,
+      query: args.query,
+      kinds: args.kinds,
+      maxMatches: args.maxMatches,
+      contextItems: args.contextItems,
+      maxCharsPerMatch: args.maxCharsPerMatch,
+    })),
+  )
+
+  server.registerTool(
+    'agent_transcript_inspect_file',
+    {
+      title: 'Inspect Agent Transcript File',
+      description:
+        'Inspects one Claude or Codex transcript JSONL file by path and returns provider, timestamp, and item-count metadata without dumping content.',
+      inputSchema: {
+        path: z.string(),
+        provider: providerSchema.optional(),
+      },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+      },
+    },
+    async args => toolText(await inspectAgentTranscriptFile({
+      path: args.path,
+      provider: args.provider,
+    })),
+  )
 }
 
 function registerAiWorkspaceTools(
@@ -280,7 +410,7 @@ function registerOrchestrationTools(
         title: z.string().optional(),
         role: z.string().optional(),
         runId: z.string().optional(),
-        builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace'])).optional(),
+        builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'])).optional(),
       },
     },
     async args => {
