@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
+import { constants, type Stats } from 'node:fs'
 import { access, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -20,6 +20,7 @@ import type {
 
 const execFileAsync = promisify(execFile)
 const AI_WORKSPACE_FILE = `${STATE_DIR}/ai-workspaces.json`
+const STATUS_REFRESH_CONCURRENCY = 12
 
 type PersistedAiWorkspaceState = {
   workspaces: AiWorkspaceRecord[]
@@ -83,6 +84,11 @@ async function detectGitContext(path: string): Promise<{
 export class AiWorkspaceRegistry {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
+  private saveQueue: Promise<void> = Promise.resolve()
+  private readonly gitContextCache = new Map<string, Promise<{
+    projectRoot?: string
+    gitBranch?: string
+  }>>()
 
   constructor(private readonly stateFile = AI_WORKSPACE_FILE) {}
 
@@ -113,7 +119,10 @@ export class AiWorkspaceRegistry {
 
   async list(): Promise<AiWorkspaceSummary[]> {
     await this.ensureLoaded()
-    await this.refreshAll()
+    // Listing is used by command-palette modes and MCP discovery-style
+    // flows where callers need names/counts, not a fresh filesystem truth
+    // pass over every attached file. Preserve the last known status here;
+    // `get`, attach, and write paths still refresh real files.
     return [...this.workspaces.values()]
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map(workspace => ({
@@ -152,8 +161,8 @@ export class AiWorkspaceRegistry {
     const fileStat = await stat(path)
     if (!fileStat.isFile()) throw new Error('AI Workspace can only attach files')
 
-    const status = await this.statusForPath(path)
-    const git = await detectGitContext(path)
+    const status = await this.statusForPath(path, fileStat)
+    const git = await this.detectGitContextCached(path)
     const existingIdx = workspace.entries.findIndex(entry => entry.path === path)
     const timestamp = nowIso()
     const entry: AiWorkspaceFileEntry = {
@@ -261,7 +270,9 @@ export class AiWorkspaceRegistry {
       for (const workspace of parsed.workspaces ?? []) {
         this.workspaces.set(workspace.workspaceId, workspace)
       }
-      await this.refreshAll()
+      // Stored statuses are allowed to be slightly stale at startup.
+      // Refreshing all references here made first use perform an uncapped
+      // filesystem sweep. The selected workspace is refreshed when opened.
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
     }
@@ -273,17 +284,15 @@ export class AiWorkspaceRegistry {
     return workspace
   }
 
-  private async refreshAll(): Promise<void> {
-    await Promise.all([...this.workspaces.keys()].map(id => this.refreshWorkspace(id)))
-  }
-
   private async refreshWorkspace(workspaceId: string): Promise<AiWorkspaceRecord> {
     const workspace = this.requiredWorkspace(workspaceId)
-    workspace.entries = await Promise.all(
-      workspace.entries.map(async entry => ({
+    workspace.entries = await mapWithConcurrency(
+      workspace.entries,
+      STATUS_REFRESH_CONCURRENCY,
+      async entry => ({
         ...entry,
         status: await this.statusForPath(entry.path),
-      })),
+      }),
     )
     return workspace
   }
@@ -301,9 +310,9 @@ export class AiWorkspaceRegistry {
     if (changed) await this.save()
   }
 
-  private async statusForPath(path: string): Promise<AiWorkspaceFileStatus> {
+  private async statusForPath(path: string, knownStats?: Stats): Promise<AiWorkspaceFileStatus> {
     try {
-      const fileStat = await stat(path)
+      const fileStat = knownStats ?? await stat(path)
       if (!fileStat.isFile()) {
         return {
           exists: true,
@@ -334,6 +343,12 @@ export class AiWorkspaceRegistry {
   }
 
   private async save(): Promise<void> {
+    const next = this.saveQueue.then(() => this.writeStateFile())
+    this.saveQueue = next.catch(() => undefined)
+    await next
+  }
+
+  private async writeStateFile(): Promise<void> {
     await mkdir(dirname(this.stateFile), { recursive: true })
     const payload: PersistedAiWorkspaceState = {
       workspaces: [...this.workspaces.values()],
@@ -351,7 +366,41 @@ export class AiWorkspaceRegistry {
     const tmp = `${this.stateFile}.${process.pid}.${Date.now()}.${Math.random()
       .toString(36)
       .slice(2)}.tmp`
-    await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8')
+    await writeFile(tmp, JSON.stringify(payload), 'utf8')
     await rename(tmp, this.stateFile)
   }
+
+  private detectGitContextCached(path: string): Promise<{
+    projectRoot?: string
+    gitBranch?: string
+  }> {
+    const cwd = dirname(path)
+    let cached = this.gitContextCache.get(cwd)
+    if (!cached) {
+      // Agent fan-outs commonly attach several files from the same report
+      // directory. Share the two git subprocesses per directory instead of
+      // multiplying them by file count during a burst of MCP attach calls.
+      cached = detectGitContext(path)
+      this.gitContextCache.set(cwd, cached)
+    }
+    return cached
+  }
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next
+      next += 1
+      out[index] = await mapper(items[index], index)
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
