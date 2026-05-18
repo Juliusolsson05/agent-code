@@ -112,7 +112,9 @@ export const sessionCommands: CommandDef[] = [
       return (
         (kind === 'claude' || kind === 'codex') &&
         Boolean(pending) &&
-        meta?.providerSessionId === pending?.rewoundProviderSessionId
+        meta?.providerSessionId === pending?.rewoundProviderSessionId &&
+        !runtime.processActive &&
+        !runtime.semantic.currentTurn
       )
     },
     run: async ({ workspace, ui }) => {

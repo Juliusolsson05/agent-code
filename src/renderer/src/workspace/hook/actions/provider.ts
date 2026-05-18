@@ -192,6 +192,7 @@ export function useProviderActions(
           kind,
           resumeSessionId: result.newProviderSessionId,
           builtInMcpDomains: meta.builtInMcpDomains,
+          targetSessionId: sourceSessionId,
         })
         if (!newSessionId) return
 
@@ -304,6 +305,7 @@ export function useProviderActions(
         kind: pending.provider,
         resumeSessionId: pending.previousProviderSessionId,
         builtInMcpDomains: pending.builtInMcpDomains,
+        targetSessionId: sourceSessionId,
       })
       if (!newSessionId) return
 

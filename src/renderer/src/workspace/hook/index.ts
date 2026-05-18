@@ -171,7 +171,12 @@ export function useWorkspace(
     updateRuntime,
     setDraftVersion,
   )
-  const { setStreamingBaseline, addOptimisticCodexUserEntry, removeOptimisticCodexUserEntry } =
+  const {
+    setStreamingBaseline,
+    clearPendingRewindUndo,
+    addOptimisticCodexUserEntry,
+    removeOptimisticCodexUserEntry,
+  } =
     useStreamingActions(setRuntimes)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
     usePickerActions(setRuntimes, refs, showPaneToast)
@@ -454,6 +459,7 @@ export function useWorkspace(
     setSplitRatio,
     setSplitRatioInTab,
     setStreamingBaseline,
+    clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,
     addOptimisticCodexUserEntry,
