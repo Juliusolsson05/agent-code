@@ -1,5 +1,6 @@
 import type { Entry } from '@shared/types/transcript'
 import { isConversationEntry } from '@shared/types/transcript'
+import { asRecord } from '@shared/lib/asRecord'
 import type {
   WorkContextConfidence,
   WorktreeActivityEvent,
@@ -275,12 +276,6 @@ function parseJsonRecord(value: string | null): Record<string, unknown> | null {
   } catch {
     return null
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
 }
 
 function stringField(

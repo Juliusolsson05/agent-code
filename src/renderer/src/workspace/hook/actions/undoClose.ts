@@ -7,9 +7,8 @@ import type {
   SessionMeta,
   Tab,
   TabId,
-  TileNode,
 } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { missingClosedTabLeafMetaIds, reinsertPane } from '@renderer/lib/undoClose'
 import type { ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
 
@@ -176,19 +175,7 @@ export function useUndoCloseAction(
 
       if (idMap.size === 0) return 'retryable-failure' // nothing survived
 
-      const remapNode = (n: TileNode): TileNode => {
-        if (n.type === 'leaf') {
-          const mapped = idMap.get(n.sessionId)
-          // requiredLeafIds are spawned all-or-nothing above, so an unmapped
-          // leaf here means a corrupt undo entry rather than a recoverable
-          // partial restore. Keep the branch explicit to preserve that
-          // invariant for future edits.
-          return { type: 'leaf', sessionId: mapped ?? n.sessionId }
-        }
-        return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
-      }
-
-      const restoredRoot = remapNode(entry.tab.root)
+      const restoredRoot = remapTileTreeSessionIds(entry.tab.root, idMap)
       const leaves = collectLeaves(restoredRoot)
       if (leaves.length === 0) return 'retryable-failure'
 

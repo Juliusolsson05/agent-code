@@ -8,7 +8,7 @@ import type {
   Tab,
   TileNode,
 } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import {
@@ -86,16 +86,6 @@ export async function rehydrateWorkspace(
     console.warn('[workspace] dropping unowned persisted sessions during rehydrate:', staleIds)
   }
 
-  const remapNode = (n: TileNode): TileNode => {
-    if (n.type === 'leaf') {
-      const mapped = idMap.get(n.sessionId)
-      return mapped
-        ? { type: 'leaf', sessionId: mapped }
-        : n // shouldn't happen, but fall through rather than crash
-    }
-    return { ...n, a: remapNode(n.a), b: remapNode(n.b) }
-  }
-
   const sanitizeRemappedNode = (n: TileNode): TileNode | null => {
     if (n.type === 'leaf') {
       return freshSessions[n.sessionId] != null ? n : null
@@ -111,7 +101,7 @@ export async function rehydrateWorkspace(
   const buildRemappedTabs = (): Tab[] =>
     persisted.tabs
       .map(t => {
-        const remappedRoot = sanitizeRemappedNode(remapNode(t.root))
+        const remappedRoot = sanitizeRemappedNode(remapTileTreeSessionIds(t.root, idMap))
         if (!remappedRoot) return null
         const leaves = collectLeaves(remappedRoot)
         if (leaves.length === 0) return null
