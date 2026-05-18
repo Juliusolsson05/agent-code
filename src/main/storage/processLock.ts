@@ -8,6 +8,7 @@ import { STATE_DIR } from '@main/storage/paths.js'
 
 const LOCK_FILE_NAME = 'agent-code.process-lock.json'
 const INVALID_LOCK_STALE_MS = 5 * 60 * 1000
+const INCONCLUSIVE_OWNER_STALE_MS = 5 * 60 * 1000
 const MAX_STALE_RETRIES = 2
 
 export type StateProcessLockOwner = {
@@ -22,8 +23,10 @@ type AcquireOptions = {
   pid?: number
   argv0?: string
   now?: () => Date
-  isLockOwnerActive?: (owner: StateProcessLockOwner) => boolean
+  isLockOwnerActive?: (owner: StateProcessLockOwner) => boolean | LockOwnerActivity
 }
+
+type LockOwnerActivity = 'active' | 'inactive' | 'inconclusive'
 
 export type StateProcessLock =
   | {
@@ -65,10 +68,10 @@ function commandLineForPid(pid: number): string | null {
   }
 }
 
-function defaultIsLockOwnerActive(owner: StateProcessLockOwner): boolean {
-  if (!defaultIsPidRunning(owner.pid)) return false
+function defaultIsLockOwnerActive(owner: StateProcessLockOwner): LockOwnerActivity {
+  if (!defaultIsPidRunning(owner.pid)) return 'inactive'
   const commandLine = commandLineForPid(owner.pid)
-  if (!commandLine) return true
+  if (!commandLine) return 'inconclusive'
   const ownerExecutable = basename(owner.argv0)
   // WHY PID liveness is not enough:
   //
@@ -80,6 +83,14 @@ function defaultIsLockOwnerActive(owner: StateProcessLockOwner): boolean {
   // Code/Electron owner still advertises the executable that wrote the lock,
   // while a recycled PID almost certainly does not.
   return ownerExecutable.length === 0 || commandLine.includes(owner.argv0) || commandLine.includes(ownerExecutable)
+    ? 'active'
+    : 'inactive'
+}
+
+function normalizeLockOwnerActivity(value: boolean | LockOwnerActivity): LockOwnerActivity {
+  if (value === true) return 'active'
+  if (value === false) return 'inactive'
+  return value
 }
 
 function parseLock(raw: string): StateProcessLockOwner | null {
@@ -107,16 +118,30 @@ function parseLock(raw: string): StateProcessLockOwner | null {
 async function readExistingLock(
   lockPath: string,
   now: () => Date,
-): Promise<{ owner: StateProcessLockOwner | null; invalidAgeMs: number | null }> {
+): Promise<{
+  owner: StateProcessLockOwner | null
+  ownerAgeMs: number | null
+  invalidAgeMs: number | null
+}> {
   const [raw, fileStat] = await Promise.all([
     readFile(lockPath, 'utf8').catch(() => null),
     stat(lockPath).catch(() => null),
   ])
-  if (raw === null) return { owner: null, invalidAgeMs: null }
+  if (raw === null) return { owner: null, ownerAgeMs: null, invalidAgeMs: null }
   const owner = parseLock(raw)
-  if (owner) return { owner, invalidAgeMs: null }
-  if (!fileStat) return { owner: null, invalidAgeMs: null }
-  return { owner: null, invalidAgeMs: now().getTime() - fileStat.mtimeMs }
+  if (owner) {
+    const startedAtMs = Date.parse(owner.startedAt)
+    const ageBaseMs = Number.isFinite(startedAtMs)
+      ? startedAtMs
+      : fileStat?.mtimeMs
+    return {
+      owner,
+      ownerAgeMs: ageBaseMs === undefined ? null : now().getTime() - ageBaseMs,
+      invalidAgeMs: null,
+    }
+  }
+  if (!fileStat) return { owner: null, ownerAgeMs: null, invalidAgeMs: null }
+  return { owner: null, ownerAgeMs: null, invalidAgeMs: now().getTime() - fileStat.mtimeMs }
 }
 
 export async function acquireStateProcessLock(
@@ -182,12 +207,40 @@ export async function acquireStateProcessLock(
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
 
       const existing = await readExistingLock(lockPath, now)
-      if (existing.owner && isLockOwnerActive(existing.owner)) {
-        return {
-          acquired: false,
-          path: lockPath,
-          owner: existing.owner,
-          reason: 'active-owner',
+      if (existing.owner) {
+        const activity = normalizeLockOwnerActivity(isLockOwnerActive(existing.owner))
+        if (activity === 'active') {
+          return {
+            acquired: false,
+            path: lockPath,
+            owner: existing.owner,
+            reason: 'active-owner',
+          }
+        }
+        if (
+          activity === 'inconclusive' &&
+          (
+            existing.ownerAgeMs === null ||
+            existing.ownerAgeMs < INCONCLUSIVE_OWNER_STALE_MS
+          )
+        ) {
+          // WHY inconclusive valid locks get a short grace window:
+          //
+          // `ps` can fail for platform/permission reasons even while the
+          // recorded PID is alive. Deleting that lock immediately would reopen
+          // the multi-main-process corruption window. But treating an old
+          // inconclusive PID as active forever is just as bad after a crash or
+          // reboot: PID reuse can make Agent Code refuse to launch until the
+          // user manually deletes a JSON file in STATE_DIR. Valid locks have a
+          // real `startedAt`, so we use the same bounded-race policy as
+          // malformed locks: fail closed briefly, then let acquisition clean up
+          // the stale file and retry.
+          return {
+            acquired: false,
+            path: lockPath,
+            owner: existing.owner,
+            reason: 'active-owner',
+          }
         }
       }
 

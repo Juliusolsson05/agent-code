@@ -101,4 +101,56 @@ await withTempDir(async dir => {
   await acquired.release()
 })
 
+await withTempDir(async dir => {
+  const lockPath = join(dir, 'agent-code.process-lock.json')
+  const now = new Date('2026-05-18T10:00:00.000Z')
+  await writeFile(
+    lockPath,
+    JSON.stringify({
+      token: 'fresh-inconclusive',
+      pid: 777,
+      startedAt: new Date(now.getTime() - 30_000).toISOString(),
+      argv0: 'agent-code',
+    }),
+    'utf8',
+  )
+
+  const blocked = await acquireStateProcessLock({
+    stateDir: dir,
+    pid: 888,
+    argv0: 'replacement',
+    now: () => now,
+    isLockOwnerActive: () => 'inconclusive',
+  })
+  assert.equal(blocked.acquired, false)
+  assert.equal(blocked.reason, 'active-owner')
+})
+
+await withTempDir(async dir => {
+  const lockPath = join(dir, 'agent-code.process-lock.json')
+  const now = new Date('2026-05-18T10:00:00.000Z')
+  await writeFile(
+    lockPath,
+    JSON.stringify({
+      token: 'old-inconclusive',
+      pid: 777,
+      startedAt: new Date(now.getTime() - 10 * 60 * 1000).toISOString(),
+      argv0: 'agent-code',
+    }),
+    'utf8',
+  )
+
+  const acquired = await acquireStateProcessLock({
+    stateDir: dir,
+    pid: 888,
+    argv0: 'replacement',
+    now: () => now,
+    isLockOwnerActive: () => 'inconclusive',
+  })
+  assert.equal(acquired.acquired, true)
+  const lockText = await readFile(acquired.path, 'utf8')
+  assert.match(lockText, /"pid": 888/)
+  acquired.releaseSync()
+})
+
 console.log('process lock tests passed')

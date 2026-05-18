@@ -53,10 +53,11 @@ export async function saveSetupState(
       // state even though the single-process lock should prevent concurrent
       // app mains:
       //
-      // Setup paths are user-visible configuration. A crash mid-write should
-      // not leave `setup.json` truncated and force the user through tool
-      // discovery again. The process lock is the multi-instance policy; this
-      // atomic write is the separate crash-safety layer for a tiny JSON file.
+      // Setup paths are user-visible configuration. A failed write should not
+      // leave `setup.json` truncated and force the user through tool discovery
+      // again. Temp+rename gives atomic visibility to readers; it is not a full
+      // fsync durability protocol for power-loss recovery, which would be a
+      // separate requirement.
       const tmp = `${SETUP_STATE_FILE}.${process.pid}.${Date.now()}.${Math.random()
         .toString(36)
         .slice(2)}.tmp`
