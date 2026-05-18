@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 
 import {
   findParentSplitInfo,
+  missingClosedTabLeafMetaIds,
   reinsertPane,
   UNDO_CLOSE_MAX_ENTRIES,
   UNDO_CLOSE_RETENTION_MS,
   UndoCloseStack,
   type ClosedEntry,
+  type ClosedTab,
 } from '../src/renderer/src/lib/undoClose'
 import { collectLeaves } from '../src/renderer/src/workspace/tile-tree/treeOps'
 import type { SessionId, SessionMeta, TileNode } from '../src/renderer/src/workspace/types'
@@ -123,6 +125,42 @@ const paneEntry = (
       'b',
     ),
     null,
+  )
+}
+
+{
+  const closedTab: ClosedTab = {
+    type: 'tab',
+    closedAt: 5_000,
+    tabIndex: 0,
+    tab: {
+      id: 'tab',
+      title: 'Tab',
+      focusedSessionId: 'a' as SessionId,
+      root: {
+        type: 'split',
+        direction: 'vertical',
+        ratio: 0.5,
+        a: { type: 'leaf', sessionId: 'a' as SessionId },
+        b: { type: 'leaf', sessionId: 'b' as SessionId },
+      },
+    },
+    sessionMetas: {
+      a: meta('a'),
+    },
+  }
+
+  assert.deepEqual(
+    missingClosedTabLeafMetaIds(closedTab),
+    ['b'],
+    'A closed tab whose tree references missing session metadata is permanently stale, not retryable',
+  )
+
+  closedTab.sessionMetas.b = meta('b')
+  assert.deepEqual(
+    missingClosedTabLeafMetaIds(closedTab),
+    [],
+    'A closed tab with metadata for every leaf can continue to the spawn/retryable restore path',
   )
 }
 

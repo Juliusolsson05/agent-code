@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 
 import type {
   DetachedSessionRecord,
@@ -10,7 +10,7 @@ import type {
   TileNode,
 } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import { reinsertPane } from '@renderer/lib/undoClose'
+import { missingClosedTabLeafMetaIds, reinsertPane } from '@renderer/lib/undoClose'
 import type { ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
 
 import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
@@ -40,6 +40,8 @@ export function useUndoCloseAction(
   undoClose: () => Promise<void>
   undoCloseCount: number
 } {
+  const [, bumpUndoCloseVersion] = useState(0)
+
   const restorePaneEntry = useCallback(
     async (entry: ClosedPane): Promise<RestoreResult> => {
       // Find which tab the sibling leaf is in now.
@@ -134,14 +136,14 @@ export function useUndoCloseAction(
       const freshSessions: Record<SessionId, SessionMeta> = {}
       const spawnedIds: SessionId[] = []
       const requiredLeafIds = collectLeaves(entry.tab.root)
+      if (missingClosedTabLeafMetaIds(entry).length > 0) {
+        return 'stale'
+      }
 
       for (const oldId of requiredLeafIds) {
         const meta = entry.sessionMetas[oldId]
         if (!meta) {
-          for (const spawnedId of spawnedIds) {
-            await sessionActions.killSession(spawnedId).catch(() => undefined)
-          }
-          return 'retryable-failure'
+          return 'stale'
         }
         try {
           const kind: SessionKind = meta.kind ?? 'claude'
@@ -273,19 +275,29 @@ export function useUndoCloseAction(
     // the same failure every time they press Cmd+Shift+T. Transient spawn
     // failures are different: those keep the entry by pushing it back so a
     // provider hiccup does not permanently consume the user's recovery slot.
+    let staleEntryConsumed = false
     while (true) {
       const entry = refs.undoStackRef.current.pop()
-      if (!entry) return
+      if (!entry) {
+        if (staleEntryConsumed) {
+          bumpUndoCloseVersion(version => version + 1)
+        }
+        return
+      }
       const result = entry.type === 'pane'
         ? await restorePaneEntry(entry)
         : await restoreTabEntry(entry)
       if (result === 'restored') return
       if (result === 'retryable-failure') {
         refs.undoStackRef.current.push(entry)
+        if (staleEntryConsumed) {
+          bumpUndoCloseVersion(version => version + 1)
+        }
         return
       }
+      staleEntryConsumed = true
     }
-  }, [refs.undoStackRef, restorePaneEntry, restoreTabEntry])
+  }, [bumpUndoCloseVersion, refs.undoStackRef, restorePaneEntry, restoreTabEntry])
 
   // Peek at the undo stack length — used by the command palette to
   // show/hide the "Undo Close" command.

@@ -126,6 +126,20 @@ export type ClosedTab = {
 
 export type ClosedEntry = ClosedPane | ClosedTab
 
+export function missingClosedTabLeafMetaIds(entry: ClosedTab): SessionId[] {
+  // WHY this validation lives beside the entry type instead of being inlined
+  // in the restore hook:
+  //
+  // A closed tab's tile tree and `sessionMetas` snapshot are one atomic
+  // restore contract. If the tree references a leaf id that has no captured
+  // meta, retrying cannot help — the missing cwd/provider/tmux data is not a
+  // transient provider outage, it is corrupted history. Treating that as
+  // retryable would push the same bad entry back onto the stack forever and
+  // shadow older valid undo entries. Keeping the check pure makes the
+  // retryable-vs-stale boundary testable without a React hook harness.
+  return collectLeaves(entry.tab.root).filter(id => entry.sessionMetas[id] === undefined)
+}
+
 // ---- Stack ----
 
 export class UndoCloseStack {
