@@ -4,6 +4,7 @@ import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPal
 import { AgentStatusPanel } from '@renderer/features/agent-status/ui/AgentStatusPanel'
 import { PinAgentsModal, type PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
 import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
+import { DebugBundleNotePrompt } from '@renderer/features/debug/ui/DebugBundleNotePrompt'
 import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
 import { HtmlDebugPanel } from '@renderer/features/debug/ui/HtmlDebugPanel'
 import { ProxyDebugPanel } from '@renderer/features/debug/ui/ProxyDebugPanel'
@@ -73,6 +74,7 @@ export default function App() {
   const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
+  const debugBundleNotePrompt = useAppStore(state => state.debugBundleNotePrompt)
   const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
@@ -106,6 +108,7 @@ export default function App() {
   const openSettingsPage = useAppStore(state => state.openSettingsPage)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
+  const closeDebugBundleNotePrompt = useAppStore(state => state.closeDebugBundleNotePrompt)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
   const closeViewPrompts = useAppStore(state => state.closeViewPrompts)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
@@ -786,6 +789,31 @@ export default function App() {
         onConfirm={note => {
           if (!buryPromptSessionId) return
           workspace.buryFocused(note, buryPromptSessionId)
+        }}
+      />
+
+      <DebugBundleNotePrompt
+        open={debugBundleNotePrompt !== null}
+        title={debugBundleNotePrompt?.title ?? ''}
+        description={debugBundleNotePrompt?.description ?? ''}
+        bundlePath={debugBundleNotePrompt?.bundlePath ?? ''}
+        onCancel={closeDebugBundleNotePrompt}
+        onConfirm={note => {
+          const prompt = debugBundleNotePrompt
+          if (!prompt) return
+          const trimmed = note.trim()
+          closeDebugBundleNotePrompt()
+          if (!trimmed) return
+          void window.api.addDebugBundleNote({
+            bundlePath: prompt.bundlePath,
+            note: trimmed,
+          }).then(
+            () => workspace.showPaneToast(prompt.sessionId, 'debug note saved', 3000),
+            err => {
+              const message = err instanceof Error ? err.message : String(err)
+              workspace.showPaneToast(prompt.sessionId, `debug note failed: ${message}`, 5000)
+            },
+          )
         }}
       />
 

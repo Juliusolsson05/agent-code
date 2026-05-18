@@ -1,5 +1,6 @@
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import { useAppStore } from '@renderer/app-state/store'
 import { sanitizeHtml } from '@renderer/lib/sanitizeHtml'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import {
@@ -530,7 +531,14 @@ export async function assembleAndSaveDebugBundle(params: {
     ),
   }
 
-  return window.api.saveDebugBundle({ sessionId, files })
+  return window.api.saveDebugBundle({
+    sessionId,
+    kind,
+    reason,
+    cwd: cwd ?? null,
+    providerSessionId: providerSessionId ?? null,
+    files,
+  })
 }
 
 export type AutoDebugBundleReason =
@@ -649,6 +657,12 @@ export async function runSaveDebugBundleCommand(workspace: Workspace): Promise<v
     // toast layout.
     const prefix = clipboardOk ? 'saved · copied path · ' : 'saved (clipboard blocked) · '
     workspace.showPaneToast(sessionId, `${prefix}${bundlePath}`, 6000)
+    useAppStore.getState().openDebugBundleNotePrompt({
+      bundlePath,
+      sessionId,
+      title: `${kind} · ${meta?.cwd?.split('/').filter(Boolean).pop() ?? sessionId}`,
+      description: meta?.cwd ?? '',
+    })
   } catch (err) {
     const msg = (err as Error)?.message ?? String(err)
     workspace.showPaneToast(sessionId, `save failed: ${msg}`, 4000)

@@ -26,6 +26,12 @@ export type UiShellState = {
   pinAgentsOpen: boolean
   settingsPageOpen: boolean
   buryPromptSessionId: SessionId | null
+  debugBundleNotePrompt: {
+    bundlePath: string
+    sessionId: SessionId
+    title: string
+    description: string
+  } | null
   viewPromptsSessionId: SessionId | null
   newAgentPlacementOpen: boolean
   /**

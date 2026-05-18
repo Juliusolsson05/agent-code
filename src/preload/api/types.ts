@@ -344,10 +344,19 @@ export type DebugBundleFile = {
 }
 export type SaveDebugBundleParams = {
   sessionId: string
+  kind?: string | null
+  reason?: string | null
+  cwd?: string | null
+  providerSessionId?: string | null
   files: DebugBundleFile[]
 }
 export type SaveDebugBundleResult = {
   bundlePath: string
+}
+
+export type AddDebugBundleNoteParams = {
+  bundlePath: string
+  note: string
 }
 
 // Section of a debug bundle filled by readProxyEvents IPC.
