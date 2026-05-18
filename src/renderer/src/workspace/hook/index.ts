@@ -354,7 +354,7 @@ export function useWorkspace(
     return off
   }, [paneActions, refs.stateRef])
 
-  const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt } =
+  const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
@@ -472,6 +472,7 @@ export function useWorkspace(
     softReloadAgentView,
     switchFocusedProvider,
     rewindFocusedToPrompt,
+    undoLastRewind,
     reloadAgentSessions,
     toggleSpotlight,
     setSpotlightSession,

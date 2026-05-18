@@ -14,6 +14,7 @@ import type {
   WorktreeActivityState,
 } from '@shared/work-context/types'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
 
 export type PickerItem = {
   id: string
@@ -38,6 +39,19 @@ export type ClaudeDraftImage = {
   base64Data: string
   previewUrl: string
   filename: string
+}
+
+export type PendingRewindUndo = {
+  createdAt: number
+  provider: 'claude' | 'codex'
+  cwd: string
+  previousProviderSessionId: string
+  rewoundProviderSessionId: string
+  rewoundPromptText: string
+  rewoundPromptTimestamp: string | null
+  previousDraftInput: string
+  previousDraftImages: ClaudeDraftImage[]
+  builtInMcpDomains?: BuiltInMcpDomain[]
 }
 
 export type SemanticLiveBlock = {
@@ -305,6 +319,21 @@ export type SessionRuntime = {
   conditions: ProviderConditionSnapshot | null
   draftInput: string
   draftImages: ClaudeDraftImage[]
+  /** One-shot recovery handle for Rewind to Prompt.
+   *
+   *  WHY runtime-only: rewind writes a new provider transcript and swaps the
+   *  pane to that provider id, but the original provider transcript remains on
+   *  disk. The only fragile part is the short-lived user intent: "that rewind
+   *  was accidental; put this pane back." Keeping the handle in runtime makes
+   *  the affordance local to the live pane and avoids promising durable history
+   *  across restart/close, where cwd access, provider transcript existence, and
+   *  branch intent all need a larger product contract.
+   *
+   *  WHY one-shot: after the rewound branch starts a new submit, undoing back to
+   *  the old transcript would hide fresh branch work from view. The submit path
+   *  clears this field before any provider bytes are written, so the command is
+   *  only available while it still means "undo my accidental rewind." */
+  pendingRewindUndo: PendingRewindUndo | null
   activityStatus: string | null
   /** Unread marker for list surfaces such as Dispatch Mode.
    *
@@ -537,6 +566,7 @@ export function emptyRuntime(): SessionRuntime {
     conditions: null,
     draftInput: '',
     draftImages: [],
+    pendingRewindUndo: null,
     activityStatus: null,
     unreadSince: null,
     unreadKind: null,

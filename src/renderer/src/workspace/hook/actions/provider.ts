@@ -32,6 +32,7 @@ export function useProviderActions(
       | { kind: 'claude'; uuid: string }
       | { kind: 'codex'; userMessageIndex: number },
   ) => Promise<void>
+  undoLastRewind: () => Promise<void>
 } {
   const switchFocusedProvider = useCallback(async () => {
     const current = refs.stateRef.current
@@ -161,6 +162,7 @@ export function useProviderActions(
         showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
         return
       }
+      const previousProviderSessionId = meta.providerSessionId
       if (kind !== anchor.kind) {
         showPaneToast(
           sourceSessionId,
@@ -176,9 +178,12 @@ export function useProviderActions(
       }
 
       try {
+        const previousDraftInput = currentRuntime?.draftInput ?? ''
+        const previousDraftImages = currentRuntime?.draftImages ?? []
+
         const result = await window.api.rewindToPrompt({
           provider: kind,
-          sourceProviderSessionId: meta.providerSessionId,
+          sourceProviderSessionId: previousProviderSessionId,
           cwd: meta.cwd,
           anchor,
         })
@@ -186,6 +191,7 @@ export function useProviderActions(
         const newSessionId = await sessionActions.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: result.newProviderSessionId,
+          builtInMcpDomains: meta.builtInMcpDomains,
         })
         if (!newSessionId) return
 
@@ -230,11 +236,30 @@ export function useProviderActions(
               ...runtime,
               draftInput: draftText,
               draftImages,
+              // Runtime-only rewind undo records the provider transcript we just
+              // left, not the local Agent Code session id we killed. Local ids
+              // are routing handles for this renderer launch; provider ids are
+              // the durable resume identity that `replaceSession` already knows
+              // how to swap back into the same pane. The record intentionally
+              // rides on the replacement runtime so command visibility follows
+              // the rewound pane, including detached Dispatch rows.
+              pendingRewindUndo: {
+                createdAt: Date.now(),
+                provider: kind,
+                cwd: meta.cwd,
+                previousProviderSessionId,
+                rewoundProviderSessionId: result.newProviderSessionId,
+                rewoundPromptText: result.promptText,
+                rewoundPromptTimestamp: null,
+                previousDraftInput,
+                previousDraftImages: previousDraftImages.slice(),
+                builtInMcpDomains: meta.builtInMcpDomains,
+              },
             },
           }
         })
 
-        showPaneToast(newSessionId, 'Rewound to prompt')
+        showPaneToast(newSessionId, 'Rewound to prompt - Undo Rewind available until next submit')
       } catch (err) {
         const message =
           err instanceof Error && err.message.length > 0
@@ -246,5 +271,70 @@ export function useProviderActions(
     [refs.latestRuntimesRef, refs.stateRef, sessionActions, setRuntimes, showPaneToast],
   )
 
-  return { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt }
+  const undoLastRewind = useCallback(async () => {
+    const current = refs.stateRef.current
+    const sourceSessionId = commandTargetSessionIdForState(current)
+    if (!sourceSessionId) return
+    const meta = current.sessions[sourceSessionId]
+    if (!meta) return
+
+    const runtime = refs.latestRuntimesRef.current[sourceSessionId]
+    const pending = runtime?.pendingRewindUndo ?? null
+    if (!pending) {
+      showPaneToast(sourceSessionId, 'No rewind to undo')
+      return
+    }
+
+    const kind = meta.kind ?? 'claude'
+    if (kind !== pending.provider) {
+      showPaneToast(sourceSessionId, 'Rewind undo no longer matches this pane')
+      return
+    }
+    if (meta.providerSessionId !== pending.rewoundProviderSessionId) {
+      showPaneToast(sourceSessionId, 'Rewind undo is no longer available')
+      return
+    }
+    if (runtime.processActive || runtime.semantic.currentTurn) {
+      showPaneToast(sourceSessionId, 'Wait for the current turn to finish before undoing rewind')
+      return
+    }
+
+    try {
+      const newSessionId = await sessionActions.replaceSession(pending.cwd, {
+        kind: pending.provider,
+        resumeSessionId: pending.previousProviderSessionId,
+        builtInMcpDomains: pending.builtInMcpDomains,
+      })
+      if (!newSessionId) return
+
+      setRuntimes(prev => {
+        const restored = prev[newSessionId]
+        if (!restored) return prev
+        return {
+          ...prev,
+          [newSessionId]: {
+            ...restored,
+            // Undo Rewind restores the composer to the user's pre-rewind draft
+            // because the rewound draft is the selected historical prompt, not
+            // the user's current unsent work. Clearing the pending record here
+            // keeps undo one-way; a redo-style stack would need a separate
+            // product model and should not appear accidentally from this swap.
+            draftInput: pending.previousDraftInput,
+            draftImages: pending.previousDraftImages,
+            pendingRewindUndo: null,
+          },
+        }
+      })
+
+      showPaneToast(newSessionId, 'Undid rewind')
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message.length > 0
+          ? err.message
+          : 'Undo rewind failed'
+      showPaneToast(sourceSessionId, message)
+    }
+  }, [refs.latestRuntimesRef, refs.stateRef, sessionActions, setRuntimes, showPaneToast])
+
+  return { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind }
 }

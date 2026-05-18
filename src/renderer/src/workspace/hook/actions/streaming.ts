@@ -85,6 +85,13 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
               ...current,
               streamingBaseline: baseline,
               awaitingAssistant: true,
+              // Rewind undo is intentionally valid only until the user starts
+              // continuing from the rewound branch. Clearing here, at the same
+              // "submit started" boundary that drives optimistic streaming,
+              // means the command disappears before provider output, JSONL
+              // replay, or a failed write can create an ambiguous state where
+              // Undo Rewind would hide new branch work from the visible pane.
+              pendingRewindUndo: null,
               streamPhase: 'submitting',
               submittedAt: now,
               phaseChangedAt: now,
