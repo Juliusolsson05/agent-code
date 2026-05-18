@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, open, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { PERFORMANCE_RUNS_DIR } from '@main/storage/paths.js'
@@ -56,9 +56,22 @@ export async function readPerformanceTail(
 ): Promise<string> {
   try {
     const path = join(runDir, `${file}.jsonl`)
-    const content = await readFile(path, 'utf8')
-    if (content.length <= TAIL_BYTES) return content
-    return content.slice(content.length - TAIL_BYTES)
+    const handle = await open(path, 'r')
+    try {
+      const { size } = await handle.stat()
+      const start = Math.max(0, size - TAIL_BYTES)
+      const length = size - start
+      const buffer = Buffer.alloc(length)
+      await handle.read(buffer, 0, length, start)
+      // WHY positioned reads instead of readFile+slice: debug bundles request
+      // six perf-log tails at once, and long perf runs can make each JSONL
+      // hundreds of MB. The caller only needs a 256 KiB diagnostic tail, so
+      // reading from the end keeps snapshot creation from becoming another
+      // burst-allocation path during a perf investigation.
+      return buffer.toString('utf8')
+    } finally {
+      await handle.close()
+    }
   } catch {
     return ''
   }
