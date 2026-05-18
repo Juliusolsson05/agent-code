@@ -481,7 +481,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'switch-provider',
     title: 'Switch Provider',
-    description: '**What it does:** Switches the focused agent between **Claude** and **Codex**.\n\n**Use when:** You want to continue the same work with another provider.\n\n**Notes:** Requires a resumable provider session.',
+    description: '**What it does:** Switches the focused agent between **Claude** and **Codex**.\n\n**Use when:** You want to continue the same work with another provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane of the other provider.',
     keywords: ['provider', 'switch', 'claude', 'codex', 'translate'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -496,8 +496,9 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
+      if (!meta) return false
       const kind = meta?.kind ?? 'claude'
-      return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
+      return kind === 'claude' || kind === 'codex'
     },
     run: ({ workspace }) => void workspace.switchFocusedProvider(),
   },
