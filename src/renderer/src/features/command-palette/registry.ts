@@ -9,6 +9,7 @@ import { readerCommands } from '@renderer/features/reader/commands/readerCommand
 import { copyAssistantCommands } from '@renderer/features/copy-assistant/commands/copyAssistantCommands'
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
 import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
+import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
 import type { CommandContext, CommandDef, ResolvedCommand } from '@renderer/features/command-palette/types'
 
 const commandDefs: CommandDef[] = [
@@ -23,6 +24,7 @@ const commandDefs: CommandDef[] = [
   ...copyAssistantCommands,
   ...copyCodeBlockCommands,
   ...promptTemplateCommands,
+  ...agentStatusCommands,
 ]
 
 export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {

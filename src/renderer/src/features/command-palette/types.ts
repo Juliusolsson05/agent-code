@@ -24,6 +24,9 @@ export type CommandContext = {
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
     toggleDevDebugPanel: () => void
+    openAgentStatusPanel: () => void
+    closeAgentStatusPanel: () => void
+    toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
     toggleGlobalEditor: () => void
     /** Toggle visibility of the Global Editor's in-editor file tree.
@@ -77,6 +80,7 @@ export type CommandContext = {
     htmlDebugPanelOpen: boolean
     devDebugEnabled: boolean
     devDebugPanelOpen: boolean
+    agentStatusPanelOpen: boolean
     performancePanelOpen: boolean
     globalEditorOpen: boolean
     /** Whether the Global Editor's in-editor file tree is rendered.
