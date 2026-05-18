@@ -10,7 +10,12 @@ import { copyAssistantCommands } from '@renderer/features/copy-assistant/command
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
 import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
 import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
-import type { CommandContext, CommandDef, ResolvedCommand } from '@renderer/features/command-palette/types'
+import type {
+  CommandContext,
+  CommandDef,
+  CommandSurface,
+  ResolvedCommand,
+} from '@renderer/features/command-palette/types'
 
 const commandDefs: CommandDef[] = [
   ...tabCommands,
@@ -27,9 +32,33 @@ const commandDefs: CommandDef[] = [
   ...agentStatusCommands,
 ]
 
+/**
+ * Mode gate applied BEFORE each command's own `when`.
+ *
+ * This is the one place the surface→mode policy lives. `grid` commands
+ * are meaningless or silent no-ops while Dispatch Mode owns the layout
+ * (they target `tab.root` grid focus); `dispatch` commands have nothing
+ * to act on outside Dispatch. Everything else — `app`, `session`,
+ * `editor`, `debug` — is mode-independent and reaches its own `when`.
+ *
+ * Putting the gate here, not in 13 separate `when` closures, is the
+ * point of issue #228: a command's module no longer has to remember to
+ * re-implement "...and hide me in the wrong mode." It declares a
+ * surface; the registry enforces it uniformly.
+ */
+function surfaceAvailable(surface: CommandSurface, ctx: CommandContext): boolean {
+  if (surface === 'grid') return !ctx.flags.dispatchModeEnabled
+  if (surface === 'dispatch') return ctx.flags.dispatchModeEnabled
+  return true
+}
+
 export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
   return commandDefs
-    .filter(command => (command.when ? command.when(ctx) : true))
+    .filter(
+      command =>
+        surfaceAvailable(command.surface, ctx) &&
+        (command.when ? command.when(ctx) : true),
+    )
     .map(command => {
       const description = command.description.trim()
       if (!description) {
@@ -39,6 +68,7 @@ export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
         id: command.id,
         title: typeof command.title === 'function' ? command.title(ctx) : command.title,
         description,
+        surface: command.surface,
         shortcut: command.shortcut,
         keywords: command.keywords ?? [],
         keepPaletteOpen: command.keepPaletteOpen === true,

@@ -15,6 +15,13 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 export const paneCommands: CommandDef[] = [
   {
     id: 'new-agent',
+    // `app`: this is the universal creation entry point. It opens the
+    // placement picker, which is Dispatch-aware — in Dispatch it makes a
+    // detached agent, in the grid it makes a pane. Because it adapts,
+    // it is the creation command Dispatch users reach for once the
+    // grid-spatial `split-*` / `codex-*` / `terminal-*` commands below
+    // are surface-gated out of Dispatch.
+    surface: 'app',
     title: 'New Agent…',
     description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, or shell pane.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead of changing the grid.',
     keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'terminal'],
@@ -22,7 +29,22 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
   },
   {
+    // `grid` surface — applies to split-vertical, split-horizontal,
+    // codex-vertical, codex-horizontal, terminal-horizontal and
+    // terminal-vertical below.
+    //
+    // WHY hide these in Dispatch even though `splitFocused` still
+    // *works* there: the title encodes a grid direction (Right / Down /
+    // Below) and Dispatch has no visible grid for that direction to
+    // mean anything. Worse, `splitFocused` ignores the direction in
+    // Dispatch entirely (pane.ts) — it just creates a detached agent —
+    // so `Split Pane Right` and `Split Pane Down` would be two palette
+    // rows doing the identical thing. Dispatch users create with
+    // `New Agent…` (surface `app`), which is direction-free by design.
+    // Power-user keybinds (⌥D etc.) still fire in Dispatch; only the
+    // misleading palette rows are gated.
     id: 'split-vertical',
+    surface: 'grid',
     title: 'Split Pane Right',
     description: '**What it does:** Creates a **new agent pane on the right**.\n\n**Use when:** You want side-by-side work in the grid.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
     shortcut: '⌥D',
@@ -30,6 +52,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'split-horizontal',
+    surface: 'grid',
     title: 'Split Pane Down',
     description: '**What it does:** Creates a **new agent pane below**.\n\n**Use when:** You want a stacked grid layout.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead.',
     shortcut: '⌥⇧D',
@@ -37,6 +60,10 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'close-pane',
+    // `session`: `closeFocused` resolves its target through the
+    // Dispatch-aware path, so this closes a grid pane in the grid and
+    // the highlighted row in Dispatch — meaningful in both modes.
+    surface: 'session',
     title: 'Close Pane',
     description: '**What it does:** Closes the **currently targeted pane or Dispatch row**.\n\n**Use when:** You are done with the current target.\n\n**Notes:** In **Dispatch**, the highlighted row is the close target.',
     shortcut: '⌘W',
@@ -44,12 +71,14 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'bury-pane',
+    surface: 'session',
     title: 'Bury Pane',
     description: '**What it does:** Hides the pane but keeps the **session alive**.\n\n**Use when:** You want it out of the layout without killing it.\n\n**Notes:** Buried panes can be revived later.',
     run: ({ workspace }) => workspace.requestBuryFocused(),
   },
   {
     id: 'linked-agent',
+    surface: 'session',
     title: 'Linked Agent…',
     description: '**What it does:** Starts a new Claude or Codex agent linked to the currently targeted agent.\n\n**Use when:** You want a one-off helper, like a review agent, visually nested under the parent.\n\n**Notes:** The linked agent is a normal Dispatch agent. It renders directly under the parent and closes automatically when the parent closes.',
     keywords: ['linked', 'agent', 'review', 'helper', 'child', 'dispatch', 'claude', 'codex'],
@@ -74,11 +103,15 @@ export const paneCommands: CommandDef[] = [
     // detached session (grid-focused rows in the dispatch list don't
     // need attaching — they're already attached).
     id: 'attach-detached-to-grid',
+    // `dispatch` surface: the old `when` opened with
+    // `if (!workspace.dispatchMode) return false`. That mode check now
+    // lives in the registry's surface gate, so `when` only carries the
+    // data condition (the focused row is a detached session).
+    surface: 'dispatch',
     title: 'Attach Detached Session to Grid…',
     description: '**What it does:** Moves one **detached Dispatch session** into the grid.\n\n**Use when:** You want to pin background work into the normal layout.\n\n**Notes:** Uses the placement picker so you can choose where it lands.',
     keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
     when: ({ workspace }) => {
-      if (!workspace.dispatchMode) return false
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       return isDetached(workspace.state, sessionId)
@@ -107,10 +140,13 @@ export const paneCommands: CommandDef[] = [
     // tells the user there's nothing to pin yet, which is more
     // discoverable than hiding the entry altogether.
     id: 'pin-agents',
+    // `dispatch` surface replaces the old `when: Boolean(dispatchMode)`
+    // guard — pins are a Dispatch-list concept and the registry gate
+    // now hides this in the grid.
+    surface: 'dispatch',
     title: 'Pin Agents…',
     description: '**What it does:** Opens the multi-select Pin modal to choose which **Dispatch** agents stay pinned at the top of the agent list.\n\n**Use when:** You want a few favorite agents to always be one keystroke away regardless of project or scope.\n\n**Notes:** Space toggles, Enter commits, Esc cancels. The order you Space through the rows is the order pins render in. Pins survive project↔global scope toggles.',
     keywords: ['pin', 'pins', 'pinned', 'favorite', 'star', 'top', 'dispatch'],
-    when: ({ workspace }) => Boolean(workspace.dispatchMode),
     run: ({ ui }) => ui.openPinAgents(),
   },
   {
@@ -127,11 +163,13 @@ export const paneCommands: CommandDef[] = [
     // non-pinned row, which silently no-ops in the reducer — bad
     // affordance.
     id: 'unpin-agent',
+    // `dispatch` surface carries the mode gate; `when` keeps only the
+    // data condition (the focused row is currently pinned).
+    surface: 'dispatch',
     title: 'Unpin Agent',
     description: '**What it does:** Removes the currently-focused **Dispatch** row from the Pinned section.\n\n**Use when:** You want to quickly drop a single pin without opening the Pin modal.\n\n**Notes:** Only appears when the focused dispatch row is currently pinned.',
     keywords: ['unpin', 'remove', 'pin', 'pinned', 'star'],
     when: ({ workspace }) => {
-      if (!workspace.dispatchMode) return false
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       return workspace.state.pinnedSessionIds.includes(sessionId)
@@ -154,6 +192,12 @@ export const paneCommands: CommandDef[] = [
     // aware resolver so global Dispatch can target the focused row's
     // tab (which may differ from `activeTabId`).
     id: 'attach-all-detached-for-tab',
+    // `app`, NOT `dispatch`: this command deliberately works in both
+    // modes (see the comment above) — detached agents outlive Dispatch,
+    // and the recovery flow is "from the grid, bring my parked agents
+    // back." Surface-gating it to `dispatch` would break that. Its
+    // `when` already hides it when there is nothing to attach.
+    surface: 'app',
     title: 'Attach All Dispatch Sessions for Tab',
     description: '**What it does:** Moves all detached **Dispatch** sessions for a tab into the grid.\n\n**Use when:** You want to bring a whole tab’s background work into view.\n\n**Notes:** Preserves the existing grid and adds the sessions beside it. Works in both Grid and Dispatch modes.',
     keywords: ['attach', 'all', 'detached', 'dispatch', 'grid', 'tab', 'pin'],
@@ -175,6 +219,9 @@ export const paneCommands: CommandDef[] = [
     // case; this `when` check gates on an actual grid leaf so the command
     // does not show for a session that is already detached.
     id: 'detach-to-dispatch',
+    // `session`: works in both modes against the Dispatch-aware target
+    // (the `when` below requires that target to be a real grid leaf).
+    surface: 'session',
     title: 'Detach Session to Dispatch',
     description: '**What it does:** Moves a grid session into **Dispatch** without killing it.\n\n**Use when:** You want to park work in the background.\n\n**Notes:** The last pane in a tab cannot be detached.',
     keywords: ['detach', 'dispatch', 'park', 'background', 'unpin'],
@@ -199,6 +246,12 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'terminal-horizontal',
+    // `grid`: unlike split-vertical, a terminal split DOES still insert
+    // into the grid tree from Dispatch (splitFocused exempts terminals).
+    // But the result lands in a grid the Dispatch user cannot see, and
+    // the "Right" label still points at nothing visible — so the
+    // palette row is hidden in Dispatch all the same.
+    surface: 'grid',
     title: 'New Terminal Right',
     description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** Terminals always attach to the grid, even from **Dispatch**.',
     shortcut: '⌥T',
@@ -206,6 +259,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'terminal-vertical',
+    surface: 'grid',
     title: 'New Terminal Below',
     description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** Terminals always attach to the grid, even from **Dispatch**.',
     shortcut: '⌥⇧T',
@@ -213,6 +267,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'codex-vertical',
+    surface: 'grid',
     title: 'New Codex Right',
     description: '**What it does:** Opens a **Codex agent on the right**.\n\n**Use when:** You want Codex beside the current agent.\n\n**Notes:** In **Dispatch**, this creates a detached Codex agent instead.',
     shortcut: '⌥C',
@@ -220,13 +275,23 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'codex-horizontal',
+    surface: 'grid',
     title: 'New Codex Below',
     description: '**What it does:** Opens a **Codex agent below**.\n\n**Use when:** You want Codex in a stacked layout.\n\n**Notes:** In **Dispatch**, this creates a detached Codex agent instead.',
     shortcut: '⌥⇧C',
     run: ({ workspace }) => void workspace.splitFocused('horizontal', 'codex'),
   },
   {
+    // `grid` surface — applies to nav-left/right/up/down below.
+    //
+    // WHY this is a real fix and not just a label tidy-up: in Dispatch
+    // `workspace.navigate()` walks `tab.root` grid focus, which Dispatch
+    // does not drive. When the Dispatch selection is a detached session
+    // it diverges from grid focus entirely and these commands were a
+    // SILENT NO-OP (issue #228). Dispatch row navigation is ⌥↑/⌥↓ (and,
+    // after this change, ⌥J/⌥K) — handled directly in useKeybinds.
     id: 'nav-left',
+    surface: 'grid',
     title: 'Focus Pane Left',
     description: '**What it does:** Focuses the pane to the **left**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
     shortcut: '⌥H',
@@ -234,6 +299,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'nav-right',
+    surface: 'grid',
     title: 'Focus Pane Right',
     description: '**What it does:** Focuses the pane to the **right**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
     shortcut: '⌥L',
@@ -241,6 +307,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'nav-up',
+    surface: 'grid',
     title: 'Focus Pane Up',
     description: '**What it does:** Focuses the pane **above**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
     shortcut: '⌥K',
@@ -248,6 +315,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'nav-down',
+    surface: 'grid',
     title: 'Focus Pane Down',
     description: '**What it does:** Focuses the pane **below**.\n\n**Use when:** You want keyboard pane navigation.\n\n**Notes:** Uses the current grid layout.',
     shortcut: '⌥J',
@@ -255,6 +323,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'undo-close',
+    surface: 'app',
     title: 'Undo Close',
     description: '**What it does:** Restores the most recent closed **pane or tab** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
     shortcut: '⌘⇧T',
@@ -262,6 +331,10 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'revive-pane',
+    // `app`: buried panes are mode-independent state, and a revived
+    // session re-enters the grid tree — which also makes it a Dispatch
+    // row — so the command is meaningful from either mode.
+    surface: 'app',
     title: 'Revive Buried Pane',
     description: '**What it does:** Restores a **buried live pane**.\n\n**Use when:** You parked a session and want it back.\n\n**Notes:** Opens a picker when multiple buried panes exist.',
     keepPaletteOpen: true,
@@ -270,6 +343,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'kill-buried-pane',
+    surface: 'app',
     title: 'Kill Buried Pane…',
     description: '**What it does:** Permanently kills a **buried session**.\n\n**Use when:** You no longer need hidden background work.\n\n**Notes:** This is destructive.',
     keywords: ['kill', 'buried', 'hidden', 'pane', 'session'],
@@ -279,6 +353,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'toggle-tail',
+    surface: 'session',
     title: 'Tail',
     description: '**What it does:** Toggles feed **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection.',
     getState: ({ workspace }) => {
@@ -309,6 +384,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'jump-latest-message',
+    surface: 'session',
     title: 'Jump to Latest Message',
     description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only.',
     shortcut: 'End',
@@ -324,6 +400,7 @@ export const paneCommands: CommandDef[] = [
   },
   {
     id: 'copy-last-assistant',
+    surface: 'session',
     title: 'Copy Last Response',
     description: '**What it does:** Copies the **latest assistant response**.\n\n**Use when:** You want the most recent answer quickly.\n\n**Notes:** No picker; copies immediately.',
     when: ({ workspace }) => {

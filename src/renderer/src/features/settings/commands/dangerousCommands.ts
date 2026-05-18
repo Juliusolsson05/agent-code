@@ -21,6 +21,7 @@ async function toggleDangerousAgents(ctx: CommandContext): Promise<void> {
 export const dangerousCommands: CommandDef[] = [
   {
     id: 'dangerous-agents',
+    surface: 'app',
     title: 'Dangerous Agents',
     description: '**What it does:** Toggles **dangerous agent mode** for future agents.\n\n**Use when:** You explicitly want agents to run with fewer safety restrictions.\n\n**Notes:** Affects new agent sessions, not existing ones.',
     getState: ({ flags }) => ({

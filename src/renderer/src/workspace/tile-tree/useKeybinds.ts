@@ -473,10 +473,37 @@ export function useKeybinds(
       if (alt && !cmd) {
         const code = e.code
 
-        if (workspace.dispatchMode && (k === 'ArrowUp' || k === 'ArrowDown')) {
-          e.preventDefault()
-          moveDispatchSelection(workspace, k === 'ArrowDown' ? 1 : -1)
-          return
+        if (workspace.dispatchMode) {
+          // WHY Dispatch steals these before normal pane navigation:
+          // Dispatch focus is `dispatchMode.focusedSessionId`, while grid
+          // navigation below walks `activeTab.focusedSessionId` through
+          // `tab.root`. Those are deliberately different invariants. Once a
+          // Dispatch row points at a detached session, falling through to
+          // `workspace.navigate()` asks the grid to find a neighbor for a
+          // session that is not in the grid and silently does nothing. The
+          // command-palette side of this fix hides `Focus Pane *` in Dispatch;
+          // the keybind side must also stop grid navigation from running
+          // underneath Dispatch.
+          //
+          // Dispatch is a vertical list, so only up/down and vim k/j have
+          // movement semantics. Left/right/h/l are consumed because letting
+          // them fall through would mutate or probe the hidden grid and make
+          // keyboard behavior depend on stale grid focus instead of the row
+          // the user actually sees highlighted.
+          if (k === 'ArrowUp' || code === 'KeyK') {
+            e.preventDefault()
+            moveDispatchSelection(workspace, -1)
+            return
+          }
+          if (k === 'ArrowDown' || code === 'KeyJ') {
+            e.preventDefault()
+            moveDispatchSelection(workspace, 1)
+            return
+          }
+          if (k === 'ArrowLeft' || k === 'ArrowRight' || code === 'KeyH' || code === 'KeyL') {
+            e.preventDefault()
+            return
+          }
         }
 
         // --- Directional resize: fn+alt+arrow ---

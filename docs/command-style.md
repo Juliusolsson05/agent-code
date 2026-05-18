@@ -32,6 +32,20 @@ This repo treats command titles as stable names, not as descriptions of the curr
    Lowercase short prepositions and articles unless they start or end the title.
    Examples: `Attach Detached Session to Grid…`, `Attach All Dispatch Sessions for Tab`.
 
+10. Classify every command with an explicit `surface`.
+    Use `app`, `grid`, `dispatch`, `session`, `editor`, or `debug`. Do not
+    rely on an ad-hoc `when` guard to express mode availability.
+
+11. Keep grid-spatial language out of Dispatch.
+    Commands named with pane directions such as `Right`, `Below`, `Left`, or
+    `Down` are `grid` commands unless they are intentionally renamed for a
+    Dispatch concept. Dispatch is a row list, not a pane tree.
+
+12. Use `session` for commands that follow the current command target.
+    If a command acts on the visible focused agent/session and should work in
+    both Grid and Dispatch, it should use the Dispatch-aware
+    `commandTargetSessionId` path and be marked `surface: 'session'`.
+
 ## Examples
 
 | Prefer | Avoid |
@@ -47,3 +61,9 @@ This repo treats command titles as stable names, not as descriptions of the curr
 ## Implementation note
 
 If a command needs to show current state in the palette, use `getState` on the command definition instead of mutating the title string.
+
+Every command definition must set `surface`. The registry owns the mode gate:
+`grid` commands are hidden while Dispatch is active, and `dispatch` commands
+are hidden while Dispatch is inactive. Per-command `when` guards are still for
+data conditions such as "there is a focused agent", "the file tree is open", or
+"this row is pinned".

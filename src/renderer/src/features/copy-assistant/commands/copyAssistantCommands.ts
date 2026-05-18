@@ -10,6 +10,7 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 export const copyAssistantCommands: CommandDef[] = [
   {
     id: 'copy-assistant-message',
+    surface: 'session',
     title: 'Copy Assistant Message…',
     description: '**What it does:** Opens a picker to copy a specific **assistant message**.\n\n**Use when:** You need an older response, not just the latest one.\n\n**Notes:** Use arrows, **Enter**, and **Esc** after opening.',
     keywords: ['copy', 'assistant', 'message', 'response', 'pick'],

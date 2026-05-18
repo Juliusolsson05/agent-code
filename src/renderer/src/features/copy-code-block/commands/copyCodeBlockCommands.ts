@@ -19,6 +19,7 @@ import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/en
 export const copyCodeBlockCommands: CommandDef[] = [
   {
     id: 'copy-code-block',
+    surface: 'session',
     title: 'Copy Code Block…',
     description: '**What it does:** Opens a picker to copy a specific **code block** from the focused pane.\n\n**Use when:** You want one fenced block — a command, a snippet, a generated file — without copying the whole message.\n\n**Notes:** Use arrows to move between blocks, **Enter** to copy, **Esc** to cancel. Starts on the most recent block.',
     keywords: ['copy', 'code', 'block', 'snippet', 'fenced', 'pick'],

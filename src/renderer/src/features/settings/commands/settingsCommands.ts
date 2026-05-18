@@ -4,12 +4,16 @@ import { dangerousCommands } from '@renderer/features/settings/commands/dangerou
 export const settingsCommands: CommandDef[] = [
   {
     id: 'open-settings',
+    surface: 'app',
     title: 'Open Settings',
     description: '**What it does:** Opens **Settings**.\n\n**Use when:** You want to change app preferences.\n\n**Notes:** Includes appearance, workspace, dictation, experimental, and safety settings.',
     run: ({ ui }) => ui.openSettings(),
   },
   {
     id: 'toggle-custom-rendering',
+    // `debug`: this exists to compare the custom feed renderer against
+    // the fallback path — a diagnostic, not an everyday preference.
+    surface: 'debug',
     title: 'Custom Rendering',
     description: '**What it does:** Toggles the custom **feed renderer**.\n\n**Use when:** You want to compare custom rendering with the fallback path.\n\n**Notes:** Rendering preference only.',
     getState: ({ flags }) => ({
@@ -25,6 +29,7 @@ export const settingsCommands: CommandDef[] = [
     // day: the user wants crash/close breadcrumbs and complete
     // bundles, not per-frame debug overhead.
     id: 'toggle-aggressive-debug-persistence',
+    surface: 'debug',
     title: 'Persistent Aggressive Debug Logs',
     description: '**What it does:** Periodically saves **debug bundles** for active agents.\n\n**Use when:** You are chasing crashes or disappearing state.\n\n**Notes:** Can create many or large debug files.',
     keywords: [
@@ -47,6 +52,7 @@ export const settingsCommands: CommandDef[] = [
   },
   {
     id: 'toggle-worktrees-bar',
+    surface: 'app',
     title: 'Worktrees',
     description: '**What it does:** Shows or hides the **Worktrees** panel.\n\n**Use when:** You want branch and worktree activity for the focused project.\n\n**Notes:** Useful for multi-agent git cleanup.',
     keywords: ['worktree', 'worktrees', 'branch', 'git', 'activity', 'agents', 'cleanup'],
@@ -58,6 +64,7 @@ export const settingsCommands: CommandDef[] = [
   },
   {
     id: 'toggle-worktree-badges',
+    surface: 'app',
     title: 'Worktree Badges',
     description: '**What it does:** Toggles **worktree badges** on agent rows.\n\n**Use when:** You want branch context visible in panes and **Dispatch**.\n\n**Notes:** Visual-only setting.',
     keywords: ['branch', 'git', 'worktree', 'badge', 'agent'],
