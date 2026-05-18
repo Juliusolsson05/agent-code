@@ -9,6 +9,14 @@ import {
   type ThemeMode,
 } from '@renderer/app-state/settings/types'
 
+// WHY Custom is intentionally absent from the compact header menu: unlike the
+// built-in modes, Custom is not a one-click preset. It needs the JSON editor
+// in full Settings, and selecting it here would look like a broken no-op
+// because the default custom payload starts as the dark theme. Keeping this
+// quick menu to built-ins also avoids exposing accent/contrast controls that
+// custom mode deliberately ignores.
+const COMPACT_THEME_MODES = THEME_MODES.filter(mode => mode.id !== 'custom')
+
 type Props = {
   settings: Settings
   onChange: (patch: Partial<Settings>) => void
@@ -67,7 +75,7 @@ export function AppearanceMenu({ settings, onChange }: Props) {
           >
           <Section title="mode">
             <div className="grid grid-cols-2 gap-1.5">
-              {THEME_MODES.map(mode => (
+              {COMPACT_THEME_MODES.map(mode => (
                 <ModeButton
                   key={mode.id}
                   mode={mode.id}
@@ -77,35 +85,42 @@ export function AppearanceMenu({ settings, onChange }: Props) {
                 />
               ))}
             </div>
+            {settings.mode === 'custom' ? (
+              <div className="mt-2 border border-border bg-canvas px-2 py-2 text-[10px] leading-4 text-muted">
+                Custom appearance is edited in Settings.
+              </div>
+            ) : null}
           </Section>
 
-          <Section title="accent">
-            <div className="grid grid-cols-4 gap-1.5">
-              {ACCENTS.map(a => (
-                <AccentSwatch
-                  key={a.id}
-                  id={a.id}
-                  color={isDarkThemeMode(settings.mode) ? a.dark : a.light}
-                  name={a.name}
-                  active={settings.accent === a.id}
-                  onPick={accent => onChange({ accent })}
+          {settings.mode !== 'custom' ? (
+            <Section title="accent">
+              <div className="grid grid-cols-4 gap-1.5">
+                {ACCENTS.map(a => (
+                  <AccentSwatch
+                    key={a.id}
+                    id={a.id}
+                    color={isDarkThemeMode(settings.mode) ? a.dark : a.light}
+                    name={a.name}
+                    active={settings.accent === a.id}
+                    onPick={accent => onChange({ accent })}
+                  />
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => onChange({ contrast: !settings.contrast })}
+                className="mt-3 flex w-full items-center justify-between border border-border px-2.5 py-2 text-left text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+              >
+                <span>High Contrast</span>
+                <span
+                  className={`
+                    flex h-3.5 w-3.5 border
+                    ${settings.contrast ? 'bg-accent border-accent' : 'bg-transparent border-border-hi'}
+                  `}
                 />
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => onChange({ contrast: !settings.contrast })}
-              className="mt-3 flex w-full items-center justify-between border border-border px-2.5 py-2 text-left text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
-            >
-              <span>High Contrast</span>
-              <span
-                className={`
-                  flex h-3.5 w-3.5 border
-                  ${settings.contrast ? 'bg-accent border-accent' : 'bg-transparent border-border-hi'}
-                `}
-              />
-            </button>
-          </Section>
+              </button>
+            </Section>
+          ) : null}
         </div>
       )}
     </div>

@@ -91,7 +91,7 @@ export const CUSTOM_APPEARANCE_SCHEMA = {
         type: 'string',
         minLength: 1,
         description:
-          'CSS color value for the matching Agent Code theme token. Hex, rgb(), hsl(), oklch(), color-mix(), and named colors are accepted as raw CSS strings.',
+          'CSS color value for the matching Agent Code theme token. Hex, named colors, and common color functions such as rgb(), hsl(), oklch(), color(), and color-mix() are accepted.',
       },
     ]),
   ),
@@ -136,7 +136,7 @@ export function parseCustomAppearanceJson(raw: string): CustomAppearanceColors {
     const trimmed = value.trim()
     if (!isSafeCssColorValue(trimmed)) {
       throw new Error(
-        `Custom appearance key "${key}" must be a non-empty CSS color string without semicolons or braces.`,
+        `Custom appearance key "${key}" must be a supported CSS color string.`,
       )
     }
     colors[key] = trimmed
@@ -155,14 +155,31 @@ export function coerceCustomAppearanceJson(value: unknown): string {
 }
 
 function isSafeCssColorValue(value: string): boolean {
-  // WHY this validation is intentionally schema-level rather than a full CSS
-  // parser: the user asked for raw JSON with freely-defined application
-  // colors. Browser support for modern color syntax moves faster than a
-  // hand-written validator (`oklch()`, `color-mix()`, display-p3, etc.), so a
-  // strict "hex only" check would make the custom mode feel fake immediately.
-  // The real safety boundary is narrower: these values are only ever assigned
-  // to CSS custom properties via `style.setProperty`, so reject characters
-  // that can try to terminate or open declarations and otherwise let CSS own
-  // color syntax validity.
-  return value.length > 0 && value.length <= 180 && !/[;{}]/.test(value)
+  // WHY this is stricter than "anything style.setProperty accepts": several
+  // app tokens are consumed by `background` shorthand declarations, not only
+  // by `color`. A raw custom property value of `url(...)` is syntactically
+  // valid CSS there and can trigger a network fetch even though the setting is
+  // local-only. We still avoid a hex-only rule because modern themes need
+  // oklch/color-mix/display-p3, but the accepted surface is deliberately
+  // color-shaped: simple literals or known CSS color functions, with `var()`
+  // and image/url functions rejected.
+  if (value.length === 0 || value.length > 180) return false
+  if (/[;{}]/.test(value)) return false
+  if (/\b(?:url|image|image-set|cross-fade|element|paint|var)\s*\(/i.test(value)) {
+    return false
+  }
+  if (!hasBalancedParentheses(value)) return false
+  if (/^#[0-9a-f]{3,8}$/i.test(value)) return true
+  if (/^[a-z][a-z-]*$/i.test(value)) return true
+  return /^(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color|color-mix)\(/i.test(value)
+}
+
+function hasBalancedParentheses(value: string): boolean {
+  let depth = 0
+  for (const char of value) {
+    if (char === '(') depth += 1
+    if (char === ')') depth -= 1
+    if (depth < 0) return false
+  }
+  return depth === 0
 }

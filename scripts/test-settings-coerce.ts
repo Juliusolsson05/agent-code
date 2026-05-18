@@ -1,4 +1,8 @@
 import { coerceSettings } from '@renderer/app-state/settings/persistence'
+import {
+  parseCustomAppearanceJson,
+  stringifyCustomAppearance,
+} from '@renderer/app-state/settings/customAppearance'
 
 function assert(condition: unknown, message: string): void {
   if (!condition) throw new Error(message)
@@ -73,7 +77,10 @@ assert(bogusFont.fontFamily === 'jetbrains-mono', 'unknown fontFamily should fal
 
 const customTheme = coerceSettings({
   mode: 'custom',
-  customAppearanceJson: defaults.customAppearanceJson.replace('#0a0a0a', '#101010'),
+  customAppearanceJson: stringifyCustomAppearance({
+    ...parseCustomAppearanceJson(defaults.customAppearanceJson),
+    canvas: '#101010',
+  }),
 })
 assert(customTheme.mode === 'custom', 'theme mode should accept custom')
 assert(
@@ -88,6 +95,18 @@ const invalidCustomTheme = coerceSettings({
 assert(
   invalidCustomTheme.customAppearanceJson === defaults.customAppearanceJson,
   'invalid customAppearanceJson should fall back to default payload',
+)
+
+const urlInjectedTheme = coerceSettings({
+  mode: 'custom',
+  customAppearanceJson: stringifyCustomAppearance({
+    ...parseCustomAppearanceJson(defaults.customAppearanceJson),
+    canvas: 'url(http://example.invalid/pixel)',
+  }),
+})
+assert(
+  urlInjectedTheme.customAppearanceJson === defaults.customAppearanceJson,
+  'customAppearanceJson should reject non-color url() values',
 )
 
 console.log('settings coercion ok')

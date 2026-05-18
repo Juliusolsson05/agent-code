@@ -138,7 +138,6 @@ export function getSettingsRegistry(): SettingDefinition[] {
         columns: 2,
         onSelect: (ctx, value) => {
           if (value === 'custom') {
-            ctx.onChange({ mode: 'custom' })
             ctx.openCustomAppearanceEditor()
             return
           }

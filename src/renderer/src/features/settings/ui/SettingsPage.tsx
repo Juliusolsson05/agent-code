@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_SCHEMA_JSON,
+  type CustomAppearanceColors,
   parseCustomAppearanceJson,
   stringifyCustomAppearance,
 } from '@renderer/app-state/settings/customAppearance'
@@ -93,8 +94,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
         <CustomAppearanceModal
           raw={settings.customAppearanceJson}
           onClose={() => setCustomAppearanceOpen(false)}
-          onSave={raw => {
-            const parsed = parseCustomAppearanceJson(raw)
+          onSave={parsed => {
             onChange({
               mode: 'custom',
               customAppearanceJson: stringifyCustomAppearance(parsed),
@@ -114,16 +114,28 @@ function CustomAppearanceModal({
 }: {
   raw: string
   onClose: () => void
-  onSave: (raw: string) => void
+  onSave: (colors: CustomAppearanceColors) => void
 }) {
   const [draft, setDraft] = useState(raw)
   const [view, setView] = useState<'json' | 'schema'>('json')
   const [error, setError] = useState<string | null>(null)
+  const textAreaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    textAreaRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   const save = () => {
     try {
-      parseCustomAppearanceJson(draft)
-      onSave(draft)
+      onSave(parseCustomAppearanceJson(draft))
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -134,6 +146,9 @@ function CustomAppearanceModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="custom-appearance-title"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onClose()
+      }}
       className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/80 px-6 py-6"
     >
       <div className="flex h-full max-h-[760px] w-full max-w-4xl flex-col border border-border bg-canvas">
@@ -167,6 +182,7 @@ function CustomAppearanceModal({
         <div className="min-h-0 flex-1 px-4 py-4">
           {view === 'json' ? (
             <textarea
+              ref={textAreaRef}
               value={draft}
               onChange={event => {
                 setDraft(event.target.value)
