@@ -34,7 +34,10 @@ import {
   buildToolResultIndex,
   debugLabelForEntry,
 } from '@renderer/features/feed/lib/helpers'
-import { deriveFeedRenderModel } from '@renderer/features/feed/model/renderModel'
+import {
+  deriveFeedCommittedProjection,
+  deriveFeedRenderModel,
+} from '@renderer/features/feed/model/renderModel'
 import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
 import {
   EAGER_TAIL,
@@ -685,11 +688,20 @@ function FeedImpl({
     [entries, toolResultIndexProp],
   )
 
+  const committedProjection = useMemo(() => {
+    // Semantic deltas can arrive many times per second while committed
+    // JSONL entries stay unchanged. Keep all committed-entry scans behind
+    // an entries-only memo so live semantic text/tool updates do not keep
+    // rebuilding visible decisions, Claude message-id ownership, and the
+    // committed assistant text index for old rows.
+    return deriveFeedCommittedProjection(entries)
+  }, [entries])
+
   const renderModel = useMemo(() => {
     const startedAt = performance.now()
     const model = deriveFeedRenderModel({
       provider,
-      entries,
+      committed: committedProjection,
       semanticHistory,
       semanticTurn,
       streamPhase,
@@ -711,6 +723,7 @@ function FeedImpl({
     return model
   }, [
     entries,
+    committedProjection,
     provider,
     semanticHistory,
     semanticTurn,
@@ -887,14 +900,14 @@ function FeedImpl({
             <SemanticStreamingTurn
               key={`semantic-history:${turn.turnId}`}
               turn={turn}
-              committedEntries={entries}
+              committedAssistantText={committedProjection.committedAssistantText}
             />
           ))}
           {renderedSemanticTurn != null && (
             <SemanticStreamingTurn
               key={`semantic:${renderedSemanticTurn.turnId}`}
               turn={renderedSemanticTurn}
-              committedEntries={entries}
+              committedAssistantText={committedProjection.committedAssistantText}
             />
           )}
           {/* WorkIndicator — the single in-feed "agent is working"

@@ -1,6 +1,5 @@
-import { memo, useContext, useMemo } from 'react'
+import { memo, useContext } from 'react'
 
-import type { Entry } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -13,8 +12,8 @@ import {
 import { SemanticCollapsedActivityRow } from '@renderer/features/feed/ui/semantic/CollapsedActivityRow'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
 import {
-  buildCommittedAssistantText,
   buildSemanticRenderUnits,
+  type CommittedAssistantText,
 } from '@renderer/features/feed/ui/semantic/renderUnits'
 
 // WHY render the semantic turn block-by-block instead of just dumping
@@ -42,12 +41,12 @@ import {
 // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
 export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   turn,
-  committedEntries,
+  committedAssistantText,
 }: {
   turn: SemanticLiveTurn
-  committedEntries: Entry[]
+  committedAssistantText: CommittedAssistantText
 }) {
-  const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
+  const hasBlocks = Object.keys(turn.blocks).length > 0
   // Committed tool_use index is threaded down from Feed via context.
   // buildSemanticRenderUnits uses it to skip live blocks whose
   // `toolUseId` / `callId` is already committed — kills the bottom-
@@ -55,18 +54,12 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   // that the committed transcript already painted above.
   const committedToolUseIndex = useContext(ToolUseIndexContext)
   const committedToolResultIndex = useContext(ToolResultIndexContext)
-  const committedAssistantText = useMemo(
-    () => buildCommittedAssistantText(committedEntries),
-    [committedEntries],
-  )
   const units = buildSemanticRenderUnits(
     turn,
     committedToolUseIndex,
     committedToolResultIndex,
     committedAssistantText,
   )
-  const hasBlocks = blocks.length > 0
-
   // Compaction-synthesis placeholder.
   //
   // When Claude Code triggers `/compact` (manual or auto), the proxy
