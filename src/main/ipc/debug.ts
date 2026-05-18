@@ -9,6 +9,7 @@ import {
   type SaveDebugBundleParams,
   type SaveDebugBundleResult,
 } from '@main/storage/debugBundle.js'
+import { addDebugBundleNote } from '@main/storage/debugBundleLog.js'
 import {
   readProxyEventsForBundle,
   type ProxyEventsBundleSection,
@@ -49,6 +50,13 @@ export function registerDebugIpc(): void {
       // explicitly, so silent failure is strictly worse than a
       // surfaced one.
       return saveDebugBundle(params)
+    },
+  )
+
+  ipcMain.handle(
+    'debug:add-bundle-note',
+    async (_evt, params: { bundlePath: string; note: string }): Promise<void> => {
+      await addDebugBundleNote(params)
     },
   )
 

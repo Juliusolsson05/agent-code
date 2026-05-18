@@ -1,6 +1,7 @@
 import { ipcRenderer } from 'electron'
 
 import type {
+  AddDebugBundleNoteParams,
   FeedDebugPersistEntry,
   ProxyEventsBundleSection,
   SaveDebugBundleParams,
@@ -26,6 +27,9 @@ export const debugApi = {
 
   saveDebugBundle: (params: SaveDebugBundleParams): Promise<SaveDebugBundleResult> =>
     ipcRenderer.invoke('debug:save-bundle', params),
+
+  addDebugBundleNote: (params: AddDebugBundleNoteParams): Promise<void> =>
+    ipcRenderer.invoke('debug:add-bundle-note', params),
 
   // Pull the latest proxy-events.jsonl tail + session-meta for a
   // given session into the renderer so the bundle assembler can
