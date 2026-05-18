@@ -3,8 +3,7 @@ import { useCallback } from 'react'
 import type { SessionId } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
-  buildDispatchGroups,
-  flattenDispatchRows,
+  buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 
@@ -35,7 +34,7 @@ export function useReaderActions(
     if (!activeTab) return
     const dispatchRow = current.dispatchMode
       ? selectVisibleDispatchRow(
-          flattenDispatchRows(buildDispatchGroups(current)),
+          buildVisibleDispatchRows(current),
           current.dispatchMode.focusedSessionId,
           activeTab.focusedSessionId,
         )
@@ -63,7 +62,7 @@ export function useReaderActions(
     (sessionId: SessionId) => {
       const snapshot = refs.stateRef.current
       const rows = snapshot.dispatchMode
-        ? flattenDispatchRows(buildDispatchGroups(snapshot))
+        ? buildVisibleDispatchRows(snapshot)
         : []
       const dispatchRow = rows.find(row => row.sessionId === sessionId) ?? null
       setReaderMode(prev => (

@@ -96,9 +96,15 @@ export function ReaderView({ workspace }: Props) {
   const tab = workspace.state.tabs.find(item => item.id === reader.tabId)
   if (!tab) return null
 
-  const sessionIds = workspace.dispatchMode
+  const sessionIds = (workspace.dispatchMode
     ? dispatchSessionIdsForTab(workspace.state, tab.id)
-    : resolveTabSessions(workspace.state, tab.id)
+    : resolveTabSessions(workspace.state, tab.id))
+    // WHY Reader filters terminal sessions even though Dispatch can render
+    // them: Reader is a transcript surface. Terminal sessions render raw PTY
+    // scrollback through xterm.js and do not have assistant messages to
+    // extract. Keeping the filter here protects restored/stale reader state in
+    // addition to the command-palette guard that prevents new terminal entry.
+    .filter(sessionId => workspace.state.sessions[sessionId]?.kind !== 'terminal')
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(reader.focusedSessionId)

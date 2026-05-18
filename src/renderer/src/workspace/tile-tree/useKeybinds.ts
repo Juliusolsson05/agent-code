@@ -3,8 +3,7 @@ import { useEffect } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import {
-  buildDispatchGroups,
-  flattenDispatchRows,
+  buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -27,7 +26,7 @@ import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlo
 //   cmd-w           close focused pane (collapses tree; closes tab if last)
 //   cmd-shift-w     close active tab outright
 //   cmd-1..9        activate Nth tab
-//                   In Dispatch Mode this selects the Nth visible agent row.
+//                   In Dispatch Mode this selects the Nth visible session row.
 //                   Press a second digit while cmd is still held to select
 //                   rows 10..99, preserving digit order (cmd-1 then 2 → 12).
 //   cmd-alt-1..9    activate Nth tab, including while Dispatch Mode owns cmd-N.
@@ -423,7 +422,7 @@ export function useKeybinds(
           return
         }
         // In Dispatch Mode, the numbered command grammar moves from
-        // "tab N" to "agent row N" because the left list is the primary
+        // "tab N" to "session row N" because the left list is the primary
         // control surface. Tab switching remains available via cmd-[ / ].
         // The row labels keep their tab letter (A/B/C) for orientation,
         // but the numeric suffix is global in the visible dispatch list.
@@ -683,12 +682,13 @@ function digitFromKeyboardEvent(
 }
 
 function dispatchRows(workspace: Workspace) {
-  // buildDispatchGroups was tightened to a single (state) arg when
-  // detached sessions were added — it no longer needs the runtime map
-  // because rows are derived purely from sessions + tabs + detached.
-  // Anything passing workspace.runtimes here is stale and would
-  // silently typecheck wrong against the new signature.
-  return flattenDispatchRows(buildDispatchGroups(workspace.state))
+  // WHY use the visible-row helper instead of flattening groups here:
+  // keyboard selection is the user's row-number contract. Once Dispatch rows
+  // include pinned agents and terminal sessions, "cmd-3" must resolve against
+  // the exact same list the user sees, not a convenient subset of project
+  // groups. The helper keeps this in lockstep with DispatchLayout and command
+  // targeting.
+  return buildVisibleDispatchRows(workspace.state)
 }
 
 function focusDispatchRowByIndex(workspace: Workspace, index: number) {

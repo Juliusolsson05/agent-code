@@ -24,8 +24,7 @@
 //   the explicit import is the documentation.
 
 import {
-  buildDispatchGroups,
-  flattenDispatchRows,
+  buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
@@ -39,7 +38,7 @@ export function commandTargetSessionIdForState(state: WorkspaceState): SessionId
   const activeTab = state.tabs.find(tab => tab.id === state.activeTabId)
   if (!state.dispatchMode) return activeTab?.focusedSessionId ?? null
 
-  const rows = flattenDispatchRows(buildDispatchGroups(state))
+  const rows = buildVisibleDispatchRows(state)
   return selectVisibleDispatchRow(
     rows,
     state.dispatchMode.focusedSessionId,
