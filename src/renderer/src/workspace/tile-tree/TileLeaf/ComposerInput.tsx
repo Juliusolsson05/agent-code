@@ -39,6 +39,7 @@ export function ComposerInput({
   onPaste,
   onFocusRequest,
   onUserEngagement,
+  onHoverChange,
   removeDraftImage,
   dictation,
 }: {
@@ -57,6 +58,7 @@ export function ComposerInput({
   onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void
   onFocusRequest: () => void
   onUserEngagement: () => void
+  onHoverChange: (hovered: boolean) => void
   removeDraftImage: (imageId: string) => void
   dictation: ComposerDictationController
 }) {
@@ -64,7 +66,11 @@ export function ComposerInput({
   const showDictationActivity = dictation.enabled && dictation.busy
 
   return (
-    <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-2 relative">
+    <div
+      className="flex-shrink-0 border-t border-border bg-surface px-3 py-2 relative"
+      onPointerEnter={() => onHoverChange(true)}
+      onPointerLeave={() => onHoverChange(false)}
+    >
       {/* SlashCommandPicker is absolutely positioned relative to this
           composer container so it floats above the input without
           shifting layout. */}

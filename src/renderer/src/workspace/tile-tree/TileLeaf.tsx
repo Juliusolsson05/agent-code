@@ -22,6 +22,7 @@ import { useTypeToFocus } from '@renderer/workspace/tile-tree/TileLeaf/useTypeTo
 import { usePasteToFocus } from '@renderer/workspace/tile-tree/TileLeaf/usePasteToFocus'
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
+import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 
 // Claude paste-state-machine constants + helpers moved to
@@ -125,6 +126,7 @@ export function TileLeaf({
   // every scroll tick via onScrollInfo callback from Feed. fraction=0
   // means at bottom, fraction=1 means at top.
   const [scrollFraction, setScrollFraction] = useState(0)
+  const [composerHovered, setComposerHovered] = useState(false)
   const scrollFractionRef = useRef(0)
   const onScrollInfo = useCallback((info: ScrollInfo) => {
     if (Math.abs(info.fraction - scrollFractionRef.current) < 0.005) return
@@ -243,7 +245,7 @@ export function TileLeaf({
   // cycling. Hook in ./TileLeaf/useComposerKeybinds.ts; returns
   // the onKeyDown handler plus the slashMode flag that the
   // ComposerInput uses to gate its own onChange logic.
-  const { onKeyDown, slashMode } = useComposerKeybinds({
+  const { onKeyDown, slashMode, submitCurrentDraft } = useComposerKeybinds({
     sessionId,
     provider,
     runtime,
@@ -274,6 +276,27 @@ export function TileLeaf({
     if (dictation.handleShortcut(event)) return
     onKeyDown(event)
   }, [dictation, onKeyDown])
+
+  useEffect(() => {
+    return registerComposerEnterTarget({
+      focused,
+      hovered: composerHovered,
+      hasSubmittableDraft: () => {
+        // Slash mode is PTY-owned: Enter commits Claude Code's highlighted
+        // slash command, not Agent Code's normal prompt submit. The textarea
+        // keydown path already knows how to send that `\r` and clear the local
+        // slash-mode state. A document-level Enter cannot safely replay that
+        // path without also understanding the picker's current PTY state, so
+        // it deliberately does nothing while slash mode is active.
+        if (slashMode) return false
+        return input.trim().length > 0 || runtime.draftImages.length > 0
+      },
+      focus: () => inputRef.current?.focus(),
+      submit: () => {
+        void submitCurrentDraft('global-enter')
+      },
+    })
+  }, [focused, composerHovered, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
 
   const isSessionLive = runtime.sessionStatus === 'running'
   const readinessText =
@@ -488,6 +511,7 @@ export function TileLeaf({
         onPaste={handlePaste}
         onFocusRequest={onFocusRequest}
         onUserEngagement={acknowledgeSession}
+        onHoverChange={setComposerHovered}
         removeDraftImage={removeDraftImage}
         dictation={dictation}
       />
