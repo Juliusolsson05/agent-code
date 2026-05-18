@@ -128,7 +128,11 @@ export function semanticTurnHasRenderableContent(
   ).length > 0
 }
 
-function semanticToolCorrelationId(block: SemanticLiveTurn['blocks'][number]): string | null {
+function semanticToolUseCorrelationId(block: SemanticLiveTurn['blocks'][number]): string | null {
+  return block.toolUseId ?? block.callId ?? block.itemId ?? null
+}
+
+function semanticToolOutputCorrelationId(block: SemanticLiveTurn['blocks'][number]): string | null {
   return block.toolUseId ?? block.callId ?? null
 }
 
@@ -183,6 +187,26 @@ function isInvisibleWriteStdinBlock(block: SemanticLiveTurn['blocks'][number]): 
   // this layer, so the render model and the DOM agree on whether this
   // block actually owns screen real estate.
   return writeStdinChars(block).length === 0
+}
+
+function isInvisibleEmptyReasoningBlock(block: SemanticLiveTurn['blocks'][number]): boolean {
+  if (block.kind !== 'thinking' && block.kind !== 'reasoning') return false
+  const text =
+    block.thinking ||
+    block.reasoningSummary ||
+    block.reasoningText ||
+    ''
+  // WHY this belongs in the render-unit selector:
+  // SemanticLiveBlockRow intentionally returns null for empty
+  // reasoning/thinking because WorkIndicator is the real "agent is
+  // thinking" surface. If this selector still emits a block unit, an
+  // archived proxy turn with only empty finalized reasoning can keep a
+  // semantic-history row alive forever in debug/render ownership while
+  // React paints no content. That false positive was part of the
+  // 2026-05-17 web-search bundle: after committed rollout owned the
+  // visible answer, empty reasoning blocks helped keep old proxy
+  // history mounted at the bottom.
+  return text.length === 0
 }
 
 // WHY add a derived render-unit pass before painting semantic blocks:
@@ -256,6 +280,7 @@ export function buildSemanticRenderUnits(
     }
 
     if (isInvisibleWriteStdinBlock(block)) continue
+    if (isInvisibleEmptyReasoningBlock(block)) continue
 
     // Committed-ownership skip. Check both Claude's `toolUseId` and
     // Codex's `callId` — the committed indices are keyed by the
@@ -272,7 +297,9 @@ export function buildSemanticRenderUnits(
     // committed, the result was not, and the live output disappeared.
     // Use blocks yield to committed tool_use ownership; output blocks
     // yield only after committed tool_result ownership exists.
-    const toolId = semanticToolCorrelationId(block)
+    const toolId = isSemanticToolOutputBlock(block)
+      ? semanticToolOutputCorrelationId(block)
+      : semanticToolUseCorrelationId(block)
     const toolOwnedByCommitted = toolId
       ? isSemanticToolOutputBlock(block)
         ? committedToolResultIndex?.has(toolId) === true

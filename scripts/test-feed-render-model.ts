@@ -166,6 +166,47 @@ function writeStdinTurn(turnId: string, chars: string): SemanticLiveTurn {
   }
 }
 
+function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string): SemanticLiveTurn {
+  return {
+    ...liveTurn(turnId),
+    text: answerText,
+    endedAt: 2,
+    blocks: {
+      0: {
+        blockIndex: 0,
+        kind: 'reasoning',
+        itemId: `rs_${itemId}`,
+        finalized: true,
+        text: '',
+        thinking: '',
+        reasoningSummary: '',
+        reasoningText: '',
+      },
+      1: {
+        blockIndex: 1,
+        kind: 'web_search_call',
+        itemId,
+        status: 'completed',
+        finalized: true,
+        webSearchAction: {
+          kind: 'search',
+          query: 'Electron window.prompt is not supported',
+          queries: ['Electron window.prompt is not supported'],
+        },
+      },
+      2: {
+        blockIndex: 2,
+        kind: 'message',
+        itemId: `msg_${itemId}`,
+        status: 'completed',
+        finalized: true,
+        text: answerText,
+      },
+    },
+    blockOrder: [0, 1, 2],
+  }
+}
+
 // WHY these tests sit below the renderer instead of inside Feed.tsx:
 // the failure mode we keep reintroducing is not "React cannot map an
 // array." It is "two different data planes both believe they own the
@@ -515,6 +556,78 @@ function writeStdinTurn(turnId: string, chars: string): SemanticLiveTurn {
     'semantic history must defensively drop the current turn id so history/current cannot double-own one turn',
   )
   assert.notEqual(model.renderedSemanticTurn, null)
+}
+
+{
+  const answerText =
+    'Yes. Electron does not support window.prompt, so the AI Workspace dialog needs a real app UI.'
+  const webSearchItemId = 'ws_06c0839c0d254157016a09ae03afd48191b67160fc3df8c70a'
+  const committedSearch = {
+    ...assistantEntry('committed-search', ''),
+    uuid: '2026-05-17T12:01:20.152Z:web_search_call',
+    codexTurnId: '019e35ce-0fd1-7ee0-8782-e8eb1761b4d0',
+    message: {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: webSearchItemId,
+          name: 'web_search',
+          input: {
+            description: 'Search: Electron window.prompt is not supported',
+          },
+        },
+      ],
+    },
+  } as Entry
+  const committedAnswer = {
+    ...assistantEntry('committed-answer', answerText),
+    uuid: '2026-05-17T12:01:59.784Z:message',
+    codexTurnId: '019e35ce-0fd1-7ee0-8782-e8eb1761b4d0',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text: answerText }],
+    },
+  } as Entry
+  const committedToolUseIndex = new Map<string, ToolUseBlock>([
+    [
+      webSearchItemId,
+      {
+        type: 'tool_use',
+        id: webSearchItemId,
+        name: 'web_search',
+        input: { description: 'Search: Electron window.prompt is not supported' },
+      },
+    ],
+  ])
+
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [committedSearch, committedAnswer],
+    semanticHistory: [
+      webSearchHistoryTurn(
+        'resp_06c0839c0d254157016a09adf8a8a88191a829817928dfd789',
+        webSearchItemId,
+        answerText,
+      ),
+    ],
+    semanticTurn: null,
+    streamPhase: 'idle',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+    committedToolUseIndex,
+  })
+
+  assert.equal(
+    model.renderedSemanticHistory.length,
+    0,
+    'committed web_search tool_use plus committed answer text must suppress the archived proxy web-search turn',
+  )
+  assert.deepEqual(
+    model.debugRows.map(row => row.slot),
+    ['entry', 'entry'],
+    'stale web-search semantic history must not remain pinned at the bottom after rollout catch-up',
+  )
 }
 
 {

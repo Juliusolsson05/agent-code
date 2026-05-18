@@ -135,7 +135,13 @@ function semanticTurnDiagnostics(
       .map(block => {
         const text = block.text ?? ''
         const normalized = normalizeCommittedAssistantText(text)
-        const toolId = block.toolUseId ?? block.callId ?? null
+        const isOutputBlock =
+          block.kind === 'function_call_output' ||
+          block.kind === 'custom_tool_call_output' ||
+          block.kind === 'tool_search_output'
+        const toolId = isOutputBlock
+          ? block.toolUseId ?? block.callId ?? null
+          : block.toolUseId ?? block.callId ?? block.itemId ?? null
         return {
           blockIndex: block.blockIndex,
           kind: block.kind,
@@ -149,9 +155,10 @@ function semanticTurnDiagnostics(
               committedText.keys.has(`${turn.turnId}\u0000${text}`) ||
               committedText.texts.has(text) ||
               (normalized !== '' && committedText.normalizedTexts.has(normalized))
-            ),
+          ),
           toolId,
-          toolOwnedByCommitted: toolId ? committedToolUseIndex.has(toolId) : false,
+          toolOwnedByCommitted:
+            toolId && !isOutputBlock ? committedToolUseIndex.has(toolId) : false,
           toolResultOwnedByCommitted: toolId ? committedToolResultIndex.has(toolId) : false,
         }
       }),
