@@ -17,6 +17,7 @@ const semanticLegends = new Map<
   { tokenTypes: string[]; tokenModifiers: string[] }
 >()
 const registeredLanguages = new Set<string>()
+const pendingSemanticProviders = new Map<string, Promise<void>>()
 
 let monacoPromise: Promise<typeof Monaco> | null = null
 let themeListenerInstalled = false
@@ -150,24 +151,41 @@ export async function ensureSemanticProvider(
   if (!workspaceRoot || !supportsLsp(normalized)) return
   if (registeredLanguages.has(normalized)) return
 
-  const legend = await window.api.ensureLspLegend(workspaceRoot, normalized)
-  if (!legend) return
+  const pending = pendingSemanticProviders.get(normalized)
+  if (pending) return pending
 
-  semanticLegends.set(normalized, legend)
-  registeredLanguages.add(normalized)
-  monaco.languages.registerDocumentSemanticTokensProvider(normalized, {
-    getLegend() {
-      const current = semanticLegends.get(normalized)
-      return {
-        tokenTypes: current?.tokenTypes ?? [],
-        tokenModifiers: current?.tokenModifiers ?? [],
-      }
-    },
-    async provideDocumentSemanticTokens(model) {
-      const result = await window.api.getLspSemanticTokens(model.uri.toString())
-      if (!result) return null
-      return { data: Uint32Array.from(result.data) }
-    },
-    releaseDocumentSemanticTokens() {},
+  // WHY provider registration is promise-coalesced even though the final
+  // provider is global per language: transcript rendering can mount dozens of
+  // Monaco code blocks in the same tick. Without this in-flight guard, every
+  // block sees `registeredLanguages` as false before `ensureLspLegend` returns,
+  // so they all perform duplicate IPC and register duplicate semantic-token
+  // providers. Monaco keeps those providers alive globally; the cheapest and
+  // safest fix is to let the first mount own registration while later mounts
+  // await the same promise.
+  const registration = (async () => {
+    const legend = await window.api.ensureLspLegend(workspaceRoot, normalized)
+    if (!legend) return
+
+    semanticLegends.set(normalized, legend)
+    registeredLanguages.add(normalized)
+    monaco.languages.registerDocumentSemanticTokensProvider(normalized, {
+      getLegend() {
+        const current = semanticLegends.get(normalized)
+        return {
+          tokenTypes: current?.tokenTypes ?? [],
+          tokenModifiers: current?.tokenModifiers ?? [],
+        }
+      },
+      async provideDocumentSemanticTokens(model) {
+        const result = await window.api.getLspSemanticTokens(model.uri.toString())
+        if (!result) return null
+        return { data: Uint32Array.from(result.data) }
+      },
+      releaseDocumentSemanticTokens() {},
+    })
+  })().finally(() => {
+    pendingSemanticProviders.delete(normalized)
   })
+  pendingSemanticProviders.set(normalized, registration)
+  return registration
 }
