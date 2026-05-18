@@ -35,6 +35,7 @@ export type WorkspaceRefs = {
   undoStackRef: MutableRefObject<UndoCloseStack>
   bootstrapTimersRef: MutableRefObject<Map<SessionId, ReturnType<typeof setTimeout>>>
   persistedFeedDebugIdRef: MutableRefObject<Record<SessionId, number>>
+  inFlightFeedDebugIdRef: MutableRefObject<Record<SessionId, number>>
   paneToastTimers: MutableRefObject<Record<SessionId, ReturnType<typeof setTimeout>>>
   saveTimerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>
   bootRef: MutableRefObject<boolean>
@@ -82,6 +83,7 @@ export function useWorkspaceRefs(
   const undoStackRef = useRef(new UndoCloseStack())
   const bootstrapTimersRef = useRef<Map<SessionId, ReturnType<typeof setTimeout>>>(new Map())
   const persistedFeedDebugIdRef = useRef<Record<SessionId, number>>({})
+  const inFlightFeedDebugIdRef = useRef<Record<SessionId, number>>({})
   const paneToastTimers = useRef<Record<SessionId, ReturnType<typeof setTimeout>>>({})
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const bootRef = useRef(false)
@@ -131,6 +133,16 @@ export function useWorkspaceRefs(
     // Tracks the largest feed-debug entry id we've shipped to main
     // per session. Prevents re-shipping entries we've already written.
     persistedFeedDebugIdRef,
+    // Tracks the largest feed-debug entry id currently owned by an
+    // unresolved append IPC. This is intentionally separate from the
+    // persisted cursor above: advancing `persisted` optimistically
+    // would drop logs if the disk write failed, but NOT reserving an
+    // in-flight range lets every high-frequency runtime update send
+    // the same pending window again while the first IPC waits behind
+    // main-process disk work. The main writer still dedupes by id as
+    // a durability guard; this ref prevents duplicate work from
+    // reaching main in the first place.
+    inFlightFeedDebugIdRef,
 
     // Per-session pane toast timers. Single-slot per session — a
     // second toast replaces the first and resets this timer.

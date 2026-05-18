@@ -99,6 +99,7 @@ export type WorkspaceHookContext = {
   undoStackRef: MutableRefObject<UndoCloseStack>
   bootstrapTimersRef: MutableRefObject<Map<SessionId, ReturnType<typeof setTimeout>>>
   persistedFeedDebugIdRef: MutableRefObject<Record<SessionId, number>>
+  inFlightFeedDebugIdRef: MutableRefObject<Record<SessionId, number>>
 
   // --- Timer refs ---
   paneToastTimers: MutableRefObject<Record<SessionId, ReturnType<typeof setTimeout>>>
