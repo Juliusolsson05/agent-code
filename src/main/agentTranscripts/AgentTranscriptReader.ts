@@ -96,7 +96,7 @@ export async function inspectAgentTranscriptFile(
 ): Promise<AgentTranscriptInspectResult | AgentTranscriptErrorResult> {
   const prepared = await preparePath(options.path)
   if (!prepared.ok) return prepared
-  const parsed = await parseTranscript(prepared.path, options.provider ?? 'auto')
+  const parsed = await inspectTranscript(prepared.path, options.provider ?? 'auto')
   if (!parsed.ok) return parsed
   return {
     ok: true,
@@ -253,6 +253,92 @@ async function parseTranscript(
     provider,
     path,
     items,
+    stats,
+    firstTimestamp,
+    lastTimestamp,
+  }
+}
+
+async function inspectTranscript(
+  path: string,
+  requestedProvider: AgentTranscriptProviderInput,
+): Promise<
+  | {
+      ok: true
+      provider: AgentTranscriptProvider
+      stats: AgentTranscriptStats
+      firstTimestamp?: number
+      lastTimestamp?: number
+    }
+  | AgentTranscriptErrorResult
+> {
+  if (requestedProvider !== 'auto' && requestedProvider !== 'claude' && requestedProvider !== 'codex') {
+    return {
+      ok: false,
+      error: 'unsupported_provider',
+      message: `Unsupported transcript provider: ${requestedProvider}`,
+    }
+  }
+  const provider = requestedProvider === 'auto'
+    ? await detectProvider(path)
+    : requestedProvider
+  if (!provider) {
+    return {
+      ok: false,
+      error: 'provider_detection_failed',
+      message: 'Could not detect whether this transcript is Claude or Codex JSONL.',
+    }
+  }
+
+  const stats = emptyStats()
+  let firstTimestamp: number | undefined
+  let lastTimestamp: number | undefined
+  let previous: AgentTranscriptItem | null = null
+
+  // WHY inspect has its own reducer instead of calling parseTranscript:
+  // inspect only needs provider, timestamps, and counts, but parseTranscript
+  // materializes every normalized item, copies them again during dedupe, and
+  // only then counts. Agent review workflows often inspect large child-agent
+  // transcripts before deciding what to read; this reducer keeps that sizing
+  // step O(1) heap while preserving the same adjacent-dedupe semantics used by
+  // read/search.
+  try {
+    for await (const raw of streamJsonl<JsonRecord>(path)) {
+      stats.totalEvents += 1
+      if (raw === null) {
+        stats.parseErrors += 1
+        continue
+      }
+      const timestamp = extractTimestamp(raw)
+      if (timestamp !== undefined) {
+        firstTimestamp = firstTimestamp === undefined ? timestamp : Math.min(firstTimestamp, timestamp)
+        lastTimestamp = lastTimestamp === undefined ? timestamp : Math.max(lastTimestamp, timestamp)
+      }
+      const extracted = provider === 'claude'
+        ? extractClaudeItems(raw, timestamp)
+        : extractCodexItems(raw, timestamp)
+      for (const item of extracted) {
+        if (previous && transcriptItemsEquivalent(previous, item)) {
+          if (previous.kind === 'assistant_message' && item.kind === 'assistant_message') {
+            previous.final = previous.final || item.final
+          }
+          continue
+        }
+        previous = { ...item }
+        incrementStats(stats, previous)
+      }
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: 'transcript_read_failed',
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  return {
+    ok: true,
+    provider,
     stats,
     firstTimestamp,
     lastTimestamp,
