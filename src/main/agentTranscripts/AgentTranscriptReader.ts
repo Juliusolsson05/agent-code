@@ -207,6 +207,7 @@ async function streamReadTranscript(
   let previous: AgentTranscriptItem | null = null
   let sawFinalAssistant = false
   let lastAssistant: AgentTranscriptItem | null = null
+  let lastSelectedAssistant: AgentTranscriptItem | null = null
 
   // WHY this is separate from parseTranscript:
   // read/tail/final are consumption tools, not archival parsers. The old
@@ -236,7 +237,7 @@ async function streamReadTranscript(
           sawFinalAssistant = sawFinalAssistant || item.final === true
         }
         if (!itemMatchesProjection(item, options.projection, options.include)) continue
-        addProjectedReadItem(selected, item, {
+        const selectedItem = addProjectedReadItem(selected, item, {
           tail,
           maxItems,
           maxChars,
@@ -247,6 +248,7 @@ async function streamReadTranscript(
           },
           markTruncated: () => { truncated = true },
         })
+        if (selectedItem?.kind === 'assistant_message') lastSelectedAssistant = selectedItem
       }
     }
   } catch (err) {
@@ -259,6 +261,7 @@ async function streamReadTranscript(
 
   if (!sawFinalAssistant && lastAssistant?.kind === 'assistant_message') {
     lastAssistant.final = true
+    if (lastSelectedAssistant) lastSelectedAssistant.final = true
     if (options.projection === 'final' && !selected.includes(lastAssistant)) {
       addProjectedReadItem(selected, lastAssistant, {
         tail,
@@ -319,24 +322,25 @@ function addProjectedReadItem(
     selectedCharsRef: { get: () => number; set: (value: number) => void }
     markTruncated: () => void
   },
-): void {
+): AgentTranscriptItem | null {
   if (options.tail > 0) {
     selected.push(item)
     while (selected.length > options.tail) {
       selected.shift()
       options.markTruncated()
     }
-    return
+    return item
   }
 
   const bounded = truncateItemText(item, options.maxCharsPerItem)
   const size = itemSearchText(bounded).length
   if (selected.length >= options.maxItems || options.selectedCharsRef.get() + size > options.maxChars) {
     options.markTruncated()
-    return
+    return null
   }
   options.selectedCharsRef.set(options.selectedCharsRef.get() + size)
   selected.push(bounded)
+  return bounded
 }
 
 async function streamSearchTranscript(

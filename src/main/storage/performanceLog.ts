@@ -62,13 +62,13 @@ export async function readPerformanceTail(
       const start = Math.max(0, size - TAIL_BYTES)
       const length = size - start
       const buffer = Buffer.alloc(length)
-      await handle.read(buffer, 0, length, start)
+      const { bytesRead } = await handle.read(buffer, 0, length, start)
       // WHY positioned reads instead of readFile+slice: debug bundles request
       // six perf-log tails at once, and long perf runs can make each JSONL
       // hundreds of MB. The caller only needs a 256 KiB diagnostic tail, so
       // reading from the end keeps snapshot creation from becoming another
       // burst-allocation path during a perf investigation.
-      return buffer.toString('utf8')
+      return buffer.subarray(0, bytesRead).toString('utf8')
     } finally {
       await handle.close()
     }

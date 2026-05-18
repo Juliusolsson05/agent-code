@@ -101,6 +101,7 @@ await writeJsonl(codexPath, [
   })
   assert.equal(result.ok, true)
   assert.deepEqual(result.items.map(item => item.kind), ['user_message', 'assistant_message'])
+  assert.equal(result.items[1]?.kind === 'assistant_message' ? result.items[1].final : false, true)
   assert.equal(result.truncated, false)
 }
 

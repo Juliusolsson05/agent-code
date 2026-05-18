@@ -170,10 +170,12 @@ async function startApp(): Promise<void> {
   })
   // Ghost-log reads are now streaming, but a years-long append-only
   // file still makes every future restore pay O(file-size) parse CPU.
-  // Startup is the safest time to compact old oversized logs: no
-  // session writer has been created yet, so the rewrite cannot race an
-  // active append to the same inode.
-  void compactAllGhostLogs().catch(err => {
+  // Startup compaction is conservative because this sweep is async:
+  // a resumed session may create its writer while the directory pass is
+  // still reading a large file. The registry check is repeated inside
+  // the compactor before rename so a newly-live session keeps append-only
+  // safety and can compact on dispose instead.
+  void compactAllGhostLogs(sessionId => ghostJournals.has(sessionId)).catch(err => {
     console.warn('[ghostJournal] startup compact failed (non-fatal):', err)
   })
   scheduleDebugStoragePrune('startup')

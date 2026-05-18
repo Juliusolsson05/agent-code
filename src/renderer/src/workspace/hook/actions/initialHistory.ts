@@ -54,14 +54,20 @@ async function acquireInitialHistorySlot(): Promise<() => void> {
   await new Promise<void>(resolve => {
     initialHistoryWaiters.push(resolve)
   })
-  activeInitialHistoryLoads++
   return releaseInitialHistorySlot
 }
 
 function releaseInitialHistorySlot(): void {
-  activeInitialHistoryLoads = Math.max(0, activeInitialHistoryLoads - 1)
   const next = initialHistoryWaiters.shift()
-  if (next) next()
+  if (next) {
+    // Transfer this slot directly to the waiter. If we decremented first and
+    // let the waiter increment in a later microtask, a fresh caller could slip
+    // through the gap and temporarily run three cold-start history loads under
+    // a limit of two.
+    next()
+    return
+  }
+  activeInitialHistoryLoads = Math.max(0, activeInitialHistoryLoads - 1)
 }
 
 function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {

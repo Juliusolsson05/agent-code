@@ -21,6 +21,7 @@ import type {
 const execFileAsync = promisify(execFile)
 const AI_WORKSPACE_FILE = `${STATE_DIR}/ai-workspaces.json`
 const STATUS_REFRESH_CONCURRENCY = 12
+const GIT_CONTEXT_CACHE_TTL_MS = 5_000
 
 type PersistedAiWorkspaceState = {
   workspaces: AiWorkspaceRecord[]
@@ -85,10 +86,13 @@ export class AiWorkspaceRegistry {
   private readonly workspaces = new Map<string, AiWorkspaceRecord>()
   private loadPromise: Promise<void> | null = null
   private saveQueue: Promise<void> = Promise.resolve()
-  private readonly gitContextCache = new Map<string, Promise<{
-    projectRoot?: string
-    gitBranch?: string
-  }>>()
+  private readonly gitContextCache = new Map<string, {
+    expiresAt: number
+    promise: Promise<{
+      projectRoot?: string
+      gitBranch?: string
+    }>
+  }>()
 
   constructor(private readonly stateFile = AI_WORKSPACE_FILE) {}
 
@@ -375,15 +379,22 @@ export class AiWorkspaceRegistry {
     gitBranch?: string
   }> {
     const cwd = dirname(path)
+    const now = Date.now()
     let cached = this.gitContextCache.get(cwd)
-    if (!cached) {
+    if (!cached || cached.expiresAt <= now) {
       // Agent fan-outs commonly attach several files from the same report
       // directory. Share the two git subprocesses per directory instead of
       // multiplying them by file count during a burst of MCP attach calls.
-      cached = detectGitContext(path)
+      // Keep the cache deliberately short-lived: branch and worktree metadata
+      // are context, not identity, and a long-lived process can switch branches
+      // between review attachments.
+      cached = {
+        expiresAt: now + GIT_CONTEXT_CACHE_TTL_MS,
+        promise: detectGitContext(path),
+      }
       this.gitContextCache.set(cwd, cached)
     }
-    return cached
+    return cached.promise
   }
 }
 

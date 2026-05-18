@@ -115,6 +115,12 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
   let bytesFreed = 0
 
   for (const artifact of artifacts) {
+    // Ghost logs are recovery state. Age alone is not enough evidence that a
+    // log is disposable: a user can resume an older crashed session and still
+    // need those provisional rows during bootstrap. Keep ghost cleanup on the
+    // budget/cap passes below, where pressure is explicit and active recent
+    // files still get the ACTIVE_GRACE_MS guard.
+    if (artifact.bucket === 'ghost-logs') continue
     if (artifact.mtimeMs >= cutoff) continue
     const freed = await removeArtifact(artifact)
     if (freed === 0) continue
