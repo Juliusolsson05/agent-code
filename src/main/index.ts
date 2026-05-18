@@ -10,7 +10,7 @@ import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
 import { LspManager } from '@main/lspManager.js'
-import { GhostJournalRegistry } from '@main/ghostJournal.js'
+import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
 import {
   DictationDebugJournalRegistry,
   pruneOldDictationDebugLogs,
@@ -167,6 +167,16 @@ async function startApp(): Promise<void> {
   })
   void pruneOldDictationDebugLogs().catch(err => {
     console.warn('[dictation] prune failed (non-fatal):', err)
+  })
+  // Ghost-log reads are now streaming, but a years-long append-only
+  // file still makes every future restore pay O(file-size) parse CPU.
+  // Startup compaction is conservative because this sweep is async:
+  // a resumed session may create its writer while the directory pass is
+  // still reading a large file. The registry check is repeated inside
+  // the compactor before rename so a newly-live session keeps append-only
+  // safety and can compact on dispose instead.
+  void compactAllGhostLogs(sessionId => ghostJournals.has(sessionId)).catch(err => {
+    console.warn('[ghostJournal] startup compact failed (non-fatal):', err)
   })
   scheduleDebugStoragePrune('startup')
   await initializeToolchain()

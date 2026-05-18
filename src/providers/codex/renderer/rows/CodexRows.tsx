@@ -403,13 +403,26 @@ function ExpandableCodeResult({
   codeId: string
   language?: string | null
 }) {
+  const [opened, setOpened] = useState(false)
   return (
     <MarkerRow marker="⎿" tone="muted">
-      <details className="text-[12px] leading-[1.55] text-ink-dim">
+      {/* Closed <details> still mounts React children. Keep the Monaco
+          CodeBlock behind first-open state so a resumed transcript with
+          many read/search results does not create hidden editors, models,
+          LSP documents, and diagnostics listeners before the user asks to
+          inspect the raw payload. Once opened, keep it mounted so copy-code
+          IDs and Monaco state remain stable while the user expands/collapses. */}
+      <details
+        className="text-[12px] leading-[1.55] text-ink-dim"
+        onToggle={event => {
+          if (event.currentTarget.open) setOpened(true)
+        }}
+      >
         <summary className="cursor-pointer select-none">
           {summary}
         </summary>
-        <div className="mt-2">
+        {opened ? (
+          <div className="mt-2">
           <CodeBlock
             code={code}
             path={path}
@@ -419,7 +432,8 @@ function ExpandableCodeResult({
             engine="monaco"
             allowAutoDetect={!language}
           />
-        </div>
+          </div>
+        ) : null}
       </details>
     </MarkerRow>
   )

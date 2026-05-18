@@ -1,8 +1,9 @@
 import { join } from 'path'
-import { readFile, readdir, stat } from 'fs/promises'
+import { readdir, stat } from 'fs/promises'
 
 import { getMainProvider } from '@providers/registry.main.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
+import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 
 const CODEX_ROLLOUT_RE =
   /^rollout-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
@@ -37,20 +38,12 @@ export type HistoryChunk = {
   entries: Record<string, unknown>[]
   hasMore: boolean
   // Total count of usable JSONL records in the on-disk transcript at
-  // the moment this chunk was read. Set on initial-load chunks (where
-  // we parse the whole file anyway to slice the tail), omitted on
-  // older-history pagination (which intentionally walks just the
-  // window the renderer asked for and doesn't have the full count
-  // handy — the renderer keeps its own running total from the
-  // initial load + live appends).
-  //
-  // WHY it lives on the chunk and not as a separate IPC: the renderer
-  // already round-trips through this shape, and `readTranscriptEntries`
-  // already pays the cost of parsing every line to pick the tail
-  // window. Adding an explicit count IPC would re-read the file for
-  // no benefit. If/when this loader moves to a streaming reader (per
-  // PR #87's streamJsonl utility) the field becomes a streamed line
-  // counter — same contract, cheaper implementation.
+  // the moment this chunk was read. Set on initial-load chunks by the
+  // streaming reader's line counter. Older-history pagination omits
+  // it because the renderer keeps its own running total from the
+  // initial load + live appends, and counting the whole file just to
+  // page one older window would reintroduce the read-everything cost
+  // this loader is specifically avoiding.
   totalEntries?: number
 }
 
@@ -119,56 +112,121 @@ async function findCodexRolloutPathByThreadId(
   return null
 }
 
-/**
- * Resolve and parse the provider's durable transcript file. Both the
- * initial-tail loader and older-history pagination use this path so
- * provider storage quirks stay in one place; renderer-side mapping is
- * still provider-specific because those mapped feed rows are UI state.
- */
-async function readTranscriptEntries(
+async function resolveTranscriptPath(
   params: InitialHistoryChunkRequest,
-): Promise<{
-  filePath: string | null
-  textLength: number
-  parseErrors: number
-  entries: Record<string, unknown>[]
-}> {
+): Promise<string | null> {
   const provider = getMainProvider(params.kind)
-  let filePath: string | null = null
 
   if (params.kind === 'claude') {
     const projectDir = await provider.getProjectDir(params.cwd)
-    filePath = join(projectDir, `${params.providerSessionId}.jsonl`)
-  } else {
-    const sessionsDir = await provider.getProjectDir(params.cwd)
-    filePath = await findCodexRolloutPathByThreadId(sessionsDir, params.providerSessionId)
+    return join(projectDir, `${params.providerSessionId}.jsonl`)
   }
 
-  if (!filePath) {
-    return { filePath: null, textLength: 0, parseErrors: 0, entries: [] }
-  }
+  const sessionsDir = await provider.getProjectDir(params.cwd)
+  return findCodexRolloutPathByThreadId(sessionsDir, params.providerSessionId)
+}
 
-  const text = await readFile(filePath, 'utf8').catch(() => null)
-  if (!text) {
-    return { filePath, textLength: 0, parseErrors: 0, entries: [] }
-  }
+function pushCapped<T>(items: T[], item: T, limit: number): void {
+  if (limit <= 0) return
+  items.push(item)
+  if (items.length > limit) items.shift()
+}
 
+async function readInitialTranscriptTail(
+  filePath: string,
+  limit: number,
+): Promise<{
+  bytes: number
+  parseErrors: number
+  parsed: number
+  entries: Record<string, unknown>[]
+}> {
+  const size = await stat(filePath).then(s => s.size).catch(() => 0)
   let parseErrors = 0
-  const entries = text
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .map(line => {
-      try {
-        return JSON.parse(line) as Record<string, unknown>
-      } catch {
-        parseErrors++
-        return null
-      }
-    })
-    .filter((entry): entry is Record<string, unknown> => entry !== null)
+  let parsed = 0
+  const entries: Record<string, unknown>[] = []
 
-  return { filePath, textLength: text.length, parseErrors, entries }
+  // WHY we stream even for the initial load: the UI only needs the newest
+  // `limit` records, but several crash reports came from main holding the
+  // raw transcript string, split-line array, parsed-object array, and IPC
+  // clone all at once. The ring buffer keeps the old totalEntries contract
+  // while bounding retained JS objects to the visible bootstrap tail.
+  try {
+    for await (const raw of streamJsonl<Record<string, unknown>>(filePath)) {
+      if (raw === null) {
+        parseErrors++
+        continue
+      }
+      parsed++
+      pushCapped(entries, raw, limit)
+    }
+  } catch {
+    return { bytes: size, parseErrors, parsed, entries: [] }
+  }
+
+  return { bytes: size, parseErrors, parsed, entries }
+}
+
+async function readOlderTranscriptWindow(
+  filePath: string,
+  params: HistoryChunkRequest,
+): Promise<{
+  bytes: number
+  parseErrors: number
+  parsed: number
+  foundMarker: boolean
+  hasMore: boolean
+  entries: Record<string, unknown>[]
+}> {
+  const size = await stat(filePath).then(s => s.size).catch(() => 0)
+  const markerOf = params.kind === 'claude'
+    ? extractClaudeHistoryMarker
+    : extractCodexHistoryMarker
+  let parseErrors = 0
+  let parsed = 0
+  let countBeforeCutoff = 0
+  let foundMarker = false
+  const entries: Record<string, unknown>[] = []
+
+  // WHY the older-page loader stops at the anchor marker instead of parsing
+  // the whole transcript: older pagination is frequently driven by scrolling,
+  // and the previous implementation reread a 100+ MB file for every page.
+  // We still preserve the historical fallback where a missing marker means
+  // "page from the file tail" because live append races can leave the renderer
+  // asking before a marker that no longer exists in the durable transcript.
+  try {
+    for await (const raw of streamJsonl<Record<string, unknown>>(filePath)) {
+      if (raw === null) {
+        parseErrors++
+        continue
+      }
+      parsed++
+      if (markerOf(raw) === params.beforeMarker) {
+        foundMarker = true
+        break
+      }
+      countBeforeCutoff++
+      pushCapped(entries, raw, params.limit)
+    }
+  } catch {
+    return {
+      bytes: size,
+      parseErrors,
+      parsed,
+      foundMarker: false,
+      hasMore: false,
+      entries: [],
+    }
+  }
+
+  return {
+    bytes: size,
+    parseErrors,
+    parsed,
+    foundMarker,
+    hasMore: countBeforeCutoff > params.limit,
+    entries,
+  }
 }
 
 /**
@@ -186,48 +244,31 @@ export async function loadOlderHistoryChunk(
   })
 
   try {
-    const parsed = await readTranscriptEntries(params)
+    const filePath = await resolveTranscriptPath(params)
 
-    if (!parsed.filePath) {
+    if (!filePath) {
       span.end({ result: 'missing-file' })
       return { entries: [], hasMore: false }
     }
 
+    const parsed = await readOlderTranscriptWindow(filePath, params)
     if (parsed.entries.length === 0) {
-      span.end({ result: 'empty-or-read-failed', filePath: parsed.filePath })
+      span.end({ result: 'empty-or-read-failed', filePath })
       return { entries: [], hasMore: false }
     }
 
-    const markerOf = params.kind === 'claude'
-      ? extractClaudeHistoryMarker
-      : extractCodexHistoryMarker
-
-    const anchorIndex = parsed.entries.findIndex(entry => markerOf(entry) === params.beforeMarker)
-    const cutoff = anchorIndex === -1 ? parsed.entries.length : anchorIndex
-    const older = parsed.entries.slice(0, cutoff)
-    if (older.length === 0) {
-      span.end({
-        result: 'no-older',
-        bytes: parsed.textLength,
-        parsed: parsed.entries.length,
-        parseErrors: parsed.parseErrors,
-      })
-      return { entries: [], hasMore: false }
-    }
-
-    const start = Math.max(0, older.length - params.limit)
-    const entries = older.slice(start)
     span.end({
       result: 'loaded',
-      bytes: parsed.textLength,
-      parsed: parsed.entries.length,
+      bytes: parsed.bytes,
+      parsed: parsed.parsed,
       parseErrors: parsed.parseErrors,
-      returned: entries.length,
-      hasMore: start > 0,
+      foundMarker: parsed.foundMarker,
+      returned: parsed.entries.length,
+      hasMore: parsed.hasMore,
     })
     return {
-      entries,
-      hasMore: start > 0,
+      entries: parsed.entries,
+      hasMore: parsed.hasMore,
     }
   } catch (err) {
     span.fail(err)
@@ -251,31 +292,30 @@ export async function loadInitialHistoryChunk(
   })
 
   try {
-    const parsed = await readTranscriptEntries(params)
-    if (!parsed.filePath) {
+    const filePath = await resolveTranscriptPath(params)
+    if (!filePath) {
       span.end({ result: 'missing-file' })
       return { entries: [], hasMore: false, totalEntries: 0 }
     }
+    const parsed = await readInitialTranscriptTail(filePath, params.limit)
     if (parsed.entries.length === 0) {
-      span.end({ result: 'empty-or-read-failed', filePath: parsed.filePath })
+      span.end({ result: 'empty-or-read-failed', filePath })
       return { entries: [], hasMore: false, totalEntries: 0 }
     }
 
-    const start = Math.max(0, parsed.entries.length - params.limit)
-    const entries = parsed.entries.slice(start)
     span.end({
       result: 'loaded',
-      bytes: parsed.textLength,
-      parsed: parsed.entries.length,
+      bytes: parsed.bytes,
+      parsed: parsed.parsed,
       parseErrors: parsed.parseErrors,
-      returned: entries.length,
-      hasMore: start > 0,
+      returned: parsed.entries.length,
+      hasMore: parsed.parsed > params.limit,
     })
-    // totalEntries is the count of every usable JSONL record in the
-    // file at this moment — what the renderer uses as the denominator
-    // for "you are at entry X of Y". This is the same value `parsed`
-    // already produced; we just stop throwing it away after slicing.
-    return { entries, hasMore: start > 0, totalEntries: parsed.entries.length }
+    return {
+      entries: parsed.entries,
+      hasMore: parsed.parsed > params.limit,
+      totalEntries: parsed.parsed,
+    }
   } catch (err) {
     span.fail(err)
     throw err

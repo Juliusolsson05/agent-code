@@ -161,6 +161,7 @@ function buildAgentOutput(params: {
     meta: params.meta,
     parentSessionId: params.parentSessionId,
     runtime: params.runtime,
+    messages,
   })
   return {
     agent: {
@@ -178,10 +179,12 @@ function buildAgentRecord(params: {
   meta: SessionMeta
   parentSessionId: string
   runtime: SessionRuntime | null
+  messages?: OrchestrationAgentMessage[]
 }): OrchestrationAgentRecord {
-  const lifecycleState = lifecycleStateForRuntime(params.runtime)
-  const messages = visibleMessages(params.runtime)
+  const messages = params.messages ?? visibleMessages(params.runtime)
   const latestAssistantText = latestAssistant(messages)
+  const lifecycleState = lifecycleStateForRuntime(params.runtime, latestAssistantText)
+  const activityAt = lastActivityAt(params.runtime, messages)
   return {
     sessionId: params.sessionId,
     kind: (params.meta.kind ?? 'claude') as 'claude' | 'codex',
@@ -193,9 +196,9 @@ function buildAgentRecord(params: {
     ...(params.meta.orchestrationRole ? { orchestrationRole: params.meta.orchestrationRole } : {}),
     lifecycleState,
     statusSummary: statusSummary(params.runtime, lifecycleState),
-    ...(lastActivityAt(params.runtime, messages) ? { lastActivityAt: lastActivityAt(params.runtime, messages) } : {}),
-    ...(lifecycleState === 'completed' && lastActivityAt(params.runtime, messages)
-      ? { completedAt: lastActivityAt(params.runtime, messages) }
+    ...(activityAt ? { lastActivityAt: activityAt } : {}),
+    ...(lifecycleState === 'completed' && activityAt
+      ? { completedAt: activityAt }
       : {}),
     ...(params.runtime?.processError ? { errorSummary: params.runtime.processError } : {}),
     ...(latestAssistantText ? { latestAssistantText, finalAssistantText: latestAssistantText } : {}),
@@ -203,7 +206,10 @@ function buildAgentRecord(params: {
   }
 }
 
-function lifecycleStateForRuntime(runtime: SessionRuntime | null): OrchestrationLifecycleState {
+function lifecycleStateForRuntime(
+  runtime: SessionRuntime | null,
+  latestAssistantText?: string,
+): OrchestrationLifecycleState {
   // WHY this derives from renderer runtime instead of provider internals:
   // orchestration's contract is "what can the parent safely coordinate on?"
   // The feed/runtime state is the same user-visible truth Dispatch and panes
@@ -221,7 +227,7 @@ function lifecycleStateForRuntime(runtime: SessionRuntime | null): Orchestration
   ) {
     return 'running'
   }
-  if (latestAssistant(visibleMessages(runtime))) return 'completed'
+  if (latestAssistantText) return 'completed'
   if (runtime.inputReady || runtime.processStatus === 'started') return 'waiting'
   return 'created'
 }

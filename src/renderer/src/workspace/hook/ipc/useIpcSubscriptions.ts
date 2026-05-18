@@ -44,6 +44,7 @@ import {
 } from '@renderer/workspace/entries/utils'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
+  gcSupersededGhosts,
   ghostsFromSemanticTurn,
   ghostsToPersist,
   orphanStale,
@@ -130,6 +131,7 @@ const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 // See docs/design/ghost-system.md for the canonical explanation.
 const GHOST_ORPHAN_TTL_MS = 30000
 const GHOST_ORPHAN_SWEEP_MS = 1000
+const GHOST_SUPERSEDED_GC_MS = 5000
 
 function canIngestWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
   const type = (raw as { type?: unknown })?.type
@@ -241,13 +243,19 @@ export function useIpcSubscriptions(
   useEffect(() => {
     const worktreeCache = new Map<string, WorktreeCacheEntry>()
     const recentWorkContextRawBySession = new Map<SessionId, unknown[]>()
-    // Ghost orphan sweep — see docs/design/ghost-system.md for the
+    // Ghost orphan / superseded-GC sweep — see docs/design/ghost-system.md for the
     // canonical explanation. Runs every GHOST_ORPHAN_SWEEP_MS,
     // calls orphanStale to flag any ghost whose updatedAt has been
-    // silent for longer than GHOST_ORPHAN_TTL_MS, persists the
-    // resulting state changes to disk via ghostAppend. Reference-
-    // stable on no-op: orphanStale returns the input map by
-    // identity when no ghost crossed the threshold.
+    // silent for longer than GHOST_ORPHAN_TTL_MS, and drops ghosts
+    // that have already been superseded by durable upstream JSONL.
+    //
+    // WHY GC superseded ghosts here instead of during reconcileUpstream:
+    // reconcile needs a short overlap window so UI ownership can move from
+    // proxy ghosts to committed entries without a flicker. After that grace
+    // window the ghosts are dead weight; keeping them forever turns
+    // selectMergedEntries into an O(ghost-map) loop on every TileLeaf render.
+    // Both reducers are reference-stable on no-op, so the sweep only replaces
+    // runtime state when something actually crossed a threshold.
     const orphanSweepTimer = window.setInterval(() => {
       const now = Date.now()
       setRuntimes(prev => {
@@ -255,7 +263,12 @@ export function useIpcSubscriptions(
         const next = { ...prev }
         for (const [sessionId, runtime] of Object.entries(prev)) {
           if (runtime.ghosts.size === 0) continue
-          const nextGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
+          const orphanedGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
+          const nextGhosts = gcSupersededGhosts(
+            orphanedGhosts,
+            now,
+            GHOST_SUPERSEDED_GC_MS,
+          )
           if (nextGhosts === runtime.ghosts) continue
           for (const ghost of ghostsToPersist(runtime.ghosts, nextGhosts)) {
             window.api.ghostAppend(sessionId, ghost)

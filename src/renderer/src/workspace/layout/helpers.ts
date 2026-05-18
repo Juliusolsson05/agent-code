@@ -1,6 +1,5 @@
 import type { SessionId, TileNode } from '@renderer/workspace/types'
 import type { SlashPickerState, TileTabsState } from '@renderer/workspace/workspaceState'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
 // Layout & picker utilities for the workspace store.
 //
@@ -96,6 +95,11 @@ export function pickerEqual(
  *  subtree contains aSession and whose `b` subtree contains
  *  bSession. Ratios clamp to [0.1, 0.9] so no pane vanishes. Used
  *  by drag-resize in TileLeaf and the split-ratio palette commands. */
+function containsSession(node: TileNode, sessionId: SessionId): boolean {
+  if (node.type === 'leaf') return node.sessionId === sessionId
+  return containsSession(node.a, sessionId) || containsSession(node.b, sessionId)
+}
+
 export function setRatioBetween(
   node: TileNode,
   aSession: SessionId,
@@ -103,14 +107,27 @@ export function setRatioBetween(
   ratio: number,
 ): TileNode {
   if (node.type === 'leaf') return node
-  const leavesA = collectLeaves(node.a)
-  const leavesB = collectLeaves(node.b)
-  if (leavesA.includes(aSession) && leavesB.includes(bSession)) {
-    return { ...node, ratio: Math.min(0.9, Math.max(0.1, ratio)) }
+  const aContainsA = containsSession(node.a, aSession)
+  const bContainsB = containsSession(node.b, bSession)
+  if (aContainsA && bContainsB) {
+    const nextRatio = Math.min(0.9, Math.max(0.1, ratio))
+    return Math.abs(nextRatio - node.ratio) < 0.001 ? node : { ...node, ratio: nextRatio }
   }
+  // WHY recurse only into sides that can still contain both endpoints:
+  // the old implementation collected both subtree leaf arrays at every
+  // split, making divider drag O(N^2) in pane count. Drag is a per-frame
+  // path, so repeated array allocation here turns directly into UI jank.
+  // Membership checks let us preserve the pure immutable tree update while
+  // avoiding most work on branches that cannot possibly hold the target split.
+  const aHasBoth = aContainsA && containsSession(node.a, bSession)
+  const bHasBoth = containsSession(node.b, aSession) && bContainsB
+  if (!aHasBoth && !bHasBoth) return node
+  const nextA = aHasBoth ? setRatioBetween(node.a, aSession, bSession, ratio) : node.a
+  const nextB = bHasBoth ? setRatioBetween(node.b, aSession, bSession, ratio) : node.b
+  if (nextA === node.a && nextB === node.b) return node
   return {
     ...node,
-    a: setRatioBetween(node.a, aSession, bSession, ratio),
-    b: setRatioBetween(node.b, aSession, bSession, ratio),
+    a: nextA,
+    b: nextB,
   }
 }

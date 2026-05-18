@@ -98,10 +98,39 @@ export function TerminalLeaf({
     let onDataDisposable: { dispose(): void } | null = null
     let offTerminalData: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
+    let resizeFrame: number | null = null
+    let lastCols = 0
+    let lastRows = 0
     // Tracked here (not inside the try block) so cleanup can detach
     // the global event listener whether mount succeeded or failed
     // before the listener was attached.
     let onThemeChangedListenerRef: ((e: Event) => void) | null = null
+
+    const fitAndNotifyResize = () => {
+      resizeFrame = null
+      if (!term || !fit) return
+      try {
+        fit.fit()
+        const { cols, rows } = term
+        // WHY guard by integer cols/rows: ResizeObserver can fire many times
+        // during split drag while xterm's grid dimensions stay unchanged.
+        // Sending every observer tick through IPC makes node-pty process a
+        // stream of resize no-ops and multiplies the layout-drag cost across
+        // every terminal pane.
+        if (cols === lastCols && rows === lastRows) return
+        lastCols = cols
+        lastRows = rows
+        void window.api.resize(sessionId, cols, rows)
+      } catch {
+        // Zero-dimension containers still throw. A later observer tick will
+        // recover when layout produces a measurable terminal box.
+      }
+    }
+
+    const scheduleFitAndNotifyResize = () => {
+      if (resizeFrame !== null) return
+      resizeFrame = requestAnimationFrame(fitAndNotifyResize)
+    }
 
     try {
       // Theme choice: leave xterm's default palette alone. The
@@ -146,17 +175,7 @@ export function TerminalLeaf({
       // after layout but before paint, so the measurements are
       // correct AND we still update before the first frame the
       // user can actually see.
-      requestAnimationFrame(() => {
-        if (!term || !fit) return
-        try {
-          fit.fit()
-          const { cols, rows } = term
-          void window.api.resize(sessionId, cols, rows)
-        } catch {
-          // Zero-dimension containers still throw. The
-          // ResizeObserver below will recover on the next tick.
-        }
-      })
+      scheduleFitAndNotifyResize()
 
       // Outgoing: keystrokes typed into the xterm go straight to
       // the shell via sendInput. No slash mode, no history
@@ -221,7 +240,7 @@ export function TerminalLeaf({
         // and attach-response. These are strictly AFTER the
         // buffer's last byte because main buffered silently
         // until we called attach.
-        for (const d of backlogQueue) termRef.current.write(d)
+        if (backlogQueue.length > 0) termRef.current.write(backlogQueue.join(''))
         backlogQueue.length = 0
         attachedBackfillDone = true
         // Now that content has landed, force-focus the terminal
@@ -240,18 +259,7 @@ export function TerminalLeaf({
       // we re-fit the terminal and push the new cols/rows down to
       // the shell so programs like `vim` / `htop` / `less` see
       // the correct dimensions.
-      resizeObserver = new ResizeObserver(() => {
-        if (!term || !fit) return
-        try {
-          fit.fit()
-          const { cols, rows } = term
-          void window.api.resize(sessionId, cols, rows)
-        } catch {
-          // Swallow transient-layout errors the same way we
-          // swallow them in TerminalSession.resize() on the
-          // main side.
-        }
-      })
+      resizeObserver = new ResizeObserver(scheduleFitAndNotifyResize)
       resizeObserver.observe(container)
 
       // Live-update the xterm fontFamily when the user changes the
@@ -285,6 +293,7 @@ export function TerminalLeaf({
     }
 
     return () => {
+      if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()
       offTerminalData?.()

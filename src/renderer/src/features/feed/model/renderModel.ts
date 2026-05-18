@@ -23,12 +23,14 @@ import {
 } from '@renderer/features/feed/lib/helpers'
 import {
   buildCommittedAssistantText,
+  type CommittedAssistantText,
   semanticTurnHasRenderableContent,
 } from '@renderer/features/feed/ui/semantic/renderUnits'
 
 export type FeedRenderModelInput = {
   provider: AgentProvider
-  entries: Entry[]
+  entries?: Entry[]
+  committed?: FeedCommittedProjection
   semanticHistory: SemanticLiveTurn[]
   semanticTurn: SemanticLiveTurn | null
   streamPhase: StreamPhase
@@ -36,6 +38,13 @@ export type FeedRenderModelInput = {
   streamPhasePendingToolUseId: string | null
   committedToolUseIndex?: Map<string, ToolUseBlock>
   committedToolResultIndex?: Map<string, ToolResultBlock>
+}
+
+export type FeedCommittedProjection = {
+  visibleDecisions: VisibleDecision[]
+  visibleEntries: Entry[]
+  committedClaudeMessageTurnIds: ReadonlySet<string>
+  committedAssistantText: CommittedAssistantText
 }
 
 export type FeedRenderModel = {
@@ -104,6 +113,7 @@ function visibleDecisionForEntry(entry: Entry, index: number): VisibleDecision {
 export function deriveFeedRenderModel({
   provider,
   entries,
+  committed,
   semanticHistory,
   semanticTurn,
   streamPhase,
@@ -112,13 +122,13 @@ export function deriveFeedRenderModel({
   committedToolUseIndex,
   committedToolResultIndex,
 }: FeedRenderModelInput): FeedRenderModel {
-  const visibleDecisions = entries.map(visibleDecisionForEntry)
-  const visibleEntries = visibleDecisions
-    .filter(item => item.visible)
-    .map(item => item.entry)
-
-  const committedClaudeMessageTurnIds = committedMessageIds(entries)
-  const committedAssistantText = buildCommittedAssistantText(entries)
+  const projection = committed ?? deriveFeedCommittedProjection(entries ?? [])
+  const {
+    visibleDecisions,
+    visibleEntries,
+    committedClaudeMessageTurnIds,
+    committedAssistantText,
+  } = projection
 
   // WHY this suppression stays turn-scoped only for Claude:
   // Claude's durable assistant JSONL row carries `message.id` equal to
@@ -220,5 +230,18 @@ export function deriveFeedRenderModel({
     hasSemanticStreaming,
     shouldShowWorkIndicator,
     debugRows,
+  }
+}
+
+export function deriveFeedCommittedProjection(entries: Entry[]): FeedCommittedProjection {
+  const visibleDecisions = entries.map(visibleDecisionForEntry)
+  const visibleEntries = visibleDecisions
+    .filter(item => item.visible)
+    .map(item => item.entry)
+  return {
+    visibleDecisions,
+    visibleEntries,
+    committedClaudeMessageTurnIds: committedMessageIds(entries),
+    committedAssistantText: buildCommittedAssistantText(entries),
   }
 }

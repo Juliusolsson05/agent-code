@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
@@ -203,6 +203,17 @@ export function TileLeaf({
     workspace.appendFeedDebug(sessionId, entry)
   }, [sessionId, workspace.appendFeedDebug])
 
+  const mergedEntries = useMemo(
+    () => selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null),
+    [
+      runtime.entries,
+      runtime.ghosts,
+      runtime.lastJsonlEntryAt,
+      runtime.semantic.currentTurn?.turnId,
+      runtime.semantic.history,
+    ],
+  )
+
   // Claude image-paste flow — three clipboard ingress paths, media-
   // type gate, 5 MB size cap. Hook in ./TileLeaf/useClaudeImagePaste.ts.
   const { handlePaste, removeDraftImage } = useClaudeImagePaste({
@@ -367,10 +378,7 @@ export function TileLeaf({
           // See docs/design/ghost-system.md for the canonical
           // explanation of the predicate and the dual-owner
           // model.
-          entries={selectMergedEntries(
-            runtime,
-            runtime.semantic.currentTurn?.turnId ?? null,
-          )}
+          entries={mergedEntries}
           // Live text renders ONLY from the semantic channel. The
           // former `streamingScreen` / `streamingScreenMarkdown` /
           // `streamingBaseline` props are gone — Feed no longer

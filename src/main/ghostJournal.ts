@@ -52,12 +52,14 @@
 // by definition and the authoritative CLI JSONL survives independently.
 
 import { createReadStream } from 'node:fs'
-import { appendFile, mkdir } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { createInterface } from 'node:readline'
 import { dirname, join } from 'node:path'
-import { app } from 'electron'
 
 import { isGhost, type GhostEntry } from 'agent-transcript-parser/ghost'
+
+import { STATE_DIR } from '@main/storage/paths.js'
 
 /**
  * Flush interval matches upstream Claude's batcher. Anything shorter
@@ -65,6 +67,8 @@ import { isGhost, type GhostEntry } from 'agent-transcript-parser/ghost'
  * during slow streams.
  */
 const FLUSH_INTERVAL_MS = 100
+const DEFAULT_COMPACT_MIN_BYTES = 5 * 1024 * 1024
+const require = createRequire(import.meta.url)
 
 /**
  * Append-only writer for a single session's ghost log. Not shared
@@ -199,11 +203,23 @@ export class GhostJournalRegistry {
     const j = this.journals.get(sessionId)
     if (!j) return
     // Fire-and-forget flush; next write to this session will mint a
-    // fresh writer that targets the same file.
-    void j.flush().catch(err => {
-      console.warn('[ghostJournal] dispose flush error:', err)
-    })
+    // fresh writer that targets the same file. Compaction is chained
+    // after the durability barrier because append-only ghost logs can
+    // otherwise grow for the lifetime of a long agent session. We do
+    // this on dispose rather than while a session is live: rewrite-
+    // compaction necessarily renames the file, and racing that with
+    // active appends can drop the just-appended tail on POSIX filesystems
+    // where the writer still targets the old inode.
+    void j.flush()
+      .then(() => compactGhostLog(sessionId))
+      .catch(err => {
+        console.warn('[ghostJournal] dispose flush/compact error:', err)
+      })
     this.journals.delete(sessionId)
+  }
+
+  has(sessionId: string): boolean {
+    return this.journals.has(sessionId)
   }
 }
 
@@ -240,6 +256,75 @@ export class GhostJournalRegistry {
  */
 export async function readGhostLog(sessionId: string): Promise<GhostEntry[]> {
   const path = ghostLogPath(sessionId)
+  return readCompactGhostState(path)
+}
+
+/**
+ * Rewrite one session ghost log to the exact compact state the renderer
+ * imports on bootstrap: one latest non-superseded ghost per uuid.
+ *
+ * WHY compaction is a separate maintenance operation:
+ *   `readGhostLog` intentionally streams so a huge file no longer OOMs
+ *   main, but streaming still pays O(file-size) CPU on every resume. The
+ *   2026-05-11 forensic notes in the comment above had `ghost-logs/` at
+ *   2.1 GB. Without a rewrite path, that cost only ever grows. We compact
+ *   at startup and after a session is disposed, where no live writer should
+ *   be appending to the same path. That preserves the append-only safety
+ *   during active streaming while bounding future resume work.
+ */
+export async function compactGhostLog(sessionId: string): Promise<boolean> {
+  return compactGhostLogFile(ghostLogPath(sessionId))
+}
+
+export async function compactAllGhostLogs(isSessionLive: (sessionId: string) => boolean = () => false): Promise<void> {
+  let entries
+  try {
+    entries = await readdir(ghostLogDir(), { withFileTypes: true })
+  } catch {
+    return
+  }
+  const minBytes = compactMinBytes()
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.ghost.jsonl')) continue
+    const sessionId = entry.name.slice(0, -'.ghost.jsonl'.length)
+    if (isSessionLive(sessionId)) continue
+    const path = join(ghostLogDir(), entry.name)
+    try {
+      const stats = await stat(path)
+      if (stats.size < minBytes) continue
+      await compactGhostLogFile(path, () => isSessionLive(sessionId))
+    } catch (err) {
+      console.warn('[ghostJournal] startup compact failed (non-fatal):', err)
+    }
+  }
+}
+
+async function compactGhostLogFile(path: string, shouldAbort: () => boolean = () => false): Promise<boolean> {
+  if (shouldAbort()) return false
+  let stats
+  try {
+    stats = await stat(path)
+  } catch {
+    return false
+  }
+  if (stats.size < compactMinBytes()) return false
+  const ghosts = await readCompactGhostState(path)
+  if (shouldAbort()) return false
+  const compacted = ghosts.map(ghost => JSON.stringify(ghost)).join('\n')
+  const body = compacted.length > 0 ? `${compacted}\n` : ''
+  if (Buffer.byteLength(body, 'utf8') >= stats.size) return false
+  const tmp = `${path}.${process.pid}.${Date.now()}.compact.tmp`
+  try {
+    await writeFile(tmp, body, { mode: 0o600 })
+    if (shouldAbort()) return false
+    await rename(tmp, path)
+    return true
+  } finally {
+    await rm(tmp, { force: true }).catch(() => {})
+  }
+}
+
+async function readCompactGhostState(path: string): Promise<GhostEntry[]> {
   const current = new Map<string, GhostEntry>()
   const stream = createReadStream(path, { encoding: 'utf8' })
   stream.on('error', () => {
@@ -277,10 +362,38 @@ export async function readGhostLog(sessionId: string): Promise<GhostEntry[]> {
   return [...current.values()]
 }
 
+function compactMinBytes(): number {
+  const raw = process.env.AGENT_CODE_GHOST_COMPACT_MIN_MB?.trim()
+  if (!raw) return DEFAULT_COMPACT_MIN_BYTES
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed * 1024 * 1024)
+    : DEFAULT_COMPACT_MIN_BYTES
+}
+
 /**
  * Deterministic path resolver. Exported so the IPC handler and the
  * reader agree on the same location.
  */
 export function ghostLogPath(sessionId: string): string {
-  return join(app.getPath('userData'), 'ghost-logs', `${sessionId}.ghost.jsonl`)
+  return join(ghostLogDir(), `${sessionId}.ghost.jsonl`)
+}
+
+export function ghostLogDir(): string {
+  // WHY this uses lazy CommonJS instead of a top-level Electron import:
+  // several pure Node test graphs touch ghost retention indirectly through
+  // performance logging. The npm `electron` package does not expose `app`
+  // under tsx the way the real Electron main process does, so importing it
+  // at module instantiation breaks unrelated tests before any ghost path is
+  // needed. In the real app we keep the historical `userData` location; in
+  // Node-only tooling we fall back to STATE_DIR so maintenance code can still
+  // no-op/prune safely without booting Electron.
+  try {
+    const electron = require('electron') as { app?: { getPath: (name: string) => string } }
+    const userData = electron.app?.getPath('userData')
+    if (userData) return join(userData, 'ghost-logs')
+  } catch {
+    // Fall back below.
+  }
+  return join(STATE_DIR, 'ghost-logs')
 }

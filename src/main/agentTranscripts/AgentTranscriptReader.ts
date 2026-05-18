@@ -66,26 +66,26 @@ export async function readAgentTranscriptFile(
 ): Promise<AgentTranscriptReadResult | AgentTranscriptErrorResult> {
   const prepared = await preparePath(options.path)
   if (!prepared.ok) return prepared
-  const parsed = await parseTranscript(prepared.path, options.provider ?? 'auto')
-  if (!parsed.ok) return parsed
-
-  const projected = projectItems(parsed.items, options.projection, options.include)
-  const bounded = boundItems(projected, {
+  const streamed = await streamReadTranscript(prepared.path, options)
+  if (!streamed.ok) return streamed
+  const bounded = options.tail && options.tail > 0
+    ? boundItems(streamed.items, {
     tail: options.tail,
     maxItems: options.maxItems ?? DEFAULT_MAX_ITEMS,
     maxChars: options.maxChars ?? DEFAULT_MAX_CHARS,
     maxCharsPerItem: options.maxCharsPerItem ?? DEFAULT_MAX_CHARS_PER_ITEM,
-  })
+      })
+    : { items: streamed.items, truncated: streamed.truncated }
 
   return {
     ok: true,
     path: prepared.path,
-    provider: parsed.provider,
+    provider: streamed.provider,
     projection: options.projection,
     items: bounded.items,
-    truncated: bounded.truncated,
+    truncated: streamed.truncated || bounded.truncated,
     stats: {
-      ...parsed.stats,
+      ...streamed.stats,
       returnedItems: bounded.items.length,
     },
   }
@@ -96,7 +96,7 @@ export async function inspectAgentTranscriptFile(
 ): Promise<AgentTranscriptInspectResult | AgentTranscriptErrorResult> {
   const prepared = await preparePath(options.path)
   if (!prepared.ok) return prepared
-  const parsed = await parseTranscript(prepared.path, options.provider ?? 'auto')
+  const parsed = await inspectTranscript(prepared.path, options.provider ?? 'auto')
   if (!parsed.ok) return parsed
   return {
     ok: true,
@@ -113,54 +113,19 @@ export async function searchAgentTranscriptFile(
 ): Promise<AgentTranscriptSearchResult | AgentTranscriptErrorResult> {
   const prepared = await preparePath(options.path)
   if (!prepared.ok) return prepared
-  const parsed = await parseTranscript(prepared.path, options.provider ?? 'auto')
-  if (!parsed.ok) return parsed
-
-  const query = options.query.toLowerCase()
-  const kinds = options.kinds?.length ? new Set(options.kinds) : null
-  const contextItems = options.contextItems ?? DEFAULT_SEARCH_CONTEXT_ITEMS
-  const maxMatches = options.maxMatches ?? DEFAULT_SEARCH_MATCHES
-  const maxCharsPerMatch = options.maxCharsPerMatch ?? DEFAULT_SEARCH_CHARS_PER_MATCH
-  const matches: AgentTranscriptSearchResult['matches'] = []
-  let truncated = false
-
-  for (let index = 0; index < parsed.items.length; index += 1) {
-    const item = parsed.items[index]
-    if (!item) continue
-    if (isRawToolOutputItem(item)) continue
-    if (kinds && !kinds.has(item.kind)) continue
-    if (!itemSearchText(item).toLowerCase().includes(query)) continue
-    if (matches.length >= maxMatches) {
-      truncated = true
-      break
-    }
-    matches.push({
-      item: truncateItemText(item, maxCharsPerMatch),
-      before: contextItems > 0
-        ? parsed.items
-          .slice(Math.max(0, index - contextItems), index)
-          .filter(item => !isRawToolOutputItem(item))
-          .map(item => truncateItemText(item, maxCharsPerMatch))
-        : undefined,
-      after: contextItems > 0
-        ? parsed.items
-          .slice(index + 1, index + 1 + contextItems)
-          .filter(item => !isRawToolOutputItem(item))
-          .map(item => truncateItemText(item, maxCharsPerMatch))
-        : undefined,
-    })
-  }
+  const searched = await streamSearchTranscript(prepared.path, options)
+  if (!searched.ok) return searched
 
   return {
     ok: true,
     path: prepared.path,
-    provider: parsed.provider,
+    provider: searched.provider,
     query: options.query,
-    matches,
-    truncated,
+    matches: searched.matches,
+    truncated: searched.truncated,
     stats: {
-      ...parsed.stats,
-      returnedItems: matches.length,
+      ...searched.stats,
+      returnedItems: searched.matches.length,
     },
   }
 }
@@ -185,6 +150,297 @@ async function preparePath(path: string): Promise<
       error: 'file_not_readable',
       message: `Transcript file is missing or not readable: ${path}`,
     }
+  }
+}
+
+async function resolveProvider(
+  path: string,
+  requestedProvider: AgentTranscriptProviderInput,
+): Promise<
+  | { ok: true; provider: AgentTranscriptProvider }
+  | AgentTranscriptErrorResult
+> {
+  if (requestedProvider !== 'auto' && requestedProvider !== 'claude' && requestedProvider !== 'codex') {
+    return {
+      ok: false,
+      error: 'unsupported_provider',
+      message: `Unsupported transcript provider: ${requestedProvider}`,
+    }
+  }
+  const provider = requestedProvider === 'auto'
+    ? await detectProvider(path)
+    : requestedProvider
+  if (!provider) {
+    return {
+      ok: false,
+      error: 'provider_detection_failed',
+      message: 'Could not detect whether this transcript is Claude or Codex JSONL.',
+    }
+  }
+  return { ok: true, provider }
+}
+
+async function streamReadTranscript(
+  path: string,
+  options: ReadFileOptions,
+): Promise<
+  | {
+      ok: true
+      provider: AgentTranscriptProvider
+      items: AgentTranscriptItem[]
+      truncated: boolean
+      stats: AgentTranscriptStats
+    }
+  | AgentTranscriptErrorResult
+> {
+  const resolved = await resolveProvider(path, options.provider ?? 'auto')
+  if (!resolved.ok) return resolved
+
+  const stats = emptyStats()
+  const maxItems = options.maxItems ?? DEFAULT_MAX_ITEMS
+  const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS
+  const maxCharsPerItem = options.maxCharsPerItem ?? DEFAULT_MAX_CHARS_PER_ITEM
+  const tail = options.tail && options.tail > 0 ? options.tail : 0
+  const selected: AgentTranscriptItem[] = []
+  let selectedChars = 0
+  let truncated = false
+  let previous: AgentTranscriptItem | null = null
+  let sawFinalAssistant = false
+  let lastAssistant: AgentTranscriptItem | null = null
+  let lastSelectedAssistant: AgentTranscriptItem | null = null
+
+  // WHY this is separate from parseTranscript:
+  // read/tail/final are consumption tools, not archival parsers. The old
+  // path streamed JSONL from disk but then retained every normalized item,
+  // copied them again for adjacent-dedupe, and only then applied maxItems,
+  // maxChars, tail, and projection. Parent agents commonly read large child
+  // transcripts with tiny caps. This reducer preserves full stats while
+  // retaining only the projected window that can actually be returned.
+  try {
+    for await (const raw of streamJsonl<JsonRecord>(path)) {
+      stats.totalEvents += 1
+      if (raw === null) {
+        stats.parseErrors += 1
+        continue
+      }
+      const timestamp = extractTimestamp(raw)
+      const extracted = resolved.provider === 'claude'
+        ? extractClaudeItems(raw, timestamp)
+        : extractCodexItems(raw, timestamp)
+      for (const rawItem of extracted) {
+        const item = acceptDedupedItem(previous, rawItem)
+        if (!item) continue
+        previous = item
+        incrementStats(stats, item)
+        if (item.kind === 'assistant_message') {
+          lastAssistant = item
+          sawFinalAssistant = sawFinalAssistant || item.final === true
+        }
+        if (!itemMatchesProjection(item, options.projection, options.include)) continue
+        const selectedItem = addProjectedReadItem(selected, item, {
+          tail,
+          maxItems,
+          maxChars,
+          maxCharsPerItem,
+          selectedCharsRef: {
+            get: () => selectedChars,
+            set: next => { selectedChars = next },
+          },
+          markTruncated: () => { truncated = true },
+        })
+        if (selectedItem?.kind === 'assistant_message') lastSelectedAssistant = selectedItem
+      }
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: 'transcript_read_failed',
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  if (!sawFinalAssistant && lastAssistant?.kind === 'assistant_message') {
+    lastAssistant.final = true
+    if (lastSelectedAssistant) lastSelectedAssistant.final = true
+    if (options.projection === 'final' && !selected.includes(lastAssistant)) {
+      addProjectedReadItem(selected, lastAssistant, {
+        tail,
+        maxItems,
+        maxChars,
+        maxCharsPerItem,
+        selectedCharsRef: {
+          get: () => selectedChars,
+          set: next => { selectedChars = next },
+        },
+        markTruncated: () => { truncated = true },
+      })
+    }
+  }
+
+  return {
+    ok: true,
+    provider: resolved.provider,
+    items: selected,
+    truncated,
+    stats,
+  }
+}
+
+function acceptDedupedItem(
+  previous: AgentTranscriptItem | null,
+  item: AgentTranscriptItem,
+): AgentTranscriptItem | null {
+  if (previous && transcriptItemsEquivalent(previous, item)) {
+    if (previous.kind === 'assistant_message' && item.kind === 'assistant_message') {
+      previous.final = previous.final || item.final
+    }
+    return null
+  }
+  return { ...item }
+}
+
+function itemMatchesProjection(
+  item: AgentTranscriptItem,
+  projection: AgentTranscriptProjection,
+  include: AgentTranscriptIncludeOptions | undefined,
+): boolean {
+  if (isRawToolOutputItem(item) && include?.rawToolOutputs !== true) return false
+  if (include && includeOverride(item, include) === true) return true
+  if (include && includeOverride(item, include) === false) return false
+  if (projection === 'final') return item.kind === 'assistant_message' && item.final === true
+  return projectionKinds(projection).has(item.kind)
+}
+
+function addProjectedReadItem(
+  selected: AgentTranscriptItem[],
+  item: AgentTranscriptItem,
+  options: {
+    tail: number
+    maxItems: number
+    maxChars: number
+    maxCharsPerItem: number
+    selectedCharsRef: { get: () => number; set: (value: number) => void }
+    markTruncated: () => void
+  },
+): AgentTranscriptItem | null {
+  if (options.tail > 0) {
+    selected.push(item)
+    while (selected.length > options.tail) {
+      selected.shift()
+      options.markTruncated()
+    }
+    return item
+  }
+
+  const bounded = truncateItemText(item, options.maxCharsPerItem)
+  const size = itemSearchText(bounded).length
+  if (selected.length >= options.maxItems || options.selectedCharsRef.get() + size > options.maxChars) {
+    options.markTruncated()
+    return null
+  }
+  options.selectedCharsRef.set(options.selectedCharsRef.get() + size)
+  selected.push(bounded)
+  return bounded
+}
+
+async function streamSearchTranscript(
+  path: string,
+  options: SearchFileOptions,
+): Promise<
+  | {
+      ok: true
+      provider: AgentTranscriptProvider
+      matches: AgentTranscriptSearchResult['matches']
+      truncated: boolean
+      stats: AgentTranscriptStats
+    }
+  | AgentTranscriptErrorResult
+> {
+  const resolved = await resolveProvider(path, options.provider ?? 'auto')
+  if (!resolved.ok) return resolved
+
+  const stats = emptyStats()
+  const query = options.query.toLowerCase()
+  const kinds = options.kinds?.length ? new Set(options.kinds) : null
+  const contextItems = options.contextItems ?? DEFAULT_SEARCH_CONTEXT_ITEMS
+  const maxMatches = options.maxMatches ?? DEFAULT_SEARCH_MATCHES
+  const maxCharsPerMatch = options.maxCharsPerMatch ?? DEFAULT_SEARCH_CHARS_PER_MATCH
+  const matches: AgentTranscriptSearchResult['matches'] = []
+  const beforeRing: AgentTranscriptItem[] = []
+  const pendingAfter: Array<{ match: AgentTranscriptSearchResult['matches'][number]; remaining: number }> = []
+  let previous: AgentTranscriptItem | null = null
+  let truncated = false
+
+  try {
+    for await (const raw of streamJsonl<JsonRecord>(path)) {
+      stats.totalEvents += 1
+      if (raw === null) {
+        stats.parseErrors += 1
+        continue
+      }
+      const timestamp = extractTimestamp(raw)
+      const extracted = resolved.provider === 'claude'
+        ? extractClaudeItems(raw, timestamp)
+        : extractCodexItems(raw, timestamp)
+      for (const rawItem of extracted) {
+        const item = acceptDedupedItem(previous, rawItem)
+        if (!item) continue
+        previous = item
+        incrementStats(stats, item)
+
+        if (!isRawToolOutputItem(item)) {
+          for (const pending of pendingAfter) {
+            if (pending.remaining <= 0) continue
+            const next = truncateItemText(item, maxCharsPerMatch)
+            pending.match.after = [...(pending.match.after ?? []), next]
+            pending.remaining -= 1
+          }
+        }
+
+        const matchesKind = !kinds || kinds.has(item.kind)
+        const searchText = !isRawToolOutputItem(item) && matchesKind
+          ? itemSearchText(item).toLowerCase()
+          : ''
+        if (searchText && searchText.includes(query)) {
+          if (matches.length >= maxMatches) {
+            truncated = true
+          } else {
+            const match = {
+              item: truncateItemText(item, maxCharsPerMatch),
+              before: contextItems > 0
+                ? beforeRing.map(item => truncateItemText(item, maxCharsPerMatch))
+                : undefined,
+              after: contextItems > 0 ? [] : undefined,
+            }
+            matches.push(match)
+            if (contextItems > 0) pendingAfter.push({ match, remaining: contextItems })
+          }
+        }
+
+        if (!isRawToolOutputItem(item) && contextItems > 0) {
+          beforeRing.push(item)
+          while (beforeRing.length > contextItems) beforeRing.shift()
+        }
+      }
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: 'transcript_read_failed',
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  for (const match of matches) {
+    if (match.after && match.after.length === 0) delete match.after
+  }
+
+  return {
+    ok: true,
+    provider: resolved.provider,
+    matches,
+    truncated,
+    stats,
   }
 }
 
@@ -253,6 +509,92 @@ async function parseTranscript(
     provider,
     path,
     items,
+    stats,
+    firstTimestamp,
+    lastTimestamp,
+  }
+}
+
+async function inspectTranscript(
+  path: string,
+  requestedProvider: AgentTranscriptProviderInput,
+): Promise<
+  | {
+      ok: true
+      provider: AgentTranscriptProvider
+      stats: AgentTranscriptStats
+      firstTimestamp?: number
+      lastTimestamp?: number
+    }
+  | AgentTranscriptErrorResult
+> {
+  if (requestedProvider !== 'auto' && requestedProvider !== 'claude' && requestedProvider !== 'codex') {
+    return {
+      ok: false,
+      error: 'unsupported_provider',
+      message: `Unsupported transcript provider: ${requestedProvider}`,
+    }
+  }
+  const provider = requestedProvider === 'auto'
+    ? await detectProvider(path)
+    : requestedProvider
+  if (!provider) {
+    return {
+      ok: false,
+      error: 'provider_detection_failed',
+      message: 'Could not detect whether this transcript is Claude or Codex JSONL.',
+    }
+  }
+
+  const stats = emptyStats()
+  let firstTimestamp: number | undefined
+  let lastTimestamp: number | undefined
+  let previous: AgentTranscriptItem | null = null
+
+  // WHY inspect has its own reducer instead of calling parseTranscript:
+  // inspect only needs provider, timestamps, and counts, but parseTranscript
+  // materializes every normalized item, copies them again during dedupe, and
+  // only then counts. Agent review workflows often inspect large child-agent
+  // transcripts before deciding what to read; this reducer keeps that sizing
+  // step O(1) heap while preserving the same adjacent-dedupe semantics used by
+  // read/search.
+  try {
+    for await (const raw of streamJsonl<JsonRecord>(path)) {
+      stats.totalEvents += 1
+      if (raw === null) {
+        stats.parseErrors += 1
+        continue
+      }
+      const timestamp = extractTimestamp(raw)
+      if (timestamp !== undefined) {
+        firstTimestamp = firstTimestamp === undefined ? timestamp : Math.min(firstTimestamp, timestamp)
+        lastTimestamp = lastTimestamp === undefined ? timestamp : Math.max(lastTimestamp, timestamp)
+      }
+      const extracted = provider === 'claude'
+        ? extractClaudeItems(raw, timestamp)
+        : extractCodexItems(raw, timestamp)
+      for (const item of extracted) {
+        if (previous && transcriptItemsEquivalent(previous, item)) {
+          if (previous.kind === 'assistant_message' && item.kind === 'assistant_message') {
+            previous.final = previous.final || item.final
+          }
+          continue
+        }
+        previous = { ...item }
+        incrementStats(stats, previous)
+      }
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: 'transcript_read_failed',
+      message: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  return {
+    ok: true,
+    provider,
     stats,
     firstTimestamp,
     lastTimestamp,

@@ -25,6 +25,7 @@ import { APP_SLUG } from '@shared/appIdentity.js'
 const DEFAULT_SLOW_SPAN_MS = 50
 const FLUSH_INTERVAL_MS = 500
 const SAMPLE_INTERVAL_MS = 5000
+const MAX_PENDING_RECORDS = 2000
 
 function envFlag(name: string): boolean {
   const value = process.env[name]
@@ -72,6 +73,7 @@ export class PerformanceService {
   private sampleTimer: ReturnType<typeof setInterval> | null = null
   private eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | null = null
   private pending: PerformanceRecord[] = []
+  private droppedPendingRecords = 0
 
   getConfig(): PerformanceConfig {
     return {
@@ -202,6 +204,15 @@ export class PerformanceService {
       runId: input.runId ?? this.runId ?? undefined,
       data: sanitizeData(input.data, this.verbose),
     }
+    if (this.pending.length >= MAX_PENDING_RECORDS) {
+      // WHY drop oldest instead of letting this array grow: performance mode is
+      // commonly enabled while the app is already sick. If disk or OTel export
+      // stalls, an unbounded diagnostics queue becomes part of the incident and
+      // can push main into the same OOM class it is supposed to explain. Keeping
+      // the newest records preserves the most relevant tail of the failure.
+      this.pending.shift()
+      this.droppedPendingRecords++
+    }
     this.pending.push(record)
   }
 
@@ -235,6 +246,23 @@ export class PerformanceService {
     if (!this.enabled || !this.runDir) return
     const batch = this.pending
     this.pending = []
+    const dropped = this.droppedPendingRecords
+    this.droppedPendingRecords = 0
+    if (dropped > 0) {
+      const ts = Date.now()
+      batch.push({
+        kind: 'metric',
+        process: 'main',
+        area: 'performance.dropped',
+        name: 'performance.pending.dropped',
+        metricType: 'counter',
+        value: dropped,
+        ts,
+        tsIso: new Date(ts).toISOString(),
+        monotonicMs: performance.now(),
+        runId: this.runId ?? undefined,
+      })
+    }
     const grouped = new Map<PerformanceLogFile, string[]>()
     for (const record of batch) {
       const file = recordFile(record)
