@@ -18,6 +18,7 @@ export type SettingActionContext = {
   onChange: (patch: Partial<Settings>) => void
   onReset: () => void
   onClose: () => void
+  openCustomAppearanceEditor: () => void
 }
 
 type ChoiceOption<T extends string> = {
@@ -82,7 +83,12 @@ export type SettingDefinition =
 const THEME_MODE_OPTIONS: ChoiceOption<ThemeMode>[] = THEME_MODES.map(mode => ({
   value: mode.id,
   label: mode.label,
-  description: mode.family === 'light' ? 'Light family' : 'Dark family',
+  description:
+    mode.family === 'custom'
+      ? 'JSON colors'
+      : mode.family === 'light'
+        ? 'Light family'
+        : 'Dark family',
 }))
 
 const ACCENT_OPTIONS: ChoiceOption<AccentId>[] = ACCENTS.map(accent => ({
@@ -130,7 +136,13 @@ export function getSettingsRegistry(): SettingDefinition[] {
         getValue: settings => settings.mode,
         options: THEME_MODE_OPTIONS,
         columns: 2,
-        onSelect: (ctx, value) => ctx.onChange({ mode: value as ThemeMode }),
+        onSelect: (ctx, value) => {
+          if (value === 'custom') {
+            ctx.openCustomAppearanceEditor()
+            return
+          }
+          ctx.onChange({ mode: value as ThemeMode })
+        },
       },
     },
     {

@@ -4,6 +4,12 @@ import {
   isDarkThemeMode,
   type Settings,
 } from '@renderer/app-state/settings/types'
+import {
+  CUSTOM_APPEARANCE_COLOR_KEYS,
+  CUSTOM_APPEARANCE_CSS_VARS,
+  DEFAULT_CUSTOM_APPEARANCE,
+  parseCustomAppearanceJson,
+} from '@renderer/app-state/settings/customAppearance'
 import { APP_SLUG } from '@shared/appIdentity'
 
 // Event name fired on `window` after every applyTheme run. Subscribers
@@ -41,11 +47,16 @@ export function applyTheme(settings: Settings): void {
   const root = document.documentElement
   root.dataset.mode = settings.mode
   root.dataset.contrast = settings.contrast ? 'high' : 'normal'
-  const accent = ACCENTS.find(a => a.id === settings.accent) ?? ACCENTS[0]
-  const hex = isDarkThemeMode(settings.mode) ? accent.dark : accent.light
-  const fg = isDarkThemeMode(settings.mode) ? accent.fgDark : accent.fgLight
-  root.style.setProperty('--theme-accent', hex)
-  root.style.setProperty('--theme-accent-fg', fg)
+  if (settings.mode === 'custom') {
+    applyCustomAppearance(root, settings.customAppearanceJson)
+  } else {
+    clearCustomAppearance(root)
+    const accent = ACCENTS.find(a => a.id === settings.accent) ?? ACCENTS[0]
+    const hex = isDarkThemeMode(settings.mode) ? accent.dark : accent.light
+    const fg = isDarkThemeMode(settings.mode) ? accent.fgDark : accent.fgLight
+    root.style.setProperty('--theme-accent', hex)
+    root.style.setProperty('--theme-accent-fg', fg)
+  }
   // Font family: the user-visible picker resolves to a curated meta entry
   // whose `family` is a complete CSS font-family declaration (including
   // fallbacks). We write both the new global token and the old code-token
@@ -58,6 +69,35 @@ export function applyTheme(settings: Settings): void {
   root.style.setProperty(LEGACY_CODE_FONT_CSS_VAR, fontMeta.family)
   root.style.setProperty('--monaco-monospace-font', fontMeta.family)
   window.dispatchEvent(new CustomEvent(THEME_CHANGED_EVENT, { detail: settings }))
+}
+
+function applyCustomAppearance(root: HTMLElement, raw: string): void {
+  // WHY custom mode writes every color token inline instead of generating a
+  // stylesheet block: the built-in themes are static CSS keyed by
+  // `[data-mode]`, but user JSON is runtime data from persisted settings.
+  // Inline custom properties on `<html>` are the same mechanism the existing
+  // accent picker already uses, and they deliberately outrank the mode blocks
+  // in styles.css. That gives live updates with zero React re-render plumbing
+  // and keeps Monaco/xterm listeners on the existing theme-changed event.
+  let colors = DEFAULT_CUSTOM_APPEARANCE
+  try {
+    colors = parseCustomAppearanceJson(raw)
+  } catch {
+    colors = DEFAULT_CUSTOM_APPEARANCE
+  }
+  for (const key of CUSTOM_APPEARANCE_COLOR_KEYS) {
+    root.style.setProperty(CUSTOM_APPEARANCE_CSS_VARS[key], colors[key])
+  }
+}
+
+function clearCustomAppearance(root: HTMLElement): void {
+  // WHY clear all color tokens when leaving custom mode: custom mode applies
+  // values as inline styles, and inline styles beat every `[data-mode]` CSS
+  // rule. If we only changed `data-mode`, the old custom palette would keep
+  // winning and every built-in theme would look broken until reload.
+  for (const key of CUSTOM_APPEARANCE_COLOR_KEYS) {
+    root.style.removeProperty(CUSTOM_APPEARANCE_CSS_VARS[key])
+  }
 }
 
 // Read the currently-active application font family as a CSS font-family

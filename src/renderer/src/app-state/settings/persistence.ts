@@ -8,6 +8,7 @@ import {
   type FontFamilyId,
   type Settings,
 } from '@renderer/app-state/settings/types'
+import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 import {
   APP_SETTINGS_STORAGE_KEY,
@@ -28,6 +29,7 @@ export function coerceSettings(value: unknown): Settings {
     accent: ACCENTS.some(a => a.id === parsed.accent)
       ? (parsed.accent as AccentId)
       : DEFAULT_SETTINGS.accent,
+    customAppearanceJson: coerceCustomAppearanceJson(parsed.customAppearanceJson),
     customRendering: parsed.customRendering === true,
     showStatusMode: parsed.showStatusMode !== false,
     showWorktreeBadges: parsed.showWorktreeBadges !== false,
