@@ -2,6 +2,7 @@ import { useCallback, useRef } from 'react'
 
 import type { DispatchModeState, SessionId, SessionMeta, TabId } from '@renderer/workspace/types'
 import { collectLeaves, wrapRootWithLeaf } from '@renderer/workspace/tile-tree/treeOps'
+import { findTerminalSessionInTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type {
   WorkspaceSetState,
   WorkspaceSetTileTabs,
@@ -36,7 +37,7 @@ export function useDispatchActions(
       if (!tab) return null
 
       const leafIds = collectLeaves(tab.root)
-      const existing = leafIds.find(id => snapshot.sessions[id]?.kind === 'terminal')
+      const existing = findTerminalSessionInTab(tab, snapshot)
       if (existing) return existing
 
       const anchorId = tab.focusedSessionId
@@ -53,9 +54,7 @@ export function useDispatchActions(
       const created = (async () => {
         const latest = refs.stateRef.current
         const latestTab = latest.tabs.find(item => item.id === tabId)
-        const latestTerminal = latestTab
-          ? collectLeaves(latestTab.root).find(id => latest.sessions[id]?.kind === 'terminal')
-          : null
+        const latestTerminal = findTerminalSessionInTab(latestTab ?? null, latest)
         if (latestTerminal) return latestTerminal
 
         let terminalId: SessionId
@@ -74,7 +73,7 @@ export function useDispatchActions(
         setState(prev => {
           const tabs = prev.tabs.map(currentTab => {
             if (currentTab.id !== tabId) return currentTab
-            if (collectLeaves(currentTab.root).some(id => prev.sessions[id]?.kind === 'terminal')) {
+            if (findTerminalSessionInTab(currentTab, prev)) {
               return currentTab
             }
             inserted = true
@@ -274,6 +273,5 @@ function findTerminalInLatestTab(
 ): SessionId | null {
   const latest = refs.stateRef.current
   const tab = latest.tabs.find(item => item.id === tabId)
-  if (!tab) return null
-  return collectLeaves(tab.root).find(id => latest.sessions[id]?.kind === 'terminal') ?? null
+  return findTerminalSessionInTab(tab ?? null, latest)
 }

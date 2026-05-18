@@ -5,6 +5,7 @@ import {
   buildPinnedDispatchRows,
   buildVisibleDispatchRows,
   detachedDispatchSessionIdsForTab,
+  findTerminalSessionInTab,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
@@ -122,6 +123,24 @@ assert.deepEqual(
   buildVisibleDispatchRows(baseState).map(row => row.sessionId),
   ['agent-pinned', 'agent-grid', 'terminal-grid', 'terminal-detached', 'agent-detached'],
   'Visible Dispatch rows should be the keyboard/command order: pins first, then grouped sessions',
+)
+
+assert.equal(
+  findTerminalSessionInTab(baseState.tabs[0] ?? null, {
+    ...baseState,
+    tabs: [
+      {
+        ...baseState.tabs[0]!,
+        focusedSessionId: 'agent-grid',
+        root: { type: 'leaf', sessionId: 'agent-grid' },
+      },
+    ],
+    detachedSessions: {
+      'terminal-detached': baseState.detachedSessions['terminal-detached']!,
+    },
+  }),
+  'terminal-detached',
+  'Project terminal lookup should still find a detached terminal so Dispatch does not spawn a duplicate PTY',
 )
 
 assert.deepEqual(

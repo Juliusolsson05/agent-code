@@ -1,6 +1,7 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 
 export type DispatchAgentRow = {
   key: string
@@ -213,7 +214,14 @@ export function findTerminalSessionInTab(
   state: WorkspaceState,
 ): SessionId | null {
   if (!tab) return null
-  return collectLeaves(tab.root).find(id => state.sessions[id]?.kind === 'terminal') ?? null
+  // WHY this uses the canonical tab-session resolver instead of scanning
+  // `tab.root`: the project terminal is allowed to be detached into Dispatch
+  // now. A grid-only scan makes the terminal disappear from the "does this tab
+  // already have a project terminal?" question, and the DispatchLayout effect
+  // will spawn a replacement PTY even though the original terminal is merely
+  // parked in `detachedSessions`. The terminal ownership question is "owned by
+  // this tab", not "currently mounted in the tile tree".
+  return resolveTabSessions(state, tab.id).find(id => state.sessions[id]?.kind === 'terminal') ?? null
 }
 
 /**
