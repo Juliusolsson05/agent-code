@@ -41,6 +41,7 @@ function bufferFromEntry(
     loading: false,
     error: null,
     mtimeMs,
+    selection: null,
   }
 }
 
@@ -93,6 +94,7 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
           loading: false,
           error: result.error,
           mtimeMs: null,
+          selection: null,
         },
       }))
       setActiveFilePath(entry.entryId)

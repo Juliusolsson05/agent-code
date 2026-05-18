@@ -25,6 +25,7 @@
     "test:process-lock": "tsx --tsconfig tsconfig.node.json scripts/test-process-lock.ts",
     "test:ghost-fallback": "tsx --tsconfig tsconfig.web.json scripts/test-ghost-fallback.ts",
     "test:feed-render-model": "tsx --tsconfig tsconfig.web.json scripts/test-feed-render-model.ts",
+    "test:rendered-content-targets": "tsx --tsconfig tsconfig.web.json scripts/test-rendered-content-targets.ts",
     "test:codex-optimistic-submit": "tsx --tsconfig tsconfig.web.json scripts/test-codex-optimistic-submit.ts",
     "test:semantic-committed-text": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-committed-text.ts",
     "test:semantic-fold-codex-replace": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-fold-codex-replace.ts",

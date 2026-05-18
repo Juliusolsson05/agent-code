@@ -13,6 +13,7 @@ type Props = {
   projectRoot: string | null
   onChange: (path: string, text: string) => void
   onSave: () => void
+  onSelectionRevealed?: (path: string) => void
 }
 
 export function MonacoFileEditor({
@@ -20,6 +21,7 @@ export function MonacoFileEditor({
   projectRoot,
   onChange,
   onSave,
+  onSelectionRevealed,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null)
@@ -77,6 +79,14 @@ export function MonacoFileEditor({
         monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
         () => onSave(),
       ) ?? null
+      if (file.selection) {
+        editor.setPosition({
+          lineNumber: file.selection.line,
+          column: file.selection.column,
+        })
+        editor.revealLineInCenter(file.selection.line)
+        onSelectionRevealed?.(file.path)
+      }
       editor.focus()
     })()
 
@@ -94,7 +104,7 @@ export function MonacoFileEditor({
       if (model && !model.isDisposed()) model.dispose()
       if (editorRef.current === editor) editorRef.current = null
     }
-  }, [file?.path, projectRoot])
+  }, [file?.path, projectRoot, onSelectionRevealed])
 
   useEffect(() => {
     const editor = editorRef.current
@@ -105,6 +115,26 @@ export function MonacoFileEditor({
     model.setValue(file.currentText)
     if (selection) editor.setSelection(selection)
   }, [file?.currentText, file?.path])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || !file?.selection) return
+    // WHY selection is kept on the buffer instead of firing a one-off
+    // imperative command from the markdown click handler: Global Editor file
+    // opens are asynchronous. The file may be read before Monaco has mounted
+    // its model, or the user may click the same already-open file with a new
+    // line suffix. Storing the requested location beside the active buffer
+    // lets both the first mount and later same-file activations converge on
+    // the same "show this location" behavior without reaching through
+    // component refs from untrusted rendered-content click handlers.
+    editor.setPosition({
+      lineNumber: file.selection.line,
+      column: file.selection.column,
+    })
+    editor.revealLineInCenter(file.selection.line)
+    editor.focus()
+    onSelectionRevealed?.(file.path)
+  }, [file?.path, file?.selection?.line, file?.selection?.column, onSelectionRevealed])
 
   if (!file) {
     return (

@@ -24,6 +24,7 @@ import { installPerformanceIpcInstrumentation } from '@main/performance/instrume
 import type { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { registerOrchestrationIpc } from '@main/ipc/orchestration.js'
 import { registerAiWorkspaceIpc } from '@main/ipc/aiWorkspace.js'
+import { registerRenderedContentIpc } from '@main/ipc/renderedContent.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 
@@ -67,4 +68,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerDevDebugIpc()
   registerOrchestrationIpc(deps.orchestrationBridge)
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
+  registerRenderedContentIpc()
 }

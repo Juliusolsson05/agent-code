@@ -18,6 +18,7 @@ import {
   type PreviewTarget,
 } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
@@ -1306,6 +1307,7 @@ const COMMAND_DESCRIPTION_COMPONENTS: import('react-markdown').Options['componen
   strong: ({ children }) => (
     <strong className="font-semibold text-ink">{children}</strong>
   ),
+  a: SafeMarkdownLink,
 }
 
 const CommandDescriptionPanel = memo(function CommandDescriptionPanel({

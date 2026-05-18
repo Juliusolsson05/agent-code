@@ -17,6 +17,7 @@ export type EditorFileBuffer = {
   loading: boolean
   error: string | null
   mtimeMs: number | null
+  selection: { line: number; column: number } | null
 }
 
 export type EditorModeState = {

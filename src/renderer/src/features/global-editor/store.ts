@@ -83,9 +83,11 @@ type GlobalEditorStore = {
     path: string
     text: string
     mtimeMs: number
+    selection?: { line: number; column: number } | null
   }) => void
   setActiveFile: (cwd: string, path: string | null) => void
   updateFileText: (cwd: string, path: string, text: string) => void
+  clearFileSelection: (cwd: string, path: string) => void
   markFileSaved: (cwd: string, path: string, text: string, mtimeMs: number) => void
   closeFile: (cwd: string, path: string) => boolean
 }
@@ -117,6 +119,7 @@ function createBuffer(params: {
   path: string
   text: string
   mtimeMs: number
+  selection?: { line: number; column: number } | null
 }): EditorFileBuffer {
   return {
     path: params.path,
@@ -128,6 +131,7 @@ function createBuffer(params: {
     loading: false,
     error: null,
     mtimeMs: params.mtimeMs,
+    selection: params.selection ?? null,
   }
 }
 
@@ -175,7 +179,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   openAiWorkspace: workspaceId => set({ aiWorkspaceId: workspaceId }),
   closeAiWorkspace: () => set({ aiWorkspaceId: null }),
 
-  openFile: ({ cwd, path, text, mtimeMs }) =>
+  openFile: ({ cwd, path, text, mtimeMs, selection }) =>
     set(state => {
       const prev = state.byCwd[cwd] ?? EMPTY_CWD_STATE
       const existing = prev.openFiles[path]
@@ -186,8 +190,14 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       // useEditorStore semantics so behaviour is consistent
       // between Global Editor and the "Code Editor" mode.
       const buffer: EditorFileBuffer = existing?.dirty
-        ? { ...existing, savedText: text, mtimeMs, error: null }
-        : createBuffer({ root: cwd, path, text, mtimeMs })
+        ? {
+            ...existing,
+            savedText: text,
+            mtimeMs,
+            error: null,
+            selection: selection ?? existing.selection,
+          }
+        : createBuffer({ root: cwd, path, text, mtimeMs, selection })
       const inOrder = prev.fileOrder.includes(path)
       return {
         byCwd: {
@@ -231,6 +241,35 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
                 ...current,
                 currentText: text,
                 dirty: text !== current.savedText,
+              },
+            },
+          },
+        },
+      }
+    }),
+
+  clearFileSelection: (cwd, path) =>
+    set(state => {
+      const prev = state.byCwd[cwd]
+      const current = prev?.openFiles[path]
+      if (!prev || !current?.selection) return state
+      return {
+        byCwd: {
+          ...state.byCwd,
+          [cwd]: {
+            ...prev,
+            openFiles: {
+              ...prev.openFiles,
+              [path]: {
+                ...current,
+                // WHY reveal selection is one-shot:
+                // A clicked `path:line` should jump the user to that location
+                // once. Keeping the selection on the durable buffer makes every
+                // tab switch or Monaco remount snap back to the old clicked
+                // line, overriding normal editor navigation. Cursor state is an
+                // editor concern after the initial reveal, so clear the request
+                // as soon as Monaco acknowledges it.
+                selection: null,
               },
             },
           },
