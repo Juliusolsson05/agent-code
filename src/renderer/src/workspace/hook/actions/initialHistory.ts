@@ -36,6 +36,34 @@ import {
   codexTurnIdFromEventPayload,
 } from '@renderer/workspace/codex/eventCursor'
 
+const INITIAL_HISTORY_CONCURRENCY = 2
+let activeInitialHistoryLoads = 0
+const initialHistoryWaiters: Array<() => void> = []
+
+async function acquireInitialHistorySlot(): Promise<() => void> {
+  if (activeInitialHistoryLoads < INITIAL_HISTORY_CONCURRENCY) {
+    activeInitialHistoryLoads++
+    return releaseInitialHistorySlot
+  }
+
+  // WHY this limiter is renderer-local instead of buried in main: the burst
+  // happens because restore/rehydrate loops fire one IPC per pane at once.
+  // Keeping the queue here protects main across all initial-history callers
+  // without changing the public IPC contract or making unrelated explicit
+  // older-history pagination wait behind a cold-start restore storm.
+  await new Promise<void>(resolve => {
+    initialHistoryWaiters.push(resolve)
+  })
+  activeInitialHistoryLoads++
+  return releaseInitialHistorySlot
+}
+
+function releaseInitialHistorySlot(): void {
+  activeInitialHistoryLoads = Math.max(0, activeInitialHistoryLoads - 1)
+  const next = initialHistoryWaiters.shift()
+  if (next) next()
+}
+
 function seedSeenFromRuntime(runtime: SessionRuntime, seen: Set<string>): void {
   for (const entry of runtime.entries) {
     const uuid = (entry as { uuid?: string }).uuid
@@ -94,13 +122,14 @@ export async function loadInitialHistoryForSession({
   })
 
   try {
+    const releaseHistorySlot = await acquireInitialHistorySlot()
     const [chunk, worktreesResult] = await Promise.all([
       window.api.loadInitialHistory({
         kind,
         cwd: meta.cwd,
         providerSessionId: meta.providerSessionId,
         limit,
-      }),
+      }).finally(releaseHistorySlot),
       window.api.gitWorktrees(meta.cwd),
     ])
     const worktrees = worktreesResult.ok ? worktreesResult.worktrees : []
