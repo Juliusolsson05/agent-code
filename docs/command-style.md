@@ -28,6 +28,10 @@ This repo treats command titles as stable names, not as descriptions of the curr
 8. Only use an ellipsis when the command requires more user input after invocation.
    Example: `New Agent…`
 
+9. Use conventional title case for command titles.
+   Lowercase short prepositions and articles unless they start or end the title.
+   Examples: `Attach Detached Session to Grid…`, `Attach All Dispatch Sessions for Tab`.
+
 ## Examples
 
 | Prefer | Avoid |
@@ -38,6 +42,7 @@ This repo treats command titles as stable names, not as descriptions of the curr
 | `Spotlight` | `Exit Spotlight` |
 | `Switch Provider` | `Switch To Claude` |
 | `Reload Agent` | `Reload Claude Agent` |
+| `AI Workspace MCP` | `Enable AI Workspace MCP` |
 
 ## Implementation note
 
