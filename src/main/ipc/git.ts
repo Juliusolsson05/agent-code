@@ -107,15 +107,20 @@ export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity
   // ask for it back-to-back: WorktreesBar status, WorktreeActivity summary,
   // initial history, older history, and live session context refreshes. A
   // tiny main-process cache removes duplicate `git worktree list` spawns
-  // across those independently-owned surfaces without hiding real changes
-  // for more than a few seconds.
+  // across those independently-owned surfaces without hiding successful
+  // results for more than a short post-probe window.
+  let cacheableResult = false
   const entry: CacheEntry<WorktreeIdentity[]> = {
     expiresAt: 0,
     settled: false,
     promise: Promise.resolve([]),
   }
   entry.promise = git(cwd, ['worktree', 'list', '--porcelain'])
-    .then(out => out.trim() ? parseWorktreePorcelain(out) : [])
+    .then(out => {
+      const worktrees = out.trim() ? parseWorktreePorcelain(out) : []
+      cacheableResult = worktrees.length > 0
+      return worktrees
+    })
     .catch(() => [])
     .finally(() => {
       // WHY the TTL starts after the probe settles, not before it starts:
@@ -125,9 +130,13 @@ export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity
       // start time, the second caller launches another identical subprocess
       // while the first is still running. Pending probes are always fresh
       // enough because no newer result exists yet, then the normal short TTL
-      // begins once we actually have data to reuse.
+      // begins once we actually have data to reuse. Empty results are not
+      // cached after settle because this code cannot distinguish "not a git
+      // repo" from "git timed out / failed and our helper returned empty
+      // stdout"; preserving immediate retry on failures is more important
+      // than negative-caching non-repos.
       entry.settled = true
-      entry.expiresAt = Date.now() + WORKTREE_CACHE_TTL_MS
+      entry.expiresAt = cacheableResult ? Date.now() + WORKTREE_CACHE_TTL_MS : 0
     })
   worktreeListCache.set(cwd, entry)
   return cloneWorktrees(await entry.promise)
@@ -138,16 +147,21 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
   const cached = worktreeStatusCache.get(cwd)
   if (cached && (!cached.settled || cached.expiresAt > now)) return cloneStatuses(await cached.promise)
 
+  let cacheableResult = false
   const entry: CacheEntry<GitWorktreeStatus[]> = {
     expiresAt: 0,
     settled: false,
     promise: Promise.resolve([]),
   }
   entry.promise = computeWorktreeStatusForCwd(cwd)
+    .then(statuses => {
+      cacheableResult = statuses.length > 0
+      return statuses
+    })
     .catch(() => [])
     .finally(() => {
       entry.settled = true
-      entry.expiresAt = Date.now() + WORKTREE_CACHE_TTL_MS
+      entry.expiresAt = cacheableResult ? Date.now() + WORKTREE_CACHE_TTL_MS : 0
     })
   worktreeStatusCache.set(cwd, entry)
   return cloneStatuses(await entry.promise)
