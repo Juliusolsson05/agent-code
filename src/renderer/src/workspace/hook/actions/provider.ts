@@ -79,11 +79,18 @@ export function useProviderActions(
         setRuntimes(prev => {
           const runtime = prev[newSessionId]
           if (!runtime) return prev
+          const nextDraftImages = targetKind === 'claude' ? draftImages : []
           return {
             ...prev,
             [newSessionId]: {
               ...runtime,
-              draftImages,
+              // Codex panes do not render or submit draft image attachments.
+              // Carrying Claude-only image state into a Codex runtime would be
+              // worse than a visible drop: the hidden array still participates
+              // in the composer "empty submit" guard, so pressing Enter on an
+              // apparently empty Codex composer could submit a blank prompt.
+              // Preserve images only when the target provider can surface them.
+              draftImages: nextDraftImages,
             },
           }
         })
