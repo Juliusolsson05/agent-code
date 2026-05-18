@@ -110,7 +110,7 @@ export class BuiltInMcpHttpHost {
     for (const registration of registrations) registration.revoked = true
     this.registrations.clear()
     this.tokensBySession.clear()
-    await Promise.allSettled(registrations.map(registration => this.closeRegistration(registration)))
+    await Promise.allSettled(registrations.map(registration => this.closeRegistrationWhenIdle(registration)))
     if (!server) return
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
@@ -221,12 +221,14 @@ export class BuiltInMcpHttpHost {
       .catch(() => {})
       .then(async () => {
         // The cached server owns the expensive registered tool/schema graph,
-        // but the streamable HTTP transport remains request-scoped. Serialize
-        // the short connect/handle/close sequence per session so an SDK
-        // implementation that stores the active transport on the server cannot
-        // have two concurrent requests race that binding. Different Agent Code
-        // sessions still run independently because each token has its own
-        // cached server and queue.
+        // but the streamable HTTP transport remains request-scoped. The MCP
+        // SDK currently stores the active transport on the server and throws
+        // "Already connected to a transport" if a second connect happens
+        // before the first transport closes. This queue is therefore not just
+        // defensive throttling: it is the invariant that lets one cached
+        // server safely serve many HTTP requests over its session lifetime.
+        // Different Agent Code sessions still run independently because each
+        // token has its own cached server and queue.
         await this.handleWithRegistration(registration, transport, req, res)
       })
     registration.requestQueue = run.then(() => undefined, () => undefined)
@@ -278,6 +280,21 @@ export class BuiltInMcpHttpHost {
       registration.closePromise = registration.server.close().catch(() => undefined)
     }
     return registration.closePromise
+  }
+
+  private async closeRegistrationWhenIdle(registration: SessionRegistration): Promise<void> {
+    if (registration.inFlightRequests > 0) {
+      // WHY stop drains the queue instead of closing immediately:
+      // `server.close()` closes the SDK's currently-bound transport. During a
+      // normal revoke path that would cut off an in-flight tool call even
+      // though `revokeSession` itself waits for the request counter to reach
+      // zero. App shutdown should follow the same lifecycle rule: stop
+      // admitting new requests by revoking and clearing the token maps, then
+      // let already-accepted requests finish their serialized connect/handle/
+      // close cycle before tearing down the cached server object.
+      await registration.requestQueue.catch(() => undefined)
+    }
+    await this.closeRegistration(registration)
   }
 
   private writeJson(res: ServerResponse, statusCode: number, payload: unknown): void {

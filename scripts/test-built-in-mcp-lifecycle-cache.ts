@@ -235,4 +235,26 @@ function tokenFromConfigUrl(url: string): string {
   assert.equal(records[1]?.closeCount, 1)
 }
 
+{
+  const delayResponse = deferred()
+  const { factory, records } = createFakeFactory({ delayResponse })
+  const host = new BuiltInMcpHttpHost(factory)
+  await host.start()
+  const [config] = host.registerSession({
+    sessionId: 'session-a',
+    cwd: '/repo',
+    domains: ['orchestration'],
+  })
+  assert.ok(config)
+  const request = requestJson(config.url, tokenFromConfigUrl(config.url))
+  await new Promise(resolve => setTimeout(resolve, 10))
+  const stop = host.stop()
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(records[0]?.closeCount, 0)
+  delayResponse.resolve()
+  assert.equal((await request).status, 200)
+  await stop
+  assert.equal(records[0]?.closeCount, 1)
+}
+
 console.log('built-in MCP lifecycle cache tests passed')
