@@ -8,6 +8,7 @@ import {
   PROXY_EVENTS_DIR,
   STATE_DIR,
 } from '@main/storage/paths.js'
+import { ghostLogDir } from '@main/ghostJournal.js'
 
 const GIB = 1024 * 1024 * 1024
 const DEFAULT_TTL_HOURS = 48
@@ -16,7 +17,7 @@ const MAX_BUDGET_BYTES = 15 * GIB
 const ACTIVE_GRACE_MS = 10 * 60 * 1000
 const PRUNE_COOLDOWN_MS = 5 * 60 * 1000
 
-type DebugStorageBucket = 'feed-debug' | 'debug-bundles' | 'proxy' | 'performance'
+type DebugStorageBucket = 'feed-debug' | 'debug-bundles' | 'proxy' | 'performance' | 'ghost-logs'
 
 type Artifact = {
   path: string
@@ -162,21 +163,27 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
 
 function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
   return {
-    'feed-debug': Math.floor(totalBudget * 0.25),
-    'debug-bundles': Math.floor(totalBudget * 0.35),
-    proxy: Math.floor(totalBudget * 0.30),
+    'feed-debug': Math.floor(totalBudget * 0.22),
+    'debug-bundles': Math.floor(totalBudget * 0.32),
+    proxy: Math.floor(totalBudget * 0.28),
     performance: Math.floor(totalBudget * 0.10),
+    // Ghost logs are recovery state, not user data. They deserve enough
+    // budget to survive a recent crash/reload, but not a hidden unlimited
+    // directory outside the normal debug-retention accounting. Compaction
+    // keeps live logs small; this cap handles abandoned session files.
+    'ghost-logs': Math.floor(totalBudget * 0.08),
   }
 }
 
 async function collectArtifacts(): Promise<Artifact[]> {
-  const [feed, bundles, proxy, performance] = await Promise.all([
+  const [feed, bundles, proxy, performance, ghostLogs] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
     collectImmediateDirs(DEBUG_BUNDLE_DIR, 'debug-bundles'),
     collectProxyRunDirs(PROXY_EVENTS_DIR),
     collectImmediateDirs(PERFORMANCE_RUNS_DIR, 'performance'),
+    collectFiles(ghostLogDir(), 'ghost-logs', name => name.endsWith('.ghost.jsonl')),
   ])
-  return [...feed, ...bundles, ...proxy, ...performance]
+  return [...feed, ...bundles, ...proxy, ...performance, ...ghostLogs]
 }
 
 async function collectFiles(

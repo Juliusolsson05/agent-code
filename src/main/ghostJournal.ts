@@ -52,7 +52,7 @@
 // by definition and the authoritative CLI JSONL survives independently.
 
 import { createReadStream } from 'node:fs'
-import { appendFile, mkdir } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, rename, stat, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
@@ -65,6 +65,7 @@ import { isGhost, type GhostEntry } from 'agent-transcript-parser/ghost'
  * during slow streams.
  */
 const FLUSH_INTERVAL_MS = 100
+const DEFAULT_COMPACT_MIN_BYTES = 5 * 1024 * 1024
 
 /**
  * Append-only writer for a single session's ghost log. Not shared
@@ -199,10 +200,18 @@ export class GhostJournalRegistry {
     const j = this.journals.get(sessionId)
     if (!j) return
     // Fire-and-forget flush; next write to this session will mint a
-    // fresh writer that targets the same file.
-    void j.flush().catch(err => {
-      console.warn('[ghostJournal] dispose flush error:', err)
-    })
+    // fresh writer that targets the same file. Compaction is chained
+    // after the durability barrier because append-only ghost logs can
+    // otherwise grow for the lifetime of a long agent session. We do
+    // this on dispose rather than while a session is live: rewrite-
+    // compaction necessarily renames the file, and racing that with
+    // active appends can drop the just-appended tail on POSIX filesystems
+    // where the writer still targets the old inode.
+    void j.flush()
+      .then(() => compactGhostLog(sessionId))
+      .catch(err => {
+        console.warn('[ghostJournal] dispose flush/compact error:', err)
+      })
     this.journals.delete(sessionId)
   }
 }
@@ -240,6 +249,66 @@ export class GhostJournalRegistry {
  */
 export async function readGhostLog(sessionId: string): Promise<GhostEntry[]> {
   const path = ghostLogPath(sessionId)
+  return readCompactGhostState(path)
+}
+
+/**
+ * Rewrite one session ghost log to the exact compact state the renderer
+ * imports on bootstrap: one latest non-superseded ghost per uuid.
+ *
+ * WHY compaction is a separate maintenance operation:
+ *   `readGhostLog` intentionally streams so a huge file no longer OOMs
+ *   main, but streaming still pays O(file-size) CPU on every resume. The
+ *   2026-05-11 forensic notes in the comment above had `ghost-logs/` at
+ *   2.1 GB. Without a rewrite path, that cost only ever grows. We compact
+ *   at startup and after a session is disposed, where no live writer should
+ *   be appending to the same path. That preserves the append-only safety
+ *   during active streaming while bounding future resume work.
+ */
+export async function compactGhostLog(sessionId: string): Promise<boolean> {
+  return compactGhostLogFile(ghostLogPath(sessionId))
+}
+
+export async function compactAllGhostLogs(): Promise<void> {
+  let entries
+  try {
+    entries = await readdir(ghostLogDir(), { withFileTypes: true })
+  } catch {
+    return
+  }
+  const minBytes = compactMinBytes()
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.ghost.jsonl')) continue
+    const path = join(ghostLogDir(), entry.name)
+    try {
+      const stats = await stat(path)
+      if (stats.size < minBytes) continue
+      await compactGhostLogFile(path)
+    } catch (err) {
+      console.warn('[ghostJournal] startup compact failed (non-fatal):', err)
+    }
+  }
+}
+
+async function compactGhostLogFile(path: string): Promise<boolean> {
+  let stats
+  try {
+    stats = await stat(path)
+  } catch {
+    return false
+  }
+  if (stats.size < compactMinBytes()) return false
+  const ghosts = await readCompactGhostState(path)
+  const compacted = ghosts.map(ghost => JSON.stringify(ghost)).join('\n')
+  const body = compacted.length > 0 ? `${compacted}\n` : ''
+  if (Buffer.byteLength(body, 'utf8') >= stats.size) return false
+  const tmp = `${path}.${process.pid}.${Date.now()}.compact.tmp`
+  await writeFile(tmp, body, { mode: 0o600 })
+  await rename(tmp, path)
+  return true
+}
+
+async function readCompactGhostState(path: string): Promise<GhostEntry[]> {
   const current = new Map<string, GhostEntry>()
   const stream = createReadStream(path, { encoding: 'utf8' })
   stream.on('error', () => {
@@ -277,10 +346,23 @@ export async function readGhostLog(sessionId: string): Promise<GhostEntry[]> {
   return [...current.values()]
 }
 
+function compactMinBytes(): number {
+  const raw = process.env.AGENT_CODE_GHOST_COMPACT_MIN_MB?.trim()
+  if (!raw) return DEFAULT_COMPACT_MIN_BYTES
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed * 1024 * 1024)
+    : DEFAULT_COMPACT_MIN_BYTES
+}
+
 /**
  * Deterministic path resolver. Exported so the IPC handler and the
  * reader agree on the same location.
  */
 export function ghostLogPath(sessionId: string): string {
-  return join(app.getPath('userData'), 'ghost-logs', `${sessionId}.ghost.jsonl`)
+  return join(ghostLogDir(), `${sessionId}.ghost.jsonl`)
+}
+
+export function ghostLogDir(): string {
+  return join(app.getPath('userData'), 'ghost-logs')
 }

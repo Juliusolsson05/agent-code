@@ -10,7 +10,7 @@ import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
 import { LspManager } from '@main/lspManager.js'
-import { GhostJournalRegistry } from '@main/ghostJournal.js'
+import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
 import {
   DictationDebugJournalRegistry,
   pruneOldDictationDebugLogs,
@@ -167,6 +167,14 @@ async function startApp(): Promise<void> {
   })
   void pruneOldDictationDebugLogs().catch(err => {
     console.warn('[dictation] prune failed (non-fatal):', err)
+  })
+  // Ghost-log reads are now streaming, but a years-long append-only
+  // file still makes every future restore pay O(file-size) parse CPU.
+  // Startup is the safest time to compact old oversized logs: no
+  // session writer has been created yet, so the rewrite cannot race an
+  // active append to the same inode.
+  void compactAllGhostLogs().catch(err => {
+    console.warn('[ghostJournal] startup compact failed (non-fatal):', err)
   })
   scheduleDebugStoragePrune('startup')
   await initializeToolchain()
