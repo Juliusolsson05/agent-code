@@ -74,7 +74,7 @@ export const paneCommands: CommandDef[] = [
     // detached session (grid-focused rows in the dispatch list don't
     // need attaching — they're already attached).
     id: 'attach-detached-to-grid',
-    title: 'Attach Detached Session To Grid…',
+    title: 'Attach Detached Session to Grid…',
     description: '**What it does:** Moves one **detached Dispatch session** into the grid.\n\n**Use when:** You want to pin background work into the normal layout.\n\n**Notes:** Uses the placement picker so you can choose where it lands.',
     keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
     when: ({ workspace }) => {
@@ -154,7 +154,7 @@ export const paneCommands: CommandDef[] = [
     // aware resolver so global Dispatch can target the focused row's
     // tab (which may differ from `activeTabId`).
     id: 'attach-all-detached-for-tab',
-    title: 'Attach All Dispatch Sessions For Tab',
+    title: 'Attach All Dispatch Sessions for Tab',
     description: '**What it does:** Moves all detached **Dispatch** sessions for a tab into the grid.\n\n**Use when:** You want to bring a whole tab’s background work into view.\n\n**Notes:** Preserves the existing grid and adds the sessions beside it. Works in both Grid and Dispatch modes.',
     keywords: ['attach', 'all', 'detached', 'dispatch', 'grid', 'tab', 'pin'],
     when: ({ workspace }) => {
@@ -175,7 +175,7 @@ export const paneCommands: CommandDef[] = [
     // case; this `when` check gates on an actual grid leaf so the command
     // does not show for a session that is already detached.
     id: 'detach-to-dispatch',
-    title: 'Detach Session To Dispatch',
+    title: 'Detach Session to Dispatch',
     description: '**What it does:** Moves a grid session into **Dispatch** without killing it.\n\n**Use when:** You want to park work in the background.\n\n**Notes:** The last pane in a tab cannot be detached.',
     keywords: ['detach', 'dispatch', 'park', 'background', 'unpin'],
     when: ({ workspace }) => {

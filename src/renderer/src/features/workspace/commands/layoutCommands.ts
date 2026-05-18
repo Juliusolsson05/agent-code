@@ -5,8 +5,8 @@ export const layoutCommands: CommandDef[] = [
   {
     id: 'dispatch-mode',
     title: 'Dispatch Mode',
-    description: '**What it does:** Toggles the **Dispatch** command-center layout.\n\n**Use when:** You want to scan and command agents from a compact list.\n\n**Notes:** Shows the selected agent, the agent list, and an optional project terminal.',
-    keywords: ['agent list', 'focused agent', 'command center'],
+    description: '**What it does:** Toggles the **Dispatch** command-center layout.\n\n**Use when:** You want to scan and command agents from a compact list.\n\n**Notes:** Shows the selected agent, the agent list, and an optional project terminal. Run again to return to the normal grid.',
+    keywords: ['agent list', 'focused agent', 'command center', 'exit dispatch', 'grid mode', 'normal layout'],
     getState: ({ flags }) => ({
       label: flags.dispatchModeEnabled
         ? (flags.globalDispatchEnabled ? 'Global' : 'Project')
@@ -34,14 +34,6 @@ export const layoutCommands: CommandDef[] = [
     run: async ({ ui }) => {
       await ui.enterGlobalDispatch()
     },
-  },
-  {
-    id: 'exit-dispatch-mode',
-    title: 'Exit Dispatch Mode',
-    description: '**What it does:** Leaves **Dispatch** and returns to the normal grid layout.\n\n**Use when:** You are done using the command-center view.\n\n**Notes:** Detached **Dispatch** agents stay parked until you attach them.',
-    keywords: ['grid mode', 'normal layout'],
-    when: ({ flags }) => flags.dispatchModeEnabled,
-    run: ({ ui }) => ui.exitDispatchMode(),
   },
   // REMOVED: 'toggle-dispatch-terminal' command. The dispatch project
   // terminal is now controlled by `settings.dispatchProjectTerminal`

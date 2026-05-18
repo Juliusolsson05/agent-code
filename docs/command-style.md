@@ -38,6 +38,7 @@ This repo treats command titles as stable names, not as descriptions of the curr
 | `Spotlight` | `Exit Spotlight` |
 | `Switch Provider` | `Switch To Claude` |
 | `Reload Agent` | `Reload Claude Agent` |
+| `AI Workspace MCP` | `Enable AI Workspace MCP` |
 
 ## Implementation note
 

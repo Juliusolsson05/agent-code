@@ -1,6 +1,7 @@
-import type { CommandDef } from '@renderer/features/command-palette/types'
+import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
 
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value
@@ -13,6 +14,19 @@ function buildResumeCommand(kind: 'claude' | 'codex', cwd: string, providerSessi
     ? `codex resume ${shellQuote(providerSessionId)}`
     : `claude --resume ${shellQuote(providerSessionId)}`
   return `${cd} && ${resume}`
+}
+
+function builtInMcpDomainState(
+  ctx: CommandContext,
+  domain: BuiltInMcpDomain,
+): { label: string; tone: 'neutral' | 'accent' } {
+  const sessionId = commandTargetSessionId(ctx.workspace)
+  const meta = sessionId ? ctx.workspace.state.sessions[sessionId] : null
+  const enabled = Boolean(meta?.builtInMcpDomains?.includes(domain))
+  return {
+    label: enabled ? 'On' : 'Off',
+    tone: enabled ? 'accent' : 'neutral',
+  }
 }
 
 export const sessionCommands: CommandDef[] = [
@@ -178,9 +192,9 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-built-in-mcp-ping',
-    title: 'Enable Built-in MCP Ping',
+    title: 'Built-in MCP Ping',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code built-in MCP access.\n\n**Use when:** You want to verify the new MCP bridge for this pane.\n\n**Notes:** Adds the ping domain only; orchestration tools are implemented separately.',
-    keywords: ['mcp', 'server', 'built-in', 'ping', 'reload', 'agent', 'claude', 'codex'],
+    keywords: ['mcp', 'server', 'built-in', 'ping', 'enable', 'reload', 'agent', 'claude', 'codex'],
     when: ({ workspace, flags }) => {
       if (!flags.devDebugEnabled) return false
       const sessionId = commandTargetSessionId(workspace)
@@ -189,6 +203,7 @@ export const sessionCommands: CommandDef[] = [
       const kind = meta?.kind ?? 'claude'
       return kind === 'claude' || kind === 'codex'
     },
+    getState: ctx => builtInMcpDomainState(ctx, 'ping'),
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
@@ -218,9 +233,9 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-ai-workspace-mcp',
-    title: 'Enable AI Workspace MCP',
+    title: 'AI Workspace MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Adds the AI Workspace domain only; orchestration agents can use it but it remains a separate MCP capability.',
-    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'reload', 'claude', 'codex'],
+    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'enable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
@@ -228,6 +243,7 @@ export const sessionCommands: CommandDef[] = [
       const kind = meta?.kind ?? 'claude'
       return kind === 'claude' || kind === 'codex'
     },
+    getState: ctx => builtInMcpDomainState(ctx, 'ai_workspace'),
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
@@ -257,9 +273,9 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-orchestration-mcp',
-    title: 'Enable Orchestration MCP',
+    title: 'Orchestration MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
-    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'reload', 'claude', 'codex'],
+    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'enable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
@@ -267,6 +283,7 @@ export const sessionCommands: CommandDef[] = [
       const kind = meta?.kind ?? 'claude'
       return kind === 'claude' || kind === 'codex'
     },
+    getState: ctx => builtInMcpDomainState(ctx, 'orchestration'),
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
@@ -296,9 +313,9 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'enable-agent-transcripts-mcp',
-    title: 'Enable Agent Transcripts MCP',
+    title: 'Agent Transcripts MCP',
     description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code transcript-consumption MCP tools.\n\n**Use when:** You want this agent to read a specific Claude/Codex JSONL transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
-    keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'reload', 'claude', 'codex'],
+    keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'enable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
@@ -306,6 +323,7 @@ export const sessionCommands: CommandDef[] = [
       const kind = meta?.kind ?? 'claude'
       return kind === 'claude' || kind === 'codex'
     },
+    getState: ctx => builtInMcpDomainState(ctx, 'agent_transcripts'),
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
@@ -524,7 +542,7 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-feed-debug-panel',
-    title: 'Open Debug Logs',
+    title: 'Feed Debug Logs',
     description: '**What it does:** Shows or hides the **feed debug log** panel.\n\n**Use when:** You want render and feed timeline logs.\n\n**Notes:** Developer-oriented.',
     keywords: ['debug', 'logs', 'feed', 'render', 'rows', 'timeline', 'panel'],
     getState: ({ flags }) => ({

@@ -13,9 +13,9 @@ function focusedAgentSessionId(ctx: CommandContext): string | null {
 export const agentStatusCommands: CommandDef[] = [
   {
     id: 'show-agent-status',
-    title: 'Show Agent Status',
+    title: 'Agent Status',
     description: '**What it does:** Shows or hides a compact **Agent Status** panel for the focused Claude or Codex agent.\n\n**Use when:** You need identity, placement, runtime status, MCP domains, or orchestration/link metadata without opening raw debug panels.\n\n**Notes:** Follows the current command target, including focused Dispatch rows.',
-    keywords: ['agent', 'status', 'state', 'inspect', 'runtime', 'session', 'mcp', 'orchestration', 'linked'],
+    keywords: ['agent', 'status', 'show', 'state', 'inspect', 'runtime', 'session', 'mcp', 'orchestration', 'linked'],
     when: ctx => focusedAgentSessionId(ctx) !== null,
     getState: ({ flags }) => ({
       label: flags.agentStatusPanelOpen ? 'Open' : 'Closed',
