@@ -32,6 +32,7 @@
     "test:semantic-committed-text": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-committed-text.ts",
     "test:semantic-fold-codex-replace": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-fold-codex-replace.ts",
     "test:agent-transcripts": "tsx --tsconfig tsconfig.node.json scripts/test-agent-transcripts.ts",
+    "test:built-in-mcp-lifecycle-cache": "tsx --tsconfig tsconfig.node.json scripts/test-built-in-mcp-lifecycle-cache.ts",
     "test:codex-semantic-channel": "tsx --tsconfig tsconfig.node.json scripts/test-codex-semantic-channel.ts",
     "test:dictation": "tsx --tsconfig tsconfig.node.json scripts/test-dictation-imports.ts",
     "proxy-demo": "npm --prefix packages/claude-code-headless run build && electron experiments/claude-proxy-stream-app/main.mjs",
