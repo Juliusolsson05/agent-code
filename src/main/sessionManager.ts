@@ -193,6 +193,13 @@ interface AgentSessionLike {
   resize(cols: number, rows: number): void
   stop(): Promise<void>
   start(): Promise<void>
+  awaitReadyForPrompt?(
+    opts?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<
+    | { kind: 'ready'; waitedMs: number }
+    | { kind: 'timeout' }
+    | { kind: 'no-headless' }
+  >
   getProcessPid?(): number | null
   isExited?(): boolean
   removeAllListeners?(event?: string): this
@@ -799,6 +806,10 @@ export class SessionManager extends EventEmitter {
     return true
   }
 
+  getSessionKind(sessionId: string): SessionKind | null {
+    return this.sessions.get(sessionId)?.kind ?? null
+  }
+
   /**
    * Claude-specific accessor for the paste-submit event-driven path
    * in `src/renderer/.../claudePaste.ts`. Returns the live ClaudeSession
@@ -842,6 +853,34 @@ export class SessionManager extends EventEmitter {
       return { kind: 'no-session' }
     }
     return session.awaitPastePlaceholder(opts)
+  }
+
+  async awaitCodexReadyForPrompt(
+    sessionId: string,
+    opts?: { timeoutMs?: number; pollIntervalMs?: number },
+  ): Promise<
+    | { kind: 'ready'; waitedMs: number }
+    | { kind: 'timeout' }
+    | { kind: 'no-headless' }
+    | { kind: 'no-session' }
+  > {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind !== 'codex') return { kind: 'no-session' }
+    // WHY this mirrors the Claude paste-placeholder escape hatch instead of
+    // widening the whole AgentSessionLike contract:
+    //
+    // Provider startup hazards are different. Claude's race is "paste payload
+    // committed but Enter arrived too early"; Codex's race is "PTY exists but
+    // the TUI is still on startup/trust chrome and will drop composer input".
+    // Keeping both probes provider-specific prevents a fake no-op readiness API
+    // from becoming part of every future provider runtime, while still giving
+    // orchestration a truthful delivery boundary before it marks a prompt as
+    // submitted.
+    const session = entry.session as AgentSessionLike
+    if (typeof session.awaitReadyForPrompt !== 'function') {
+      return { kind: 'no-headless' }
+    }
+    return session.awaitReadyForPrompt(opts)
   }
 
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */
