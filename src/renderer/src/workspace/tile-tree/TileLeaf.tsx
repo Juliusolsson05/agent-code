@@ -281,13 +281,22 @@ export function TileLeaf({
     return registerComposerEnterTarget({
       focused,
       hovered: composerHovered,
-      hasSubmittableDraft: () => input.trim().length > 0 || runtime.draftImages.length > 0,
+      hasSubmittableDraft: () => {
+        // Slash mode is PTY-owned: Enter commits Claude Code's highlighted
+        // slash command, not Agent Code's normal prompt submit. The textarea
+        // keydown path already knows how to send that `\r` and clear the local
+        // slash-mode state. A document-level Enter cannot safely replay that
+        // path without also understanding the picker's current PTY state, so
+        // it deliberately does nothing while slash mode is active.
+        if (slashMode) return false
+        return input.trim().length > 0 || runtime.draftImages.length > 0
+      },
       focus: () => inputRef.current?.focus(),
       submit: () => {
         void submitCurrentDraft('global-enter')
       },
     })
-  }, [focused, composerHovered, input, runtime.draftImages.length, submitCurrentDraft])
+  }, [focused, composerHovered, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
 
   const isSessionLive = runtime.sessionStatus === 'running'
   const readinessText =
