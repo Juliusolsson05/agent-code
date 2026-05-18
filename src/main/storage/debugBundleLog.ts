@@ -42,6 +42,12 @@ function isInsideDebugBundleDir(path: string): boolean {
 }
 
 async function appendDebugBundleLogEntry(entry: DebugBundleLogEntry): Promise<void> {
+  // WHY this stays a plain append instead of a locked/fsync'd ledger: the
+  // folder on disk is the source of truth. This file is an operator-friendly
+  // index for "what did I save and why?", so losing the last line on a crash
+  // or racing a same-process append is acceptable. Making the debug-save path
+  // block on stronger durability would be the wrong trade for a command used
+  // while the app is already misbehaving.
   await mkdir(dirname(DEBUG_BUNDLE_LOG_FILE), { recursive: true })
   await appendFile(DEBUG_BUNDLE_LOG_FILE, `${JSON.stringify(entry)}\n`, 'utf8')
 }
@@ -58,7 +64,7 @@ export async function appendDebugBundleSaved(params: {
     schemaVersion: 1,
     event: 'saved',
     ...nowFields(),
-    bundlePath: params.bundlePath,
+    bundlePath: resolve(params.bundlePath),
     sessionId: params.sessionId,
     kind: params.kind ?? null,
     reason: params.reason ?? null,
@@ -86,22 +92,51 @@ export async function addDebugBundleNote(params: {
   // the JSONL is an index, but the bundle folder is the unit the user opens
   // later. Keeping a small note.json inside the bundle means a copied folder
   // remains self-describing even if the global index is pruned, moved, or not
-  // shared with the bundle.
-  await writeFile(
-    notePath,
-    JSON.stringify({
+  // shared with the bundle. It is intentionally not part of manifest.json:
+  // the manifest describes the files captured at save time, while this note
+  // is user-authored follow-up metadata that can be added or skipped later.
+  try {
+    await writeFile(
+      notePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        createdAt: created.ts,
+        createdAtIso: created.tsIso,
+        note,
+      }, null, 2),
+      'utf8',
+    )
+  } catch (err) {
+    if (isMissingPathError(err)) {
+      // Retention pruning can remove an old bundle while the note modal is
+      // still open. Recreating the directory here would leave an empty folder
+      // that looks like a real capture, so skip the late note instead.
+      console.warn('[debug-bundle] skipped note for pruned bundle', params.bundlePath)
+      return
+    }
+    throw err
+  }
+  try {
+    await appendDebugBundleLogEntry({
       schemaVersion: 1,
-      createdAt: created.ts,
-      createdAtIso: created.tsIso,
+      event: 'note-added',
+      ...created,
+      bundlePath: resolve(params.bundlePath),
       note,
-    }, null, 2),
-    'utf8',
+    })
+  } catch (err) {
+    // The note file was written into the bundle already. Keep the IPC result
+    // successful for the same reason save entries are best-effort: the JSONL
+    // is an index, not the user's durable artifact.
+    console.warn('[debug-bundle] failed to append note index entry', err)
+  }
+}
+
+function isMissingPathError(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    (err as { code?: unknown }).code === 'ENOENT'
   )
-  await appendDebugBundleLogEntry({
-    schemaVersion: 1,
-    event: 'note-added',
-    ...created,
-    bundlePath: resolve(params.bundlePath),
-    note,
-  })
 }

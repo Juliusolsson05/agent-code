@@ -137,14 +137,23 @@ export async function saveDebugBundle(
     await writeFile(target, file.content, 'utf8')
   }
 
-  await appendDebugBundleSaved({
-    bundlePath,
-    sessionId: params.sessionId,
-    kind: params.kind ?? null,
-    reason: params.reason ?? null,
-    cwd: params.cwd ?? null,
-    providerSessionId: params.providerSessionId ?? null,
-  })
+  try {
+    await appendDebugBundleSaved({
+      bundlePath,
+      sessionId: params.sessionId,
+      kind: params.kind ?? null,
+      reason: params.reason ?? null,
+      cwd: params.cwd ?? null,
+      providerSessionId: params.providerSessionId ?? null,
+    })
+  } catch (err) {
+    // WHY the index is best-effort: the timestamped bundle folder is the
+    // durable artifact the user asked us to save. The JSONL is only a lookup
+    // aid for future browsing. Reporting "save failed" after every file was
+    // already written would make the worst disk-pressure case actively
+    // misleading and would also skip the note prompt for a usable bundle.
+    console.warn('[debug-bundle] failed to append saved-bundle index entry', err)
+  }
 
   scheduleDebugStoragePrune('debug-bundle-save')
 
