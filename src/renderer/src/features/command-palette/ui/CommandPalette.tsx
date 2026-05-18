@@ -84,6 +84,9 @@ type Props = {
   toggleProxyDebugPanel: () => void
   toggleHtmlDebugPanel: () => void
   toggleDevDebugPanel: () => void
+  openAgentStatusPanel: () => void
+  closeAgentStatusPanel: () => void
+  toggleAgentStatusPanel: () => void
   togglePerformancePanel: () => void
   toggleGlobalEditor: () => void
   toggleFileTreeVisible: () => void
@@ -109,6 +112,7 @@ type Props = {
   htmlDebugPanelOpen: boolean
   devDebugEnabled: boolean
   devDebugPanelOpen: boolean
+  agentStatusPanelOpen: boolean
   performancePanelOpen: boolean
   globalEditorOpen: boolean
   fileTreeVisible: boolean
@@ -148,6 +152,9 @@ export function CommandPalette({
   toggleProxyDebugPanel,
   toggleHtmlDebugPanel,
   toggleDevDebugPanel,
+  openAgentStatusPanel,
+  closeAgentStatusPanel,
+  toggleAgentStatusPanel,
   togglePerformancePanel,
   toggleGlobalEditor,
   toggleFileTreeVisible,
@@ -173,6 +180,7 @@ export function CommandPalette({
   htmlDebugPanelOpen,
   devDebugEnabled,
   devDebugPanelOpen,
+  agentStatusPanelOpen,
   performancePanelOpen,
   globalEditorOpen,
   fileTreeVisible,
@@ -349,6 +357,9 @@ export function CommandPalette({
         toggleProxyDebugPanel,
         toggleHtmlDebugPanel,
         toggleDevDebugPanel,
+        openAgentStatusPanel,
+        closeAgentStatusPanel,
+        toggleAgentStatusPanel,
         togglePerformancePanel,
         toggleGlobalEditor,
         toggleFileTreeVisible,
@@ -387,6 +398,7 @@ export function CommandPalette({
         htmlDebugPanelOpen,
         devDebugEnabled,
         devDebugPanelOpen,
+        agentStatusPanelOpen,
         performancePanelOpen,
         globalEditorOpen,
         fileTreeVisible,
@@ -412,6 +424,9 @@ export function CommandPalette({
       toggleProxyDebugPanel,
       toggleHtmlDebugPanel,
       toggleDevDebugPanel,
+      openAgentStatusPanel,
+      closeAgentStatusPanel,
+      toggleAgentStatusPanel,
       togglePerformancePanel,
       toggleGlobalEditor,
       toggleFileTreeVisible,
@@ -448,6 +463,7 @@ export function CommandPalette({
       htmlDebugPanelOpen,
       devDebugEnabled,
       devDebugPanelOpen,
+      agentStatusPanelOpen,
       performancePanelOpen,
       globalEditorOpen,
       fileTreeVisible,

@@ -84,6 +84,13 @@ export type UiShellState = {
    *  they may poll, render custom UI, or call IPC while a bug is being
    *  understood, and then disappear after the fix lands. */
   devDebugPanelOpen: boolean
+  /** When true, the read-only Agent Status panel is mounted. This is
+   *  intentionally uiShell state rather than WorkspaceState: the panel is
+   *  command chrome over the current focused agent, not durable workspace
+   *  data. It follows `commandTargetSessionId` the same way the debug panels
+   *  do, so focus changes update what the inspector describes without
+   *  persisting an extra "inspected session" source of truth. */
+  agentStatusPanelOpen: boolean
   performancePanelOpen: boolean
   /** When true, the Global Editor overlay is mounted. Splits the
    *  workspace area: left half is a file tree + Monaco editor rooted
