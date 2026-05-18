@@ -29,6 +29,21 @@ function builtInMcpDomainState(
   }
 }
 
+function toggleBuiltInMcpDomain(
+  domains: readonly BuiltInMcpDomain[] | undefined,
+  domain: BuiltInMcpDomain,
+): BuiltInMcpDomain[] {
+  // WHY these commands are true toggles even though they reload the agent:
+  // the palette badge says On/Off, so the command must honor that contract.
+  // Adding a domain requires a provider restart because the MCP server list
+  // is fixed at spawn time; disabling one is the same operation in reverse:
+  // restart the same provider session with the domain removed.
+  const current = domains ?? []
+  return current.includes(domain)
+    ? current.filter(existing => existing !== domain)
+    : Array.from(new Set([...current, domain]))
+}
+
 export const sessionCommands: CommandDef[] = [
   {
     id: 'view-prompts',
@@ -193,8 +208,8 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'enable-built-in-mcp-ping',
     title: 'Built-in MCP Ping',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code built-in MCP access.\n\n**Use when:** You want to verify the new MCP bridge for this pane.\n\n**Notes:** Adds the ping domain only; orchestration tools are implemented separately.',
-    keywords: ['mcp', 'server', 'built-in', 'ping', 'enable', 'reload', 'agent', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code built-in MCP ping access on or off.\n\n**Use when:** You want to verify the MCP bridge for this pane.\n\n**Notes:** Ping is a diagnostic MCP domain; orchestration tools are separate.',
+    keywords: ['mcp', 'server', 'built-in', 'ping', 'enable', 'disable', 'reload', 'agent', 'claude', 'codex'],
     when: ({ workspace, flags }) => {
       if (!flags.devDebugEnabled) return false
       const sessionId = commandTargetSessionId(workspace)
@@ -213,14 +228,19 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'ping' as const]))
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'ping')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
           builtInMcpDomains: nextDomains,
         })
         if (newSessionId) {
-          workspace.showPaneToast(newSessionId, 'Reloaded with built-in MCP ping')
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('ping')
+              ? 'Reloaded with built-in MCP ping'
+              : 'Reloaded without built-in MCP ping',
+          )
         }
       } catch (err) {
         const message =
@@ -234,8 +254,8 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'enable-ai-workspace-mcp',
     title: 'AI Workspace MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Adds the AI Workspace domain only; orchestration agents can use it but it remains a separate MCP capability.',
-    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'enable', 'reload', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools on or off.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Orchestration agents can use this domain, but it remains a separate MCP capability.',
+    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'enable', 'disable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
@@ -253,14 +273,19 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'ai_workspace' as const]))
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'ai_workspace')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
           builtInMcpDomains: nextDomains,
         })
         if (newSessionId) {
-          workspace.showPaneToast(newSessionId, 'Reloaded with AI Workspace MCP')
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('ai_workspace')
+              ? 'Reloaded with AI Workspace MCP'
+              : 'Reloaded without AI Workspace MCP',
+          )
         }
       } catch (err) {
         const message =
@@ -274,8 +299,8 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'enable-orchestration-mcp',
     title: 'Orchestration MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
-    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'enable', 'reload', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools on or off.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
+    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'enable', 'disable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
@@ -293,14 +318,19 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'orchestration' as const]))
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'orchestration')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
           builtInMcpDomains: nextDomains,
         })
         if (newSessionId) {
-          workspace.showPaneToast(newSessionId, 'Reloaded with orchestration MCP')
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('orchestration')
+              ? 'Reloaded with orchestration MCP'
+              : 'Reloaded without orchestration MCP',
+          )
         }
       } catch (err) {
         const message =
@@ -314,8 +344,8 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'enable-agent-transcripts-mcp',
     title: 'Agent Transcripts MCP',
-    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code transcript-consumption MCP tools.\n\n**Use when:** You want this agent to read a specific Claude/Codex JSONL transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
-    keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'enable', 'reload', 'claude', 'codex'],
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code transcript-consumption MCP tools on or off.\n\n**Use when:** You want this agent to read a specific Claude/Codex JSONL transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
+    keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'enable', 'disable', 'reload', 'claude', 'codex'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
@@ -333,14 +363,19 @@ export const sessionCommands: CommandDef[] = [
 
       ui.closePalette()
       try {
-        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'agent_transcripts' as const]))
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'agent_transcripts')
         const newSessionId = await workspace.replaceSession(meta.cwd, {
           kind,
           resumeSessionId: meta.providerSessionId,
           builtInMcpDomains: nextDomains,
         })
         if (newSessionId) {
-          workspace.showPaneToast(newSessionId, 'Reloaded with Agent Transcripts MCP')
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('agent_transcripts')
+              ? 'Reloaded with Agent Transcripts MCP'
+              : 'Reloaded without Agent Transcripts MCP',
+          )
         }
       } catch (err) {
         const message =
@@ -542,7 +577,7 @@ export const sessionCommands: CommandDef[] = [
   },
   {
     id: 'toggle-feed-debug-panel',
-    title: 'Feed Debug Logs',
+    title: 'Feed Debug Panel',
     description: '**What it does:** Shows or hides the **feed debug log** panel.\n\n**Use when:** You want render and feed timeline logs.\n\n**Notes:** Developer-oriented.',
     keywords: ['debug', 'logs', 'feed', 'render', 'rows', 'timeline', 'panel'],
     getState: ({ flags }) => ({

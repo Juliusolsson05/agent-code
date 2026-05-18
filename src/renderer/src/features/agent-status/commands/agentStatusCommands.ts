@@ -18,7 +18,7 @@ export const agentStatusCommands: CommandDef[] = [
     keywords: ['agent', 'status', 'show', 'state', 'inspect', 'runtime', 'session', 'mcp', 'orchestration', 'linked'],
     when: ctx => focusedAgentSessionId(ctx) !== null,
     getState: ({ flags }) => ({
-      label: flags.agentStatusPanelOpen ? 'Open' : 'Closed',
+      label: flags.agentStatusPanelOpen ? 'On' : 'Off',
       tone: flags.agentStatusPanelOpen ? 'accent' : 'neutral',
     }),
     run: ({ ui }) => {
