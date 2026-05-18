@@ -45,12 +45,56 @@ export function useProviderActions(
       showPaneToast(sourceSessionId, 'Only Claude and Codex panes can switch provider')
       return
     }
-    if (!meta.providerSessionId) {
-      showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
-      return
-    }
+    const targetKind = sourceKind === 'claude' ? 'codex' : 'claude'
 
     try {
+      if (!meta.providerSessionId) {
+        const draftImages =
+          refs.latestRuntimesRef.current[sourceSessionId]?.draftImages ?? []
+
+        // A freshly-spawned provider pane has no durable provider
+        // transcript yet. Claude's sessionId and Codex's session_meta
+        // only reach SessionMeta after the first provider JSONL/rollout
+        // entry arrives, which usually means after the first user
+        // submission. Calling main-process conversion here would be
+        // conceptually wrong as well as mechanically brittle: there is
+        // no persisted conversation to translate, and the converter
+        // derives the target resume id from transcript records that do
+        // not exist yet. The user's intent in this state is "I opened
+        // the wrong provider before starting", so a no-resume replacement
+        // is the faithful operation.
+        //
+        // `replaceSession` already preserves draftInput because several
+        // replacement flows want typed-but-unsent text to survive. It does
+        // not preserve draftImages today, and broadening that helper would
+        // change reload/rewind/resume semantics outside this issue. Image
+        // drafts are still part of the user's unsent empty-pane state, so
+        // this branch snapshots and restores them explicitly.
+        const newSessionId = await sessionActions.replaceSession(meta.cwd, {
+          kind: targetKind,
+          builtInMcpDomains: meta.builtInMcpDomains,
+        })
+        if (!newSessionId) return
+
+        setRuntimes(prev => {
+          const runtime = prev[newSessionId]
+          if (!runtime) return prev
+          return {
+            ...prev,
+            [newSessionId]: {
+              ...runtime,
+              draftImages,
+            },
+          }
+        })
+
+        showPaneToast(
+          newSessionId,
+          targetKind === 'codex' ? 'Switched to Codex' : 'Switched to Claude',
+        )
+        return
+      }
+
       // The translated target transcript must be created BEFORE we
       // replace the live pane. If translation fails, the current
       // provider process should stay untouched and the user should
@@ -80,7 +124,7 @@ export function useProviderActions(
           : 'Provider switch failed'
       showPaneToast(sourceSessionId, message)
     }
-  }, [refs.stateRef, sessionActions, showPaneToast])
+  }, [refs.latestRuntimesRef, refs.stateRef, sessionActions, setRuntimes, showPaneToast])
 
   const reloadFocusedAgent = useCallback(async () => {
     const current = refs.stateRef.current
