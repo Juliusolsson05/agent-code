@@ -31,11 +31,13 @@ type ClosedAgentRecord = {
 const MAX_PROMPT_DELIVERIES = 1000
 const MAX_CLOSED_AGENTS = 500
 const ORCHESTRATION_METADATA_TTL_MS = 24 * 60 * 60 * 1000
+const PRUNE_INTERVAL_MS = 5 * 60 * 1000
 
 export class OrchestrationBridge {
   private readonly pending = new Map<string, PendingRequest>()
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
+  private lastPrunedAt = 0
 
   async createAgent(params: {
     parentSessionId: string
@@ -321,6 +323,7 @@ export class OrchestrationBridge {
     runId?: string
     liveAgents: OrchestrationAgentRecord[]
   }): OrchestrationAgentRecord[] {
+    if (this.closedAgents.size === 0) return params.liveAgents
     const seen = new Set(params.liveAgents.map(agent => agent.sessionId))
     const closed = Array.from(this.closedAgents.values())
       .filter(item => !seen.has(item.output.agent.sessionId))
@@ -337,6 +340,7 @@ export class OrchestrationBridge {
     liveOutputs: OrchestrationAgentOutput[]
     maxMessagesPerAgent?: number
   }): OrchestrationAgentOutput[] {
+    if (this.closedAgents.size === 0) return params.liveOutputs
     const seen = new Set(params.liveOutputs.map(output => output.agent.sessionId))
     const closed = Array.from(this.closedAgents.values())
       .filter(item => !seen.has(item.output.agent.sessionId))
@@ -378,6 +382,14 @@ export class OrchestrationBridge {
   }
 
   private pruneCoordinationMetadata(now = Date.now()): void {
+    if (
+      now - this.lastPrunedAt < PRUNE_INTERVAL_MS &&
+      this.promptDeliveries.size <= MAX_PROMPT_DELIVERIES &&
+      this.closedAgents.size <= MAX_CLOSED_AGENTS
+    ) {
+      return
+    }
+    this.lastPrunedAt = now
     // WHY cap these maps in main:
     // orchestration metadata is useful coordination state, not durable app
     // history. The renderer owns live workspace sessions; main only remembers

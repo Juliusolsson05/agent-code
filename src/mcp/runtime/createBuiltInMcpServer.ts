@@ -609,20 +609,17 @@ function registerOrchestrationTools(
           agents = agents.filter(agent => wanted.has(agent.sessionId))
         }
       }
-      const outputs = await Promise.all(
-        agents.map(agent =>
-          bridge.readAgent({
-            parentSessionId: scope.sessionId,
-            sessionId: agent.sessionId,
-            maxMessages: args.maxMessagesPerAgent,
-          }).catch(() => null),
-        ),
-      )
+      const agentIds = new Set(agents.map(agent => agent.sessionId))
+      const outputs = await bridge.readRunOutputs({
+        parentSessionId: scope.sessionId,
+        runId: args.runId,
+        maxMessagesPerAgent: args.maxMessagesPerAgent,
+      }).then(outputs => outputs.filter(output => agentIds.has(output.agent.sessionId)))
       return toolText({
         ok: true,
         done: !agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState)),
         agents,
-        outputs: outputs.filter(output => output !== null),
+        outputs,
       })
     },
   )
