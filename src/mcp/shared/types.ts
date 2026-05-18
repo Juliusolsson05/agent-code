@@ -1,9 +1,10 @@
-export type BuiltInMcpDomain = 'ping' | 'orchestration' | 'ai_workspace'
+export type BuiltInMcpDomain = 'ping' | 'orchestration' | 'ai_workspace' | 'agent_transcripts'
 
 export const BUILT_IN_MCP_DOMAINS: readonly BuiltInMcpDomain[] = [
   'ping',
   'orchestration',
   'ai_workspace',
+  'agent_transcripts',
 ] as const
 
 export type BuiltInMcpServerConfig = {
