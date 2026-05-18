@@ -15,7 +15,6 @@ export async function openFileInGlobalEditor({
   column,
 }: OpenFileInGlobalEditorParams): Promise<{ ok: true } | { ok: false; error: string }> {
   const editor = useGlobalEditorStore.getState()
-  const existing = editor.byCwd[root]?.openFiles[path]
   const selection = line
     ? {
         line,
@@ -23,19 +22,13 @@ export async function openFileInGlobalEditor({
       }
     : null
 
-  if (existing && !existing.dirty && !selection) {
-    // WHY this fast path belongs in the global open helper, not only the file
-    // tree: rendered markdown links, command-palette actions, and explorer
-    // clicks all funnel through here. Re-clicking an already-open clean tab
-    // should be a local tab activation, not a main-process stat+read+IPC
-    // roundtrip. Dirty buffers still go through the read path because
-    // store.openFile refreshes their savedText/mtime while preserving edits.
-    editor.setActiveFile(root, path)
-    editor.setActiveCwd(root)
-    useAppStore.getState().openGlobalEditor()
-    return { ok: true }
-  }
-
+  // WHY we still read when the tab is already open and clean: agent writes
+  // commonly happen outside the editor store, and there is no file watcher on
+  // these buffers yet. A click on the tree or rendered path is the user's
+  // explicit "show me this file now" intent, so it must revalidate against
+  // disk instead of assuming the in-memory clean buffer is current. Dirty
+  // buffers remain protected by store.openFile, which refreshes savedText and
+  // mtime while preserving the user's edits.
   const result = await window.api.editorReadTextFile({ root, path }).catch(err => ({
     ok: false as const,
     error: err instanceof Error ? err.message : 'read failed',

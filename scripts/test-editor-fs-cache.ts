@@ -78,3 +78,59 @@ cache.setTextFile({
 now += 101
 assert.equal(cache.getTextFile({ root: '/repo', path: 'src/ttl.ts', mtimeMs: 30, size: 3 }), null)
 
+const evictingCache = new EditorFsCache({
+  ttlMs: 1_000,
+  maxDirectories: 2,
+  maxFiles: 2,
+  now: () => now,
+})
+evictingCache.setDirectory({
+  root: '/repo',
+  path: 'a',
+  showHidden: false,
+  mtimeMs: 1,
+  size: 1,
+  entries: [],
+})
+now += 1
+evictingCache.setDirectory({
+  root: '/repo',
+  path: 'b',
+  showHidden: false,
+  mtimeMs: 1,
+  size: 1,
+  entries: [],
+})
+now += 1
+evictingCache.setDirectory({
+  root: '/repo',
+  path: 'c',
+  showHidden: false,
+  mtimeMs: 1,
+  size: 1,
+  entries: [],
+})
+assert.equal(evictingCache.getDirectory({ root: '/repo', path: 'a', showHidden: false, mtimeMs: 1, size: 1 }), null)
+assert.deepEqual(evictingCache.getDirectory({ root: '/repo', path: 'b', showHidden: false, mtimeMs: 1, size: 1 }), [])
+assert.deepEqual(evictingCache.getDirectory({ root: '/repo', path: 'c', showHidden: false, mtimeMs: 1, size: 1 }), [])
+
+evictingCache.setTextFile({
+  root: '/repo',
+  path: 'a.ts',
+  read: { path: 'a.ts', text: 'a', mtimeMs: 1, size: 1 },
+})
+now += 1
+evictingCache.setTextFile({
+  root: '/repo',
+  path: 'b.ts',
+  read: { path: 'b.ts', text: 'b', mtimeMs: 1, size: 1 },
+})
+now += 1
+evictingCache.setTextFile({
+  root: '/repo',
+  path: 'c.ts',
+  read: { path: 'c.ts', text: 'c', mtimeMs: 1, size: 1 },
+})
+assert.equal(evictingCache.getTextFile({ root: '/repo', path: 'a.ts', mtimeMs: 1, size: 1 }), null)
+assert.equal(evictingCache.getTextFile({ root: '/repo', path: 'b.ts', mtimeMs: 1, size: 1 })?.text, 'b')
+assert.equal(evictingCache.getTextFile({ root: '/repo', path: 'c.ts', mtimeMs: 1, size: 1 })?.text, 'c')
