@@ -256,7 +256,7 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'undo-close',
     title: 'Undo Close',
-    description: '**What it does:** Restores the last closed **pane or tab**.\n\n**Use when:** You closed something by mistake.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
+    description: '**What it does:** Restores the most recent closed **pane or tab** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
     shortcut: '⌘⇧T',
     run: ({ workspace }) => void workspace.undoClose(),
   },

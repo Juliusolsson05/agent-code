@@ -857,7 +857,7 @@ export function usePaneActions(
       // alike.
       const kindLabel = sessionMeta.kind ?? 'claude'
       const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
-      showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T (Undo Close)`)
+      showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
     } else if (!parentInfo && sessionMeta) {
       // This pane IS the root — closing it kills the tab. Capture
       // the tab-level undo entry.
@@ -873,7 +873,7 @@ export function usePaneActions(
         tabIndex: tabIdx,
         sessionMetas: allMetas,
       })
-      showToast(`Closed “${tab.title}” — ⌘⇧T (Undo Close)`)
+      showToast(`Closed “${tab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
     }
 
     await window.api.killSession(targetId)
@@ -1004,7 +1004,7 @@ export function usePaneActions(
         })
         const kindLabel = sessionMeta.kind ?? 'claude'
         const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
-        showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T (Undo Close)`)
+        showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
       } else if (!parentInfo && sessionMeta) {
         const tabIdx = snapshot.tabs.findIndex(t => t.id === owningTab.id)
         const allMetas: Record<SessionId, SessionMeta> = {}
@@ -1018,7 +1018,7 @@ export function usePaneActions(
           tabIndex: tabIdx,
           sessionMetas: allMetas,
         })
-        showToast(`Closed “${owningTab.title}” — ⌘⇧T (Undo Close)`)
+        showToast(`Closed “${owningTab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
       }
 
       await window.api.killSession(targetId)
