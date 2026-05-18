@@ -12,6 +12,7 @@ function focusedAgentSessionId(workspace: Workspace): string | null {
 export const promptTemplateCommands: CommandDef[] = [
   {
     id: 'prompt-template',
+    surface: 'session',
     title: 'Prompt Template…',
     description: '**What it does:** Inserts a saved **prompt template** into the focused composer.\n\n**Use when:** You want reusable prompt text without retyping it.\n\n**Notes:** Agent panes only.',
     keywords: ['prompt', 'template', 'snippet', 'insert', 'draft'],
@@ -21,6 +22,7 @@ export const promptTemplateCommands: CommandDef[] = [
   },
   {
     id: 'save-composer-as-prompt-template',
+    surface: 'session',
     title: 'Save Composer as Prompt Template…',
     description: '**What it does:** Saves current composer text as a **custom prompt template**.\n\n**Use when:** You wrote a prompt you expect to reuse.\n\n**Notes:** Only appears when the composer has text.',
     keywords: ['prompt', 'template', 'save', 'composer', 'custom', 'snippet'],

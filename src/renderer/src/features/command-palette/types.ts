@@ -5,6 +5,47 @@ export type CommandState = {
   tone?: 'neutral' | 'accent' | 'danger'
 }
 
+/**
+ * Which workspace surface a command belongs to.
+ *
+ * WHY this exists: the command registry used to be one flat list where
+ * every command decided its own availability through ad-hoc `when`
+ * guards (or didn't guard at all). That worked while Agent Code was
+ * essentially a pane grid, but it broke down once Dispatch Mode became
+ * a first-class layout. Grid-spatial commands — `Split Pane Right`,
+ * `New Terminal Below`, `Focus Pane Left` — kept showing in the palette
+ * while Dispatch was active, where "right"/"below"/"left" point at a
+ * grid the user can't see. Worse, `Focus Pane *` and the layout
+ * commands (`Normalize Layout`, `Rotate Layout`) were *silent no-ops*
+ * in Dispatch: they mutate `tab.root` grid focus, which Dispatch does
+ * not use. See issue #228.
+ *
+ * `surface` makes that classification explicit and machine-readable so
+ * the palette can hide commands that don't apply to the current mode,
+ * and so a future native menu (#148) can build itself from the same
+ * model instead of re-deriving intent from title text.
+ *
+ *  - `app`      — always meaningful, mode-independent. New Tab,
+ *                 Settings, Resume Session, Dispatch Mode toggle.
+ *  - `grid`     — operates on the tile grid; hidden while Dispatch
+ *                 Mode is active. Pane splits, directional pane
+ *                 focus, layout normalize/rotate.
+ *  - `dispatch` — only meaningful inside Dispatch Mode; hidden in the
+ *                 grid. Pin/unpin agents, attach detached session,
+ *                 Global Dispatch scope.
+ *  - `session`  — acts on the current command-target session and
+ *                 works in BOTH modes (the target resolver is already
+ *                 Dispatch-aware — see commandTargetSessionId). Reload
+ *                 Agent, Tail, Copy Last Response, Reader Mode.
+ *  - `editor`   — Global Editor overlay. Orthogonal to grid/Dispatch
+ *                 (the overlay wraps either), so NOT mode-gated; the
+ *                 surface is a category, and editor commands keep
+ *                 their own `when` for overlay-open checks.
+ *  - `debug`    — developer/diagnostic tooling. Mode-independent;
+ *                 grouped separately so it can be demoted or hidden.
+ */
+export type CommandSurface = 'app' | 'grid' | 'dispatch' | 'session' | 'editor' | 'debug'
+
 export type CommandContext = {
   workspace: Workspace
   ui: {
@@ -96,6 +137,17 @@ export type CommandDef = {
   id: string
   title: string | ((ctx: CommandContext) => string)
   description: string
+  /**
+   * The workspace surface this command belongs to. REQUIRED — there is
+   * no default on purpose: every command must make a deliberate choice,
+   * and TypeScript should fail the build if a new command forgets to.
+   * `buildCommandRegistry` uses this to hide `grid` commands while
+   * Dispatch Mode is active and `dispatch` commands while it is not,
+   * BEFORE the per-command `when` guard runs. `when` remains for
+   * data-dependent availability (a session exists, the focused pane is
+   * an agent, the overlay is open); `surface` is for mode availability.
+   */
+  surface: CommandSurface
   shortcut?: string
   keywords?: string[]
   keepPaletteOpen?: boolean
@@ -108,6 +160,9 @@ export type ResolvedCommand = {
   id: string
   title: string
   description: string
+  /** Carried through from CommandDef so palette/menu consumers can
+   *  group or label by surface without re-importing the raw defs. */
+  surface: CommandSurface
   shortcut?: string
   keywords: string[]
   keepPaletteOpen: boolean
