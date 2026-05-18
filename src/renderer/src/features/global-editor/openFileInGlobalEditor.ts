@@ -14,18 +14,33 @@ export async function openFileInGlobalEditor({
   line,
   column,
 }: OpenFileInGlobalEditorParams): Promise<{ ok: true } | { ok: false; error: string }> {
-  const result = await window.api.editorReadTextFile({ root, path }).catch(err => ({
-    ok: false as const,
-    error: err instanceof Error ? err.message : 'read failed',
-  }))
-  if (!result.ok) return { ok: false, error: result.error }
-
+  const editor = useGlobalEditorStore.getState()
+  const existing = editor.byCwd[root]?.openFiles[path]
   const selection = line
     ? {
         line,
         column: column ?? 1,
       }
     : null
+
+  if (existing && !existing.dirty && !selection) {
+    // WHY this fast path belongs in the global open helper, not only the file
+    // tree: rendered markdown links, command-palette actions, and explorer
+    // clicks all funnel through here. Re-clicking an already-open clean tab
+    // should be a local tab activation, not a main-process stat+read+IPC
+    // roundtrip. Dirty buffers still go through the read path because
+    // store.openFile refreshes their savedText/mtime while preserving edits.
+    editor.setActiveFile(root, path)
+    editor.setActiveCwd(root)
+    useAppStore.getState().openGlobalEditor()
+    return { ok: true }
+  }
+
+  const result = await window.api.editorReadTextFile({ root, path }).catch(err => ({
+    ok: false as const,
+    error: err instanceof Error ? err.message : 'read failed',
+  }))
+  if (!result.ok) return { ok: false, error: result.error }
 
   // WHY rendered-content file activation reuses the Global Editor store
   // instead of opening file: URLs or delegating to the OS: assistant/provider
@@ -35,7 +50,6 @@ export async function openFileInGlobalEditor({
   // buffer preservation, tab ordering, and language detection. Reusing that
   // path means a clicked markdown path behaves like a file-tree click rather
   // than becoming a second filesystem policy surface.
-  const editor = useGlobalEditorStore.getState()
   editor.openFile({
     cwd: root,
     path: result.path,

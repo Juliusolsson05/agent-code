@@ -27,6 +27,7 @@
     "test:ghost-fallback": "tsx --tsconfig tsconfig.web.json scripts/test-ghost-fallback.ts",
     "test:feed-render-model": "tsx --tsconfig tsconfig.web.json scripts/test-feed-render-model.ts",
     "test:rendered-content-targets": "tsx --tsconfig tsconfig.web.json scripts/test-rendered-content-targets.ts",
+    "test:editor-fs-cache": "tsx --tsconfig tsconfig.node.json scripts/test-editor-fs-cache.ts",
     "test:codex-optimistic-submit": "tsx --tsconfig tsconfig.web.json scripts/test-codex-optimistic-submit.ts",
     "test:agent-status-model": "tsx --tsconfig tsconfig.web.json scripts/test-agent-status-model.ts",
     "test:semantic-committed-text": "tsx --tsconfig tsconfig.web.json scripts/test-semantic-committed-text.ts",

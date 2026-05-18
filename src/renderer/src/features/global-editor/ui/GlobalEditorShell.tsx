@@ -126,6 +126,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     setActiveCwd,
     setActiveFile,
     updateFileText,
+    setFileError,
     clearFileSelection,
     markFileSaved,
     closeFileAction,
@@ -145,6 +146,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         setActiveCwd: state.setActiveCwd,
         setActiveFile: state.setActiveFile,
         updateFileText: state.updateFileText,
+        setFileError: state.setFileError,
         clearFileSelection: state.clearFileSelection,
         markFileSaved: state.markFileSaved,
         closeFileAction: state.closeFile,
@@ -224,8 +226,11 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   // Save handler — wired into MonacoFileEditor's Cmd+S. Validates
   // we have an active cwd + active file, reads the buffer, writes
   // to disk via the editorFs IPC, then calls markFileSaved on
-  // success. Errors surface through setFileError on the buffer if
-  // we add that path; for now we silently keep dirty.
+  // success. The mtime guard matters more once main caches reads:
+  // cache invalidation keeps this process fresh, but it cannot see
+  // every external editor/agent write before save. Passing the last
+  // observed mtime makes "agent changed this while I was typing"
+  // fail closed instead of overwriting a newer disk version.
   const saveActive = useCallback(async () => {
     if (!activeCwd) return
     const activePath = cwdState.activeFilePath
@@ -236,11 +241,14 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       root: activeCwd,
       path: activePath,
       text: buf.currentText,
+      expectedMtimeMs: buf.mtimeMs,
     })
     if (result.ok) {
       markFileSaved(activeCwd, activePath, buf.currentText, result.mtimeMs)
+    } else {
+      setFileError(activeCwd, activePath, result.error)
     }
-  }, [activeCwd, cwdState, markFileSaved])
+  }, [activeCwd, cwdState, markFileSaved, setFileError])
 
   // Open a file from the explorer. Reads via IPC, then commits to
   // the store as a fresh buffer (or refreshes savedText on an
