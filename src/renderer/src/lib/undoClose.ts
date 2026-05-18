@@ -24,14 +24,27 @@ import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 // matches Cmd+Shift+T muscle memory from every browser ever. Multiple
 // undoes pop successively older entries.
 //
-// Entries auto-expire after EXPIRY_MS (default 2 minutes). After that
-// the session state is too stale to be useful — the user has moved on
-// and restoring an ancient split would be confusing. The expiry is
-// checked lazily on push/pop so we don't need a timer ticking in the
-// background.
+// Entries auto-expire after UNDO_CLOSE_RETENTION_MS. The policy is
+// intentionally longer than a toast lifetime because agent cleanup is
+// often batched: users close a pile of panes, keep working, then only
+// notice the mistaken close when they need that context again. One
+// hour gives that real recovery window without turning Undo Close into
+// durable session history. We keep it in-memory on purpose: persisting
+// entries across restart would imply we can validate provider resume
+// ids, tmux names, tab anchors, and cwd access after the process has
+// been torn down, which is a larger recovery contract than this small
+// LIFO affordance should promise.
+//
+// The cap is 10, not the old 20, because the useful product model is
+// "recent recovery history", not an unbounded audit log. A smaller cap
+// keeps repeated Cmd+Shift+T predictable during cleanup while limiting
+// the number of stale pane anchors we carry around for the full hour.
+// Expiry is checked lazily on push/pop/peek/length so we avoid a
+// background timer whose only job would be making command-palette
+// visibility slightly fresher.
 
-const EXPIRY_MS = 2 * 60 * 1000 // 2 minutes
-const MAX_ENTRIES = 20
+export const UNDO_CLOSE_RETENTION_MS = 60 * 60 * 1000 // 1 hour
+export const UNDO_CLOSE_MAX_ENTRIES = 10
 
 // ---- Entry types ----
 
@@ -113,17 +126,33 @@ export type ClosedTab = {
 
 export type ClosedEntry = ClosedPane | ClosedTab
 
+export function missingClosedTabLeafMetaIds(entry: ClosedTab): SessionId[] {
+  // WHY this validation lives beside the entry type instead of being inlined
+  // in the restore hook:
+  //
+  // A closed tab's tile tree and `sessionMetas` snapshot are one atomic
+  // restore contract. If the tree references a leaf id that has no captured
+  // meta, retrying cannot help — the missing cwd/provider/tmux data is not a
+  // transient provider outage, it is corrupted history. Treating that as
+  // retryable would push the same bad entry back onto the stack forever and
+  // shadow older valid undo entries. Keeping the check pure makes the
+  // retryable-vs-stale boundary testable without a React hook harness.
+  return collectLeaves(entry.tab.root).filter(id => entry.sessionMetas[id] === undefined)
+}
+
 // ---- Stack ----
 
 export class UndoCloseStack {
   private entries: ClosedEntry[] = []
 
+  constructor(private readonly now: () => number = Date.now) {}
+
   /** Push a new entry onto the stack. Prunes expired + over-cap. */
   push(entry: ClosedEntry): void {
     this.prune()
     this.entries.push(entry)
-    if (this.entries.length > MAX_ENTRIES) {
-      this.entries = this.entries.slice(-MAX_ENTRIES)
+    if (this.entries.length > UNDO_CLOSE_MAX_ENTRIES) {
+      this.entries = this.entries.slice(-UNDO_CLOSE_MAX_ENTRIES)
     }
   }
 
@@ -146,7 +175,7 @@ export class UndoCloseStack {
   }
 
   private prune(): void {
-    const cutoff = Date.now() - EXPIRY_MS
+    const cutoff = this.now() - UNDO_CLOSE_RETENTION_MS
     this.entries = this.entries.filter(e => e.closedAt > cutoff)
   }
 }

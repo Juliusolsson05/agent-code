@@ -28,6 +28,7 @@ export const createUiShellSlice: StateCreator<
   proxyDebugPanelOpen: false,
   htmlDebugPanelOpen: false,
   devDebugPanelOpen: false,
+  agentStatusPanelOpen: false,
   performancePanelOpen: false,
   globalEditorOpen: false,
   promptSearchOpen: false,
@@ -137,6 +138,16 @@ export const createUiShellSlice: StateCreator<
       state => ({ devDebugPanelOpen: !state.devDebugPanelOpen }),
       false,
       'uiShell/toggleDevDebugPanel',
+    ),
+  openAgentStatusPanel: () =>
+    set({ agentStatusPanelOpen: true }, false, 'uiShell/openAgentStatusPanel'),
+  closeAgentStatusPanel: () =>
+    set({ agentStatusPanelOpen: false }, false, 'uiShell/closeAgentStatusPanel'),
+  toggleAgentStatusPanel: () =>
+    set(
+      state => ({ agentStatusPanelOpen: !state.agentStatusPanelOpen }),
+      false,
+      'uiShell/toggleAgentStatusPanel',
     ),
   togglePerformancePanel: () =>
     set(

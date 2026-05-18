@@ -1,7 +1,9 @@
 import { useCallback } from 'react'
 
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
-import type { SessionId, SessionKind, SessionMeta } from '@renderer/workspace/types'
+import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import { closeLeaf, collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import type { Tab } from '@renderer/workspace/types'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
@@ -49,12 +51,18 @@ export type SessionActions = {
       kind?: SessionKind
       dangerousMode?: boolean
       recoverTmuxName?: string
+      builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
   killSession: (sessionId: SessionId) => Promise<void>
   replaceSession: (
     cwd: string,
-    opts?: { resumeSessionId?: string; kind?: SessionKind },
+    opts?: {
+      resumeSessionId?: string
+      kind?: SessionKind
+      builtInMcpDomains?: BuiltInMcpDomain[]
+      targetSessionId?: SessionId
+    },
   ) => Promise<SessionId | undefined>
   reloadAgentSessions: (dangerousMode?: boolean) => Promise<void>
   softReloadAgentView: (sessionId?: SessionId) => Promise<SessionId | null>
@@ -134,6 +142,7 @@ export function useSessionActions(
         kind?: SessionKind
         dangerousMode?: boolean
         recoverTmuxName?: string
+        builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
       const kind: SessionKind = opts?.kind ?? 'claude'
@@ -145,6 +154,10 @@ export function useSessionActions(
       // proxy via `openai_base_url`.
       const useProxy =
         kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined
+      const builtInMcpDomains =
+        kind !== 'terminal'
+          ? normalizeSessionBuiltInMcpDomains(opts?.builtInMcpDomains)
+          : undefined
       let sessionId: SessionId
       let tmuxName: string | undefined
       try {
@@ -155,6 +168,7 @@ export function useSessionActions(
           dangerousMode,
           useProxy,
           recoverTmuxName: opts?.recoverTmuxName,
+          builtInMcpDomains,
         })
         sessionId = result.sessionId
         tmuxName = result.tmuxName
@@ -167,6 +181,9 @@ export function useSessionActions(
         ...(tmuxName ? { tmuxName } : {}),
         ...(kind !== 'terminal' && opts?.resumeSessionId
           ? { providerSessionId: opts.resumeSessionId }
+          : {}),
+        ...(kind !== 'terminal' && builtInMcpDomains
+          ? { builtInMcpDomains }
           : {}),
       }
       setState(prev => ({
@@ -320,9 +337,15 @@ export function useSessionActions(
   const replaceSession = useCallback(
     async (
       cwd: string,
-      opts?: { resumeSessionId?: string; kind?: SessionKind },
+      opts?: {
+        resumeSessionId?: string
+        kind?: SessionKind
+        builtInMcpDomains?: BuiltInMcpDomain[]
+        targetSessionId?: SessionId
+      },
     ): Promise<SessionId | undefined> => {
       const snapshot = refs.stateRef.current
+      const { targetSessionId: _targetSessionId, ...spawnOpts } = opts ?? {}
       // WHY this reads Dispatch focus before tab focus:
       //
       // `replaceSession` powers resume, reload, provider-switch, and rewind.
@@ -331,11 +354,39 @@ export function useSessionActions(
       // mutate Tab.focusedSessionId. Remapping by the old grid-only focus would
       // make the palette labels talk about one agent while the destructive
       // replacement happened to another.
-      const oldId = commandTargetSessionIdForState(snapshot)
+      // WHY callers may pin the target:
+      // Most command actions should follow the *current* command target at the
+      // moment replacement begins. Rewind is different: main may spend time
+      // cloning a provider transcript before the pane swap, and the user can
+      // legitimately focus another pane during that await. Re-reading focus
+      // after the clone would replace the wrong pane with the rewound provider
+      // id. `targetSessionId` lets those two-phase operations say "replace the
+      // pane I validated before the await" while preserving the default
+      // Dispatch-aware targeting for simple one-shot commands.
+      const oldId = _targetSessionId ?? commandTargetSessionIdForState(snapshot)
       if (!oldId) return
-      const nextKind = opts?.kind ?? snapshot.sessions[oldId]?.kind ?? 'claude'
+      const oldMeta = snapshot.sessions[oldId]
+      if (!oldMeta) return
+      const nextKind = spawnOpts.kind ?? oldMeta?.kind ?? 'claude'
+      // WHY replaceSession inherits MCP domains by default:
+      //
+      // Reload, provider switch, resume, and rewind all funnel through this
+      // path. Most callers think in terms of "keep this pane, replace the
+      // provider process" and therefore do not know they must restate every
+      // enabled MCP domain. Treating the old session metadata as the default
+      // keeps MCP enablement a durable property of the agent pane instead of a
+      // transient spawn flag that disappears on the next routine reload.
+      const builtInMcpDomains =
+        nextKind !== 'terminal'
+          ? normalizeSessionBuiltInMcpDomains(
+            spawnOpts.builtInMcpDomains ?? oldMeta?.builtInMcpDomains,
+          )
+          : undefined
       const oldDraft = refs.latestRuntimesRef.current[oldId]?.draftInput ?? ''
-      const newId = await spawn(cwd, opts)
+      const newId = await spawn(cwd, {
+        ...spawnOpts,
+        ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+      })
       setRuntimes(prev => ({
         ...prev,
         [newId]: {
@@ -378,7 +429,8 @@ export function useSessionActions(
           ...(sessions[newId] ?? { cwd, kind: nextKind }),
           cwd,
           kind: nextKind,
-          ...(opts?.resumeSessionId ? { providerSessionId: opts.resumeSessionId } : {}),
+          ...(spawnOpts.resumeSessionId ? { providerSessionId: spawnOpts.resumeSessionId } : {}),
+          ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }
         const detached = detachedSessions[oldId]
@@ -464,15 +516,23 @@ export function useSessionActions(
 
         try {
           const kind: SessionKind = meta.kind ?? 'claude'
+          const builtInMcpDomains =
+            kind !== 'terminal'
+              ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)
+              : undefined
           const { sessionId: newId } = await window.api.spawnSession({
             kind,
             cwd: meta.cwd,
             resumeSessionId: meta.providerSessionId,
             dangerousMode,
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
+            builtInMcpDomains,
           })
           idMap.set(oldId, newId)
-          freshSessions[newId] = { ...meta }
+          freshSessions[newId] = {
+            ...meta,
+            ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+          }
         } catch {
           failedIds.add(oldId)
         }
@@ -526,7 +586,7 @@ export function useSessionActions(
 
         const nextTabs = prev.tabs
           .map(tab => {
-            let root = remapTileTreeSessionIds(tab.root, idMap)
+            let root: TileNode | null = remapTileTreeSessionIds(tab.root, idMap)
             for (const failedId of failedIds) {
               root = closeLeaf(root!, failedId)
               if (root === null) break

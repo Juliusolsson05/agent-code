@@ -9,8 +9,7 @@ import type {
 import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import {
-  buildDispatchGroups,
-  flattenDispatchRows,
+  buildVisibleDispatchRows,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
   assistantUuidsWithText,
@@ -106,7 +105,7 @@ function validFocusSessionIdsForMode(
   // sees the id isn't a grid leaf → forces focus back to the first
   // grid pane → user's selection silently disappears.
   if (state.dispatchMode) {
-    return flattenDispatchRows(buildDispatchGroups(state))
+    return buildVisibleDispatchRows(state)
       .filter(row => row.tabId === tabId)
       .map(row => row.sessionId)
   }

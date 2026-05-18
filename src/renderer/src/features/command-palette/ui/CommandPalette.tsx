@@ -17,6 +17,9 @@ import {
   SessionPreviewPane,
   type PreviewTarget,
 } from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
+import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -51,6 +54,9 @@ type PaletteMode =
   | 'prompt-template'
   | 'save-prompt-template'
   | 'edit-prompt-template'
+  | 'ai-workspace-open'
+  | 'ai-workspace-create'
+  | 'ai-workspace-clear'
 
 type PromptTemplateForm = {
   id: string | null
@@ -78,6 +84,9 @@ type Props = {
   toggleProxyDebugPanel: () => void
   toggleHtmlDebugPanel: () => void
   toggleDevDebugPanel: () => void
+  openAgentStatusPanel: () => void
+  closeAgentStatusPanel: () => void
+  toggleAgentStatusPanel: () => void
   togglePerformancePanel: () => void
   toggleGlobalEditor: () => void
   toggleFileTreeVisible: () => void
@@ -103,6 +112,7 @@ type Props = {
   htmlDebugPanelOpen: boolean
   devDebugEnabled: boolean
   devDebugPanelOpen: boolean
+  agentStatusPanelOpen: boolean
   performancePanelOpen: boolean
   globalEditorOpen: boolean
   fileTreeVisible: boolean
@@ -142,6 +152,9 @@ export function CommandPalette({
   toggleProxyDebugPanel,
   toggleHtmlDebugPanel,
   toggleDevDebugPanel,
+  openAgentStatusPanel,
+  closeAgentStatusPanel,
+  toggleAgentStatusPanel,
   togglePerformancePanel,
   toggleGlobalEditor,
   toggleFileTreeVisible,
@@ -167,6 +180,7 @@ export function CommandPalette({
   htmlDebugPanelOpen,
   devDebugEnabled,
   devDebugPanelOpen,
+  agentStatusPanelOpen,
   performancePanelOpen,
   globalEditorOpen,
   fileTreeVisible,
@@ -180,6 +194,8 @@ export function CommandPalette({
   const [mode, setMode] = useState<PaletteMode>('commands')
   const [sessions, setSessions] = useState<SessionInfo[]>([])
   const [sessionsLoading, setSessionsLoading] = useState(false)
+  const [aiWorkspaces, setAiWorkspaces] = useState<AiWorkspaceSummary[]>([])
+  const [aiWorkspacesLoading, setAiWorkspacesLoading] = useState(false)
   const [customPromptTemplates, setCustomPromptTemplates] = useState<PromptTemplate[]>([])
   const [promptTemplateForm, setPromptTemplateForm] = useState<PromptTemplateForm>({
     id: null,
@@ -290,6 +306,37 @@ export function CommandPalette({
     setSelectedIndex(0)
   }, [])
 
+  const loadAiWorkspaces = useCallback(async () => {
+    setAiWorkspacesLoading(true)
+    try {
+      setAiWorkspaces(await window.api.aiWorkspaceList())
+    } catch {
+      setAiWorkspaces([])
+    } finally {
+      setAiWorkspacesLoading(false)
+    }
+  }, [])
+
+  const enterAiWorkspaceOpenMode = useCallback(() => {
+    setMode('ai-workspace-open')
+    setQuery('')
+    setSelectedIndex(0)
+    void loadAiWorkspaces()
+  }, [loadAiWorkspaces])
+
+  const enterAiWorkspaceCreateMode = useCallback(() => {
+    setMode('ai-workspace-create')
+    setQuery('')
+    setSelectedIndex(0)
+  }, [])
+
+  const enterAiWorkspaceClearMode = useCallback(() => {
+    setMode('ai-workspace-clear')
+    setQuery('')
+    setSelectedIndex(0)
+    void loadAiWorkspaces()
+  }, [loadAiWorkspaces])
+
   const commandContext = useMemo<CommandContext>(
     () => ({
       workspace,
@@ -310,6 +357,9 @@ export function CommandPalette({
         toggleProxyDebugPanel,
         toggleHtmlDebugPanel,
         toggleDevDebugPanel,
+        openAgentStatusPanel,
+        closeAgentStatusPanel,
+        toggleAgentStatusPanel,
         togglePerformancePanel,
         toggleGlobalEditor,
         toggleFileTreeVisible,
@@ -329,6 +379,9 @@ export function CommandPalette({
         enterKillBuriedMode,
         enterPromptTemplateMode,
         enterSavePromptTemplateMode,
+        enterAiWorkspaceOpenMode,
+        enterAiWorkspaceCreateMode,
+        enterAiWorkspaceClearMode,
         closePalette: onClose,
       },
       flags: {
@@ -345,6 +398,7 @@ export function CommandPalette({
         htmlDebugPanelOpen,
         devDebugEnabled,
         devDebugPanelOpen,
+        agentStatusPanelOpen,
         performancePanelOpen,
         globalEditorOpen,
         fileTreeVisible,
@@ -370,6 +424,9 @@ export function CommandPalette({
       toggleProxyDebugPanel,
       toggleHtmlDebugPanel,
       toggleDevDebugPanel,
+      openAgentStatusPanel,
+      closeAgentStatusPanel,
+      toggleAgentStatusPanel,
       togglePerformancePanel,
       toggleGlobalEditor,
       toggleFileTreeVisible,
@@ -389,6 +446,9 @@ export function CommandPalette({
       enterKillBuriedMode,
       enterPromptTemplateMode,
       enterSavePromptTemplateMode,
+      enterAiWorkspaceOpenMode,
+      enterAiWorkspaceCreateMode,
+      enterAiWorkspaceClearMode,
       onClose,
       customRenderingEnabled,
       statusModeEnabled,
@@ -403,6 +463,7 @@ export function CommandPalette({
       htmlDebugPanelOpen,
       devDebugEnabled,
       devDebugPanelOpen,
+      agentStatusPanelOpen,
       performancePanelOpen,
       globalEditorOpen,
       fileTreeVisible,
@@ -458,6 +519,18 @@ export function CommandPalette({
         : promptTemplates,
     [promptTemplates, queryText],
   )
+  const filteredAiWorkspaces = useMemo(
+    () =>
+      queryText
+        ? aiWorkspaces.filter(
+            workspace =>
+              fuzzyMatch(workspace.name, queryText) ||
+              fuzzyMatch(workspace.description ?? '', queryText) ||
+              fuzzyMatch(workspace.workspaceId, queryText),
+          )
+        : aiWorkspaces,
+    [aiWorkspaces, queryText],
+  )
   const filteredCommands = useMemo(
     () =>
       queryText
@@ -477,6 +550,8 @@ export function CommandPalette({
         ? filteredBuried.length
         : mode === 'prompt-template'
           ? filteredPromptTemplates.length
+          : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
+            ? filteredAiWorkspaces.length
           : mode === 'commands'
             ? filteredCommands.length
             : 0
@@ -493,6 +568,8 @@ export function CommandPalette({
       setMode('commands')
       setSessions([])
       setSessionsLoading(false)
+      setAiWorkspaces([])
+      setAiWorkspacesLoading(false)
       setPromptTemplateForm({ id: null, title: '', body: '' })
       requestAnimationFrame(() => inputRef.current?.focus())
     }
@@ -610,6 +687,31 @@ export function CommandPalette({
     }
   }, [promptTemplateForm, refreshCustomPromptTemplates, workspace])
 
+  const openAiWorkspace = useCallback(
+    (workspaceId: string) => {
+      useGlobalEditorStore.getState().openAiWorkspace(workspaceId)
+      if (!globalEditorOpen) toggleGlobalEditor()
+      onClose()
+    },
+    [globalEditorOpen, onClose, toggleGlobalEditor],
+  )
+
+  const createAiWorkspace = useCallback(async () => {
+    const name = query.trim()
+    if (!name) return
+    const workspace = await window.api.aiWorkspaceCreate({ name })
+    openAiWorkspace(workspace.workspaceId)
+  }, [openAiWorkspace, query])
+
+  const clearAiWorkspace = useCallback(
+    async (workspace: AiWorkspaceSummary) => {
+      await window.api.aiWorkspaceClear(workspace.workspaceId)
+      await loadAiWorkspaces()
+      setSelectedIndex(0)
+    },
+    [loadAiWorkspaces],
+  )
+
   const deletePromptTemplate = useCallback(
     (template: PromptTemplate) => {
       if (template.scope !== 'custom') return
@@ -630,7 +732,10 @@ export function CommandPalette({
           mode === 'buried' ||
           mode === 'kill-buried' ||
           mode === 'prompt-template' ||
-          mode === 'save-prompt-template'
+          mode === 'save-prompt-template' ||
+          mode === 'ai-workspace-open' ||
+          mode === 'ai-workspace-create' ||
+          mode === 'ai-workspace-clear'
         ) {
           setMode(mode === 'save-prompt-template' ? 'commands' : 'commands')
           setPromptTemplateForm({ id: null, title: '', body: '' })
@@ -662,6 +767,14 @@ export function CommandPalette({
         e.preventDefault()
         if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
           savePromptTemplateForm()
+        } else if (mode === 'ai-workspace-create') {
+          void createAiWorkspace()
+        } else if (mode === 'ai-workspace-open') {
+          const workspace = filteredAiWorkspaces[selectedIndex]
+          if (workspace) openAiWorkspace(workspace.workspaceId)
+        } else if (mode === 'ai-workspace-clear') {
+          const workspace = filteredAiWorkspaces[selectedIndex]
+          if (workspace) void clearAiWorkspace(workspace)
         } else if (mode === 'resume') {
           const session = filteredSessions[selectedIndex]
           if (session) executeResume(session)
@@ -685,6 +798,7 @@ export function CommandPalette({
       filteredLength,
       filteredBuried,
       filteredCommands,
+      filteredAiWorkspaces,
       filteredPromptTemplates,
       filteredSessions,
       selectedIndex,
@@ -693,6 +807,9 @@ export function CommandPalette({
       executeKillBuried,
       executePromptTemplate,
       executeResume,
+      createAiWorkspace,
+      clearAiWorkspace,
+      openAiWorkspace,
       savePromptTemplateForm,
       onClose,
     ],
@@ -776,6 +893,21 @@ export function CommandPalette({
               edit template &rsaquo;
             </span>
           )}
+          {mode === 'ai-workspace-open' && (
+            <span className="text-accent text-[11px] flex-shrink-0 select-none">
+              open AI workspace &rsaquo;
+            </span>
+          )}
+          {mode === 'ai-workspace-create' && (
+            <span className="text-accent text-[11px] flex-shrink-0 select-none">
+              create AI workspace &rsaquo;
+            </span>
+          )}
+          {mode === 'ai-workspace-clear' && (
+            <span className="text-red-300 text-[11px] flex-shrink-0 select-none">
+              clear AI workspace &rsaquo;
+            </span>
+          )}
           <input
             ref={inputRef}
             type="text"
@@ -788,8 +920,12 @@ export function CommandPalette({
             placeholder={
               mode === 'save-prompt-template' || mode === 'edit-prompt-template'
                 ? 'Template name…'
+                : mode === 'ai-workspace-create'
+                  ? 'Workspace name…'
                 : mode === 'resume'
                 ? 'Search sessions…'
+                : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
+                  ? 'Search AI Workspaces…'
                 : mode === 'buried' || mode === 'kill-buried'
                   ? 'Search buried panes…'
                   : mode === 'prompt-template'
@@ -955,6 +1091,76 @@ export function CommandPalette({
               ))
             ))}
 
+          {(mode === 'ai-workspace-open' || mode === 'ai-workspace-clear') &&
+            (aiWorkspacesLoading ? (
+              <div className="px-3 py-4 text-muted text-[12px] text-center">
+                Loading AI Workspaces…
+              </div>
+            ) : filteredAiWorkspaces.length === 0 ? (
+              <div className="px-3 py-4 text-muted text-[12px] text-center">
+                No AI Workspaces
+              </div>
+            ) : (
+              filteredAiWorkspaces.map((workspace, i) => (
+                <div
+                  key={workspace.workspaceId}
+                  className={`
+                    px-3 py-2
+                    cursor-pointer
+                    border-b border-border last:border-b-0
+                    ${
+                      i === selectedIndex
+                        ? mode === 'ai-workspace-clear'
+                          ? 'bg-red-500/15 text-ink'
+                          : 'bg-accent/15 text-ink'
+                        : 'text-ink-dim hover:bg-surface-hi'
+                    }
+                  `}
+                  onMouseEnter={() => setSelectedIndex(i)}
+                  onClick={() => {
+                    if (mode === 'ai-workspace-clear') void clearAiWorkspace(workspace)
+                    else openAiWorkspace(workspace.workspaceId)
+                  }}
+                >
+                  <div className="text-[12px] truncate">{workspace.name}</div>
+                  <div className="text-[10px] text-muted mt-0.5 truncate">
+                    {workspace.fileCount} files
+                    {workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''}
+                    {workspace.description ? ` · ${workspace.description}` : ''}
+                  </div>
+                </div>
+              ))
+            ))}
+
+          {mode === 'ai-workspace-create' && (
+            <div className="px-3 py-3">
+              <div className="mb-3 text-[12px] text-muted">
+                Press Enter to create and open the named AI Workspace.
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="border border-border bg-surface-hi px-2 py-1 text-[11px] text-muted hover:text-ink"
+                  onClick={() => {
+                    setMode('commands')
+                    setQuery('')
+                    setSelectedIndex(0)
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
+                  disabled={!query.trim()}
+                  onClick={() => void createAiWorkspace()}
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          )}
+
           {mode === 'buried' &&
             (filteredBuried.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
@@ -1117,6 +1323,7 @@ const COMMAND_DESCRIPTION_COMPONENTS: import('react-markdown').Options['componen
   strong: ({ children }) => (
     <strong className="font-semibold text-ink">{children}</strong>
   ),
+  a: SafeMarkdownLink,
 }
 
 const CommandDescriptionPanel = memo(function CommandDescriptionPanel({

@@ -36,7 +36,8 @@
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
       "@shared/*": ["./src/shared/*"],
-      "@providers/*": ["./src/providers/*"]
+      "@providers/*": ["./src/providers/*"],
+      "@mcp/*": ["./src/mcp/*"]
     }
   },
   "include": [
@@ -46,7 +47,9 @@
     "src/shared/types/**/*",
     "src/shared/performance/**/*",
     "src/shared/parsers/**/*",
+    "src/shared/renderedContent/**/*",
     "src/shared/work-context/**/*",
+    "src/mcp/shared/**/*",
     "src/providers/*/parsers/**/*",
     "src/providers/*/renderer/**/*",
     // registry.renderer.ts lives at providers/ root, outside the

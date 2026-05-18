@@ -7,8 +7,10 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { ExplorerPane } from '@renderer/features/editor/ui/ExplorerPane'
 import { EditorTabs } from '@renderer/features/editor/ui/EditorTabs'
 import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
+import { AiWorkspaceEditor } from '@renderer/features/ai-workspace/ui/AiWorkspaceEditor'
 
 import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
 import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 
@@ -106,6 +108,8 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     fileTreeWidthPx,
     setFileTreeWidthPx,
     fileTreeVisible,
+    aiWorkspaceId,
+    closeAiWorkspace,
   } = useGlobalEditorStore(
     useShallow(state => ({
       splitterRatio: state.splitterRatio,
@@ -113,14 +117,16 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       fileTreeWidthPx: state.fileTreeWidthPx,
       setFileTreeWidthPx: state.setFileTreeWidthPx,
       fileTreeVisible: state.fileTreeVisible,
+      aiWorkspaceId: state.aiWorkspaceId,
+      closeAiWorkspace: state.closeAiWorkspace,
     })),
   )
   const {
     activeCwd,
     setActiveCwd,
-    openFileAction,
     setActiveFile,
     updateFileText,
+    clearFileSelection,
     markFileSaved,
     closeFileAction,
     cwdState,
@@ -137,9 +143,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       return {
         activeCwd: aCwd,
         setActiveCwd: state.setActiveCwd,
-        openFileAction: state.openFile,
         setActiveFile: state.setActiveFile,
         updateFileText: state.updateFileText,
+        clearFileSelection: state.clearFileSelection,
         markFileSaved: state.markFileSaved,
         closeFileAction: state.closeFile,
         cwdState: (aCwd && byCwd[aCwd]) || EMPTY_CWD_STATE,
@@ -242,19 +248,20 @@ export function GlobalEditorShell({ children, workspace }: Props) {
   const openFileFromTree = useCallback(
     async (relativePath: string) => {
       if (!activeCwd) return
-      const result = await window.api.editorReadTextFile({
+      await openFileInGlobalEditor({
         root: activeCwd,
         path: relativePath,
       })
-      if (!result.ok) return
-      openFileAction({
-        cwd: activeCwd,
-        path: relativePath,
-        text: result.text,
-        mtimeMs: result.mtimeMs,
-      })
     },
-    [activeCwd, openFileAction],
+    [activeCwd],
+  )
+
+  const clearRevealedSelection = useCallback(
+    (path: string) => {
+      if (!activeCwd) return
+      clearFileSelection(activeCwd, path)
+    },
+    [activeCwd, clearFileSelection],
   )
 
   // When the overlay is closed, render the workspace area
@@ -297,7 +304,9 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         className="flex flex-col min-h-0 overflow-hidden border-r border-border"
         style={{ width: `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)` }}
       >
-        {activeCwd ? (
+        {aiWorkspaceId ? (
+          <AiWorkspaceEditor workspaceId={aiWorkspaceId} onClose={closeAiWorkspace} />
+        ) : activeCwd ? (
           <div className="flex flex-1 min-h-0 overflow-hidden">
             {/*
               File tree. Conditionally rendered — when
@@ -363,6 +372,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                     updateFileText(activeCwd, path, text)
                   }
                   onSave={() => void saveActive()}
+                  onSelectionRevealed={clearRevealedSelection}
                 />
               </div>
             </div>

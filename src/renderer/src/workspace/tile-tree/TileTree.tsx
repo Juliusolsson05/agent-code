@@ -4,7 +4,6 @@ import { getRendererProvider } from '@providers/registry.renderer'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
-import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 
 // TileTree — recursive renderer for a tab's binary-split tree.
@@ -119,7 +118,9 @@ export function renderWorkspaceLeaf(
 }
 
 function firstLeafId(n: TileNode): SessionId {
-  return collectLeaves(n)[0]
+  let current = n
+  while (current.type !== 'leaf') current = current.a
+  return current.sessionId
 }
 
 // ---------------------------------------------------------------------------
@@ -168,15 +169,38 @@ function SplitContainer({
       e.preventDefault()
       const container = containerRef.current
       if (!container) return
+      const rect = container.getBoundingClientRect()
+      let frame: number | null = null
+      let pendingRatio: number | null = null
+      let lastSentRatio = ratio
+
+      const flush = () => {
+        frame = null
+        if (pendingRatio === null) return
+        const nextRatio = pendingRatio
+        pendingRatio = null
+        // WHY a tiny epsilon matters here: pointermove fires far more often
+        // than CSS flex-basis visibly changes, and many adjacent events clamp
+        // to the same effective split ratio. Skipping no-op-ish commits avoids
+        // rewriting workspace state, re-rendering every pane, and triggering
+        // terminal ResizeObservers for movements that cannot affect layout.
+        if (Math.abs(nextRatio - lastSentRatio) < 0.001) return
+        lastSentRatio = nextRatio
+        workspace.setSplitRatioInTab(tabId, aSessionId, bSessionId, nextRatio)
+      }
 
       const onMove = (ev: MouseEvent) => {
-        const rect = container.getBoundingClientRect()
-        const rel = isVertical
+        pendingRatio = isVertical
           ? (ev.clientX - rect.left) / rect.width
           : (ev.clientY - rect.top) / rect.height
-        workspace.setSplitRatioInTab(tabId, aSessionId, bSessionId, rel)
+        if (frame === null) frame = requestAnimationFrame(flush)
       }
       const onUp = () => {
+        if (frame !== null) {
+          cancelAnimationFrame(frame)
+          frame = null
+        }
+        flush()
         document.removeEventListener('mousemove', onMove)
         document.removeEventListener('mouseup', onUp)
       }

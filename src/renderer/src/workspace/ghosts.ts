@@ -523,16 +523,15 @@ export function gcSupersededGhosts(
   now: number,
   gcMs: number,
 ): Map<string, GhostEntry> {
-  if (prev.size === 0) return new Map(prev)
-  let changed = false
-  const next = new Map(prev)
-  for (const [uuid, ghost] of next) {
+  if (prev.size === 0) return prev as Map<string, GhostEntry>
+  let next: Map<string, GhostEntry> | null = null
+  for (const [uuid, ghost] of prev) {
     if (ghost._atp.supersededBy === undefined) continue
     if (ghost._atp.updatedAt + gcMs >= now) continue
+    if (next === null) next = new Map(prev)
     next.delete(uuid)
-    changed = true
   }
-  return changed ? next : new Map(prev)
+  return next ?? (prev as Map<string, GhostEntry>)
 }
 
 // -----------------------------------------------------------------------------

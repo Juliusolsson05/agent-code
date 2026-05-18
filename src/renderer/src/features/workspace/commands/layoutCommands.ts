@@ -1,4 +1,5 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
 export const layoutCommands: CommandDef[] = [
   {
@@ -97,7 +98,39 @@ export const layoutCommands: CommandDef[] = [
       label: flags.globalEditorOpen ? 'On' : 'Off',
       tone: flags.globalEditorOpen ? 'accent' : 'neutral',
     }),
-    run: ({ ui }) => ui.toggleGlobalEditor(),
+    run: ({ ui, flags }) => {
+      const editor = useGlobalEditorStore.getState()
+      if (editor.aiWorkspaceId && flags.globalEditorOpen) {
+        editor.closeAiWorkspace()
+        return
+      }
+      editor.closeAiWorkspace()
+      ui.toggleGlobalEditor()
+    },
+  },
+  {
+    id: 'open-ai-workspace',
+    title: 'Open AI Workspace',
+    description: '**What it does:** Opens a curated **AI Workspace** file set in the Global Editor surface.\n\n**Use when:** An agent has attached plans, notes, or review artifacts from multiple worktrees and you want one focused review view.\n\n**Notes:** If more than one AI Workspace exists, you choose which one to open.',
+    keywords: ['ai workspace', 'mcp', 'workspace', 'files', 'review', 'worktree', 'global editor'],
+    keepPaletteOpen: true,
+    run: ({ ui }) => ui.enterAiWorkspaceOpenMode(),
+  },
+  {
+    id: 'create-ai-workspace',
+    title: 'Create AI Workspace',
+    description: '**What it does:** Creates an empty named **AI Workspace** and opens it in the Global Editor surface.\n\n**Use when:** You want a curated file set ready before an agent starts attaching files.\n\n**Notes:** Agents can also create AI Workspaces through MCP.',
+    keywords: ['ai workspace', 'mcp', 'create', 'workspace', 'review'],
+    keepPaletteOpen: true,
+    run: ({ ui }) => ui.enterAiWorkspaceCreateMode(),
+  },
+  {
+    id: 'clear-ai-workspace',
+    title: 'Clear AI Workspace',
+    description: '**What it does:** Removes every file reference from an **AI Workspace** without deleting files from disk.\n\n**Use when:** A curated review set is stale but you want to keep the workspace itself.\n\n**Notes:** This only clears Agent Code metadata.',
+    keywords: ['ai workspace', 'mcp', 'clear', 'delete', 'files'],
+    keepPaletteOpen: true,
+    run: ({ ui }) => ui.enterAiWorkspaceClearMode(),
   },
   {
     // WHY a dedicated command rather than a setting:

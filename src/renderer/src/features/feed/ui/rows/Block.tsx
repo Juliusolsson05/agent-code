@@ -8,8 +8,10 @@ import {
 } from '@providers/claude/renderer/rows/ClaudeRows'
 import {
   CodexApplyPatchRow,
+  CodexExecCommandRow,
   CodexToolRow,
   CodexToolResultRow,
+  CodexWriteStdinRow,
 } from '@providers/codex/renderer/rows/CodexRows'
 import type {
   ContentBlock,
@@ -31,7 +33,7 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
 
 import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
-import { ToolBand, UserBand } from '@renderer/features/feed/ui/rows/primitives'
+import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
 import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
 
@@ -139,28 +141,30 @@ export const Block = memo(function Block({
         if (intent && cmd) {
           const paired = toolResultIndex.get(tu.id)
           const output = paired ? toolResultText(paired) : ''
-          return (
-            <ToolBand>
-              <GitCardRow intent={intent} output={output} />
-            </ToolBand>
-          )
+          return <GitCardRow intent={intent} output={output} />
         }
       }
 
       if (currentProvider === 'codex') {
         if (tu.name === 'apply_patch') {
-          return <ToolBand><CodexApplyPatchRow block={tu} /></ToolBand>
+          return <CodexApplyPatchRow block={tu} />
+        }
+        if (tu.name === 'exec_command') {
+          return <CodexExecCommandRow block={tu} />
+        }
+        if (tu.name === 'write_stdin') {
+          return <CodexWriteStdinRow block={tu} />
         }
         return <CodexToolRow block={tu} />
       }
       // Claude provider — dispatch by tool name.
       switch (tu.name) {
         case 'Edit':
-          return <ToolBand><EditRow block={tu} /></ToolBand>
+          return <EditRow block={tu} />
         case 'MultiEdit':
-          return <ToolBand><MultiEditRow block={tu} /></ToolBand>
+          return <MultiEditRow block={tu} />
         case 'Write':
-          return <ToolBand><WriteRow block={tu} /></ToolBand>
+          return <WriteRow block={tu} />
         case 'TodoWrite':
           return <TodoRow block={tu} />
         default:

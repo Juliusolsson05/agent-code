@@ -69,6 +69,22 @@ export type {
   TranscriptPathRequest,
   TranscriptPathResult,
 } from '@preload/api/types.js'
+export type {
+  OrchestrationAgentRecord,
+  OrchestrationRendererRequest,
+  OrchestrationRendererResponse,
+} from '@mcp/shared/orchestrationTypes.js'
+export type {
+  AiWorkspaceAttachFileParams,
+  AiWorkspaceCreateParams,
+  AiWorkspaceDetachFileParams,
+  AiWorkspaceFileEntry,
+  AiWorkspaceOpenRequest,
+  AiWorkspaceReadFileResult,
+  AiWorkspaceRecord,
+  AiWorkspaceSummary,
+  AiWorkspaceWriteFileResult,
+} from '@mcp/shared/aiWorkspaceTypes.js'
 
 export type {
   SetupCheckResult,

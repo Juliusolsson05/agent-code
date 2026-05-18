@@ -24,6 +24,9 @@ export type CommandContext = {
     toggleProxyDebugPanel: () => void
     toggleHtmlDebugPanel: () => void
     toggleDevDebugPanel: () => void
+    openAgentStatusPanel: () => void
+    closeAgentStatusPanel: () => void
+    toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
     toggleGlobalEditor: () => void
     /** Toggle visibility of the Global Editor's in-editor file tree.
@@ -58,6 +61,9 @@ export type CommandContext = {
     enterKillBuriedMode: () => void
     enterPromptTemplateMode: () => void
     enterSavePromptTemplateMode: () => void
+    enterAiWorkspaceOpenMode: () => void
+    enterAiWorkspaceCreateMode: () => void
+    enterAiWorkspaceClearMode: () => void
     closePalette: () => void
   }
   flags: {
@@ -74,6 +80,7 @@ export type CommandContext = {
     htmlDebugPanelOpen: boolean
     devDebugEnabled: boolean
     devDebugPanelOpen: boolean
+    agentStatusPanelOpen: boolean
     performancePanelOpen: boolean
     globalEditorOpen: boolean
     /** Whether the Global Editor's in-editor file tree is rendered.

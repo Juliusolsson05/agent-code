@@ -1,6 +1,7 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { resolveTabSessions } from '@renderer/workspace/queries'
 
 export type DispatchAgentRow = {
   key: string
@@ -39,7 +40,9 @@ export function buildDispatchGroups(
   // to the same sessionId) and would lie about the visual hierarchy
   // ("this is in two places at once"). Same exclusivity invariant as
   // detached-vs-grid: each row belongs to exactly one bucket.
-  const pinnedSet = new Set(state.pinnedSessionIds)
+  const pinnedSet = new Set(
+    state.pinnedSessionIds.filter(id => state.sessions[id]?.kind !== 'terminal'),
+  )
 
   // The tab letter answers "which project group owns this row"; the
   // number answers "which visible dispatch item will cmd+N select".
@@ -51,7 +54,15 @@ export function buildDispatchGroups(
     .map(tab => {
       const tabIndex = state.tabs.findIndex(item => item.id === tab.id)
       const gridSessionIds = collectLeaves(tab.root)
-        .filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
+        // WHY terminals belong in the primary Dispatch row stream now:
+        // Dispatch focus is session-based, not transcript-based. TerminalLeaf
+        // already renders through renderWorkspaceLeaf and uses the same
+        // sessionId-scoped IPC lifecycle as agents, so filtering terminals here
+        // made the list lie about which live sessions the user could command.
+        // Agent-only affordances stay guarded at their command/action sites;
+        // row construction should answer the broader placement question:
+        // "which sessions are in this Dispatch scope?"
+        .filter(sessionId => state.sessions[sessionId] !== undefined)
         .filter(sessionId => !pinnedSet.has(sessionId))
       const detachedSessionIds = detachedDispatchSessionIdsForTab(state, tab.id)
         .filter(sessionId => !pinnedSet.has(sessionId))
@@ -61,23 +72,29 @@ export function buildDispatchGroups(
         ...detachedSessionIds.map(sessionId => ({ sessionId, placement: 'detached' as const })),
       ]
 
-      // Nesting pass: a linked agent (SessionMeta.linkedParentId)
-      // renders indented immediately under its parent's row rather
-      // than at the bottom of the tab group. We index children by
-      // parent, then walk the natural order emitting each non-child
-      // row followed by its children.
+      // Nesting pass: manual linked agents and MCP-created orchestration
+      // agents render indented immediately under their parent row rather than
+      // at the bottom of the tab group. We index children by parent, then walk
+      // the natural order emitting each non-child row followed by its children.
       //
       // WHY the parent must also be in `entries` (same tab group):
-      // the linked agent always lands in its parent's tab, so the
-      // parent is normally present — but scope filters, a closed
-      // parent, or a pinned parent (pinned rows are pulled into
-      // their own section) can leave the child "orphaned" here. In
-      // that case the child is emitted as an ordinary depth-0 row
-      // in its natural position rather than vanishing.
+      // both child types land in their parent's tab, so the parent is normally
+      // present — but scope filters, a closed parent, or a pinned parent
+      // (pinned rows are pulled into their own section) can leave the child
+      // "orphaned" here. In that case the child is emitted as an ordinary
+      // depth-0 row in its natural position rather than vanishing.
+      //
+      // WHY orchestration has its own parent field but shares this visual
+      // nesting: the user experience is the same "this agent belongs under
+      // that parent" shape, but the lifecycle and future controls are not the
+      // same as manual Linked Agents. Keeping `linkedParentId` and
+      // `orchestrationParentId` separate prevents accidental semantic coupling
+      // while still reusing the established Dispatch row indentation.
       const entryIds = new Set(entries.map(e => e.sessionId))
       const childrenByParent = new Map<SessionId, typeof entries>()
       for (const e of entries) {
-        const parentId = state.sessions[e.sessionId]?.linkedParentId
+        const meta = state.sessions[e.sessionId]
+        const parentId = meta?.linkedParentId ?? meta?.orchestrationParentId
         if (parentId && entryIds.has(parentId)) {
           const arr = childrenByParent.get(parentId) ?? []
           arr.push(e)
@@ -90,7 +107,8 @@ export function buildDispatchGroups(
         depth: number
       }> = []
       for (const e of entries) {
-        const parentId = state.sessions[e.sessionId]?.linkedParentId
+        const meta = state.sessions[e.sessionId]
+        const parentId = meta?.linkedParentId ?? meta?.orchestrationParentId
         // Children are emitted under their parent below — skip here.
         if (parentId && entryIds.has(parentId)) continue
         ordered.push({ ...e, depth: 0 })
@@ -128,6 +146,21 @@ export function flattenDispatchRows(groups: DispatchTabGroup[]): DispatchAgentRo
   return groups.flatMap(group => group.rows)
 }
 
+export function buildVisibleDispatchRows(state: WorkspaceState): DispatchAgentRow[] {
+  // WHY this helper exists instead of having every caller concatenate
+  // pinned + grouped rows itself:
+  // Dispatch now has multiple row classes (pinned agents, grid sessions,
+  // detached sessions, and terminals). Keyboard navigation, command
+  // targeting, close-after-delete focus, and the rendered list must agree on
+  // the same linear order or the highlighted row and the acted-on session
+  // drift apart. Keeping the visible row list here makes the selector layer
+  // the single source of truth for "row N" semantics.
+  return [
+    ...buildPinnedDispatchRows(state),
+    ...flattenDispatchRows(buildDispatchGroups(state)),
+  ]
+}
+
 export function dispatchSessionIdsForTab(
   state: WorkspaceState,
   tabId: TabId,
@@ -142,15 +175,15 @@ export function detachedDispatchSessionIdsForTab(
   tabId: TabId,
 ): SessionId[] {
   // Keep this ordering in one place so the list UI and bulk attach agree on
-  // what "all Dispatch agents for this tab" means. Detached rows are displayed
-  // oldest-first in buildDispatchGroups; bulk attach should preserve that same
-  // user-visible sequence inside the normalized incoming subtree.
+  // what "all detached Dispatch sessions for this tab" means. Detached rows
+  // are displayed oldest-first in buildDispatchGroups; bulk attach should
+  // preserve that same user-visible sequence inside the normalized incoming
+  // subtree.
   return Object.values(state.detachedSessions)
     .filter(entry => (
       entry.surface === 'dispatch' &&
       entry.projectTabId === tabId &&
-      state.sessions[entry.sessionId] !== undefined &&
-      state.sessions[entry.sessionId]?.kind !== 'terminal'
+      state.sessions[entry.sessionId] !== undefined
     ))
     .sort((a, b) => a.detachedAt - b.detachedAt)
     .map(entry => entry.sessionId)
@@ -181,7 +214,14 @@ export function findTerminalSessionInTab(
   state: WorkspaceState,
 ): SessionId | null {
   if (!tab) return null
-  return collectLeaves(tab.root).find(id => state.sessions[id]?.kind === 'terminal') ?? null
+  // WHY this uses the canonical tab-session resolver instead of scanning
+  // `tab.root`: the project terminal is allowed to be detached into Dispatch
+  // now. A grid-only scan makes the terminal disappear from the "does this tab
+  // already have a project terminal?" question, and the DispatchLayout effect
+  // will spawn a replacement PTY even though the original terminal is merely
+  // parked in `detachedSessions`. The terminal ownership question is "owned by
+  // this tab", not "currently mounted in the tile tree".
+  return resolveTabSessions(state, tab.id).find(id => state.sessions[id]?.kind === 'terminal') ?? null
 }
 
 /**

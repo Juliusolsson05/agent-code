@@ -4,13 +4,13 @@
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
 
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import { readFile } from 'fs/promises'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
 import { LspManager } from '@main/lspManager.js'
-import { GhostJournalRegistry } from '@main/ghostJournal.js'
+import { compactAllGhostLogs, GhostJournalRegistry } from '@main/ghostJournal.js'
 import {
   DictationDebugJournalRegistry,
   pruneOldDictationDebugLogs,
@@ -25,7 +25,8 @@ import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js
 import { STATE_FILE } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
-import { createMainWindow, focusMainWindow } from '@main/window/mainWindow.js'
+import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
+import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
@@ -34,6 +35,9 @@ import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/h
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
+import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
+import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 
 // Main process — thin Electron host.
 //
@@ -77,6 +81,9 @@ const dictationDebugJournals = new DictationDebugJournalRegistry()
 // harness-findings-and-fix.md for context.
 const pasteDebugJournals = new PasteDebugJournalRegistry()
 const worktreeActivityIndex = new WorktreeActivityIndex()
+const builtInMcpHost = new BuiltInMcpHttpHost()
+const orchestrationBridge = new OrchestrationBridge()
+const aiWorkspaceRegistry = new AiWorkspaceRegistry()
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -86,6 +93,26 @@ const worktreeActivityIndex = new WorktreeActivityIndex()
 // callbacks that fire after the assignment.
 let manager: SessionManager | null = null
 let tmuxRegistry: TmuxRegistry | null = null
+let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
+
+// WHY Agent Code is intentionally single-primary-process:
+//
+// The renderer persists the whole workspace as one `workspace.json` snapshot,
+// main keeps AI Workspace and worktree-index state in process-local maps, and
+// provider resume starts real Claude/Codex processes that tail native
+// transcripts. Making 2+ Electron mains safe would require database-style
+// revision/merge semantics and provider-session ownership across all of those
+// surfaces. The current product shape is one primary process with one window;
+// a future multi-window UI should add windows to THIS process, not launch more
+// mains against the same `~/.config/agent-code` state root.
+//
+// Electron's single-instance lock handles the normal "user opened the app
+// again" path and lets us focus the existing window. The state-process lock in
+// `startApp()` is a second belt for dev/prod or app-identity splits where
+// Electron might consider the processes different but our STATE_DIR is still
+// shared. If that lock ever feels too strict, the storage model must be changed
+// first; deleting the guard alone would make last-writer-wins corruption
+// possible again.
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 
 if (!hasSingleInstanceLock) {
@@ -101,6 +128,26 @@ if (!hasSingleInstanceLock) {
 // ---------- App lifecycle ----------
 
 async function startApp(): Promise<void> {
+  const lock = await acquireStateProcessLock()
+  if (!lock.acquired) {
+    console.warn(
+      '[app] refusing to start a second Agent Code main process for shared state:',
+      {
+        lockPath: lock.path,
+        reason: lock.reason,
+        ownerPid: lock.owner?.pid ?? null,
+        ownerStartedAt: lock.owner?.startedAt ?? null,
+      },
+    )
+    dialog.showErrorBox(
+      'Agent Code is already running',
+      'Another Agent Code process appears to own the shared app state. Close the existing app window before starting a second copy.',
+    )
+    app.quit()
+    return
+  }
+  stateProcessLock = lock
+
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
   })
@@ -120,6 +167,16 @@ async function startApp(): Promise<void> {
   })
   void pruneOldDictationDebugLogs().catch(err => {
     console.warn('[dictation] prune failed (non-fatal):', err)
+  })
+  // Ghost-log reads are now streaming, but a years-long append-only
+  // file still makes every future restore pay O(file-size) parse CPU.
+  // Startup compaction is conservative because this sweep is async:
+  // a resumed session may create its writer while the directory pass is
+  // still reading a large file. The registry check is repeated inside
+  // the compactor before rename so a newly-live session keeps append-only
+  // safety and can compact on dispose instead.
+  void compactAllGhostLogs(sessionId => ghostJournals.has(sessionId)).catch(err => {
+    console.warn('[ghostJournal] startup compact failed (non-fatal):', err)
   })
   scheduleDebugStoragePrune('startup')
   await initializeToolchain()
@@ -206,11 +263,37 @@ async function startApp(): Promise<void> {
     }
   }
 
-  manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null)
+  await builtInMcpHost.start()
+  manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost)
+  builtInMcpHost.setDependencies({
+    orchestrationBridge,
+    aiWorkspaceRegistry,
+    openAiWorkspace: workspaceId => {
+      // WHY this is a one-way UI request rather than a main-owned UI state:
+      //
+      // MCP tools run in main because providers talk to the built-in MCP host
+      // there, but the Global Editor overlay is renderer-owned workspace UI.
+      // Main validates the workspace exists through the registry, then emits a
+      // narrow "open this id" request. The renderer decides how to present it,
+      // preserving the existing rule that layout/chrome state stays renderer
+      // local instead of turning main into a second UI store.
+      sendToMainWindow('ai-workspace:open-request', { workspaceId })
+    },
+    sessionManager: manager,
+  })
   performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
-  registerAllIpc({ manager, lspManager, ghostJournals, dictationDebugJournals, pasteDebugJournals, worktreeActivityIndex })
+  registerAllIpc({
+    manager,
+    lspManager,
+    ghostJournals,
+    dictationDebugJournals,
+    pasteDebugJournals,
+    worktreeActivityIndex,
+    orchestrationBridge,
+    aiWorkspaceRegistry,
+  })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()
   performanceService.mark('app.main.window.created')
@@ -222,6 +305,7 @@ async function startApp(): Promise<void> {
 
 app.on('window-all-closed', () => {
   void manager?.killAll()
+  void builtInMcpHost.stop()
   void lspManager.dispose()
   if (process.platform !== 'darwin') app.quit()
 })
@@ -229,6 +313,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   performanceService.mark('app.main.beforeQuit')
   void manager?.killAll()
+  void builtInMcpHost.stop()
   void lspManager.dispose()
   cleanupDictationIpcResources()
   stopMainHeapWatchdog()
@@ -244,4 +329,6 @@ app.on('before-quit', () => {
   void dictationDebugJournals.flushAll()
   void pasteDebugJournals.flushAll()
   performanceService.stop()
+  stateProcessLock?.releaseSync()
+  stateProcessLock = null
 })

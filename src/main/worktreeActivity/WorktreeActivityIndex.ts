@@ -93,6 +93,12 @@ export class WorktreeActivityIndex {
     IN_MEMORY_MAX_ENTRIES,
   )
   private totalOnDisk = 0
+  private summaryCache:
+    | {
+        key: string
+        summaries: WorktreeActivitySummary[]
+      }
+    | null = null
   private status: WorktreeActivityIndexStatus = {
     lastIndexedAt: null,
     refreshing: false,
@@ -324,13 +330,21 @@ export class WorktreeActivityIndex {
     worktrees: WorktreeIdentity[],
   ): Promise<WorktreeActivitySummary[]> {
     if (this.updatedAt === 0 && this.transcripts.size === 0) return []
+    const cacheKey = summaryCacheKey(this.updatedAt, this.totalOnDisk, worktrees)
+    if (this.summaryCache?.key === cacheKey) return this.summaryCache.summaries
+
     // Fast path: when every on-disk transcript fits in the LRU,
     // iterating the LRU gives the same answer as iterating disk
     // — and avoids the parse cost on every poll. This is the case
-    // for light users (the OOM problem is heavy users). For heavy
-    // users we pay the disk read on each summary call; this is
-    // ~30 MB transient memory per call and is the cost of bounding
-    // the resident set.
+    // for light users (the OOM problem is heavy users).
+    //
+    // WHY the summary result is cached for heavy users: the Worktrees
+    // bar polls on a fixed cadence, while the compact transcript index
+    // changes only when refreshNow writes a new updatedAt. Without this
+    // cache, heavy users reread and JSON.parse the whole 30 MB+ index on
+    // every 10s UI poll just to answer the same question for the same
+    // worktree set. The key includes updatedAt + totalOnDisk + worktree
+    // identity, so a refresh or a changed worktree list naturally misses.
     let transcriptMap: Record<string, IndexedTranscript>
     if (this.totalOnDisk <= IN_MEMORY_MAX_ENTRIES) {
       // values() iterates without touching LRU ordering. We use the
@@ -348,8 +362,22 @@ export class WorktreeActivityIndex {
       updatedAt: this.updatedAt,
       transcripts: transcriptMap,
     }
-    return collectWorktreeActivitySummaries(file, worktrees)
+    const summaries = collectWorktreeActivitySummaries(file, worktrees)
+    this.summaryCache = { key: cacheKey, summaries }
+    return summaries
   }
+}
+
+function summaryCacheKey(
+  updatedAt: number,
+  totalOnDisk: number,
+  worktrees: WorktreeIdentity[],
+): string {
+  return [
+    updatedAt,
+    totalOnDisk,
+    ...worktrees.map(worktree => `${worktree.path}\0${worktree.branch ?? ''}`),
+  ].join('\n')
 }
 
 // Module-private since the only external caller used to be a unit

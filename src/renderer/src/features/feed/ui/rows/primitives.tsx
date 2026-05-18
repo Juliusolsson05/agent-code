@@ -2,14 +2,11 @@ import type { ReactNode } from 'react'
 
 // Layout primitives used by multiple row components.
 //
-// UserBand and ToolBand are horizontal "bands" that tint the full
-// width of the feed column behind their children. They both use
-// the same `-mx-8 px-8` negative-margin + compensating-padding
-// trick: feed rows sit inside a `px-8` centered column, so a naive
-// bg-color on the row would be narrower than the column's gutters
-// and look like a tight card. Pulling the band out to -mx-8 and
-// compensating with px-8 makes the fill edge-to-edge within the
-// column while keeping the text at its original x.
+// UserBand is the only horizontal background band in committed chat
+// rows. Tool rows deliberately render without a matching band: the
+// live semantic plane already gives tools enough structure through
+// markers, file headers, and diff slabs, and committed edit/write rows
+// should look like the streaming patch surface they replace.
 
 /**
  * UserBand — a horizontal highlight band that sits behind a *user
@@ -21,20 +18,6 @@ import type { ReactNode } from 'react'
 export function UserBand({ children }: { children: ReactNode }) {
   return (
     <div className="bg-user-bg -mx-8 px-8 py-3">
-      {children}
-    </div>
-  )
-}
-
-/**
- * Background band for tool output (Read, Grep, Edit results).
- * Subtler than UserBand — a faint step away from canvas that groups
- * tool output visually without competing with user turns or assistant
- * text. Same edge-to-edge trick as UserBand.
- */
-export function ToolBand({ children }: { children: ReactNode }) {
-  return (
-    <div className="bg-tool-bg -mx-8 px-8 py-2">
       {children}
     </div>
   )

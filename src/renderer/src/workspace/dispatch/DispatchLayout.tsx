@@ -12,8 +12,8 @@ import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latest
 import {
   buildDispatchGroups,
   buildPinnedDispatchRows,
+  buildVisibleDispatchRows,
   findTerminalSessionInTab,
-  flattenDispatchRows,
   selectVisibleDispatchRow,
   type DispatchAgentRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -56,8 +56,8 @@ export function DispatchLayout({
   // anything else when the explicit focus id is stale, which matches
   // the Pinned section's visual position at the top of the list.
   const rows = useMemo(
-    () => [...pinnedRows, ...flattenDispatchRows(groups)],
-    [groups, pinnedRows],
+    () => buildVisibleDispatchRows(workspace.state),
+    [workspace.state],
   )
   const activeRow = selectVisibleDispatchRow(
     rows,
@@ -201,11 +201,11 @@ export function DispatchLayout({
             () => workspace.focusDispatchSession(activeRow.tabId, activeRow.sessionId),
           )
         ) : (
-          <DispatchEmpty message="no agents in this dispatch scope" />
+          <DispatchEmpty message="no sessions in this dispatch scope" />
         )}
       </div>
 
-      {terminalVisible && (
+      {terminalVisible && activeRow?.sessionId !== terminalSessionId && (
         <div className="basis-1/4 min-w-0 min-h-0 flex-shrink-0">
           {activeTab && terminalSessionId ? (
             <TerminalLeaf
@@ -270,7 +270,7 @@ const DispatchAgentList = memo(function DispatchAgentList({
     } else if (rowRect.bottom > visibleBottom) {
       list.scrollTop += rowRect.bottom - visibleBottom
     }
-  }, [activeSessionId, groups])
+  }, [activeSessionId, groups, pinnedRows])
 
   return (
     // WHY h-full w-full instead of `basis-1/4 min-w-[220px]
@@ -295,7 +295,7 @@ const DispatchAgentList = memo(function DispatchAgentList({
         data-dispatch-list-header="true"
         className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-surface px-2.5 py-1.5 text-[10px] text-muted uppercase"
       >
-        <span>Agents</span>
+        <span>Sessions</span>
         <span>{dispatchScope}</span>
       </div>
       {/* Pinned section. Rendered above the regular groups and
@@ -404,18 +404,21 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
   const onSelect = useCallback(() => {
     focusSessionInTab(row.tabId, row.sessionId)
   }, [focusSessionInTab, row.sessionId, row.tabId])
+  const isTerminal = row.kind === 'terminal'
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
-  const subtitle = dispatchSubtitle(runtime)
-  const title = runtime.entries
+  const subtitle = dispatchSubtitle(runtime, row.kind)
+  const title = !isTerminal && runtime.entries
     ? cachedLatestPromptTitle(runtime.entries, row.kind) ?? row.title
     : row.title
   const attentionLabel = dispatchAttentionLabel(runtime)
-  const unreadKind = attentionLabel
-    ? 'attention'
-    : runtime.unreadKind === 'attention'
-      ? 'output'
-      : runtime.unreadKind
+  const unreadKind = isTerminal
+    ? null
+    : attentionLabel
+      ? 'attention'
+      : runtime.unreadKind === 'attention'
+        ? 'output'
+        : runtime.unreadKind
 
   return (
     <button
@@ -502,7 +505,19 @@ function dispatchSubtitle(runtime: {
   streamPhase?: string
   exited?: number | null
   unreadSince?: number | null
-}): string {
+}, kind?: SessionKind): string {
+  // WHY terminals get their own label path:
+  // Agent subtitles describe model turn state (`thinking`, `responding`,
+  // tool phases). A shell terminal has no transcript turn lifecycle, so
+  // showing those same words would imply Claude/Codex semantics that do not
+  // exist. Keep the process state visible, but prefix it as shell state so a
+  // terminal row is scan-distinct even before the badge is read.
+  if (kind === 'terminal') {
+    if (runtime.sessionStatus === undefined) return 'shell starting'
+    if (runtime.exited !== null && runtime.exited !== undefined) return 'shell exited'
+    if (runtime.sessionStatus === 'running') return 'shell running'
+    return 'shell idle'
+  }
   if (runtime.sessionStatus === undefined) return 'starting'
   if (runtime.streamPhase && runtime.streamPhase !== 'idle') return runtime.streamPhase
   if (runtime.sessionStatus === 'running') return 'running'
@@ -528,8 +543,11 @@ function dispatchAttentionLabel(runtime: {
 function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
   const label =
     kind === 'codex' ? 'Codex' : kind === 'terminal' ? 'Terminal' : 'Claude'
+  const classes = kind === 'terminal'
+    ? 'border-cyan-400/50 bg-cyan-400/10 text-cyan-200'
+    : 'border-border bg-surface-hi text-muted'
   return (
-    <span className="flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none text-muted border border-border bg-surface-hi">
+    <span className={`flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
       {label}
     </span>
   )

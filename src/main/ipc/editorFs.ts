@@ -145,14 +145,19 @@ export function registerEditorFsIpc(): void {
             }
           }
           const abs = join(target, dirent.name)
-          const itemStat = await stat(abs).catch(() => null)
-          if (!itemStat) continue
           entries.push({
             name: dirent.name,
             path: toProjectPath(root, abs),
             isDirectory: dirent.isDirectory(),
-            size: dirent.isDirectory() ? null : itemStat.size,
-            mtimeMs: itemStat.mtimeMs,
+            // WHY list-directory intentionally does not stat every entry:
+            // the explorer UI only needs name/path/type, and `Dirent` already
+            // gives us the type from the readdir call. Serial stat() per row
+            // made expanding a large source directory scale with thousands of
+            // extra syscalls and a much larger IPC payload. Read/write paths
+            // still stat the selected file where size/mtime are correctness
+            // inputs for conflict detection.
+            size: null,
+            mtimeMs: 0,
           })
         }
         entries.sort((a, b) => {

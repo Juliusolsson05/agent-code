@@ -13,3 +13,7 @@
 [submodule "packages/agent-voice-dictation"]
 	path = packages/agent-voice-dictation
 	url = https://github.com/Juliusolsson05/agent-voice-dictation.git
+[submodule "packages/opencode-headless"]
+	path = packages/opencode-headless
+	url = https://github.com/Juliusolsson05/opencode-headless.git
+	branch = dev

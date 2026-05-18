@@ -7,7 +7,13 @@ import {
   recordHtmlTraceSnapshot,
   recordScreenTailSnapshot,
 } from '@renderer/features/debug/renderTrace'
+import {
+  buildCommittedAssistantText,
+  buildSemanticRenderUnits,
+  normalizeCommittedAssistantText,
+} from '@renderer/features/feed/ui/semantic/renderUnits'
 import { summarizeWorktreeActivity } from '@shared/work-context/debug'
+import { asRecord } from '@shared/lib/asRecord'
 
 // saveDebugBundle — assemble-and-ship side of the "Save Debug Logs"
 // command. Runs in the renderer because every data source the
@@ -41,6 +47,7 @@ const FILE_NAMES = {
   state: 'state-snapshot.json',
   feedDebug: 'feed-debug.jsonl',
   workContext: 'work-context.json',
+  renderDiagnostics: 'render-diagnostics.json',
   semantic: 'proxy-semantic.json',
   htmlRaw: 'html-raw.html',
   htmlClean: 'html-clean.html',
@@ -72,6 +79,7 @@ const FILE_NAMES = {
 // include recent tool output context but stops the snapshot from
 // ballooning on very long-lived panes.
 const SCREEN_TAIL_LINES = 200
+const DIAGNOSTIC_SNIPPET_CHARS = 360
 export const AUTO_DEBUG_BUNDLE_INTERVAL_MS = 60_000
 
 function tailLines(text: string, count: number): string {
@@ -81,6 +89,166 @@ function tailLines(text: string, count: number): string {
 }
 
 type BundleFile = { name: string; content: string }
+
+function snippet(text: string, max = DIAGNOSTIC_SNIPPET_CHARS): string {
+  if (text.length <= max) return text
+  return `${text.slice(0, max)}…`
+}
+
+function semanticTurnDiagnostics(
+  turn: SessionRuntime['semantic']['currentTurn'],
+  committedText: ReturnType<typeof buildCommittedAssistantText>,
+  committedToolUseIndex: SessionRuntime['toolUseIndex'],
+  committedToolResultIndex: SessionRuntime['toolResultIndex'],
+): Record<string, unknown> | null {
+  if (!turn) return null
+  const units = buildSemanticRenderUnits(
+    turn,
+    committedToolUseIndex,
+    committedToolResultIndex,
+    committedText,
+  )
+  const fallbackText = turn.text ?? ''
+  const normalizedFallbackText = normalizeCommittedAssistantText(fallbackText)
+
+  return {
+    turnId: turn.turnId,
+    source: turn.source ?? null,
+    startedAt: turn.startedAt ?? null,
+    endedAt: turn.endedAt ?? null,
+    textLen: fallbackText.length,
+    textSnippet: fallbackText ? snippet(fallbackText) : null,
+    fallbackTextOwnedByCommitted:
+      fallbackText !== '' &&
+      (
+        committedText.keys.has(`${turn.turnId}\u0000${fallbackText}`) ||
+        committedText.texts.has(fallbackText) ||
+        (
+          normalizedFallbackText !== '' &&
+          committedText.normalizedTexts.has(normalizedFallbackText)
+        )
+      ),
+    renderUnitCount: units.length,
+    renderUnitTypes: units.map(unit => unit.type),
+    blocks: Object.values(turn.blocks)
+      .sort((a, b) => a.blockIndex - b.blockIndex)
+      .map(block => {
+        const text = block.text ?? ''
+        const normalized = normalizeCommittedAssistantText(text)
+        const isOutputBlock =
+          block.kind === 'function_call_output' ||
+          block.kind === 'custom_tool_call_output' ||
+          block.kind === 'tool_search_output'
+        const toolId = isOutputBlock
+          ? block.toolUseId ?? block.callId ?? null
+          : block.toolUseId ?? block.callId ?? block.itemId ?? null
+        return {
+          blockIndex: block.blockIndex,
+          kind: block.kind,
+          status: block.status ?? null,
+          finalized: block.finalized ?? false,
+          textLen: text.length,
+          textSnippet: text ? snippet(text) : null,
+          textOwnedByCommitted:
+            text !== '' &&
+            (
+              committedText.keys.has(`${turn.turnId}\u0000${text}`) ||
+              committedText.texts.has(text) ||
+              (normalized !== '' && committedText.normalizedTexts.has(normalized))
+          ),
+          toolId,
+          toolOwnedByCommitted:
+            toolId && !isOutputBlock ? committedToolUseIndex.has(toolId) : false,
+          toolResultOwnedByCommitted: toolId ? committedToolResultIndex.has(toolId) : false,
+        }
+      }),
+  }
+}
+
+// WHY this file exists separately from proxy-semantic.json and
+// feed-debug.jsonl:
+// The recurring rendering failures are not usually caused by one
+// channel being absent. They happen at the ownership boundary between
+// the committed transcript channel and the live semantic channel:
+// "is this semantic block still the owner of visible UI, or did the
+// committed transcript already take over?" Raw HTML can prove the
+// duplicate after the fact, and feed-debug can show row keys, but
+// neither made the committed text/tool ownership set explicit. The
+// 2026-05-16T18:49 bundle took too much manual reconstruction because
+// the committed assistant row lacked both `message.id` and
+// `codexTurnId`; this diagnostic is the join table future-us needs
+// before changing render suppression again.
+function buildRenderDiagnostics(runtime: SessionRuntime, kind: string): Record<string, unknown> {
+  const committedText = buildCommittedAssistantText(runtime.entries)
+  const committedAssistantRows = runtime.entries
+    .map((entry, index) => {
+      if (entry.type !== 'assistant') return null
+      const record = asRecord(entry)
+      const message = asRecord(record?.message)
+      const content = message?.content
+      const textBlocks = Array.isArray(content)
+        ? content
+            .map(block => {
+              const item = asRecord(block)
+              return item?.type === 'text' && typeof item.text === 'string'
+                ? item.text
+                : null
+            })
+            .filter((text): text is string => text !== null)
+        : []
+      return {
+        index,
+        uuid: typeof record?.uuid === 'string' ? record.uuid : null,
+        messageId: typeof message?.id === 'string' ? message.id : null,
+        codexTurnId: typeof record?.codexTurnId === 'string' ? record.codexTurnId : null,
+        textBlocks: textBlocks.map(text => ({
+          len: text.length,
+          normalizedLen: normalizeCommittedAssistantText(text).length,
+          snippet: snippet(text),
+        })),
+      }
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null)
+
+  return {
+    schemaVersion: 1,
+    kind,
+    _why:
+      'Diagnoses committed-transcript vs live-semantic render ownership. ' +
+      'Timestamps order events, but this file shows the ownership sets ' +
+      'that decide whether semantic rows should still be visible.',
+    counts: {
+      entries: runtime.entries.length,
+      assistantRows: committedAssistantRows.length,
+      committedAssistantTextExact: committedText.texts.size,
+      committedAssistantTextNormalized: committedText.normalizedTexts.size,
+      committedAssistantTextKeys: committedText.keys.size,
+      committedToolUseIndex: runtime.toolUseIndex.size,
+      committedToolResultIndex: runtime.toolResultIndex.size,
+      semanticHistory: runtime.semantic.history.length,
+    },
+    committedAssistantRows,
+    committedAssistantTextSnippets: Array.from(committedText.texts).map(text => ({
+      len: text.length,
+      normalizedLen: normalizeCommittedAssistantText(text).length,
+      snippet: snippet(text),
+    })),
+    semanticCurrentTurn: semanticTurnDiagnostics(
+      runtime.semantic.currentTurn,
+      committedText,
+      runtime.toolUseIndex,
+      runtime.toolResultIndex,
+    ),
+    semanticHistory: runtime.semantic.history.map(turn =>
+      semanticTurnDiagnostics(
+        turn,
+        committedText,
+        runtime.toolUseIndex,
+        runtime.toolResultIndex,
+      ),
+    ),
+  }
+}
 
 // Build a state snapshot from the runtime with non-serializable and
 // overly-heavy fields removed. WHY each exclusion:
@@ -319,6 +487,10 @@ export async function assembleAndSaveDebugBundle(params: {
     {
       name: FILE_NAMES.workContext,
       content: JSON.stringify(summarizeWorktreeActivity(runtime.workActivity), null, 2),
+    },
+    {
+      name: FILE_NAMES.renderDiagnostics,
+      content: JSON.stringify(buildRenderDiagnostics(runtime, kind), null, 2),
     },
     {
       name: FILE_NAMES.semantic,

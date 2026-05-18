@@ -89,16 +89,19 @@ export function useResizeActions(
 
   const setSplitRatioInTab = useCallback(
     (tabId: TabId, fromSessionId: SessionId, toSessionId: SessionId, ratio: number) => {
-      setState(prev => ({
-        ...prev,
-        activeTabId: tabId,
-        tabs: prev.tabs.map(t => {
+      setState(prev => {
+        let changed = prev.activeTabId !== tabId
+        const tabs = prev.tabs.map(t => {
           if (t.id !== tabId) return t
-          return { ...t, root: setRatioBetween(t.root, fromSessionId, toSessionId, ratio) }
-        }),
-      }))
+          const root = setRatioBetween(t.root, fromSessionId, toSessionId, ratio)
+          if (root === t.root) return t
+          changed = true
+          return { ...t, root }
+        })
+        return changed ? { ...prev, activeTabId: tabId, tabs } : prev
+      })
       setTileTabs(prev => (
-        prev && prev.tabIds.includes(tabId)
+        prev && prev.focusedTabId !== tabId && prev.tabIds.includes(tabId)
           ? { ...prev, focusedTabId: tabId }
           : prev
       ))

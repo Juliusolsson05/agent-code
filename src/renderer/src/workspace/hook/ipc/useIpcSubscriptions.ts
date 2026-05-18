@@ -44,11 +44,15 @@ import {
 } from '@renderer/workspace/entries/utils'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
+  gcSupersededGhosts,
   ghostsFromSemanticTurn,
   ghostsToPersist,
   orphanStale,
   reconcileUpstream,
 } from '@renderer/workspace/ghosts'
+import {
+  codexPromptsMatchForOwnership,
+} from '@renderer/workspace/hook/actions/streaming'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import type { WorktreeIdentity } from '@shared/work-context/types'
@@ -106,13 +110,14 @@ const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 // With the layered predicate in mergedEntries.ts, an orphan flag
 // merely makes a ghost ELIGIBLE for rendering; rules 4 (timestamp
 // gate) and 5 (sidecar shape) still gate final visibility, and
-// rule 3 hides ghosts whose `turnId === currentTurnId`. So during
-// healthy operation, even a tool that runs tens of seconds doesn't
-// visibly orphan: the semantic reducer keeps `currentTurn` alive
-// across pending tools (see hasPendingSemanticTools in
-// semantic/helpers.ts), and rule 3 hides any ghost whose turn is
-// still active. The TTL here is the failsafe boundary for "how
-// long before we conclude JSONL had its chance" — reachable only
+// rule 3 hides ghosts whose turn id is already owned by semantic
+// current/history. So during healthy operation, even a tool that runs
+// tens of seconds doesn't visibly orphan: the semantic reducer keeps
+// `currentTurn` alive across pending tools (see
+// hasPendingSemanticTools in semantic/helpers.ts), and archived
+// semantic history continues to own completed turns while JSONL
+// catches up. The TTL here is the failsafe boundary for "how long
+// before we conclude JSONL had its chance" — reachable only
 // when currentTurn has cleared and JSONL has genuinely stalled.
 //
 // 30000ms matches atp's library default and is the right balance:
@@ -126,6 +131,7 @@ const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 // See docs/design/ghost-system.md for the canonical explanation.
 const GHOST_ORPHAN_TTL_MS = 30000
 const GHOST_ORPHAN_SWEEP_MS = 1000
+const GHOST_SUPERSEDED_GC_MS = 5000
 
 function canIngestWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
   const type = (raw as { type?: unknown })?.type
@@ -237,13 +243,19 @@ export function useIpcSubscriptions(
   useEffect(() => {
     const worktreeCache = new Map<string, WorktreeCacheEntry>()
     const recentWorkContextRawBySession = new Map<SessionId, unknown[]>()
-    // Ghost orphan sweep — see docs/design/ghost-system.md for the
+    // Ghost orphan / superseded-GC sweep — see docs/design/ghost-system.md for the
     // canonical explanation. Runs every GHOST_ORPHAN_SWEEP_MS,
     // calls orphanStale to flag any ghost whose updatedAt has been
-    // silent for longer than GHOST_ORPHAN_TTL_MS, persists the
-    // resulting state changes to disk via ghostAppend. Reference-
-    // stable on no-op: orphanStale returns the input map by
-    // identity when no ghost crossed the threshold.
+    // silent for longer than GHOST_ORPHAN_TTL_MS, and drops ghosts
+    // that have already been superseded by durable upstream JSONL.
+    //
+    // WHY GC superseded ghosts here instead of during reconcileUpstream:
+    // reconcile needs a short overlap window so UI ownership can move from
+    // proxy ghosts to committed entries without a flicker. After that grace
+    // window the ghosts are dead weight; keeping them forever turns
+    // selectMergedEntries into an O(ghost-map) loop on every TileLeaf render.
+    // Both reducers are reference-stable on no-op, so the sweep only replaces
+    // runtime state when something actually crossed a threshold.
     const orphanSweepTimer = window.setInterval(() => {
       const now = Date.now()
       setRuntimes(prev => {
@@ -251,7 +263,12 @@ export function useIpcSubscriptions(
         const next = { ...prev }
         for (const [sessionId, runtime] of Object.entries(prev)) {
           if (runtime.ghosts.size === 0) continue
-          const nextGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
+          const orphanedGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
+          const nextGhosts = gcSupersededGhosts(
+            orphanedGhosts,
+            now,
+            GHOST_SUPERSEDED_GC_MS,
+          )
           if (nextGhosts === runtime.ghosts) continue
           for (const ghost of ghostsToPersist(runtime.ghosts, nextGhosts)) {
             window.api.ghostAppend(sessionId, ghost)
@@ -1045,6 +1062,29 @@ export function useIpcSubscriptions(
               ) {
                 reconciledOptimisticText = mappedText
               }
+              // Mid-turn Codex submits are intentionally kept in
+              // queuedMessages instead of appended to entries (see
+              // addOptimisticCodexUserEntry). The authoritative rollout
+              // user row is the point where that local "queued" surface
+              // must disappear; otherwise the queue strip becomes the new
+              // stale-bottom duplicate after the transcript catches up.
+              if (queuedMessages.some(q => codexPromptsMatchForOwnership(q.content, mappedText))) {
+                // WHY queued prompt reconciliation is normalized:
+                // queuedMessages is only a temporary local surface for
+                // a mid-turn submit. The authoritative user row comes
+                // from Codex rollout, and rollout can differ from the
+                // original submit by CRLF normalization, unicode form,
+                // or block-join whitespace. Exact matching leaves the
+                // QueueStrip stuck after the real transcript row has
+                // arrived, recreating the stale-bottom artifact this
+                // renderer rewrite is meant to eliminate. Preserve the
+                // original displayed text in the queue, but compare by
+                // the same ownership key we use for render dedupe.
+                queuedMessages = queuedMessages.filter(q =>
+                  !codexPromptsMatchForOwnership(q.content, mappedText),
+                )
+                reconciledOptimisticText = mappedText
+              }
             }
 
             for (const e of mapped) {
@@ -1228,13 +1268,14 @@ export function useIpcSubscriptions(
           return prev
         }
 
+        const nextEntries = appended.length > 0 || reconciledOptimisticText !== null
+          ? [...baseEntries, ...appended]
+          : current.entries
         const nextRuntimeBase = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
               ...current,
-              entries: appended.length > 0 || reconciledOptimisticText !== null
-                ? [...baseEntries, ...appended]
-                : current.entries,
+              entries: nextEntries,
               // Bump totalEntries by however many real entries just
               // landed via this burst. `appended` is already deduped
               // against the `seen` UUID set seeded from the initial
@@ -1276,6 +1317,20 @@ export function useIpcSubscriptions(
                 burstSize: entries.length,
                 appendedCount: appended.length,
                 reconciledOptimisticUser: reconciledOptimisticText !== null,
+                // WHY these counts are more important than they look:
+                // optimistic Codex user rows intentionally disappear
+                // when the durable rollout user message arrives. In
+                // the haunted failure mode, the UI symptom is exactly
+                // the same as a correct reconcile ("my optimistic row
+                // went away") except the replacement row is missing
+                // or filtered. Logging the before/base/appended/after
+                // counts lets the next debug trace distinguish a
+                // healthy handoff from a removal gap without needing
+                // to reproduce under a debugger.
+                entryCountBefore: current.entries.length,
+                entryCountBaseAfterOptimisticReconcile: baseEntries.length,
+                entryCountAfter: nextEntries.length,
+                reconciledOptimisticText,
                 appended: appended.slice(-8).map(summarizeEntryForDebug),
                 queuedMessages: queuedMessages.length,
                 workContext,

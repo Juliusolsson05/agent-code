@@ -6,11 +6,11 @@ import {
 } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { isDetached } from '@renderer/workspace/queries'
 import {
+  buildVisibleDispatchRows,
   detachedDispatchSessionIdsForTab,
-  buildDispatchGroups,
-  flattenDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
 export const paneCommands: CommandDef[] = [
   {
@@ -68,14 +68,14 @@ export const paneCommands: CommandDef[] = [
     },
   },
   {
-    // Promote the dispatch-focused detached agent into the active
+    // Promote the dispatch-focused detached session into the active
     // tab's grid via the existing placement-target picker. Available
     // only when Dispatch Mode is active AND its current focus is on a
     // detached session (grid-focused rows in the dispatch list don't
     // need attaching — they're already attached).
     id: 'attach-detached-to-grid',
-    title: 'Attach Detached Agent To Grid…',
-    description: '**What it does:** Moves one **detached Dispatch agent** into the grid.\n\n**Use when:** You want to pin background work into the normal layout.\n\n**Notes:** Uses the placement picker so you can choose where it lands.',
+    title: 'Attach Detached Session To Grid…',
+    description: '**What it does:** Moves one **detached Dispatch session** into the grid.\n\n**Use when:** You want to pin background work into the normal layout.\n\n**Notes:** Uses the placement picker so you can choose where it lands.',
     keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
     when: ({ workspace }) => {
       if (!workspace.dispatchMode) return false
@@ -154,8 +154,8 @@ export const paneCommands: CommandDef[] = [
     // aware resolver so global Dispatch can target the focused row's
     // tab (which may differ from `activeTabId`).
     id: 'attach-all-detached-for-tab',
-    title: 'Attach All Dispatch Agents For Tab',
-    description: '**What it does:** Moves all detached **Dispatch** agents for a tab into the grid.\n\n**Use when:** You want to bring a whole tab’s background agents into view.\n\n**Notes:** Preserves the existing grid and adds the agents beside it. Works in both Grid and Dispatch modes.',
+    title: 'Attach All Dispatch Sessions For Tab',
+    description: '**What it does:** Moves all detached **Dispatch** sessions for a tab into the grid.\n\n**Use when:** You want to bring a whole tab’s background work into view.\n\n**Notes:** Preserves the existing grid and adds the sessions beside it. Works in both Grid and Dispatch modes.',
     keywords: ['attach', 'all', 'detached', 'dispatch', 'grid', 'tab', 'pin'],
     when: ({ workspace }) => {
       const tabId = attachAllCommandTabId(workspace)
@@ -171,13 +171,12 @@ export const paneCommands: CommandDef[] = [
   {
     // The reverse of attach: take the focused grid pane out of the
     // tile tree without killing it and add it to the dispatch
-    // detached bucket. Refuses on the action side (with a toast) for
-    // terminals and for the only-leaf-in-tab case; the `when` check
-    // here just gates on having any non-terminal focused leaf so the
-    // command shows up in the palette.
+    // detached bucket. The action side refuses the only-leaf-in-tab
+    // case; this `when` check gates on an actual grid leaf so the command
+    // does not show for a session that is already detached.
     id: 'detach-to-dispatch',
-    title: 'Detach Agent To Dispatch',
-    description: '**What it does:** Moves a grid agent into **Dispatch** without killing it.\n\n**Use when:** You want to park work in the background.\n\n**Notes:** Terminals and the last pane in a tab cannot be detached.',
+    title: 'Detach Session To Dispatch',
+    description: '**What it does:** Moves a grid session into **Dispatch** without killing it.\n\n**Use when:** You want to park work in the background.\n\n**Notes:** The last pane in a tab cannot be detached.',
     keywords: ['detach', 'dispatch', 'park', 'background', 'unpin'],
     when: ({ workspace }) => {
       // Use the Dispatch-aware target resolver, not tab.focusedSessionId.
@@ -193,7 +192,8 @@ export const paneCommands: CommandDef[] = [
       const sessionId = commandTargetSessionIdForState(workspace.state)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      return Boolean(meta) && meta.kind !== 'terminal'
+      const owner = workspace.state.tabs.find(tab => collectLeaves(tab.root).includes(sessionId))
+      return Boolean(meta && owner)
     },
     run: ({ workspace }) => workspace.detachFocusedToDispatch(),
   },
@@ -256,7 +256,7 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'undo-close',
     title: 'Undo Close',
-    description: '**What it does:** Restores the last closed **pane or tab**.\n\n**Use when:** You closed something by mistake.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
+    description: '**What it does:** Restores the most recent closed **pane or tab** from a small recent-close history.\n\n**Use when:** You closed something by mistake, or repeat it to walk back through earlier closes.\n\n**Notes:** Also restores detached **Dispatch** agents captured with a closed tab.',
     shortcut: '⌘⇧T',
     run: ({ workspace }) => void workspace.undoClose(),
   },
@@ -291,6 +291,16 @@ export const paneCommands: CommandDef[] = [
         tone: tailMode ? 'accent' : 'neutral',
       }
     },
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      // WHY tail is agent-only even though terminals are Dispatch rows:
+      // tailMode controls the rendered transcript/feed scroll container.
+      // Terminal panes delegate scrollback to xterm.js, so toggling this
+      // runtime flag on a terminal would present a command that appears to
+      // work while changing nothing visible.
+      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+    },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
@@ -316,6 +326,15 @@ export const paneCommands: CommandDef[] = [
     id: 'copy-last-assistant',
     title: 'Copy Last Response',
     description: '**What it does:** Copies the **latest assistant response**.\n\n**Use when:** You want the most recent answer quickly.\n\n**Notes:** No picker; copies immediately.',
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      // WHY hide this for terminals: terminal output is not an assistant
+      // transcript, and extractLastAssistantText intentionally reads provider
+      // entries. Showing the command on a shell row would imply there is an
+      // assistant response to copy when there is only PTY scrollback.
+      return workspace.state.sessions[sessionId]?.kind !== 'terminal'
+    },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
@@ -339,7 +358,7 @@ function dispatchCommandTabId(
   }
   const activeTab = workspace.activeTab
   const row = selectVisibleDispatchRow(
-    flattenDispatchRows(buildDispatchGroups(workspace.state)),
+    buildVisibleDispatchRows(workspace.state),
     workspace.dispatchMode.focusedSessionId,
     activeTab?.focusedSessionId,
   )

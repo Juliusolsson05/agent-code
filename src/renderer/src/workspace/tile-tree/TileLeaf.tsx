@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
@@ -8,7 +8,6 @@ import { ProviderConditionOutlet } from '@providers/shared/renderer/conditions/P
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
 import {
   selectMergedEntries,
-  shouldShowSemanticStreaming,
 } from '@renderer/workspace/mergedEntries'
 import type { SessionId } from '@renderer/workspace/types'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
@@ -87,7 +86,6 @@ export function TileLeaf({
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { showToast } = useGlobalToast()
-  const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
@@ -204,6 +202,17 @@ export function TileLeaf({
   const appendRenderDebug = useCallback((entry: Parameters<typeof workspace.appendFeedDebug>[1]) => {
     workspace.appendFeedDebug(sessionId, entry)
   }, [sessionId, workspace.appendFeedDebug])
+
+  const mergedEntries = useMemo(
+    () => selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null),
+    [
+      runtime.entries,
+      runtime.ghosts,
+      runtime.lastJsonlEntryAt,
+      runtime.semantic.currentTurn?.turnId,
+      runtime.semantic.history,
+    ],
+  )
 
   // Claude image-paste flow — three clipboard ingress paths, media-
   // type gate, 5 MB size cap. Hook in ./TileLeaf/useClaudeImagePaste.ts.
@@ -361,17 +370,15 @@ export function TileLeaf({
           // The layered predicate in selectMergedEntries renders
           // a ghost only when JSONL has stalled past the proxy
           // AND the ghost is not sidecar-shaped (title-gen /
-          // predict-next-prompt fingerprint). The live current
-          // turn is owned by `SemanticStreamingTurn` below; the
-          // `currentTurnId` argument hides any ghost for that
-          // turn so the two surfaces never double-render.
+          // predict-next-prompt fingerprint). SemanticStreamingTurn
+          // owns the live current turn and bounded completed
+          // semantic history; selectMergedEntries suppresses ghosts
+          // for those turn ids so the two surfaces never
+          // double-render.
           // See docs/design/ghost-system.md for the canonical
           // explanation of the predicate and the dual-owner
           // model.
-          entries={selectMergedEntries(
-            runtime,
-            runtime.semantic.currentTurn?.turnId ?? null,
-          )}
+          entries={mergedEntries}
           // Live text renders ONLY from the semantic channel. The
           // former `streamingScreen` / `streamingScreenMarkdown` /
           // `streamingBaseline` props are gone — Feed no longer
@@ -391,17 +398,20 @@ export function TileLeaf({
           streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
           turnStartedAt={runtime.turnStartedAt}
           // Live-turn ownership: SemanticStreamingTurn renders the
-          // current turn end-to-end off the semantic channel.
-          // Ghosts for the same turnId are filtered out of the
-          // merged feed by selectMergedEntries (currentTurnId
-          // argument), so there is no double-render risk.
-          // shouldShowSemanticStreaming collapses to "is there a
-          // current turn?".
-          semanticTurn={
-            shouldShowSemanticStreaming(runtime)
-              ? runtime.semantic.currentTurn
-              : null
-          }
+          // current turn end-to-end off the semantic channel. Ghosts
+          // for semantic current/history turn ids are filtered out of
+          // the merged feed, so semantic rows and orphan fallback rows
+          // cannot both own the same visible turn.
+          //
+          // Completed semantic history is passed separately because
+          // MCP/Codex tool execution can advance through several
+          // Responses turns before JSONL commits rows for the earlier
+          // turns. Without this bounded bridge, archiving the current
+          // semantic turn makes the visible feed shrink until the
+          // durable transcript catches up — the exact "conversation
+          // clears while the agent is working" failure.
+          semanticHistory={runtime.semantic.history}
+          semanticTurn={runtime.semantic.currentTurn}
           tailMode={runtime.tailMode}
           pickerSelectedUuid={runtime.assistantPicker?.selectedUuid ?? null}
           codeBlockSelectedId={runtime.codeBlockPicker?.selectedId ?? null}
@@ -419,7 +429,21 @@ export function TileLeaf({
           scrollToLatestRequest={runtime.scrollToLatestRequest}
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
-          onDebugLog={feedDebugPanelOpen && focused ? appendRenderDebug : undefined}
+          // Keep render-decision logging tied to mounted feeds, not
+          // to the debug panel or the transient focus flag. The
+          // state/semantic layers already persist aggressively in
+          // normal sessions, but `Feed` used to log `visible_rows`
+          // only when the panel was mounted. A later focus-gated
+          // version still missed MCP/tool-call traces because focus
+          // can move while the same pane keeps receiving streamed
+          // state. That left the exact haunted class of bugs
+          // invisible in the saved trace: optimistic user row added,
+          // MCP semantic turn advanced, JSONL reconciled, and then
+          // no record of whether the feed actually rendered those
+          // rows. `Feed` logs only row/count changes and the debug
+          // store is capped, so all-mounted logging is the correct
+          // diagnostic boundary.
+          onDebugLog={appendRenderDebug}
         />
       </div>
 

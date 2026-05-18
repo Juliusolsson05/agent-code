@@ -1,3 +1,5 @@
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
+
 // Tile tree data model.
 //
 // Design constraints (captured during brainstorming with the user):
@@ -128,6 +130,35 @@ export type SessionMeta = {
    * parent, so the depth is always at most one.
    */
   linkedParentId?: SessionId
+  /**
+   * Set on an agent created by the Orchestration MCP server.
+   *
+   * WHY this is intentionally separate from `linkedParentId`:
+   * linked agents are a user-facing manual affordance with existing Dispatch
+   * indentation and cascade-close semantics. Orchestration agents are created
+   * programmatically by an MCP tool and need their own lifecycle, grouping, and
+   * future controls. Reusing `linkedParentId` would make the first
+   * implementation look convenient while quietly coupling two different
+   * product concepts; future "show orchestration run", "review worker diff",
+   * or "stop this run" features would then inherit linked-agent behavior by
+   * accident.
+   */
+  orchestrationParentId?: SessionId
+  orchestrationRootId?: SessionId
+  orchestrationRunId?: string
+  orchestrationRole?: string
+  /**
+   * Built-in MCP domains this agent should receive when it is spawned.
+   *
+   * WHY this is session metadata, not only a transient spawn option:
+   * enabling an Agent Code MCP server is a property of the live agent
+   * contract. Reloading dangerous-mode settings, restoring a workspace,
+   * switching focus, or duplicating UI placement should not silently strip
+   * those tools from the provider process. Persisting the domain names keeps
+   * the renderer as the source of truth for "this pane is MCP-augmented" while
+   * the main process owns the short-lived URL/token material.
+   */
+  builtInMcpDomains?: BuiltInMcpDomain[]
 }
 
 export type BuriedPaneRecord = {

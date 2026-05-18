@@ -32,6 +32,14 @@ import {
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
+import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
+import {
+  closeOrchestrationAgent,
+  closeOrchestrationRun,
+  listOrchestrationAgents,
+  readOrchestrationAgent,
+  readOrchestrationRunOutputs,
+} from '@renderer/workspace/orchestrationMcp'
 
 // -----------------------------------------------------------------------------
 // useWorkspace — the composer.
@@ -141,6 +149,7 @@ export function useWorkspace(
       undoStackRef: refs.undoStackRef,
       bootstrapTimersRef: refs.bootstrapTimersRef,
       persistedFeedDebugIdRef: refs.persistedFeedDebugIdRef,
+      inFlightFeedDebugIdRef: refs.inFlightFeedDebugIdRef,
       paneToastTimers: refs.paneToastTimers,
       saveTimerRef: refs.saveTimerRef,
       bootRef: refs.bootRef,
@@ -163,7 +172,12 @@ export function useWorkspace(
     updateRuntime,
     setDraftVersion,
   )
-  const { setStreamingBaseline, addOptimisticCodexUserEntry, removeOptimisticCodexUserEntry } =
+  const {
+    setStreamingBaseline,
+    clearPendingRewindUndo,
+    addOptimisticCodexUserEntry,
+    removeOptimisticCodexUserEntry,
+  } =
     useStreamingActions(setRuntimes)
   const { pickerEnter, pickerMove, pickerCancel, pickerConfirm, setCodeBlockPicker } =
     usePickerActions(setRuntimes, refs, showPaneToast)
@@ -229,7 +243,124 @@ export function useWorkspace(
     sessionActions,
   )
 
-  const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt } =
+  useEffect(() => {
+    const off = window.api.onOrchestrationRequest(async request => {
+      try {
+        if (request.type === 'create-agent') {
+          const agent = await paneActions.createOrchestrationAgent({
+            parentId: request.parentSessionId,
+            kind: request.kind,
+            cwd: request.cwd,
+            title: request.title,
+            role: request.role,
+            runId: request.runId,
+            builtInMcpDomains: request.builtInMcpDomains,
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'create-agent',
+            agent,
+          })
+          return
+        }
+
+        const snapshot = refs.stateRef.current
+        const runtimes = refs.latestRuntimesRef.current
+        if (request.type === 'list-agents') {
+          const agents: OrchestrationAgentRecord[] = listOrchestrationAgents({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            runId: request.runId,
+          })
+
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'list-agents',
+            agents,
+          })
+          return
+        }
+
+        if (request.type === 'read-agent') {
+          const output = readOrchestrationAgent({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            maxMessages: request.maxMessages,
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'read-agent',
+            output,
+          })
+          return
+        }
+
+        if (request.type === 'read-run-outputs') {
+          const outputs = readOrchestrationRunOutputs({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            runId: request.runId,
+            maxMessagesPerAgent: request.maxMessagesPerAgent,
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'read-run-outputs',
+            outputs,
+          })
+          return
+        }
+
+        if (request.type === 'close-agent') {
+          const result = await closeOrchestrationAgent({
+            state: snapshot,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            closeSession: paneActions.closeSession,
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'close-agent',
+            result,
+          })
+          return
+        }
+
+        const result = await closeOrchestrationRun({
+          state: snapshot,
+          parentSessionId: request.parentSessionId,
+          runId: request.runId,
+          closeSession: paneActions.closeSession,
+        })
+        await window.api.resolveOrchestrationRequest({
+          requestId: request.requestId,
+          ok: true,
+          type: 'close-run',
+          result,
+        })
+      } catch (err) {
+        await window.api.resolveOrchestrationRequest({
+          requestId: request.requestId,
+          ok: false,
+          type: request.type,
+          message: err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Orchestration request failed',
+        })
+      }
+    })
+    return off
+  }, [paneActions, refs.stateRef])
+
+  const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
   const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
@@ -306,6 +437,7 @@ export function useWorkspace(
     commitNewAgentPlacement: paneActions.commitNewAgentPlacement,
     createDetachedDispatchAgent: paneActions.createDetachedDispatchAgent,
     createLinkedAgent: paneActions.createLinkedAgent,
+    createOrchestrationAgent: paneActions.createOrchestrationAgent,
     attachDetachedToGrid: paneActions.attachDetachedToGrid,
     attachAllDetachedForTab: paneActions.attachAllDetachedForTab,
     detachFocusedToDispatch: paneActions.detachFocusedToDispatch,
@@ -328,6 +460,7 @@ export function useWorkspace(
     setSplitRatio,
     setSplitRatioInTab,
     setStreamingBaseline,
+    clearPendingRewindUndo,
     acknowledgeSession,
     appendFeedDebug,
     addOptimisticCodexUserEntry,
@@ -346,6 +479,7 @@ export function useWorkspace(
     softReloadAgentView,
     switchFocusedProvider,
     rewindFocusedToPrompt,
+    undoLastRewind,
     reloadAgentSessions,
     toggleSpotlight,
     setSpotlightSession,

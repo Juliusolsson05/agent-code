@@ -7,14 +7,13 @@ import type {
 
 import {
   SEMANTIC_ERROR_CAP,
-  SEMANTIC_HISTORY_CAP,
   SEMANTIC_LOG_CAP,
+  appendSemanticHistory,
   deriveSemanticTaskSnapshot,
   emptySemanticLookupSnapshot,
   emptySemanticTaskSnapshot,
   flattenSemanticUsage,
   hasPendingSemanticTools,
-  semanticHistoryRow,
   semanticToIndex,
 } from '@renderer/workspace/semantic/helpers'
 import { summarizeSemanticEvent } from '@renderer/workspace/semantic/summarize'
@@ -57,6 +56,116 @@ function eventTargetsDifferentTurn(
   // here would trade the observed cross-turn corruption for missing
   // valid updates.
   return typeof ev.turnId === 'string' && ev.turnId !== currentTurn.turnId
+}
+
+function codexCanReplaceEndedTurn(currentTurn: SemanticLiveTurn): boolean {
+  // WHY Codex gets this narrow escape hatch from strict turn-id
+  // ownership:
+  // the strict gate exists to stop concurrent proxy/rollout flows from
+  // thrashing the single live-turn slot while a response is still
+  // streaming. MCP and other client-executed tools have a different
+  // lifecycle: the function_call response completes, the UI keeps that
+  // turn open as "awaiting tool" so the tool row stays pending, and
+  // Codex then sends the function_call_output in the NEXT Responses
+  // turn. If we keep applying the strict mismatch rule to an already
+  // ended pending-tool turn, every valid follow-up turn is dropped and
+  // the feed looks blank except for the phase indicator. `endedAt`
+  // separates the safe sequential case from the unsafe concurrent
+  // streaming case; live, unended turns still reject mismatched ids.
+  return currentTurn.endedAt != null
+}
+
+function isTerminalProxyBlock(block: SemanticLiveBlock): boolean {
+  // WHY status/finalized are treated as equivalent here:
+  // Codex proxy message items usually reach us as
+  // `block_completed` with `finalized: true`, but the upstream
+  // Responses item also carries `status: "completed"`. The
+  // 2026-05-16T18:42 persistent log showed the dangerous hybrid:
+  // a final_answer message block had both terminal block markers,
+  // while the turn-level `turn_completed` was missing because the
+  // strict headless lifecycle had rejected the finish. If we only
+  // trust `endedAt`, that old final answer squats in `currentTurn`
+  // forever and every later proxy `resp_*` is dropped as a supposed
+  // racing producer.
+  return block.finalized === true || block.status === 'completed'
+}
+
+function isCompletedProxyTurnReadyToYield(
+  currentTurn: SemanticLiveTurn,
+): boolean {
+  // WHY this ignores `hasPendingSemanticTools` on purpose:
+  // the original strict Codex gate exists because two live producers
+  // can emit different turn ids for the same user-visible moment
+  // (proxy stream vs screen/rollout fallback). Replacing a live turn
+  // on a stray mismatched event recreated the 0/1/0/1 semantic row
+  // flicker. The 2026-05-16T19:08 bundle proved the opposite failure:
+  // a proxy turn with a completed message + completed function_call
+  // never received turn_completed, so `hasPendingSemanticTools`
+  // treated the completed function_call as "pending" forever and the
+  // strict mismatch guard dropped every later `resp_*` block. From the
+  // renderer's perspective, "all known blocks are terminal" is the
+  // decisive yield signal. If Codex later sends the tool output in a
+  // new Responses turn, that new turn must be allowed to become the
+  // live owner; keeping the stale function_call mounted is what breaks
+  // streaming.
+  if (currentTurn.source !== 'proxy') return false
+  if (currentTurn.endedAt != null) return false
+  const blocks = Object.values(currentTurn.blocks)
+  if (blocks.length === 0) return false
+  return blocks.every(isTerminalProxyBlock)
+}
+
+function isEmptyNonProxyShellTurn(currentTurn: SemanticLiveTurn): boolean {
+  return (
+    currentTurn.source !== 'proxy' &&
+    currentTurn.endedAt === null &&
+    currentTurn.text.length === 0 &&
+    currentTurn.blockOrder.length === 0 &&
+    Object.keys(currentTurn.blocks).length === 0
+  )
+}
+
+function codexCanReplaceTurn(
+  currentTurn: SemanticLiveTurn,
+  ev: Record<string, unknown>,
+): boolean {
+  if (codexCanReplaceEndedTurn(currentTurn)) return true
+  if (ev.source === 'proxy' && isCompletedProxyTurnReadyToYield(currentTurn)) {
+    return true
+  }
+  // WHY proxy can replace an empty rollout/screen shell:
+  // rollout can open a placeholder Codex turn immediately after
+  // submit, before the proxy emits the real Responses turn carrying
+  // reasoning/message blocks. The strict mismatch guard then drops
+  // every proxy block, so the feed shows no streaming. Keep the guard
+  // for live content, but let proxy claim ownership while the current
+  // non-proxy turn is still empty.
+  return ev.source === 'proxy' && isEmptyNonProxyShellTurn(currentTurn)
+}
+
+function shouldArchiveReplacedTurn(currentTurn: SemanticLiveTurn): boolean {
+  return !isEmptyNonProxyShellTurn(currentTurn)
+}
+
+function semanticTurnFromEvent(
+  ev: Record<string, unknown>,
+  now: number,
+  turnId: string,
+): SemanticLiveTurn {
+  return {
+    turnId,
+    text: '',
+    source: typeof ev.source === 'string' ? ev.source : null,
+    blocks: {},
+    blockOrder: [],
+    stopReason: null,
+    usage: null,
+    task: emptySemanticTaskSnapshot(),
+    lookups: emptySemanticLookupSnapshot(),
+    startedAt: now,
+    endedAt: null,
+    ...(ev.isCompactionSynthesis === true ? { isCompactionSynthesis: true } : {}),
+  }
 }
 
 export function foldSemanticEvent(
@@ -114,11 +223,12 @@ export function foldSemanticEvent(
       if (!turnId) break
       // Provider-gated turn ownership.
       //
-      // Codex (strict): mismatched turnIds are DROPPED because they
-      // come from racing producers (proxy flow + screen fallback, or
-      // two concurrent proxy flows). Replacing currentTurn on their
-      // say-so wipes the block map the live renderer is already
-      // showing — the 0/1/0/1 flicker documented in
+      // Codex (strict while live): mismatched turnIds are DROPPED
+      // while the current turn is still streaming because they come
+      // from racing producers (proxy flow + screen fallback, or two
+      // concurrent proxy flows). Replacing currentTurn on their say-so
+      // wipes the block map the live renderer is already showing —
+      // the 0/1/0/1 flicker documented in
       // docs/superpowers/plans/2026-04-17-codex-semantic-flicker-fix.md.
       //
       // Claude (auto-replace): archive the stuck turn and open the
@@ -167,24 +277,16 @@ export function foldSemanticEvent(
           source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
           ...(isCompactionSynthesis ? { isCompactionSynthesis: true } : {}),
         }
-      } else if (sessionKind === 'claude') {
-        history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
-        currentTurn = {
-          turnId,
-          text: '',
-          source: typeof ev.source === 'string' ? ev.source : null,
-          blocks: {},
-          blockOrder: [],
-          stopReason: null,
-          usage: null,
-          task: emptySemanticTaskSnapshot(),
-          lookups: emptySemanticLookupSnapshot(),
-          startedAt: now,
-          endedAt: null,
-          ...(isCompactionSynthesis ? { isCompactionSynthesis: true } : {}),
+      } else if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+        if (shouldArchiveReplacedTurn(currentTurn)) {
+          history = appendSemanticHistory(history, currentTurn)
         }
+        currentTurn = semanticTurnFromEvent(ev, now, turnId)
       }
-      // Codex: mismatched turnId falls through — drop the event.
+      // Codex: live mismatched turnId falls through — drop the event.
+      // Already-ended pending-tool turns are archived/replaced above;
+      // see codexCanReplaceTurn for the MCP/function_call_output
+      // lifecycle that requires that exception.
       break
     }
     case 'source_changed': {
@@ -205,8 +307,10 @@ export function foldSemanticEvent(
       // On turnId mismatch:
       //   - Claude: archive the pinned old turn and open a new one.
       //     Same rationale as the turn_started branch above.
-      //   - Codex: drop. Racing producers must not mutate a
-      //     currentTurn that doesn't belong to them (flicker defense).
+      //   - Codex: drop while the current turn is still live. Racing
+      //     producers must not mutate a currentTurn that doesn't
+      //     belong to them (flicker defense). Ended pending-tool turns
+      //     are a valid sequential handoff and are replaced.
       if (!currentTurn) {
         currentTurn = {
           turnId,
@@ -222,21 +326,11 @@ export function foldSemanticEvent(
           endedAt: null,
         }
       } else if (currentTurn.turnId !== turnId) {
-        if (sessionKind === 'claude') {
-          history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
-          currentTurn = {
-            turnId,
-            text: '',
-            source: typeof ev.source === 'string' ? ev.source : null,
-            blocks: {},
-            blockOrder: [],
-            stopReason: null,
-            usage: null,
-            task: emptySemanticTaskSnapshot(),
-            lookups: emptySemanticLookupSnapshot(),
-            startedAt: now,
-            endedAt: null,
+        if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+          if (shouldArchiveReplacedTurn(currentTurn)) {
+            history = appendSemanticHistory(history, currentTurn)
           }
+          currentTurn = semanticTurnFromEvent(ev, now, turnId)
         } else {
           break
         }
@@ -249,8 +343,30 @@ export function foldSemanticEvent(
       break
     }
     case 'block_started': {
-      if (!currentTurn) break
-      if (eventTargetsDifferentTurn(ev, currentTurn)) break
+      const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
+      if (!currentTurn) {
+        // WHY block_started can soft-open a turn:
+        // Codex proxy blocks are the render-critical source, and the
+        // 2026-05-16 failure class proved the stricter headless
+        // lifecycle can lose a ceremonial turn opener/closer while
+        // still delivering block_started/text/tool events. Keep this
+        // recovery Codex-proxy-only. Claude and fallback producers
+        // have older late-event failure modes where opening from a
+        // stray block after currentTurn was already archived would
+        // resurrect stale semantic rows.
+        if (sessionKind !== 'codex' || ev.source !== 'proxy' || !turnId) break
+        currentTurn = semanticTurnFromEvent(ev, now, turnId)
+      } else if (eventTargetsDifferentTurn(ev, currentTurn)) {
+        const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
+        if (sessionKind === 'codex' && turnId && codexCanReplaceTurn(currentTurn, ev)) {
+          if (shouldArchiveReplacedTurn(currentTurn)) {
+            history = appendSemanticHistory(history, currentTurn)
+          }
+          currentTurn = semanticTurnFromEvent(ev, now, turnId)
+        } else {
+          break
+        }
+      }
       const idx = semanticToIndex(ev.blockIndex)
       if (idx === null) break
       // Codex emits `callId` where Claude emits `toolUseId`. Both feed
@@ -569,10 +685,7 @@ export function foldSemanticEvent(
           lookups: derived.lookups,
         }
         if (nextTurn.endedAt != null && !hasPendingSemanticTools(nextTurn)) {
-          history = [
-            ...history,
-            semanticHistoryRow(nextTurn),
-          ].slice(-SEMANTIC_HISTORY_CAP)
+          history = appendSemanticHistory(history, nextTurn)
           currentTurn = null
         } else {
           currentTurn = nextTurn
@@ -588,11 +701,12 @@ export function foldSemanticEvent(
           ? ev.turnId
           : currentTurn?.turnId ?? `codex-${now}`
       // Provider-gated turn ownership (see turn_started for full
-      // rationale). Codex drops on mismatch (flicker defense);
-      // Claude archives and replaces (self-heals the stuck-pending-tool
-      // case). tool_started is Codex-only in practice today, but
-      // gating by provider keeps the policy consistent with the other
-      // two branches and avoids a subtle divergence for future
+      // rationale). Codex drops live mismatches (flicker defense) but
+      // archives/replaces already-ended pending-tool turns; Claude
+      // archives and replaces more broadly (self-heals the stuck-
+      // pending-tool case). tool_started is Codex-only in practice
+      // today, but gating by provider keeps the policy consistent with
+      // the other branches and avoids a subtle divergence for future
       // Claude-side emitters.
       if (!currentTurn) {
         currentTurn = {
@@ -609,21 +723,11 @@ export function foldSemanticEvent(
           endedAt: null,
         }
       } else if (currentTurn.turnId !== turnId) {
-        if (sessionKind === 'claude') {
-          history = [...history, semanticHistoryRow(currentTurn)].slice(-SEMANTIC_HISTORY_CAP)
-          currentTurn = {
-            turnId,
-            text: '',
-            source: typeof ev.source === 'string' ? ev.source : null,
-            blocks: {},
-            blockOrder: [],
-            stopReason: null,
-            usage: null,
-            task: emptySemanticTaskSnapshot(),
-            lookups: emptySemanticLookupSnapshot(),
-            startedAt: now,
-            endedAt: null,
+        if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+          if (shouldArchiveReplacedTurn(currentTurn)) {
+            history = appendSemanticHistory(history, currentTurn)
           }
+          currentTurn = semanticTurnFromEvent(ev, now, turnId)
         } else {
           break
         }
@@ -693,7 +797,7 @@ export function foldSemanticEvent(
       if (!match) break
       const idx = Number(match[0])
       const block = match[1]
-      currentTurn = {
+      const nextTurn = {
         ...currentTurn,
         blocks: {
           ...currentTurn.blocks,
@@ -705,6 +809,36 @@ export function foldSemanticEvent(
             resultAt: now,
           },
         },
+      }
+      // Mirror the Anthropic-style `tool_result` branch above.
+      //
+      // WHY this matters for MCP/client-executed tools:
+      // Codex rollout emits `mcp_tool_call_begin/end` and
+      // `exec_command_begin/end` as tool_started/tool_completed
+      // side-channel events, not as Claude-shaped `tool_result`
+      // entries. The `turn_completed` branch intentionally keeps an
+      // ended turn mounted while a client tool is pending so the
+      // live row does not disappear. Once `tool_completed` resolves
+      // the last pending tool, keeping that ended turn in the
+      // single currentTurn slot is wrong: it blocks the renderer
+      // from treating the turn as completed-history and makes MCP
+      // sessions look like they keep replacing the bottom of the
+      // feed instead of growing it. Archive it through the same
+      // bounded history path used by `tool_result`; Feed will render
+      // that archived copy until JSONL supersedes it.
+      {
+        const derived = deriveSemanticTaskSnapshot(nextTurn.blocks)
+        const completedTurn = {
+          ...nextTurn,
+          task: derived.task,
+          lookups: derived.lookups,
+        }
+        if (completedTurn.endedAt != null && !hasPendingSemanticTools(completedTurn)) {
+          history = appendSemanticHistory(history, completedTurn)
+          currentTurn = null
+        } else {
+          currentTurn = completedTurn
+        }
       }
       break
     }
@@ -733,10 +867,7 @@ export function foldSemanticEvent(
       if (hasPendingSemanticTools(completedTurn)) {
         currentTurn = completedTurn
       } else {
-        history = [
-          ...history,
-          semanticHistoryRow(completedTurn),
-        ].slice(-SEMANTIC_HISTORY_CAP)
+        history = appendSemanticHistory(history, completedTurn)
         currentTurn = null
       }
       break

@@ -1,5 +1,7 @@
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 
 // Shared payload types for the preload IPC bridge.
 //

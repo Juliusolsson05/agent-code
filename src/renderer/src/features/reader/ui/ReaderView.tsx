@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm'
 
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
+import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
+import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 import { assistantUuidsWithText, extractAssistantByUuid } from '@renderer/lib/copyAssistant'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -57,7 +59,7 @@ function MarkdownCode({
   // by the prose theme (accent color, no background chip).
   const isInline = !language && !text.includes('\n')
   if (isInline) {
-    return <code>{children}</code>
+    return <SafeInlineCode>{children}</SafeInlineCode>
   }
 
   return (
@@ -75,6 +77,7 @@ function MarkdownCode({
 const MARKDOWN_COMPONENTS: import('react-markdown').Options['components'] = {
   pre: MarkdownPre,
   code: MarkdownCode,
+  a: SafeMarkdownLink,
 }
 
 type ReaderAssistantMessage = {
@@ -93,9 +96,15 @@ export function ReaderView({ workspace }: Props) {
   const tab = workspace.state.tabs.find(item => item.id === reader.tabId)
   if (!tab) return null
 
-  const sessionIds = workspace.dispatchMode
+  const sessionIds = (workspace.dispatchMode
     ? dispatchSessionIdsForTab(workspace.state, tab.id)
-    : resolveTabSessions(workspace.state, tab.id)
+    : resolveTabSessions(workspace.state, tab.id))
+    // WHY Reader filters terminal sessions even though Dispatch can render
+    // them: Reader is a transcript surface. Terminal sessions render raw PTY
+    // scrollback through xterm.js and do not have assistant messages to
+    // extract. Keeping the filter here protects restored/stale reader state in
+    // addition to the command-palette guard that prevents new terminal entry.
+    .filter(sessionId => workspace.state.sessions[sessionId]?.kind !== 'terminal')
   if (sessionIds.length === 0) return null
 
   const focusedSessionId = sessionIds.includes(reader.focusedSessionId)

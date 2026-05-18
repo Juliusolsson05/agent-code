@@ -29,6 +29,16 @@ import { getToolPath } from '@main/setup/toolchain.js'
 const exec = promisify(execFile)
 
 type NumstatLine = { file: string; additions: number; deletions: number }
+const WORKTREE_CACHE_TTL_MS = 5_000
+const WORKTREE_STATUS_CONCURRENCY = 6
+
+type CacheEntry<T> = {
+  expiresAt: number
+  promise: Promise<T>
+}
+
+const worktreeListCache = new Map<string, CacheEntry<WorktreeIdentity[]>>()
+const worktreeStatusCache = new Map<string, CacheEntry<GitWorktreeStatus[]>>()
 
 // Centralized git runner. Returns stdout; swallows errors and returns
 // '' so callers can treat "no output" as a valid signal (clean
@@ -88,14 +98,36 @@ function parseWorktreePorcelain(out: string): WorktreeIdentity[] {
 }
 
 export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity[]> {
-  const out = await git(cwd, ['worktree', 'list', '--porcelain'])
-  if (!out.trim()) return []
-  return parseWorktreePorcelain(out)
+  const now = Date.now()
+  const cached = worktreeListCache.get(cwd)
+  if (cached && cached.expiresAt > now) return cloneWorktrees(await cached.promise)
+
+  // Worktree identity is stable on human timescales but several hot paths
+  // ask for it back-to-back: WorktreesBar status, WorktreeActivity summary,
+  // initial history, older history, and live session context refreshes. A
+  // tiny main-process cache removes duplicate `git worktree list` spawns
+  // across those independently-owned surfaces without hiding real changes
+  // for more than a few seconds.
+  const promise = git(cwd, ['worktree', 'list', '--porcelain'])
+    .then(out => out.trim() ? parseWorktreePorcelain(out) : [])
+    .catch(() => [])
+  worktreeListCache.set(cwd, { expiresAt: now + WORKTREE_CACHE_TTL_MS, promise })
+  return cloneWorktrees(await promise)
 }
 
 export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStatus[]> {
+  const now = Date.now()
+  const cached = worktreeStatusCache.get(cwd)
+  if (cached && cached.expiresAt > now) return cloneStatuses(await cached.promise)
+
+  const promise = computeWorktreeStatusForCwd(cwd).catch(() => [])
+  worktreeStatusCache.set(cwd, { expiresAt: now + WORKTREE_CACHE_TTL_MS, promise })
+  return cloneStatuses(await promise)
+}
+
+async function computeWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStatus[]> {
   const worktrees = await listWorktreesForCwd(cwd)
-  return await Promise.all(worktrees.map(async worktree => {
+  return await mapWithConcurrency(worktrees, WORKTREE_STATUS_CONCURRENCY, async worktree => {
     const branch = worktree.branch
     const dirty = (await git(worktree.path, ['status', '--porcelain'])).trim().length > 0
     const lastCommitAtRaw = (await git(worktree.path, ['log', '-1', '--format=%ct'])).trim()
@@ -164,7 +196,33 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
       lastCommitRelative,
       category,
     }
-  }))
+  })
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next
+      next += 1
+      out[index] = await mapper(items[index], index)
+    }
+  })
+  await Promise.all(workers)
+  return out
+}
+
+function cloneWorktrees(worktrees: WorktreeIdentity[]): WorktreeIdentity[] {
+  return worktrees.map(worktree => ({ ...worktree }))
+}
+
+function cloneStatuses(worktrees: GitWorktreeStatus[]): GitWorktreeStatus[] {
+  return worktrees.map(worktree => ({ ...worktree }))
 }
 
 // numstat → rows. Binary files emit '-' for both counts; we coerce

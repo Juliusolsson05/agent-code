@@ -1,15 +1,20 @@
-import { memo, useContext, useMemo } from 'react'
+import { memo, useContext } from 'react'
 
-import type { Entry } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
-import { ToolUseIndexContext } from '@renderer/features/feed/context'
+import {
+  ToolResultIndexContext,
+  ToolUseIndexContext,
+} from '@renderer/features/feed/context'
 import { SemanticCollapsedActivityRow } from '@renderer/features/feed/ui/semantic/CollapsedActivityRow'
 import { SemanticLiveBlockRow } from '@renderer/features/feed/ui/semantic/BlockRow'
-import { buildSemanticRenderUnits } from '@renderer/features/feed/ui/semantic/renderUnits'
+import {
+  buildSemanticRenderUnits,
+  type CommittedAssistantText,
+} from '@renderer/features/feed/ui/semantic/renderUnits'
 
 // WHY render the semantic turn block-by-block instead of just dumping
 // `turn.text` through markdown:
@@ -36,51 +41,25 @@ import { buildSemanticRenderUnits } from '@renderer/features/feed/ui/semantic/re
 // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
 export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   turn,
-  committedEntries,
+  committedAssistantText,
 }: {
   turn: SemanticLiveTurn
-  committedEntries: Entry[]
+  committedAssistantText: CommittedAssistantText
 }) {
-  const blocks = Object.values(turn.blocks).sort((a, b) => a.blockIndex - b.blockIndex)
+  const hasBlocks = Object.keys(turn.blocks).length > 0
   // Committed tool_use index is threaded down from Feed via context.
   // buildSemanticRenderUnits uses it to skip live blocks whose
   // `toolUseId` / `callId` is already committed — kills the bottom-
   // of-feed dupe where the live turn keeps rendering tool rounds
   // that the committed transcript already painted above.
   const committedToolUseIndex = useContext(ToolUseIndexContext)
-  const committedAssistantTextKeys = useMemo(() => {
-    const keys = new Set<string>()
-    for (const entry of committedEntries) {
-      if (entry.type !== 'assistant') continue
-      const assistantEntry = entry as {
-        codexTurnId?: unknown
-        message?: { id?: unknown; content?: unknown }
-      }
-      const turnIds = [
-        typeof assistantEntry.message?.id === 'string' ? assistantEntry.message.id : null,
-        typeof assistantEntry.codexTurnId === 'string' ? assistantEntry.codexTurnId : null,
-      ].filter((id): id is string => Boolean(id))
-      if (turnIds.length === 0) continue
-
-      const content = assistantEntry.message?.content
-      if (!Array.isArray(content)) continue
-      for (const block of content) {
-        const item = block as Record<string, unknown>
-        if (item.type !== 'text' || typeof item.text !== 'string' || !item.text) continue
-        for (const turnId of turnIds) {
-          keys.add(`${turnId}\u0000${item.text}`)
-        }
-      }
-    }
-    return keys
-  }, [committedEntries])
+  const committedToolResultIndex = useContext(ToolResultIndexContext)
   const units = buildSemanticRenderUnits(
     turn,
     committedToolUseIndex,
-    committedAssistantTextKeys,
+    committedToolResultIndex,
+    committedAssistantText,
   )
-  const hasBlocks = blocks.length > 0
-
   // Compaction-synthesis placeholder.
   //
   // When Claude Code triggers `/compact` (manual or auto), the proxy
@@ -106,7 +85,7 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
   // moving it earlier would break Rules of Hooks because the hook
   // count would differ between compaction and non-compaction renders
   // of the same component instance. The wasted hook work is cheap —
-  // `committedAssistantTextKeys` memoizes on `committedEntries` which
+  // `committedAssistantText` memoizes on `committedEntries` which
   // doesn't grow during the compaction window.
   if (turn.isCompactionSynthesis) {
     return (
@@ -136,6 +115,12 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
     // carries the "agent is working" signal on its own. See
     // docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
     if (!turn.text) return null
+    if (
+      committedAssistantText.keys.has(`${turn.turnId}\u0000${turn.text}`) ||
+      committedAssistantText.texts.has(turn.text)
+    ) {
+      return null
+    }
     return (
       <MarkerRow marker="⏺">
         <StreamingProse text={turn.text} />
@@ -148,12 +133,12 @@ export const SemanticStreamingTurn = memo(function SemanticStreamingTurn({
       {units.map(unit => (
         unit.type === 'collapsed_activity' ? (
           <SemanticCollapsedActivityRow
-            key={`collapsed:${unit.blockIndices.join(',')}`}
+            key={`${turn.turnId}:collapsed:${unit.blockIndices.join(',')}`}
             unit={unit}
           />
         ) : (
           <SemanticLiveBlockRow
-            key={unit.block.blockIndex}
+            key={`${turn.turnId}:block:${unit.block.blockIndex}:${unit.block.itemId ?? unit.block.callId ?? unit.block.toolUseId ?? 'anon'}`}
             block={unit.block}
             toolState={unit.toolState}
           />

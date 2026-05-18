@@ -1,4 +1,4 @@
-import { memo, useContext } from 'react'
+import { memo, useContext, useState, type ReactNode } from 'react'
 
 import type { ToolResultBlock } from '@shared/types/transcript'
 
@@ -8,10 +8,37 @@ import { stripLineNumberPrefix } from '@renderer/features/feed/lib/helpers'
 import { CodeRenderContext, ToolUseIndexContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
-import { ToolBand } from '@renderer/features/feed/ui/rows/primitives'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
+
+function LazyDetails({
+  summary,
+  children,
+}: {
+  summary: ReactNode
+  children: ReactNode
+}) {
+  const [opened, setOpened] = useState(false)
+  return (
+    // Closed <details> hides its contents visually but React still mounts
+    // children. The expensive child here is usually a Monaco CodeBlock,
+    // which means editor creation, model allocation, and sometimes LSP
+    // document lifecycle. Gate it on first-open so dense restored feeds
+    // stay cheap until the user explicitly drills into the raw file output.
+    <details
+      className="text-[12px] leading-[1.55] text-ink-dim"
+      onToggle={event => {
+        if (event.currentTarget.open) setOpened(true)
+      }}
+    >
+      <summary className="cursor-pointer select-none">
+        {summary}
+      </summary>
+      {opened ? <div className="mt-2">{children}</div> : null}
+    </details>
+  )
+}
 
 /**
  * Look at the tool_use this result came from (via the feed-level
@@ -96,22 +123,23 @@ export const ToolResultRow = memo(function ToolResultRow({
           : null
     return (
       <MarkerRow marker="⎿" tone="muted">
-        <details className="text-[12px] leading-[1.55] text-ink-dim">
-          <summary className="cursor-pointer select-none">
+        <LazyDetails
+          summary={(
+            <>
             Read <span className="text-ink font-semibold">{numLines}</span>{' '}
             {numLines === 1 ? 'line' : 'lines'}
-          </summary>
-          <div className="mt-2">
-            <CodeBlock
-              code={stripped}
-              path={filePath}
-              workspaceRoot={codeContext.workspaceRoot}
-              codeId={`read:${block.tool_use_id}`}
-              engine="monaco"
-              allowAutoDetect
-            />
-          </div>
-        </details>
+            </>
+          )}
+        >
+          <CodeBlock
+            code={stripped}
+            path={filePath}
+            workspaceRoot={codeContext.workspaceRoot}
+            codeId={`read:${block.tool_use_id}`}
+            engine="monaco"
+            allowAutoDetect
+          />
+        </LazyDetails>
       </MarkerRow>
     )
   }
@@ -128,18 +156,16 @@ export const ToolResultRow = memo(function ToolResultRow({
         ? sourceInput.path
         : null
     return (
-      <ToolBand>
-        <MarkerRow marker="⎿" tone="muted">
-          <CodeBlock
-            code={trimmed}
-            path={filePath}
-            workspaceRoot={codeContext.workspaceRoot}
-            codeId={`grep:${block.tool_use_id}`}
-            engine="monaco"
-            allowAutoDetect
-          />
-        </MarkerRow>
-      </ToolBand>
+      <MarkerRow marker="⎿" tone="muted">
+        <CodeBlock
+          code={trimmed}
+          path={filePath}
+          workspaceRoot={codeContext.workspaceRoot}
+          codeId={`grep:${block.tool_use_id}`}
+          engine="monaco"
+          allowAutoDetect
+        />
+      </MarkerRow>
     )
   }
 

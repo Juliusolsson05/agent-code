@@ -82,6 +82,47 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Undo Rewind — a runtime-only recovery affordance for the most recent
+    // Rewind-to-Prompt on the focused pane. This deliberately does NOT share
+    // the Undo Close stack: close undo restores tile placement from a LIFO
+    // history, while rewind undo swaps provider transcript identity back via
+    // replaceSession. The command is visible only while the current pane still
+    // points at the rewound provider id; submit-start clearing removes it before
+    // the user can create branch work that an undo would hide.
+    id: 'undo-rewind',
+    title: 'Undo Rewind',
+    description: '**What it does:** Restores the focused **agent session** to the provider transcript it used before the last rewind.\n\n**Use when:** You rewound to the wrong prompt and have not submitted new work from the rewound branch.\n\n**Notes:** Runtime-only. Available until the next submit, pane close, or reload.',
+    keywords: [
+      'undo',
+      'rewind',
+      'restore',
+      'tail',
+      'rollback',
+      'back',
+      'history',
+      'prompt',
+    ],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const runtime = workspace.getRuntime(sessionId)
+      const pending = runtime.pendingRewindUndo
+      const kind = meta?.kind ?? 'claude'
+      return (
+        (kind === 'claude' || kind === 'codex') &&
+        Boolean(pending) &&
+        meta?.providerSessionId === pending?.rewoundProviderSessionId &&
+        !runtime.processActive &&
+        !runtime.semantic.currentTurn
+      )
+    },
+    run: async ({ workspace, ui }) => {
+      ui.closePalette()
+      await workspace.undoLastRewind()
+    },
+  },
+  {
     // Agent Activity — overview of every visible pane/session
     // grouped by tab, sorted by last activity. Primary use case is
     // triaging a long working session: scan which agents have gone
@@ -133,6 +174,163 @@ export const sessionCommands: CommandDef[] = [
     run: ({ ui }) => {
       ui.openPromptSearch()
       ui.closePalette()
+    },
+  },
+  {
+    id: 'enable-built-in-mcp-ping',
+    title: 'Enable Built-in MCP Ping',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code built-in MCP access.\n\n**Use when:** You want to verify the new MCP bridge for this pane.\n\n**Notes:** Adds the ping domain only; orchestration tools are implemented separately.',
+    keywords: ['mcp', 'server', 'built-in', 'ping', 'reload', 'agent', 'claude', 'codex'],
+    when: ({ workspace, flags }) => {
+      if (!flags.devDebugEnabled) return false
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'ping' as const]))
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(newSessionId, 'Reloaded with built-in MCP ping')
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Built-in MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
+    id: 'enable-ai-workspace-mcp',
+    title: 'Enable AI Workspace MCP',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code AI Workspace MCP tools.\n\n**Use when:** You want this agent to create curated cross-worktree file review workspaces.\n\n**Notes:** Adds the AI Workspace domain only; orchestration agents can use it but it remains a separate MCP capability.',
+    keywords: ['mcp', 'ai workspace', 'workspace', 'review', 'files', 'worktree', 'reload', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'ai_workspace' as const]))
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(newSessionId, 'Reloaded with AI Workspace MCP')
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'AI Workspace MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
+    id: 'enable-orchestration-mcp',
+    title: 'Enable Orchestration MCP',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code orchestration MCP tools.\n\n**Use when:** You want this agent to create and coordinate distinct orchestration child agents.\n\n**Notes:** Orchestration agents are separate from manual Linked Agents.',
+    keywords: ['mcp', 'orchestration', 'agents', 'workers', 'reload', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'orchestration' as const]))
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(newSessionId, 'Reloaded with orchestration MCP')
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Orchestration MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
+    id: 'enable-agent-transcripts-mcp',
+    title: 'Enable Agent Transcripts MCP',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code transcript-consumption MCP tools.\n\n**Use when:** You want this agent to read a specific Claude/Codex JSONL transcript file through filtered projections instead of manual shell parsing.\n\n**Notes:** The tool accepts an explicit file path and returns bounded normalized transcript context; it does not discover transcripts for the agent.',
+    keywords: ['mcp', 'transcript', 'transcripts', 'agent context', 'handoff', 'review', 'reload', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = Array.from(new Set([...(meta.builtInMcpDomains ?? []), 'agent_transcripts' as const]))
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(newSessionId, 'Reloaded with Agent Transcripts MCP')
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Agent Transcripts MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
     },
   },
   {
@@ -283,7 +481,7 @@ export const sessionCommands: CommandDef[] = [
   {
     id: 'switch-provider',
     title: 'Switch Provider',
-    description: '**What it does:** Switches the focused agent between **Claude** and **Codex**.\n\n**Use when:** You want to continue the same work with another provider.\n\n**Notes:** Requires a resumable provider session.',
+    description: '**What it does:** Switches the focused agent between **Claude** and **Codex**.\n\n**Use when:** You want to continue the same work with another provider.\n\n**Notes:** Saved sessions are translated; empty panes are replaced with a fresh pane of the other provider.',
     keywords: ['provider', 'switch', 'claude', 'codex', 'translate'],
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -298,8 +496,9 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
+      if (!meta) return false
       const kind = meta?.kind ?? 'claude'
-      return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
+      return kind === 'claude' || kind === 'codex'
     },
     run: ({ workspace }) => void workspace.switchFocusedProvider(),
   },

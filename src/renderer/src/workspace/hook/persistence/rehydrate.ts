@@ -22,6 +22,7 @@ import type {
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import * as perf from '@renderer/performance/client'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 
@@ -175,6 +176,25 @@ export async function rehydrateWorkspace(
     return out
   }
 
+  const buildRemappedSessions = (): Record<SessionId, SessionMeta> => {
+    // WHY relationship fields are remapped at commit time instead of when each
+    // session finishes spawning:
+    //
+    // Rehydrate is intentionally concurrent and incremental. A child can spawn
+    // before its parent, so `idMap` may not contain the parent old->new mapping
+    // during that child's first commit. If we rewrote `freshSessions` eagerly,
+    // that early partial commit would permanently drop the relationship and a
+    // later parent spawn could not repair it. Keeping `freshSessions` as the
+    // raw persisted metadata and projecting a remapped sessions map for each
+    // commit lets relationships appear as soon as both endpoints have fresh
+    // ids, while partial states avoid stale pre-restart pointers.
+    const out: Record<SessionId, SessionMeta> = {}
+    for (const [sessionId, meta] of Object.entries(freshSessions)) {
+      out[sessionId] = remapSessionMetaRelationships(meta, idMap)
+    }
+    return out
+  }
+
   const buildRemappedTileTabs = (tabs: Tab[]): TileTabsState | null => {
     const persistedTileTabs = persisted.tileTabs
     if (!persistedTileTabs) return null
@@ -231,7 +251,7 @@ export async function rehydrateWorkspace(
         tabs: newTabs,
         activeTabId,
         dispatchMode: remappedDispatchMode,
-        sessions: { ...freshSessions },
+        sessions: buildRemappedSessions(),
         detachedSessions: buildRemappedDetachedSessions(),
         buried: buildRemappedBuried(),
         pinnedSessionIds: buildRemappedPinnedSessionIds(),
@@ -339,10 +359,20 @@ export async function rehydrateWorkspace(
         })
         try {
           const kind: SessionKind = meta.kind ?? 'claude'
+          const builtInMcpDomains =
+            kind !== 'terminal'
+              ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)
+              : undefined
           // For terminal sessions with a persisted tmuxName, pass it
           // as recoverTmuxName so main re-attaches the alive tmux
           // session (or falls back to fresh spawn if it died). Agents
           // ignore recoverTmuxName at the main side; safe to omit.
+          //
+          // WHY MCP domains are threaded through rehydrate:
+          // workspace.json stores durable domain names; main mints fresh
+          // loopback URLs/tokens for every new provider process. If rehydrate
+          // respawns without the saved domains, the pane visually restores but
+          // its tool surface silently changes underneath the user.
           const { sessionId: newId, tmuxName: nextTmuxName } = await window.api.spawnSession({
             kind,
             cwd: meta.cwd,
@@ -350,6 +380,7 @@ export async function rehydrateWorkspace(
             dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+            builtInMcpDomains,
           })
           idMap.set(oldId, newId)
           // Carry the full meta forward — kind + providerSessionId +
@@ -359,6 +390,7 @@ export async function rehydrateWorkspace(
           // (recovered name when alive, fresh name when respawned).
           freshSessions[newId] = {
             ...meta,
+            ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
             ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
           }
           commitRehydratedState()
@@ -393,5 +425,46 @@ export async function rehydrateWorkspace(
     restoredSessions,
     expectedSessions,
     complete: restoredSessions === expectedSessions,
+  }
+}
+
+export function remapSessionMetaRelationships(
+  meta: SessionMeta,
+  idMap: Map<SessionId, SessionId>,
+): SessionMeta {
+  // WHY these SessionMeta fields need the same old->new remap as tile leaves:
+  //
+  // Agent Code SessionIds are launch-local routing ids. Rehydrate respawns
+  // every backend process, so every persisted reference to another session must
+  // cross the idMap boundary. Tile leaves, detached records, buried records,
+  // pins, and Dispatch focus already do this. `linkedParentId`,
+  // `orchestrationParentId`, and `orchestrationRootId` are the same kind of
+  // relationship pointer; leaving them untouched makes restored child agents
+  // render as top-level rows and breaks parent-scoped orchestration MCP reads.
+  // If the referenced parent/root failed to respawn, omitting the field is the
+  // honest state: the child survived, but the relationship endpoint did not.
+  const {
+    linkedParentId,
+    orchestrationParentId,
+    orchestrationRootId,
+    ...rest
+  } = meta
+  const remappedLinkedParentId = linkedParentId ? idMap.get(linkedParentId) : undefined
+  const remappedOrchestrationParentId = orchestrationParentId
+    ? idMap.get(orchestrationParentId)
+    : undefined
+  const remappedOrchestrationRootId = orchestrationRootId
+    ? idMap.get(orchestrationRootId)
+    : undefined
+
+  return {
+    ...rest,
+    ...(remappedLinkedParentId ? { linkedParentId: remappedLinkedParentId } : {}),
+    ...(remappedOrchestrationParentId
+      ? { orchestrationParentId: remappedOrchestrationParentId }
+      : {}),
+    ...(remappedOrchestrationRootId
+      ? { orchestrationRootId: remappedOrchestrationRootId }
+      : {}),
   }
 }

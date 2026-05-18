@@ -26,13 +26,17 @@ import { findBestRemainingFocus, findDirectionalNeighbor } from '@renderer/works
 import { findParentSplitInfo } from '@renderer/lib/undoClose'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 import {
-  buildDispatchGroups,
+  buildVisibleDispatchRows,
   detachedDispatchSessionIdsForTab,
-  flattenDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type {
+  OrchestrationAgentKind,
+  OrchestrationAgentRecord,
+} from '@mcp/shared/orchestrationTypes'
 
 import type {
   WorkspaceSetRuntimes,
@@ -79,6 +83,15 @@ export function usePaneActions(
     kind: Exclude<SessionKind, 'terminal'>,
     parentId: SessionId,
   ) => Promise<void>
+  createOrchestrationAgent: (params: {
+    parentId: SessionId
+    kind: OrchestrationAgentKind
+    cwd?: string
+    title?: string
+    role?: string
+    runId?: string
+    builtInMcpDomains?: BuiltInMcpDomain[]
+  }) => Promise<OrchestrationAgentRecord>
   attachDetachedToGrid: (sessionId: SessionId, target: PlacementTarget) => void
   attachAllDetachedForTab: (tabId: string) => void
   detachFocusedToDispatch: () => void
@@ -373,6 +386,96 @@ export function usePaneActions(
     [refs.stateRef, sessionActions, setState, showToast],
   )
 
+  const createOrchestrationAgent = useCallback(
+    async (params: {
+      parentId: SessionId
+      kind: OrchestrationAgentKind
+      cwd?: string
+      title?: string
+      role?: string
+      runId?: string
+      builtInMcpDomains?: BuiltInMcpDomain[]
+    }): Promise<OrchestrationAgentRecord> => {
+      const snapshot = refs.stateRef.current
+      const parentMeta = snapshot.sessions[params.parentId]
+      if (!parentMeta) {
+        throw new Error('Could not create orchestration agent: parent agent is gone')
+      }
+
+      const rootParentId = parentMeta.orchestrationRootId ?? params.parentId
+      const rootParentMeta = snapshot.sessions[rootParentId] ?? parentMeta
+      const parentDetached = snapshot.detachedSessions[rootParentId]
+      const parentTab = parentDetached
+        ? snapshot.tabs.find(t => t.id === parentDetached.projectTabId)
+        : snapshot.tabs.find(t => collectLeaves(t.root).includes(rootParentId))
+      if (!parentTab) {
+        throw new Error('Could not create orchestration agent: parent tab not found')
+      }
+
+      const cwd = params.cwd ?? rootParentMeta.cwd
+      const sessionId = await sessionActions.spawn(cwd, {
+        kind: params.kind,
+        builtInMcpDomains: params.builtInMcpDomains,
+      })
+
+      const agent: OrchestrationAgentRecord = {
+        sessionId,
+        kind: params.kind,
+        cwd,
+        ...(params.title ? { title: params.title } : {}),
+        orchestrationParentId: params.parentId,
+        orchestrationRootId: rootParentId,
+        ...(params.runId ? { orchestrationRunId: params.runId } : {}),
+        ...(params.role ? { orchestrationRole: params.role } : {}),
+      }
+
+      setState(prev => {
+        const latestTab = prev.tabs.find(t => t.id === parentTab.id)
+        const projectTabIndex = prev.tabs.findIndex(t => t.id === parentTab.id)
+        if (!latestTab) return prev
+        return {
+          ...prev,
+          sessions: {
+            ...prev.sessions,
+            [sessionId]: {
+              ...(prev.sessions[sessionId] ?? { cwd, kind: params.kind }),
+              cwd,
+              kind: params.kind,
+              ...(params.title ? { title: params.title } : {}),
+              orchestrationParentId: params.parentId,
+              orchestrationRootId: rootParentId,
+              ...(params.runId ? { orchestrationRunId: params.runId } : {}),
+              ...(params.role ? { orchestrationRole: params.role } : {}),
+            },
+          },
+          detachedSessions: {
+            ...prev.detachedSessions,
+            [sessionId]: {
+              sessionId,
+              surface: 'dispatch',
+              projectTabId: latestTab.id,
+              projectTabTitle: latestTab.title,
+              projectTabIndex: projectTabIndex >= 0 ? projectTabIndex : 0,
+              detachedAt: Date.now(),
+            },
+          },
+          // WHY orchestration agents intentionally do not steal focus:
+          // the MCP caller already gets `sessionId` back as the control handle,
+          // and the user may be reading or editing the parent while the new
+          // worker boots. Reusing Dispatch's visual nesting is correct, but
+          // reusing its manual "new agent means jump to it" focus semantics is
+          // wrong for orchestration because one prompt can create many agents.
+          // Keeping the active tab and focused dispatch row unchanged preserves
+          // the user's review surface while still linking the child into the
+          // same project tree.
+        }
+      })
+
+      return agent
+    },
+    [refs.stateRef, sessionActions, setState],
+  )
+
   // Close every linked child of `parentId`, recursively. Linked
   // agents are lifecycle-bound to their parent: when the parent is
   // closed, every session that named it as `linkedParentId` is
@@ -485,11 +588,11 @@ export function usePaneActions(
         }
 
         // Bulk attach deliberately creates one new subtree for the
-        // incoming Dispatch agents and hard-normalizes ONLY that
+        // incoming Dispatch sessions and hard-normalizes ONLY that
         // subtree. The existing tab root is preserved byte-for-byte
         // below a single wrapper split; its internal ratios and pane
         // arrangement are not flattened. This gives users a predictable
-        // "pin all background agents beside my current grid" action
+        // "pin all background work beside my current grid" action
         // without punishing the layout they already curated.
         const attachedSubtree = normalizeTree(detachedIds)
         const nextRoot = wrapRootWithNode(
@@ -513,8 +616,8 @@ export function usePaneActions(
                 }
               : currentTab,
           ),
-          // The attached agents stop being detached records, but the first one
-          // is still the user's target for the bulk attach action. Keep
+          // The attached sessions stop being detached records, but the first
+          // one is still the user's target for the bulk attach action. Keep
           // Dispatch focus explicit so the highlighted row and command target
           // do not depend on selectVisibleDispatchRow's grid-focus fallback.
           dispatchMode: prev.dispatchMode
@@ -524,7 +627,7 @@ export function usePaneActions(
       })
       if (attachedCount > 0) {
         showToast(
-          `Attached ${attachedCount} Dispatch ${attachedCount === 1 ? 'agent' : 'agents'} to grid`,
+          `Attached ${attachedCount} Dispatch ${attachedCount === 1 ? 'session' : 'sessions'} to grid`,
         )
       }
     },
@@ -535,35 +638,35 @@ export function usePaneActions(
   // tree without killing its session, and add it to the dispatch
   // detached bucket.
   //
-  // Refuses in three cases, each surfaced as a toast so the user
+  // Refuses in two cases, each surfaced as a toast so the user
   // understands why nothing happened:
   //   1. No focused session — nothing to detach.
-  //   2. Focused session is a terminal — terminals already have a
-  //      first-class slot in Dispatch (the right-hand project terminal),
-  //      so detaching one would create two terminals fighting for the
-  //      same surface.
-  //   3. The focused pane is the only leaf in its tab — closeLeaf would
+  //   2. The focused pane is the only leaf in its tab — closeLeaf would
   //      return null and the tab.root type cannot represent an empty
   //      tree. We don't want to silently close the tab either, so we
   //      refuse and ask the user to add another pane first.
   const detachFocusedToDispatch = useCallback(() => {
     const snapshot = refs.stateRef.current
-    const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
-    if (!tab) return
-    const sessionId = tab.focusedSessionId
+    const sessionId = commandTargetSessionIdForState(snapshot)
     if (!sessionId) {
-      showToast('No focused agent to detach')
+      showToast('No focused session to detach')
       return
     }
     const meta = snapshot.sessions[sessionId]
     if (!meta) return
-    if (meta.kind === 'terminal') {
-      showToast('Terminals cannot be detached to Dispatch')
+    const tab = snapshot.tabs.find(t => collectLeaves(t.root).includes(sessionId))
+    if (!tab) {
+      // WHY detached rows no-op here instead of re-detaching:
+      // This action means "move the grid pane out to Dispatch." A detached
+      // session is already there; treating it as success would hide a stale
+      // command-target bug, while trying to mutate it would duplicate the
+      // ownership record. The attach command owns the reverse direction.
+      showToast('Session is already detached to Dispatch')
       return
     }
     const leaves = collectLeaves(tab.root)
     if (leaves.length <= 1) {
-      showToast('Cannot detach the last pane in a tab — add another agent first')
+      showToast('Cannot detach the last pane in a tab — add another pane first')
       return
     }
     const tabIndex = snapshot.tabs.findIndex(t => t.id === tab.id)
@@ -603,7 +706,7 @@ export function usePaneActions(
           },
         },
         // If Dispatch is currently active, focus the freshly detached
-        // agent so the user sees the result of their action. If
+        // session so the user sees the result of their action. If
         // Dispatch is not active, leave dispatchMode alone — toggling
         // into Dispatch later will pick this up via the existing
         // first-row fallback in selectActiveRow.
@@ -612,7 +715,7 @@ export function usePaneActions(
           : prev.dispatchMode,
       }
     })
-    const cwdBase = meta.cwd.split('/').filter(Boolean).pop() ?? 'agent'
+    const cwdBase = meta.cwd.split('/').filter(Boolean).pop() ?? 'session'
     showToast(`Detached "${cwdBase}" to Dispatch`)
   }, [refs.stateRef, setState, showToast])
 
@@ -687,7 +790,7 @@ export function usePaneActions(
     const snapshot = refs.stateRef.current
     const activeTab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
     const dispatchRows = snapshot.dispatchMode
-      ? flattenDispatchRows(buildDispatchGroups(snapshot))
+      ? buildVisibleDispatchRows(snapshot)
       : []
     const dispatchTargetId = snapshot.dispatchMode
       ? selectVisibleDispatchRow(
@@ -753,7 +856,7 @@ export function usePaneActions(
       // alike.
       const kindLabel = sessionMeta.kind ?? 'claude'
       const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
-      showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T (Undo Close)`)
+      showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
     } else if (!parentInfo && sessionMeta) {
       // This pane IS the root — closing it kills the tab. Capture
       // the tab-level undo entry.
@@ -769,7 +872,7 @@ export function usePaneActions(
         tabIndex: tabIdx,
         sessionMetas: allMetas,
       })
-      showToast(`Closed “${tab.title}” — ⌘⇧T (Undo Close)`)
+      showToast(`Closed “${tab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
     }
 
     await window.api.killSession(targetId)
@@ -877,8 +980,8 @@ export function usePaneActions(
           }
         })
         const kindLabel = sessionMeta?.kind ?? 'claude'
-        const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'agent'
-        showToast(`Closed detached ${kindLabel} agent (${cwdBase})`)
+        const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'session'
+        showToast(`Closed detached ${kindLabel} session (${cwdBase})`)
         return
       }
       if (!owningTab) return
@@ -900,7 +1003,7 @@ export function usePaneActions(
         })
         const kindLabel = sessionMeta.kind ?? 'claude'
         const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
-        showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T (Undo Close)`)
+        showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
       } else if (!parentInfo && sessionMeta) {
         const tabIdx = snapshot.tabs.findIndex(t => t.id === owningTab.id)
         const allMetas: Record<SessionId, SessionMeta> = {}
@@ -914,7 +1017,7 @@ export function usePaneActions(
           tabIndex: tabIdx,
           sessionMetas: allMetas,
         })
-        showToast(`Closed “${owningTab.title}” — ⌘⇧T (Undo Close)`)
+        showToast(`Closed “${owningTab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
       }
 
       await window.api.killSession(targetId)
@@ -1359,6 +1462,7 @@ export function usePaneActions(
     commitNewAgentPlacement,
     createDetachedDispatchAgent,
     createLinkedAgent,
+    createOrchestrationAgent,
     attachDetachedToGrid,
     attachAllDetachedForTab,
     detachFocusedToDispatch,
@@ -1412,8 +1516,8 @@ function dispatchModeAfterSessionRemoval(
   // activeTabId to a different project) we deliberately clear focus instead
   // of inventing a row. The DispatchLayout fallback effect will pick a sane
   // first-row default on the next render in the new scope.
-  const beforeRows = flattenDispatchRows(buildDispatchGroups(before))
-  const afterRows = flattenDispatchRows(buildDispatchGroups(after))
+  const beforeRows = buildVisibleDispatchRows(before)
+  const afterRows = buildVisibleDispatchRows(after)
   const removedIndex = beforeRows.findIndex(row => row.sessionId === removedSessionId)
   const successor =
     removedIndex >= 0

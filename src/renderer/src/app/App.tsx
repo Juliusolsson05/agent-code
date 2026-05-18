@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
+import { AgentStatusPanel } from '@renderer/features/agent-status/ui/AgentStatusPanel'
 import { PinAgentsModal, type PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
 import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
 import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
@@ -83,6 +84,7 @@ export default function App() {
   const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
+  const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
   const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
@@ -130,6 +132,9 @@ export default function App() {
   const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
   const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
   const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
+  const openAgentStatusPanel = useAppStore(state => state.openAgentStatusPanel)
+  const closeAgentStatusPanel = useAppStore(state => state.closeAgentStatusPanel)
+  const toggleAgentStatusPanel = useAppStore(state => state.toggleAgentStatusPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
   const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
   // File-tree visibility lives on the global-editor store, not on
@@ -153,6 +158,14 @@ export default function App() {
   useEffect(() => {
     applyTheme(settings)
   }, [settings])
+
+  useEffect(() => {
+    const off = window.api.onAiWorkspaceOpenRequest(request => {
+      useGlobalEditorStore.getState().openAiWorkspace(request.workspaceId)
+      useAppStore.getState().openGlobalEditor()
+    })
+    return off
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -604,6 +617,14 @@ export default function App() {
           />
         )}
 
+        {agentStatusPanelOpen && commandTargetId && (
+          <AgentStatusPanel
+            sessionId={commandTargetId}
+            workspace={workspace}
+            onClose={closeAgentStatusPanel}
+          />
+        )}
+
         {debugPanelOpen && commandTargetId && (
           <DebugPanel
             sessionId={commandTargetId}
@@ -662,6 +683,9 @@ export default function App() {
         toggleProxyDebugPanel={toggleProxyDebugPanel}
         toggleHtmlDebugPanel={toggleHtmlDebugPanel}
         toggleDevDebugPanel={toggleDevDebugPanel}
+        openAgentStatusPanel={openAgentStatusPanel}
+        closeAgentStatusPanel={closeAgentStatusPanel}
+        toggleAgentStatusPanel={toggleAgentStatusPanel}
         togglePerformancePanel={togglePerformancePanel}
         toggleGlobalEditor={toggleGlobalEditor}
         toggleFileTreeVisible={toggleFileTreeVisible}
@@ -698,6 +722,7 @@ export default function App() {
         htmlDebugPanelOpen={htmlDebugPanelOpen}
         devDebugEnabled={devDebugEnabled}
         devDebugPanelOpen={devDebugPanelOpen}
+        agentStatusPanelOpen={agentStatusPanelOpen}
         performancePanelOpen={performancePanelOpen}
         globalEditorOpen={globalEditorOpen}
         fileTreeVisible={fileTreeVisible}

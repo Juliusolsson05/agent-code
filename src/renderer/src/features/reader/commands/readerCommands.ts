@@ -1,4 +1,5 @@
 import type { CommandDef } from '@renderer/features/command-palette/types'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 export const readerCommands: CommandDef[] = [
   {
@@ -10,6 +11,17 @@ export const readerCommands: CommandDef[] = [
       label: workspace.readerMode ? 'On' : 'Off',
       tone: workspace.readerMode ? 'accent' : 'neutral',
     }),
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      // WHY Reader Mode is agent-only:
+      // Reader renders assistant transcript messages. A terminal row renders
+      // raw PTY scrollback through xterm.js and has no assistant-message
+      // model, so allowing Reader from a terminal would either show an empty
+      // surface or pretend terminal output is provider prose.
+      return kind === 'claude' || kind === 'codex'
+    },
     run: ({ workspace }) => workspace.toggleReaderMode(),
   },
 ]
