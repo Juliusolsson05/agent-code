@@ -117,7 +117,15 @@ export const CodeBlock = memo(function CodeBlock({
       const monaco = await getMonaco()
       if (disposed || !containerRef.current) return
 
-      await ensureSemanticProvider(monaco, workspaceRoot, normalizedLanguage)
+      await ensureSemanticProvider(monaco, workspaceRoot, normalizedLanguage).catch(() => {
+        // WHY semantic provider setup is allowed to fail open: syntax-colored
+        // code blocks are still useful when the TypeScript/JSON/CSS language
+        // server cannot start, and the renderer has no recovery action to
+        // offer from inside a transcript row. Let Monaco render the model with
+        // its built-in tokenization and let a future mount retry provider
+        // registration; do not turn an LSP startup hiccup into an empty code
+        // block plus an unhandled async effect rejection.
+      })
       if (disposed) return
 
       const uri = monaco.Uri.parse(clientUri)
