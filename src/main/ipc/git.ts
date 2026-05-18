@@ -34,6 +34,7 @@ const WORKTREE_STATUS_CONCURRENCY = 6
 
 type CacheEntry<T> = {
   expiresAt: number
+  settled: boolean
   promise: Promise<T>
 }
 
@@ -100,7 +101,7 @@ function parseWorktreePorcelain(out: string): WorktreeIdentity[] {
 export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity[]> {
   const now = Date.now()
   const cached = worktreeListCache.get(cwd)
-  if (cached && cached.expiresAt > now) return cloneWorktrees(await cached.promise)
+  if (cached && (!cached.settled || cached.expiresAt > now)) return cloneWorktrees(await cached.promise)
 
   // Worktree identity is stable on human timescales but several hot paths
   // ask for it back-to-back: WorktreesBar status, WorktreeActivity summary,
@@ -108,21 +109,48 @@ export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity
   // tiny main-process cache removes duplicate `git worktree list` spawns
   // across those independently-owned surfaces without hiding real changes
   // for more than a few seconds.
-  const promise = git(cwd, ['worktree', 'list', '--porcelain'])
+  const entry: CacheEntry<WorktreeIdentity[]> = {
+    expiresAt: 0,
+    settled: false,
+    promise: Promise.resolve([]),
+  }
+  entry.promise = git(cwd, ['worktree', 'list', '--porcelain'])
     .then(out => out.trim() ? parseWorktreePorcelain(out) : [])
     .catch(() => [])
-  worktreeListCache.set(cwd, { expiresAt: now + WORKTREE_CACHE_TTL_MS, promise })
-  return cloneWorktrees(await promise)
+    .finally(() => {
+      // WHY the TTL starts after the probe settles, not before it starts:
+      // this cache exists to coalesce independently-owned UI refresh paths.
+      // A slow `git worktree list` can exceed the five-second freshness
+      // window on large repos or busy disks; if we expire pending promises by
+      // start time, the second caller launches another identical subprocess
+      // while the first is still running. Pending probes are always fresh
+      // enough because no newer result exists yet, then the normal short TTL
+      // begins once we actually have data to reuse.
+      entry.settled = true
+      entry.expiresAt = Date.now() + WORKTREE_CACHE_TTL_MS
+    })
+  worktreeListCache.set(cwd, entry)
+  return cloneWorktrees(await entry.promise)
 }
 
 export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStatus[]> {
   const now = Date.now()
   const cached = worktreeStatusCache.get(cwd)
-  if (cached && cached.expiresAt > now) return cloneStatuses(await cached.promise)
+  if (cached && (!cached.settled || cached.expiresAt > now)) return cloneStatuses(await cached.promise)
 
-  const promise = computeWorktreeStatusForCwd(cwd).catch(() => [])
-  worktreeStatusCache.set(cwd, { expiresAt: now + WORKTREE_CACHE_TTL_MS, promise })
-  return cloneStatuses(await promise)
+  const entry: CacheEntry<GitWorktreeStatus[]> = {
+    expiresAt: 0,
+    settled: false,
+    promise: Promise.resolve([]),
+  }
+  entry.promise = computeWorktreeStatusForCwd(cwd)
+    .catch(() => [])
+    .finally(() => {
+      entry.settled = true
+      entry.expiresAt = Date.now() + WORKTREE_CACHE_TTL_MS
+    })
+  worktreeStatusCache.set(cwd, entry)
+  return cloneStatuses(await entry.promise)
 }
 
 async function computeWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStatus[]> {
