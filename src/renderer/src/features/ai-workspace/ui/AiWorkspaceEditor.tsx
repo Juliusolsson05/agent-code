@@ -5,25 +5,15 @@ import type {
   AiWorkspaceRecord,
 } from '@mcp/shared/aiWorkspaceTypes'
 import { normalizeCodeLanguage } from '@shared/code/language'
-import { FileIcon } from '@renderer/features/editor/lib/fileIcon'
 import { basename } from '@renderer/features/editor/lib/path'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
-import { EditorTabs } from '@renderer/features/editor/ui/EditorTabs'
-import { MonacoFileEditor } from '@renderer/features/editor/ui/MonacoFileEditor'
+import { EditorWorkbench } from '@renderer/features/editor/ui/EditorWorkbench'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { AiWorkspaceFileList } from '@renderer/features/ai-workspace/ui/AiWorkspaceFileList'
 
 type Props = {
   workspaceId: string
   onClose: () => void
-}
-
-function fileTitle(entry: AiWorkspaceFileEntry): string {
-  return entry.title || basename(entry.path)
-}
-
-function workspaceLabel(entry: AiWorkspaceFileEntry): string {
-  if (entry.gitBranch) return entry.gitBranch
-  if (entry.projectRoot) return basename(entry.projectRoot)
-  return basename(entry.path)
 }
 
 function bufferFromEntry(
@@ -46,6 +36,14 @@ function bufferFromEntry(
 }
 
 export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
+  // Reuse the Global Editor sidebar width instead of minting a second AI
+  // Workspace-specific preference. AI Workspace is mounted inside the Global
+  // Editor left pane, and to the user this is still "the editor sidebar",
+  // just backed by a curated multi-root file source. Sharing the width keeps
+  // the surface from feeling like two unrelated editors while still leaving
+  // file loading/writing on the AI Workspace registry boundary below.
+  const fileTreeWidthPx = useGlobalEditorStore(state => state.fileTreeWidthPx)
+  const setFileTreeWidthPx = useGlobalEditorStore(state => state.setFileTreeWidthPx)
   const [workspace, setWorkspace] = useState<AiWorkspaceRecord | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -167,89 +165,35 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
   const activeFile = activeFilePath ? openFiles[activeFilePath] ?? null : null
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
-      <aside className="flex h-full w-[280px] flex-shrink-0 flex-col border-r border-border bg-surface font-code text-[12px]">
-        <div className="flex h-8 flex-shrink-0 items-center justify-between gap-2 border-b border-border px-2 text-[10px] uppercase tracking-wider text-muted">
-          <span className="min-w-0 flex-1 truncate">{workspace?.name ?? 'AI Workspace'}</span>
-          <div className="flex flex-shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void loadWorkspace()}
-              className="text-muted hover:text-ink"
-            >
-              refresh
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="border border-border bg-surface-hi px-1.5 py-0.5 text-muted hover:border-accent hover:text-ink"
-            >
-              close
-            </button>
-          </div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-auto py-1">
-          {loading ? (
-            <div className="px-2 py-1 text-muted">loading...</div>
-          ) : error ? (
-            <div className="px-2 py-1 text-danger">{error}</div>
-          ) : workspace?.entries.length === 0 ? (
-            <div className="px-2 py-1 text-muted">No files attached.</div>
-          ) : (
-            workspace?.entries.map(entry => {
-              const stale = !entry.status.exists || !entry.status.readable
-              return (
-                <button
-                  key={entry.entryId}
-                  type="button"
-                  disabled={stale}
-                  onClick={() => void openEntry(entry)}
-                  className={`flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors ${
-                    activeFilePath === entry.entryId
-                      ? 'bg-accent-soft text-ink'
-                      : stale
-                        ? 'text-muted opacity-70'
-                        : 'text-ink-dim hover:bg-surface-hi hover:text-ink'
-                  }`}
-                  title={entry.path}
-                >
-                  <span className="mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center">
-                    <FileIcon name={entry.path} />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate">{fileTitle(entry)}</span>
-                    <span className="block truncate text-[10px] text-muted">
-                      {stale ? entry.status.staleReason ?? 'stale' : workspaceLabel(entry)}
-                    </span>
-                  </span>
-                </button>
-              )
-            })
-          )}
-        </div>
-      </aside>
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <EditorTabs
-          fileOrder={fileOrder}
-          openFiles={openFiles}
-          activeFilePath={activeFilePath}
-          onActivate={setActiveFilePath}
-          onClose={closeFile}
+    <EditorWorkbench
+      sidebar={
+        <AiWorkspaceFileList
+          title={workspace?.name ?? 'AI Workspace'}
+          entries={workspace?.entries ?? []}
+          loading={loading}
+          error={error}
+          activeEntryId={activeFilePath}
+          onOpenEntry={entry => void openEntry(entry)}
+          onRefresh={() => void loadWorkspace()}
+          onClose={onClose}
         />
-        <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
-          <MonacoFileEditor
-            file={activeFile}
-            // The AI Workspace editor intentionally opens absolute files from
-            // many roots. MonacoFileEditor only needs this prop as a lifecycle
-            // key for editor/model recreation; the actual file URI comes from
-            // `file.absolutePath`, so the workspace id is the stable identity
-            // for this curated surface.
-            projectRoot={workspaceId}
-            onChange={updateText}
-            onSave={() => void saveActive()}
-          />
-        </div>
-      </div>
-    </div>
+      }
+      sidebarWidthPx={fileTreeWidthPx}
+      onSidebarWidthChange={setFileTreeWidthPx}
+      fileOrder={fileOrder}
+      openFiles={openFiles}
+      activeFilePath={activeFilePath}
+      activeFile={activeFile}
+      // The AI Workspace editor intentionally opens absolute files from many
+      // roots. MonacoFileEditor only needs this prop as a lifecycle key for
+      // editor/model recreation; the actual file URI comes from
+      // `file.absolutePath`, so the workspace id is the stable identity for
+      // this curated surface.
+      projectRoot={workspaceId}
+      onActivateFile={setActiveFilePath}
+      onCloseFile={closeFile}
+      onChangeFile={updateText}
+      onSave={() => void saveActive()}
+    />
   )
 }
