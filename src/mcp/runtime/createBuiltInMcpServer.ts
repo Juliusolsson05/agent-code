@@ -10,7 +10,11 @@ import {
   AGENT_TRANSCRIPT_ITEM_KINDS,
   AGENT_TRANSCRIPT_PROJECTIONS,
 } from '@mcp/shared/agentTranscriptTypes.js'
-import type { OrchestrationAgentKind } from '@mcp/shared/orchestrationTypes.js'
+import type {
+  OrchestrationAgentKind,
+  OrchestrationAgentOutput,
+} from '@mcp/shared/orchestrationTypes.js'
+import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
@@ -411,6 +415,7 @@ function registerOrchestrationTools(
         title: z.string().optional(),
         role: z.string().optional(),
         runId: z.string().optional(),
+        inheritParentContext: z.boolean().default(true).optional(),
         builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'])).optional(),
       },
     },
@@ -432,11 +437,16 @@ function registerOrchestrationTools(
         title: args.title,
         role: args.role,
         runId: args.runId,
+        inheritParentContext: args.inheritParentContext,
         builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
       })
 
       if (args.prompt && args.prompt.trim().length > 0) {
-        const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, args.prompt)
+        const prompt = buildOrchestrationBootstrapPrompt({
+          task: args.prompt,
+          inheritedParentContext: agent.inheritedParentContext === true,
+        })
+        const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, prompt)
         if (!delivery.ok) {
           return toolText({
             ok: false,
@@ -471,11 +481,29 @@ function registerOrchestrationTools(
     },
     async args => {
       const manager = dependencies.sessionManager
-      if (!manager) {
+      const bridge = dependencies.orchestrationBridge
+      if (!manager || !bridge) {
         return toolText({
           ok: false,
-          error: 'session_manager_unavailable',
-          message: 'Agent Code session manager is not available.',
+          error: 'orchestration_unavailable',
+          message: 'Agent Code orchestration services are not available.',
+        })
+      }
+      let output: OrchestrationAgentOutput
+      try {
+        output = await bridge.readAgent({
+          parentSessionId: scope.sessionId,
+          sessionId: args.sessionId,
+          maxMessages: 1,
+        })
+      } catch (err) {
+        return toolText({
+          ok: false,
+          error: 'orchestration_agent_not_owned',
+          message: err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Could not read orchestration agent owned by this parent.',
+          sessionId: args.sessionId,
         })
       }
       const kind = manager.getSessionKind(args.sessionId)
@@ -487,7 +515,14 @@ function registerOrchestrationTools(
           sessionId: args.sessionId,
         })
       }
-      const delivery = await submitPrompt(manager, args.sessionId, kind, args.prompt)
+      const shouldWrap = bridge.promptSubmissionCount(args.sessionId) === 0
+      const prompt = shouldWrap
+        ? buildOrchestrationBootstrapPrompt({
+            task: args.prompt,
+            inheritedParentContext: output.agent.inheritedParentContext === true,
+          })
+        : args.prompt
+      const delivery = await submitPrompt(manager, args.sessionId, kind, prompt)
       if (!delivery.ok) {
         return toolText({
           ok: false,
@@ -496,7 +531,7 @@ function registerOrchestrationTools(
           sessionId: args.sessionId,
         })
       }
-      dependencies.orchestrationBridge?.notePromptSubmitted(args.sessionId)
+      bridge.notePromptSubmitted(args.sessionId)
       return toolText({ ok: true, sessionId: args.sessionId })
     },
   )

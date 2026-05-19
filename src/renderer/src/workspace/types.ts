@@ -148,6 +148,20 @@ export type SessionMeta = {
   orchestrationRunId?: string
   orchestrationRole?: string
   /**
+   * True when an orchestration child was spawned from a duplicated provider
+   * transcript rather than a blank conversation.
+   *
+   * WHY this is persisted on the child instead of only returned from the
+   * create call:
+   * follow-up MCP prompts and Dispatch status views need to know whether the
+   * child's provider history came from the parent. The clone itself is already
+   * independent on disk; these ids are explanatory metadata for handoff
+   * prompts and debugging, not authority to mutate the parent transcript.
+   */
+  inheritedParentContext?: boolean
+  inheritedParentProviderSessionId?: string
+  inheritedProviderSessionId?: string
+  /**
    * Built-in MCP domains this agent should receive when it is spawned.
    *
    * WHY this is session metadata, not only a transient spawn option:

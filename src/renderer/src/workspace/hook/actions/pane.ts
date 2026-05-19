@@ -395,6 +395,7 @@ export function usePaneActions(
       role?: string
       runId?: string
       builtInMcpDomains?: BuiltInMcpDomain[]
+      inheritParentContext?: boolean
     }): Promise<OrchestrationAgentRecord> => {
       const snapshot = refs.stateRef.current
       const parentMeta = snapshot.sessions[params.parentId]
@@ -413,8 +414,44 @@ export function usePaneActions(
       }
 
       const cwd = params.cwd ?? rootParentMeta.cwd
+      let resumeSessionId: string | undefined
+      let inheritedParentProviderSessionId: string | undefined
+      let inheritedProviderSessionId: string | undefined
+
+      if (
+        params.inheritParentContext !== false &&
+        (parentMeta.kind === 'claude' || parentMeta.kind === 'codex') &&
+        parentMeta.providerSessionId
+      ) {
+        // WHY duplicate before spawn:
+        // orchestration children need the parent's conversation as background,
+        // but resuming the parent's real provider session would make two live
+        // processes append to the same transcript. Same-provider children use
+        // `duplicateSession`; cross-provider children use the existing
+        // transcript translation path. Both produce a fresh provider transcript
+        // id and leave the original parent transcript untouched.
+        if (parentMeta.kind === params.kind) {
+          const duplicate = await window.api.duplicateSession({
+            provider: parentMeta.kind,
+            sourceProviderSessionId: parentMeta.providerSessionId,
+            cwd: parentMeta.cwd,
+          })
+          resumeSessionId = duplicate.newProviderSessionId
+        } else {
+          const switched = await window.api.switchProvider({
+            sourceKind: parentMeta.kind,
+            sourceProviderSessionId: parentMeta.providerSessionId,
+            cwd: parentMeta.cwd,
+          })
+          resumeSessionId = switched.targetProviderSessionId
+        }
+        inheritedParentProviderSessionId = parentMeta.providerSessionId
+        inheritedProviderSessionId = resumeSessionId
+      }
+
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
+        resumeSessionId,
         builtInMcpDomains: params.builtInMcpDomains,
       })
 
@@ -427,6 +464,13 @@ export function usePaneActions(
         orchestrationRootId: rootParentId,
         ...(params.runId ? { orchestrationRunId: params.runId } : {}),
         ...(params.role ? { orchestrationRole: params.role } : {}),
+        ...(inheritedProviderSessionId
+          ? {
+              inheritedParentContext: true,
+              inheritedParentProviderSessionId,
+              inheritedProviderSessionId,
+            }
+          : {}),
       }
 
       setState(prev => {
@@ -446,6 +490,13 @@ export function usePaneActions(
               orchestrationRootId: rootParentId,
               ...(params.runId ? { orchestrationRunId: params.runId } : {}),
               ...(params.role ? { orchestrationRole: params.role } : {}),
+              ...(inheritedProviderSessionId
+                ? {
+                    inheritedParentContext: true,
+                    inheritedParentProviderSessionId,
+                    inheritedProviderSessionId,
+                  }
+                : {}),
             },
           },
           detachedSessions: {

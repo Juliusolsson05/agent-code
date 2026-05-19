@@ -255,6 +255,7 @@ export function useWorkspace(
             role: request.role,
             runId: request.runId,
             builtInMcpDomains: request.builtInMcpDomains,
+            inheritParentContext: request.inheritParentContext,
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,

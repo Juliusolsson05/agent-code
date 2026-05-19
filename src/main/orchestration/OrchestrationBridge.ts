@@ -47,6 +47,7 @@ export class OrchestrationBridge {
     role?: string
     runId?: string
     builtInMcpDomains?: BuiltInMcpDomain[]
+    inheritParentContext?: boolean
   }): Promise<OrchestrationAgentRecord> {
     const response = await this.request({
       requestId: randomUUID(),
@@ -205,6 +206,10 @@ export class OrchestrationBridge {
     }
     this.promptDeliveries.delete(sessionId)
     this.promptDeliveries.set(sessionId, next)
+  }
+
+  promptSubmissionCount(sessionId: string): number {
+    return this.promptDeliveries.get(sessionId)?.promptSubmissionCount ?? 0
   }
 
   resolve(response: OrchestrationRendererResponse): void {

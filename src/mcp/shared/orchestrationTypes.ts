@@ -12,6 +12,7 @@ export type OrchestrationCreateAgentRequest = {
   role?: string
   runId?: string
   builtInMcpDomains?: BuiltInMcpDomain[]
+  inheritParentContext?: boolean
 }
 
 export type OrchestrationListAgentsRequest = {
@@ -84,6 +85,9 @@ export type OrchestrationAgentRecord = {
   orchestrationRootId: string
   orchestrationRunId?: string
   orchestrationRole?: string
+  inheritedParentContext?: boolean
+  inheritedParentProviderSessionId?: string
+  inheritedProviderSessionId?: string
   lifecycleState?: OrchestrationLifecycleState
   createdAt?: number
   lastActivityAt?: number

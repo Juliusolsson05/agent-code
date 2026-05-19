@@ -194,6 +194,17 @@ function buildAgentRecord(params: {
     orchestrationRootId: params.meta.orchestrationRootId ?? params.parentSessionId,
     ...(params.meta.orchestrationRunId ? { orchestrationRunId: params.meta.orchestrationRunId } : {}),
     ...(params.meta.orchestrationRole ? { orchestrationRole: params.meta.orchestrationRole } : {}),
+    ...(params.meta.inheritedParentContext
+      ? {
+          inheritedParentContext: true,
+          ...(params.meta.inheritedParentProviderSessionId
+            ? { inheritedParentProviderSessionId: params.meta.inheritedParentProviderSessionId }
+            : {}),
+          ...(params.meta.inheritedProviderSessionId
+            ? { inheritedProviderSessionId: params.meta.inheritedProviderSessionId }
+            : {}),
+        }
+      : {}),
     lifecycleState,
     statusSummary: statusSummary(params.runtime, lifecycleState),
     ...(activityAt ? { lastActivityAt: activityAt } : {}),
