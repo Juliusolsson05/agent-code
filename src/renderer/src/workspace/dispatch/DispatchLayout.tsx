@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow'
 
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { SplitHandle } from '@renderer/features/shared/SplitHandle'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
@@ -173,20 +174,12 @@ export function DispatchLayout({
         (flex-shrink-0), and the active pane uses flex-1 to absorb
         the remainder.
       */}
-      <div
-        role="separator"
-        aria-orientation="vertical"
+      <SplitHandle
+        dragging={listSplitter.dragging}
         onMouseDown={listSplitter.onMouseDown}
-        className="relative flex-shrink-0 cursor-col-resize select-none"
-        style={{ width: '10px' }}
-      >
-        <div
-          className={`absolute left-1/2 top-0 h-full -translate-x-1/2 ${
-            listSplitter.dragging ? 'bg-accent' : 'bg-border'
-          } transition-colors`}
-          style={{ width: '4px' }}
-        />
-      </div>
+        hitSizePx={10}
+        barSizePx={4}
+      />
       {listSplitter.cursorLock}
 
       <div className="flex-1 min-w-0 min-h-0 border-r border-border">

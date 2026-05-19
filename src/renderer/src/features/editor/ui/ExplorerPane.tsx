@@ -138,7 +138,7 @@ export function ExplorerPane({ root, activeFilePath, onOpenFile }: Props) {
   }, [activeFilePath])
 
   return (
-    <aside className="flex h-full min-h-0 w-[260px] flex-shrink-0 flex-col border-r border-border bg-surface font-code text-[12px]">
+    <aside className="flex h-full min-h-0 w-full flex-shrink-0 flex-col border-r border-border bg-surface font-code text-[12px]">
       <div
         className="flex h-8 flex-shrink-0 items-center justify-between border-b border-border px-2 text-[10px] uppercase tracking-wider text-muted"
         title={root}
