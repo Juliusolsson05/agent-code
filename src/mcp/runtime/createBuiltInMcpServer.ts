@@ -407,7 +407,12 @@ function registerOrchestrationTools(
     {
       title: 'Create Orchestration Agent',
       description:
-        'Creates a distinct Agent Code orchestration child agent in Dispatch, optionally bootstrapped with an initial prompt.',
+        [
+          'Creates a distinct Agent Code orchestration child agent in Dispatch, optionally bootstrapped with an initial prompt.',
+          'Use this only when the user explicitly asks for delegated, parallel, or orchestrated agent work.',
+          'By default the child starts from a duplicated or translated copy of this parent agent transcript so it can use the conversation as background context without appending to the parent transcript.',
+          'Set inheritParentContext to false only when the child should start from a clean provider conversation.',
+        ].join(' '),
       inputSchema: {
         kind: z.enum(['claude', 'codex']).default('claude'),
         prompt: z.string().optional(),
@@ -415,7 +420,13 @@ function registerOrchestrationTools(
         title: z.string().optional(),
         role: z.string().optional(),
         runId: z.string().optional(),
-        inheritParentContext: z.boolean().default(true).optional(),
+        inheritParentContext: z.boolean().default(true).optional().describe(
+          [
+            'Defaults to true.',
+            'When true, Agent Code duplicates or translates the parent provider transcript before spawning the child, giving the child read-only background context from the parent conversation while keeping its future messages in a separate transcript.',
+            'Leave this enabled for normal orchestrated work; set false only when the user or task requires an isolated child with no inherited conversation context.',
+          ].join(' '),
+        ),
         builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'])).optional(),
       },
     },
