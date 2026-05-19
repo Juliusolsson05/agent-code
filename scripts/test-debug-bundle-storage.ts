@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { basename, dirname } from 'node:path'
 
+import { legacyDebugBundleBucketForPath } from '../src/main/storage/debugRetention'
 import {
   AUTOSAVE_DEBUG_BUNDLE_DIR,
   DEBUG_BUNDLE_DIR,
@@ -10,6 +11,7 @@ import {
   AUTOSAVE_DEBUG_BUNDLE_LOG_FILE,
   DEBUG_BUNDLE_LOG_FILE,
   MANUAL_DEBUG_BUNDLE_LOG_FILE,
+  debugBundleLogFileForBundlePath,
   debugBundleLogFileForReason,
   debugBundleRootForReason,
   isAutosaveDebugBundleReason,
@@ -24,6 +26,11 @@ assert.equal(debugBundleRootForReason('autosave-beforeunload'), AUTOSAVE_DEBUG_B
 
 assert.equal(debugBundleLogFileForReason('manual'), MANUAL_DEBUG_BUNDLE_LOG_FILE)
 assert.equal(debugBundleLogFileForReason('autosave-interval'), AUTOSAVE_DEBUG_BUNDLE_LOG_FILE)
+assert.equal(debugBundleLogFileForBundlePath(`${MANUAL_DEBUG_BUNDLE_DIR}/bundle-a`), MANUAL_DEBUG_BUNDLE_LOG_FILE)
+assert.equal(
+  debugBundleLogFileForBundlePath(`${AUTOSAVE_DEBUG_BUNDLE_DIR}/bundle-a`),
+  AUTOSAVE_DEBUG_BUNDLE_LOG_FILE,
+)
 
 assert.equal(isAutosaveDebugBundleReason('autosave-interval'), true)
 assert.equal(isAutosaveDebugBundleReason('manual'), false)
@@ -41,5 +48,17 @@ assert.equal(basename(AUTOSAVE_DEBUG_BUNDLE_DIR), 'autosave')
 assert.notEqual(MANUAL_DEBUG_BUNDLE_LOG_FILE, DEBUG_BUNDLE_LOG_FILE)
 assert.notEqual(AUTOSAVE_DEBUG_BUNDLE_LOG_FILE, DEBUG_BUNDLE_LOG_FILE)
 assert.notEqual(MANUAL_DEBUG_BUNDLE_LOG_FILE, AUTOSAVE_DEBUG_BUNDLE_LOG_FILE)
+
+const legacyManualPath = `${DEBUG_BUNDLE_DIR}/2026-05-19T09-03-10-738-21e655e8`
+const legacyAutosavePath = `${DEBUG_BUNDLE_DIR}/2026-05-19T09-05-05-349-285663e4`
+const manualLegacyPaths = new Set([legacyManualPath])
+assert.equal(
+  legacyDebugBundleBucketForPath(legacyManualPath, manualLegacyPaths),
+  'debug-bundles-manual',
+)
+assert.equal(
+  legacyDebugBundleBucketForPath(legacyAutosavePath, manualLegacyPaths),
+  'debug-bundles-legacy',
+)
 
 console.log('debug bundle storage routing ok')

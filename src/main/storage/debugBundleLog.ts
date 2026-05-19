@@ -61,6 +61,19 @@ export function debugBundleLogFileForReason(reason?: string | null): string {
     : MANUAL_DEBUG_BUNDLE_LOG_FILE
 }
 
+export function debugBundleLogFileForBundlePath(bundlePath: string): string {
+  const target = resolve(bundlePath)
+  const autosaveRoot = resolve(AUTOSAVE_DEBUG_BUNDLE_DIR)
+  const rel = relative(autosaveRoot, target)
+  // WHY notes normally only come from manual saves, but this helper keeps the
+  // storage contract honest if a future caller attaches a note to an autosave
+  // bundle. The ledger should follow the bundle's root instead of silently
+  // polluting the manual incident index with metadata for cache artifacts.
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+    ? AUTOSAVE_DEBUG_BUNDLE_LOG_FILE
+    : MANUAL_DEBUG_BUNDLE_LOG_FILE
+}
+
 function nowFields(now = Date.now()): { ts: number; tsIso: string } {
   return { ts: now, tsIso: new Date(now).toISOString() }
 }
@@ -151,7 +164,7 @@ export async function addDebugBundleNote(params: {
     throw err
   }
   try {
-    await appendDebugBundleLogEntry(MANUAL_DEBUG_BUNDLE_LOG_FILE, {
+    await appendDebugBundleLogEntry(debugBundleLogFileForBundlePath(params.bundlePath), {
       schemaVersion: 1,
       event: 'note-added',
       ...created,
