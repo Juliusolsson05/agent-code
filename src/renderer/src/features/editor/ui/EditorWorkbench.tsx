@@ -16,7 +16,7 @@ type EditorWorkbenchProps = {
   activeFile: EditorFileBuffer | null
   projectRoot: string | null
   onActivateFile: (path: string) => void
-  onCloseFile: (path: string) => void | boolean
+  onCloseFile: (path: string) => void
   onChangeFile: (path: string, text: string) => void
   onSave: () => void
   onSelectionRevealed?: (path: string) => void

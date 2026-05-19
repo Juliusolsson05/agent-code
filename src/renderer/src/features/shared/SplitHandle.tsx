@@ -5,6 +5,7 @@ type SplitHandleProps = {
   onMouseDown: (event: MouseEvent) => void
   hitSizePx?: number
   barSizePx?: number
+  exposeSeparatorRole?: boolean
   className?: string
   style?: CSSProperties
 }
@@ -24,13 +25,14 @@ export function SplitHandle({
   onMouseDown,
   hitSizePx = 10,
   barSizePx = 4,
+  exposeSeparatorRole = true,
   className = '',
   style,
 }: SplitHandleProps) {
   return (
     <div
-      role="separator"
-      aria-orientation="vertical"
+      role={exposeSeparatorRole ? 'separator' : undefined}
+      aria-orientation={exposeSeparatorRole ? 'vertical' : undefined}
       onMouseDown={onMouseDown}
       className={`relative flex-shrink-0 cursor-col-resize select-none ${className}`}
       style={{ width: `${hitSizePx}px`, ...style }}
