@@ -24,9 +24,11 @@ import {
 //   - debug:save-bundle — one-shot, user-triggered from the "Save
 //     Debug Logs" command palette entry. Renderer assembles the bundle
 //     (state + feed-debug + proxy semantic + html raw/clean) and we
-//     persist it as a timestamped folder under DEBUG_BUNDLE_DIR. The
-//     return value is the absolute path so the renderer can display
-//     it and copy it to the clipboard.
+//     persist it as a timestamped folder. Main chooses the manual vs.
+//     autosave root from params.reason so renderer callers cannot
+//     accidentally make the "Save Debug Logs" history noisy again.
+//     The return value is the absolute path so the renderer can
+//     display it and copy it to the clipboard.
 
 export function registerDebugIpc(): void {
   ipcMain.handle(

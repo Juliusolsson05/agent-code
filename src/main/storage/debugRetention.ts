@@ -1,14 +1,21 @@
-import { mkdir, readdir, rm, stat, statfs } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { mkdir, readFile, readdir, rm, stat, statfs } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
 
 import {
+  AUTOSAVE_DEBUG_BUNDLE_DIR,
   DEBUG_BUNDLE_DIR,
   FEED_DEBUG_DIR,
+  MANUAL_DEBUG_BUNDLE_DIR,
   PERFORMANCE_RUNS_DIR,
   PROXY_EVENTS_DIR,
   STATE_DIR,
 } from '@main/storage/paths.js'
 import { ghostLogDir } from '@main/ghostJournal.js'
+import {
+  DEBUG_BUNDLE_LOG_FILE,
+  isAutosaveDebugBundleReason,
+  type DebugBundleLogEntry,
+} from '@main/storage/debugBundleLog.js'
 
 const GIB = 1024 * 1024 * 1024
 const DEFAULT_TTL_HOURS = 48
@@ -16,8 +23,16 @@ const MIN_BUDGET_BYTES = 10 * GIB
 const MAX_BUDGET_BYTES = 15 * GIB
 const ACTIVE_GRACE_MS = 10 * 60 * 1000
 const PRUNE_COOLDOWN_MS = 5 * 60 * 1000
+const LEGACY_DEBUG_BUNDLE_DIR_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}-.+$/
 
-type DebugStorageBucket = 'feed-debug' | 'debug-bundles' | 'proxy' | 'performance' | 'ghost-logs'
+export type DebugStorageBucket =
+  | 'feed-debug'
+  | 'debug-bundles-manual'
+  | 'debug-bundles-autosave'
+  | 'debug-bundles-legacy'
+  | 'proxy'
+  | 'performance'
+  | 'ghost-logs'
 
 type Artifact = {
   path: string
@@ -120,7 +135,7 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
     // need those provisional rows during bootstrap. Keep ghost cleanup on the
     // budget/cap passes below, where pressure is explicit and active recent
     // files still get the ACTIVE_GRACE_MS guard.
-    if (artifact.bucket === 'ghost-logs') continue
+    if (isProtectedFromDebugPrune(artifact)) continue
     if (artifact.mtimeMs >= cutoff) continue
     const freed = await removeArtifact(artifact)
     if (freed === 0) continue
@@ -130,6 +145,7 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
 
   artifacts = await collectArtifacts()
   for (const bucket of Object.keys(caps) as DebugStorageBucket[]) {
+    if (bucket === 'debug-bundles-manual') continue
     const bucketArtifacts = artifacts
       .filter(artifact => artifact.bucket === bucket)
       .sort((a, b) => a.mtimeMs - b.mtimeMs)
@@ -149,6 +165,7 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
   let totalBytes = sumBytes(artifacts)
   for (const artifact of [...artifacts].sort((a, b) => a.mtimeMs - b.mtimeMs)) {
     if (totalBytes <= budget) break
+    if (isProtectedFromDebugPrune(artifact)) continue
     if (artifact.mtimeMs > activeCutoff) continue
     const freed = await removeArtifact(artifact)
     if (freed === 0) continue
@@ -170,7 +187,15 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
 function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
   return {
     'feed-debug': Math.floor(totalBudget * 0.22),
-    'debug-bundles': Math.floor(totalBudget * 0.32),
+    // Manual debug bundles are user-intentional captures, often with notes
+    // added seconds later. They are deliberately absent from TTL, per-bucket,
+    // and global-budget deletion passes: if disk pressure is severe, pruning
+    // should consume cache-like debug data before it erases the exact incident
+    // captures the user asked to preserve. The cap value stays in the map only
+    // to keep bucket accounting explicit and future UI budget displays honest.
+    'debug-bundles-manual': Math.floor(totalBudget * 0.08),
+    'debug-bundles-autosave': Math.floor(totalBudget * 0.20),
+    'debug-bundles-legacy': Math.floor(totalBudget * 0.04),
     proxy: Math.floor(totalBudget * 0.28),
     performance: Math.floor(totalBudget * 0.10),
     // Ghost logs are recovery state, not user data. They deserve enough
@@ -182,14 +207,25 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
 }
 
 async function collectArtifacts(): Promise<Artifact[]> {
-  const [feed, bundles, proxy, performance, ghostLogs] = await Promise.all([
+  const manualLegacyBundlePaths = await loadManualLegacyBundlePaths()
+  const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, ghostLogs] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
-    collectImmediateDirs(DEBUG_BUNDLE_DIR, 'debug-bundles'),
+    collectImmediateDirs(MANUAL_DEBUG_BUNDLE_DIR, 'debug-bundles-manual'),
+    collectImmediateDirs(AUTOSAVE_DEBUG_BUNDLE_DIR, 'debug-bundles-autosave'),
+    collectLegacyDebugBundleDirs(DEBUG_BUNDLE_DIR, manualLegacyBundlePaths),
     collectProxyRunDirs(PROXY_EVENTS_DIR),
     collectImmediateDirs(PERFORMANCE_RUNS_DIR, 'performance'),
     collectFiles(ghostLogDir(), 'ghost-logs', name => name.endsWith('.ghost.jsonl')),
   ])
-  return [...feed, ...bundles, ...proxy, ...performance, ...ghostLogs]
+  return [
+    ...feed,
+    ...manualBundles,
+    ...autosaveBundles,
+    ...legacyBundles,
+    ...proxy,
+    ...performance,
+    ...ghostLogs,
+  ]
 }
 
 async function collectFiles(
@@ -228,6 +264,81 @@ async function collectImmediateDirs(
   } catch {
     return []
   }
+}
+
+async function collectLegacyDebugBundleDirs(
+  dir: string,
+  manualLegacyBundlePaths: Set<string>,
+): Promise<Artifact[]> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true })
+    // WHY legacy root folders are still collected: old versions wrote both
+    // manual and autosave bundles directly under debug-bundles/. The mixed
+    // JSONL ledger is the only durable source that knows which root-level
+    // timestamp folders were user-triggered, so retention rehydrates that
+    // distinction here. We also require the old timestamp folder shape instead
+    // of treating every unknown sibling as disposable cache; otherwise a future
+    // debug-bundles/<feature>/ directory could be silently pruned as "legacy."
+    const dirs = entries
+      .filter(entry =>
+        entry.isDirectory() &&
+        entry.name !== 'manual' &&
+        entry.name !== 'autosave' &&
+        LEGACY_DEBUG_BUNDLE_DIR_RE.test(entry.name),
+      )
+      .map(entry => join(dir, entry.name))
+    return Promise.all(dirs.map(path => {
+      const bucket = legacyDebugBundleBucketForPath(path, manualLegacyBundlePaths)
+      return collectDirArtifact(path, bucket)
+    }))
+      .then(items => items.filter((item): item is Artifact => item !== null))
+  } catch {
+    return []
+  }
+}
+
+export function legacyDebugBundleBucketForPath(
+  bundlePath: string,
+  manualLegacyBundlePaths: Set<string>,
+): DebugStorageBucket {
+  return manualLegacyBundlePaths.has(resolve(bundlePath))
+    ? 'debug-bundles-manual'
+    : 'debug-bundles-legacy'
+}
+
+function isProtectedFromDebugPrune(artifact: Artifact): boolean {
+  return artifact.bucket === 'ghost-logs' || artifact.bucket === 'debug-bundles-manual'
+}
+
+async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
+  const manual = new Set<string>()
+  let raw: string
+  try {
+    raw = await readFile(DEBUG_BUNDLE_LOG_FILE, 'utf8')
+  } catch {
+    return manual
+  }
+
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    let entry: DebugBundleLogEntry
+    try {
+      entry = JSON.parse(trimmed) as DebugBundleLogEntry
+    } catch {
+      continue
+    }
+    if (entry.event !== 'saved') continue
+    if (isAutosaveDebugBundleReason(entry.reason)) continue
+    // WHY manual legacy classification comes from the old mixed ledger instead
+    // of folder contents: every bundle contains a manifest, but reading
+    // thousands of manifests during retention would turn a cheap directory
+    // sweep into a burst of random I/O. The append-only ledger was designed as
+    // the operator index for "what did I save and why?", so it is the right
+    // source for separating pre-split manual incidents from autosave cache.
+    manual.add(resolve(entry.bundlePath))
+  }
+  return manual
 }
 
 async function collectProxyRunDirs(root: string): Promise<Artifact[]> {
