@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   closeOrchestrationRun,
   listOrchestrationAgents,
+  markOrchestrationBootstrapPromptDelivered,
   readOrchestrationAgent,
   readOrchestrationRunOutputs,
 } from '../src/renderer/src/workspace/orchestrationMcp'
@@ -37,6 +38,7 @@ const state: WorkspaceState = {
       inheritedParentContext: true,
       inheritedParentProviderSessionId: 'parent-provider-session',
       inheritedProviderSessionId: 'child-provider-session',
+      orchestrationBootstrapPromptDelivered: true,
     }),
     [grandchild]: meta('/grandchild', {
       orchestrationParentId: child,
@@ -102,6 +104,10 @@ const runtime = {
     agents.find(agent => agent.sessionId === child)?.inheritedProviderSessionId,
     'child-provider-session',
   )
+  assert.equal(
+    agents.find(agent => agent.sessionId === child)?.orchestrationBootstrapPromptDelivered,
+    true,
+  )
   assert.equal(agents.find(agent => agent.sessionId === grandchild)?.lifecycleState, 'running')
 }
 
@@ -154,6 +160,35 @@ const runtime = {
 }
 
 {
+  const unmarked: WorkspaceState = {
+    ...state,
+    sessions: {
+      ...state.sessions,
+      [child]: {
+        ...state.sessions[child]!,
+        orchestrationBootstrapPromptDelivered: false,
+      },
+    },
+  }
+  const marked = markOrchestrationBootstrapPromptDelivered({
+    state: unmarked,
+    parentSessionId: parent,
+    sessionId: child,
+  })
+  assert.equal(
+    marked.sessions[child]?.orchestrationBootstrapPromptDelivered,
+    true,
+  )
+  assert.throws(() =>
+    markOrchestrationBootstrapPromptDelivered({
+      state,
+      parentSessionId: parent,
+      sessionId: unrelated,
+    }),
+  )
+}
+
+{
   const prompt = buildOrchestrationBootstrapPrompt({
     task: 'Review the provider runtime contract.',
     inheritedParentContext: true,
@@ -163,4 +198,14 @@ const runtime = {
   assert.match(prompt, /duplicated copy of your parent agent transcript/)
   assert.match(prompt, /Do not continue acting as the parent agent/)
   assert.match(prompt, /Review the provider runtime contract/)
+}
+
+{
+  const prompt = buildOrchestrationBootstrapPrompt({
+    task: 'Review the provider runtime contract.',
+    inheritedParentContext: false,
+  })
+
+  assert.match(prompt, /could not provide a duplicated transcript context/)
+  assert.doesNotMatch(prompt, /You were started from a duplicated copy/)
 }

@@ -22,6 +22,8 @@ export const providerApi = {
     sourceKind: 'claude' | 'codex'
     sourceProviderSessionId: string
     cwd: string
+    sourceCwd?: string
+    targetCwd?: string
   }): Promise<{
     targetKind: 'claude' | 'codex'
     targetProviderSessionId: string
@@ -44,6 +46,8 @@ export const providerApi = {
     provider: 'claude' | 'codex'
     sourceProviderSessionId: string
     cwd: string
+    sourceCwd?: string
+    targetCwd?: string
   }): Promise<{
     provider: 'claude' | 'codex'
     newProviderSessionId: string

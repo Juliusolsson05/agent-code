@@ -420,7 +420,7 @@ function registerOrchestrationTools(
         title: z.string().optional(),
         role: z.string().optional(),
         runId: z.string().optional(),
-        inheritParentContext: z.boolean().default(true).optional().describe(
+        inheritParentContext: z.boolean().optional().describe(
           [
             'Defaults to true.',
             'When true, Agent Code duplicates or translates the parent provider transcript before spawning the child, giving the child read-only background context from the parent conversation while keeping its future messages in a separate transcript.',
@@ -441,7 +441,7 @@ function registerOrchestrationTools(
         })
       }
 
-      const agent = await bridge.createAgent({
+      let agent = await bridge.createAgent({
         parentSessionId: scope.sessionId,
         kind: args.kind as OrchestrationAgentKind,
         cwd: args.cwd,
@@ -468,12 +468,15 @@ function registerOrchestrationTools(
           })
         }
         bridge.notePromptSubmitted(agent.sessionId)
+        agent = await bridge.markBootstrapPromptDelivered({
+          parentSessionId: scope.sessionId,
+          sessionId: agent.sessionId,
+        })
       }
 
       return toolText({
         ok: true,
-        agent: (await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }).catch(() => [agent]))
-          .find(item => item.sessionId === agent.sessionId) ?? agent,
+        agent,
         promptSubmitted: Boolean(args.prompt && args.prompt.trim().length > 0),
       })
     },
@@ -487,7 +490,9 @@ function registerOrchestrationTools(
         'Sends a follow-up prompt to an existing orchestration-created Agent Code session.',
       inputSchema: {
         sessionId: z.string(),
-        prompt: z.string(),
+        prompt: z.string().refine(value => value.trim().length > 0, {
+          message: 'Prompt must not be empty.',
+        }),
       },
     },
     async args => {
@@ -517,6 +522,14 @@ function registerOrchestrationTools(
           sessionId: args.sessionId,
         })
       }
+      if (output.agent.lifecycleState === 'closed') {
+        return toolText({
+          ok: false,
+          error: 'orchestration_agent_closed',
+          message: `Cannot send orchestration prompt to closed agent ${args.sessionId}`,
+          sessionId: args.sessionId,
+        })
+      }
       const kind = manager.getSessionKind(args.sessionId)
       if (kind !== 'claude' && kind !== 'codex') {
         return toolText({
@@ -526,13 +539,13 @@ function registerOrchestrationTools(
           sessionId: args.sessionId,
         })
       }
-      const shouldWrap = bridge.promptSubmissionCount(args.sessionId) === 0
+      const shouldWrap = output.agent.orchestrationBootstrapPromptDelivered !== true
       const prompt = shouldWrap
         ? buildOrchestrationBootstrapPrompt({
-            task: args.prompt,
+            task: args.prompt.trim(),
             inheritedParentContext: output.agent.inheritedParentContext === true,
           })
-        : args.prompt
+        : args.prompt.trim()
       const delivery = await submitPrompt(manager, args.sessionId, kind, prompt)
       if (!delivery.ok) {
         return toolText({
@@ -543,6 +556,12 @@ function registerOrchestrationTools(
         })
       }
       bridge.notePromptSubmitted(args.sessionId)
+      if (shouldWrap) {
+        await bridge.markBootstrapPromptDelivered({
+          parentSessionId: scope.sessionId,
+          sessionId: args.sessionId,
+        })
+      }
       return toolText({ ok: true, sessionId: args.sessionId })
     },
   )

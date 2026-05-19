@@ -29,6 +29,8 @@ export function registerProviderIpc(): void {
         sourceKind: 'claude' | 'codex'
         sourceProviderSessionId: string
         cwd: string
+        sourceCwd?: string
+        targetCwd?: string
       },
     ) => {
       return await switchProvider(params)
@@ -43,6 +45,8 @@ export function registerProviderIpc(): void {
         provider: 'claude' | 'codex'
         sourceProviderSessionId: string
         cwd: string
+        sourceCwd?: string
+        targetCwd?: string
       },
     ) => {
       return await duplicateSession(params)

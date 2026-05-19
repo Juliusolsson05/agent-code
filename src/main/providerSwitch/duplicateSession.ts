@@ -27,6 +27,7 @@ import type {
   CodexRolloutLine,
 } from 'agent-transcript-parser'
 
+import { sanitizeClaudeEntriesForResume } from '@main/providerSwitch/claudeResumeSanitizer.js'
 import {
   findCodexRolloutPathBySessionId,
   getClaudeSessionFilePath,
@@ -42,6 +43,12 @@ export type DuplicateSessionRequest = {
    *  Ignored for Codex — rollout files are discovered globally
    *  under `~/.codex/sessions`. */
   cwd: string
+  /** Optional explicit source cwd for callers that need to read a Claude
+   *  transcript from one project and write the clone for another. */
+  sourceCwd?: string
+  /** Optional explicit target cwd for Claude clone placement. Defaults to
+   *  `cwd` for legacy callers. Ignored for Codex. */
+  targetCwd?: string
 }
 
 export type DuplicateSessionResult = {
@@ -63,8 +70,10 @@ export async function duplicateSession(
 async function duplicateClaude(
   request: DuplicateSessionRequest,
 ): Promise<DuplicateSessionResult> {
+  const sourceCwd = request.sourceCwd ?? request.cwd
+  const targetCwd = request.targetCwd ?? request.cwd
   const sourceFilePath = await getClaudeSessionFilePath(
-    request.cwd,
+    sourceCwd,
     request.sourceProviderSessionId,
   )
   // Read the whole source in a single shot. If the session is still
@@ -79,7 +88,8 @@ async function duplicateClaude(
   }
 
   const { entries, newSessionId } = cloneClaudeTranscript(sourceEntries)
-  const newFilePath = await writeClaudeSessionFile(request.cwd, entries)
+  const safeEntries = sanitizeClaudeEntriesForResume(entries)
+  const newFilePath = await writeClaudeSessionFile(targetCwd, safeEntries)
 
   return {
     provider: 'claude',

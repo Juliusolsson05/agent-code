@@ -52,6 +52,13 @@ export type OrchestrationCloseRunRequest = {
   runId?: string
 }
 
+export type OrchestrationMarkBootstrapPromptDeliveredRequest = {
+  requestId: string
+  type: 'mark-bootstrap-prompt-delivered'
+  parentSessionId: string
+  sessionId: string
+}
+
 export type OrchestrationRendererRequest =
   | OrchestrationCreateAgentRequest
   | OrchestrationListAgentsRequest
@@ -59,6 +66,7 @@ export type OrchestrationRendererRequest =
   | OrchestrationReadRunOutputsRequest
   | OrchestrationCloseAgentRequest
   | OrchestrationCloseRunRequest
+  | OrchestrationMarkBootstrapPromptDeliveredRequest
 
 export type OrchestrationLifecycleState =
   | 'created'
@@ -88,6 +96,7 @@ export type OrchestrationAgentRecord = {
   inheritedParentContext?: boolean
   inheritedParentProviderSessionId?: string
   inheritedProviderSessionId?: string
+  orchestrationBootstrapPromptDelivered?: boolean
   lifecycleState?: OrchestrationLifecycleState
   createdAt?: number
   lastActivityAt?: number
@@ -144,6 +153,12 @@ export type OrchestrationRendererResponse =
       ok: true
       type: 'close-agent' | 'close-run'
       result: OrchestrationCloseResult
+    }
+  | {
+      requestId: string
+      ok: true
+      type: 'mark-bootstrap-prompt-delivered'
+      agent: OrchestrationAgentRecord
     }
   | {
       requestId: string

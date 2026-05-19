@@ -162,6 +162,18 @@ export type SessionMeta = {
   inheritedParentProviderSessionId?: string
   inheritedProviderSessionId?: string
   /**
+   * Durable marker that the first orchestration handoff prompt has already
+   * been delivered to this child.
+   *
+   * WHY this cannot live only in main's OrchestrationBridge:
+   * the bridge's prompt-delivery map is intentionally short-lived coordination
+   * state. Workspace sessions survive app restarts and metadata pruning; the
+   * fact that the child already received its identity/handoff guard must
+   * survive with the child, otherwise the next `send_prompt` after restart
+   * would inject a second bootstrap block mid-conversation.
+   */
+  orchestrationBootstrapPromptDelivered?: boolean
+  /**
    * Built-in MCP domains this agent should receive when it is spawned.
    *
    * WHY this is session metadata, not only a transient spawn option:

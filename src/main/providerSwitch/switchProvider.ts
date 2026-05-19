@@ -1,6 +1,7 @@
 import { toClaude, toCodex } from 'agent-transcript-parser'
 import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
 
+import { sanitizeClaudeEntriesForResume } from '@main/providerSwitch/claudeResumeSanitizer.js'
 import {
   findCodexRolloutPathBySessionId,
   getClaudeSessionFilePath,
@@ -15,6 +16,8 @@ export type SwitchProviderRequest = {
   sourceKind: 'claude' | 'codex'
   sourceProviderSessionId: string
   cwd: string
+  sourceCwd?: string
+  targetCwd?: string
 }
 
 export type SwitchProviderResult = {
@@ -35,8 +38,9 @@ export async function switchProvider(
 async function switchClaudeToCodex(
   request: SwitchProviderRequest,
 ): Promise<SwitchProviderResult> {
+  const sourceCwd = request.sourceCwd ?? request.cwd
   const sourceFilePath = await getClaudeSessionFilePath(
-    request.cwd,
+    sourceCwd,
     request.sourceProviderSessionId,
   )
   const sourceEntries = await readJsonlFile<ClaudeEntry>(sourceFilePath)
@@ -87,7 +91,10 @@ async function switchCodexToClaude(
   const sourceLines = await readJsonlFile<CodexRolloutLine>(sourceFilePath)
   const translated = toClaude(sourceLines, { lossy: false })
   const targetProviderSessionId = getClaudeSessionId(translated)
-  const targetFilePath = await writeClaudeSessionFile(request.cwd, translated)
+  const targetFilePath = await writeClaudeSessionFile(
+    request.targetCwd ?? request.cwd,
+    sanitizeClaudeEntriesForResume(translated),
+  )
 
   return {
     targetKind: 'claude',

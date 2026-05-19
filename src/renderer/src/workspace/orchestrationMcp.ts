@@ -117,6 +117,27 @@ export async function closeOrchestrationRun(params: {
   }
 }
 
+export function markOrchestrationBootstrapPromptDelivered(params: {
+  state: WorkspaceState
+  parentSessionId: string
+  sessionId: string
+}): WorkspaceState {
+  const meta = params.state.sessions[params.sessionId]
+  if (!meta || !isVisibleToOrchestrationParent(meta, params.parentSessionId)) {
+    throw new Error('Orchestration agent not found for this parent session.')
+  }
+  return {
+    ...params.state,
+    sessions: {
+      ...params.state.sessions,
+      [params.sessionId]: {
+        ...meta,
+        orchestrationBootstrapPromptDelivered: true,
+      },
+    },
+  }
+}
+
 function matchingOrchestrationSessionIds(
   state: WorkspaceState,
   parentSessionId: string,
@@ -204,6 +225,9 @@ function buildAgentRecord(params: {
             ? { inheritedProviderSessionId: params.meta.inheritedProviderSessionId }
             : {}),
         }
+      : {}),
+    ...(params.meta.orchestrationBootstrapPromptDelivered
+      ? { orchestrationBootstrapPromptDelivered: true }
       : {}),
     lifecycleState,
     statusSummary: statusSummary(params.runtime, lifecycleState),
