@@ -37,6 +37,7 @@ import {
   closeOrchestrationAgent,
   closeOrchestrationRun,
   listOrchestrationAgents,
+  markOrchestrationBootstrapPromptDelivered,
   readOrchestrationAgent,
   readOrchestrationRunOutputs,
 } from '@renderer/workspace/orchestrationMcp'
@@ -255,6 +256,7 @@ export function useWorkspace(
             role: request.role,
             runId: request.runId,
             builtInMcpDomains: request.builtInMcpDomains,
+            inheritParentContext: request.inheritParentContext,
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,
@@ -330,6 +332,33 @@ export function useWorkspace(
             ok: true,
             type: 'close-agent',
             result,
+          })
+          return
+        }
+
+        if (request.type === 'mark-bootstrap-prompt-delivered') {
+          const output = readOrchestrationAgent({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            maxMessages: 1,
+          })
+          setState(prev => {
+            return markOrchestrationBootstrapPromptDelivered({
+              state: prev,
+              parentSessionId: request.parentSessionId,
+              sessionId: request.sessionId,
+            })
+          })
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'mark-bootstrap-prompt-delivered',
+            agent: {
+              ...output.agent,
+              orchestrationBootstrapPromptDelivered: true,
+            },
           })
           return
         }

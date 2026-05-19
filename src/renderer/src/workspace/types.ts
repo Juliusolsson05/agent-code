@@ -148,6 +148,32 @@ export type SessionMeta = {
   orchestrationRunId?: string
   orchestrationRole?: string
   /**
+   * True when an orchestration child was spawned from a duplicated provider
+   * transcript rather than a blank conversation.
+   *
+   * WHY this is persisted on the child instead of only returned from the
+   * create call:
+   * follow-up MCP prompts and Dispatch status views need to know whether the
+   * child's provider history came from the parent. The clone itself is already
+   * independent on disk; these ids are explanatory metadata for handoff
+   * prompts and debugging, not authority to mutate the parent transcript.
+   */
+  inheritedParentContext?: boolean
+  inheritedParentProviderSessionId?: string
+  inheritedProviderSessionId?: string
+  /**
+   * Durable marker that the first orchestration handoff prompt has already
+   * been delivered to this child.
+   *
+   * WHY this cannot live only in main's OrchestrationBridge:
+   * the bridge's prompt-delivery map is intentionally short-lived coordination
+   * state. Workspace sessions survive app restarts and metadata pruning; the
+   * fact that the child already received its identity/handoff guard must
+   * survive with the child, otherwise the next `send_prompt` after restart
+   * would inject a second bootstrap block mid-conversation.
+   */
+  orchestrationBootstrapPromptDelivered?: boolean
+  /**
    * Built-in MCP domains this agent should receive when it is spawned.
    *
    * WHY this is session metadata, not only a transient spawn option:

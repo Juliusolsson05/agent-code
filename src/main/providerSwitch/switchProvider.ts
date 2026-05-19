@@ -1,6 +1,8 @@
 import { toClaude, toCodex } from 'agent-transcript-parser'
 import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
 
+import { sanitizeClaudeEntriesForResume } from '@main/providerSwitch/claudeResumeSanitizer.js'
+import { sanitizeCodexRolloutForResume } from '@main/providerSwitch/codexResumeSanitizer.js'
 import {
   findCodexRolloutPathBySessionId,
   getClaudeSessionFilePath,
@@ -15,6 +17,8 @@ export type SwitchProviderRequest = {
   sourceKind: 'claude' | 'codex'
   sourceProviderSessionId: string
   cwd: string
+  sourceCwd?: string
+  targetCwd?: string
 }
 
 export type SwitchProviderResult = {
@@ -35,8 +39,9 @@ export async function switchProvider(
 async function switchClaudeToCodex(
   request: SwitchProviderRequest,
 ): Promise<SwitchProviderResult> {
+  const sourceCwd = request.sourceCwd ?? request.cwd
   const sourceFilePath = await getClaudeSessionFilePath(
-    request.cwd,
+    sourceCwd,
     request.sourceProviderSessionId,
   )
   const sourceEntries = await readJsonlFile<ClaudeEntry>(sourceFilePath)
@@ -57,13 +62,15 @@ async function switchClaudeToCodex(
   //
   // Round-trip fidelity isn't a goal on provider-switch — the user has
   // already committed to living inside Codex from here on.
-  const translated = toCodex(sourceEntries, {
+  const translated = toCodex(sanitizeClaudeEntriesForResume(sourceEntries), {
     lossy: false,
     dropClaudeBootstrap: true,
     sanitizeForResume: true,
   })
   const targetProviderSessionId = getCodexSessionId(translated)
-  const targetFilePath = await writeCodexRolloutFile(translated)
+  const targetFilePath = await writeCodexRolloutFile(
+    sanitizeCodexRolloutForResume(translated),
+  )
 
   return {
     targetKind: 'codex',
@@ -87,7 +94,10 @@ async function switchCodexToClaude(
   const sourceLines = await readJsonlFile<CodexRolloutLine>(sourceFilePath)
   const translated = toClaude(sourceLines, { lossy: false })
   const targetProviderSessionId = getClaudeSessionId(translated)
-  const targetFilePath = await writeClaudeSessionFile(request.cwd, translated)
+  const targetFilePath = await writeClaudeSessionFile(
+    request.targetCwd ?? request.cwd,
+    sanitizeClaudeEntriesForResume(translated),
+  )
 
   return {
     targetKind: 'claude',

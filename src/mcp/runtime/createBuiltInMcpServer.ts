@@ -10,7 +10,11 @@ import {
   AGENT_TRANSCRIPT_ITEM_KINDS,
   AGENT_TRANSCRIPT_PROJECTIONS,
 } from '@mcp/shared/agentTranscriptTypes.js'
-import type { OrchestrationAgentKind } from '@mcp/shared/orchestrationTypes.js'
+import type {
+  OrchestrationAgentKind,
+  OrchestrationAgentOutput,
+} from '@mcp/shared/orchestrationTypes.js'
+import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationPrompt.js'
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
@@ -403,7 +407,12 @@ function registerOrchestrationTools(
     {
       title: 'Create Orchestration Agent',
       description:
-        'Creates a distinct Agent Code orchestration child agent in Dispatch, optionally bootstrapped with an initial prompt.',
+        [
+          'Creates a distinct Agent Code orchestration child agent in Dispatch, optionally bootstrapped with an initial prompt.',
+          'Use this only when the user explicitly asks for delegated, parallel, or orchestrated agent work.',
+          'By default the child starts from a duplicated or translated copy of this parent agent transcript so it can use the conversation as background context without appending to the parent transcript.',
+          'Set inheritParentContext to false only when the child should start from a clean provider conversation.',
+        ].join(' '),
       inputSchema: {
         kind: z.enum(['claude', 'codex']).default('claude'),
         prompt: z.string().optional(),
@@ -411,6 +420,13 @@ function registerOrchestrationTools(
         title: z.string().optional(),
         role: z.string().optional(),
         runId: z.string().optional(),
+        inheritParentContext: z.boolean().optional().describe(
+          [
+            'Defaults to true.',
+            'When true, Agent Code duplicates or translates the parent provider transcript before spawning the child, giving the child read-only background context from the parent conversation while keeping its future messages in a separate transcript.',
+            'Leave this enabled for normal orchestrated work; set false only when the user or task requires an isolated child with no inherited conversation context.',
+          ].join(' '),
+        ),
         builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'])).optional(),
       },
     },
@@ -432,11 +448,16 @@ function registerOrchestrationTools(
         title: args.title,
         role: args.role,
         runId: args.runId,
+        inheritParentContext: args.inheritParentContext,
         builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
       })
 
       if (args.prompt && args.prompt.trim().length > 0) {
-        const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, args.prompt)
+        const prompt = buildOrchestrationBootstrapPrompt({
+          task: args.prompt,
+          inheritedParentContext: agent.inheritedParentContext === true,
+        })
+        const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, prompt)
         if (!delivery.ok) {
           return toolText({
             ok: false,
@@ -447,6 +468,26 @@ function registerOrchestrationTools(
           })
         }
         bridge.notePromptSubmitted(agent.sessionId)
+        try {
+          return toolText({
+            ok: true,
+            agent: await bridge.markBootstrapPromptDelivered({
+              parentSessionId: scope.sessionId,
+              sessionId: agent.sessionId,
+            }),
+            promptSubmitted: true,
+          })
+        } catch (err) {
+          return toolText({
+            ok: true,
+            agent,
+            promptSubmitted: true,
+            bootstrapPromptDelivered: true,
+            bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Could not persist orchestration bootstrap delivery state.',
+          })
+        }
       }
 
       return toolText({
@@ -466,16 +507,44 @@ function registerOrchestrationTools(
         'Sends a follow-up prompt to an existing orchestration-created Agent Code session.',
       inputSchema: {
         sessionId: z.string(),
-        prompt: z.string(),
+        prompt: z.string().refine(value => value.trim().length > 0, {
+          message: 'Prompt must not be empty.',
+        }),
       },
     },
     async args => {
       const manager = dependencies.sessionManager
-      if (!manager) {
+      const bridge = dependencies.orchestrationBridge
+      if (!manager || !bridge) {
         return toolText({
           ok: false,
-          error: 'session_manager_unavailable',
-          message: 'Agent Code session manager is not available.',
+          error: 'orchestration_unavailable',
+          message: 'Agent Code orchestration services are not available.',
+        })
+      }
+      let output: OrchestrationAgentOutput
+      try {
+        output = await bridge.readAgent({
+          parentSessionId: scope.sessionId,
+          sessionId: args.sessionId,
+          maxMessages: 1,
+        })
+      } catch (err) {
+        return toolText({
+          ok: false,
+          error: 'orchestration_agent_not_owned',
+          message: err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Could not read orchestration agent owned by this parent.',
+          sessionId: args.sessionId,
+        })
+      }
+      if (output.agent.lifecycleState === 'closed') {
+        return toolText({
+          ok: false,
+          error: 'orchestration_agent_closed',
+          message: `Cannot send orchestration prompt to closed agent ${args.sessionId}`,
+          sessionId: args.sessionId,
         })
       }
       const kind = manager.getSessionKind(args.sessionId)
@@ -487,7 +556,14 @@ function registerOrchestrationTools(
           sessionId: args.sessionId,
         })
       }
-      const delivery = await submitPrompt(manager, args.sessionId, kind, args.prompt)
+      const shouldWrap = output.agent.orchestrationBootstrapPromptDelivered !== true
+      const prompt = shouldWrap
+        ? buildOrchestrationBootstrapPrompt({
+            task: args.prompt.trim(),
+            inheritedParentContext: output.agent.inheritedParentContext === true,
+          })
+        : args.prompt.trim()
+      const delivery = await submitPrompt(manager, args.sessionId, kind, prompt)
       if (!delivery.ok) {
         return toolText({
           ok: false,
@@ -496,7 +572,24 @@ function registerOrchestrationTools(
           sessionId: args.sessionId,
         })
       }
-      dependencies.orchestrationBridge?.notePromptSubmitted(args.sessionId)
+      bridge.notePromptSubmitted(args.sessionId)
+      if (shouldWrap) {
+        try {
+          await bridge.markBootstrapPromptDelivered({
+            parentSessionId: scope.sessionId,
+            sessionId: args.sessionId,
+          })
+        } catch (err) {
+          return toolText({
+            ok: true,
+            sessionId: args.sessionId,
+            bootstrapPromptDelivered: true,
+            bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Could not persist orchestration bootstrap delivery state.',
+          })
+        }
+      }
       return toolText({ ok: true, sessionId: args.sessionId })
     },
   )

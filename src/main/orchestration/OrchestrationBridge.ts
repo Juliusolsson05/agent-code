@@ -47,6 +47,7 @@ export class OrchestrationBridge {
     role?: string
     runId?: string
     builtInMcpDomains?: BuiltInMcpDomain[]
+    inheritParentContext?: boolean
   }): Promise<OrchestrationAgentRecord> {
     const response = await this.request({
       requestId: randomUUID(),
@@ -205,6 +206,27 @@ export class OrchestrationBridge {
     }
     this.promptDeliveries.delete(sessionId)
     this.promptDeliveries.set(sessionId, next)
+  }
+
+  promptSubmissionCount(sessionId: string): number {
+    return this.promptDeliveries.get(sessionId)?.promptSubmissionCount ?? 0
+  }
+
+  async markBootstrapPromptDelivered(params: {
+    parentSessionId: string
+    sessionId: string
+  }): Promise<OrchestrationAgentRecord> {
+    const response = await this.request({
+      requestId: randomUUID(),
+      type: 'mark-bootstrap-prompt-delivered',
+      parentSessionId: params.parentSessionId,
+      sessionId: params.sessionId,
+    })
+    if (!response.ok) throw new Error(response.message)
+    if (response.type !== 'mark-bootstrap-prompt-delivered') {
+      throw new Error(`Unexpected orchestration response: ${response.type}`)
+    }
+    return this.enrichAgent(response.agent)
   }
 
   resolve(response: OrchestrationRendererResponse): void {

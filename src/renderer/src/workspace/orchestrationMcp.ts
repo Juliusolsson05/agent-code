@@ -117,6 +117,27 @@ export async function closeOrchestrationRun(params: {
   }
 }
 
+export function markOrchestrationBootstrapPromptDelivered(params: {
+  state: WorkspaceState
+  parentSessionId: string
+  sessionId: string
+}): WorkspaceState {
+  const meta = params.state.sessions[params.sessionId]
+  if (!meta || !isVisibleToOrchestrationParent(meta, params.parentSessionId)) {
+    return params.state
+  }
+  return {
+    ...params.state,
+    sessions: {
+      ...params.state.sessions,
+      [params.sessionId]: {
+        ...meta,
+        orchestrationBootstrapPromptDelivered: true,
+      },
+    },
+  }
+}
+
 function matchingOrchestrationSessionIds(
   state: WorkspaceState,
   parentSessionId: string,
@@ -194,6 +215,20 @@ function buildAgentRecord(params: {
     orchestrationRootId: params.meta.orchestrationRootId ?? params.parentSessionId,
     ...(params.meta.orchestrationRunId ? { orchestrationRunId: params.meta.orchestrationRunId } : {}),
     ...(params.meta.orchestrationRole ? { orchestrationRole: params.meta.orchestrationRole } : {}),
+    ...(params.meta.inheritedParentContext
+      ? {
+          inheritedParentContext: true,
+          ...(params.meta.inheritedParentProviderSessionId
+            ? { inheritedParentProviderSessionId: params.meta.inheritedParentProviderSessionId }
+            : {}),
+          ...(params.meta.inheritedProviderSessionId
+            ? { inheritedProviderSessionId: params.meta.inheritedProviderSessionId }
+            : {}),
+        }
+      : {}),
+    ...(params.meta.orchestrationBootstrapPromptDelivered
+      ? { orchestrationBootstrapPromptDelivered: true }
+      : {}),
     lifecycleState,
     statusSummary: statusSummary(params.runtime, lifecycleState),
     ...(activityAt ? { lastActivityAt: activityAt } : {}),
