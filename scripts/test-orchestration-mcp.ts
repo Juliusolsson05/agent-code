@@ -179,13 +179,12 @@ const runtime = {
     marked.sessions[child]?.orchestrationBootstrapPromptDelivered,
     true,
   )
-  assert.throws(() =>
-    markOrchestrationBootstrapPromptDelivered({
+  const unchanged = markOrchestrationBootstrapPromptDelivered({
       state,
       parentSessionId: parent,
       sessionId: unrelated,
-    }),
-  )
+    })
+  assert.equal(unchanged, state)
 }
 
 {

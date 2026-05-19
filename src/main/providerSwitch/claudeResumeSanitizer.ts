@@ -12,7 +12,8 @@ export function sanitizeClaudeEntriesForResume(entries: readonly ClaudeEntry[]):
   }
 
   const out: ClaudeEntry[] = []
-  for (const entry of entries) {
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]!
     const message = entry.message
     const content = entry.message?.content
     if (entry.type !== 'assistant' || !message || !Array.isArray(content)) {
@@ -24,7 +25,23 @@ export function sanitizeClaudeEntriesForResume(entries: readonly ClaudeEntry[]):
       if (!isClaudeToolUseBlock(block)) return true
       return resolvedToolUseIds.has(block.id)
     })
-    if (cleaned.length === 0) continue
+    if (cleaned.length === 0) {
+      if (index === entries.length - 1) {
+        out.push({
+          ...entry,
+          message: {
+            ...message,
+            content: [{
+              type: 'text',
+              text: 'Tool call omitted from this resumed snapshot because its result was not recorded before the transcript was cloned.',
+            }],
+          },
+        })
+        continue
+      }
+      out.push(entry)
+      continue
+    }
     if (cleaned.length === content.length) {
       out.push(entry)
       continue

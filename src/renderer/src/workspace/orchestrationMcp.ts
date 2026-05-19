@@ -124,7 +124,7 @@ export function markOrchestrationBootstrapPromptDelivered(params: {
 }): WorkspaceState {
   const meta = params.state.sessions[params.sessionId]
   if (!meta || !isVisibleToOrchestrationParent(meta, params.parentSessionId)) {
-    throw new Error('Orchestration agent not found for this parent session.')
+    return params.state
   }
   return {
     ...params.state,

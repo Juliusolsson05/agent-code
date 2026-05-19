@@ -3,14 +3,18 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import type { ClaudeEntry } from 'agent-transcript-parser'
+import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
 
 import { duplicateSession } from '../src/main/providerSwitch/duplicateSession'
+import { switchProvider } from '../src/main/providerSwitch/switchProvider'
 import { getProjectDirForCwd } from '../src/shared/runtime/projectDir'
+import { getCodexSessionsDir } from '../src/providers/codex/runtime/projectDir'
 
 const root = await mkdtemp(join(tmpdir(), 'agent-code-provider-switch-'))
 const previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR
+const previousCodexHome = process.env.CODEX_HOME
 process.env.CLAUDE_CONFIG_DIR = join(root, 'claude')
+process.env.CODEX_HOME = join(root, 'codex')
 
 try {
   const sourceCwd = join(root, 'source-project')
@@ -84,11 +88,73 @@ try {
   assert.equal(clonedText.includes(unresolvedToolUseId), false)
   assert.equal(clonedText.includes(resolvedToolUseId), true)
   assert.equal(clonedText.includes(duplicate.newProviderSessionId), true)
+
+  const switched = await switchProvider({
+    sourceKind: 'claude',
+    sourceProviderSessionId: sourceSessionId,
+    cwd: targetCwd,
+    sourceCwd,
+    targetCwd,
+  })
+  const switchedText = await readFile(switched.targetFilePath, 'utf8')
+  assert.equal(switchedText.includes(unresolvedToolUseId), false)
+  assert.equal(switchedText.includes(resolvedToolUseId), true)
+
+  const codexSourceId = '22222222-2222-4222-8222-222222222222'
+  const unresolvedCallId = 'call_unresolved'
+  const resolvedCallId = 'call_resolved'
+  const codexLines: CodexRolloutLine[] = [
+    {
+      timestamp: '2026-05-19T10:00:00.000Z',
+      type: 'session_meta',
+      payload: { id: codexSourceId, timestamp: '2026-05-19T10:00:00.000Z', cwd: sourceCwd },
+    },
+    {
+      timestamp: '2026-05-19T10:00:01.000Z',
+      type: 'response_item',
+      payload: { type: 'function_call', name: 'done', arguments: '{}', call_id: resolvedCallId },
+    },
+    {
+      timestamp: '2026-05-19T10:00:02.000Z',
+      type: 'response_item',
+      payload: { type: 'function_call_output', call_id: resolvedCallId, output: 'ok' },
+    },
+    {
+      timestamp: '2026-05-19T10:00:03.000Z',
+      type: 'response_item',
+      payload: { type: 'function_call', name: 'dangling', arguments: '{}', call_id: unresolvedCallId },
+    },
+  ]
+  const codexDir = join(getCodexSessionsDir(), '2026', '05', '19')
+  await mkdir(codexDir, { recursive: true })
+  const codexSourcePath = join(
+    codexDir,
+    `rollout-2026-05-19T10-00-00-${codexSourceId}.jsonl`,
+  )
+  await writeFile(
+    codexSourcePath,
+    `${codexLines.map(line => JSON.stringify(line)).join('\n')}\n`,
+    'utf8',
+  )
+
+  const codexDuplicate = await duplicateSession({
+    provider: 'codex',
+    sourceProviderSessionId: codexSourceId,
+    cwd: targetCwd,
+  })
+  const codexDuplicateText = await readFile(codexDuplicate.newFilePath, 'utf8')
+  assert.equal(codexDuplicateText.includes(unresolvedCallId), false)
+  assert.equal(codexDuplicateText.includes(resolvedCallId), true)
 } finally {
   if (previousClaudeConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR
   } else {
     process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir
+  }
+  if (previousCodexHome === undefined) {
+    delete process.env.CODEX_HOME
+  } else {
+    process.env.CODEX_HOME = previousCodexHome
   }
   await rm(root, { recursive: true, force: true })
 }

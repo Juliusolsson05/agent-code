@@ -441,7 +441,7 @@ function registerOrchestrationTools(
         })
       }
 
-      let agent = await bridge.createAgent({
+      const agent = await bridge.createAgent({
         parentSessionId: scope.sessionId,
         kind: args.kind as OrchestrationAgentKind,
         cwd: args.cwd,
@@ -468,15 +468,32 @@ function registerOrchestrationTools(
           })
         }
         bridge.notePromptSubmitted(agent.sessionId)
-        agent = await bridge.markBootstrapPromptDelivered({
-          parentSessionId: scope.sessionId,
-          sessionId: agent.sessionId,
-        })
+        try {
+          return toolText({
+            ok: true,
+            agent: await bridge.markBootstrapPromptDelivered({
+              parentSessionId: scope.sessionId,
+              sessionId: agent.sessionId,
+            }),
+            promptSubmitted: true,
+          })
+        } catch (err) {
+          return toolText({
+            ok: true,
+            agent,
+            promptSubmitted: true,
+            bootstrapPromptDelivered: true,
+            bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Could not persist orchestration bootstrap delivery state.',
+          })
+        }
       }
 
       return toolText({
         ok: true,
-        agent,
+        agent: (await bridge.listAgents({ parentSessionId: scope.sessionId, runId: args.runId }).catch(() => [agent]))
+          .find(item => item.sessionId === agent.sessionId) ?? agent,
         promptSubmitted: Boolean(args.prompt && args.prompt.trim().length > 0),
       })
     },
@@ -557,10 +574,21 @@ function registerOrchestrationTools(
       }
       bridge.notePromptSubmitted(args.sessionId)
       if (shouldWrap) {
-        await bridge.markBootstrapPromptDelivered({
-          parentSessionId: scope.sessionId,
-          sessionId: args.sessionId,
-        })
+        try {
+          await bridge.markBootstrapPromptDelivered({
+            parentSessionId: scope.sessionId,
+            sessionId: args.sessionId,
+          })
+        } catch (err) {
+          return toolText({
+            ok: true,
+            sessionId: args.sessionId,
+            bootstrapPromptDelivered: true,
+            bootstrapPromptPersistenceWarning: err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Could not persist orchestration bootstrap delivery state.',
+          })
+        }
       }
       return toolText({ ok: true, sessionId: args.sessionId })
     },

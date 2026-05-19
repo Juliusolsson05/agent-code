@@ -28,6 +28,7 @@ import type {
 } from 'agent-transcript-parser'
 
 import { sanitizeClaudeEntriesForResume } from '@main/providerSwitch/claudeResumeSanitizer.js'
+import { sanitizeCodexRolloutForResume } from '@main/providerSwitch/codexResumeSanitizer.js'
 import {
   findCodexRolloutPathBySessionId,
   getClaudeSessionFilePath,
@@ -117,7 +118,9 @@ async function duplicateCodex(
   }
 
   const { lines, newSessionId } = cloneCodexRollout(sourceLines)
-  const newFilePath = await writeCodexRolloutFile(lines)
+  const newFilePath = await writeCodexRolloutFile(
+    sanitizeCodexRolloutForResume(lines),
+  )
 
   return {
     provider: 'codex',
