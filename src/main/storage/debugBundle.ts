@@ -1,9 +1,11 @@
 import { mkdir, writeFile } from 'fs/promises'
 import { dirname, join, normalize } from 'path'
 
-import { DEBUG_BUNDLE_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
-import { appendDebugBundleSaved } from '@main/storage/debugBundleLog.js'
+import {
+  appendDebugBundleSaved,
+  debugBundleRootForReason,
+} from '@main/storage/debugBundleLog.js'
 
 // Debug-bundle writer.
 //
@@ -119,10 +121,11 @@ export async function saveDebugBundle(
   }
 
   const bundleFolderName = buildBundleFolderName(params.sessionId, new Date())
-  const bundlePath = join(DEBUG_BUNDLE_DIR, bundleFolderName)
+  const bundleRoot = debugBundleRootForReason(params.reason)
+  const bundlePath = join(bundleRoot, bundleFolderName)
 
-  // mkdir recursive handles both the DEBUG_BUNDLE_DIR root (first
-  // invocation ever) and the new per-bundle folder in one call.
+  // mkdir recursive handles both the manual/autosave root (first invocation
+  // ever) and the new per-bundle folder in one call.
   await mkdir(bundlePath, { recursive: true })
 
   // Sequential writes. Could parallelize with Promise.all but bundles

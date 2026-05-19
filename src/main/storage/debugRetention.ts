@@ -2,8 +2,10 @@ import { mkdir, readdir, rm, stat, statfs } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import {
+  AUTOSAVE_DEBUG_BUNDLE_DIR,
   DEBUG_BUNDLE_DIR,
   FEED_DEBUG_DIR,
+  MANUAL_DEBUG_BUNDLE_DIR,
   PERFORMANCE_RUNS_DIR,
   PROXY_EVENTS_DIR,
   STATE_DIR,
@@ -17,7 +19,14 @@ const MAX_BUDGET_BYTES = 15 * GIB
 const ACTIVE_GRACE_MS = 10 * 60 * 1000
 const PRUNE_COOLDOWN_MS = 5 * 60 * 1000
 
-type DebugStorageBucket = 'feed-debug' | 'debug-bundles' | 'proxy' | 'performance' | 'ghost-logs'
+type DebugStorageBucket =
+  | 'feed-debug'
+  | 'debug-bundles-manual'
+  | 'debug-bundles-autosave'
+  | 'debug-bundles-legacy'
+  | 'proxy'
+  | 'performance'
+  | 'ghost-logs'
 
 type Artifact = {
   path: string
@@ -120,7 +129,7 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
     // need those provisional rows during bootstrap. Keep ghost cleanup on the
     // budget/cap passes below, where pressure is explicit and active recent
     // files still get the ACTIVE_GRACE_MS guard.
-    if (artifact.bucket === 'ghost-logs') continue
+    if (artifact.bucket === 'ghost-logs' || artifact.bucket === 'debug-bundles-manual') continue
     if (artifact.mtimeMs >= cutoff) continue
     const freed = await removeArtifact(artifact)
     if (freed === 0) continue
@@ -170,7 +179,14 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
 function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
   return {
     'feed-debug': Math.floor(totalBudget * 0.22),
-    'debug-bundles': Math.floor(totalBudget * 0.32),
+    // Manual debug bundles are user-intentional captures, often with notes
+    // added seconds later. They should not lose same-day incident evidence just
+    // because autosave generated thousands of background snapshots, so they get
+    // a small protected lane and skip TTL pruning above. Autosave/legacy
+    // bundles remain cache-like and can be reclaimed aggressively.
+    'debug-bundles-manual': Math.floor(totalBudget * 0.08),
+    'debug-bundles-autosave': Math.floor(totalBudget * 0.20),
+    'debug-bundles-legacy': Math.floor(totalBudget * 0.04),
     proxy: Math.floor(totalBudget * 0.28),
     performance: Math.floor(totalBudget * 0.10),
     // Ghost logs are recovery state, not user data. They deserve enough
@@ -182,14 +198,24 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
 }
 
 async function collectArtifacts(): Promise<Artifact[]> {
-  const [feed, bundles, proxy, performance, ghostLogs] = await Promise.all([
+  const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, ghostLogs] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
-    collectImmediateDirs(DEBUG_BUNDLE_DIR, 'debug-bundles'),
+    collectImmediateDirs(MANUAL_DEBUG_BUNDLE_DIR, 'debug-bundles-manual'),
+    collectImmediateDirs(AUTOSAVE_DEBUG_BUNDLE_DIR, 'debug-bundles-autosave'),
+    collectLegacyDebugBundleDirs(DEBUG_BUNDLE_DIR),
     collectProxyRunDirs(PROXY_EVENTS_DIR),
     collectImmediateDirs(PERFORMANCE_RUNS_DIR, 'performance'),
     collectFiles(ghostLogDir(), 'ghost-logs', name => name.endsWith('.ghost.jsonl')),
   ])
-  return [...feed, ...bundles, ...proxy, ...performance, ...ghostLogs]
+  return [
+    ...feed,
+    ...manualBundles,
+    ...autosaveBundles,
+    ...legacyBundles,
+    ...proxy,
+    ...performance,
+    ...ghostLogs,
+  ]
 }
 
 async function collectFiles(
@@ -224,6 +250,23 @@ async function collectImmediateDirs(
     const entries = await readdir(dir, { withFileTypes: true })
     const dirs = entries.filter(entry => entry.isDirectory()).map(entry => join(dir, entry.name))
     return Promise.all(dirs.map(path => collectDirArtifact(path, bucket)))
+      .then(items => items.filter((item): item is Artifact => item !== null))
+  } catch {
+    return []
+  }
+}
+
+async function collectLegacyDebugBundleDirs(dir: string): Promise<Artifact[]> {
+  try {
+    const entries = await readdir(dir, { withFileTypes: true })
+    // WHY legacy root folders are still collected: old versions wrote manual
+    // and autosave bundles directly under debug-bundles/. New code uses
+    // manual/ and autosave/, but leaving the old timestamped folders invisible
+    // to retention would strand the exact disk bloat this split is fixing.
+    const dirs = entries
+      .filter(entry => entry.isDirectory() && entry.name !== 'manual' && entry.name !== 'autosave')
+      .map(entry => join(dir, entry.name))
+    return Promise.all(dirs.map(path => collectDirArtifact(path, 'debug-bundles-legacy')))
       .then(items => items.filter((item): item is Artifact => item !== null))
   } catch {
     return []

@@ -1,8 +1,20 @@
 import { appendFile, mkdir, writeFile } from 'fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'path'
 
-import { DEBUG_BUNDLE_DIR } from '@main/storage/paths.js'
+import {
+  AUTOSAVE_DEBUG_BUNDLE_DIR,
+  DEBUG_BUNDLE_DIR,
+  MANUAL_DEBUG_BUNDLE_DIR,
+} from '@main/storage/paths.js'
 
+export const MANUAL_DEBUG_BUNDLE_LOG_FILE = join(MANUAL_DEBUG_BUNDLE_DIR, 'saved-debug-bundles.jsonl')
+export const AUTOSAVE_DEBUG_BUNDLE_LOG_FILE = join(
+  AUTOSAVE_DEBUG_BUNDLE_DIR,
+  'autosaved-debug-bundles.jsonl',
+)
+// Legacy mixed ledger kept as an exported constant because older troubleshooting
+// scripts and user instructions may still point at this file. New saves do not
+// append here; storage selection now happens through debugBundleLogFileForReason.
 export const DEBUG_BUNDLE_LOG_FILE = join(DEBUG_BUNDLE_DIR, 'saved-debug-bundles.jsonl')
 const DEBUG_BUNDLE_NOTE_FILE = 'note.json'
 
@@ -30,6 +42,25 @@ export type DebugBundleLogNoteEntry = {
 
 export type DebugBundleLogEntry = DebugBundleLogSavedEntry | DebugBundleLogNoteEntry
 
+export function isAutosaveDebugBundleReason(reason?: string | null): boolean {
+  return typeof reason === 'string' && reason.startsWith('autosave-')
+}
+
+export function debugBundleRootForReason(reason?: string | null): string {
+  // WHY the split keys off reason instead of a new IPC field: every renderer
+  // caller already labels the capture as either `manual` or `autosave-*`, and
+  // main is the storage owner. Requiring another parallel boolean would create
+  // two sources of truth where disagreement could put a manual incident capture
+  // back into the noisy autosave cache.
+  return isAutosaveDebugBundleReason(reason) ? AUTOSAVE_DEBUG_BUNDLE_DIR : MANUAL_DEBUG_BUNDLE_DIR
+}
+
+export function debugBundleLogFileForReason(reason?: string | null): string {
+  return isAutosaveDebugBundleReason(reason)
+    ? AUTOSAVE_DEBUG_BUNDLE_LOG_FILE
+    : MANUAL_DEBUG_BUNDLE_LOG_FILE
+}
+
 function nowFields(now = Date.now()): { ts: number; tsIso: string } {
   return { ts: now, tsIso: new Date(now).toISOString() }
 }
@@ -41,15 +72,18 @@ function isInsideDebugBundleDir(path: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 }
 
-async function appendDebugBundleLogEntry(entry: DebugBundleLogEntry): Promise<void> {
+async function appendDebugBundleLogEntry(
+  file: string,
+  entry: DebugBundleLogEntry,
+): Promise<void> {
   // WHY this stays a plain append instead of a locked/fsync'd ledger: the
   // folder on disk is the source of truth. This file is an operator-friendly
   // index for "what did I save and why?", so losing the last line on a crash
   // or racing a same-process append is acceptable. Making the debug-save path
   // block on stronger durability would be the wrong trade for a command used
   // while the app is already misbehaving.
-  await mkdir(dirname(DEBUG_BUNDLE_LOG_FILE), { recursive: true })
-  await appendFile(DEBUG_BUNDLE_LOG_FILE, `${JSON.stringify(entry)}\n`, 'utf8')
+  await mkdir(dirname(file), { recursive: true })
+  await appendFile(file, `${JSON.stringify(entry)}\n`, 'utf8')
 }
 
 export async function appendDebugBundleSaved(params: {
@@ -60,7 +94,7 @@ export async function appendDebugBundleSaved(params: {
   cwd?: string | null
   providerSessionId?: string | null
 }): Promise<void> {
-  await appendDebugBundleLogEntry({
+  await appendDebugBundleLogEntry(debugBundleLogFileForReason(params.reason), {
     schemaVersion: 1,
     event: 'saved',
     ...nowFields(),
@@ -117,7 +151,7 @@ export async function addDebugBundleNote(params: {
     throw err
   }
   try {
-    await appendDebugBundleLogEntry({
+    await appendDebugBundleLogEntry(MANUAL_DEBUG_BUNDLE_LOG_FILE, {
       schemaVersion: 1,
       event: 'note-added',
       ...created,
