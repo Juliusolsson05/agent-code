@@ -9,6 +9,7 @@ import {
 import { asRecord } from '@shared/lib/asRecord'
 
 import type {
+  QueuedMessage,
   SemanticLiveTurn,
   StreamPhase,
 } from '@renderer/workspace/workspaceState'
@@ -31,6 +32,7 @@ export type FeedRenderModelInput = {
   provider: AgentProvider
   entries?: Entry[]
   committed?: FeedCommittedProjection
+  queuedMessages?: QueuedMessage[]
   semanticHistory: SemanticLiveTurn[]
   semanticTurn: SemanticLiveTurn | null
   streamPhase: StreamPhase
@@ -48,6 +50,7 @@ export type FeedCommittedProjection = {
 }
 
 export type FeedRenderModel = {
+  items: FeedRenderItem[]
   visibleDecisions: VisibleDecision[]
   visibleEntries: Entry[]
   renderedSemanticHistory: SemanticLiveTurn[]
@@ -56,6 +59,56 @@ export type FeedRenderModel = {
   shouldShowWorkIndicator: boolean
   debugRows: DebugVisibleRow[]
 }
+
+export type FeedRenderItemOrder = {
+  phase: 'empty' | 'content' | 'work' | 'queue'
+  timeMs: number | null
+  sequence: number
+  source: string
+}
+
+export type FeedRenderItem =
+  | {
+      type: 'entry'
+      key: string
+      entry: Entry
+      visibleDecision: VisibleDecision
+      entryOrdinal: number
+      order: FeedRenderItemOrder
+    }
+  | {
+      type: 'semantic-history'
+      key: string
+      turn: SemanticLiveTurn
+      order: FeedRenderItemOrder
+    }
+  | {
+      type: 'semantic-current'
+      key: string
+      turn: SemanticLiveTurn
+      order: FeedRenderItemOrder
+    }
+  | {
+      type: 'work'
+      key: string
+      phase: StreamPhase
+      toolName: string | null
+      toolUseId: string | null
+      order: FeedRenderItemOrder
+    }
+  | {
+      type: 'queued-prompt'
+      key: string
+      message: QueuedMessage
+      queueOrdinal: number
+      order: FeedRenderItemOrder
+    }
+  | {
+      type: 'empty'
+      key: string
+      provider: AgentProvider
+      order: FeedRenderItemOrder
+    }
 
 function committedMessageIds(entries: Entry[]): Set<string> {
   const ids = new Set<string>()
@@ -110,10 +163,125 @@ function visibleDecisionForEntry(entry: Entry, index: number): VisibleDecision {
   }
 }
 
+function timestampMs(value: unknown): number | null {
+  if (typeof value !== 'string') return null
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function entryTimestampMs(entry: Entry): number | null {
+  return timestampMs(asRecord(entry)?.timestamp)
+}
+
+function semanticTurnTimestampMs(turn: SemanticLiveTurn): number | null {
+  return typeof turn.endedAt === 'number' ? turn.endedAt : turn.startedAt
+}
+
+function phaseRank(phase: FeedRenderItemOrder['phase']): number {
+  switch (phase) {
+    case 'empty':
+      return 0
+    case 'content':
+      return 1
+    case 'work':
+      return 2
+    case 'queue':
+      return 3
+  }
+}
+
+function contentSourceRank(source: string): number {
+  switch (source) {
+    case 'entry':
+      return 0
+    case 'semantic-history':
+      return 1
+    case 'semantic-current':
+      return 2
+    default:
+      return 3
+  }
+}
+
+function contentSortTime(order: FeedRenderItemOrder): number {
+  // WHY null timestamps sort after timestamped content instead of
+  // pretending to be "now": a missing timestamp is a lossy transcript
+  // edge, not evidence that the row happened last. Keeping the
+  // sequence fallback stable prevents one malformed committed row from
+  // pushing stale semantic history underneath a newer user prompt.
+  return order.timeMs ?? Number.MAX_SAFE_INTEGER
+}
+
+function sortFeedRenderItems(items: FeedRenderItem[]): FeedRenderItem[] {
+  return [...items].sort((a, b) => {
+    const phaseDelta = phaseRank(a.order.phase) - phaseRank(b.order.phase)
+    if (phaseDelta !== 0) return phaseDelta
+
+    if (a.order.phase === 'content' && b.order.phase === 'content') {
+      const timeDelta = contentSortTime(a.order) - contentSortTime(b.order)
+      if (timeDelta !== 0) return timeDelta
+      const sourceDelta =
+        contentSourceRank(a.order.source) - contentSourceRank(b.order.source)
+      if (sourceDelta !== 0) return sourceDelta
+    }
+
+    return a.order.sequence - b.order.sequence
+  })
+}
+
+function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
+  switch (item.type) {
+    case 'entry':
+      return debugLabelForEntry(item.entry)
+    case 'semantic-history':
+      return `semantic history ${item.turn.turnId.slice(0, 12)} · ${item.turn.source ?? 'unknown'}`
+    case 'semantic-current':
+      return `semantic turn ${item.turn.turnId.slice(0, 12)} · ${item.turn.source ?? 'unknown'}`
+    case 'work':
+      return item.toolName && (
+        item.phase === 'tool-input' ||
+        item.phase === 'tool-use' ||
+        item.phase === 'awaiting-tool'
+      )
+        ? `work ${item.phase} · ${item.toolName}`
+        : `work ${item.phase}`
+    case 'queued-prompt':
+      return `queued prompt ${item.queueOrdinal + 1}`
+    case 'empty':
+      return provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'
+  }
+}
+
+function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
+  switch (item.type) {
+    case 'entry':
+    case 'queued-prompt':
+      return 'entry'
+    case 'semantic-history':
+    case 'semantic-current':
+      return 'semantic'
+    case 'work':
+      return 'work'
+    case 'empty':
+      return 'empty'
+  }
+}
+
+function debugRowsForItems(items: FeedRenderItem[], provider: AgentProvider): DebugVisibleRow[] {
+  return items.map(item => ({
+    key: item.key,
+    slot: slotForItem(item),
+    label: labelForItem(item, provider),
+    itemType: item.type,
+    order: item.order,
+  }))
+}
+
 export function deriveFeedRenderModel({
   provider,
   entries,
   committed,
+  queuedMessages = [],
   semanticHistory,
   semanticTurn,
   streamPhase,
@@ -167,36 +335,66 @@ export function deriveFeedRenderModel({
     renderedSemanticTurn !== null || renderedSemanticHistory.length > 0
   const shouldShowWorkIndicator = streamPhase !== 'idle'
 
-  const debugRows: DebugVisibleRow[] = []
-  if (visibleEntries.length === 0 && !hasSemanticStreaming) {
-    debugRows.push({
-      key: 'empty',
-      slot: 'empty',
-      label: provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…',
+  const unsortedItems: FeedRenderItem[] = []
+  let contentSequence = 0
+  let entryOrdinal = 0
+  for (const item of visibleDecisions) {
+    if (!item.visible) continue
+    unsortedItems.push({
+      type: 'entry',
+      key: `entry:${item.key}`,
+      entry: item.entry,
+      visibleDecision: item,
+      entryOrdinal,
+      order: {
+        phase: 'content',
+        timeMs: entryTimestampMs(item.entry),
+        sequence: contentSequence++,
+        source: 'entry',
+      },
     })
-  } else {
-    for (const item of visibleDecisions) {
-      if (!item.visible) continue
-      debugRows.push({
-        key: `entry:${item.key}`,
-        slot: 'entry',
-        label: debugLabelForEntry(item.entry),
-      })
-    }
-    for (const turn of renderedSemanticHistory) {
-      debugRows.push({
-        key: `semantic-history:${turn.turnId}`,
-        slot: 'semantic',
-        label: `semantic history ${turn.turnId.slice(0, 12)} · ${turn.source ?? 'unknown'}`,
-      })
-    }
-    if (renderedSemanticTurn != null) {
-      debugRows.push({
-        key: `semantic:${renderedSemanticTurn.turnId}`,
-        slot: 'semantic',
-        label: `semantic turn ${renderedSemanticTurn.turnId.slice(0, 12)} · ${renderedSemanticTurn.source ?? 'unknown'}`,
-      })
-    }
+    entryOrdinal += 1
+  }
+  for (const turn of renderedSemanticHistory) {
+    unsortedItems.push({
+      type: 'semantic-history',
+      key: `semantic-history:${turn.turnId}`,
+      turn,
+      order: {
+        phase: 'content',
+        timeMs: semanticTurnTimestampMs(turn),
+        sequence: contentSequence++,
+        source: 'semantic-history',
+      },
+    })
+  }
+  if (renderedSemanticTurn != null) {
+    unsortedItems.push({
+      type: 'semantic-current',
+      key: `semantic:${renderedSemanticTurn.turnId}`,
+      turn: renderedSemanticTurn,
+      order: {
+        phase: 'content',
+        timeMs: semanticTurnTimestampMs(renderedSemanticTurn),
+        sequence: contentSequence++,
+        source: 'semantic-current',
+      },
+    })
+  }
+
+  const hasContentItems = unsortedItems.length > 0 || queuedMessages.length > 0
+  if (!hasContentItems) {
+    unsortedItems.push({
+      type: 'empty',
+      key: 'empty',
+      provider,
+      order: {
+        phase: 'empty',
+        timeMs: null,
+        sequence: 0,
+        source: 'empty',
+      },
+    })
   }
 
   // WHY work is modeled independently from content rows:
@@ -208,21 +406,49 @@ export function deriveFeedRenderModel({
   // the work affordance as its own surface so "busy" cannot disappear
   // just because the semantic owner changed.
   if (shouldShowWorkIndicator) {
-    debugRows.push({
+    unsortedItems.push({
+      type: 'work',
       key: `work:${streamPhase}:${streamPhasePendingToolUseId ?? 'none'}`,
-      slot: 'work',
-      label:
-        streamPhasePendingToolName && (
-          streamPhase === 'tool-input' ||
-          streamPhase === 'tool-use' ||
-          streamPhase === 'awaiting-tool'
-        )
-          ? `work ${streamPhase} · ${streamPhasePendingToolName}`
-          : `work ${streamPhase}`,
+      phase: streamPhase,
+      toolName: streamPhasePendingToolName,
+      toolUseId: streamPhasePendingToolUseId,
+      order: {
+        phase: 'work',
+        timeMs: null,
+        sequence: 0,
+        source: 'work',
+      },
     })
   }
 
+  queuedMessages.forEach((message, index) => {
+    unsortedItems.push({
+      type: 'queued-prompt',
+      key: `queue:${message.timestamp}:${index}`,
+      message,
+      queueOrdinal: index,
+      order: {
+        phase: 'queue',
+        timeMs: timestampMs(message.timestamp),
+        sequence: index,
+        source: 'queue',
+      },
+    })
+  })
+
+  // WHY the sort happens after ownership suppression rather than
+  // before: visibility ownership decides whether a semantic/archive
+  // row is allowed to exist at all. Ordering is only meaningful over
+  // surviving render owners. This is the bug boundary that kept
+  // hiding user prompts: the old renderer made correct per-plane
+  // ownership decisions, then mounted the planes in bucket order so a
+  // stale semantic history row could still appear after a newer user
+  // prompt.
+  const items = sortFeedRenderItems(unsortedItems)
+  const debugRows = debugRowsForItems(items, provider)
+
   return {
+    items,
     visibleDecisions,
     visibleEntries,
     renderedSemanticHistory,

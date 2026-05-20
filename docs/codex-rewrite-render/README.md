@@ -36,6 +36,7 @@ The first implementation pass introduces `deriveFeedRenderModel` in `src/rendere
 
 ## Remaining Work
 
+- Implement the single ordered `FeedRenderItem[]` plan documented in `feed-render-item-plan.md`. This is the fix for the recurring "user prompt is missing" shape where the prompt exists in the entry plane but stale semantic/work rows render below it.
 - Move more semantic ownership out of React components and into the selector so Feed can eventually render a single typed `FeedRenderItem[]`.
 - Add a renderer trace command that logs committed, semantic, and work owner candidates before selection and after selection.
 - Investigate the Codex headless rollout lifecycle issue documented in `headless-channel-model.md`: rollout `agent_message_delta` may need to soft-open a semantic turn before applying deltas.

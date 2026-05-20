@@ -17,12 +17,12 @@ import type { Entry, ToolResultBlock, ToolUseBlock } from '../src/shared/types/t
 import type { SemanticLiveTurn } from '../src/renderer/src/workspace/workspaceState'
 import { deriveFeedRenderModel } from '../src/renderer/src/features/feed/model/renderModel'
 
-function assistantEntry(id: string, text: string): Entry {
+function assistantEntry(id: string, text: string, timestamp = '2026-05-16T18:30:00.000Z'): Entry {
   return {
     type: 'assistant',
     uuid: `${id}:entry`,
     parentUuid: null,
-    timestamp: '2026-05-16T18:30:00.000Z',
+    timestamp,
     message: {
       id,
       role: 'assistant',
@@ -44,12 +44,17 @@ function assistantEntryWithoutMessageId(uuid: string, text: string): Entry {
   } as Entry
 }
 
-function userEntry(id: string, text: string, isMeta = false): Entry {
+function userEntry(
+  id: string,
+  text: string,
+  isMeta = false,
+  timestamp = '2026-05-16T18:30:01.000Z',
+): Entry {
   return {
     type: 'user',
     uuid: `${id}:entry`,
     parentUuid: null,
-    timestamp: '2026-05-16T18:30:01.000Z',
+    timestamp,
     isMeta,
     message: {
       id,
@@ -315,10 +320,12 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
 }
 
 {
+  const archived = liveTurn('resp_history_bridge')
+  archived.endedAt = Date.parse('2026-05-16T18:29:59.000Z')
   const model = deriveFeedRenderModel({
     provider: 'codex',
     entries: [userEntry('optimistic-codex-user:1', 'new submitted prompt')],
-    semanticHistory: [liveTurn('resp_history_bridge')],
+    semanticHistory: [archived],
     semanticTurn: null,
     streamPhase: 'submitting',
     streamPhasePendingToolName: null,
@@ -326,9 +333,14 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.deepEqual(
-    model.debugRows.map(row => row.slot),
-    ['entry', 'semantic', 'work'],
-    'Feed still renders entry-plane optimistic prompts before semantic history/work, so submit ownership must avoid this plane when history is renderable',
+    model.items.map(item => item.type),
+    ['semantic-history', 'entry', 'work'],
+    'Feed must chronologically place archived semantic history before a newer optimistic prompt instead of appending history under the prompt',
+  )
+  assert.deepEqual(
+    model.debugRows.map(row => row.itemType),
+    ['semantic-history', 'entry', 'work'],
+    'debug rows must report the same unified item order that Feed renders',
   )
 }
 
@@ -424,8 +436,8 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   )
   assert.deepEqual(
     model.debugRows.map(row => row.slot),
-    ['entry', 'semantic'],
-    'Codex can legitimately render committed item rows plus still-live semantic leftovers',
+    ['semantic', 'entry'],
+    'Codex can legitimately render committed item rows plus still-live semantic leftovers in the unified chronological order',
   )
 }
 
@@ -574,6 +586,90 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
     'semantic history must defensively drop the current turn id so history/current cannot double-own one turn',
   )
   assert.notEqual(model.renderedSemanticTurn, null)
+}
+
+{
+  const current = liveTurn('current-after-prompt', 'rollout')
+  current.startedAt = Date.parse('2026-05-16T18:30:02.000Z')
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [userEntry('u-current', 'prompt before current turn')],
+    semanticHistory: [],
+    semanticTurn: current,
+    streamPhase: 'thinking',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+  })
+
+  assert.deepEqual(
+    model.items.map(item => item.type),
+    ['entry', 'semantic-current', 'work'],
+    'current semantic output that starts after the user prompt must stay below that prompt in the unified feed order',
+  )
+}
+
+{
+  const archived = liveTurn('late-history-race', 'rollout')
+  archived.endedAt = Date.parse('2026-05-16T18:29:59.000Z')
+
+  const beforeHistory = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [userEntry('race-user', 'prompt visible before semantic history arrives')],
+    semanticHistory: [],
+    semanticTurn: null,
+    streamPhase: 'submitting',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+  })
+
+  const afterHistory = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [userEntry('race-user', 'prompt visible before semantic history arrives')],
+    semanticHistory: [archived],
+    semanticTurn: null,
+    streamPhase: 'submitting',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+  })
+
+  assert.deepEqual(
+    beforeHistory.items.map(item => item.type),
+    ['entry', 'work'],
+    'optimistic prompt must render while submit is still waiting for semantic catch-up',
+  )
+  assert.deepEqual(
+    afterHistory.items.map(item => item.type),
+    ['semantic-history', 'entry', 'work'],
+    'late-arriving history must insert above the already-rendered newer prompt, not below it',
+  )
+}
+
+{
+  const archived = liveTurn('queue-history', 'rollout')
+  archived.endedAt = Date.parse('2026-05-16T18:30:01.000Z')
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [
+      assistantEntry('queue-before', 'assistant before queued prompt', '2026-05-16T18:30:00.000Z'),
+    ],
+    queuedMessages: [
+      {
+        content: 'queued follow-up prompt',
+        timestamp: '2026-05-16T18:30:03.000Z',
+      },
+    ],
+    semanticHistory: [archived],
+    semanticTurn: null,
+    streamPhase: 'thinking',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+  })
+
+  assert.deepEqual(
+    model.items.map(item => item.type),
+    ['entry', 'semantic-history', 'work', 'queued-prompt'],
+    'queued prompts must live in the same feed plan after existing content and work, not in a second visual plane outside Feed',
+  )
 }
 
 {

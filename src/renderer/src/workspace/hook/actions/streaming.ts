@@ -205,14 +205,14 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
                 // Codex lets the user submit follow-up prompts while the
                 // previous assistant/tool turn is still live. Appending a
                 // synthetic user Entry to `entries` during that window puts
-                // it in Feed's committed plane, which renders before
-                // semantic history/current turn. The 2026-05-16T19-21
-                // bundle captured the result: the future user prompt
-                // appeared one level too high, above the active apply_patch
-                // plane. QueueStrip is the existing "about to happen"
-                // surface; keeping mid-turn optimistic prompts there avoids
-                // lying about transcript order while still making submit
-                // visible immediately.
+                // it in Feed's committed-entry plane used to render before
+                // semantic history/current. The 2026-05-16T19-21 bundle
+                // captured the result: the future user prompt appeared one
+                // level too high, above the active apply_patch plane. Keep
+                // mid-turn optimistic prompts in queuedMessages instead;
+                // Feed's unified item plan renders that queue surface after
+                // current work without lying that the prompt is already a
+                // durable transcript row.
                 data: {
                   text: trimmed,
                   queueLengthBefore: current.queuedMessages.length,

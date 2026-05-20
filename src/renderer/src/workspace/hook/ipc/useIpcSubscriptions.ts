@@ -1111,8 +1111,8 @@ export function useIpcSubscriptions(
               // Mid-turn Codex submits are intentionally kept in
               // queuedMessages instead of appended to entries (see
               // addOptimisticCodexUserEntry). The authoritative rollout
-              // user row is the point where that local "queued" surface
-              // must disappear; otherwise the queue strip becomes the new
+              // user row is the point where that local "queued" feed item
+              // must disappear; otherwise the queue surface becomes the new
               // stale-bottom duplicate after the transcript catches up.
               if (queuedMessages.some(q => codexPromptsMatchForOwnership(q.content, mappedText))) {
                 // WHY queued prompt reconciliation is normalized:
@@ -1121,7 +1121,7 @@ export function useIpcSubscriptions(
                 // from Codex rollout, and rollout can differ from the
                 // original submit by CRLF normalization, unicode form,
                 // or block-join whitespace. Exact matching leaves the
-                // QueueStrip stuck after the real transcript row has
+                // queued prompt stuck after the real transcript row has
                 // arrived, recreating the stale-bottom artifact this
                 // renderer rewrite is meant to eliminate. Preserve the
                 // original displayed text in the queue, but compare by

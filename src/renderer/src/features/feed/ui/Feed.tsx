@@ -12,6 +12,7 @@ import {
 } from '@shared/types/transcript'
 
 import type {
+  QueuedMessage,
   SemanticLiveTurn,
   StreamPhase,
 } from '@renderer/workspace/workspaceState'
@@ -37,6 +38,7 @@ import {
 import {
   deriveFeedCommittedProjection,
   deriveFeedRenderModel,
+  type FeedRenderItem,
 } from '@renderer/features/feed/model/renderModel'
 import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
 import {
@@ -114,6 +116,7 @@ type Props = {
   streamPhase?: StreamPhase
   streamPhasePendingToolName?: string | null
   streamPhasePendingToolUseId?: string | null
+  queuedMessages?: QueuedMessage[]
   turnStartedAt?: number | null
   tailMode?: boolean
   /**
@@ -241,6 +244,7 @@ function FeedImpl({
   streamPhase = 'idle',
   streamPhasePendingToolName = null,
   streamPhasePendingToolUseId = null,
+  queuedMessages = [],
   turnStartedAt = null,
   tailMode = false,
   pickerSelectedUuid = null,
@@ -702,6 +706,7 @@ function FeedImpl({
     const model = deriveFeedRenderModel({
       provider,
       committed: committedProjection,
+      queuedMessages,
       semanticHistory,
       semanticTurn,
       streamPhase,
@@ -727,6 +732,7 @@ function FeedImpl({
     provider,
     semanticHistory,
     semanticTurn,
+    queuedMessages,
     sessionId,
     streamPhase,
     streamPhasePendingToolName,
@@ -736,6 +742,7 @@ function FeedImpl({
   ])
 
   const visibleDecisions = renderModel.visibleDecisions
+  const renderItems = renderModel.items
   const visible = renderModel.visibleEntries
   const renderedSemanticHistory = renderModel.renderedSemanticHistory
   const renderedSemanticTurn = renderModel.renderedSemanticTurn
@@ -752,6 +759,7 @@ function FeedImpl({
     const renderDebugSignature = JSON.stringify({
       entryCount: entries.length,
       visibleEntryCount: visible.length,
+      itemKeys: renderedRows.map(row => row.key),
       semanticTurnId: semanticTurn?.turnId ?? null,
       semanticHistoryTurnIds: renderedSemanticHistory.map(turn => turn.turnId),
       streamPhase,
@@ -799,7 +807,82 @@ function FeedImpl({
     previousRenderDebugSignatureRef.current = renderDebugSignature
   }, [entries.length, onDebugLog, renderedRows, renderedSemanticHistory, semanticTurn?.turnId, streamPhase, visible.length, visibleDecisions])
 
-  if (visible.length === 0 && !hasSemanticStreaming) {
+  const renderFeedItem = (item: FeedRenderItem) => {
+    switch (item.type) {
+      case 'entry': {
+        const e = item.entry
+        const uuid = e.uuid
+        const selected =
+          pickerSelectedUuid != null && uuid === pickerSelectedUuid
+        // WHY eager rendering keys off committed-entry ordinal, not
+        // render-item index: semantic/work/queued rows now live in the
+        // same ordered list, but markdown parse cost still belongs to
+        // committed entries. Counting non-entry rows here would make a
+        // busy turn accidentally lazy-mount the newest committed prompt.
+        const eager = item.entryOrdinal >= visible.length - EAGER_TAIL
+        return (
+          <div
+            key={item.key}
+            data-entry-uuid={uuid ?? undefined}
+            className={
+              selected
+                ? 'outline outline-2 outline-accent outline-offset-2 transition-[outline-color] duration-150'
+                : undefined
+            }
+          >
+            <LazyEntry
+              eager={eager}
+              suspended={bootstrapping}
+              scrollerRef={scrollerRef}
+            >
+              <EntryRow entry={e} />
+            </LazyEntry>
+          </div>
+        )
+      }
+      case 'semantic-history':
+      case 'semantic-current':
+        return (
+          <SemanticStreamingTurn
+            key={item.key}
+            turn={item.turn}
+            committedAssistantText={committedProjection.committedAssistantText}
+          />
+        )
+      case 'work':
+        return (
+          <WorkIndicator
+            key={item.key}
+            phase={item.phase}
+            turnStartedAt={turnStartedAt}
+            toolName={item.toolName}
+            toolHint={toolHintFromTurn(renderedSemanticTurn, item.toolUseId)}
+          />
+        )
+      case 'queued-prompt':
+        return (
+          <div
+            key={item.key}
+            className="flex items-start gap-3 border-t border-border pt-3 text-[12px] leading-[1.5] text-ink-dim"
+            aria-label="queued message"
+          >
+            <span
+              className="w-3 text-accent flex-shrink-0 select-none opacity-60"
+              aria-hidden="true"
+            >
+              ❯
+            </span>
+            <div className="flex-1 min-w-0 break-words font-code">
+              {item.message.content}
+            </div>
+          </div>
+        )
+      case 'empty':
+        return null
+    }
+  }
+
+  if (renderItems.some(item => item.type === 'empty')) {
     // Empty-feed branch: no committed entries yet AND no live
     // semantic turn. Show the WorkIndicator if the stream phase is
     // non-idle — the placeholder-only render used to swallow
@@ -846,87 +929,18 @@ function FeedImpl({
         }}
       >
         <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
-          {visible.map((e, i) => {
-            const uuid = (e as Entry).uuid
-            const key = uuid ?? `i${i}`
-            // The last EAGER_TAIL entries render immediately — they're
-            // in or near the current viewport (the user sees the bottom
-            // of the feed on load). Everything above starts as a
-            // lightweight placeholder and mounts when the user scrolls
-            // up to it. Once mounted, never unmounts — React.memo
-            // keeps re-renders free and we avoid the re-parse cost
-            // that virtualization (unmount→remount) would cause.
-            const eager = i >= visible.length - EAGER_TAIL
-            const selected =
-              pickerSelectedUuid != null && uuid === pickerSelectedUuid
-            // Wrapper carries the uuid attribute (for scrollIntoView
-            // lookup) and the outline class when selected by the
-            // Copy Assistant picker.
-            return (
-              <div
-                key={key}
-                data-entry-uuid={uuid ?? undefined}
-                className={
-                  selected
-                    ? 'outline outline-2 outline-accent outline-offset-2 transition-[outline-color] duration-150'
-                    : undefined
-                }
-              >
-                <LazyEntry
-                  eager={eager}
-                  suspended={bootstrapping}
-                  scrollerRef={scrollerRef}
-                >
-                  <EntryRow entry={e} />
-                </LazyEntry>
-              </div>
-            )
-          })}
-          {/* ONE owner rule for live assistant text.
+          {/* ONE owner rule for every visible feed surface.
            *
-           * Live text renders exclusively from the semantic channel
-           * (claude-code-headless / codex-headless). The old
-           * render-time regex extractor over raw TUI screen paint was
-           * removed because it was a second producer for the same feed
-           * slot — the structural cause of double-render on resume and
-           * stale previous-turn text under new user messages.
-           *
-           * Non-proxy sessions still get live streaming: the headless
-           * packages publish screen-derived semantic deltas (labelled
-           * `source: 'screen'`) on the same channel, gated by a
-           * baseline so they don't emit the previous turn's buffered
-           * text as the first delta of a new turn. */}
-          {renderedSemanticHistory.map(turn => (
-            <SemanticStreamingTurn
-              key={`semantic-history:${turn.turnId}`}
-              turn={turn}
-              committedAssistantText={committedProjection.committedAssistantText}
-            />
-          ))}
-          {renderedSemanticTurn != null && (
-            <SemanticStreamingTurn
-              key={`semantic:${renderedSemanticTurn.turnId}`}
-              turn={renderedSemanticTurn}
-              committedAssistantText={committedProjection.committedAssistantText}
-            />
-          )}
-          {/* WorkIndicator — the single in-feed "agent is working"
-              affordance. Driven by `streamPhase`, NOT gated on whether
-              a semantic turn is mounted. That gate was the old
-              ActivityIndicator's core bug: the indicator vanished the
-              moment `SemanticStreamingTurn` mounted, leaving a blind
-              spot during tool execution. With phase as the driver, the
-              indicator stays visible through every phase transition —
-              submitting → requesting → thinking → tool-input →
-              awaiting-tool → requesting (next turn) → … — and only
-              disappears on terminal `idle`. See
-              docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md. */}
-          <WorkIndicator
-            phase={streamPhase}
-            turnStartedAt={turnStartedAt}
-            toolName={streamPhasePendingToolName}
-            toolHint={toolHintFromTurn(renderedSemanticTurn, streamPhasePendingToolUseId)}
-          />
+           * The old JSX rendered separate buckets in a fixed order:
+           * committed entries first, semantic history/current later,
+           * work last, and queued prompts outside Feed. That let a
+           * stale semantic history row mount under a newer submitted
+           * prompt, which looked exactly like "my user prompt never
+           * rendered" in real conversations. Feed now consumes the
+           * selector's single ordered item list so ownership,
+           * chronological placement, debug rows, lazy-entry eagerness,
+           * and queue visibility all share one render contract. */}
+          {renderItems.map(renderFeedItem)}
           <div ref={endRef} />
         </div>
       </div>

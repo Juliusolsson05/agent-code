@@ -11,7 +11,6 @@ import {
 } from '@renderer/workspace/mergedEntries'
 import type { SessionId } from '@renderer/workspace/types'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
-import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 import { ScrollIndicator } from '@renderer/workspace/tile-tree/TileLeaf/ScrollIndicator'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
@@ -419,6 +418,7 @@ export function TileLeaf({
           streamPhase={runtime.streamPhase}
           streamPhasePendingToolName={runtime.streamPhasePendingToolName}
           streamPhasePendingToolUseId={runtime.streamPhasePendingToolUseId}
+          queuedMessages={runtime.queuedMessages}
           turnStartedAt={runtime.turnStartedAt}
           // Live-turn ownership: SemanticStreamingTurn renders the
           // current turn end-to-end off the semantic channel. Ghosts
@@ -469,8 +469,6 @@ export function TileLeaf({
           onDebugLog={appendRenderDebug}
         />
       </div>
-
-      <QueueStrip queuedMessages={runtime.queuedMessages} />
 
       {readinessText && (
         <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
