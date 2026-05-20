@@ -20,6 +20,21 @@ export type DevDebugConfig = {
   enabled: boolean
 }
 
+export type CaffeinateStatus = {
+  supported: boolean
+  active: boolean
+  pid: number | null
+  startedAt: number | null
+  command: string[]
+  message: string | null
+}
+
+export type CaffeinateCommandResult = {
+  ok: boolean
+  message: string
+  status: CaffeinateStatus
+}
+
 export type DictationProvider = 'deepgram' | 'assemblyai' | 'openai' | 'gladia' | 'elevenlabs'
 
 export type DictationStartResult =

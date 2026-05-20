@@ -25,8 +25,10 @@ import type { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActiv
 import { registerOrchestrationIpc } from '@main/ipc/orchestration.js'
 import { registerAiWorkspaceIpc } from '@main/ipc/aiWorkspace.js'
 import { registerRenderedContentIpc } from '@main/ipc/renderedContent.js'
+import { registerCaffeinateIpc } from '@main/ipc/caffeinate.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
+import type { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 
 // IPC registration aggregator.
 //
@@ -46,6 +48,7 @@ export type IpcDeps = {
   worktreeActivityIndex: WorktreeActivityIndex
   orchestrationBridge: OrchestrationBridge
   aiWorkspaceRegistry: AiWorkspaceRegistry
+  caffeinateController: CaffeinateController
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -69,4 +72,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerOrchestrationIpc(deps.orchestrationBridge)
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
   registerRenderedContentIpc()
+  registerCaffeinateIpc(deps.caffeinateController)
 }
