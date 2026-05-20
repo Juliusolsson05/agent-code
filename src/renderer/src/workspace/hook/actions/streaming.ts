@@ -12,6 +12,10 @@ import {
 } from '@renderer/workspace/entries/utils'
 import { isOptimisticCodexUserEntry } from '@renderer/workspace/codex/entries'
 import { isSemanticTurnRunning } from '@renderer/workspace/semantic/helpers'
+import {
+  buildCommittedAssistantText,
+  semanticTurnHasRenderableContent,
+} from '@renderer/features/feed/ui/semantic/renderUnits'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 
@@ -35,7 +39,10 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 // (see ipc/handleBulkJsonl.ts for the reconciliation side).
 
 export function shouldQueueOptimisticCodexUserEntry(
-  current: Pick<SessionRuntime, 'semantic' | 'streamPhase'>,
+  current: Pick<
+    SessionRuntime,
+    'entries' | 'semantic' | 'streamPhase' | 'toolResultIndex' | 'toolUseIndex'
+  >,
 ): boolean {
   // WHY this deliberately ignores `streamPhase`:
   // TileLeaf calls setStreamingBaseline() and addOptimisticCodexUserEntry()
@@ -50,7 +57,29 @@ export function shouldQueueOptimisticCodexUserEntry(
   // work indicator, but it is polluted by the current submit and cannot
   // answer "is there older live feed content this prompt must not jump
   // above?"
-  return isSemanticTurnRunning(current.semantic.currentTurn)
+  if (isSemanticTurnRunning(current.semantic.currentTurn)) return true
+
+  // WHY completed semantic history is part of this ownership test:
+  // Feed renders in planes: committed/optimistic entries first, then
+  // semantic history/current, then work. A Codex submit that becomes a
+  // normal optimistic Entry while a previous completed semantic turn is
+  // still renderable therefore lands above the previous turn's semantic
+  // bridge and the work row. The prompt is "present" in the DOM, but it
+  // is no longer the latest user action visually — exactly the #239
+  // failure. Raw history length is too broad because history can linger
+  // after committed rows already own its visible content, so mirror the
+  // Feed renderability predicate with the same committed text/tool
+  // ownership inputs.
+  const committedAssistantText = buildCommittedAssistantText(current.entries)
+  return current.semantic.history.some(turn =>
+    turn.turnId !== current.semantic.currentTurn?.turnId &&
+    semanticTurnHasRenderableContent(
+      turn,
+      current.toolUseIndex,
+      current.toolResultIndex,
+      committedAssistantText,
+    ),
+  )
 }
 
 export function codexPromptOwnershipKey(text: string | null | undefined): string {

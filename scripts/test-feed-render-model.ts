@@ -315,6 +315,24 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
 }
 
 {
+  const model = deriveFeedRenderModel({
+    provider: 'codex',
+    entries: [userEntry('optimistic-codex-user:1', 'new submitted prompt')],
+    semanticHistory: [liveTurn('resp_history_bridge')],
+    semanticTurn: null,
+    streamPhase: 'submitting',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+  })
+
+  assert.deepEqual(
+    model.debugRows.map(row => row.slot),
+    ['entry', 'semantic', 'work'],
+    'Feed still renders entry-plane optimistic prompts before semantic history/work, so submit ownership must avoid this plane when history is renderable',
+  )
+}
+
+{
   const committed = assistantEntry(
     'committed-rollout-copy',
     'This worktree has empty submodule directories; that explains the build/typecheck noise and the missing mitm file. I’m initializing the submodules in the worktree now, then I’ll rerun the bundle check.',

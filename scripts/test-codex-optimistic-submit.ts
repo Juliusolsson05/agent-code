@@ -17,7 +17,39 @@ import {
   codexPromptsMatchForOwnership,
   shouldQueueOptimisticCodexUserEntry,
 } from '../src/renderer/src/workspace/hook/actions/streaming'
-import { emptyRuntime } from '../src/renderer/src/workspace/workspaceState'
+import { shouldClearIdleCodexQueuedMessages } from '../src/renderer/src/workspace/queueInvariants'
+import { emptyRuntime, type SemanticLiveTurn } from '../src/renderer/src/workspace/workspaceState'
+
+function semanticTurn(
+  turnId: string,
+  endedAt: number | null,
+  text = '',
+): SemanticLiveTurn {
+  return {
+    turnId,
+    text,
+    source: 'proxy',
+    blocks: {},
+    blockOrder: [],
+    stopReason: null,
+    usage: null,
+    task: {
+      todos: [],
+      doneCount: 0,
+      totalCount: 0,
+      inProgressToolUseIds: [],
+      activeToolNames: [],
+    },
+    lookups: {
+      toolCallsById: {},
+      toolUseIdsInOrder: [],
+      resolvedToolUseIds: [],
+      erroredToolUseIds: [],
+    },
+    startedAt: 1,
+    endedAt,
+  }
+}
 
 // The bug this guards was brutally simple: submit calls
 // setStreamingBaseline() first, which changes streamPhase to
@@ -41,30 +73,7 @@ import { emptyRuntime } from '../src/renderer/src/workspace/workspaceState'
 {
   const runtime = emptyRuntime()
   runtime.streamPhase = 'idle'
-  runtime.semantic.currentTurn = {
-    turnId: 'resp_live',
-    text: '',
-    source: 'proxy',
-    blocks: {},
-    blockOrder: [],
-    stopReason: null,
-    usage: null,
-    task: {
-      todos: [],
-      doneCount: 0,
-      totalCount: 0,
-      inProgressToolUseIds: [],
-      activeToolNames: [],
-    },
-    lookups: {
-      toolCallsById: {},
-      toolUseIdsInOrder: [],
-      resolvedToolUseIds: [],
-      erroredToolUseIds: [],
-    },
-    startedAt: 1,
-    endedAt: null,
-  }
+  runtime.semantic.currentTurn = semanticTurn('resp_live', null)
 
   assert.equal(
     shouldQueueOptimisticCodexUserEntry(runtime),
@@ -76,35 +85,52 @@ import { emptyRuntime } from '../src/renderer/src/workspace/workspaceState'
 {
   const runtime = emptyRuntime()
   runtime.streamPhase = 'tool_running'
-  runtime.semantic.currentTurn = {
-    turnId: 'resp_done',
-    text: '',
-    source: 'proxy',
-    blocks: {},
-    blockOrder: [],
-    stopReason: null,
-    usage: null,
-    task: {
-      todos: [],
-      doneCount: 0,
-      totalCount: 0,
-      inProgressToolUseIds: [],
-      activeToolNames: [],
-    },
-    lookups: {
-      toolCallsById: {},
-      toolUseIdsInOrder: [],
-      resolvedToolUseIds: [],
-      erroredToolUseIds: [],
-    },
-    startedAt: 1,
-    endedAt: 2,
-  }
+  runtime.semantic.currentTurn = semanticTurn('resp_done', 2)
 
   assert.equal(
     shouldQueueOptimisticCodexUserEntry(runtime),
     false,
     'a sealed semantic turn must not keep future Codex prompts stuck in QueueStrip',
+  )
+}
+
+{
+  const runtime = emptyRuntime()
+  runtime.streamPhase = 'submitting'
+  runtime.semantic.history = [
+    semanticTurn('resp_history_bridge', 2, 'previous turn still visible until JSONL catches up'),
+  ]
+
+  assert.equal(
+    shouldQueueOptimisticCodexUserEntry(runtime),
+    true,
+    'a Codex prompt must queue while rendered semantic history still owns the feed tail',
+  )
+}
+
+{
+  const runtime = emptyRuntime()
+  runtime.streamPhase = 'submitting'
+  runtime.entries = [
+    {
+      type: 'assistant',
+      uuid: 'committed:entry',
+      parentUuid: null,
+      timestamp: '2026-05-20T12:00:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'already committed' }],
+      },
+    },
+  ]
+  runtime.semantic.history = [
+    semanticTurn('resp_history_committed', 2, 'already committed'),
+  ]
+
+  assert.equal(
+    shouldQueueOptimisticCodexUserEntry(runtime),
+    false,
+    'committed-owned semantic history must not keep later Codex prompts stuck in QueueStrip',
   )
 }
 
@@ -118,6 +144,42 @@ import { emptyRuntime } from '../src/renderer/src/workspace/workspaceState'
     codexPromptsMatchForOwnership('Fix this now', 'Fix something else now'),
     false,
     'prompt ownership normalization must not collapse unrelated queued prompts',
+  )
+}
+
+{
+  assert.equal(
+    shouldClearIdleCodexQueuedMessages({
+      awaitingAssistant: false,
+      processActive: false,
+      provider: 'codex',
+      queuedMessagesLength: 1,
+      streamPhase: 'idle',
+    }),
+    true,
+    'idle Codex panes must not retain local queued prompts after all live signals clear',
+  )
+  assert.equal(
+    shouldClearIdleCodexQueuedMessages({
+      awaitingAssistant: false,
+      processActive: true,
+      provider: 'codex',
+      queuedMessagesLength: 1,
+      streamPhase: 'idle',
+    }),
+    false,
+    'active Codex process state can still legitimately own queued prompts',
+  )
+  assert.equal(
+    shouldClearIdleCodexQueuedMessages({
+      awaitingAssistant: false,
+      processActive: false,
+      provider: 'claude',
+      queuedMessagesLength: 1,
+      streamPhase: 'idle',
+    }),
+    false,
+    'Claude queue rows are backed by provider queue-operation records and must not use the Codex fallback',
   )
 }
 
