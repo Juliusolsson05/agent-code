@@ -460,22 +460,14 @@ function FeedImpl({
   // user is scrolled up, we skip — they're reading earlier content
   // and we don't want to yank them back.
   //
-  // Include cheap fingerprints of the current semantic turn, bounded
-  // semantic history, and queued prompts so the effect re-runs when
-  // any tail-owned feed item changes, not only when committed entries
-  // append. Queued prompts used to live in a separate QueueStrip
-  // outside this scroller; now that the unified render-item model
-  // places them inside Feed, omitting the queue signal strands a just-
-  // submitted follow-up below the viewport until some unrelated
-  // semantic delta happens to arrive.
+  // Include cheap fingerprints of the current semantic turn and
+  // bounded semantic history so the effect re-runs when semantic
+  // deltas land, not only when committed entries append.
   const semanticTurnSignal = semanticTurn
     ? `${semanticTurn.turnId}:${semanticTurn.text.length}:${Object.keys(semanticTurn.blocks).length}`
     : ''
   const semanticHistorySignal = semanticHistory
     .map(turn => `${turn.turnId}:${turn.text.length}:${Object.keys(turn.blocks).length}`)
-    .join('|')
-  const queuedMessagesSignal = queuedMessages
-    .map(message => `${message.timestamp}:${message.content.length}`)
     .join('|')
   useEffect(() => {
     // During a bulk bootstrap burst we skip per-append auto-scroll.
@@ -496,7 +488,6 @@ function FeedImpl({
     tailMode,
     semanticTurnSignal,
     semanticHistorySignal,
-    queuedMessagesSignal,
     bootstrapping,
   ])
 

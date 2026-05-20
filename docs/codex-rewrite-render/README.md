@@ -32,13 +32,15 @@ The first implementation pass introduces `deriveFeedRenderModel` in `src/rendere
   - RENDER debug rows derived from the same model Feed uses to paint.
 - Exported semantic ownership helpers from `renderUnits.ts` so debug/model decisions cannot claim a semantic row that `SemanticStreamingTurn` would later return as `null`.
 - Added stable current semantic turn keys and turn-scoped semantic block keys.
-- Implemented the single ordered `FeedRenderItem[]` plan documented in
-  `feed-render-item-plan.md`, including queued prompts in the same feed item
-  ordering as committed, semantic, work, and empty rows.
+- Implemented the single ordered `FeedRenderItem[]` plan for committed,
+  semantic, work, and empty rows. Queued prompts remain in `QueueStrip`
+  for this branch because they are pending input, not durable transcript
+  history.
 - Added `scripts/test-feed-render-model.ts` and `npm run test:feed-render-model`.
 
 ## Remaining Work
 
-- Move more semantic ownership out of React components and into the selector so Feed can eventually render a single typed `FeedRenderItem[]`.
+- Move more semantic ownership out of React components and into the selector so each rendered semantic unit has one typed owner before it reaches `Feed`.
+- Revisit queued prompt ownership separately. The full plan explores moving `QueueStrip` into render items, but this branch keeps queue UI composer-adjacent to avoid presenting pending prompts as committed feed history.
 - Add a renderer trace command that logs committed, semantic, and work owner candidates before selection and after selection.
 - Investigate the Codex headless rollout lifecycle issue documented in `headless-channel-model.md`: rollout `agent_message_delta` may need to soft-open a semantic turn before applying deltas.
