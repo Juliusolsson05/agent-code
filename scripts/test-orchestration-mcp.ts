@@ -81,6 +81,67 @@ const runtime = {
   ],
 }
 
+const inheritedRuntime = {
+  ...emptyRuntime(),
+  inputReady: true,
+  processStatus: 'started' as const,
+  entries: [
+    {
+      type: 'user',
+      uuid: 'parent-u1',
+      parentUuid: null,
+      timestamp: '2026-05-17T09:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Parent task.' }],
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: 'parent-a1',
+      parentUuid: 'parent-u1',
+      timestamp: '2026-05-17T09:01:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Inherited parent answer.' }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'child-u1',
+      parentUuid: 'parent-a1',
+      timestamp: '2026-05-17T10:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: [
+              '<orchestration-handoff>',
+              'You are now an orchestrated child agent in Agent Code.',
+              '</orchestration-handoff>',
+              '',
+              '<task>',
+              'Review the provider runtime contract.',
+              '</task>',
+            ].join('\n'),
+          },
+        ],
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: 'child-a1',
+      parentUuid: 'child-u1',
+      timestamp: '2026-05-17T10:01:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Child review result.' }],
+      },
+    },
+  ],
+}
+
 {
   const agents = listOrchestrationAgents({
     state,
@@ -121,6 +182,35 @@ const runtime = {
 
   assert.equal(output.latestAssistantText, 'No findings.')
   assert.deepEqual(output.messages.map(message => message.role), ['user', 'assistant'])
+}
+
+{
+  const output = readOrchestrationAgent({
+    state,
+    runtimes: { [child]: inheritedRuntime },
+    parentSessionId: parent,
+    sessionId: child,
+  })
+
+  // WHY inherited output is scoped to the bootstrap prompt:
+  // the provider transcript must retain parent history as model context, but
+  // orchestration parents need the child's work product. A raw latest-message
+  // scan over the full resumed transcript regressed real review agents by
+  // reporting stale parent commentary as the child's final result.
+  assert.equal(output.latestAssistantText, 'Child review result.')
+  assert.equal(output.agent.latestAssistantText, 'Child review result.')
+  assert.deepEqual(output.messages.map(message => message.text), [
+    [
+      '<orchestration-handoff>',
+      'You are now an orchestrated child agent in Agent Code.',
+      '</orchestration-handoff>',
+      '',
+      '<task>',
+      'Review the provider runtime contract.',
+      '</task>',
+    ].join('\n'),
+    'Child review result.',
+  ])
 }
 
 {
