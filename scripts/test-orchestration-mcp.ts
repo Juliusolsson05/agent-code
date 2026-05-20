@@ -208,6 +208,67 @@ const nestedInheritedRuntime = {
   ],
 }
 
+const inheritedRuntimeWithStructuredUserEntry = {
+  ...emptyRuntime(),
+  inputReady: true,
+  processStatus: 'started' as const,
+  entries: [
+    {
+      type: 'user',
+      uuid: 'parent-u1',
+      parentUuid: null,
+      timestamp: '2026-05-17T09:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Parent task.' }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'child-u1',
+      parentUuid: 'parent-u1',
+      timestamp: '2026-05-17T10:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: [
+              '<orchestration-handoff>',
+              'Current child handoff.',
+              '</orchestration-handoff>',
+            ].join('\n'),
+          },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'child-tool-result',
+      parentUuid: 'child-u1',
+      timestamp: '2026-05-17T10:00:30.000Z',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'toolu-read',
+          content: 'tool output',
+        }],
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: 'child-a1',
+      parentUuid: 'child-tool-result',
+      timestamp: '2026-05-17T10:01:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Structured user entry handled.' }],
+      },
+    },
+  ],
+}
+
 {
   const agents = listOrchestrationAgents({
     state,
@@ -304,6 +365,30 @@ const nestedInheritedRuntime = {
       '</task>',
     ].join('\n'),
     'Current child result.',
+  ])
+}
+
+{
+  const output = readOrchestrationAgent({
+    state,
+    runtimes: { [child]: inheritedRuntimeWithStructuredUserEntry },
+    parentSessionId: parent,
+    sessionId: child,
+  })
+
+  // WHY this fixture puts a non-text user entry after the handoff:
+  // Claude/Codex transcripts can encode tool-result payloads as user-role
+  // conversation entries. The handoff scan walks from newest to oldest, so the
+  // read path must skip structured user entries instead of assuming text and
+  // crashing before it reaches the real bootstrap marker.
+  assert.equal(output.latestAssistantText, 'Structured user entry handled.')
+  assert.deepEqual(output.messages.map(message => message.text), [
+    [
+      '<orchestration-handoff>',
+      'Current child handoff.',
+      '</orchestration-handoff>',
+    ].join('\n'),
+    'Structured user entry handled.',
   ])
 }
 
