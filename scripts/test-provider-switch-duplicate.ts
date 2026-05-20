@@ -110,6 +110,29 @@ try {
       payload: { id: codexSourceId, timestamp: '2026-05-19T10:00:00.000Z', cwd: sourceCwd },
     },
     {
+      timestamp: '2026-05-19T10:00:00.500Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'Summarize the state.' }],
+      },
+    },
+    {
+      timestamp: '2026-05-19T10:00:00.750Z',
+      type: 'event_msg',
+      payload: { type: 'agent_reasoning', text: 'Codex-only sidecar event.' },
+    },
+    {
+      timestamp: '2026-05-19T10:00:00.900Z',
+      type: 'response_item',
+      payload: {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'State summarized.' }],
+      },
+    },
+    {
       timestamp: '2026-05-19T10:00:01.000Z',
       type: 'response_item',
       payload: { type: 'function_call', name: 'done', arguments: '{}', call_id: resolvedCallId },
@@ -145,6 +168,35 @@ try {
   const codexDuplicateText = await readFile(codexDuplicate.newFilePath, 'utf8')
   assert.equal(codexDuplicateText.includes(unresolvedCallId), false)
   assert.equal(codexDuplicateText.includes(resolvedCallId), true)
+
+  const codexSwitched = await switchProvider({
+    sourceKind: 'codex',
+    sourceProviderSessionId: codexSourceId,
+    cwd: targetCwd,
+    sourceCwd,
+    targetCwd,
+  })
+  const codexSwitchedText = await readFile(codexSwitched.targetFilePath, 'utf8')
+  assert.equal(codexSwitched.targetKind, 'claude')
+  assert.notEqual(codexSwitched.targetProviderSessionId, codexSourceId)
+  assert.equal(codexSwitched.targetFilePath.startsWith(targetProjectDir), true)
+  assert.equal(codexSwitchedText.includes(codexSwitched.targetProviderSessionId), true)
+  assert.equal(codexSwitchedText.includes(`"sessionId":"${codexSourceId}"`), false)
+  const codexSwitchedEntries = codexSwitchedText
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line) as ClaudeEntry)
+  const codexSwitchedAssistants = codexSwitchedEntries.filter(entry => entry.type === 'assistant')
+  assert.equal(codexSwitchedEntries[0]?.type, 'last-prompt')
+  assert.equal(codexSwitchedEntries[1]?.type, 'permission-mode')
+  assert.equal(codexSwitchedEntries.some(entry => entry.type === 'system'), false)
+  assert.ok(codexSwitchedAssistants.length > 0)
+  for (const entry of codexSwitchedAssistants) {
+    assert.equal(typeof entry.requestId, 'string')
+    assert.equal(entry.message?.type, 'message')
+    assert.equal(typeof entry.message?.model, 'string')
+    assert.equal(typeof entry.message?.usage, 'object')
+  }
 } finally {
   if (previousClaudeConfigDir === undefined) {
     delete process.env.CLAUDE_CONFIG_DIR

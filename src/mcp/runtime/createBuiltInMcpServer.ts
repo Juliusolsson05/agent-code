@@ -847,6 +847,24 @@ async function submitPrompt(
         message: `Codex session ${sessionId} was not ready for prompt delivery (${ready.kind})`,
       }
     }
+    // WHY Codex uses one PTY write for paste + submit:
+    // the normal renderer composer treats Codex as the provider whose
+    // bracketed paste can safely include the trailing Enter in the same
+    // terminal write. The old orchestration path split these into two writes,
+    // which made delivery accounting lie in exactly the failure mode inherited
+    // orchestration cannot tolerate: CodexHeadless records submitted prompts
+    // when it sees the bracketed paste bytes, before the separate Enter write
+    // proves the prompt was actually submitted. A child resumed from the
+    // parent's transcript then keeps reading stale inherited context as if it
+    // is still the parent. Keeping Codex atomic makes "write returned true"
+    // match the one operation the TUI needs to see.
+    if (!manager.write(sessionId, `\x1b[200~${prompt}\x1b[201~\r`)) {
+      return {
+        ok: false,
+        message: `Could not submit orchestration prompt to Codex session ${sessionId}`,
+      }
+    }
+    return { ok: true }
   }
 
   if (!manager.write(sessionId, `\x1b[200~${prompt}\x1b[201~`)) {

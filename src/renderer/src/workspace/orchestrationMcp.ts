@@ -174,7 +174,7 @@ function buildAgentOutput(params: {
   runtime: SessionRuntime | null
   maxMessages?: number
 }): OrchestrationAgentOutput {
-  const messages = visibleMessages(params.runtime)
+  const messages = visibleMessages(params.runtime, params.meta)
   const cappedMessages = messages.slice(-boundedMaxMessages(params.maxMessages))
   const latestAssistantText = latestAssistant(messages)
   const agent = buildAgentRecord({
@@ -202,7 +202,7 @@ function buildAgentRecord(params: {
   runtime: SessionRuntime | null
   messages?: OrchestrationAgentMessage[]
 }): OrchestrationAgentRecord {
-  const messages = params.messages ?? visibleMessages(params.runtime)
+  const messages = params.messages ?? visibleMessages(params.runtime, params.meta)
   const latestAssistantText = latestAssistant(messages)
   const lifecycleState = lifecycleStateForRuntime(params.runtime, latestAssistantText)
   const activityAt = lastActivityAt(params.runtime, messages)
@@ -278,10 +278,14 @@ function statusSummary(
   return lifecycleState
 }
 
-function visibleMessages(runtime: SessionRuntime | null): OrchestrationAgentMessage[] {
+function visibleMessages(
+  runtime: SessionRuntime | null,
+  meta?: SessionMeta,
+): OrchestrationAgentMessage[] {
   if (!runtime) return []
   const messages: OrchestrationAgentMessage[] = []
-  for (const entry of runtime.entries) {
+  const entries = orchestrationVisibleEntries(runtime, meta)
+  for (const entry of entries) {
     if (entry.type !== 'user' && entry.type !== 'assistant') continue
     const text = entryTextContent(entry)
     if (!text?.trim()) continue
@@ -299,6 +303,54 @@ function visibleMessages(runtime: SessionRuntime | null): OrchestrationAgentMess
     })
   }
   return messages
+}
+
+function orchestrationVisibleEntries(
+  runtime: SessionRuntime,
+  meta?: SessionMeta,
+): SessionRuntime['entries'] {
+  // WHY inherited children need a transcript cut point:
+  // context inheritance deliberately resumes a duplicated parent transcript so
+  // the child can read the conversation that led to its task. That history is
+  // useful model context, but it is not the child's work product. The MCP
+  // read/list tools are consumed by the parent coordinator, so reporting the
+  // last assistant message from the whole resumed transcript can make a child
+  // appear to have returned the parent's old commentary instead of its own
+  // answer. The bootstrap prompt is the durable, provider-agnostic marker we
+  // write after spawning the child; everything before the child's bootstrap is
+  // inherited context, everything from it onward is the child session.
+  //
+  // Use the LAST handoff marker, not the first. A parent can itself be an
+  // orchestrated child, so its duplicated transcript may already contain an
+  // older handoff. Cutting at the first marker would resurrect the same bug for
+  // grandchildren by treating the parent's child-task output as the current
+  // child's output. The newest handoff is the one submitted by this launch.
+  //
+  // We only apply this cut after the bootstrap has been marked delivered. That
+  // preserves old behavior for regular agents, failed pre-prompt launches, and
+  // any older inherited sessions whose transcript does not contain the marker.
+  if (
+    meta?.inheritedParentContext !== true ||
+    meta.orchestrationBootstrapPromptDelivered !== true
+  ) {
+    return runtime.entries
+  }
+  const bootstrapIndex = lastIndexWhere(runtime.entries, entry =>
+    entry.type === 'user' &&
+    entryTextContent(entry).includes('<orchestration-handoff>'),
+  )
+  if (bootstrapIndex < 0) return runtime.entries
+  return runtime.entries.slice(bootstrapIndex)
+}
+
+function lastIndexWhere<T>(
+  values: readonly T[],
+  predicate: (value: T) => boolean,
+): number {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (predicate(values[index]!)) return index
+  }
+  return -1
 }
 
 function latestAssistant(messages: OrchestrationAgentMessage[]): string | undefined {
