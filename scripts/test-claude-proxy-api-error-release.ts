@@ -13,7 +13,10 @@
 import assert from 'node:assert/strict'
 
 import { SemanticChannel } from '../packages/claude-code-headless/src/channels/SemanticChannel'
-import type { SemanticEvent } from '../packages/claude-code-headless/src/channels/types'
+import type {
+  SemanticEvent,
+  SemanticLifecycleViolationEvent,
+} from '../packages/claude-code-headless/src/channels/types'
 import { ClaudeProxyAdapter } from '../packages/claude-code-headless/src/proxy/ClaudeProxyAdapter'
 
 function sse(event: string, data: unknown): string {
@@ -30,17 +33,71 @@ function chunk(flowId: string, body: string) {
 
 const channel = new SemanticChannel()
 const events: SemanticEvent[] = []
+const lifecycleViolations: SemanticLifecycleViolationEvent[] = []
 channel.on('event', event => events.push(event))
+channel.on('lifecycle_violation', event => lifecycleViolations.push(event))
 
 const adapter = new ClaudeProxyAdapter({ channel })
 
-adapter.handleTransportEvent({
-  kind: 'request',
-  flow_id: 'failed-flow',
-  method: 'POST',
-  host: 'api.anthropic.com',
-  path: '/v1/messages?beta=true',
-})
+function startFlow(flowId: string): void {
+  adapter.handleTransportEvent({
+    kind: 'request',
+    flow_id: flowId,
+    method: 'POST',
+    host: 'api.anthropic.com',
+    path: '/v1/messages?beta=true',
+  })
+}
+
+function endFlow(flowId: string): void {
+  adapter.handleTransportEvent({
+    kind: 'response-end',
+    flow_id: flowId,
+  })
+}
+
+function successfulTextTurn(flowId: string, turnId: string, text: string): void {
+  adapter.handleTransportEvent(chunk(
+    flowId,
+    [
+      sse('message_start', {
+        type: 'message_start',
+        message: {
+          id: turnId,
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-opus-4-7',
+          content: [],
+          usage: { input_tokens: 1, output_tokens: 1 },
+        },
+      }),
+      sse('content_block_start', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }),
+      sse('content_block_delta', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text },
+      }),
+      sse('content_block_stop', {
+        type: 'content_block_stop',
+        index: 0,
+      }),
+      sse('message_delta', {
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn' },
+        usage: { output_tokens: 9 },
+      }),
+      sse('message_stop', {
+        type: 'message_stop',
+      }),
+    ].join(''),
+  ))
+}
+
+startFlow('failed-flow')
 
 adapter.handleTransportEvent(chunk(
   'failed-flow',
@@ -55,21 +112,33 @@ adapter.handleTransportEvent(chunk(
 
 assert.equal(events.some(event => event.type === 'api_error' && event.isOverloaded), true)
 
-adapter.handleTransportEvent({
-  kind: 'request',
-  flow_id: 'retry-flow',
-  method: 'POST',
-  host: 'api.anthropic.com',
-  path: '/v1/messages?beta=true',
-})
+startFlow('retry-flow')
+successfulTextTurn('retry-flow', 'msg_retry', 'RECOVERED')
+endFlow('retry-flow')
 
+assert.equal(
+  events.some(event =>
+    event.type === 'flow_ignored' &&
+    event.flowId === 'retry-flow' &&
+    event.reason.includes('concurrent with active flow failed-flow'),
+  ),
+  false,
+  'retry flow must not be ignored behind the failed overloaded flow',
+)
+assert.equal(events.some(event => event.type === 'turn_started' && event.turnId === 'msg_retry'), true)
+assert.equal(
+  events.some(event => event.type === 'turn_completed' && event.fullText === 'RECOVERED'),
+  true,
+)
+
+startFlow('mid-turn-failed-flow')
 adapter.handleTransportEvent(chunk(
-  'retry-flow',
+  'mid-turn-failed-flow',
   [
     sse('message_start', {
       type: 'message_start',
       message: {
-        id: 'msg_retry',
+        id: 'msg_mid_turn_failure',
         type: 'message',
         role: 'assistant',
         model: 'claude-opus-4-7',
@@ -85,35 +154,55 @@ adapter.handleTransportEvent(chunk(
     sse('content_block_delta', {
       type: 'content_block_delta',
       index: 0,
-      delta: { type: 'text_delta', text: 'RECOVERED' },
+      delta: { type: 'text_delta', text: 'PARTIAL' },
     }),
-    sse('content_block_stop', {
-      type: 'content_block_stop',
-      index: 0,
-    }),
-    sse('message_delta', {
-      type: 'message_delta',
-      delta: { stop_reason: 'end_turn' },
-      usage: { output_tokens: 9 },
-    }),
-    sse('message_stop', {
-      type: 'message_stop',
+    sse('error', {
+      type: 'error',
+      error: {
+        type: 'overloaded_error',
+        message: 'Overloaded after partial output',
+      },
     }),
   ].join(''),
 ))
 
 assert.equal(
   events.some(event =>
-    event.type === 'flow_ignored' &&
-    event.flowId === 'retry-flow' &&
-    event.reason.includes('concurrent with active flow failed-flow'),
+    event.type === 'turn_stopped' &&
+    event.turnId === 'msg_mid_turn_failure' &&
+    event.stopReason === null,
+  ),
+  true,
+  'mid-turn API errors must stop the active semantic turn before retry',
+)
+assert.equal(
+  events.some(event =>
+    event.type === 'turn_completed' &&
+    event.turnId === 'msg_mid_turn_failure' &&
+    event.fullText === 'PARTIAL',
+  ),
+  true,
+  'mid-turn API errors must finish the active semantic turn before retry',
+)
+
+startFlow('retry-after-mid-turn-error-flow')
+successfulTextTurn('retry-after-mid-turn-error-flow', 'msg_after_mid_turn_error', 'RECOVERED_AGAIN')
+endFlow('retry-after-mid-turn-error-flow')
+
+assert.equal(
+  lifecycleViolations.some(event =>
+    event.kind === 'start_while_active' &&
+    event.attemptedTurnId === 'msg_after_mid_turn_error',
   ),
   false,
-  'retry flow must not be ignored behind the failed overloaded flow',
+  'retry after a mid-turn API error must not hit start_while_active',
 )
-assert.equal(events.some(event => event.type === 'turn_started' && event.turnId === 'msg_retry'), true)
 assert.equal(
-  events.some(event => event.type === 'turn_completed' && event.fullText === 'RECOVERED'),
+  events.some(event =>
+    event.type === 'turn_completed' &&
+    event.turnId === 'msg_after_mid_turn_error' &&
+    event.fullText === 'RECOVERED_AGAIN',
+  ),
   true,
 )
 
