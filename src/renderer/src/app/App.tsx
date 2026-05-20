@@ -216,9 +216,15 @@ export default function App() {
   }, [])
 
   const toggleCaffeinate = useCallback(async () => {
-    const result = await window.api.toggleCaffeinate()
-    setCaffeinateStatus(result.status)
-    setCaffeinateMessage(result.message)
+    try {
+      const result = await window.api.toggleCaffeinate()
+      setCaffeinateStatus(result.status)
+      setCaffeinateMessage(result.message)
+    } catch (err) {
+      setCaffeinateMessage(
+        err instanceof Error ? err.message : 'Could not toggle caffeinate.',
+      )
+    }
   }, [])
 
   useEffect(() => {
@@ -531,6 +537,7 @@ export default function App() {
           </button>
           <button
             type="button"
+            disabled={caffeinateStatus?.supported === false}
             onClick={() => void toggleCaffeinate()}
             title={
               caffeinateStatus?.supported === false
@@ -544,6 +551,8 @@ export default function App() {
               ${
                 caffeinateStatus?.active
                   ? 'border-accent bg-accent text-accent-fg'
+                  : caffeinateStatus?.supported === false
+                    ? 'border-border bg-surface-hi text-muted/50 cursor-not-allowed'
                   : 'border-border bg-surface-hi text-muted hover:text-ink'
               }
             `}

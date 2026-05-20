@@ -310,6 +310,12 @@ app.on('window-all-closed', () => {
   void manager?.killAll()
   void builtInMcpHost.stop()
   void lspManager.dispose()
+  // WHY we release caffeinate here even though macOS keeps the app process
+  // alive after the last window closes:
+  // this same branch kills every live agent session. Keeping a sleep
+  // assertion after all windows and sessions are gone would keep the machine
+  // awake for an app that no longer has active work to protect. Cmd+Q also
+  // reaches before-quit below; this branch covers the close-window path.
   caffeinateController.dispose()
   if (process.platform !== 'darwin') app.quit()
 })

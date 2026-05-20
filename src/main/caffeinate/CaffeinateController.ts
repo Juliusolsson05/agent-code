@@ -7,7 +7,14 @@ import type {
 } from '@preload/api/types.js'
 
 const CAFFEINATE_BINARY = '/usr/bin/caffeinate'
-const CAFFEINATE_ARGS = ['-dimsu'] as const
+// WHY `-ims` and not the tempting kitchen-sink `-dimsu`:
+//   `-u` only asserts "user is active" for five seconds without `-t`, and it
+//   can wake the display as a side effect. That is wrong for background agent
+//   work. `-d` keeps the display awake, which is also stronger than this
+//   command promises. We want the Mac to keep doing work, not to force the
+//   screen on. `-s` is valid only on AC power, so `-i` remains the portable
+//   idle-sleep assertion and `-m` keeps disk idle sleep out of long runs.
+const CAFFEINATE_ARGS = ['-ims'] as const
 
 type CaffeinateEvents = {
   'state-changed': [CaffeinateStatus]
@@ -55,7 +62,7 @@ export class CaffeinateController extends EventEmitter<CaffeinateEvents> {
       this.child = child
       this.startedAt = Date.now()
       this.lastMessage =
-        'Caffeinate is active. It prevents idle sleep while Agent Code is open, but macOS lid-close sleep remains hardware and power-state dependent.'
+        'Caffeinate is active. It prevents idle sleep while Agent Code is open; system-sleep prevention depends on AC power, and macOS lid-close sleep remains hardware and power-state dependent.'
 
       child.once('error', err => {
         if (this.child !== child) return
@@ -100,7 +107,11 @@ export class CaffeinateController extends EventEmitter<CaffeinateEvents> {
     // the app must only release the exact assertion it created. A global
     // `pkill caffeinate` would trample user-started caffeinate processes,
     // defeating the trust boundary around this command.
-    child.kill('SIGTERM')
+    const signaled = child.kill('SIGTERM')
+    if (!signaled) {
+      this.lastMessage = 'Could not stop caffeinate; the process did not accept SIGTERM.'
+      return { ok: false, message: this.lastMessage, status: this.getStatus() }
+    }
     this.child = null
     this.startedAt = null
     this.lastMessage = 'Caffeinate stopped.'
