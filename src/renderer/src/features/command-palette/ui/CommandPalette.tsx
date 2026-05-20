@@ -88,6 +88,7 @@ type Props = {
   closeAgentStatusPanel: () => void
   toggleAgentStatusPanel: () => void
   togglePerformancePanel: () => void
+  toggleCaffeinate: () => Promise<void> | void
   toggleGlobalEditor: () => void
   toggleFileTreeVisible: () => void
   enterDispatchMode: () => Promise<void> | void
@@ -114,6 +115,8 @@ type Props = {
   devDebugPanelOpen: boolean
   agentStatusPanelOpen: boolean
   performancePanelOpen: boolean
+  caffeinateActive: boolean
+  caffeinateSupported: boolean
   globalEditorOpen: boolean
   fileTreeVisible: boolean
   dispatchModeEnabled: boolean
@@ -156,6 +159,7 @@ export function CommandPalette({
   closeAgentStatusPanel,
   toggleAgentStatusPanel,
   togglePerformancePanel,
+  toggleCaffeinate,
   toggleGlobalEditor,
   toggleFileTreeVisible,
   enterDispatchMode,
@@ -182,6 +186,8 @@ export function CommandPalette({
   devDebugPanelOpen,
   agentStatusPanelOpen,
   performancePanelOpen,
+  caffeinateActive,
+  caffeinateSupported,
   globalEditorOpen,
   fileTreeVisible,
   dispatchModeEnabled,
@@ -361,6 +367,7 @@ export function CommandPalette({
         closeAgentStatusPanel,
         toggleAgentStatusPanel,
         togglePerformancePanel,
+        toggleCaffeinate,
         toggleGlobalEditor,
         toggleFileTreeVisible,
         enterDispatchMode,
@@ -400,6 +407,8 @@ export function CommandPalette({
         devDebugPanelOpen,
         agentStatusPanelOpen,
         performancePanelOpen,
+        caffeinateActive,
+        caffeinateSupported,
         globalEditorOpen,
         fileTreeVisible,
         dispatchModeEnabled,
@@ -428,6 +437,7 @@ export function CommandPalette({
       closeAgentStatusPanel,
       toggleAgentStatusPanel,
       togglePerformancePanel,
+      toggleCaffeinate,
       toggleGlobalEditor,
       toggleFileTreeVisible,
       enterDispatchMode,
@@ -465,6 +475,8 @@ export function CommandPalette({
       devDebugPanelOpen,
       agentStatusPanelOpen,
       performancePanelOpen,
+      caffeinateActive,
+      caffeinateSupported,
       globalEditorOpen,
       fileTreeVisible,
       dispatchModeEnabled,

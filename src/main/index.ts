@@ -38,6 +38,7 @@ import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIn
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
+import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 
 // Main process — thin Electron host.
 //
@@ -84,6 +85,7 @@ const worktreeActivityIndex = new WorktreeActivityIndex()
 const builtInMcpHost = new BuiltInMcpHttpHost()
 const orchestrationBridge = new OrchestrationBridge()
 const aiWorkspaceRegistry = new AiWorkspaceRegistry()
+const caffeinateController = new CaffeinateController()
 
 // SessionManager is constructed inside whenReady so we can await
 // TmuxRegistry.detectAvailability() first — terminal sessions need
@@ -293,6 +295,7 @@ async function startApp(): Promise<void> {
     worktreeActivityIndex,
     orchestrationBridge,
     aiWorkspaceRegistry,
+    caffeinateController,
   })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()
@@ -307,6 +310,13 @@ app.on('window-all-closed', () => {
   void manager?.killAll()
   void builtInMcpHost.stop()
   void lspManager.dispose()
+  // WHY we release caffeinate here even though macOS keeps the app process
+  // alive after the last window closes:
+  // this same branch kills every live agent session. Keeping a sleep
+  // assertion after all windows and sessions are gone would keep the machine
+  // awake for an app that no longer has active work to protect. Cmd+Q also
+  // reaches before-quit below; this branch covers the close-window path.
+  caffeinateController.dispose()
   if (process.platform !== 'darwin') app.quit()
 })
 
@@ -315,6 +325,7 @@ app.on('before-quit', () => {
   void manager?.killAll()
   void builtInMcpHost.stop()
   void lspManager.dispose()
+  caffeinateController.dispose()
   cleanupDictationIpcResources()
   stopMainHeapWatchdog()
   // Flush pending ghost writes. Fire-and-forget is fine — Electron's

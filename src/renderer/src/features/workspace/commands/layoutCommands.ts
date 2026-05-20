@@ -97,6 +97,20 @@ export const layoutCommands: CommandDef[] = [
     run: ({ ui }) => ui.togglePerformancePanel(),
   },
   {
+    id: 'toggle-caffeinate',
+    surface: 'app',
+    title: 'Caffeinate',
+    description: '**What it does:** Toggles a macOS `caffeinate` process so long-running agent work can prevent idle/system sleep.\n\n**Use when:** You want Agent Code to keep the machine awake while agents run.\n\n**Notes:** macOS lid-close behavior is hardware and power-state dependent; this command does not guarantee work keeps running after the lid is closed.',
+    keywords: ['sleep', 'awake', 'macos', 'power', 'long running', 'idle'],
+    getState: ({ flags }) => ({
+      label: flags.caffeinateSupported
+        ? (flags.caffeinateActive ? 'On' : 'Off')
+        : 'Unsupported',
+      tone: flags.caffeinateActive ? 'accent' : 'neutral',
+    }),
+    run: ({ ui }) => ui.toggleCaffeinate(),
+  },
+  {
     id: 'toggle-global-editor',
     // `app`: the Global Editor overlay WRAPS whatever workspace layout
     // is active (grid, Dispatch, tiled) rather than replacing it, so

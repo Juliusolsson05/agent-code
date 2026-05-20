@@ -30,6 +30,8 @@ export type { Api }
 // preload bundle.
 export type {
   FeedDebugPersistEntry,
+  CaffeinateCommandResult,
+  CaffeinateStatus,
   DevDebugConfig,
   JsonlEntry,
   LspDiagnostic,

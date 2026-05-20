@@ -44,6 +44,7 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, TabId } from '@renderer/workspace/types'
+import type { CaffeinateStatus } from '@preload/index'
 
 // App — thin shell around the workspace hook.
 //
@@ -157,6 +158,8 @@ export default function App() {
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
   const [devDebugEnabled, setDevDebugEnabled] = useState(false)
+  const [caffeinateStatus, setCaffeinateStatus] = useState<CaffeinateStatus | null>(null)
+  const [caffeinateMessage, setCaffeinateMessage] = useState<string | null>(null)
 
   useEffect(() => {
     applyTheme(settings)
@@ -183,6 +186,52 @@ export default function App() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    void window.api.getCaffeinateStatus()
+      .then(status => {
+        if (!cancelled) setCaffeinateStatus(status)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCaffeinateStatus({
+            supported: false,
+            active: false,
+            pid: null,
+            startedAt: null,
+            command: [],
+            message: 'Could not read caffeinate status.',
+          })
+        }
+      })
+    const off = window.api.onCaffeinateStateChanged(status => {
+      setCaffeinateStatus(status)
+      setCaffeinateMessage(status.message)
+    })
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [])
+
+  const toggleCaffeinate = useCallback(async () => {
+    try {
+      const result = await window.api.toggleCaffeinate()
+      setCaffeinateStatus(result.status)
+      setCaffeinateMessage(result.message)
+    } catch (err) {
+      setCaffeinateMessage(
+        err instanceof Error ? err.message : 'Could not toggle caffeinate.',
+      )
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!caffeinateMessage) return
+    const timer = window.setTimeout(() => setCaffeinateMessage(null), 5000)
+    return () => window.clearTimeout(timer)
+  }, [caffeinateMessage])
 
   useEffect(() => {
     // The default dictation trigger is bare Fn, which Chromium does not expose
@@ -486,6 +535,30 @@ export default function App() {
           >
             perf
           </button>
+          <button
+            type="button"
+            disabled={caffeinateStatus?.supported === false}
+            onClick={() => void toggleCaffeinate()}
+            title={
+              caffeinateStatus?.supported === false
+                ? 'Caffeinate is only available on macOS.'
+                : caffeinateStatus?.active
+                  ? 'Caffeinate is active. Click to stop keeping the machine awake.'
+                  : 'Start caffeinate to prevent idle sleep during long-running agent work.'
+            }
+            className={`
+              px-2 py-1 border text-[10px] font-code transition-colors
+              ${
+                caffeinateStatus?.active
+                  ? 'border-accent bg-accent text-accent-fg'
+                  : caffeinateStatus?.supported === false
+                    ? 'border-border bg-surface-hi text-muted/50 cursor-not-allowed'
+                  : 'border-border bg-surface-hi text-muted hover:text-ink'
+              }
+            `}
+          >
+            caff
+          </button>
           <PerformancePanel open={performancePanelOpen} workspace={workspace} />
           {/*
             Always-visible main-process heap + RSS badge with a 60s
@@ -690,6 +763,7 @@ export default function App() {
         closeAgentStatusPanel={closeAgentStatusPanel}
         toggleAgentStatusPanel={toggleAgentStatusPanel}
         togglePerformancePanel={togglePerformancePanel}
+        toggleCaffeinate={toggleCaffeinate}
         toggleGlobalEditor={toggleGlobalEditor}
         toggleFileTreeVisible={toggleFileTreeVisible}
         enterDispatchMode={workspace.enterDispatchMode}
@@ -727,6 +801,8 @@ export default function App() {
         devDebugPanelOpen={devDebugPanelOpen}
         agentStatusPanelOpen={agentStatusPanelOpen}
         performancePanelOpen={performancePanelOpen}
+        caffeinateActive={caffeinateStatus?.active === true}
+        caffeinateSupported={caffeinateStatus?.supported !== false}
         globalEditorOpen={globalEditorOpen}
         fileTreeVisible={fileTreeVisible}
         dispatchModeEnabled={workspace.dispatchMode !== null}
@@ -743,6 +819,22 @@ export default function App() {
         onAccept={onPathPickerAccept}
         onResume={onPathPickerResume}
       />
+
+      {caffeinateMessage ? (
+        <div
+          role="status"
+          className="
+            fixed bottom-3 right-3 z-50 max-w-[360px]
+            border border-border bg-surface-hi px-3 py-2
+            text-[11px] leading-snug text-ink shadow-lg
+          "
+        >
+          <div className="font-semibold uppercase tracking-wide text-muted">
+            Caffeinate
+          </div>
+          <div>{caffeinateMessage}</div>
+        </div>
+      ) : null}
 
       <TileTabsModal
         open={tileTabsModalOpen}

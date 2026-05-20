@@ -69,6 +69,7 @@ export type CommandContext = {
     closeAgentStatusPanel: () => void
     toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
+    toggleCaffeinate: () => Promise<void> | void
     toggleGlobalEditor: () => void
     /** Toggle visibility of the Global Editor's in-editor file tree.
      *  Only meaningful when the overlay is open — the command's
@@ -123,6 +124,8 @@ export type CommandContext = {
     devDebugPanelOpen: boolean
     agentStatusPanelOpen: boolean
     performancePanelOpen: boolean
+    caffeinateActive: boolean
+    caffeinateSupported: boolean
     globalEditorOpen: boolean
     /** Whether the Global Editor's in-editor file tree is rendered.
      *  Only consulted while the overlay is open; otherwise it has no
