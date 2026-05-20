@@ -9,7 +9,6 @@ import {
 import { asRecord } from '@shared/lib/asRecord'
 
 import type {
-  QueuedMessage,
   SemanticLiveTurn,
   StreamPhase,
 } from '@renderer/workspace/workspaceState'
@@ -32,7 +31,6 @@ export type FeedRenderModelInput = {
   provider: AgentProvider
   entries?: Entry[]
   committed?: FeedCommittedProjection
-  queuedMessages?: QueuedMessage[]
   semanticHistory: SemanticLiveTurn[]
   semanticTurn: SemanticLiveTurn | null
   streamPhase: StreamPhase
@@ -61,7 +59,7 @@ export type FeedRenderModel = {
 }
 
 export type FeedRenderItemOrder = {
-  phase: 'empty' | 'content' | 'work' | 'queue'
+  phase: 'empty' | 'content' | 'work'
   timeMs: number | null
   sequence: number
   source: string
@@ -94,13 +92,6 @@ export type FeedRenderItem =
       phase: StreamPhase
       toolName: string | null
       toolUseId: string | null
-      order: FeedRenderItemOrder
-    }
-  | {
-      type: 'queued-prompt'
-      key: string
-      message: QueuedMessage
-      queueOrdinal: number
       order: FeedRenderItemOrder
     }
   | {
@@ -185,8 +176,6 @@ function phaseRank(phase: FeedRenderItemOrder['phase']): number {
       return 1
     case 'work':
       return 2
-    case 'queue':
-      return 3
   }
 }
 
@@ -245,8 +234,6 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
       )
         ? `work ${item.phase} · ${item.toolName}`
         : `work ${item.phase}`
-    case 'queued-prompt':
-      return `queued prompt ${item.queueOrdinal + 1}`
     case 'empty':
       return provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'
   }
@@ -255,7 +242,6 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
 function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
   switch (item.type) {
     case 'entry':
-    case 'queued-prompt':
       return 'entry'
     case 'semantic-history':
     case 'semantic-current':
@@ -281,7 +267,6 @@ export function deriveFeedRenderModel({
   provider,
   entries,
   committed,
-  queuedMessages = [],
   semanticHistory,
   semanticTurn,
   streamPhase,
@@ -382,7 +367,7 @@ export function deriveFeedRenderModel({
     })
   }
 
-  const hasContentItems = unsortedItems.length > 0 || queuedMessages.length > 0
+  const hasContentItems = unsortedItems.length > 0
   if (!hasContentItems) {
     unsortedItems.push({
       type: 'empty',
@@ -420,21 +405,6 @@ export function deriveFeedRenderModel({
       },
     })
   }
-
-  queuedMessages.forEach((message, index) => {
-    unsortedItems.push({
-      type: 'queued-prompt',
-      key: `queue:${message.timestamp}:${index}`,
-      message,
-      queueOrdinal: index,
-      order: {
-        phase: 'queue',
-        timeMs: timestampMs(message.timestamp),
-        sequence: index,
-        source: 'queue',
-      },
-    })
-  })
 
   // WHY the sort happens after ownership suppression rather than
   // before: visibility ownership decides whether a semantic/archive

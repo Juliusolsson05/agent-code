@@ -645,34 +645,6 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
 }
 
 {
-  const archived = liveTurn('queue-history', 'rollout')
-  archived.endedAt = Date.parse('2026-05-16T18:30:01.000Z')
-  const model = deriveFeedRenderModel({
-    provider: 'codex',
-    entries: [
-      assistantEntry('queue-before', 'assistant before queued prompt', '2026-05-16T18:30:00.000Z'),
-    ],
-    queuedMessages: [
-      {
-        content: 'queued follow-up prompt',
-        timestamp: '2026-05-16T18:30:03.000Z',
-      },
-    ],
-    semanticHistory: [archived],
-    semanticTurn: null,
-    streamPhase: 'thinking',
-    streamPhasePendingToolName: null,
-    streamPhasePendingToolUseId: null,
-  })
-
-  assert.deepEqual(
-    model.items.map(item => item.type),
-    ['entry', 'semantic-history', 'work', 'queued-prompt'],
-    'queued prompts must live in the same feed plan after existing content and work, not in a second visual plane outside Feed',
-  )
-}
-
-{
   const answerText =
     'Yes. Electron does not support window.prompt, so the AI Workspace dialog needs a real app UI.'
   const webSearchItemId = 'ws_06c0839c0d254157016a09ae03afd48191b67160fc3df8c70a'

@@ -12,7 +12,6 @@ import {
 } from '@shared/types/transcript'
 
 import type {
-  QueuedMessage,
   SemanticLiveTurn,
   StreamPhase,
 } from '@renderer/workspace/workspaceState'
@@ -116,7 +115,6 @@ type Props = {
   streamPhase?: StreamPhase
   streamPhasePendingToolName?: string | null
   streamPhasePendingToolUseId?: string | null
-  queuedMessages?: QueuedMessage[]
   turnStartedAt?: number | null
   tailMode?: boolean
   /**
@@ -244,7 +242,6 @@ function FeedImpl({
   streamPhase = 'idle',
   streamPhasePendingToolName = null,
   streamPhasePendingToolUseId = null,
-  queuedMessages = [],
   turnStartedAt = null,
   tailMode = false,
   pickerSelectedUuid = null,
@@ -721,7 +718,6 @@ function FeedImpl({
     const model = deriveFeedRenderModel({
       provider,
       committed: committedProjection,
-      queuedMessages,
       semanticHistory,
       semanticTurn,
       streamPhase,
@@ -747,7 +743,6 @@ function FeedImpl({
     provider,
     semanticHistory,
     semanticTurn,
-    queuedMessages,
     sessionId,
     streamPhase,
     streamPhasePendingToolName,
@@ -830,7 +825,7 @@ function FeedImpl({
         const selected =
           pickerSelectedUuid != null && uuid === pickerSelectedUuid
         // WHY eager rendering keys off committed-entry ordinal, not
-        // render-item index: semantic/work/queued rows now live in the
+        // render-item index: semantic/work rows now live in the
         // same ordered list, but markdown parse cost still belongs to
         // committed entries. Counting non-entry rows here would make a
         // busy turn accidentally lazy-mount the newest committed prompt.
@@ -873,24 +868,6 @@ function FeedImpl({
             toolName={item.toolName}
             toolHint={toolHintFromTurn(renderedSemanticTurn, item.toolUseId)}
           />
-        )
-      case 'queued-prompt':
-        return (
-          <div
-            key={item.key}
-            className="flex items-start gap-3 border-t border-border pt-3 text-[12px] leading-[1.5] text-ink-dim"
-            aria-label="queued message"
-          >
-            <span
-              className="w-3 text-accent flex-shrink-0 select-none opacity-60"
-              aria-hidden="true"
-            >
-              ❯
-            </span>
-            <div className="flex-1 min-w-0 break-words font-code">
-              {item.message.content}
-            </div>
-          </div>
         )
       case 'empty':
         return null
@@ -948,13 +925,15 @@ function FeedImpl({
            *
            * The old JSX rendered separate buckets in a fixed order:
            * committed entries first, semantic history/current later,
-           * work last, and queued prompts outside Feed. That let a
+           * work last. That let a
            * stale semantic history row mount under a newer submitted
            * prompt, which looked exactly like "my user prompt never
            * rendered" in real conversations. Feed now consumes the
            * selector's single ordered item list so ownership,
-           * chronological placement, debug rows, lazy-entry eagerness,
-           * and queue visibility all share one render contract. */}
+           * chronological placement, debug rows, and lazy-entry
+           * eagerness all share one render contract. Queued prompts
+           * remain composer-adjacent because they are pending input,
+           * not transcript history. */}
           {renderItems.map(renderFeedItem)}
           <div ref={endRef} />
         </div>

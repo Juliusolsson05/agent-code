@@ -38,7 +38,7 @@ export type DebugVisibleRow = {
   label: string
   itemType?: string
   order?: {
-    phase: 'empty' | 'content' | 'work' | 'queue'
+    phase: 'empty' | 'content' | 'work'
     timeMs: number | null
     sequence: number
     source: string
