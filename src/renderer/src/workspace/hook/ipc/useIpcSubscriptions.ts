@@ -53,6 +53,7 @@ import {
 import {
   codexPromptsMatchForOwnership,
 } from '@renderer/workspace/hook/actions/streaming'
+import { shouldClearIdleCodexQueuedMessages } from '@renderer/workspace/queueInvariants'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import type { WorktreeIdentity } from '@shared/work-context/types'
@@ -613,6 +614,14 @@ export function useIpcSubscriptions(
       ({ sessionId, active, status }) => {
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
+          const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
+          const shouldClearIdleCodexQueue = shouldClearIdleCodexQueuedMessages({
+            awaitingAssistant: false,
+            processActive: active,
+            provider: sessionKind,
+            queuedMessagesLength: current.queuedMessages.length,
+            streamPhase: current.streamPhase,
+          })
           const next = withDerivedSessionStatus(
             appendFeedDebugLog(
               {
@@ -623,14 +632,25 @@ export function useIpcSubscriptions(
                 inputReady: current.exited === null,
                 activityStatus: active ? (status ?? null) : null,
                 awaitingAssistant: false,
+                queuedMessages: shouldClearIdleCodexQueue
+                  ? []
+                  : current.queuedMessages,
               },
               {
                 layer: 'STATE',
                 kind: 'process_state',
                 summary: active
                   ? `process active${status ? ` · ${status}` : ''}`
-                  : 'process idle',
-                data: { active, status: status ?? null },
+                  : shouldClearIdleCodexQueue
+                    ? 'process idle · cleared stale Codex queue'
+                    : 'process idle',
+                data: {
+                  active,
+                  status: status ?? null,
+                  clearedQueuedMessages: shouldClearIdleCodexQueue
+                    ? current.queuedMessages.length
+                    : 0,
+                },
               },
             ),
           )
@@ -790,7 +810,23 @@ export function useIpcSubscriptions(
         const awaitingUnchanged = clearOptimisticAwaiting
           ? current.awaitingAssistant === false
           : true
-        if (semanticUnchanged && phaseUnchanged && ghostsUnchanged && awaitingUnchanged) {
+        const nextAwaitingAssistant = clearOptimisticAwaiting
+          ? false
+          : current.awaitingAssistant
+        const shouldClearIdleCodexQueue = shouldClearIdleCodexQueuedMessages({
+          awaitingAssistant: nextAwaitingAssistant,
+          processActive: current.processActive,
+          provider: sessionKind,
+          queuedMessagesLength: current.queuedMessages.length,
+          streamPhase,
+        })
+        if (
+          semanticUnchanged &&
+          phaseUnchanged &&
+          ghostsUnchanged &&
+          awaitingUnchanged &&
+          !shouldClearIdleCodexQueue
+        ) {
           closeSpan({
             sessionId,
             eventType: eventType || 'semantic',
@@ -803,7 +839,10 @@ export function useIpcSubscriptions(
           appendFeedDebugLog(
             {
               ...current,
-              awaitingAssistant: clearOptimisticAwaiting ? false : current.awaitingAssistant,
+              awaitingAssistant: nextAwaitingAssistant,
+              queuedMessages: shouldClearIdleCodexQueue
+                ? []
+                : current.queuedMessages,
               semantic: nextSemantic,
               streamPhase,
               streamPhasePendingToolName,
@@ -816,8 +855,15 @@ export function useIpcSubscriptions(
             {
               layer: 'SEM',
               kind: eventType || 'semantic',
-              summary: summarizeSemanticEventForDebug(semanticEvent),
-              data: semanticEvent,
+              summary: shouldClearIdleCodexQueue
+                ? `${summarizeSemanticEventForDebug(semanticEvent)} · cleared stale Codex queue`
+                : summarizeSemanticEventForDebug(semanticEvent),
+              data: shouldClearIdleCodexQueue
+                ? {
+                    ...semanticEvent,
+                    clearedQueuedMessages: current.queuedMessages.length,
+                  }
+                : semanticEvent,
             },
           ),
         )
@@ -1426,6 +1472,7 @@ export function useIpcSubscriptions(
           // "permanently lying about running for days."
           const hasLiveSignal =
             current.processActive || current.streamPhase !== 'idle'
+          const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
           let next = current
           const reconciled: string[] = []
 
@@ -1436,6 +1483,27 @@ export function useIpcSubscriptions(
           ) {
             next = { ...next, awaitingAssistant: false }
             reconciled.push('awaitingAssistant')
+          }
+
+          if (
+            shouldClearIdleCodexQueuedMessages({
+              // At bootstrap-complete, no live process/stream signal means
+              // the optimistic submit owner has already lost its provider
+              // evidence. Let the Codex queue invariant clear the local row
+              // even if `awaitingAssistant` is itself one of the stale replay
+              // flags left behind by the same missing rollout handoff.
+              awaitingAssistant: false,
+              processActive: current.processActive,
+              provider: sessionKind,
+              queuedMessagesLength: next.queuedMessages.length,
+              streamPhase: current.streamPhase,
+            })
+          ) {
+            next = { ...next, awaitingAssistant: false, queuedMessages: [] }
+            if (!reconciled.includes('awaitingAssistant')) {
+              reconciled.push('awaitingAssistant')
+            }
+            reconciled.push('queuedMessages')
           }
 
           const currentTurn = next.semantic.currentTurn
