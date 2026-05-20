@@ -142,6 +142,72 @@ const inheritedRuntime = {
   ],
 }
 
+const nestedInheritedRuntime = {
+  ...emptyRuntime(),
+  inputReady: true,
+  processStatus: 'started' as const,
+  entries: [
+    {
+      type: 'user',
+      uuid: 'ancestor-child-u1',
+      parentUuid: null,
+      timestamp: '2026-05-17T08:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: [
+            '<orchestration-handoff>',
+            'Older inherited handoff from the parent agent launch.',
+            '</orchestration-handoff>',
+          ].join('\n'),
+        }],
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: 'ancestor-child-a1',
+      parentUuid: 'ancestor-child-u1',
+      timestamp: '2026-05-17T08:01:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Older inherited child result.' }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'current-child-u1',
+      parentUuid: 'ancestor-child-a1',
+      timestamp: '2026-05-17T10:00:00.000Z',
+      message: {
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: [
+            '<orchestration-handoff>',
+            'Current child handoff.',
+            '</orchestration-handoff>',
+            '',
+            '<task>',
+            'Review nested orchestration output.',
+            '</task>',
+          ].join('\n'),
+        }],
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: 'current-child-a1',
+      parentUuid: 'current-child-u1',
+      timestamp: '2026-05-17T10:01:00.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Current child result.' }],
+      },
+    },
+  ],
+}
+
 {
   const agents = listOrchestrationAgents({
     state,
@@ -210,6 +276,34 @@ const inheritedRuntime = {
       '</task>',
     ].join('\n'),
     'Child review result.',
+  ])
+}
+
+{
+  const output = readOrchestrationAgent({
+    state,
+    runtimes: { [child]: nestedInheritedRuntime },
+    parentSessionId: parent,
+    sessionId: child,
+  })
+
+  // WHY this covers chained orchestration:
+  // a child can be spawned from a parent that was itself orchestrated. In that
+  // case the inherited transcript already contains an older handoff marker.
+  // The output cut must use the newest marker written for the current child,
+  // otherwise grandchild reads can leak the parent's child-task answer.
+  assert.equal(output.latestAssistantText, 'Current child result.')
+  assert.deepEqual(output.messages.map(message => message.text), [
+    [
+      '<orchestration-handoff>',
+      'Current child handoff.',
+      '</orchestration-handoff>',
+      '',
+      '<task>',
+      'Review nested orchestration output.',
+      '</task>',
+    ].join('\n'),
+    'Current child result.',
   ])
 }
 

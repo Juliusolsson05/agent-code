@@ -316,9 +316,15 @@ function orchestrationVisibleEntries(
   // read/list tools are consumed by the parent coordinator, so reporting the
   // last assistant message from the whole resumed transcript can make a child
   // appear to have returned the parent's old commentary instead of its own
-  // answer. The bootstrap prompt is the first durable, provider-agnostic marker
-  // we write after spawning the child; everything before it is inherited
-  // context, everything from it onward is the child session.
+  // answer. The bootstrap prompt is the durable, provider-agnostic marker we
+  // write after spawning the child; everything before the child's bootstrap is
+  // inherited context, everything from it onward is the child session.
+  //
+  // Use the LAST handoff marker, not the first. A parent can itself be an
+  // orchestrated child, so its duplicated transcript may already contain an
+  // older handoff. Cutting at the first marker would resurrect the same bug for
+  // grandchildren by treating the parent's child-task output as the current
+  // child's output. The newest handoff is the one submitted by this launch.
   //
   // We only apply this cut after the bootstrap has been marked delivered. That
   // preserves old behavior for regular agents, failed pre-prompt launches, and
@@ -329,12 +335,22 @@ function orchestrationVisibleEntries(
   ) {
     return runtime.entries
   }
-  const bootstrapIndex = runtime.entries.findIndex(entry => {
-    if (entry.type !== 'user') return false
-    return entryTextContent(entry).includes('<orchestration-handoff>')
-  })
+  const bootstrapIndex = lastIndexWhere(runtime.entries, entry =>
+    entry.type === 'user' &&
+    entryTextContent(entry).includes('<orchestration-handoff>'),
+  )
   if (bootstrapIndex < 0) return runtime.entries
   return runtime.entries.slice(bootstrapIndex)
+}
+
+function lastIndexWhere<T>(
+  values: readonly T[],
+  predicate: (value: T) => boolean,
+): number {
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    if (predicate(values[index]!)) return index
+  }
+  return -1
 }
 
 function latestAssistant(messages: OrchestrationAgentMessage[]): string | undefined {
