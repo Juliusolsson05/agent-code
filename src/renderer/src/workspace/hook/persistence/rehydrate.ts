@@ -12,6 +12,7 @@ import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile
 import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import {
+  collectLiveProcessIds,
   collectOwnedSessionIds,
   collectUnownedSessionIds,
 } from '@renderer/workspace/sessionOwnership'
@@ -70,6 +71,7 @@ export async function rehydrateWorkspace(
   const idMap = new Map<SessionId, SessionId>()
   const freshSessions: Record<SessionId, SessionMeta> = {}
   const ownedIds = collectOwnedSessionIds(persisted)
+  const liveProcessIds = collectLiveProcessIds(persisted)
   const staleIds = collectUnownedSessionIds(persisted)
 
   if (staleIds.length > 0) {
@@ -86,9 +88,45 @@ export async function rehydrateWorkspace(
     console.warn('[workspace] dropping unowned persisted sessions during rehydrate:', staleIds)
   }
 
+  // WHY we pre-populate freshSessions with hibernated metadata BEFORE the
+  // spawn loop:
+  //
+  // The spawn loop only writes into freshSessions for sessions it actually
+  // launches (live tile leaves). Detached and buried sessions are intentionally
+  // skipped at spawn time — see sessionOwnership.ts for the live-vs-owned
+  // split. But their metadata (cwd, kind, providerSessionId, builtInMcpDomains,
+  // tmuxName) is durable user state: it has to survive into state.sessions so
+  // the dispatch list and buried-panes UI can render them, and so that "wake
+  // this hibernated agent" can find the providerSessionId to pass as
+  // --resume.
+  //
+  // We seed under the ORIGINAL persisted sessionId, not a freshly minted one,
+  // for two reasons:
+  //   1. No process means no need for a fresh routing id. SessionIds are only
+  //      "launch-local" when they identify a backend PTY; for hibernated
+  //      records the id is just a stable key.
+  //   2. detachedSessions / buried records reference these ids. Skipping the
+  //      idMap remap keeps those references valid without any extra wiring.
+  for (const [persistedId, meta] of Object.entries(persisted.sessions)) {
+    if (!ownedIds.has(persistedId)) continue
+    if (liveProcessIds.has(persistedId)) continue
+    freshSessions[persistedId] = meta
+  }
+
+  // WHY `spawnedIds` is separate from `freshSessions`:
+  //
+  // freshSessions now holds BOTH live-spawned session metadata (under fresh
+  // remapped ids) AND hibernated metadata (under original persisted ids — see
+  // the seed loop above). The sanitize check below needs to drop tile leaves
+  // whose backing process never actually started; freshSessions membership is
+  // no longer sufficient for that check because hibernated entries are also
+  // present. `spawnedIds` is the strict subset that did spawn — written only
+  // inside the Promise.all loop after `window.api.spawnSession` resolves.
+  const spawnedIds = new Set<SessionId>()
+
   const sanitizeRemappedNode = (n: TileNode): TileNode | null => {
     if (n.type === 'leaf') {
-      return freshSessions[n.sessionId] != null ? n : null
+      return spawnedIds.has(n.sessionId) ? n : null
     }
     const a = sanitizeRemappedNode(n.a)
     const b = sanitizeRemappedNode(n.b)
@@ -118,8 +156,15 @@ export async function rehydrateWorkspace(
   const buildRemappedBuried = (): BuriedPaneRecord[] =>
     (persisted.buried ?? [])
       .flatMap(entry => {
-        const mappedSessionId = idMap.get(entry.sessionId)
-        if (!mappedSessionId) return []
+        // WHY fall back to the original sessionId when idMap has no entry:
+        //
+        // Buried panes are hibernated by design — no PTY, no rehydrate spawn,
+        // metadata only. They never appear in idMap because the spawn loop
+        // skipped them (see liveProcessIds filter). The previous behavior
+        // ("drop if not in idMap") silently lost the buried pane on every
+        // restart, defeating the purpose of "bury this for later". Use the
+        // original sessionId as the key so the record round-trips intact.
+        const mappedSessionId = idMap.get(entry.sessionId) ?? entry.sessionId
         const remapped: BuriedPaneRecord = {
           ...entry,
           id: mappedSessionId,
@@ -161,13 +206,20 @@ export async function rehydrateWorkspace(
   const buildRemappedDetachedSessions = (): Record<SessionId, DetachedSessionRecord> => {
     const out: Record<SessionId, DetachedSessionRecord> = {}
     for (const entry of Object.values(persisted.detachedSessions ?? {})) {
-      const mappedSessionId = idMap.get(entry.sessionId)
-      if (!mappedSessionId) continue
-      // WHY key by the fresh session id rather than trusting the persisted
-      // object key: renderer SessionIds are per-launch routing ids. Rehydrate
-      // respawns every process and remaps every old id, so a detached record's
-      // identity has to follow the same old->new map as tile leaves and buried
-      // records or later lifecycle actions would delete/update the wrong key.
+      // WHY fall back to the original sessionId when idMap has no entry:
+      //
+      // Detached (hibernated) sessions are intentionally not respawned during
+      // rehydrate — that is the entire point of the live-vs-owned split in
+      // sessionOwnership.ts. They have no idMap entry because the spawn loop
+      // skipped them. Pre-fix code dropped them here on every restart, which
+      // silently emptied the dispatch parking pool after each launch. Falling
+      // back to the original id preserves the record verbatim, ready to be
+      // woken by an explicit user action later.
+      //
+      // When a mapping DOES exist (a session that was live, spawned, and then
+      // got detached during a previous run — uncommon but possible), we honor
+      // the remap so the new routing id matches the spawned process.
+      const mappedSessionId = idMap.get(entry.sessionId) ?? entry.sessionId
       out[mappedSessionId] = {
         ...entry,
         sessionId: mappedSessionId,
@@ -344,12 +396,28 @@ export async function rehydrateWorkspace(
     return true
   }
 
-  // Spawn all sessions concurrently instead of serially. A single
-  // slow respawn must not block the entire tab strip from coming
-  // back.
+  // Spawn live tile-leaf sessions concurrently. A single slow respawn
+  // must not block the entire tab strip from coming back.
+  //
+  // WHY this filter is liveProcessIds, not ownedIds (the original bug):
+  //
+  // ownedIds includes detached and buried sessions — i.e. parked agents the
+  // user has explicitly removed from their visible workspace. The previous
+  // code spawned every owner on rehydrate, which meant every time you parked
+  // dispatch agents and restarted, all of them came back as live processes
+  // (plus a per-session mitmdump) regardless of whether you intended to use
+  // them. With ~40 parked dispatch agents accumulating in detachedSessions,
+  // a single restart fork-bombed the machine with 40 claude + 40 mitmdump
+  // processes, all started in this Promise.all in the same ~3 seconds.
+  //
+  // liveProcessIds is the strictly smaller set the user is going to be
+  // exposed to on launch — current tile-tree leaves only. Hibernated
+  // sessions get metadata-restored above (so they're still rendered in
+  // dispatch lists and revivable later), but no PTY/mitmdump/MCP host
+  // is created until the user explicitly wakes one.
   await Promise.all(
     Object.entries(persisted.sessions)
-      .filter(([oldId]) => ownedIds.has(oldId))
+      .filter(([oldId]) => liveProcessIds.has(oldId))
       .map(async ([oldId, meta]) => {
         const restoreSpan = perf.span('workspace.rehydrate.session', {
           oldId,
@@ -383,6 +451,7 @@ export async function rehydrateWorkspace(
             builtInMcpDomains,
           })
           idMap.set(oldId, newId)
+          spawnedIds.add(newId)
           // Carry the full meta forward — kind + providerSessionId +
           // tmuxName — so the next save cycle doesn't drop these and
           // cause the session to degrade on the NEXT reload.
@@ -415,11 +484,23 @@ export async function rehydrateWorkspace(
     const cwd = await window.api.defaultCwd()
     await newTab(cwd)
   }
-  const restoredSessions = Object.keys(freshSessions).length
-  const expectedSessions = ownedIds.size
+  // WHY restored/expected count live-spawned sessions, not owned:
+  //
+  // `complete` here gates autosave (useBootstrap reads it to decide whether
+  // disk can be overwritten with the in-memory model). The invariant the gate
+  // enforces is "no visible pane was silently dropped" — i.e. every leaf in
+  // the user's tile tree got a working backend process. Hibernated sessions
+  // (detached + buried) deliberately do not spawn a process during rehydrate;
+  // counting them against expected would make `complete` false forever for
+  // anyone who has parked a dispatch agent, permanently disabling autosave.
+  // freshSessions also includes hibernated metadata seeds, so we count
+  // `spawnedIds` (strict subset that actually started) instead.
+  const restoredSessions = spawnedIds.size
+  const expectedSessions = liveProcessIds.size
   perf.mark('workspace.rehydrate.complete', {
     restoredSessions,
     expectedSessions,
+    hibernatedSessions: ownedIds.size - liveProcessIds.size,
   })
   return {
     restoredSessions,

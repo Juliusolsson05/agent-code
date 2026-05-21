@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  collectLiveProcessIds,
   collectOwnedSessionIds,
   collectUnownedSessionIds,
   pickOwnedSessions,
@@ -71,6 +72,41 @@ const sessions: Record<string, SessionMeta> = {
     [...owned].sort(),
     ['buried-a', 'detached-a', 'visible-a', 'visible-b'],
   )
+}
+
+// WHY this block exists:
+//
+// The previous regression was the inverse of the original OOM bug. After the
+// owned-set was introduced to stop orphan metadata from respawning, EVERY
+// owner — including detached/buried — got a fresh PTY + mitmdump on rehydrate.
+// Each "park this dispatch agent" action permanently added a backend process
+// to every future launch. The live-process set is the smaller, stricter
+// answer to "what must the user be able to type into RIGHT NOW?", and
+// rehydrate filters its Promise.all by this set.
+//
+// The asserts below pin down the contract:
+//   - tile leaves ARE live processes (visible-a, visible-b)
+//   - detached are NOT (dispatch parking, wake-on-attach later)
+//   - buried are NOT (hidden by user, wake-on-restore later)
+//   - dispatch focus alone is NOT (it is a selection pointer, not ownership)
+{
+  const live = collectLiveProcessIds({
+    tabs: [tab],
+    sessions,
+    detachedSessions: { 'old-key': detached },
+    buried: [buried],
+  })
+  assert.deepEqual([...live].sort(), ['visible-a', 'visible-b'])
+
+  // No tabs ⇒ no live processes, even with detached/buried records present.
+  // This is the rehydrate-after-bury edge case.
+  const liveEmpty = collectLiveProcessIds({
+    tabs: [],
+    sessions,
+    detachedSessions: { 'old-key': detached },
+    buried: [buried],
+  })
+  assert.deepEqual([...liveEmpty], [])
 }
 
 {
