@@ -483,13 +483,7 @@ function FeedImpl({
     // no animation frames.
     const el = scrollerRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [
-    entries.length,
-    tailMode,
-    semanticTurnSignal,
-    semanticHistorySignal,
-    bootstrapping,
-  ])
+  }, [entries.length, tailMode, semanticTurnSignal, semanticHistorySignal, bootstrapping])
 
   // Pin-once on the bootstrap → live transition. Runs exactly once per
   // transition thanks to the previous-value ref: we read the prior
@@ -722,9 +716,11 @@ function FeedImpl({
       perf.metric('feed.renderModel.build', durationMs, 'sample', {
         sessionId,
         entries: entries.length,
-        visible: model.visibleEntries.length,
+        visible: model.items.filter(item => item.type === 'entry').length,
         rows: model.debugRows.length,
-        hasSemanticStreaming: model.hasSemanticStreaming,
+        hasSemanticStreaming: model.items.some(
+          item => item.type === 'semantic-history' || item.type === 'semantic-current',
+        ),
       })
     }
     return model
@@ -744,12 +740,22 @@ function FeedImpl({
 
   const visibleDecisions = renderModel.visibleDecisions
   const renderItems = renderModel.items
-  const visible = renderModel.visibleEntries
-  const renderedSemanticHistory = renderModel.renderedSemanticHistory
-  const renderedSemanticTurn = renderModel.renderedSemanticTurn
-  const hasSemanticStreaming = renderModel.hasSemanticStreaming
-  const shouldShowWorkIndicator = renderModel.shouldShowWorkIndicator
   const renderedRows = renderModel.debugRows
+  const visibleEntryCount = renderItems.filter(item => item.type === 'entry').length
+  const renderedSemanticHistoryTurnIds = useMemo(
+    () =>
+      renderItems
+        .filter(item => item.type === 'semantic-history')
+        .map(item => item.turn.turnId),
+    [renderItems],
+  )
+  const renderedSemanticHistorySignature = renderedSemanticHistoryTurnIds.join('\u0000')
+  const renderedSemanticTurn = useMemo(() => {
+    for (const item of renderItems) {
+      if (item.type === 'semantic-current') return item.turn
+    }
+    return null
+  }, [renderItems])
 
   const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
   const previousRenderDebugSignatureRef = useRef<string | null>(null)
@@ -759,10 +765,10 @@ function FeedImpl({
     const previous = previousRenderedRowsRef.current
     const renderDebugSignature = JSON.stringify({
       entryCount: entries.length,
-      visibleEntryCount: visible.length,
+      visibleEntryCount,
       itemKeys: renderedRows.map(row => row.key),
       semanticTurnId: semanticTurn?.turnId ?? null,
-      semanticHistoryTurnIds: renderedSemanticHistory.map(turn => turn.turnId),
+      semanticHistoryTurnIds: renderedSemanticHistoryTurnIds,
       streamPhase,
     })
     const prevKeys = new Set(previous?.map(row => row.key) ?? [])
@@ -798,15 +804,15 @@ function FeedImpl({
         removed,
         hidden,
         entryCount: entries.length,
-        visibleEntryCount: visible.length,
+        visibleEntryCount,
         semanticTurnId: semanticTurn?.turnId ?? null,
-        semanticHistoryTurnIds: renderedSemanticHistory.map(turn => turn.turnId),
+        semanticHistoryTurnIds: renderedSemanticHistoryTurnIds,
         streamPhase,
       },
     })
     previousRenderedRowsRef.current = renderedRows
     previousRenderDebugSignatureRef.current = renderDebugSignature
-  }, [entries.length, onDebugLog, renderedRows, renderedSemanticHistory, semanticTurn?.turnId, streamPhase, visible.length, visibleDecisions])
+  }, [entries.length, onDebugLog, renderedRows, renderedSemanticHistorySignature, renderedSemanticHistoryTurnIds, semanticTurn?.turnId, streamPhase, visibleDecisions, visibleEntryCount])
 
   const renderFeedItem = (item: FeedRenderItem) => {
     switch (item.type) {
@@ -820,7 +826,7 @@ function FeedImpl({
         // same ordered list, but markdown parse cost still belongs to
         // committed entries. Counting non-entry rows here would make a
         // busy turn accidentally lazy-mount the newest committed prompt.
-        const eager = item.entryOrdinal >= visible.length - EAGER_TAIL
+        const eager = item.entryOrdinal >= visibleEntryCount - EAGER_TAIL
         return (
           <div
             key={item.key}
@@ -861,39 +867,17 @@ function FeedImpl({
           />
         )
       case 'empty':
-        return null
+        return (
+          <div
+            key={item.key}
+            className="flex min-h-[240px] flex-1 items-center justify-center"
+          >
+            <div className="text-muted text-[12px]">
+              {item.provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'}
+            </div>
+          </div>
+        )
     }
-  }
-
-  if (renderItems.some(item => item.type === 'empty')) {
-    // Empty-feed branch: no committed entries yet AND no live
-    // semantic turn. Show the WorkIndicator if the stream phase is
-    // non-idle — the placeholder-only render used to swallow
-    // the indicator during `submitting` / `requesting` / early
-    // `thinking`, so a fresh submit looked like a silent stall
-    // until the first delta landed. Reuse the same positioning the
-    // non-empty branch uses (WorkIndicator at the natural
-    // composer-adjacent bottom), wrapped here in a column flex so
-    // the placeholder text stays centered above it when idle.
-    return (
-      <div className="h-full flex flex-col">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-muted text-[12px]">
-            {provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'}
-          </div>
-        </div>
-        {shouldShowWorkIndicator && (
-          <div className="flex-shrink-0 px-8 pb-6">
-            <WorkIndicator
-              phase={streamPhase}
-              toolName={streamPhasePendingToolName}
-              toolHint={toolHintFromTurn(semanticTurn, streamPhasePendingToolUseId)}
-              turnStartedAt={turnStartedAt}
-            />
-          </div>
-        )}
-      </div>
-    )
   }
 
   return (
@@ -911,7 +895,7 @@ function FeedImpl({
           onUserEngagement?.()
         }}
       >
-        <div className="max-w-[880px] mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
+        <div className="max-w-[880px] min-h-full mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
           {/* ONE owner rule for every visible feed surface.
            *
            * The old JSX rendered separate buckets in a fixed order:

@@ -20,7 +20,7 @@ This note is scoped to the current Agent Code renderer as inspected in the `code
 - Archived and current semantic turns from `runtime.semantic.history` and `runtime.semantic.currentTurn`.
 - Work indicator state from `runtime.streamPhase`.
 
-`Feed` then computes `visibleDecisions`, `renderedSemanticHistory`, `renderedSemanticTurn`, `renderedRows`, and emits RENDER feed-debug entries of kind `visible_rows`.
+`Feed` then computes one ordered transcript item list plus `visibleDecisions`, derives `renderedRows`, and emits RENDER feed-debug entries of kind `visible_rows`. `QueueStrip` is intentionally outside that transcript model; debug bundles should report it as pane-level pending input, not as a Feed row.
 
 ## How prompts should enter the new renderer
 
