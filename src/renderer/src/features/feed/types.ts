@@ -36,6 +36,13 @@ export type DebugVisibleRow = {
   key: string
   slot: 'entry' | 'semantic' | 'work' | 'empty'
   label: string
+  itemType?: string
+  order?: {
+    phase: 'empty' | 'content' | 'work'
+    timeMs: number | null
+    sequence: number
+    source: string
+  }
 }
 
 // ---------------------------------------------------------------------------

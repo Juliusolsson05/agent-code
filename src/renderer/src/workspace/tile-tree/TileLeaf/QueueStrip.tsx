@@ -1,22 +1,12 @@
-import type { QueuedMessage } from '@renderer/workspace/workspaceStore'
+import type { QueuedMessage } from '@renderer/workspace/workspaceState'
 
-// Pending queue strip. Renders only when CC's internal message
-// queue has items — i.e. the user submitted prompts while CC
-// was still generating a previous turn. Lives between Feed and
-// composer so it sits in the natural "about to happen" region
-// of the screen, and so the user can see their queued text
-// without it getting mixed into the feed proper (where it
-// would show as either phantom future user rows or as real
-// rows that then duplicate themselves when the actual user
-// entry materializes in the transcript).
-//
-// Feature-gated on queuedMessages.length so the strip is
-// zero-DOM when nothing is queued — no layout shift for the
-// common path. The caller does the length check before
-// rendering this component so early-return here would be
-// redundant; we still guard because QueueStrip might be called
-// directly by a future surface (debug view, storybook) where
-// the caller forgets.
+// Pending queue strip. Renders only when the provider's local queue
+// has items: prompts accepted while the agent is still generating a
+// previous turn. This intentionally lives outside the scrollable
+// transcript Feed. A queued prompt is pending input, not durable
+// conversation history; painting it as a Feed row makes the UI look
+// like a strange half-sent user message and was the failure captured
+// in the 2026-05-20 "COMPLETELY FUCKED UI" manual debug bundle.
 export function QueueStrip({
   queuedMessages,
 }: {
