@@ -335,10 +335,17 @@ function orchestrationVisibleEntries(
   ) {
     return runtime.entries
   }
-  const bootstrapIndex = lastIndexWhere(runtime.entries, entry =>
-    entry.type === 'user' &&
-    entryTextContent(entry).includes('<orchestration-handoff>'),
-  )
+  const bootstrapIndex = lastIndexWhere(runtime.entries, entry => {
+    if (entry.type !== 'user') return false
+    const text = entryTextContent(entry)
+    // WHY this cannot assume every user entry has text:
+    // provider transcripts also represent tool-result and other structured
+    // user-role payloads as `type: "user"`. Orchestration reads scan
+    // backwards through the duplicated transcript, so one structured user
+    // entry after the bootstrap marker used to crash `.includes()` before the
+    // parent could read, list, or wait on an otherwise healthy child.
+    return text?.includes('<orchestration-handoff>') === true
+  })
   if (bootstrapIndex < 0) return runtime.entries
   return runtime.entries.slice(bootstrapIndex)
 }
