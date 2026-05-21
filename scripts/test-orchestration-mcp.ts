@@ -374,21 +374,10 @@ const nestedInheritedRuntime = {
 {
   const prompt = buildOrchestrationBootstrapPrompt({
     task: 'Review the provider runtime contract.',
-    inheritedParentContext: true,
   })
 
   assert.match(prompt, /orchestrated child agent/)
-  assert.match(prompt, /duplicated copy of your parent agent transcript/)
-  assert.match(prompt, /Do not continue acting as the parent agent/)
+  assert.match(prompt, /clean conversation/)
+  assert.match(prompt, /inherited parent transcript context is temporarily disabled/)
   assert.match(prompt, /Review the provider runtime contract/)
-}
-
-{
-  const prompt = buildOrchestrationBootstrapPrompt({
-    task: 'Review the provider runtime contract.',
-    inheritedParentContext: false,
-  })
-
-  assert.match(prompt, /could not provide a duplicated transcript context/)
-  assert.doesNotMatch(prompt, /You were started from a duplicated copy/)
 }

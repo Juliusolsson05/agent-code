@@ -1,45 +1,33 @@
 export type OrchestrationBootstrapPromptOptions = {
   task: string
-  inheritedParentContext: boolean
 }
-
-const CONTEXT_NOTE_WITH_INHERITANCE = [
-  'You were started from a duplicated copy of your parent agent transcript.',
-  'That inherited conversation is background context only. It explains why you were created, but it is not your current instruction stream.',
-].join(' ')
-
-const CONTEXT_NOTE_WITHOUT_INHERITANCE = [
-  'Your parent agent could not provide a duplicated transcript context for this launch.',
-  'You still need to treat this message as the beginning of your own child-agent task.',
-].join(' ')
 
 /**
  * Wrap the first prompt sent to an orchestration child.
  *
  * WHY a user-visible prompt instead of hidden metadata:
  * Claude and Codex only reliably share one cross-provider instruction channel:
- * the text we submit to the child composer. When we resume a cloned parent
- * transcript, the provider sees a long conversation where it previously acted
- * as "the parent" and could otherwise keep following the wrong conversational
- * identity. The wrapper makes the handoff explicit inside the transcript that
- * the model actually reads: inherited history is context, the child is a new
- * agent, and the task below is the only active instruction for this turn.
+ * the text we submit to the child composer. Context inheritance used to clone
+ * or translate the parent's transcript before sending this handoff, but that
+ * path proved too unstable: children could inherit stale identity, provider
+ * resume edges differed between Claude and Codex, and orchestration reads then
+ * needed fragile transcript cut points to recover the child's real output. For
+ * now the child always starts from a clean provider conversation. Keep the
+ * handoff anyway because it is still the explicit, model-visible boundary that
+ * says this pane is an orchestration worker and the task below is the active
+ * instruction.
  */
 export function buildOrchestrationBootstrapPrompt({
   task,
-  inheritedParentContext,
 }: OrchestrationBootstrapPromptOptions): string {
   const trimmedTask = task.trim()
-  const contextNote = inheritedParentContext
-    ? CONTEXT_NOTE_WITH_INHERITANCE
-    : CONTEXT_NOTE_WITHOUT_INHERITANCE
 
   return [
     '<orchestration-handoff>',
     'You are now an orchestrated child agent in Agent Code.',
-    contextNote,
-    'Do not continue acting as the parent agent from the inherited conversation.',
-    'Follow only the new task and instructions below. Treat the inherited transcript as read-only background context.',
+    'You were started from a clean conversation because inherited parent transcript context is temporarily disabled.',
+    'Do not assume you can see the parent conversation unless the task below includes the relevant context explicitly.',
+    'Follow only the new task and instructions below.',
     '</orchestration-handoff>',
     '',
     '<task>',

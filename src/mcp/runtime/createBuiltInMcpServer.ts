@@ -410,8 +410,7 @@ function registerOrchestrationTools(
         [
           'Creates a distinct Agent Code orchestration child agent in Dispatch, optionally bootstrapped with an initial prompt.',
           'Use this only when the user explicitly asks for delegated, parallel, or orchestrated agent work.',
-          'By default the child starts from a duplicated or translated copy of this parent agent transcript so it can use the conversation as background context without appending to the parent transcript.',
-          'Set inheritParentContext to false only when the child should start from a clean provider conversation.',
+          'The child currently starts from a clean provider conversation; include any necessary parent context directly in the prompt.',
         ].join(' '),
       inputSchema: {
         kind: z.enum(['claude', 'codex']).default('claude'),
@@ -422,9 +421,9 @@ function registerOrchestrationTools(
         runId: z.string().optional(),
         inheritParentContext: z.boolean().optional().describe(
           [
-            'Defaults to true.',
-            'When true, Agent Code duplicates or translates the parent provider transcript before spawning the child, giving the child read-only background context from the parent conversation while keeping its future messages in a separate transcript.',
-            'Leave this enabled for normal orchestrated work; set false only when the user or task requires an isolated child with no inherited conversation context.',
+            'Temporarily ignored.',
+            'Agent Code currently disables orchestration context inheritance because transcript duplication/translation was not stable enough for production child-agent work.',
+            'Pass all required context in the prompt until the inheritance path is redesigned.',
           ].join(' '),
         ),
         builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'])).optional(),
@@ -448,14 +447,17 @@ function registerOrchestrationTools(
         title: args.title,
         role: args.role,
         runId: args.runId,
-        inheritParentContext: args.inheritParentContext,
+        // WHY force clean children even if an older tool caller passes true:
+        // the inheritance implementation is intentionally disabled in this PR.
+        // Keeping the schema field avoids breaking stale provider tool caches,
+        // but honoring it would re-enable the broken clone/translate path.
+        inheritParentContext: false,
         builtInMcpDomains: args.builtInMcpDomains as BuiltInMcpDomain[] | undefined,
       })
 
       if (args.prompt && args.prompt.trim().length > 0) {
         const prompt = buildOrchestrationBootstrapPrompt({
           task: args.prompt,
-          inheritedParentContext: agent.inheritedParentContext === true,
         })
         const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, prompt)
         if (!delivery.ok) {
@@ -560,7 +562,6 @@ function registerOrchestrationTools(
       const prompt = shouldWrap
         ? buildOrchestrationBootstrapPrompt({
             task: args.prompt.trim(),
-            inheritedParentContext: output.agent.inheritedParentContext === true,
           })
         : args.prompt.trim()
       const delivery = await submitPrompt(manager, args.sessionId, kind, prompt)
