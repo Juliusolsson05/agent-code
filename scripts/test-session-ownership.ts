@@ -7,6 +7,7 @@ import {
   pickOwnedSessions,
   pruneSessionOwnership,
 } from '../src/renderer/src/workspace/sessionOwnership'
+import { remapSessionMetaRelationships } from '../src/renderer/src/workspace/hook/persistence/rehydrate'
 import type {
   BuriedPaneRecord,
   DetachedSessionRecord,
@@ -177,4 +178,85 @@ const sessions: Record<string, SessionMeta> = {
     'missing-detached-meta',
     'stale-a',
   ])
+}
+
+// WHY this block exists:
+//
+// The first fix shipped a hibernated-spawn cut but kept
+// remapSessionMetaRelationships using a strict idMap.get(...) lookup with no
+// fallback. Two hibernated sessions in a parent/child orchestration tree
+// would both survive rehydrate (their metadata round-trips under the
+// original sessionId), but the link BETWEEN them would silently disappear
+// because neither endpoint is in idMap. After wake-on-attach lands, that
+// shows up as orphaned children rendering as top-level rows.
+//
+// The asserts below pin the contract:
+//   1. spawned->spawned: remap through idMap (existing behavior).
+//   2. hibernated->hibernated: preserved via the original id when the
+//      endpoint is listed in knownSessionIds.
+//   3. hibernated->vanished: dropped (endpoint not in idMap NOR
+//      knownSessionIds) — keeps the "honest state" invariant.
+//   4. No knownSessionIds passed (back-compat): old strict behavior.
+{
+  const childMeta: SessionMeta = {
+    cwd: '/child',
+    kind: 'claude',
+    providerSessionId: 'child-provider',
+    linkedParentId: 'parent-old',
+    orchestrationParentId: 'parent-old',
+    orchestrationRootId: 'root-old',
+  }
+
+  // Case 1: spawned parent, spawned child. idMap maps both old ids forward.
+  const idMapSpawned = new Map<string, string>([
+    ['parent-old', 'parent-new'],
+    ['root-old', 'root-new'],
+  ])
+  const knownAfterSpawn = new Set(['parent-new', 'root-new'])
+  const remappedSpawned = remapSessionMetaRelationships(
+    childMeta,
+    idMapSpawned,
+    knownAfterSpawn,
+  )
+  assert.equal(remappedSpawned.linkedParentId, 'parent-new')
+  assert.equal(remappedSpawned.orchestrationParentId, 'parent-new')
+  assert.equal(remappedSpawned.orchestrationRootId, 'root-new')
+
+  // Case 2: hibernated parent, hibernated child. Empty idMap, but parent/root
+  // are still in knownSessionIds (under their original ids).
+  const idMapHibernated = new Map<string, string>()
+  const knownHibernated = new Set(['parent-old', 'root-old'])
+  const remappedHibernated = remapSessionMetaRelationships(
+    childMeta,
+    idMapHibernated,
+    knownHibernated,
+  )
+  assert.equal(remappedHibernated.linkedParentId, 'parent-old')
+  assert.equal(remappedHibernated.orchestrationParentId, 'parent-old')
+  assert.equal(remappedHibernated.orchestrationRootId, 'root-old')
+
+  // Case 3: parent vanished entirely (not in idMap, not in knownSessionIds).
+  // The link is dropped — the relationship endpoint is gone and pretending
+  // otherwise would resurrect a dead pointer.
+  const remappedOrphaned = remapSessionMetaRelationships(
+    childMeta,
+    new Map(),
+    new Set(),
+  )
+  assert.equal(remappedOrphaned.linkedParentId, undefined)
+  assert.equal(remappedOrphaned.orchestrationParentId, undefined)
+  assert.equal(remappedOrphaned.orchestrationRootId, undefined)
+
+  // Case 4: back-compat — calling without knownSessionIds preserves the
+  // strict pre-PR behavior (drop when not in idMap). Important so any future
+  // caller outside rehydrate keeps the explicit-opt-in shape.
+  const remappedNoKnown = remapSessionMetaRelationships(childMeta, idMapSpawned)
+  assert.equal(remappedNoKnown.linkedParentId, 'parent-new')
+  assert.equal(remappedNoKnown.orchestrationParentId, 'parent-new')
+  assert.equal(remappedNoKnown.orchestrationRootId, 'root-new')
+
+  const remappedNoKnownEmpty = remapSessionMetaRelationships(childMeta, new Map())
+  assert.equal(remappedNoKnownEmpty.linkedParentId, undefined)
+  assert.equal(remappedNoKnownEmpty.orchestrationParentId, undefined)
+  assert.equal(remappedNoKnownEmpty.orchestrationRootId, undefined)
 }

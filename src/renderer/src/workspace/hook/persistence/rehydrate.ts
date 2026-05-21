@@ -194,7 +194,16 @@ export async function rehydrateWorkspace(
     const remapped: SessionId[] = []
     const seen = new Set<SessionId>()
     for (const oldId of ids) {
-      const mapped = idMap.get(oldId)
+      // WHY fall back to the original id when not in idMap:
+      //
+      // Same pattern as buildRemappedDetachedSessions / buildRemappedBuried.
+      // Hibernated sessions are seeded into freshSessions under their original
+      // persisted id and never get an idMap entry. A pin pointing at a parked
+      // dispatch agent is durable user state — dropping it on every restart
+      // (pre-fix behavior) silently emptied the Pinned section after each
+      // detach. If the target didn't survive at all (orphaned pin), the
+      // freshSessions guard keeps us honest by still dropping it.
+      const mapped = idMap.get(oldId) ?? (freshSessions[oldId] ? oldId : undefined)
       if (!mapped) continue
       if (seen.has(mapped)) continue
       seen.add(mapped)
@@ -241,8 +250,16 @@ export async function rehydrateWorkspace(
     // commit lets relationships appear as soon as both endpoints have fresh
     // ids, while partial states avoid stale pre-restart pointers.
     const out: Record<SessionId, SessionMeta> = {}
+    // WHY pass the freshSessions key set as `knownSessionIds`:
+    //
+    // remapSessionMetaRelationships needs to know which ids survived this
+    // rehydrate so it can preserve hibernated->hibernated links. Spawned
+    // sessions appear under their new id; hibernated sessions appear under
+    // their original id. Either form is "still known" — the union is the
+    // freshSessions key set computed right here.
+    const knownSessionIds = new Set<SessionId>(Object.keys(freshSessions))
     for (const [sessionId, meta] of Object.entries(freshSessions)) {
-      out[sessionId] = remapSessionMetaRelationships(meta, idMap)
+      out[sessionId] = remapSessionMetaRelationships(meta, idMap, knownSessionIds)
     }
     return out
   }
@@ -512,31 +529,48 @@ export async function rehydrateWorkspace(
 export function remapSessionMetaRelationships(
   meta: SessionMeta,
   idMap: Map<SessionId, SessionId>,
+  knownSessionIds: Set<SessionId> = new Set(),
 ): SessionMeta {
   // WHY these SessionMeta fields need the same old->new remap as tile leaves:
   //
   // Agent Code SessionIds are launch-local routing ids. Rehydrate respawns
-  // every backend process, so every persisted reference to another session must
-  // cross the idMap boundary. Tile leaves, detached records, buried records,
-  // pins, and Dispatch focus already do this. `linkedParentId`,
+  // live backend processes, so every persisted reference to another session
+  // must cross the idMap boundary. Tile leaves, detached records, buried
+  // records, pins, and Dispatch focus already do this. `linkedParentId`,
   // `orchestrationParentId`, and `orchestrationRootId` are the same kind of
   // relationship pointer; leaving them untouched makes restored child agents
   // render as top-level rows and breaks parent-scoped orchestration MCP reads.
-  // If the referenced parent/root failed to respawn, omitting the field is the
-  // honest state: the child survived, but the relationship endpoint did not.
+  //
+  // WHY the fallback to the original id when no idMap entry exists:
+  //
+  // Hibernated sessions (detached + buried) intentionally do not respawn during
+  // rehydrate, so they never appear in idMap. Their metadata is still seeded
+  // into `freshSessions` under the original persisted id (no fresh routing id
+  // is needed because no process was created). A hibernated → hibernated
+  // relationship link must therefore resolve via "is this endpoint still
+  // known?" rather than "is it in idMap?". `knownSessionIds` is the set of
+  // every sessionId that survived this rehydrate — both spawned (new ids) and
+  // hibernated (original ids). If the endpoint survived under either label,
+  // the link is honest; if it survived under no label, omitting the field is
+  // the correct honest state (the relationship endpoint is gone).
+  //
+  // Backward compatibility: knownSessionIds is optional so non-rehydrate
+  // callers (if any) get the old "idMap or drop" behavior without surprise.
+  const remap = (id?: SessionId): SessionId | undefined => {
+    if (!id) return undefined
+    const mapped = idMap.get(id)
+    if (mapped) return mapped
+    return knownSessionIds.has(id) ? id : undefined
+  }
   const {
     linkedParentId,
     orchestrationParentId,
     orchestrationRootId,
     ...rest
   } = meta
-  const remappedLinkedParentId = linkedParentId ? idMap.get(linkedParentId) : undefined
-  const remappedOrchestrationParentId = orchestrationParentId
-    ? idMap.get(orchestrationParentId)
-    : undefined
-  const remappedOrchestrationRootId = orchestrationRootId
-    ? idMap.get(orchestrationRootId)
-    : undefined
+  const remappedLinkedParentId = remap(linkedParentId)
+  const remappedOrchestrationParentId = remap(orchestrationParentId)
+  const remappedOrchestrationRootId = remap(orchestrationRootId)
 
   return {
     ...rest,
