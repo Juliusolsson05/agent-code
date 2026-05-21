@@ -21,6 +21,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import {
+  collectLiveProcessIds,
   collectOwnedSessionIds,
   collectUnownedSessionIds,
   pickOwnedSessions,
@@ -476,7 +477,7 @@ export function useSessionActions(
   const reloadAgentSessions = useCallback(
     async (dangerousMode = refs.dangerousAgentsRef.current) => {
       const current = refs.stateRef.current
-      const ownedIds = collectOwnedSessionIds(current)
+      const liveProcessIds = collectLiveProcessIds(current)
       const staleIds = collectUnownedSessionIds(current)
       if (staleIds.length > 0) {
         // WHY reload prunes but does not kill unowned ids directly:
@@ -491,8 +492,20 @@ export function useSessionActions(
         // eslint-disable-next-line no-console
         console.warn('[workspace] dropping unowned sessions during agent reload:', staleIds)
       }
+      // WHY filter by liveProcessIds, not ownedIds (mirrors the rehydrate fix):
+      //
+      // After the rehydrate live-vs-owned split, hibernated dispatch agents
+      // (entries in `state.sessions` whose ids are NOT in any tile leaf) have
+      // no PTY, no mitmdump, and no provider process to reload. Toggling
+      // dangerous mode while parked agents exist used to call killSession +
+      // spawnSession on every one of them, which re-introduced the original
+      // fork-bomb in a different code path: a single mode toggle would
+      // resurrect N hibernated agents as live processes. liveProcessIds
+      // restricts the reload to tile-leaf sessions actually exposed to the
+      // user; hibernated agents pick up the new dangerous-mode setting when
+      // the wake-on-attach UI later spawns them.
       const agentEntries = Object.entries(current.sessions).filter(([id, meta]) => {
-        if (!ownedIds.has(id)) return false
+        if (!liveProcessIds.has(id)) return false
         const kind = meta.kind ?? 'claude'
         return kind === 'claude' || kind === 'codex'
       })
