@@ -9,7 +9,11 @@ This note describes the renderer as it exists in the production Feed path:
 - `src/renderer/src/features/feed/ui/markdown/*`
 - `src/renderer/src/features/feed/scroll.ts`
 
-The key finding: Feed already has many local duplicate guards, but it does not yet have one explicit, first-principles “visible render units” owner. React currently receives committed transcript entries, archived semantic turns, the current semantic turn, and a work indicator as adjacent JSX branches. That split is workable but makes duplicate and missing-row behavior depend on scattered suppression rules.
+The key finding: Feed now has one explicit transcript render owner. React receives
+one ordered `FeedRenderItem[]` for committed transcript entries, archived semantic
+turns, the current semantic turn, the work indicator, and empty transcript state.
+Pending queued prompts are intentionally not Feed rows; they are pane-level
+pending input and render next to the composer.
 
 ## Current Top-Level Render Order
 
@@ -20,43 +24,19 @@ The key finding: Feed already has many local duplicate guards, but it does not y
    - `toolUseIndex`: `tool_use.id -> ToolUseBlock`
    - `toolResultIndex`: `tool_use_id -> ToolResultBlock`
 3. Filter archived semantic turns at turn level for Claude only.
-4. Render committed visible entries.
-5. Render archived semantic history turns.
-6. Render the current semantic turn.
-7. Render `WorkIndicator`.
-8. Render the bottom sentinel.
+4. Build one ordered `FeedRenderItem[]`.
+5. Render the item list once.
+6. Render the bottom sentinel.
 
-The JSX order in the non-empty branch is:
+The JSX shape is:
 
 ```tsx
-visible.map(entry => (
-  <div key={entry.uuid ?? `i${i}`}>
-    <LazyEntry>
-      <EntryRow entry={entry} />
-    </LazyEntry>
-  </div>
-))
-
-renderedSemanticHistory.map(turn => (
-  <SemanticStreamingTurn
-    key={`semantic-history:${turn.turnId}`}
-    turn={turn}
-    committedEntries={entries}
-  />
-))
-
-renderedSemanticTurn != null && (
-  <SemanticStreamingTurn
-    turn={renderedSemanticTurn}
-    committedEntries={entries}
-  />
-)
-
-<WorkIndicator ... />
+renderItems.map(renderFeedItem)
 <div ref={endRef} />
 ```
 
-The empty branch is separate: when there are no visible committed entries and no semantic streaming, Feed returns a centered `waiting for ...` placeholder plus a bottom `WorkIndicator` if `streamPhase !== 'idle'`.
+The old empty branch was deleted. Empty state and work now both render through
+the same item list.
 
 ## Current Keys
 
@@ -69,7 +49,7 @@ Committed entry rows use:
 Semantic rows use:
 
 - Archived turn JSX key: `semantic-history:${turn.turnId}`.
-- Current turn JSX has no explicit key because it is a single conditional child.
+- Current turn JSX key: `semantic:${turn.turnId}`.
 - Semantic render-unit keys:
   - Collapsed activity: `collapsed:${unit.blockIndices.join(',')}`.
   - Block row: `unit.block.blockIndex`.
@@ -238,12 +218,11 @@ Work indicator suppression:
 
 ## Where Duplicates Arise
 
-The structural duplicate risk is that there are two live-ish surfaces after the committed rows:
-
-- `renderedSemanticHistory`
-- `renderedSemanticTurn`
-
-Both are rendered after all committed entries, not interleaved at the location where their durable entry will eventually land. That means any missed suppression appears as a bottom-of-feed duplicate, even if the committed owner is already above.
+The old structural duplicate risk was separate JSX buckets for committed rows,
+archived semantic rows, current semantic rows, and work. Feed no longer mounts
+those buckets independently; it renders one ordered item list. Remaining duplicate
+risk now lives inside ownership suppression before items are created and inside
+semantic render-unit suppression after an item is selected.
 
 Known duplicate classes:
 
@@ -417,4 +396,3 @@ The debug `renderedRows` array should come from this same render plan, not from 
 The most important invariant for the new model:
 
 > A user-visible artifact is rendered by exactly one owner. If ownership changes from semantic to committed, the semantic unit is suppressed with a reason before React sees it.
-

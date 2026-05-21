@@ -219,6 +219,18 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
 // contract executable without needing a browser, markdown rendering,
 // IntersectionObserver, or scroll timing in the loop.
 
+function itemTypes(model: ReturnType<typeof deriveFeedRenderModel>): string[] {
+  return model.items.map(item => item.type)
+}
+
+function itemCount(model: ReturnType<typeof deriveFeedRenderModel>, type: string): number {
+  return model.items.filter(item => item.type === type).length
+}
+
+function hasItem(model: ReturnType<typeof deriveFeedRenderModel>, type: string): boolean {
+  return model.items.some(item => item.type === type)
+}
+
 {
   const entries = [
     userEntry('u1', 'visible user'),
@@ -247,7 +259,7 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
     ],
     'committed visibility must hide meta/system noise without hiding real conversation rows',
   )
-  assert.equal(model.visibleEntries.length, 2)
+  assert.equal(itemCount(model, 'entry'), 2)
   assert.deepEqual(
     model.debugRows.map(row => row.slot),
     ['entry', 'entry'],
@@ -267,7 +279,7 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticHistory.length,
+    itemCount(model, 'semantic-history'),
     0,
     'Claude committed message id must suppress the archived semantic copy of that same turn',
   )
@@ -290,7 +302,7 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticHistory.length,
+    itemCount(model, 'semantic-history'),
     1,
     'hidden/non-assistant message ids must not suppress semantic history they do not visibly own',
   )
@@ -308,8 +320,8 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticTurn,
-    null,
+    hasItem(model, 'semantic-current'),
+    false,
     'current semantic turn must disappear from the render model when all of its units are committed duplicates',
   )
   assert.deepEqual(
@@ -364,7 +376,7 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticHistory.length,
+    itemCount(model, 'semantic-history'),
     0,
     'archived text-only rollout turns must suppress once committed text owns the same rendered message',
   )
@@ -397,7 +409,7 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticHistory.length,
+    itemCount(model, 'semantic-history'),
     0,
     'visible committed assistant text without message.id must still own and suppress the same rollout history text',
   )
@@ -430,7 +442,7 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticHistory.length,
+    itemCount(model, 'semantic-history'),
     1,
     'Codex committed rollout items must not suppress a whole semantic turn by broad codexTurnId',
   )
@@ -457,8 +469,8 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticTurn,
-    null,
+    hasItem(model, 'semantic-current'),
+    false,
     'committed tool_use ownership must suppress a live semantic turn whose only unit is that committed tool',
   )
   assert.deepEqual(
@@ -484,9 +496,9 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
     committedToolResultIndex: new Map(),
   })
 
-  assert.notEqual(
-    model.renderedSemanticTurn,
-    null,
+  assert.equal(
+    hasItem(model, 'semantic-current'),
+    true,
     'committed tool_use alone must not hide live tool output before the committed tool_result lands',
   )
   assert.deepEqual(
@@ -516,8 +528,8 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticTurn,
-    null,
+    hasItem(model, 'semantic-current'),
+    false,
     'committed tool_result ownership must suppress the duplicate live output block',
   )
   assert.deepEqual(
@@ -539,8 +551,8 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticTurn,
-    null,
+    hasItem(model, 'semantic-current'),
+    false,
     'empty write_stdin must not count as renderable semantic content when the row renderer paints null',
   )
   assert.deepEqual(
@@ -561,9 +573,9 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
     streamPhasePendingToolUseId: 'stdin-call',
   })
 
-  assert.notEqual(
-    model.renderedSemanticTurn,
-    null,
+  assert.equal(
+    hasItem(model, 'semantic-current'),
+    true,
     'non-empty write_stdin must still render as live semantic tool content',
   )
 }
@@ -581,11 +593,11 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticHistory.length,
+    itemCount(model, 'semantic-history'),
     0,
     'semantic history must defensively drop the current turn id so history/current cannot double-own one turn',
   )
-  assert.notEqual(model.renderedSemanticTurn, null)
+  assert.equal(hasItem(model, 'semantic-current'), true)
 }
 
 {
@@ -705,7 +717,7 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
   })
 
   assert.equal(
-    model.renderedSemanticHistory.length,
+    itemCount(model, 'semantic-history'),
     0,
     'committed web_search tool_use plus committed answer text must suppress the archived proxy web-search turn',
   )
@@ -727,7 +739,7 @@ function webSearchHistoryTurn(turnId: string, itemId: string, answerText: string
     streamPhasePendingToolUseId: null,
   })
 
-  assert.equal(model.shouldShowWorkIndicator, true)
+  assert.equal(hasItem(model, 'work'), true)
   assert.deepEqual(
     model.debugRows.map(row => row.slot),
     ['empty', 'work'],

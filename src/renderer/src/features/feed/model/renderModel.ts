@@ -50,11 +50,6 @@ export type FeedCommittedProjection = {
 export type FeedRenderModel = {
   items: FeedRenderItem[]
   visibleDecisions: VisibleDecision[]
-  visibleEntries: Entry[]
-  renderedSemanticHistory: SemanticLiveTurn[]
-  renderedSemanticTurn: SemanticLiveTurn | null
-  hasSemanticStreaming: boolean
-  shouldShowWorkIndicator: boolean
   debugRows: DebugVisibleRow[]
 }
 
@@ -278,7 +273,6 @@ export function deriveFeedRenderModel({
   const projection = committed ?? deriveFeedCommittedProjection(entries ?? [])
   const {
     visibleDecisions,
-    visibleEntries,
     committedClaudeMessageTurnIds,
     committedAssistantText,
   } = projection
@@ -316,8 +310,6 @@ export function deriveFeedRenderModel({
     )
       ? semanticTurn
       : null
-  const hasSemanticStreaming =
-    renderedSemanticTurn !== null || renderedSemanticHistory.length > 0
   const shouldShowWorkIndicator = streamPhase !== 'idle'
 
   const unsortedItems: FeedRenderItem[] = []
@@ -420,11 +412,6 @@ export function deriveFeedRenderModel({
   return {
     items,
     visibleDecisions,
-    visibleEntries,
-    renderedSemanticHistory,
-    renderedSemanticTurn,
-    hasSemanticStreaming,
-    shouldShowWorkIndicator,
     debugRows,
   }
 }
