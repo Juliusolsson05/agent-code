@@ -414,63 +414,46 @@ export function usePaneActions(
       }
 
       const cwd = params.cwd ?? rootParentMeta.cwd
-      let resumeSessionId: string | undefined
-      let inheritedParentProviderSessionId: string | undefined
-      let inheritedProviderSessionId: string | undefined
+      const resumeSessionId: string | undefined = undefined
 
-      if (
-        params.inheritParentContext !== false &&
-        (parentMeta.kind === 'claude' || parentMeta.kind === 'codex') &&
-        parentMeta.providerSessionId
-      ) {
-        try {
-          // WHY duplicate before spawn:
-          // orchestration children need the parent's conversation as background,
-          // but resuming the parent's real provider session would make two live
-          // processes append to the same transcript. Same-provider children use
-          // `duplicateSession`; cross-provider children use the existing
-          // transcript translation path. Both produce a fresh provider transcript
-          // id and leave the original parent transcript untouched.
-          //
-          // WHY source/target cwd are separate:
-          // Claude stores transcripts under a project-dir derived from cwd. An
-          // orchestration caller can create a child in a different cwd than the
-          // parent, so the clone must READ from the parent's project directory
-          // and WRITE into the child's project directory. Passing one cwd worked
-          // for same-project children but made cross-cwd inherited resumes point
-          // at a file Claude could not find.
-          if (parentMeta.kind === params.kind) {
-            const duplicate = await window.api.duplicateSession({
-              provider: parentMeta.kind,
-              sourceProviderSessionId: parentMeta.providerSessionId,
-              cwd,
-              sourceCwd: parentMeta.cwd,
-              targetCwd: cwd,
-            })
-            resumeSessionId = duplicate.newProviderSessionId
-          } else {
-            const switched = await window.api.switchProvider({
-              sourceKind: parentMeta.kind,
-              sourceProviderSessionId: parentMeta.providerSessionId,
-              cwd,
-              sourceCwd: parentMeta.cwd,
-              targetCwd: cwd,
-            })
-            resumeSessionId = switched.targetProviderSessionId
-          }
-          inheritedParentProviderSessionId = parentMeta.providerSessionId
-          inheritedProviderSessionId = resumeSessionId
-        } catch (err) {
-          // WHY failed inheritance degrades to a clean child:
-          // orchestration is primarily a coordination primitive. A missing or
-          // malformed provider transcript should not block the parent from
-          // creating the worker the user asked for; it should only change the
-          // honesty of the handoff prompt. Leaving inheritedProviderSessionId
-          // unset makes the bootstrap text say no duplicated context was
-          // available, and the child still starts as an isolated agent.
-          console.warn('Failed to inherit orchestration parent context', err)
-        }
-      }
+      // WHY context inheritance is commented out instead of quietly deleted:
+      // this is the exact behavior a follow-up issue should rebuild, but the
+      // current implementation is too flawed to keep behind a tool flag. It
+      // relied on duplicating or translating the parent's provider transcript,
+      // then resuming the child from that file. In real orchestration runs that
+      // produced unstable identity, stale parent answers being reported as
+      // child output, and provider-specific race edges around cloned/resumed
+      // conversations. Until there is a more stable contract, orchestration
+      // children must start clean and the parent must put required context in
+      // the prompt it sends.
+      //
+      // Disabled implementation sketch:
+      //
+      // if (
+      //   params.inheritParentContext !== false &&
+      //   (parentMeta.kind === 'claude' || parentMeta.kind === 'codex') &&
+      //   parentMeta.providerSessionId
+      // ) {
+      //   if (parentMeta.kind === params.kind) {
+      //     const duplicate = await window.api.duplicateSession({
+      //       provider: parentMeta.kind,
+      //       sourceProviderSessionId: parentMeta.providerSessionId,
+      //       cwd,
+      //       sourceCwd: parentMeta.cwd,
+      //       targetCwd: cwd,
+      //     })
+      //     resumeSessionId = duplicate.newProviderSessionId
+      //   } else {
+      //     const switched = await window.api.switchProvider({
+      //       sourceKind: parentMeta.kind,
+      //       sourceProviderSessionId: parentMeta.providerSessionId,
+      //       cwd,
+      //       sourceCwd: parentMeta.cwd,
+      //       targetCwd: cwd,
+      //     })
+      //     resumeSessionId = switched.targetProviderSessionId
+      //   }
+      // }
 
       const sessionId = await sessionActions.spawn(cwd, {
         kind: params.kind,
@@ -487,13 +470,6 @@ export function usePaneActions(
         orchestrationRootId: rootParentId,
         ...(params.runId ? { orchestrationRunId: params.runId } : {}),
         ...(params.role ? { orchestrationRole: params.role } : {}),
-        ...(inheritedProviderSessionId
-          ? {
-              inheritedParentContext: true,
-              inheritedParentProviderSessionId,
-              inheritedProviderSessionId,
-            }
-          : {}),
       }
 
       setState(prev => {
@@ -513,13 +489,6 @@ export function usePaneActions(
               orchestrationRootId: rootParentId,
               ...(params.runId ? { orchestrationRunId: params.runId } : {}),
               ...(params.role ? { orchestrationRole: params.role } : {}),
-              ...(inheritedProviderSessionId
-                ? {
-                    inheritedParentContext: true,
-                    inheritedParentProviderSessionId,
-                    inheritedProviderSessionId,
-                  }
-                : {}),
             },
           },
           detachedSessions: {
