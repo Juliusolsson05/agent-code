@@ -7,6 +7,15 @@ release
 *.log
 .vite
 temp.txt
+
+# Vitest coverage output is intentionally local build evidence.
+# WHY this is ignored here instead of asking agents to remember `rm -rf`:
+# `npm run test:coverage` is one of the verification commands for the new test
+# stack, and it recreates this directory every time. Leaving it unignored makes
+# a successful verification look like source drift, which trains future agents
+# to either skip coverage or accidentally stage generated HTML.
+/coverage/
+
 # Scratch directory for diagnosis notes / one-off forensic dumps
 # (e.g. temp/session-respawn-oom-root-cause.md). Keep untracked so
 # investigations don't clutter the repo, but stay in the working

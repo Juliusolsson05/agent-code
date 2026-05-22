@@ -165,15 +165,22 @@ Specific invariants:
 - Codex optimistic user rows cannot be reconciled by tail position; committed user prompts can arrive after tool-result user rows.
 - Screen snapshots are debug/baseline state, not live transcript authority.
 
-## Existing Test Scripts
+## Historical Test Coverage
 
-Relevant scripts in `package.json`:
+The old `scripts/test-*.ts` runner surface has been removed by the ground-zero
+Vitest reset. The behaviors below still matter, but they must come back as
+colocated Vitest tests instead of package scripts:
 
-- `npm run test:ghost-fallback` checks the five-rule ghost render predicate, sidecar filtering, null `lastJsonlEntryAt`, and `orphanStale` reference-stable no-ops.
-- `npm run test:semantic-committed-text` checks committed assistant text suppression across the Codex proxy id vs rollout turn-id split.
-- `npm run test:session-ownership` checks visible/detached/buried session ownership and proves dispatch focus alone does not keep stale sessions alive.
-- `npm run test:work-context` and `npm run test:worktree-activity` cover adjacent work-context ingestion.
-- `npm run test:review-fixes` currently runs settings, prompt-template, and session-ownership tests only; it does not include the ghost or semantic committed-text tests.
+- ghost fallback predicate, sidecar filtering, null `lastJsonlEntryAt`, and
+  `orphanStale` reference-stable no-ops.
+- committed assistant text suppression across the Codex proxy id vs rollout
+  turn-id split.
+- visible/detached/buried session ownership, including the invariant that
+  dispatch focus alone does not keep stale sessions alive.
+- adjacent work-context and worktree-activity ingestion.
+
+Use `docs/superpowers/plans/2026-05-22-test-script-salvage-inventory.md` as the
+source of truth for what to rewrite, defer, or drop.
 
 Useful harnesses:
 

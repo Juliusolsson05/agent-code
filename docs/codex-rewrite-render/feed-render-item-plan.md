@@ -570,7 +570,9 @@ The deeper pass did not find a counterexample to the single-plan fix. It sharpen
 
 ### Tests Currently Prove The Wrong Boundary
 
-The existing regression coverage does not assert the final visual-order invariant. One test in `scripts/test-feed-render-model.ts` explicitly expects the current bad bucket order:
+The old script-based regression coverage did not assert the final visual-order
+invariant. One removed case from `scripts/test-feed-render-model.ts` explicitly
+expected the bad bucket order:
 
 ```text
 entry
