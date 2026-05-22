@@ -36,7 +36,12 @@ The first implementation pass introduces `deriveFeedRenderModel` in `src/rendere
   semantic, work, and empty rows. Queued prompts remain in `QueueStrip`
   for this branch because they are pending input, not durable transcript
   history.
-- Added `scripts/test-feed-render-model.ts` and `npm run test:feed-render-model`.
+- Historical note: this branch originally added `scripts/test-feed-render-model.ts`
+  and `npm run test:feed-render-model`. The ground-zero Vitest reset removed
+  those one-off scripts; render-model coverage should be rebuilt as colocated
+  Vitest tests under the unit/renderer projects. See
+  `docs/superpowers/plans/2026-05-22-test-script-salvage-inventory.md` for the
+  salvage map.
 
 ## Remaining Work
 
