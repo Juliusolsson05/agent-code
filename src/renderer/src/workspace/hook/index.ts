@@ -540,5 +540,11 @@ export function useWorkspace(
     pinSession: dispatchActions.pinSession,
     unpinSession: dispatchActions.unpinSession,
     setPinnedSessionIds: dispatchActions.setPinnedSessionIds,
+    enterTiledDispatch: dispatchActions.enterTiledDispatch,
+    exitTiledDispatch: dispatchActions.exitTiledDispatch,
+    setTiledLaneSession: dispatchActions.setTiledLaneSession,
+    setTiledLaneCount: dispatchActions.setTiledLaneCount,
+    setTiledFocusedLane: dispatchActions.setTiledFocusedLane,
+    setTiledRatios: dispatchActions.setTiledRatios,
   }
 }
