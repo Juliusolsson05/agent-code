@@ -94,6 +94,7 @@ type Props = {
   enterDispatchMode: () => Promise<void> | void
   enterGlobalDispatch: () => Promise<void> | void
   exitDispatchMode: () => void
+  openTiledDispatchPrompt: () => void
   openDispatchAttach: (sessionId: string) => void
   openLinkedAgent: (sessionId: string) => void
   openPinAgents: () => void
@@ -165,6 +166,7 @@ export function CommandPalette({
   enterDispatchMode,
   enterGlobalDispatch,
   exitDispatchMode,
+  openTiledDispatchPrompt,
   openDispatchAttach,
   openLinkedAgent,
   openPinAgents,
@@ -373,6 +375,7 @@ export function CommandPalette({
         enterDispatchMode,
         enterGlobalDispatch,
         exitDispatchMode,
+        openTiledDispatchPrompt,
         openDispatchAttach,
         openLinkedAgent,
         openPinAgents,
@@ -443,6 +446,7 @@ export function CommandPalette({
       enterDispatchMode,
       enterGlobalDispatch,
       exitDispatchMode,
+      openTiledDispatchPrompt,
       openDispatchAttach,
       openLinkedAgent,
       openPinAgents,

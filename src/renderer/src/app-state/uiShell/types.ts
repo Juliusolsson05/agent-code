@@ -146,4 +146,11 @@ export type UiShellState = {
    *  this comment is the single load-bearing place that decision
    *  was made. */
   dispatchListRatio: number
+  /** When true, the Tiled Dispatch tile-count prompt overlay is open.
+   *  Transient command chrome (like newAgentPlacementOpen): the chosen
+   *  count is applied immediately via workspace.enterTiledDispatch and the
+   *  flag flips back to false — nothing about the prompt itself persists.
+   *  A dedicated overlay (not a command-palette mode) keeps the numeric
+   *  input out of the palette's large mode state machine. */
+  tiledDispatchPromptOpen: boolean
 }

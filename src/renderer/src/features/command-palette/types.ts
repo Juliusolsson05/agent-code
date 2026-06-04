@@ -80,6 +80,9 @@ export type CommandContext = {
     enterDispatchMode: () => Promise<void> | void
     enterGlobalDispatch: () => Promise<void> | void
     exitDispatchMode: () => void
+    /** Open the Tiled Dispatch tile-count prompt overlay. The overlay
+     *  applies the chosen count via workspace.enterTiledDispatch. */
+    openTiledDispatchPrompt: () => void
     /** Open the placement overlay in "attach detached session to grid"
      *  mode for the given sessionId. The session must exist in
      *  workspace.state.detachedSessions; the command's `when` guard is

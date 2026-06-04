@@ -20,6 +20,7 @@ export const createUiShellSlice: StateCreator<
   debugBundleNotePrompt: null,
   viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
+  tiledDispatchPromptOpen: false,
   dispatchAttachIntent: null,
   linkedAgentParentId: null,
   gitBarOpen: false,
@@ -100,6 +101,10 @@ export const createUiShellSlice: StateCreator<
     set({ newAgentPlacementOpen: true }, false, 'uiShell/openNewAgentPlacement'),
   closeNewAgentPlacement: () =>
     set({ newAgentPlacementOpen: false }, false, 'uiShell/closeNewAgentPlacement'),
+  openTiledDispatchPrompt: () =>
+    set({ tiledDispatchPromptOpen: true }, false, 'uiShell/openTiledDispatchPrompt'),
+  closeTiledDispatchPrompt: () =>
+    set({ tiledDispatchPromptOpen: false }, false, 'uiShell/closeTiledDispatchPrompt'),
 
   openDispatchAttach: sessionId =>
     set({ dispatchAttachIntent: sessionId }, false, 'uiShell/openDispatchAttach'),
