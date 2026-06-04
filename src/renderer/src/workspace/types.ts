@@ -234,6 +234,56 @@ export type DetachedSessionRecord = {
   detachedAt: number
 }
 
+/**
+ * One lane in a Tiled Dispatch layout. lanes[0] is always the full index
+ * lane; lanes[1..] are compact mini-list + agent-view lanes.
+ */
+export type DispatchLane = {
+  /**
+   * Session shown in this lane. Undefined => empty lane (renders a
+   * lane-local "select an agent" prompt). On re-entry/rehydrate a lane
+   * whose session no longer exists is reset to undefined and re-filled
+   * from the next unclaimed visible agent.
+   *
+   * INVARIANT: a given sessionId appears in at most one lane at a time.
+   * This is what lets Tiled Dispatch reuse the single-view render path
+   * (renderWorkspaceLeaf) with ZERO session-manager changes. The only
+   * place in the codebase that assumes 1:1 view<->session is the terminal
+   * xterm attach (a Set, single attacher) and its replay buffer; the
+   * one-per-lane rule means a session is never mounted in two lanes
+   * simultaneously, so that assumption is never violated. Drop this
+   * invariant and you'd need reference-counted attach/detach in the
+   * session manager — exactly the refactor this design avoids.
+   */
+  selectedSessionId?: SessionId
+  /**
+   * RESERVED for phase-2 scroll-sync (scrolling a mini-list nudges the
+   * index lane to the same region while keeping lane 0's own highlight).
+   * Unused in v1; declared now so adding scroll-sync later does not have
+   * to reshape persisted state.
+   */
+  scrollAnchorKey?: string
+}
+
+export type TiledDispatchState = {
+  /** Tile count, clamped 1..10. lanes[0] is the index lane. */
+  lanes: DispatchLane[]
+  /**
+   * Lane index that currently owns keyboard selection (arrows / cmd+N).
+   * Switching the focused lane must never change another lane's
+   * selection — that's the whole point of per-lane independence.
+   * Defaults to 0 (the index lane).
+   */
+  focusedLane: number
+  /**
+   * Per-boundary split ratios (fraction given to the left side of each
+   * boundary). Absent => even distribution. Same clamp discipline as the
+   * grid SplitContainer. Reset to undefined on tile-count change because
+   * stale ratios sized for a different boundary count mis-lay-out lanes.
+   */
+  ratios?: number[]
+}
+
 export type DispatchModeState = {
   scope: 'project' | 'global'
   /**
@@ -244,6 +294,13 @@ export type DispatchModeState = {
    * grid in an impossible focus state.
    */
   focusedSessionId?: SessionId
+  /**
+   * Present => render the multi-lane TiledDispatchLayout instead of the
+   * classic single-agent layout. Lives inside dispatchMode (which is
+   * already persisted to workspace.json) so lanes / focusedLane / ratios
+   * survive reloads for free. Absent => classic Dispatch (unchanged).
+   */
+  tiled?: TiledDispatchState
   // HISTORICAL: a `terminalVisible: boolean` flag used to live here. It
   // was replaced by the global `settings.dispatchProjectTerminal` toggle
   // because the per-session flag re-defaulted to ON every time dispatch
