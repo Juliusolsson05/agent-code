@@ -18,6 +18,7 @@ import {
   DispatchAgentList,
   DispatchEmpty,
 } from '@renderer/workspace/dispatch/DispatchAgentList'
+import { TiledDispatchLayout } from '@renderer/workspace/dispatch/TiledDispatchLayout'
 
 type Props = {
   workspace: Workspace
@@ -25,7 +26,20 @@ type Props = {
   showWorktreeBadges: boolean
 }
 
-export function DispatchLayout({
+// The single render fork. This wrapper must call NO hooks before the
+// branch: the classic and tiled layouts run different numbers of hooks, so
+// choosing between them has to be a component swap (each child's hooks stay
+// unconditional), not an early return inside one hook-bearing component.
+// dispatchMode.tiled is the source of truth (set by enterTiledDispatch /
+// cleared by exitTiledDispatch).
+export function DispatchLayout(props: Props) {
+  if (props.workspace.state.dispatchMode?.tiled) {
+    return <TiledDispatchLayout {...props} />
+  }
+  return <ClassicDispatchLayout {...props} />
+}
+
+function ClassicDispatchLayout({
   workspace,
   showStatusMode,
   showWorktreeBadges,
