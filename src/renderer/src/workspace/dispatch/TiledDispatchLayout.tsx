@@ -16,7 +16,7 @@ import {
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
 import { claimedSessionIds } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
-import type { SessionId } from '@renderer/workspace/types'
+import type { SessionId, TabId } from '@renderer/workspace/types'
 
 type Props = {
   workspace: Workspace
@@ -59,6 +59,8 @@ function normalizedLaneWeights(ratios: number[] | undefined, laneCount: number):
   return raw.map(w => w / sum)
 }
 
+type LaneResolution = { sessionId: SessionId; tabId: TabId } | null
+
 export function TiledDispatchLayout({
   workspace,
   showStatusMode,
@@ -72,54 +74,72 @@ export function TiledDispatchLayout({
   const pinnedRows = useMemo(() => buildPinnedDispatchRows(state), [state])
   const rows = useMemo(() => buildVisibleDispatchRows(state), [state])
 
-  // sessionId -> row, so a lane can resolve its tabId (renderWorkspaceLeaf
-  // needs it) and so we can tell a live session from a dead one.
+  // sessionId -> row. A session is renderable in a lane ONLY if it appears
+  // here: this is the scope-correct source of truth for both "is it alive?"
+  // and "which tab owns it?". Using state.sessions for liveness instead
+  // would let an out-of-scope (different project) session count as live,
+  // and then resolveLane would have no row to read the tab from and would
+  // wrongly fall back to activeTabId. Keying everything off the visible
+  // rows keeps liveness and tab resolution on the same source.
   const rowBySession = useMemo(() => {
     const map = new Map<SessionId, DispatchAgentRow>()
     for (const row of rows) map.set(row.sessionId, row)
     return map
   }, [rows])
 
-  // Sanitize + auto-fill effect. Two jobs, both convergent:
-  //   1. A lane whose session died while the tiled view was dormant points
-  //      at a now-missing id. We can't render it, so overwrite it with a
-  //      live unclaimed agent (setTiledLaneSession overwrites the dead id).
-  //   2. An empty lane (no selection, or just emptied above) gets the next
-  //      available unclaimed agent so the user lands on a populated cockpit.
-  // Convergence: once every fillable lane holds a live, unique agent there
-  // is nothing to assign and the effect is a no-op. If there are more lanes
-  // than agents, the surplus lanes stay empty (render the picker prompt) and
-  // the effect still settles because no available agent remains.
-  useEffect(() => {
-    // Ids currently held by lanes that still point at a LIVE session — these
-    // are off-limits for filling other lanes (one-session-per-lane).
-    const liveClaimed = new Set<SessionId>()
-    for (const lane of lanes) {
+  // Resolve every lane to {sessionId, tabId} | null, DEDUPING as we go: a
+  // session already resolved by an earlier lane this pass yields null for
+  // the later lane. This is the render-time guarantee of the
+  // one-session-per-lane invariant — even if persisted/corrupt state ever
+  // puts the same live id in two lanes, only the first renders it; the
+  // second falls to the picker prompt and the auto-fill effect re-homes it.
+  // Doing this here (not just in reducers) means there is never a frame —
+  // including the very first render after rehydrate, before any effect — in
+  // which renderWorkspaceLeaf mounts one session twice.
+  const laneResolutions = useMemo<LaneResolution[]>(() => {
+    const used = new Set<SessionId>()
+    return lanes.map(lane => {
       const id = lane.selectedSessionId
-      if (id && state.sessions[id] !== undefined) liveClaimed.add(id)
-    }
+      if (!id) return null
+      const row = rowBySession.get(id)
+      if (!row) return null // dead, or not in the current dispatch scope
+      if (used.has(id)) return null // duplicate of an earlier lane
+      used.add(id)
+      return { sessionId: id, tabId: row.tabId }
+    })
+  }, [lanes, rowBySession])
+
+  // Auto-fill / heal effect. Any lane that did NOT resolve (empty, dead,
+  // out-of-scope, or a de-duped duplicate) is handed the next visible agent
+  // not already resolved by another lane. Convergent: once every fillable
+  // lane holds a unique, in-scope, live agent there is nothing to assign.
+  // If there are more lanes than agents the surplus stay empty (picker
+  // prompt) and the effect settles. setTiledLaneSession overwrites the
+  // lane's stale id, so this also repairs the live-duplicate case (the
+  // second lane's old id is replaced rather than left double-mounted).
+  useEffect(() => {
+    const resolvedIds = new Set<SessionId>()
+    for (const r of laneResolutions) if (r) resolvedIds.add(r.sessionId)
     const available = rows
       .map(row => row.sessionId)
-      .filter(id => !liveClaimed.has(id))
+      .filter(id => !resolvedIds.has(id))
     let cursor = 0
-    for (let i = 0; i < lanes.length; i++) {
-      const id = lanes[i].selectedSessionId
-      const isLive = id !== undefined && state.sessions[id] !== undefined
-      if (isLive) continue
-      // Lane needs a live agent; take the next available one.
-      while (cursor < available.length && liveClaimed.has(available[cursor])) cursor++
+    for (let i = 0; i < laneResolutions.length; i++) {
+      if (laneResolutions[i]) continue
       const next = available[cursor]
       if (next === undefined) break // no more agents to hand out
       cursor++
-      liveClaimed.add(next)
+      resolvedIds.add(next)
       workspace.setTiledLaneSession(i, next)
     }
-    // Depend on the session set and lane selections; both change via setState
-    // so identities are fresh when something relevant moves.
-  }, [state.sessions, lanes, rows, workspace.setTiledLaneSession])
+  }, [laneResolutions, rows, workspace.setTiledLaneSession])
 
   const indexFraction = clampIndexFraction(tiled.ratios?.[0] ?? DEFAULT_INDEX_FRACTION)
   const laneWeights = normalizedLaneWeights(tiled.ratios, lanes.length)
+
+  // lane-0 index greys out agents already shown in lanes >0 so a claimed
+  // row can't be clicked into a silent no-op (matches the mini-lists).
+  const indexClaimed = useMemo(() => claimedSessionIds(lanes, 0), [lanes])
 
   const rowRef = useRef<HTMLDivElement | null>(null)
   const laneRegionRef = useRef<HTMLDivElement | null>(null)
@@ -141,18 +161,6 @@ export function TiledDispatchLayout({
     ),
   })
 
-  // Resolve the (sessionId, tabId) a lane should render, or null if the lane
-  // is empty / its session is gone (the auto-fill effect will replace it).
-  const resolveLane = useCallback(
-    (laneIndex: number): { sessionId: SessionId; tabId: string } | null => {
-      const id = lanes[laneIndex]?.selectedSessionId
-      if (!id || state.sessions[id] === undefined) return null
-      const tabId = rowBySession.get(id)?.tabId ?? state.activeTabId
-      return { sessionId: id, tabId }
-    },
-    [lanes, rowBySession, state.activeTabId, state.sessions],
-  )
-
   return (
     <div
       ref={rowRef}
@@ -170,11 +178,12 @@ export function TiledDispatchLayout({
           pinnedRows={pinnedRows}
           activeSessionId={lanes[0]?.selectedSessionId ?? null}
           dispatchScope={state.dispatchMode?.scope === 'global' ? 'global' : 'project'}
-          focusSessionInTab={(tabId, sessionId) => {
+          focusSessionInTab={(_tabId, sessionId) => {
             workspace.setTiledLaneSession(0, sessionId)
             workspace.setTiledFocusedLane(0)
           }}
           showWorktreeBadges={showWorktreeBadges}
+          disabledSessionIds={indexClaimed}
         />
       </div>
 
@@ -188,8 +197,8 @@ export function TiledDispatchLayout({
 
       {/* Lane region: the N agent-view units share this space by weight. */}
       <div ref={laneRegionRef} className="flex-1 min-w-0 min-h-0 flex overflow-hidden">
-        {lanes.map((_, laneIndex) => {
-          const resolved = resolveLane(laneIndex)
+        {lanes.map((lane, laneIndex) => {
+          const resolved = laneResolutions[laneIndex]
           const focused = tiled.focusedLane === laneIndex
           return (
             <div
@@ -214,9 +223,10 @@ export function TiledDispatchLayout({
                 <div className="flex-shrink-0 w-[150px] min-h-0">
                   <DispatchMiniList
                     rows={rows}
-                    selectedSessionId={lanes[laneIndex].selectedSessionId}
+                    selectedSessionId={lane.selectedSessionId}
                     claimed={claimedSessionIds(lanes, laneIndex)}
                     focused={focused}
+                    laneNumber={laneIndex + 1}
                     onSelect={row => {
                       workspace.setTiledLaneSession(laneIndex, row.sessionId)
                       workspace.setTiledFocusedLane(laneIndex)
@@ -285,14 +295,15 @@ function LaneBoundary({
         let before = 0
         for (let i = 0; i < left; i++) before += laneWeights[i]
         const pairTotal = laneWeights[left] + laneWeights[right]
+        // Per-pair minimum: at high lane counts pairTotal can be below
+        // 2*LANE_MIN_FRACTION, in which case a fixed LANE_MIN_FRACTION would
+        // invert the clamp (Math.min(pairTotal-min, …) goes negative and the
+        // right lane ends up zero/negative width). Cap the min at half the
+        // pair so both sides always get a non-negative share.
+        const min = Math.min(LANE_MIN_FRACTION, pairTotal / 2)
         const pointer = (clientX - rect.left) / rect.width
-        // Desired width of the left lane within the pair, clamped so neither
-        // neighbour drops below the minimum.
         const desiredLeft = pointer - before
-        const clampedLeft = Math.max(
-          LANE_MIN_FRACTION,
-          Math.min(pairTotal - LANE_MIN_FRACTION, desiredLeft),
-        )
+        const clampedLeft = Math.max(min, Math.min(pairTotal - min, desiredLeft))
         const next = laneWeights.slice()
         next[left] = clampedLeft
         next[right] = pairTotal - clampedLeft

@@ -30,6 +30,9 @@ type Props = {
   // in the UI so the user sees why a row is unavailable before clicking.
   claimed: Set<SessionId>
   focused: boolean
+  // 1-based lane number shown in the header so a multi-lane cockpit is
+  // identifiable at a glance (which selector drives which view).
+  laneNumber: number
   onSelect: (row: DispatchAgentRow) => void
 }
 
@@ -38,6 +41,7 @@ export const DispatchMiniList = memo(function DispatchMiniList({
   selectedSessionId,
   claimed,
   focused,
+  laneNumber,
   onSelect,
 }: Props) {
   return (
@@ -48,7 +52,7 @@ export const DispatchMiniList = memo(function DispatchMiniList({
       `}
     >
       <div className="sticky top-0 z-10 border-b border-border bg-surface px-2 py-1 text-[9px] uppercase text-muted">
-        lane
+        lane {laneNumber}
       </div>
       {rows.map(row => (
         <DispatchMiniRow

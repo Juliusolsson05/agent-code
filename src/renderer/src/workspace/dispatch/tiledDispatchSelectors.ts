@@ -86,30 +86,12 @@ export function buildAutoLanes(
   return lanes
 }
 
-/**
- * Re-entry / rehydrate sanitizer: drop lane sessions that no longer exist
- * and de-duplicate. The invariant ("at most one lane per session") could
- * be violated by a hand-edited workspace.json or a session killed while
- * the tiled layout was dormant. A lane whose session is gone or duplicated
- * is reset to empty.
- *
- * WHY this is pure and does NOT auto-refill: keeping it side-effect-free
- * makes it safe to call inside selectors/memos. The layout effect decides
- * whether to refill emptied lanes — separating "make valid" from "make
- * useful" keeps each step predictable and testable by eye.
- */
-export function sanitizeLanes(
-  state: WorkspaceState,
-  lanes: DispatchLane[],
-): DispatchLane[] {
-  const seen = new Set<SessionId>()
-  return lanes.map(lane => {
-    const id = lane.selectedSessionId
-    if (!id) return lane
-    if (state.sessions[id] === undefined || seen.has(id)) {
-      return { ...lane, selectedSessionId: undefined }
-    }
-    seen.add(id)
-    return lane
-  })
-}
+// NOTE: there is deliberately no `sanitizeLanes` reducer-side helper. Stale
+// or duplicate lane state (dead session, hand-edited workspace.json,
+// corrupt rehydrate) is handled at RENDER time in TiledDispatchLayout: the
+// `laneResolutions` memo de-dups and drops dead/out-of-scope ids every
+// frame (so renderWorkspaceLeaf can never double-mount a session, even on
+// the first frame after rehydrate before effects run), and the heal effect
+// re-homes the affected lanes. A separate pure sanitizer was tried first but
+// (a) couldn't prevent the first-frame double-mount and (b) became dead
+// code the moment the render-time guard existed.

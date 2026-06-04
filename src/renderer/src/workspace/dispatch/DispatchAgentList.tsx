@@ -37,6 +37,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   dispatchScope,
   focusSessionInTab,
   showWorktreeBadges,
+  disabledSessionIds,
 }: {
   groups: ReturnType<typeof buildDispatchGroups>
   pinnedRows: DispatchAgentRow[]
@@ -44,6 +45,12 @@ export const DispatchAgentList = memo(function DispatchAgentList({
   dispatchScope: 'global' | 'project'
   focusSessionInTab: Workspace['focusSessionInTab']
   showWorktreeBadges: boolean
+  // Sessions that must render as unselectable in this index. Used by Tiled
+  // Dispatch's lane-0 index to grey out agents already shown in another lane
+  // (the one-session-per-lane invariant — without this, clicking a claimed
+  // agent looks selectable but silently no-ops in setTiledLaneSession).
+  // Undefined/absent in classic Dispatch, so its rows stay fully clickable.
+  disabledSessionIds?: Set<SessionId>
 }) {
   const listRef = useRef<HTMLElement | null>(null)
 
@@ -116,6 +123,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                 key={row.key}
                 row={row}
                 active={row.sessionId === activeSessionId}
+                disabled={disabledSessionIds?.has(row.sessionId) ?? false}
                 showWorktreeBadges={showWorktreeBadges}
                 focusSessionInTab={focusSessionInTab}
                 projectChip={`${tabIndexLabel(row.tabIndex)} · ${row.tabTitle}`}
@@ -133,6 +141,7 @@ export const DispatchAgentList = memo(function DispatchAgentList({
                 key={row.key}
                 row={row}
                 active={row.sessionId === activeSessionId}
+                disabled={disabledSessionIds?.has(row.sessionId) ?? false}
                 showWorktreeBadges={showWorktreeBadges}
                 focusSessionInTab={focusSessionInTab}
               />
@@ -174,12 +183,17 @@ const DispatchGroupHeader = memo(function DispatchGroupHeader({
 const DispatchAgentListRow = memo(function DispatchAgentListRow({
   row,
   active,
+  disabled = false,
   showWorktreeBadges,
   focusSessionInTab,
   projectChip,
 }: {
   row: DispatchAgentRow
   active: boolean
+  // When true the row is shown but unselectable (Tiled Dispatch: this agent
+  // already occupies another lane). Defaults false so classic Dispatch rows
+  // are always clickable.
+  disabled?: boolean
   showWorktreeBadges: boolean
   focusSessionInTab: (tabId: TabId, sessionId: SessionId) => void
   // Optional small label (tab letter + project title) shown next to
@@ -204,8 +218,9 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     }
   }))
   const onSelect = useCallback(() => {
+    if (disabled) return
     focusSessionInTab(row.tabId, row.sessionId)
-  }, [focusSessionInTab, row.sessionId, row.tabId])
+  }, [disabled, focusSessionInTab, row.sessionId, row.tabId])
   const isTerminal = row.kind === 'terminal'
   const activity = dispatchActivity(runtime)
   const activityClasses = dispatchActivityClasses(activity, active)
@@ -226,11 +241,13 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
     <button
       type="button"
       onClick={onSelect}
-      title={title}
+      disabled={disabled}
+      title={disabled ? 'shown in another lane' : title}
       data-dispatch-active={active ? 'true' : undefined}
       className={`
         relative flex w-full items-stretch text-left pr-2.5 border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
+        ${disabled ? 'opacity-40 cursor-not-allowed' : ''}
       `}
     >
       {/* Linked-agent indent. A linked agent (row.depth > 0) renders
