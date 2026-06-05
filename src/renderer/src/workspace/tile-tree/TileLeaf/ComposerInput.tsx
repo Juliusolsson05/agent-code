@@ -3,6 +3,7 @@ import type { MutableRefObject } from 'react'
 import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
 import type { ClaudeDraftImage, SlashPickerState } from '@renderer/workspace/workspaceState'
 import type { ComposerDictationController } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
+import { PromptSuggestionChip } from '@renderer/workspace/tile-tree/TileLeaf/PromptSuggestionChip'
 
 // Composer input — the textarea at the bottom of the pane plus its
 // two siblings: the Claude draft-images preview strip and the
@@ -42,6 +43,9 @@ export function ComposerInput({
   onHoverChange,
   removeDraftImage,
   dictation,
+  promptSuggestion,
+  onApplySuggestion,
+  onDismissSuggestion,
 }: {
   inputRef: MutableRefObject<HTMLTextAreaElement | null>
   input: string
@@ -61,6 +65,13 @@ export function ComposerInput({
   onHoverChange: (hovered: boolean) => void
   removeDraftImage: (imageId: string) => void
   dictation: ComposerDictationController
+  /** Ephemeral next-prompt suggestion text for this pane (issue #174), or
+   *  null when there is none to offer. */
+  promptSuggestion: string | null
+  /** Prefill the draft with the suggestion (and the caller clears it). */
+  onApplySuggestion: (text: string) => void
+  /** Clear the suggestion without applying. */
+  onDismissSuggestion: () => void
 }) {
   const showDictationPlaceholder = dictation.enabled && dictation.busy && input.length === 0
   const showDictationActivity = dictation.enabled && dictation.busy
@@ -75,6 +86,19 @@ export function ComposerInput({
           composer container so it floats above the input without
           shifting layout. */}
       <SlashCommandPicker state={pickerState ?? { visible: false, items: [] }} />
+
+      {/* Prompt-suggestion chip (issue #174). Sits at the very top of the
+          composer container, above the draft-images strip and the textarea,
+          so it reads as a hint attached to the input rather than a feed row.
+          Rendered only when a suggestion exists; the component itself also
+          no-ops on empty text. */}
+      {promptSuggestion ? (
+        <PromptSuggestionChip
+          text={promptSuggestion}
+          onApply={onApplySuggestion}
+          onDismiss={onDismissSuggestion}
+        />
+      ) : null}
 
       {/* The composer is a <textarea> (not <input>) so the box can
           grow vertically to fit a multi-line prompt. See
