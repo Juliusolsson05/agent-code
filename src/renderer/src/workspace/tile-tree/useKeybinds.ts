@@ -6,6 +6,7 @@ import {
   buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { claimedSessionIds } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
@@ -433,15 +434,21 @@ export function useKeybinds(
           if (digit !== null) {
             e.preventDefault()
             if (!e.repeat) {
+              // In a tiled layout cmd-N fills the FOCUSED LANE; in classic
+              // Dispatch it moves the single dispatch focus. Same row index
+              // semantics (buildVisibleDispatchRows) either way.
+              const selectRow = workspace.dispatchMode?.tiled
+                ? (index: number) => focusTiledRowByIndex(workspace, index)
+                : (index: number) => focusDispatchRowByIndex(workspace, index)
               const combined =
                 pendingDispatchDigit !== null
                   ? pendingDispatchDigit * 10 + digit
                   : null
               if (combined !== null && combined >= 10 && combined <= 99) {
-                focusDispatchRowByIndex(workspace, combined - 1)
+                selectRow(combined - 1)
                 clearPendingDispatchDigit()
               } else if (digit > 0) {
-                focusDispatchRowByIndex(workspace, digit - 1)
+                selectRow(digit - 1)
                 rememberDispatchDigit(digit)
               }
             }
@@ -490,18 +497,32 @@ export function useKeybinds(
           // them fall through would mutate or probe the hidden grid and make
           // keyboard behavior depend on stale grid focus instead of the row
           // the user actually sees highlighted.
+          // In a tiled layout the same up/down keys move the FOCUSED LANE's
+          // selection, and left/right — which are swallowed in classic
+          // Dispatch (a vertical list) — gain meaning: they switch which
+          // lane has keyboard focus. Switching lanes never changes any
+          // lane's selection, keeping lanes independent.
+          const tiled = workspace.dispatchMode?.tiled
           if (k === 'ArrowUp' || code === 'KeyK') {
             e.preventDefault()
-            moveDispatchSelection(workspace, -1)
+            if (tiled) moveTiledLaneSelection(workspace, -1)
+            else moveDispatchSelection(workspace, -1)
             return
           }
           if (k === 'ArrowDown' || code === 'KeyJ') {
             e.preventDefault()
-            moveDispatchSelection(workspace, 1)
+            if (tiled) moveTiledLaneSelection(workspace, 1)
+            else moveDispatchSelection(workspace, 1)
             return
           }
-          if (k === 'ArrowLeft' || k === 'ArrowRight' || code === 'KeyH' || code === 'KeyL') {
+          if (k === 'ArrowLeft' || code === 'KeyH') {
             e.preventDefault()
+            if (tiled) workspace.setTiledFocusedLane(tiled.focusedLane - 1)
+            return
+          }
+          if (k === 'ArrowRight' || code === 'KeyL') {
+            e.preventDefault()
+            if (tiled) workspace.setTiledFocusedLane(tiled.focusedLane + 1)
             return
           }
         }
@@ -722,6 +743,49 @@ function focusDispatchRowByIndex(workspace: Workspace, index: number) {
   const row = dispatchRows(workspace)[index]
   if (!row) return
   workspace.focusDispatchSession(row.tabId, row.sessionId)
+}
+
+// ---- Tiled Dispatch keybind helpers (issue #248) ----
+//
+// When a tiled layout is active, dispatch selection targets the FOCUSED
+// LANE rather than the single dispatch focus. These mirror the classic
+// helpers above but write through setTiledLaneSession (which enforces the
+// one-session-per-lane invariant), so cmd-N / arrows fill the focused lane.
+
+function focusedTiledLane(workspace: Workspace): number {
+  return workspace.dispatchMode?.tiled?.focusedLane ?? 0
+}
+
+function focusTiledRowByIndex(workspace: Workspace, index: number) {
+  const row = dispatchRows(workspace)[index]
+  if (!row) return
+  // No-op if the row is already shown in another lane — cmd-N on a claimed
+  // row does nothing rather than yanking it out of its current lane.
+  workspace.setTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
+}
+
+function moveTiledLaneSelection(workspace: Workspace, delta: number) {
+  const tiled = workspace.dispatchMode?.tiled
+  if (!tiled) return
+  const rows = dispatchRows(workspace)
+  if (rows.length === 0) return
+  const laneIndex = tiled.focusedLane
+  const claimed = claimedSessionIds(tiled.lanes, laneIndex)
+  const currentId = tiled.lanes[laneIndex]?.selectedSessionId
+  const currentIndex = currentId
+    ? rows.findIndex(row => row.sessionId === currentId)
+    : -1
+  // Step in `delta` direction, skipping rows already shown in other lanes,
+  // wrapping once around the list. If every other row is claimed we settle
+  // back on the current row (a reducer no-op).
+  const len = rows.length
+  for (let step = 1; step <= len; step++) {
+    const probe = (((currentIndex + delta * step) % len) + len) % len
+    const row = rows[probe]
+    if (!row || claimed.has(row.sessionId)) continue
+    workspace.setTiledLaneSession(laneIndex, row.sessionId)
+    return
+  }
 }
 
 function moveDispatchSelection(workspace: Workspace, delta: number) {

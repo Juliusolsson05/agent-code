@@ -3,6 +3,10 @@ import { useCallback, useRef } from 'react'
 import type { DispatchModeState, SessionId, SessionMeta, TabId } from '@renderer/workspace/types'
 import { collectLeaves, wrapRootWithLeaf } from '@renderer/workspace/tile-tree/treeOps'
 import { findTerminalSessionInTab } from '@renderer/workspace/dispatch/dispatchSelectors'
+import {
+  buildAutoLanes,
+  clampTileCount,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type {
   WorkspaceSetState,
   WorkspaceSetTileTabs,
@@ -27,6 +31,13 @@ export function useDispatchActions(
   pinSession: (sessionId: SessionId) => void
   unpinSession: (sessionId: SessionId) => void
   setPinnedSessionIds: (ids: SessionId[]) => void
+  // ---- Tiled Dispatch (issue #248) ----
+  enterTiledDispatch: (count: number) => Promise<void>
+  exitTiledDispatch: () => void
+  setTiledLaneSession: (laneIndex: number, sessionId: SessionId) => void
+  setTiledLaneCount: (count: number) => void
+  setTiledFocusedLane: (laneIndex: number) => void
+  setTiledRatios: (ratios: number[]) => void
 } {
   const pendingTerminalByTabRef = useRef(new Map<TabId, Promise<SessionId | null>>())
 
@@ -179,6 +190,140 @@ export function useDispatchActions(
     [setState],
   )
 
+  // ---- Tiled Dispatch reducers (issue #248) ----
+  //
+  // These all read/write `dispatchMode.tiled`. The `tiled` block being
+  // present is the single render fork (DispatchLayout renders the
+  // multi-lane layout iff it exists). Every reducer is a no-op when there
+  // is no dispatchMode/tiled, so a stray call from a stale keybind or
+  // command can never corrupt classic Dispatch. The reducers are the real
+  // guard for the one-session-per-lane invariant — the mini-list UI also
+  // greys claimed rows, but multiple write paths (click, keybind, command)
+  // reach these, so the invariant lives here rather than at each call site.
+
+  // Enter (or freshly build) a Tiled Dispatch layout. Enters Dispatch if
+  // it wasn't already on, clears tiled-tabs (mutually exclusive top-level
+  // mode), and auto-fills lanes from unclaimed visible agents so the user
+  // lands on a populated cockpit rather than N empty lanes.
+  const enterTiledDispatch = useCallback(
+    async (count: number) => {
+      closeNewAgentPlacement()
+      setState(prev => {
+        const scope = prev.dispatchMode?.scope ?? 'project'
+        const lanes = buildAutoLanes(prev, clampTileCount(count))
+        return {
+          ...prev,
+          dispatchMode: {
+            scope,
+            focusedSessionId: prev.dispatchMode?.focusedSessionId,
+            tiled: { lanes, focusedLane: 0 },
+          },
+        }
+      })
+      setTileTabs(null)
+    },
+    [closeNewAgentPlacement, setState, setTileTabs],
+  )
+
+  // Return to classic single-view Dispatch. Agents keep running — we only
+  // drop the `tiled` block. (Exiting Dispatch entirely via exitDispatchMode
+  // already drops it along with the rest of dispatchMode.)
+  const exitTiledDispatch = useCallback(() => {
+    setState(prev => {
+      if (!prev.dispatchMode?.tiled) return prev
+      const { tiled: _tiled, ...rest } = prev.dispatchMode
+      return { ...prev, dispatchMode: { ...rest } }
+    })
+  }, [setState])
+
+  // Assign a lane's agent. No-op if that session already occupies another
+  // lane (enforces one-session-per-lane). No-op for out-of-range indexes so
+  // a stale keybind targeting a since-removed lane is harmless.
+  const setTiledLaneSession = useCallback(
+    (laneIndex: number, sessionId: SessionId) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
+        const claimedElsewhere = tiled.lanes.some(
+          (lane, i) => i !== laneIndex && lane.selectedSessionId === sessionId,
+        )
+        if (claimedElsewhere) return prev
+        if (tiled.lanes[laneIndex]?.selectedSessionId === sessionId) return prev
+        const lanes = tiled.lanes.map((lane, i) =>
+          i === laneIndex ? { ...lane, selectedSessionId: sessionId } : lane,
+        )
+        return {
+          ...prev,
+          dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, lanes } },
+        }
+      })
+    },
+    [setState],
+  )
+
+  // Grow (append auto-filled lanes) or shrink (drop from the right).
+  // Surviving lanes keep their selections; never reshuffle or respawn. We
+  // reset ratios on a count change because a ratios array sized for the old
+  // boundary count would mis-lay-out the new lane set; even distribution is
+  // the safe default and the user can re-drag.
+  const setTiledLaneCount = useCallback(
+    (count: number) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const next = clampTileCount(count)
+        if (next === tiled.lanes.length) return prev
+        const lanes =
+          next < tiled.lanes.length
+            ? tiled.lanes.slice(0, next)
+            : buildAutoLanes(prev, next, tiled.lanes)
+        const focusedLane = Math.min(tiled.focusedLane, lanes.length - 1)
+        return {
+          ...prev,
+          dispatchMode: {
+            ...prev.dispatchMode!,
+            tiled: { lanes, focusedLane, ratios: undefined },
+          },
+        }
+      })
+    },
+    [setState],
+  )
+
+  // Move keyboard-selection focus between lanes. Clamped. Must never touch
+  // any lane's selection — that's what keeps lanes independent.
+  const setTiledFocusedLane = useCallback(
+    (laneIndex: number) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        const clamped = Math.max(0, Math.min(laneIndex, tiled.lanes.length - 1))
+        if (clamped === tiled.focusedLane) return prev
+        return {
+          ...prev,
+          dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, focusedLane: clamped } },
+        }
+      })
+    },
+    [setState],
+  )
+
+  // Persist resized lane-boundary ratios.
+  const setTiledRatios = useCallback(
+    (ratios: number[]) => {
+      setState(prev => {
+        const tiled = prev.dispatchMode?.tiled
+        if (!tiled) return prev
+        return {
+          ...prev,
+          dispatchMode: { ...prev.dispatchMode!, tiled: { ...tiled, ratios } },
+        }
+      })
+    },
+    [setState],
+  )
+
   // Pin reducers. Three callbacks share the same invariant:
   //   pinnedSessionIds[i] -> state.sessions[id] is an agent (not a terminal,
   //   not undefined). The reducer is defensive on top of the command-palette
@@ -264,6 +409,12 @@ export function useDispatchActions(
     pinSession,
     unpinSession,
     setPinnedSessionIds,
+    enterTiledDispatch,
+    exitTiledDispatch,
+    setTiledLaneSession,
+    setTiledLaneCount,
+    setTiledFocusedLane,
+    setTiledRatios,
   }
 }
 

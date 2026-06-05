@@ -42,6 +42,17 @@ export const layoutCommands: CommandDef[] = [
       await ui.enterGlobalDispatch()
     },
   },
+  {
+    id: 'tiled-dispatch',
+    // `app`, like the Dispatch toggle: Tiled Dispatch enters (and is the
+    // adjust-count path for) the multi-lane Dispatch layout, so it should be
+    // reachable from the grid as well as from Dispatch.
+    surface: 'app',
+    title: 'Tiled Dispatch',
+    description: '**What it does:** Opens a multi-lane **Dispatch** layout — the full agent index plus several live agent lanes side by side.\n\n**Use when:** You want to watch and drive multiple agents at once.\n\n**Notes:** Prompts for a tile count (1–10). The leftmost lane is the full index; every other lane has its own compact selector. Re-run to change the tile count (existing lane selections are preserved). Return to the normal grid with **Dispatch Mode**.',
+    keywords: ['tiled dispatch', 'multi agent', 'lanes', 'split dispatch', 'cockpit', 'parallel agents', 'grid of agents'],
+    run: ({ ui }) => ui.openTiledDispatchPrompt(),
+  },
   // REMOVED: 'toggle-dispatch-terminal' command. The dispatch project
   // terminal is now controlled by `settings.dispatchProjectTerminal`
   // (default OFF) rather than a per-session command-palette toggle. The

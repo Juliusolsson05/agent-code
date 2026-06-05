@@ -18,6 +18,7 @@ import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
 import { AgentActivityModal } from '@renderer/features/workspace/ui/AgentActivityModal'
 import { BuryPanePrompt } from '@renderer/features/workspace/ui/BuryPanePrompt'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
+import { TiledDispatchCountOverlay } from '@renderer/features/workspace/ui/TiledDispatchCountOverlay'
 import { PromptSearchModal } from '@renderer/features/workspace/ui/PromptSearchModal'
 import { ReorderTabsModal } from '@renderer/features/workspace/ui/ReorderTabsModal'
 import { RewindToPromptModal } from '@renderer/features/workspace/ui/RewindToPromptModal'
@@ -78,6 +79,9 @@ export default function App() {
   const debugBundleNotePrompt = useAppStore(state => state.debugBundleNotePrompt)
   const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
+  const tiledDispatchPromptOpen = useAppStore(state => state.tiledDispatchPromptOpen)
+  const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
+  const closeTiledDispatchPrompt = useAppStore(state => state.closeTiledDispatchPrompt)
   const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
   const linkedAgentParentId = useAppStore(state => state.linkedAgentParentId)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
@@ -773,6 +777,7 @@ export default function App() {
           )
         }
         exitDispatchMode={workspace.exitDispatchMode}
+        openTiledDispatchPrompt={openTiledDispatchPrompt}
         openDispatchAttach={openDispatchAttach}
         openLinkedAgent={openLinkedAgent}
         openPinAgents={openPinAgents}
@@ -819,6 +824,16 @@ export default function App() {
         onAccept={onPathPickerAccept}
         onResume={onPathPickerResume}
       />
+
+      {/* Tiled Dispatch tile-count prompt. Rendered at the app root (fixed
+          overlay) because the command is `app`-surface — it can be invoked
+          from the grid, classic Dispatch, or an already-tiled layout. */}
+      {tiledDispatchPromptOpen && (
+        <TiledDispatchCountOverlay
+          workspace={workspace}
+          onClose={closeTiledDispatchPrompt}
+        />
+      )}
 
       {caffeinateMessage ? (
         <div
