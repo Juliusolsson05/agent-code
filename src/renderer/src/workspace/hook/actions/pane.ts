@@ -28,6 +28,7 @@ import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 import {
   buildVisibleDispatchRows,
   detachedDispatchSessionIdsForTab,
+  resolveDispatchSpawnTarget,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -54,6 +55,33 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 // closeFocused, closeSession, requestBuryFocused, buryFocused,
 // reviveBuried, killBuried, focusSession, focusSessionInTab, navigate.
 // -----------------------------------------------------------------------------
+
+// Update dispatchMode after a new dispatch agent is spawned. In Tiled
+// Dispatch the new agent takes over the lane the user is commanding
+// (target.laneIndex) so it appears where they were looking; in classic
+// Dispatch it becomes the single focus. Setting focusedSessionId in both
+// cases keeps classic focus coherent if the user later exits the tiled view.
+// The lane index is re-validated here (a stale resolution could outrun a
+// concurrent count change), falling back to a plain focus update.
+function applyDispatchSpawnFocus(
+  dispatchMode: DispatchModeState | null,
+  sessionId: SessionId,
+  laneIndex: number | null,
+): DispatchModeState | null {
+  if (!dispatchMode) return dispatchMode
+  const tiled = dispatchMode.tiled
+  if (laneIndex !== null && tiled && laneIndex >= 0 && laneIndex < tiled.lanes.length) {
+    const lanes = tiled.lanes.map((lane, i) =>
+      i === laneIndex ? { ...lane, selectedSessionId: sessionId } : lane,
+    )
+    return {
+      ...dispatchMode,
+      focusedSessionId: sessionId,
+      tiled: { ...tiled, lanes, focusedLane: laneIndex },
+    }
+  }
+  return { ...dispatchMode, focusedSessionId: sessionId }
+}
 
 export function usePaneActions(
   state: {
@@ -117,13 +145,16 @@ export function usePaneActions(
     ) => {
       const dispatchSnapshot = refs.stateRef.current
       if (dispatchSnapshot.dispatchMode && kind !== 'terminal') {
-        const tab = dispatchSnapshot.tabs.find(t => t.id === dispatchSnapshot.activeTabId)
+        // Same target resolution as createDetachedDispatchAgent: follow the
+        // focused lane in Tiled Dispatch so cwd and projectTab agree on the
+        // project the user is commanding (issue #266 / #248).
+        const target = resolveDispatchSpawnTarget(dispatchSnapshot)
+        const tab = dispatchSnapshot.tabs.find(t => t.id === target.tabId)
         if (!tab) return
 
         const leafIds = collectLeaves(tab.root)
-        const focusedDispatchId = dispatchSnapshot.dispatchMode.focusedSessionId
         const cwd =
-          (focusedDispatchId ? dispatchSnapshot.sessions[focusedDispatchId]?.cwd : null) ??
+          (target.cwdSessionId ? dispatchSnapshot.sessions[target.cwdSessionId]?.cwd : null) ??
           dispatchSnapshot.sessions[tab.focusedSessionId]?.cwd ??
           leafIds.map(id => dispatchSnapshot.sessions[id]?.cwd).find(Boolean)
         if (!cwd) {
@@ -172,9 +203,7 @@ export function usePaneActions(
                 detachedAt: Date.now(),
               },
             },
-            dispatchMode: prev.dispatchMode
-              ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-              : prev.dispatchMode,
+            dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
           }
         })
         closeNewAgentPlacement()
@@ -232,13 +261,17 @@ export function usePaneActions(
   const createDetachedDispatchAgent = useCallback(
     async (kind: Exclude<SessionKind, 'terminal'>) => {
       const snapshot = refs.stateRef.current
-      const tab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
+      // Resolve the target project ONCE so cwd and projectTab agree. In Tiled
+      // Dispatch this follows the focused lane, not the stale active tab —
+      // reading cwd from focusedSessionId while filing under activeTabId is the
+      // bug this fixes (issue #266 / #248). See resolveDispatchSpawnTarget.
+      const target = resolveDispatchSpawnTarget(snapshot)
+      const tab = snapshot.tabs.find(t => t.id === target.tabId)
       if (!tab) return
 
       const leafIds = collectLeaves(tab.root)
-      const focusedDispatchId = snapshot.dispatchMode?.focusedSessionId
       const cwd =
-        (focusedDispatchId ? snapshot.sessions[focusedDispatchId]?.cwd : null) ??
+        (target.cwdSessionId ? snapshot.sessions[target.cwdSessionId]?.cwd : null) ??
         snapshot.sessions[tab.focusedSessionId]?.cwd ??
         leafIds.map(id => snapshot.sessions[id]?.cwd).find(Boolean)
       if (!cwd) {
@@ -281,9 +314,7 @@ export function usePaneActions(
               detachedAt: Date.now(),
             },
           },
-          dispatchMode: prev.dispatchMode
-            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-            : prev.dispatchMode,
+          dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
         }
       })
       closeNewAgentPlacement()

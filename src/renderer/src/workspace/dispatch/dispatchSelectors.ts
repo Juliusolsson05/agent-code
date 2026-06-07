@@ -307,6 +307,78 @@ export function isPinned(state: WorkspaceState, sessionId: SessionId): boolean {
   return state.pinnedSessionIds.includes(sessionId)
 }
 
+/**
+ * Where a NEW Dispatch agent should be created.
+ *
+ *  - `tabId`        — the project tab the agent is filed under
+ *                     (becomes detachedSessions[id].projectTabId).
+ *  - `cwdSessionId` — the existing session whose cwd the new agent
+ *                     inherits, or null to let the caller fall back to
+ *                     the tab's leaves.
+ *  - `laneIndex`    — in Tiled Dispatch, the lane the new agent should
+ *                     occupy so it appears where the user is looking;
+ *                     null in classic Dispatch.
+ *
+ * WHY this is a selector instead of inline logic in the spawn actions:
+ * `createDetachedDispatchAgent` and `splitFocused` both have to answer
+ * "which project does a new agent belong to?" and they used to read
+ * cwd from `dispatchMode.focusedSessionId` but the project tab from
+ * `activeTabId`. Those two fields agree in classic Dispatch (focusing a
+ * row syncs both via focusDispatchSession) but DIVERGE in Tiled
+ * Dispatch: lane focus/selection (setTiledFocusedLane /
+ * setTiledLaneSession) writes only `tiled.focusedLane` and
+ * `lanes[].selectedSessionId` — never the classic focus fields. The
+ * result was new agents landing in the stale active tab instead of the
+ * focused lane's project (issue #266 / #248 regression). Resolving the
+ * target in one place keeps cwd and projectTab on the SAME project for
+ * both surfaces.
+ */
+export type DispatchSpawnTarget = {
+  tabId: TabId
+  cwdSessionId: SessionId | null
+  laneIndex: number | null
+}
+
+export function resolveDispatchSpawnTarget(state: WorkspaceState): DispatchSpawnTarget {
+  const dm = state.dispatchMode
+  if (!dm) {
+    return { tabId: state.activeTabId, cwdSessionId: null, laneIndex: null }
+  }
+
+  // The visible rows are the scope-correct source of "which tab owns this
+  // session?" — the same list the user sees and that lane resolution uses.
+  const rows = buildVisibleDispatchRows(state)
+  const tabForSession = (id: SessionId | undefined | null): TabId | null =>
+    id ? rows.find(row => row.sessionId === id)?.tabId ?? null : null
+
+  // Tiled Dispatch: the focused lane is the command target.
+  if (dm.tiled) {
+    const laneIndex = dm.tiled.focusedLane
+    const laneSessionId = dm.tiled.lanes[laneIndex]?.selectedSessionId ?? null
+    const laneTab = tabForSession(laneSessionId)
+    if (laneTab) {
+      return { tabId: laneTab, cwdSessionId: laneSessionId, laneIndex }
+    }
+    // Focused lane is empty / its agent is gone: there is no project to read
+    // from the lane itself, so fall back to the classic focus, then the active
+    // tab — but still place the new agent INTO the focused lane.
+    const focusTab = tabForSession(dm.focusedSessionId)
+    return {
+      tabId: focusTab ?? state.activeTabId,
+      cwdSessionId: focusTab ? dm.focusedSessionId ?? null : null,
+      laneIndex,
+    }
+  }
+
+  // Classic Dispatch: prefer the focused session's own tab so cwd and
+  // projectTab stay on the same project even if activeTabId ever drifts.
+  const focusTab = tabForSession(dm.focusedSessionId)
+  if (focusTab) {
+    return { tabId: focusTab, cwdSessionId: dm.focusedSessionId ?? null, laneIndex: null }
+  }
+  return { tabId: state.activeTabId, cwdSessionId: null, laneIndex: null }
+}
+
 function sessionTitle(
   meta: WorkspaceState['sessions'][SessionId] | undefined,
 ): string {
