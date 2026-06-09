@@ -6,7 +6,6 @@ import {
   buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
-import { claimedSessionIds } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
@@ -749,8 +748,8 @@ function focusDispatchRowByIndex(workspace: Workspace, index: number) {
 //
 // When a tiled layout is active, dispatch selection targets the FOCUSED
 // LANE rather than the single dispatch focus. These mirror the classic
-// helpers above but write through setTiledLaneSession (which enforces the
-// one-session-per-lane invariant), so cmd-N / arrows fill the focused lane.
+// helpers above but write through setTiledLaneSession, so cmd-N / arrows
+// fill the focused lane (duplicates across lanes are allowed).
 
 function focusedTiledLane(workspace: Workspace): number {
   return workspace.dispatchMode?.tiled?.focusedLane ?? 0
@@ -759,8 +758,8 @@ function focusedTiledLane(workspace: Workspace): number {
 function focusTiledRowByIndex(workspace: Workspace, index: number) {
   const row = dispatchRows(workspace)[index]
   if (!row) return
-  // No-op if the row is already shown in another lane — cmd-N on a claimed
-  // row does nothing rather than yanking it out of its current lane.
+  // cmd-N fills the focused lane with row N. Duplicates are allowed, so this
+  // works even if that agent is already shown in another lane.
   workspace.setTiledLaneSession(focusedTiledLane(workspace), row.sessionId)
 }
 
@@ -770,22 +769,17 @@ function moveTiledLaneSelection(workspace: Workspace, delta: number) {
   const rows = dispatchRows(workspace)
   if (rows.length === 0) return
   const laneIndex = tiled.focusedLane
-  const claimed = claimedSessionIds(tiled.lanes, laneIndex)
   const currentId = tiled.lanes[laneIndex]?.selectedSessionId
   const currentIndex = currentId
     ? rows.findIndex(row => row.sessionId === currentId)
     : -1
-  // Step in `delta` direction, skipping rows already shown in other lanes,
-  // wrapping once around the list. If every other row is claimed we settle
-  // back on the current row (a reducer no-op).
+  // Step one row in `delta` direction, wrapping. Duplicates are allowed, so
+  // we do NOT skip rows shown in other lanes — landing on one just mirrors
+  // that agent into this lane too.
   const len = rows.length
-  for (let step = 1; step <= len; step++) {
-    const probe = (((currentIndex + delta * step) % len) + len) % len
-    const row = rows[probe]
-    if (!row || claimed.has(row.sessionId)) continue
-    workspace.setTiledLaneSession(laneIndex, row.sessionId)
-    return
-  }
+  const probe = (((currentIndex + delta) % len) + len) % len
+  const row = rows[probe]
+  if (row) workspace.setTiledLaneSession(laneIndex, row.sessionId)
 }
 
 function moveDispatchSelection(workspace: Workspace, delta: number) {

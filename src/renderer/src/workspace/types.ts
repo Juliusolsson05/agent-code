@@ -242,27 +242,21 @@ export type DispatchLane = {
   /**
    * Session shown in this lane. Undefined => empty lane (renders a
    * lane-local "select an agent" prompt). On re-entry/rehydrate a lane
-   * whose session no longer exists is reset to undefined and re-filled
-   * from the next unclaimed visible agent.
+   * whose session no longer exists is reset to undefined and re-filled.
    *
-   * INVARIANT: a given sessionId appears in at most one lane at a time.
-   * This is what lets Tiled Dispatch reuse the single-view render path
-   * (renderWorkspaceLeaf) with ZERO session-manager changes. The only
-   * place in the codebase that assumes 1:1 view<->session is the terminal
-   * xterm attach (a Set, single attacher) and its replay buffer; the
-   * one-per-lane rule means a session is never mounted in two lanes
-   * simultaneously, so that assumption is never violated. Drop this
-   * invariant and you'd need reference-counted attach/detach in the
-   * session manager — exactly the refactor this design avoids.
+   * The SAME sessionId may legitimately appear in more than one lane — the
+   * earlier one-session-per-lane restriction was dropped because greying out
+   * an agent just because it's open elsewhere is a confusing UX. When a
+   * session is duplicated across lanes, the views MIRROR: Claude/Codex agent
+   * views mirror for free (every TileLeaf reads the same per-session runtime
+   * from the store and writes input keyed by sessionId, so feed + composer
+   * reflect in all of them). Terminals are the one exception — their xterm
+   * attach is currently single-attacher, so a duplicated TERMINAL only fully
+   * mirrors once terminal multi-attach (ref-counted attach + PTY broadcast)
+   * lands in its own follow-up. Until then, a duplicated terminal's second
+   * view may not stream; agents are unaffected.
    */
   selectedSessionId?: SessionId
-  /**
-   * RESERVED for phase-2 scroll-sync (scrolling a mini-list nudges the
-   * index lane to the same region while keeping lane 0's own highlight).
-   * Unused in v1; declared now so adding scroll-sync later does not have
-   * to reshape persisted state.
-   */
-  scrollAnchorKey?: string
 }
 
 export type TiledDispatchState = {

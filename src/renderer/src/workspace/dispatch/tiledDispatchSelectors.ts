@@ -23,29 +23,10 @@ export function clampTileCount(n: number): number {
 }
 
 /**
- * Session ids claimed by lanes OTHER than `exceptLaneIndex`. Mini-lists
- * use this to grey out (and refuse) agents already shown elsewhere,
- * surfacing the one-session-per-lane invariant in the UI. The reducer
- * enforces the same rule as the real guard — this is just so the user
- * sees why a row is unselectable before they click it.
- */
-export function claimedSessionIds(
-  lanes: DispatchLane[],
-  exceptLaneIndex: number,
-): Set<SessionId> {
-  const claimed = new Set<SessionId>()
-  lanes.forEach((lane, i) => {
-    if (i === exceptLaneIndex) return
-    if (lane.selectedSessionId) claimed.add(lane.selectedSessionId)
-  })
-  return claimed
-}
-
-/**
  * Build a lane array of `count` lanes, auto-assigning each lane the next
- * visible agent not already claimed. Used on enter (preserve=[]) and on
- * grow (preserve=existing lanes, so surviving lanes keep their agents and
- * only the appended lanes get auto-filled).
+ * visible agent not already used by an earlier lane in THIS fill. Used on
+ * enter (preserve=[]) and on grow (preserve=existing lanes, so surviving
+ * lanes keep their agents and only the appended lanes get auto-filled).
  *
  * WHY auto-fill rather than start blank: the user asked for N tiles
  * because they want to SEE N agents. Landing them on N empty lanes that
@@ -54,9 +35,10 @@ export function claimedSessionIds(
  * in one keystroke. Lanes beyond the number of available agents stay
  * empty (render the lane-local picker prompt).
  *
- * `buildVisibleDispatchRows` is the single source of truth for row order,
- * so terminals are eligible here exactly as they are in the index — the
- * one-per-lane rule still prevents double-mounting any of them.
+ * NOTE the local `claimed` set only spreads DISTINCT agents across lanes as
+ * a sensible default — it is NOT an invariant. The user can still manually
+ * put the same agent in two lanes afterwards (duplicates are allowed and the
+ * views mirror; see DispatchLane).
  */
 export function buildAutoLanes(
   state: WorkspaceState,

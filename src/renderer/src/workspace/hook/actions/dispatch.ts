@@ -196,10 +196,9 @@ export function useDispatchActions(
   // present is the single render fork (DispatchLayout renders the
   // multi-lane layout iff it exists). Every reducer is a no-op when there
   // is no dispatchMode/tiled, so a stray call from a stale keybind or
-  // command can never corrupt classic Dispatch. The reducers are the real
-  // guard for the one-session-per-lane invariant — the mini-list UI also
-  // greys claimed rows, but multiple write paths (click, keybind, command)
-  // reach these, so the invariant lives here rather than at each call site.
+  // command can never corrupt classic Dispatch. Duplicates across lanes are
+  // allowed (the views mirror — see DispatchLane), so these reducers no
+  // longer reject a session that's open elsewhere.
 
   // Enter (or freshly build) a Tiled Dispatch layout. Enters Dispatch if
   // it wasn't already on, clears tiled-tabs (mutually exclusive top-level
@@ -236,19 +235,16 @@ export function useDispatchActions(
     })
   }, [setState])
 
-  // Assign a lane's agent. No-op if that session already occupies another
-  // lane (enforces one-session-per-lane). No-op for out-of-range indexes so
-  // a stale keybind targeting a since-removed lane is harmless.
+  // Assign a lane's agent. Duplicates ARE allowed — the same session may sit
+  // in multiple lanes (the views mirror; see DispatchLane). No-op for
+  // out-of-range indexes so a stale keybind targeting a since-removed lane is
+  // harmless, and a no-op when the lane already shows this session.
   const setTiledLaneSession = useCallback(
     (laneIndex: number, sessionId: SessionId) => {
       setState(prev => {
         const tiled = prev.dispatchMode?.tiled
         if (!tiled) return prev
         if (laneIndex < 0 || laneIndex >= tiled.lanes.length) return prev
-        const claimedElsewhere = tiled.lanes.some(
-          (lane, i) => i !== laneIndex && lane.selectedSessionId === sessionId,
-        )
-        if (claimedElsewhere) return prev
         if (tiled.lanes[laneIndex]?.selectedSessionId === sessionId) return prev
         const lanes = tiled.lanes.map((lane, i) =>
           i === laneIndex ? { ...lane, selectedSessionId: sessionId } : lane,
