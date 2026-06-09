@@ -15,7 +15,6 @@ import {
   DispatchEmpty,
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 import { DispatchMiniList } from '@renderer/workspace/dispatch/DispatchMiniList'
-import { claimedSessionIds } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 
 type Props = {
@@ -87,24 +86,20 @@ export function TiledDispatchLayout({
     return map
   }, [rows])
 
-  // Resolve every lane to {sessionId, tabId} | null, DEDUPING as we go: a
-  // session already resolved by an earlier lane this pass yields null for
-  // the later lane. This is the render-time guarantee of the
-  // one-session-per-lane invariant — even if persisted/corrupt state ever
-  // puts the same live id in two lanes, only the first renders it; the
-  // second falls to the picker prompt and the auto-fill effect re-homes it.
-  // Doing this here (not just in reducers) means there is never a frame —
-  // including the very first render after rehydrate, before any effect — in
-  // which renderWorkspaceLeaf mounts one session twice.
+  // Resolve every lane to {sessionId, tabId} | null. A lane resolves iff its
+  // session is alive AND in the current dispatch scope (present in
+  // rowBySession) — the scope-correct liveness + tab source. We deliberately
+  // do NOT de-dup: the same session may resolve in multiple lanes and each
+  // renders it. Claude/Codex views mirror for free (shared per-session
+  // runtime, input keyed by sessionId); terminals mirror once multi-attach
+  // lands. An empty/dead/out-of-scope lane resolves to null and the heal
+  // effect re-homes it.
   const laneResolutions = useMemo<LaneResolution[]>(() => {
-    const used = new Set<SessionId>()
     return lanes.map(lane => {
       const id = lane.selectedSessionId
       if (!id) return null
       const row = rowBySession.get(id)
       if (!row) return null // dead, or not in the current dispatch scope
-      if (used.has(id)) return null // duplicate of an earlier lane
-      used.add(id)
       return { sessionId: id, tabId: row.tabId }
     })
   }, [lanes, rowBySession])
@@ -136,10 +131,6 @@ export function TiledDispatchLayout({
 
   const indexFraction = clampIndexFraction(tiled.ratios?.[0] ?? DEFAULT_INDEX_FRACTION)
   const laneWeights = normalizedLaneWeights(tiled.ratios, lanes.length)
-
-  // lane-0 index greys out agents already shown in lanes >0 so a claimed
-  // row can't be clicked into a silent no-op (matches the mini-lists).
-  const indexClaimed = useMemo(() => claimedSessionIds(lanes, 0), [lanes])
 
   const rowRef = useRef<HTMLDivElement | null>(null)
   const laneRegionRef = useRef<HTMLDivElement | null>(null)
@@ -183,7 +174,6 @@ export function TiledDispatchLayout({
             workspace.setTiledFocusedLane(0)
           }}
           showWorktreeBadges={showWorktreeBadges}
-          disabledSessionIds={indexClaimed}
         />
       </div>
 
@@ -219,14 +209,14 @@ export function TiledDispatchLayout({
                   workspace={workspace}
                 />
               )}
+              {/* Chips-only selector for this lane — a thin w-9 strip the
+                  exact width of the index's chip cell. No title/dot/header. */}
               {laneIndex > 0 && (
-                <div className="flex-shrink-0 w-[150px] min-h-0">
+                <div className="flex-shrink-0 w-9 min-h-0">
                   <DispatchMiniList
                     rows={rows}
                     selectedSessionId={lane.selectedSessionId}
-                    claimed={claimedSessionIds(lanes, laneIndex)}
                     focused={focused}
-                    laneNumber={laneIndex + 1}
                     onSelect={row => {
                       workspace.setTiledLaneSession(laneIndex, row.sessionId)
                       workspace.setTiledFocusedLane(laneIndex)
@@ -234,10 +224,17 @@ export function TiledDispatchLayout({
                   />
                 </div>
               )}
-              {/* The agent view. A subtle ring marks the keyboard-focused
-                  lane so the user knows which lane arrows / cmd+N target. */}
+              {/* Agent view. Focus affordance mirrors tiled-tabs: only the
+                  focused lane passes a real focusedSessionId (so only IT gets
+                  TileLeaf's accent border — fixes the old "border on every
+                  lane" bug where the sessionId was passed as its own focus
+                  id), and every NON-focused lane gets the same translucent
+                  scrim tiled-tabs uses for unfocused tabs, so the one bright
+                  agent is unmistakably where you are. The scrim is
+                  pointer-events-none so clicking a dimmed lane still focuses
+                  it. */}
               <div
-                className={`flex-1 min-w-0 min-h-0 ${focused ? 'ring-1 ring-inset ring-accent/50' : ''}`}
+                className="relative flex-1 min-w-0 min-h-0"
                 onMouseDownCapture={() => {
                   if (!focused) workspace.setTiledFocusedLane(laneIndex)
                 }}
@@ -245,7 +242,7 @@ export function TiledDispatchLayout({
                 {resolved ? (
                   renderWorkspaceLeaf(
                     resolved.sessionId,
-                    resolved.sessionId,
+                    focused ? resolved.sessionId : null,
                     workspace,
                     resolved.tabId,
                     showStatusMode,
@@ -254,6 +251,9 @@ export function TiledDispatchLayout({
                   )
                 ) : (
                   <DispatchEmpty message="select an agent" />
+                )}
+                {!focused && (
+                  <div className="absolute inset-0 pointer-events-none bg-canvas/34 ring-1 ring-inset ring-border" />
                 )}
               </div>
             </div>

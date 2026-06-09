@@ -7,41 +7,33 @@ import type { SessionId } from '@renderer/workspace/types'
 import {
   cachedLatestPromptTitle,
   dispatchActivity,
-  dispatchActivityDotClass,
+  dispatchActivityClasses,
 } from '@renderer/workspace/dispatch/DispatchAgentList'
 
-// WHY a separate compact list rather than reusing DispatchAgentList:
-// In Tiled Dispatch every non-index lane gets its OWN selector to the left
-// of its agent view. The full index (section titles, worktree grouping,
-// provider chips, two-line rows) is exactly what the issue says these lanes
-// must NOT repeat — they "omit repeated section titles / worktree labels /
-// provider chips". So this is a deliberately dense, header-less, one-line
-// variant whose only job is "switch which agent this lane shows". The full
-// context still lives one lane over in the pinned index (lane 0).
+// The Tiled Dispatch lane selector, deliberately stripped to NOTHING but the
+// index chips ([A1], [A2], ★1 …) — no titles, no activity dots, no badges,
+// no section headers, no tab separators. Rationale (user's call): the rich
+// context already lives one lane over in the full pinned index; repeating any
+// of it here just wastes the narrow column. To identify what a chip refers
+// to, glance back at the index (or hover the chip for its tooltip).
 //
-// Rows come from the SAME buildVisibleDispatchRows source as the index, so
-// the "row N" / label semantics never drift between the two surfaces.
+// Each chip is visually identical to the full list's index cell — same width
+// and same activity background — because it's painted with the SAME
+// dispatchActivityClasses(...).index palette. The chip for THIS lane's
+// current selection is highlighted (accent). Duplicates are fine: the same
+// chip can be the accent selection in more than one lane at once.
 
 type Props = {
   rows: DispatchAgentRow[]
   selectedSessionId?: SessionId
-  // Sessions shown in OTHER lanes. These are greyed out and unselectable
-  // here — the one-session-per-lane invariant (see DispatchLane) surfaced
-  // in the UI so the user sees why a row is unavailable before clicking.
-  claimed: Set<SessionId>
   focused: boolean
-  // 1-based lane number shown in the header so a multi-lane cockpit is
-  // identifiable at a glance (which selector drives which view).
-  laneNumber: number
   onSelect: (row: DispatchAgentRow) => void
 }
 
 export const DispatchMiniList = memo(function DispatchMiniList({
   rows,
   selectedSessionId,
-  claimed,
   focused,
-  laneNumber,
   onSelect,
 }: Props) {
   return (
@@ -51,15 +43,11 @@ export const DispatchMiniList = memo(function DispatchMiniList({
         border-l ${focused ? 'border-accent/60' : 'border-border'}
       `}
     >
-      <div className="sticky top-0 z-10 border-b border-border bg-surface px-2 py-1 text-[9px] uppercase text-muted">
-        lane {laneNumber}
-      </div>
       {rows.map(row => (
-        <DispatchMiniRow
+        <DispatchMiniChip
           key={row.key}
           row={row}
           active={row.sessionId === selectedSessionId}
-          claimed={claimed.has(row.sessionId)}
           onSelect={onSelect}
         />
       ))}
@@ -67,17 +55,18 @@ export const DispatchMiniList = memo(function DispatchMiniList({
   )
 })
 
-const DispatchMiniRow = memo(function DispatchMiniRow({
+const DispatchMiniChip = memo(function DispatchMiniChip({
   row,
   active,
-  claimed,
   onSelect,
 }: {
   row: DispatchAgentRow
   active: boolean
-  claimed: boolean
   onSelect: (row: DispatchAgentRow) => void
 }) {
+  // Read just enough runtime to colour the chip by activity. `entries` is only
+  // pulled for the hover tooltip (the prompt title) — it is NOT rendered in
+  // the strip itself, keeping this a chips-only column.
   const runtime = useAppStore(useShallow(state => {
     const current = state.workspaceRuntimes[row.sessionId]
     return {
@@ -87,17 +76,13 @@ const DispatchMiniRow = memo(function DispatchMiniRow({
       entries: current?.entries,
     }
   }))
-  const onClick = useCallback(() => {
-    // The reducer also refuses claimed sessions, but bailing here avoids a
-    // pointless no-op dispatch and a focus flicker on a row the user can't
-    // actually take.
-    if (claimed) return
-    onSelect(row)
-  }, [claimed, onSelect, row])
+  const onClick = useCallback(() => onSelect(row), [onSelect, row])
 
-  const isTerminal = row.kind === 'terminal'
   const activity = dispatchActivity(runtime)
-  const dot = dispatchActivityDotClass(activity)
+  // Same palette as the main index's chip cell: activity background, or
+  // accent when this chip is the lane's current selection.
+  const chipClasses = dispatchActivityClasses(activity, active).index
+  const isTerminal = row.kind === 'terminal'
   const title = !isTerminal && runtime.entries
     ? cachedLatestPromptTitle(runtime.entries, row.kind) ?? row.title
     : row.title
@@ -106,24 +91,16 @@ const DispatchMiniRow = memo(function DispatchMiniRow({
     <button
       type="button"
       onClick={onClick}
-      disabled={claimed}
-      title={claimed ? 'shown in another lane' : title}
+      title={`${row.label} · ${title}`}
       data-dispatch-mini-active={active ? 'true' : undefined}
       className={`
-        flex w-full items-center gap-1.5 px-2 py-1 text-left border-t border-border
-        text-[10px] overflow-hidden [contain:layout_paint]
-        ${claimed ? 'opacity-40 cursor-not-allowed' : 'hover:bg-surface-hi'}
-        ${active ? 'bg-accent/15 text-ink' : 'text-ink-dim'}
+        flex w-full items-center justify-center border-t border-border
+        py-1.5 text-[10px] font-semibold tabular-nums
+        hover:ring-1 hover:ring-inset hover:ring-accent/40
+        ${chipClasses}
       `}
     >
-      <span
-        className={`flex-shrink-0 w-1.5 h-1.5 rounded-full ${dot}`}
-        aria-hidden="true"
-      />
-      <span className="flex-shrink-0 w-7 font-semibold tabular-nums text-muted">
-        {row.label}
-      </span>
-      <span className="min-w-0 flex-1 truncate">{title}</span>
+      {row.label}
     </button>
   )
 })

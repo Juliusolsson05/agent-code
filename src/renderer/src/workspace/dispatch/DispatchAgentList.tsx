@@ -419,7 +419,10 @@ export function dispatchActivity(runtime: {
   return 'idle'
 }
 
-function dispatchActivityClasses(
+// Exported so the Tiled Dispatch mini-list can render its index chips with
+// the exact same activity background + accent-when-selected palette as the
+// main index's chip cell — the two surfaces must read identically.
+export function dispatchActivityClasses(
   activity: DispatchAgentActivity,
   active: boolean,
 ): {
