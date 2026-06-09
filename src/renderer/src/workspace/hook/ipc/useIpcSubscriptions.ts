@@ -16,6 +16,7 @@ import {
   withDerivedSessionStatus,
 } from '@renderer/workspace/semantic/helpers'
 import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
+import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/applyPromptSuggestionToRuntime'
 import { summarizeSemanticEventForDebug } from '@renderer/workspace/semantic/summarize'
 import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
 import {
@@ -678,6 +679,21 @@ export function useIpcSubscriptions(
         // want to keep. See
         // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
         const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind ?? 'claude'
+
+        // prompt_suggestion is an ephemeral next-prompt hint, NOT a turn. It
+        // must never enter foldSemanticEvent / semantic history (that is the
+        // #174 leak). Handle it out-of-band: write the per-session runtime
+        // field and return before the turn / ghost / phase machinery runs.
+        if (semanticEvent.type === 'prompt_suggestion') {
+          const updated = applyPromptSuggestionToRuntime(current, semanticEvent)
+          if (updated === current) {
+            closeSpan({ sessionId, eventType: 'prompt_suggestion', changed: false })
+            return prev
+          }
+          closeSpan({ sessionId, eventType: 'prompt_suggestion', changed: true })
+          return { ...prev, [sessionId]: updated }
+        }
+
         const nextSemantic = foldSemanticEvent(current.semantic, semanticEvent, sessionKind)
         const eventType = typeof semanticEvent.type === 'string' ? semanticEvent.type : ''
         const clearOptimisticAwaiting =
@@ -843,6 +859,11 @@ export function useIpcSubscriptions(
               queuedMessages: shouldClearIdleCodexQueue
                 ? []
                 : current.queuedMessages,
+              // A suggestion is an offer about the NEXT input; once a new
+              // turn begins it is stale, so clear it on turn_started. The
+              // chip's apply/dismiss/submit paths clear it directly too.
+              promptSuggestion:
+                eventType === 'turn_started' ? null : current.promptSuggestion,
               semantic: nextSemantic,
               streamPhase,
               streamPhasePendingToolName,

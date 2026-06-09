@@ -195,6 +195,12 @@ export function TileLeaf({
     if (!ok) {
       throw new Error(`sendInput failed for missing session ${sessionId}`)
     }
+    // Clear any prompt-suggestion chip on submit so a stale offer never
+    // lingers past the input it was suggesting. turn_started clears it too,
+    // but doing it here makes the chip vanish the instant the user commits.
+    if (runtime.promptSuggestion) {
+      workspace.updateRuntime(sessionId, { promptSuggestion: null })
+    }
   }
 
   const loadOlderHistory = useCallback(async () => {
@@ -514,6 +520,17 @@ export function TileLeaf({
         onHoverChange={setComposerHovered}
         removeDraftImage={removeDraftImage}
         dictation={dictation}
+        promptSuggestion={runtime.promptSuggestion?.text ?? null}
+        onApplySuggestion={text => {
+          // Prefill the draft and clear the suggestion. We do NOT auto-send —
+          // the user reviews/edits before submitting, matching #174's
+          // "clickable suggestion chips" (prefill) acceptance criterion.
+          setInputText(text)
+          workspace.updateRuntime(sessionId, { promptSuggestion: null })
+        }}
+        onDismissSuggestion={() =>
+          workspace.updateRuntime(sessionId, { promptSuggestion: null })
+        }
       />
     </div>
   )

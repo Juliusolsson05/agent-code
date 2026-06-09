@@ -319,6 +319,13 @@ export type SessionRuntime = {
   conditions: ProviderConditionSnapshot | null
   draftInput: string
   draftImages: ClaudeDraftImage[]
+  /** Ephemeral next-prompt suggestion offered by the model (issue #174).
+   *  Lives on the per-session runtime (not a global uiShell slice) because
+   *  each pane has its own suggestion and it must survive tab switches.
+   *  Set from the `prompt_suggestion` semantic event; cleared when the next
+   *  turn starts or the user applies/dismisses it. Never persisted, never
+   *  part of the feed/history — that separation is the whole point of #174. */
+  promptSuggestion: { text: string; receivedAt: number } | null
   /** One-shot recovery handle for Rewind to Prompt.
    *
    *  WHY runtime-only: rewind writes a new provider transcript and swaps the
@@ -566,6 +573,7 @@ export function emptyRuntime(): SessionRuntime {
     conditions: null,
     draftInput: '',
     draftImages: [],
+    promptSuggestion: null,
     pendingRewindUndo: null,
     activityStatus: null,
     unreadSince: null,

@@ -182,6 +182,14 @@ export function foldSemanticEvent(
   let errors = state.errors
 
   switch (t) {
+    case 'prompt_suggestion':
+      // Ephemeral next-prompt hint (issue #174). Handled out-of-band in
+      // useIpcSubscriptions (it writes the per-session runtime field). It is
+      // NOT a turn and must never touch semantic state — returning `state`
+      // unchanged keeps it out of currentTurn/history and out of the debug
+      // "unknown event" log. The explicit case exists so a future reader
+      // doesn't mistake the absence for an oversight.
+      return state
     case 'flow_selected': {
       const flowId = String(ev.flowId ?? '')
       const prev = flows[flowId]
