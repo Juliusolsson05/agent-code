@@ -18,11 +18,7 @@ import {
 type SessionRegistration = {
   token: string
   scope: McpSessionScope
-  server: McpServer
-  inFlightRequests: number
-  requestQueue: Promise<void>
   revoked: boolean
-  closePromise: Promise<void> | null
 }
 
 type BuiltInMcpServerFactory = (
@@ -104,14 +100,19 @@ export class BuiltInMcpHttpHost {
 
   async stop(): Promise<void> {
     const server = this.server
-    const registrations = [...this.registrations.values()]
     this.server = null
     this.port = null
-    for (const registration of registrations) registration.revoked = true
+    for (const registration of this.registrations.values()) registration.revoked = true
     this.registrations.clear()
     this.tokensBySession.clear()
-    await Promise.allSettled(registrations.map(registration => this.closeRegistrationWhenIdle(registration)))
     if (!server) return
+    // Force-drop any open sockets — notably the long-lived GET notification
+    // streams agents keep open for the whole session. Without this, a plain
+    // server.close() waits for those streams to end on their own and shutdown
+    // hangs. Each request owns its own scoped server/transport now (see
+    // handleRequest), so there is no per-session server object left to tear
+    // down here; closing the sockets is sufficient.
+    server.closeAllConnections?.()
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
 
@@ -144,22 +145,13 @@ export class BuiltInMcpHttpHost {
       cwd: scope.cwd,
       domains,
     }
+    // The registration intentionally holds NO McpServer instance. A scoped
+    // server is built per HTTP request in handleRequest instead. See the long
+    // comment there for why caching one server per session caused a deadlock.
     this.registrations.set(token, {
       token,
       scope: mcpScope,
-      // WHY this server is created once per Agent Code session instead of once
-      // per HTTP request: the built-in bridge registers a growing set of tools
-      // and Zod schemas for orchestration, AI Workspace, and transcript access.
-      // Providers commonly issue initialize/tools/list/tools/call in bursts,
-      // and rebuilding the identical scoped server for every request turns
-      // discovery into avoidable allocation churn. The scope remains per
-      // session/token, so handlers still close over the correct parent id/cwd;
-      // only the registered server object is reused.
-      server: this.createServerForScope(mcpScope, this.dependencies),
-      inFlightRequests: 0,
-      requestQueue: Promise.resolve(),
       revoked: false,
-      closePromise: null,
     })
     this.tokensBySession.set(scope.sessionId, token)
 
@@ -189,11 +181,11 @@ export class BuiltInMcpHttpHost {
     this.tokensBySession.delete(sessionId)
     const registration = this.registrations.get(token)
     this.registrations.delete(token)
-    if (!registration) return
-    registration.revoked = true
-    if (registration.inFlightRequests === 0) {
-      void this.closeRegistration(registration)
-    }
+    // Mark the captured object revoked too: an in-flight request already past
+    // registrationForRequest holds a reference, and its long-lived GET stream
+    // ends when the agent's socket closes on exit. There is no cached server to
+    // tear down — each request owns and closes its own scoped server.
+    if (registration) registration.revoked = true
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -213,43 +205,33 @@ export class BuiltInMcpHttpHost {
       return
     }
 
+    // WHY a fresh scoped server + transport PER REQUEST, and explicitly NOT a
+    // cached per-session server behind a serialization queue:
+    //
+    // MCP Streamable HTTP clients (both Claude Code and Codex) open a
+    // long-lived GET SSE "notification stream" right after initialize and keep
+    // it open for the whole session. Its `transport.handleRequest` never
+    // resolves by design. An earlier optimization cached one McpServer per
+    // session and funnelled every HTTP request through a single per-session
+    // promise queue — needed because the SDK stores the active transport on the
+    // server and throws "Already connected to a transport" on a second concurrent
+    // connect. But that queue made the never-resolving GET stream block every
+    // subsequent request: tools/list and tools/call hung until the client gave
+    // up (JSON-RPC -32001 timeout), which silently killed the whole bridge.
+    //
+    // Building a scoped server per request keeps each HTTP exchange fully
+    // independent: the standing GET can stay open without wedging discovery or
+    // tool calls, and each server connects to exactly one transport so the
+    // "Already connected" race can't happen. Rebuilding the Zod tool graph per
+    // request is cheap relative to a dead bridge. (Verified end-to-end against
+    // the MCP SDK client: cached+queue => listTools times out; per-request =>
+    // listTools returns.)
+    const server = this.createServerForScope(registration.scope, this.dependencies)
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
     })
-    registration.inFlightRequests += 1
-    const run = registration.requestQueue
-      .catch(() => {})
-      .then(async () => {
-        // The cached server owns the expensive registered tool/schema graph,
-        // but the streamable HTTP transport remains request-scoped. The MCP
-        // SDK currently stores the active transport on the server and throws
-        // "Already connected to a transport" if a second connect happens
-        // before the first transport closes. This queue is therefore not just
-        // defensive throttling: it is the invariant that lets one cached
-        // server safely serve many HTTP requests over its session lifetime.
-        // Different Agent Code sessions still run independently because each
-        // token has its own cached server and queue.
-        await this.handleWithRegistration(registration, transport, req, res)
-      })
-    registration.requestQueue = run.then(() => undefined, () => undefined)
     try {
-      await run
-    } finally {
-      registration.inFlightRequests = Math.max(0, registration.inFlightRequests - 1)
-      if (registration.revoked && registration.inFlightRequests === 0) {
-        await this.closeRegistration(registration)
-      }
-    }
-  }
-
-  private async handleWithRegistration(
-    registration: SessionRegistration,
-    transport: StreamableHTTPServerTransport,
-    req: IncomingMessage,
-    res: ServerResponse,
-  ): Promise<void> {
-    try {
-      await registration.server.connect(transport)
+      await server.connect(transport)
       await transport.handleRequest(req, res)
     } catch (err) {
       if (!res.headersSent) {
@@ -258,6 +240,7 @@ export class BuiltInMcpHttpHost {
       }
     } finally {
       await transport.close().catch(() => undefined)
+      await server.close().catch(() => undefined)
     }
   }
 
@@ -273,28 +256,6 @@ export class BuiltInMcpHttpHost {
     if (!token) return null
     const registration = this.registrations.get(token) ?? null
     return registration && !registration.revoked ? registration : null
-  }
-
-  private closeRegistration(registration: SessionRegistration): Promise<void> {
-    if (!registration.closePromise) {
-      registration.closePromise = registration.server.close().catch(() => undefined)
-    }
-    return registration.closePromise
-  }
-
-  private async closeRegistrationWhenIdle(registration: SessionRegistration): Promise<void> {
-    if (registration.inFlightRequests > 0) {
-      // WHY stop drains the queue instead of closing immediately:
-      // `server.close()` closes the SDK's currently-bound transport. During a
-      // normal revoke path that would cut off an in-flight tool call even
-      // though `revokeSession` itself waits for the request counter to reach
-      // zero. App shutdown should follow the same lifecycle rule: stop
-      // admitting new requests by revoking and clearing the token maps, then
-      // let already-accepted requests finish their serialized connect/handle/
-      // close cycle before tearing down the cached server object.
-      await registration.requestQueue.catch(() => undefined)
-    }
-    await this.closeRegistration(registration)
   }
 
   private writeJson(res: ServerResponse, statusCode: number, payload: unknown): void {
