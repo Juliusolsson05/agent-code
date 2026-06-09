@@ -463,6 +463,13 @@ export function useWorkspace(
     setReaderModeSession,
     latestScreenRef: refs.latestScreenRef,
     getRuntime,
+    // Patch a session's runtime (sessionId, partial). Used by TileLeaf for
+    // pane toasts and the prompt-suggestion chip's apply/dismiss handlers.
+    // It was destructured above and wired into sub-hooks but never exposed
+    // on the returned Workspace object, so `workspace.updateRuntime(...)`
+    // threw "is not a function" at runtime (vite strips types, so the build
+    // never caught the missing member). Exposing it here is the whole fix.
+    updateRuntime,
     // actions
     newTab: tabActions.newTab,
     closeTab: tabActions.closeTab,
