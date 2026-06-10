@@ -452,8 +452,38 @@ export function useSessionActions(
           }),
           sessions,
           detachedSessions,
-          dispatchMode: prev.dispatchMode?.focusedSessionId === oldId
-            ? { ...prev.dispatchMode, focusedSessionId: newId }
+          // Remap the swapped session id everywhere Dispatch holds it. Besides
+          // the classic single-view focus, Tiled Dispatch keeps its OWN
+          // per-lane selections in dispatchMode.tiled.lanes[].selectedSessionId
+          // — which this used to ignore. So reload / provider-switch / resume /
+          // rewind (all funnel through replaceSession) killed oldId, spawned
+          // newId, swapped it in the grid tree + detached map + focus, but left
+          // the focused lane pointing at the now-dead oldId. The layout's
+          // laneResolutions then couldn't resolve that lane, and the auto-fill
+          // heal effect re-homed it to the first available agent — i.e. "reload
+          // sent me back to the first tile." Remapping the lanes by the same
+          // oldId->newId here keeps the reloaded agent in its lane. Same
+          // tiled-vs-grid divergence as #266/#267 and #271, fixed at the swap.
+          dispatchMode: prev.dispatchMode
+            ? {
+              ...prev.dispatchMode,
+              focusedSessionId:
+                prev.dispatchMode.focusedSessionId === oldId
+                  ? newId
+                  : prev.dispatchMode.focusedSessionId,
+              ...(prev.dispatchMode.tiled
+                ? {
+                  tiled: {
+                    ...prev.dispatchMode.tiled,
+                    lanes: prev.dispatchMode.tiled.lanes.map(lane =>
+                      lane.selectedSessionId === oldId
+                        ? { ...lane, selectedSessionId: newId }
+                        : lane,
+                    ),
+                  },
+                }
+                : {}),
+            }
             : prev.dispatchMode,
         }
       })
