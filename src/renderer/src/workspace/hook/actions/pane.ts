@@ -31,6 +31,10 @@ import {
   resolveDispatchSpawnTarget,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import {
+  clearTiledLaneSessions,
+  dispatchFocusedSessionId,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
@@ -272,7 +276,10 @@ export function usePaneActions(
       const leafIds = collectLeaves(tab.root)
       const cwd =
         (target.cwdSessionId ? snapshot.sessions[target.cwdSessionId]?.cwd : null) ??
-        snapshot.sessions[tab.focusedSessionId]?.cwd ??
+        // Do NOT fall back to tab.focusedSessionId: in Tiled Dispatch that's
+        // stale grid focus (the focused lane's session is already
+        // target.cwdSessionId via resolveDispatchSpawnTarget). Fall back to any
+        // leaf cwd of the resolved tab — all are valid project dirs for it.
         leafIds.map(id => snapshot.sessions[id]?.cwd).find(Boolean)
       if (!cwd) {
         showToast('Could not create dispatch agent: no project directory found')
@@ -869,7 +876,9 @@ export function usePaneActions(
     const dispatchTargetId = snapshot.dispatchMode
       ? selectVisibleDispatchRow(
           dispatchRows,
-          snapshot.dispatchMode.focusedSessionId,
+          // tiled-aware: close the FOCUSED LANE's agent, not the stale
+          // dispatchMode.focusedSessionId (which would close tile 0).
+          dispatchFocusedSessionId(snapshot.dispatchMode),
           activeTab?.focusedSessionId,
         )?.sessionId
       : null
@@ -1269,6 +1278,10 @@ export function usePaneActions(
               ...prev.buried.filter(entry => entry.sessionId !== targetId),
               buriedRecord,
             ],
+            // A buried session is hidden from the dispatch rows, so a tiled
+            // lane still pointing at it would dangle; clear it so the lane
+            // re-homes cleanly instead of bouncing to tile 0.
+            dispatchMode: clearTiledLaneSessions(prev.dispatchMode, targetId),
           }
         }
 
@@ -1287,6 +1300,8 @@ export function usePaneActions(
             ...prev.buried.filter(entry => entry.sessionId !== targetId),
             buriedRecord,
           ],
+          // See above: clear any tiled lane pointing at the buried session.
+          dispatchMode: clearTiledLaneSessions(prev.dispatchMode, targetId),
         }
       })
       setSpotlight(prev => (prev?.tabId === owningTab.id ? null : prev))
@@ -1557,14 +1572,21 @@ function dispatchModeAfterSessionRemoval(
   after: WorkspaceState,
   removedSessionId: SessionId,
 ): DispatchModeState | null {
-  if (!after.dispatchMode || after.dispatchMode.focusedSessionId !== removedSessionId) {
+  // Always clear the removed session out of any TILED LANE first. A lane can
+  // hold a session that is NOT the classic dispatch focus, so the
+  // focusedSessionId short-circuit below must not skip lane cleanup — otherwise
+  // the lane dangles at a dead id and the layout's auto-fill effect bounces it
+  // to the first agent. clearTiledLaneSessions is a no-op (same ref) when there
+  // is no tiled layout or no lane held the removed session.
+  const cleared = clearTiledLaneSessions(after.dispatchMode, removedSessionId)
+  if (!cleared || cleared.focusedSessionId !== removedSessionId) {
     // The user wasn't visibly commanding this row — leave Dispatch focus alone.
     //
     // This short-circuit matters because closeSession is also reached from
     // the Agent Activity modal, which kills *background* panes by id. Without
     // this branch, killing a stranger row would shuffle the user's visible
     // Dispatch selection on every removal.
-    return after.dispatchMode
+    return cleared
   }
 
   // Row-by-index successor selection.
@@ -1599,7 +1621,7 @@ function dispatchModeAfterSessionRemoval(
       : undefined
 
   return {
-    ...after.dispatchMode,
+    ...cleared,
     focusedSessionId: successor?.sessionId,
   }
 }

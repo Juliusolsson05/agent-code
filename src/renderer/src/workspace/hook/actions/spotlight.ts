@@ -6,6 +6,7 @@ import {
   buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
 import type {
   WorkspaceSetSpotlight,
@@ -33,7 +34,9 @@ export function useSpotlightActions(
     const dispatchRow = current.dispatchMode
       ? selectVisibleDispatchRow(
           buildVisibleDispatchRows(current),
-          current.dispatchMode.focusedSessionId,
+          // tiled-aware: focused lane's agent in Tiled Dispatch, not the
+          // stale dispatchMode.focusedSessionId (which would spotlight tile 0).
+          dispatchFocusedSessionId(current.dispatchMode),
           activeTab.focusedSessionId,
         )
       : null

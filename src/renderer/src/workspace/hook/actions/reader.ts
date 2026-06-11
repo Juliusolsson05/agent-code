@@ -6,6 +6,7 @@ import {
   buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
 import type {
   WorkspaceSetReaderMode,
@@ -35,7 +36,9 @@ export function useReaderActions(
     const dispatchRow = current.dispatchMode
       ? selectVisibleDispatchRow(
           buildVisibleDispatchRows(current),
-          current.dispatchMode.focusedSessionId,
+          // tiled-aware: focused lane's agent in Tiled Dispatch, not the
+          // stale dispatchMode.focusedSessionId (which would read tile 0).
+          dispatchFocusedSessionId(current.dispatchMode),
           activeTab.focusedSessionId,
         )
       : null

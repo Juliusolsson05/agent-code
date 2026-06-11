@@ -10,6 +10,7 @@ import {
   detachedDispatchSessionIdsForTab,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
 export const paneCommands: CommandDef[] = [
@@ -436,7 +437,8 @@ function dispatchCommandTabId(
   const activeTab = workspace.activeTab
   const row = selectVisibleDispatchRow(
     buildVisibleDispatchRows(workspace.state),
-    workspace.dispatchMode.focusedSessionId,
+    // tiled-aware focus so the resolved tab follows the focused lane.
+    dispatchFocusedSessionId(workspace.dispatchMode),
     activeTab?.focusedSessionId,
   )
   return row?.tabId ?? workspace.state.activeTabId ?? null

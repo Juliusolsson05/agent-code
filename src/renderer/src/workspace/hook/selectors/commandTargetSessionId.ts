@@ -27,6 +27,7 @@ import {
   buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -38,25 +39,18 @@ export function commandTargetSessionIdForState(state: WorkspaceState): SessionId
   const activeTab = state.tabs.find(tab => tab.id === state.activeTabId)
   if (!state.dispatchMode) return activeTab?.focusedSessionId ?? null
 
-  // In Tiled Dispatch, "what the user is commanding" is the FOCUSED LANE's
-  // agent — NOT dispatchMode.focusedSessionId, which tiled never updates
-  // (lane focus lives on tiled.focusedLane). Without resolving the lane
-  // first, selectVisibleDispatchRow falls back to dispatchMode.focusedSessionId
-  // or rows[0] — i.e. the FIRST tile — so View Prompts / Reload / Close /
-  // provider switch / debug bundle all targeted lane 0 no matter which tile
-  // was focused. Same focused-lane source the spawn-target resolver uses
-  // (resolveDispatchSpawnTarget). When the focused lane is empty we pass null
-  // and fall through to the classic dispatch/grid focus, so classic Dispatch
-  // (no `tiled`) is byte-for-byte unchanged.
-  const tiled = state.dispatchMode.tiled
-  const laneSessionId = tiled
-    ? tiled.lanes[tiled.focusedLane]?.selectedSessionId ?? null
-    : null
-
+  // dispatchFocusedSessionId is the single tiled-aware reader: the focused
+  // lane's agent in Tiled Dispatch (falling back to classic focus when the
+  // lane is empty), else dispatchMode.focusedSessionId. Passing it — not the
+  // raw dispatchMode.focusedSessionId — is what makes View Prompts / Reload /
+  // Close / provider switch / debug panels target the lane the user actually
+  // has focused instead of falling through to rows[0] (the first tile).
+  // Classic Dispatch is byte-for-byte unchanged (the helper returns
+  // dispatchMode.focusedSessionId when there is no `tiled`).
   const rows = buildVisibleDispatchRows(state)
   return selectVisibleDispatchRow(
     rows,
-    laneSessionId ?? state.dispatchMode.focusedSessionId,
+    dispatchFocusedSessionId(state.dispatchMode),
     activeTab?.focusedSessionId,
   )?.sessionId ?? null
 }

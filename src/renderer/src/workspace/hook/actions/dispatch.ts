@@ -6,6 +6,7 @@ import { findTerminalSessionInTab } from '@renderer/workspace/dispatch/dispatchS
 import {
   buildAutoLanes,
   clampTileCount,
+  dispatchFocusedSessionId,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import type {
   WorkspaceSetState,
@@ -51,8 +52,12 @@ export function useDispatchActions(
       const existing = findTerminalSessionInTab(tab, snapshot)
       if (existing) return existing
 
-      const anchorId = tab.focusedSessionId
-      const cwd = snapshot.sessions[anchorId]?.cwd
+      // Anchor the terminal's cwd to the session the user is actually focused
+      // on. In Tiled Dispatch that's the focused lane's agent — tab.focusedSessionId
+      // is stale grid focus there and would spawn the terminal in the wrong
+      // project. Fall back to grid focus, then any leaf cwd of the tab.
+      const anchorId = dispatchFocusedSessionId(snapshot.dispatchMode) ?? tab.focusedSessionId
+      const cwd = (anchorId ? snapshot.sessions[anchorId]?.cwd : undefined)
         ?? leafIds.map(id => snapshot.sessions[id]?.cwd).find(Boolean)
       if (!cwd) {
         showToast('Could not create dispatch terminal: no project directory found')
