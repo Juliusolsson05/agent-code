@@ -4,6 +4,10 @@ import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspace
 import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
+import {
+  clearTiledLaneSessions,
+  remapTiledLanes,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { closeLeaf, collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import type { Tab } from '@renderer/workspace/types'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
@@ -306,13 +310,20 @@ export function useSessionActions(
         delete nextSessions[sessionId]
         const detachedSessions = { ...prev.detachedSessions }
         delete detachedSessions[sessionId]
+        // Clear the killed session out of any tiled lane FIRST (a lane can
+        // hold a session that isn't the classic dispatch focus), then clear
+        // the classic focus if it pointed here. Otherwise the lane dangles at
+        // a dead id and the layout's auto-fill effect bounces it to tile 0.
+        const clearedDispatch = clearTiledLaneSessions(prev.dispatchMode, sessionId)
+        const dispatchMode =
+          clearedDispatch?.focusedSessionId === sessionId
+            ? { ...clearedDispatch, focusedSessionId: undefined }
+            : clearedDispatch
         return {
           ...prev,
           sessions: nextSessions,
           detachedSessions,
-          dispatchMode: prev.dispatchMode?.focusedSessionId === sessionId
-            ? { ...prev.dispatchMode, focusedSessionId: undefined }
-            : prev.dispatchMode,
+          dispatchMode,
         }
       })
       delete refs.seenUuidsRef.current[sessionId]
@@ -452,39 +463,19 @@ export function useSessionActions(
           }),
           sessions,
           detachedSessions,
-          // Remap the swapped session id everywhere Dispatch holds it. Besides
-          // the classic single-view focus, Tiled Dispatch keeps its OWN
-          // per-lane selections in dispatchMode.tiled.lanes[].selectedSessionId
-          // — which this used to ignore. So reload / provider-switch / resume /
-          // rewind (all funnel through replaceSession) killed oldId, spawned
-          // newId, swapped it in the grid tree + detached map + focus, but left
-          // the focused lane pointing at the now-dead oldId. The layout's
-          // laneResolutions then couldn't resolve that lane, and the auto-fill
-          // heal effect re-homed it to the first available agent — i.e. "reload
-          // sent me back to the first tile." Remapping the lanes by the same
-          // oldId->newId here keeps the reloaded agent in its lane. Same
-          // tiled-vs-grid divergence as #266/#267 and #271, fixed at the swap.
-          dispatchMode: prev.dispatchMode
-            ? {
-              ...prev.dispatchMode,
-              focusedSessionId:
-                prev.dispatchMode.focusedSessionId === oldId
-                  ? newId
-                  : prev.dispatchMode.focusedSessionId,
-              ...(prev.dispatchMode.tiled
-                ? {
-                  tiled: {
-                    ...prev.dispatchMode.tiled,
-                    lanes: prev.dispatchMode.tiled.lanes.map(lane =>
-                      lane.selectedSessionId === oldId
-                        ? { ...lane, selectedSessionId: newId }
-                        : lane,
-                    ),
-                  },
-                }
-                : {}),
-            }
-            : prev.dispatchMode,
+          // Remap the swapped session id everywhere Dispatch holds it: the
+          // classic single-view focus AND every Tiled Dispatch lane selection
+          // (dispatchMode.tiled.lanes[].selectedSessionId). reload /
+          // provider-switch / resume / rewind all funnel through here; before
+          // this, the focused lane kept pointing at the now-dead oldId and the
+          // layout's auto-fill effect re-homed it to the first tile. Same
+          // tiled-vs-grid divergence as #266/#267/#271, fixed at the swap.
+          dispatchMode: remapTiledLanes(
+            prev.dispatchMode?.focusedSessionId === oldId
+              ? { ...prev.dispatchMode, focusedSessionId: newId }
+              : prev.dispatchMode,
+            idMap,
+          ),
         }
       })
       return newId
@@ -673,9 +664,17 @@ export function useSessionActions(
         )
 
         const focusedDispatchSessionId = prev.dispatchMode?.focusedSessionId
-        const nextDispatchMode = prev.dispatchMode
+        // Remap tiled lanes through the same old->new idMap (every reloaded
+        // agent got a fresh sessionId), then clear any lane whose session
+        // failed to respawn. Without this, "reload all" would point every lane
+        // at a dead id and the auto-fill effect would collapse them to tile 0.
+        const remappedDispatch = clearTiledLaneSessions(
+          remapTiledLanes(prev.dispatchMode, idMap),
+          failedIds,
+        )
+        const nextDispatchMode = remappedDispatch
           ? {
-              ...prev.dispatchMode,
+              ...remappedDispatch,
               focusedSessionId: focusedDispatchSessionId
                 ? idMap.get(focusedDispatchSessionId) ??
                   (failedIds.has(focusedDispatchSessionId) ? undefined : focusedDispatchSessionId)

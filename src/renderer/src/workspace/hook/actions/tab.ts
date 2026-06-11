@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 
 import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { sanitizeTileTabsState, titleFromCwd } from '@renderer/workspace/layout/helpers'
 
 import type {
@@ -141,15 +142,20 @@ export function useTabActions(
             ? (tabs[0]?.id ?? '')
             : prev.activeTabId
         const dispatchFocused = prev.dispatchMode?.focusedSessionId
+        // Closing a tab kills all its sessions; clear any tiled lane pointing
+        // at one of them (else the lane dangles and auto-fill bounces to tile 0),
+        // then clear the classic focus if it pointed at a killed session.
+        const killed = new Set(idsToKill)
+        const clearedDispatch = clearTiledLaneSessions(prev.dispatchMode, killed)
         return {
           ...prev,
           tabs,
           activeTabId,
           sessions,
           detachedSessions,
-          dispatchMode: dispatchFocused && idsToKill.includes(dispatchFocused)
-            ? { ...prev.dispatchMode!, focusedSessionId: undefined }
-            : prev.dispatchMode,
+          dispatchMode: dispatchFocused && killed.has(dispatchFocused)
+            ? { ...clearedDispatch!, focusedSessionId: undefined }
+            : clearedDispatch,
         }
       })
       setTileTabs(prev => {

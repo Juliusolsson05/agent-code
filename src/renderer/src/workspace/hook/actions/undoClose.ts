@@ -9,6 +9,7 @@ import type {
   TabId,
 } from '@renderer/workspace/types'
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
+import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { missingClosedTabLeafMetaIds, reinsertPane } from '@renderer/lib/undoClose'
 import type { ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
 
@@ -243,6 +244,10 @@ export function useUndoCloseAction(
           tabs,
           activeTabId: restoredTab.id,
           detachedSessions: { ...prev.detachedSessions, ...restoredDetached },
+          // Restored sessions get fresh ids (idMap); remap any tiled lane that
+          // pointed at the closed tab's sessions so the lane follows the
+          // restored agent instead of dangling at a dead id.
+          dispatchMode: remapTiledLanes(prev.dispatchMode, idMap),
         }
       })
       return 'restored'

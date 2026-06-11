@@ -9,6 +9,7 @@ import type {
   TileNode,
 } from '@renderer/workspace/types'
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
+import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import {
@@ -307,14 +308,27 @@ export async function rehydrateWorkspace(
       // Falling back to undefined when the old id failed to respawn
       // keeps the model honest — better to clear the focus than to
       // pretend a dead id is still selectable.
-      const remappedDispatchMode = persisted.dispatchMode
-        ? {
-            ...persisted.dispatchMode,
-            focusedSessionId: persisted.dispatchMode.focusedSessionId
-              ? idMap.get(persisted.dispatchMode.focusedSessionId)
-              : undefined,
-          }
-        : null
+      // The SAME remap must hit Tiled Dispatch's per-lane selections. Each
+      // tiled.lanes[].selectedSessionId is a persisted pre-restart SessionId;
+      // without remapping them through idMap, EVERY lane points at a dead id
+      // after restart, laneResolutions can't resolve any of them, and the
+      // auto-fill effect collapses the whole layout onto the first agents.
+      // (This is the most likely "resume doesn't resume" cause for a
+      // Tiled-Dispatch user — it fires on every single restart.) Lanes whose
+      // id has no idMap entry — hibernated detached/buried sessions kept under
+      // their original id per #258 — are left untouched by remapTiledLanes,
+      // which is correct: those ids still exist in the rehydrated sessions.
+      const remappedDispatchMode = remapTiledLanes(
+        persisted.dispatchMode
+          ? {
+              ...persisted.dispatchMode,
+              focusedSessionId: persisted.dispatchMode.focusedSessionId
+                ? idMap.get(persisted.dispatchMode.focusedSessionId)
+                : undefined,
+            }
+          : null,
+        idMap,
+      )
 
       return {
         tabs: newTabs,
