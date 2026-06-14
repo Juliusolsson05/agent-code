@@ -159,6 +159,60 @@ export type SessionConditionsEvent = {
   snapshot: ProviderConditionSnapshot
 }
 
+// --- Subagent fleet -----------------------------------------------------------
+//
+// Claude Code's `Agent` tool spawns a subagent whose FULL transcript is written
+// live to `<projectDir>/<providerSessionId>/subagents/agent-<id>.jsonl`, with a
+// sidecar `agent-<id>.meta.json` carrying { agentType, description, toolUseId }.
+// `toolUseId` matches the parent `Agent` tool_use block id exactly — the
+// deterministic join key that lets the feed nest a subagent's live work under
+// the card that spawned it. The main-process watcher derives these and pushes
+// the whole per-session map on every change. See
+// src/main/subagents/ and the design spec
+// docs/superpowers/specs/2026-06-14-subagent-fleet-rendering-design.md.
+
+/** One tool call in a subagent's timeline (the drill-in mini-feed). */
+export type SubAgentToolCall = {
+  /** Tool name, e.g. "Read" | "Bash" | "Grep". */
+  name: string
+  /** First meaningful arg (path/command/pattern/query), already truncated. */
+  headline: string | null
+  /** 'done' once a matching tool_result was observed; else 'running'. */
+  status: 'running' | 'done'
+}
+
+/** Live state of one subagent, keyed by its parent `Agent` tool_use id. */
+export type SubAgentState = {
+  /** Parent `Agent` tool_use block id — meta.toolUseId. The render join key. */
+  toolUseId: string
+  /** The agent-<id> filename id. */
+  agentId: string
+  /** meta.agentType, e.g. "Explore" | "general-purpose". */
+  agentType: string
+  /** meta.description — the card headline. */
+  description: string
+  status: 'running' | 'done' | 'error'
+  /** Epoch ms of the first transcript entry, or null if unknown. */
+  startedAt: number | null
+  /** Epoch ms of the last observed entry (drives elapsed + live pulse). */
+  lastActivityAt: number | null
+  /** Count of assistant turns observed. */
+  turnCount: number
+  /** Ordered tool-call timeline (capped — see SUBAGENT_TOOL_CALLS_MAX). */
+  toolCalls: SubAgentToolCall[]
+  /** Count of tool calls dropped from the front when capped (0 if none). */
+  droppedToolCalls: number
+  /** Derived activity label, e.g. "running Grep" | "thinking" | null. */
+  currentActivity: string | null
+}
+
+/** Per-session push: the full subAgents map for one session, keyed by
+ *  parent `Agent` tool_use id. */
+export type SessionSubAgentsEvent = {
+  sessionId: string
+  subAgents: Record<string, SubAgentState>
+}
+
 /** Per-block semantic stream from Claude's proxy adapter (or screen
  *  fallback when proxy is off). `event` is a `SemanticEvent` from
  *  claude-code-headless — discriminated by `event.type` (text_delta /
