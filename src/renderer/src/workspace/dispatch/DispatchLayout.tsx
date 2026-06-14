@@ -211,7 +211,21 @@ function ClassicDispatchLayout({
                 terminalSessionId,
               )}
               focused={false}
-              onFocusRequest={() => {}}
+              // WHY this focuses the terminal in Dispatch instead of being a
+              // no-op: every Dispatch command (Close, Reload, View Prompts,
+              // provider switch, …) targets dispatchMode.focusedSessionId via
+              // commandTargetSessionId. The project terminal lives in its own
+              // side column OUTSIDE the active-row mechanism, so when its
+              // onFocusRequest did nothing, clicking into the terminal to use
+              // it never updated the dispatch focus — focus stayed on the last
+              // agent (or a stale id that resolved to rows[0]), and running
+              // Close from the terminal killed a random AGENT instead of the
+              // terminal. The terminal is already a real dispatch row
+              // (terminals are in buildVisibleDispatchRows), so making it the
+              // focus is the same promotion that selecting its list row does:
+              // it becomes the active row, the command target follows it, and
+              // Close closes the terminal.
+              onFocusRequest={() => workspace.focusDispatchSession(activeTab.id, terminalSessionId)}
               workspace={workspace}
             />
           ) : (
