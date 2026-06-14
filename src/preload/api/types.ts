@@ -348,6 +348,20 @@ export type PasteDebugEvent = PasteDebugEventInput & {
   tMs: number
 }
 
+// Read-back shape for the dev-debug ClaudePasteDetection module (#90). The
+// journal writer (pasteDebugJournal.ts) persists one `<pasteId>.paste.jsonl`
+// per submit; this groups all events of one such file back into a session so
+// the renderer can reconstruct the issued→detected timeline. We surface the
+// raw events (not a pre-digested lifecycle) because the digest is
+// investigation-local and lives in the renderer module, where it can evolve
+// without an IPC version bump.
+export type PasteDebugSession = {
+  pasteId: string
+  /** First event's wall-clock ts, or the file mtime when the file is empty. */
+  startedAt: number
+  events: PasteDebugEvent[]
+}
+
 // Debug bundle — opaque file list shipped from renderer to main.
 // See main/storage/debugBundle.ts for the layout rationale. Types
 // are duplicated here (not imported) because preload/main/renderer
