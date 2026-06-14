@@ -478,6 +478,7 @@ export function TileLeaf({
           scrollToLatestRequest={runtime.scrollToLatestRequest}
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
+          subAgents={runtime.subAgents}
           // Keep render-decision logging tied to mounted feeds, not
           // to the debug panel or the transient focus flag. The
           // state/semantic layers already persist aggressively in

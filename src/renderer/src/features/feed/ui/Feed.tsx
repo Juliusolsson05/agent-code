@@ -22,6 +22,7 @@ import {
   ToolUseIndexContext,
   ToolResultIndexContext,
   CodeRenderContext,
+  SubAgentsContext,
 } from '@renderer/features/feed/context'
 import {
   type AgentProvider,
@@ -46,6 +47,7 @@ import {
   LazyEntry,
 } from '@renderer/features/feed/ui/rows'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import type { SubAgentState } from '@renderer/workspace/workspaceState'
 import * as perf from '@renderer/performance/client'
 
 // Re-export — many external callers import these types from Feed
@@ -156,6 +158,10 @@ type Props = {
    *  now from the runtime — the store grows them at ingest time. */
   toolUseIndex?: Map<string, ToolUseBlock>
   toolResultIndex?: Map<string, ToolResultBlock>
+  /** Subagent fleet for this session, keyed by parent `Agent` tool_use id.
+   *  Threaded from runtime.subAgents and provided to rows via
+   *  SubAgentsContext so the `Agent` card can render live status + drill-in. */
+  subAgents?: Record<string, SubAgentState>
   onDebugLog?: (entry: {
     layer: 'RENDER'
     kind: string
@@ -258,6 +264,7 @@ function FeedImpl({
   scrollToLatestRequest = 0,
   toolUseIndex: toolUseIndexProp,
   toolResultIndex: toolResultIndexProp,
+  subAgents = {},
   onDebugLog,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
@@ -884,6 +891,7 @@ function FeedImpl({
     <ProviderContext.Provider value={provider}>
     <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
+    <SubAgentsContext.Provider value={subAgents}>
     <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
       <div
         ref={scrollerRef}
@@ -914,6 +922,7 @@ function FeedImpl({
         </div>
       </div>
     </CodeRenderContext.Provider>
+    </SubAgentsContext.Provider>
     </ToolResultIndexContext.Provider>
     </ToolUseIndexContext.Provider>
     </ProviderContext.Provider>

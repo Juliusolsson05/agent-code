@@ -938,6 +938,18 @@ export function useIpcSubscriptions(
       })
     })
 
+    // Subagent fleet state. Main pushes the FULL per-session map on every
+    // change (it's small — agentType/description + a capped tool-call
+    // timeline), so we just replace the field wholesale. Reference-equal bail
+    // keeps Feed from re-rendering when an unrelated session updates.
+    const offSubAgents = window.api.onSessionSubAgents(({ sessionId, subAgents }) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        if (current.subAgents === subAgents) return prev
+        return { ...prev, [sessionId]: { ...current, subAgents } }
+      })
+    })
+
     // Bulk jsonl-entry path — the ONLY entry handler now that main
     // no longer dual-emits singular events. Folds a whole burst in
     // one setRuntimes + at most one setState, grows the tool
@@ -1603,6 +1615,7 @@ export function useIpcSubscriptions(
       offProcessState()
       offSemantic()
       offConditions()
+      offSubAgents()
       offExit()
       for (const t of refs.bootstrapTimersRef.current.values()) clearTimeout(t)
       refs.bootstrapTimersRef.current.clear()
