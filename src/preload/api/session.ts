@@ -19,6 +19,7 @@ import type {
   SessionResumePromptEvent,
   SessionCompactionStateEvent,
   SessionConditionsEvent,
+  SessionSubAgentsEvent,
   BuiltInMcpDomain,
   TranscriptPathRequest,
   TranscriptPathResult,
@@ -210,6 +211,14 @@ export const sessionApi = {
 
   onSessionConditions: (cb: (e: SessionConditionsEvent) => void): Unsub =>
     subscribe('session:conditions', cb),
+
+  /** Subscribe to per-session subagent fleet state. Fires whenever the
+   *  main-process subagents watcher observes a change in any
+   *  `<sessionDir>/subagents/agent-<id>.jsonl`. Payload is the full
+   *  subAgents map for the session (keyed by parent Agent tool_use id);
+   *  the renderer folds it into runtime.subAgents. */
+  onSessionSubAgents: (cb: (e: SessionSubAgentsEvent) => void): Unsub =>
+    subscribe('session:sub-agents', cb),
 
   /** Subscribe to Claude's semantic event stream. Fires for every
    *  SemanticEvent emitted by the adapter — the renderer narrows by

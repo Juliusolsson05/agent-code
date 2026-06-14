@@ -3,6 +3,7 @@ import type { LspManager } from '@main/lspManager.js'
 
 import { sendToMainWindow } from '@main/window/mainWindow.js'
 import { enqueueJsonl, flushAndDropJsonl } from '@main/sessions/jsonlCoalescer.js'
+import { SubAgentWatcherManager } from '@main/subagents/index.js'
 
 // Session event forwarder.
 //
@@ -21,6 +22,14 @@ export function wireSessionForwarder(
   manager: SessionManager,
   lspManager: LspManager,
 ): void {
+  // Per-session subagent fleet watcher. Driven off the main transcript stream
+  // (jsonl-entry carries the transcript `file` we derive the subagents dir
+  // from, and the tool_result blocks that flip a subagent to done/error). See
+  // src/main/subagents/.
+  const subAgents = new SubAgentWatcherManager((sessionId, map) =>
+    sendToMainWindow('session:sub-agents', { sessionId, subAgents: map }),
+  )
+
   manager.on('started', payload => sendToMainWindow('session:started', payload))
   manager.on('screen', payload => sendToMainWindow('session:screen', payload))
 
@@ -29,6 +38,7 @@ export function wireSessionForwarder(
   // entries become 1-element bulk messages with imperceptible latency.
   manager.on('jsonl-entry', payload => {
     enqueueJsonl(payload.sessionId, payload.entry, payload.file)
+    subAgents.observeParentEntry(payload.sessionId, payload.entry, payload.file)
   })
   manager.on('jsonl-error', ({ sessionId, error }) =>
     sendToMainWindow('session:jsonl-error', {
@@ -54,6 +64,7 @@ export function wireSessionForwarder(
     // bootstrapTail tick must land before exit so the renderer sees a
     // consistent final entries list.
     flushAndDropJsonl(payload.sessionId)
+    subAgents.stop(payload.sessionId)
     sendToMainWindow('session:exit', payload)
   })
   lspManager.on('diagnostics', payload => sendToMainWindow('lsp:diagnostics', payload))

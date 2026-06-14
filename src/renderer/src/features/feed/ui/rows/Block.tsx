@@ -36,6 +36,7 @@ import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
 import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
+import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 
 /* ---------- Block dispatcher ---------- */
 
@@ -167,6 +168,12 @@ export const Block = memo(function Block({
           return <WriteRow block={tu} />
         case 'TodoWrite':
           return <TodoRow block={tu} />
+        // A subagent spawn. The generic ToolUseRow showed a dead "Agent" +
+        // description card; TaskSubagentRow makes it live — status + tool
+        // count + an expandable tool-call timeline — by joining this block's
+        // id against runtime.subAgents (see SubAgentsContext).
+        case 'Agent':
+          return <TaskSubagentRow block={tu} />
         default:
           return <ToolUseRow block={tu} />
       }

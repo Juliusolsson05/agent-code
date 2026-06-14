@@ -6,6 +6,7 @@ import type {
 } from '@shared/types/transcript'
 
 import type { AgentProvider } from '@renderer/features/feed/types'
+import type { SubAgentState } from '@renderer/workspace/workspaceState'
 
 // ---------------------------------------------------------------------------
 // Feed contexts.
@@ -66,3 +67,11 @@ export const CodeRenderContext = createContext<{
   sessionId: '',
   workspaceRoot: null,
 })
+
+// Subagent fleet state for this session, keyed by parent `Agent` tool_use id.
+// The `Agent` tool_use row (and the "Spawned N agents" group header) read this
+// to render live status + the drill-in tool-call timeline. Same side-channel
+// rationale as the maps above: the row only sees its own block, but needs the
+// session-wide subagent map that lives one level up on the runtime. Empty `{}`
+// when no subagents exist, so consumers render the plain spawn card.
+export const SubAgentsContext = createContext<Record<string, SubAgentState>>({})

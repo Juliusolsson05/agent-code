@@ -15,6 +15,8 @@ import type {
 } from '@shared/work-context/types'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
+import type { SubAgentState } from '@preload/api/types'
+export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
 
 export type PickerItem = {
   id: string
@@ -523,6 +525,13 @@ export type SessionRuntime = {
    *  reducer functions mutate this field. Disk persistence lives
    *  in `src/main/ghostJournal.ts`. */
   ghosts: Map<string, GhostEntry>
+  /** Task-tool subagents spawned by this session's work, keyed by the parent
+   *  `Agent` tool_use id. Folded from the `session:sub-agents` IPC push (which
+   *  the main-process watcher derives from `<sessionDir>/subagents/*.jsonl`).
+   *  Read by the feed's TaskSubagentRow / SubagentGroupHeader to show how many
+   *  agents are running and what each is doing. Empty `{}` when no subagents
+   *  exist — the feed then renders exactly as before. */
+  subAgents: Record<string, SubAgentState>
 }
 
 export function emptySemanticRuntime(): SemanticRuntimeState {
@@ -614,6 +623,7 @@ export function emptyRuntime(): SessionRuntime {
     feedDebugEpochMs: null,
     lastJsonlEntryAt: null,
     ghosts: new Map(),
+    subAgents: {},
   }
 }
 
