@@ -1,5 +1,7 @@
 import { ipcMain } from 'electron'
 
+import { readRecentPasteSessions } from '../pasteDebugJournal.js'
+
 export type DevDebugConfig = {
   enabled: boolean
 }
@@ -21,4 +23,14 @@ export function registerDevDebugIpc(): void {
       enabled: envFlag('AGENT_CODE_DEV_DEBUG'),
     }
   })
+
+  // Read side of the paste-debug journals, consumed by the ClaudePasteDetection
+  // dev module (#90). The journals are write-only at runtime (the renderer
+  // records events via record-paste-debug-event); this lets the module pull
+  // them back to reconstruct issued→detected latency. Renderer-only modules get
+  // main-process data exactly this way — a thin invoke handler, no per-module
+  // channel proliferation.
+  ipcMain.handle('dev-debug:read-paste-events', (_evt, limit?: number) =>
+    readRecentPasteSessions(typeof limit === 'number' ? limit : 30),
+  )
 }

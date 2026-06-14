@@ -29,11 +29,22 @@
 //   * a file per paste × hundreds of pastes/day adds up; without
 //     pruning we'd grow forever
 
-import { appendFile, mkdir, readdir, stat, unlink } from 'node:fs/promises'
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  unlink,
+} from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 
-import type { PasteDebugEvent, PasteDebugEventInput } from '@preload/api/types.js'
+import type {
+  PasteDebugEvent,
+  PasteDebugEventInput,
+  PasteDebugSession,
+} from '@preload/api/types.js'
 
 const FLUSH_INTERVAL_MS = 100
 
@@ -141,6 +152,66 @@ export function pasteDebugLogPath(pasteId: string): string {
     'paste-debug',
     `${pasteId}.paste.jsonl`,
   )
+}
+
+// Read the N most-recently-modified paste journals, newest first, for the
+// dev-debug ClaudePasteDetection module (#90). This is the read side of the
+// write-only journal: the renderer module surfaces issued→detected latency and
+// stuck-submit outcomes from these files.
+//
+// Tolerant by construction: a journal may be mid-append while we read it (the
+// 100ms drain is asynchronous), so a trailing partial line is normal — we skip
+// any line that fails to parse rather than throwing. A debug panel must never
+// crash on its own diagnostic data.
+export async function readRecentPasteSessions(
+  limit = 30,
+): Promise<PasteDebugSession[]> {
+  const dir = join(app.getPath('userData'), 'paste-debug')
+  let names: string[]
+  try {
+    names = (await readdir(dir)).filter(n => n.endsWith('.paste.jsonl'))
+  } catch {
+    // Dir is created lazily on the first paste — absence just means
+    // "no submits recorded yet", not an error.
+    return []
+  }
+
+  const withMtime = await Promise.all(
+    names.map(async name => {
+      try {
+        return { name, mtime: (await stat(join(dir, name))).mtimeMs }
+      } catch {
+        return { name, mtime: 0 }
+      }
+    }),
+  )
+  withMtime.sort((a, b) => b.mtime - a.mtime)
+
+  const out: PasteDebugSession[] = []
+  for (const { name, mtime } of withMtime.slice(0, limit)) {
+    const pasteId = name.replace(/\.paste\.jsonl$/, '')
+    let events: PasteDebugEvent[] = []
+    try {
+      const raw = await readFile(join(dir, name), 'utf8')
+      events = raw
+        .split('\n')
+        .map(l => l.trim())
+        .filter(Boolean)
+        .map(l => {
+          try {
+            return JSON.parse(l) as PasteDebugEvent
+          } catch {
+            return null
+          }
+        })
+        .filter((e): e is PasteDebugEvent => e !== null)
+    } catch {
+      // Unreadable file (deleted between readdir and read, perms): emit an
+      // empty session so the pasteId still shows rather than vanishing.
+    }
+    out.push({ pasteId, startedAt: events[0]?.ts ?? mtime, events })
+  }
+  return out
 }
 
 export async function pruneOldPasteDebugLogs(): Promise<void> {
