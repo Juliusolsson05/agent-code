@@ -267,6 +267,19 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'auto-send-prompt-suggestion',
+      category: 'workspace',
+      title: 'Auto-send Prompt Suggestions',
+      description:
+        'When on, clicking a prompt-suggestion chip sends it immediately as the next prompt. When off, clicking only fills the composer so you can edit it first. On by default.',
+      keywords: ['prompt', 'suggestion', 'chip', 'autosend', 'send', 'composer', 'next prompt'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.autoSendPromptSuggestion,
+        onToggle: (ctx, value) => ctx.onChange({ autoSendPromptSuggestion: value }),
+      },
+    },
+    {
       id: 'aggressive-debug-persistence',
       category: 'experimental',
       title: 'Persistent Aggressive Debug Logs',

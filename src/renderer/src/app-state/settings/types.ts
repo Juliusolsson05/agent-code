@@ -247,6 +247,13 @@ export type Settings = {
   *  controls and removes the "terminal always mounted even when turned
   *  off" failure mode. */
   dispatchProjectTerminal: boolean
+  /** When on (default), clicking a prompt-suggestion chip immediately SENDS
+   *  that suggestion as the next prompt; when off, clicking only prefills the
+   *  composer draft so the user can edit before submitting. The chip is an
+   *  offer that appears after a turn (issue #174); most users want one click
+   *  to act, hence on-by-default. The send-vs-prefill decision lives at the
+   *  apply site (TileLeaf), so the chip component stays presentational. */
+  autoSendPromptSuggestion: boolean
   /** Monospace face used across the whole app: inherited DOM text,
    *  existing `font-code` Tailwind classes, Monaco code blocks, and
    *  xterm panes all resolve through the same `--theme-app-font`
@@ -276,5 +283,6 @@ export const DEFAULT_SETTINGS: Settings = {
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
   dispatchProjectTerminal: false,
+  autoSendPromptSuggestion: true,
   fontFamily: 'jetbrains-mono',
 }
