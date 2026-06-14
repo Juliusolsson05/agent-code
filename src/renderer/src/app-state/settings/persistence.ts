@@ -50,6 +50,10 @@ export function coerceSettings(value: unknown): Settings {
     // setting's docstring. Anything looser (e.g. `!== false`) would
     // flip the default to ON for fresh installs.
     dispatchProjectTerminal: parsed.dispatchProjectTerminal === true,
+    // `!== false` so the default is ON — only an explicit persisted `false`
+    // turns autosend off. Fresh installs / older workspace.json blobs (no
+    // such key) get the on-by-default behavior.
+    autoSendPromptSuggestion: parsed.autoSendPromptSuggestion !== false,
     // WHY membership check via WORKSPACE_MODES rather than a literal
     // === 'dispatch': keeps the source of truth in one array so adding
     // a new mode label later (if ever) only requires editing types.ts.

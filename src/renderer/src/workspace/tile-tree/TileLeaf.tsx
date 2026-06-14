@@ -91,6 +91,14 @@ export function TileLeaf({
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
   const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
+  const autoSendPromptSuggestion = useAppStore(state => state.settings.autoSendPromptSuggestion)
+  // When a prompt-suggestion chip is clicked with autosend on, we prefill the
+  // draft (setInputText) and stash the text here; the effect below fires the
+  // real submit ONCE the draft has committed to runtime.draftInput, so
+  // submitCurrentDraft's own closure sees the suggestion text. This keeps the
+  // delicate provider submit/paste path untouched — autosend reuses it exactly
+  // as if the user had typed the suggestion and pressed Enter.
+  const autoSendPendingRef = useRef<string | null>(null)
   // Destructure the stable useCallback setter so effect deps don't
   // spuriously invalidate on every parent render. workspace itself
   // is a fresh object literal each render, but its methods are
@@ -303,6 +311,18 @@ export function TileLeaf({
       },
     })
   }, [focused, composerHovered, input, runtime.draftImages.length, slashMode, submitCurrentDraft])
+
+  // Auto-send a clicked prompt suggestion. onApplySuggestion prefills the draft
+  // and stashes the text in autoSendPendingRef; this effect waits until the
+  // draft has actually committed to `input`, then submits via the SAME path a
+  // manual Enter uses (submitCurrentDraft clears the draft itself). Gated on
+  // the exact pending text so it fires exactly once and never on normal typing.
+  useEffect(() => {
+    const pending = autoSendPendingRef.current
+    if (pending === null || input !== pending) return
+    autoSendPendingRef.current = null
+    void submitCurrentDraft('global-enter')
+  }, [input, submitCurrentDraft])
 
   const isSessionLive = runtime.sessionStatus === 'running'
   const readinessText =
@@ -522,11 +542,14 @@ export function TileLeaf({
         dictation={dictation}
         promptSuggestion={runtime.promptSuggestion?.text ?? null}
         onApplySuggestion={text => {
-          // Prefill the draft and clear the suggestion. We do NOT auto-send —
-          // the user reviews/edits before submitting, matching #174's
-          // "clickable suggestion chips" (prefill) acceptance criterion.
+          // Always prefill the draft and clear the chip. Then, if autosend is
+          // on (the default), stash the text so the effect above submits it
+          // once the draft commits — one click acts. With autosend off we stop
+          // at prefill so the user can edit before submitting (#174's original
+          // prefill behavior, now opt-in via Settings → Workspace).
           setInputText(text)
           workspace.updateRuntime(sessionId, { promptSuggestion: null })
+          if (autoSendPromptSuggestion) autoSendPendingRef.current = text
         }}
         onDismissSuggestion={() =>
           workspace.updateRuntime(sessionId, { promptSuggestion: null })
