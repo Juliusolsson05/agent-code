@@ -8,6 +8,10 @@ import {
   clearTiledLaneSessions,
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import {
+  remapPinnedSessionIds,
+  remapSessionsRelationships,
+} from '@renderer/workspace/idRemap'
 import { closeLeaf, collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import type { Tab } from '@renderer/workspace/types'
 import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage'
@@ -461,7 +465,16 @@ export function useSessionActions(
                 t.focusedSessionId === oldId ? newId : t.focusedSessionId,
             }
           }),
-          sessions,
+          // Remap relationship pointers across ALL sessions: a linked /
+          // orchestration CHILD of the swapped session carries oldId in its
+          // linkedParentId/orchestrationParentId/orchestrationRootId, so the
+          // swap has to update those too or the child renders top-level and
+          // parent-scoped orchestration reads break. (rehydrate already does
+          // this; reload/switch/resume/rewind funnel through here and didn't.)
+          sessions: remapSessionsRelationships(sessions, idMap),
+          // A pinned agent that gets a fresh id on reload/switch must follow
+          // to the new id instead of silently dropping out of the Pinned list.
+          pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
           detachedSessions,
           // Remap the swapped session id everywhere Dispatch holds it: the
           // classic single-view focus AND every Tiled Dispatch lane selection
@@ -686,7 +699,11 @@ export function useSessionActions(
           ...prev,
           tabs: nextTabs,
           activeTabId,
-          sessions: nextSessions,
+          // Reload-all gives every agent a fresh id; remap relationship
+          // pointers across all sessions (children keep pointing at the right
+          // parent) and remap the pinned list (pins follow to the new ids).
+          sessions: remapSessionsRelationships(nextSessions, idMap),
+          pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
           detachedSessions: nextDetachedSessions,
           buried: nextBuried,
           dispatchMode: nextDispatchMode,

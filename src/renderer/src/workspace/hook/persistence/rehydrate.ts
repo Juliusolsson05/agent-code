@@ -10,6 +10,7 @@ import type {
 } from '@renderer/workspace/types'
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { remapSessionMetaRelationships } from '@renderer/workspace/idRemap'
 import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
 import {
@@ -540,60 +541,9 @@ export async function rehydrateWorkspace(
   }
 }
 
-export function remapSessionMetaRelationships(
-  meta: SessionMeta,
-  idMap: Map<SessionId, SessionId>,
-  knownSessionIds: Set<SessionId> = new Set(),
-): SessionMeta {
-  // WHY these SessionMeta fields need the same old->new remap as tile leaves:
-  //
-  // Agent Code SessionIds are launch-local routing ids. Rehydrate respawns
-  // live backend processes, so every persisted reference to another session
-  // must cross the idMap boundary. Tile leaves, detached records, buried
-  // records, pins, and Dispatch focus already do this. `linkedParentId`,
-  // `orchestrationParentId`, and `orchestrationRootId` are the same kind of
-  // relationship pointer; leaving them untouched makes restored child agents
-  // render as top-level rows and breaks parent-scoped orchestration MCP reads.
-  //
-  // WHY the fallback to the original id when no idMap entry exists:
-  //
-  // Hibernated sessions (detached + buried) intentionally do not respawn during
-  // rehydrate, so they never appear in idMap. Their metadata is still seeded
-  // into `freshSessions` under the original persisted id (no fresh routing id
-  // is needed because no process was created). A hibernated → hibernated
-  // relationship link must therefore resolve via "is this endpoint still
-  // known?" rather than "is it in idMap?". `knownSessionIds` is the set of
-  // every sessionId that survived this rehydrate — both spawned (new ids) and
-  // hibernated (original ids). If the endpoint survived under either label,
-  // the link is honest; if it survived under no label, omitting the field is
-  // the correct honest state (the relationship endpoint is gone).
-  //
-  // Backward compatibility: knownSessionIds is optional so non-rehydrate
-  // callers (if any) get the old "idMap or drop" behavior without surprise.
-  const remap = (id?: SessionId): SessionId | undefined => {
-    if (!id) return undefined
-    const mapped = idMap.get(id)
-    if (mapped) return mapped
-    return knownSessionIds.has(id) ? id : undefined
-  }
-  const {
-    linkedParentId,
-    orchestrationParentId,
-    orchestrationRootId,
-    ...rest
-  } = meta
-  const remappedLinkedParentId = remap(linkedParentId)
-  const remappedOrchestrationParentId = remap(orchestrationParentId)
-  const remappedOrchestrationRootId = remap(orchestrationRootId)
-
-  return {
-    ...rest,
-    ...(remappedLinkedParentId ? { linkedParentId: remappedLinkedParentId } : {}),
-    ...(remappedOrchestrationParentId
-      ? { orchestrationParentId: remappedOrchestrationParentId }
-      : {}),
-    ...(remappedOrchestrationRootId
-      ? { orchestrationRootId: remappedOrchestrationRootId }
-      : {}),
-  }
-}
+// remapSessionMetaRelationships moved to src/renderer/src/workspace/idRemap.ts
+// so the non-rehydrate remap sites (replaceSession, reloadAgentSessions) can
+// share it without importing this persistence module (which would create an
+// import cycle). Re-exported here to keep this file's historical import path
+// working for any external consumer.
+export { remapSessionMetaRelationships }
