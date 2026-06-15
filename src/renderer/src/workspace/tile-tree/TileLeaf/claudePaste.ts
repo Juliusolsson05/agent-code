@@ -1,11 +1,12 @@
 // Claude's TUI has its own paste-state machine. Large input and
 // bracketed paste do NOT go straight from "bytes arrived" to "submit
-// immediately" — Claude first buffers the paste, may collapse it into
-// a `[Pasted text #N]` placeholder in the visible composer, and only
-// later expands it back out during submit. If we send the paste
-// payload AND the trailing Enter in the same PTY write, that Enter
-// can land while Claude still considers the paste "in flight". The
-// result is the exact user-facing bug we saw:
+// immediately" — Claude buffers every `isPasted` chunk and flushes on a
+// ~100ms debounce (`PASTE_COMPLETION_TIMEOUT_MS` in claude-code-src).
+// INSIDE that debounce window a `pastePendingRef` guard swallows every
+// subsequent keystroke — INCLUDING our submit `\r` — as more paste
+// content. So if the Enter lands before the debounce fires, it becomes
+// literal text, no turn starts, and the user has to press Enter again.
+// That is the exact user-facing bug:
 //
 //   1. the pasted prompt appears in Claude's composer,
 //   2. Claude flips into a "working" looking state,
@@ -13,61 +14,53 @@
 //   4. and the NEXT Enter finally submits the already-buffered prompt.
 //
 // We fix this at the shell boundary instead of forking Claude's paste
-// logic: for Claude only, any prompt that is likely to be treated as
-// a paste gets delivered in TWO phases — first the payload, then a
-// separate submit write after Claude visibly acknowledges the paste.
+// logic: deliver the paste in TWO phases — first the bracketed payload,
+// then a separate submit `\r` only AFTER we can see Claude's composer
+// has visibly absorbed the paste (the debounce has provably fired).
 //
-// The primary strategy is event-driven and not user-configurable:
+// ----------------------------------------------------------------------------
+// THE SIGNAL IS A CONTENT MATCH, NOT A CLOCK.
+// ----------------------------------------------------------------------------
 //
-//   * EVENT-DRIVEN: poll Claude's screen snapshot for
-//     `[Pasted text #N]` and send `\r` the instant the placeholder
-//     appears. Load-independent — works at 10 ms or 10 s. This is
-//     the strategy the paste-submit repro harness at
-//     `vendor/in_progress/paste-submit-repro/` showed to be 10/10
-//     reliable with average waits ~58 ms.
+// We compare what the user submitted against what is actually in the
+// headless composer, via the live screen snapshot (`latestScreenRef`),
+// and send `\r` the instant the composer reflects the paste. Two
+// screen-truth manifestations, because Claude renders pastes two ways:
 //
-//   * WALL-CLOCK FALLBACK: wait `delayMs` (default 125 ms — slightly
-//     above Claude's 100 ms paste completion timeout) then send `\r`.
-//     Kept only as a fallback because the event-driven path depends on
-//     Claude continuing to render the placeholder. A future Claude UI
-//     rename should degrade paste-submit, not brick it entirely. The
-//     harness shows the timer races even at 1000 ms under load, so it
-//     must never be exposed as a selectable primary path again.
+//   * COLLAPSE: a large paste becomes a `[Pasted text #N]` placeholder.
+//     Signal: a NEW placeholder appeared vs. the pre-paste baseline.
+//   * INLINE:  a medium paste (≈100 chars up to Claude's collapse
+//     threshold) is inserted as raw text. NO placeholder ever renders —
+//     this is the band that issue #279 / #90 kept failing on, because
+//     the old detector only watched for the placeholder, timed out, and
+//     blind-fired `\r` straight into the debounce. Signal: the paste's
+//     tail newly appears in the composer.
+//
+// Both are load-independent: 10ms or 10s, we wait for the *condition*.
+//
+// The wall-clock wait survives ONLY as a rare safety floor — if neither
+// signal materializes within a short bound (a future Claude UI rename,
+// or a screen snapshot we can't read), we send `\r` anyway so submit
+// degrades rather than hangs. It must never again be the primary path:
+// real production traces show the timer races even at 1000ms under load,
+// and "there's no value of T that's correct under all load conditions."
 //
 // Why these numbers:
-//   - 100 chars: empirical lower bound on text length where Claude's
-//     TUI runs its internal paste accumulator. The original constant
-//     was 800 because we believed it had to match Claude's *collapse*
-//     threshold (the size at which Claude renders `[Pasted text #N]`
-//     instead of inlining the bytes). It does not. Claude's paste
-//     ACCUMULATOR triggers independently, around ~100 chars, regardless
-//     of whether the inlined-vs-collapse cutoff has been crossed. Real
-//     per-paste debug dumps showed the bug recurring on 145 / 156 / 177
-//     / 215-char single-line text that we were sending as
-//     `route:claude-plain-text` (raw text + `\r` in one PTY write),
-//     because Claude's accumulator engaged on the inline bytes and
-//     swallowed the trailing `\r`. Lowering this to 100 routes those
-//     cases through the bracketed-paste + event-driven path instead,
-//     which is the bug fix.
-//   - 125 ms is slightly above Claude's 100 ms paste completion
-//     timeout. Going lower risks reintroducing the race; going much
-//     higher makes submit feel laggy on every long paste. Only
-//     consulted only when the event-driven path times out or cannot
-//     reach the live Claude session.
-//   - 500 ms event-driven safety bound (down from 2000 ms): for
-//     bracketed pastes that DO NOT cross Claude's inline→collapse
-//     threshold, the `[Pasted text #N]` placeholder never renders, so
-//     our detector hits the timeout fallback every time. At 2000 ms
-//     that became a noticeable per-submit lag on any text 100–800
-//     chars — exactly the size range this PR moves into the
-//     bracketed-paste path. 500 ms is well past Claude's 100 ms
-//     accumulator window (so `\r` is always safe by then) and short
-//     enough to feel responsive even on the slow-path fallback.
+//   - 100 chars: empirical lower bound where Claude's paste ACCUMULATOR
+//     engages, independent of the inline-vs-collapse cutoff. Below this we
+//     send raw `text + \r` in one write (the accumulator doesn't engage,
+//     so the `\r` is safe).
+//   - 125 ms floor: slightly above Claude's 100 ms debounce. Consulted
+//     ONLY when the content match can't be made (the rare safety net).
+//   - 500 ms detection bound: well past the 100 ms accumulator window, so
+//     a real absorption always wins first; short enough that the rare
+//     safety-net path still feels responsive.
 
 export const CLAUDE_PASTE_THRESHOLD = 100
 export const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
 export const CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS = 750
 export const CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS = 500
+export const CLAUDE_PASTE_POLL_INTERVAL_MS = 10
 
 function wait(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -86,6 +79,81 @@ async function sha8(data: string): Promise<string> {
   return hex.join('')
 }
 
+// --- Content-match detection helpers ---------------------------------------
+
+const PASTE_PLACEHOLDER_RE = /\[Pasted text #\d+/g
+
+export function placeholderCount(screen: string): number {
+  const matches = screen.match(PASTE_PLACEHOLDER_RE)
+  return matches ? matches.length : 0
+}
+
+function normalizeWhitespace(s: string): string {
+  return s.replace(/\s+/g, ' ')
+}
+
+// A distinctive needle from the END of the paste. The paste's tail lands at
+// the composer cursor, so it's the most reliable contiguous substring to find
+// when Claude inlines a medium paste (no placeholder). Whitespace-normalized
+// so the TUI's reflow/wrapping doesn't defeat the match. Null for pastes too
+// short to fingerprint distinctively — those never reach this path (they take
+// the plain `text + \r` route).
+export function pasteTailNeedle(payload: string): string | null {
+  const norm = normalizeWhitespace(payload).trim()
+  return norm.length >= 8 ? norm.slice(-24) : null
+}
+
+export type PasteAbsorbedOutcome =
+  | { kind: 'absorbed'; waitedMs: number; via: 'placeholder' | 'inline' }
+  | { kind: 'timeout' }
+
+/**
+ * Resolve when Claude's composer visibly reflects the paste — i.e. the ~100ms
+ * paste-accumulator debounce has fired and `\r` can no longer be swallowed.
+ *
+ * `getScreen` returns the live headless screen snapshot (the renderer's
+ * `latestScreenRef`, kept in sync by `onSessionScreen`). `baselineScreen` is
+ * captured BEFORE the bracketed paste so we detect the *transition* (a NEW
+ * placeholder / the tail NEWLY appearing) rather than a coincidental match
+ * against content that was already on screen (e.g. the same text in scrollback).
+ */
+export function waitForPasteAbsorbed(
+  getScreen: () => string | undefined,
+  baselineScreen: string,
+  payload: string,
+  opts: { timeoutMs: number; pollIntervalMs: number },
+): Promise<PasteAbsorbedOutcome> {
+  const tail = pasteTailNeedle(payload)
+  const baseCount = placeholderCount(baselineScreen)
+  const tailAlreadyPresent = tail
+    ? normalizeWhitespace(baselineScreen).includes(tail)
+    : false
+  const startedAt = Date.now()
+  return new Promise(resolve => {
+    const tick = (): void => {
+      const screen = getScreen() ?? ''
+      // Collapse case: a NEW `[Pasted text #N]` placeholder appeared.
+      if (placeholderCount(screen) > baseCount) {
+        resolve({ kind: 'absorbed', waitedMs: Date.now() - startedAt, via: 'placeholder' })
+        return
+      }
+      // Inline case: the paste's tail newly appears in the composer. The
+      // `!tailAlreadyPresent` guard keeps a duplicate in scrollback from
+      // false-confirming before the paste has actually landed.
+      if (tail && !tailAlreadyPresent && normalizeWhitespace(screen).includes(tail)) {
+        resolve({ kind: 'absorbed', waitedMs: Date.now() - startedAt, via: 'inline' })
+        return
+      }
+      if (Date.now() - startedAt >= opts.timeoutMs) {
+        resolve({ kind: 'timeout' })
+        return
+      }
+      setTimeout(tick, opts.pollIntervalMs)
+    }
+    tick()
+  })
+}
+
 export type ClaudePasteSendFn = (data: string, pasteId?: string) => Promise<void>
 
 export type ClaudePasteOpts = {
@@ -93,11 +161,11 @@ export type ClaudePasteOpts = {
    *  every PTY write in this paste emits an IPC:write event to the
    *  journal. */
   pasteId?: string
-  /** Event-driven submit for Claude paste-like text. The composer always
-   *  provides this for Claude; optional in the type only because lower-level
-   *  helpers are also used by Codex and image-path paste flows that must not
-   *  wait for Claude's text placeholder. */
-  eventDriven?: { enabled: boolean; sessionId: string }
+  /** Event-driven submit for Claude paste-like text. `getScreen` returns the
+   *  live headless TUI snapshot so we can confirm the composer absorbed the
+   *  paste before sending Enter. Optional in the type only because lower-level
+   *  helpers are also used by Codex and image-path flows that do not need it. */
+  eventDriven?: { enabled: boolean; getScreen: () => string | undefined }
 }
 
 export async function sendBracketedPaste(
@@ -125,13 +193,11 @@ export async function sendBracketedPasteThenSubmit(
   const pasteId = opts?.pasteId
   const eventDriven = opts?.eventDriven
 
-  // Single-write fast path. Used by callers that don't care about
-  // the placeholder race (e.g. Codex, which has its own paste-state
-  // machine that does NOT exhibit this bug). Even on Claude we honor
-  // this when explicitly opted in via `delayMs <= 0` — but the
-  // composer call site in useComposerKeybinds always sets a positive
-  // delay AND sets `eventDriven` so this branch is effectively
-  // codex-only in production.
+  // Single-write fast path. Used by callers that don't care about the
+  // accumulator race (e.g. Codex, which has its own paste-state machine that
+  // does NOT exhibit this bug). On Claude this branch is only taken when
+  // `delayMs <= 0` AND event-driven is off — the composer call site always
+  // sets event-driven, so in production this is codex-only.
   if (delayMs <= 0 && !eventDriven?.enabled) {
     if (pasteId) {
       window.api.recordPasteDebugEvent(pasteId, {
@@ -144,59 +210,40 @@ export async function sendBracketedPasteThenSubmit(
     return
   }
 
+  // Capture the composer baseline BEFORE writing the paste so the detector
+  // keys on the placeholder/inline-text *transition*, not a stale match.
+  const baselineScreen = eventDriven?.enabled ? (eventDriven.getScreen() ?? '') : ''
+
   await sendBracketedPaste(send, payload, opts)
 
-  // Try the event-driven path first if enabled. The placeholder poll
-  // happens main-side inside `awaitClaudePastePlaceholder` so we
-  // don't pay an IPC round-trip per poll tick (10 ms cadence × 100s
-  // of ms wait would be ~30 IPC msgs/paste otherwise).
   if (eventDriven?.enabled) {
-    const outcome = await window.api.awaitClaudePastePlaceholder(
-      eventDriven.sessionId,
-      { timeoutMs: CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS },
-    )
+    const outcome = await waitForPasteAbsorbed(eventDriven.getScreen, baselineScreen, payload, {
+      timeoutMs: CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS,
+      pollIntervalMs: CLAUDE_PASTE_POLL_INTERVAL_MS,
+    })
     if (pasteId) {
       window.api.recordPasteDebugEvent(pasteId, {
         layer: 'SCREEN',
-        event: outcome.kind === 'appeared'
-          ? 'placeholder:appeared'
-          : outcome.kind === 'timeout'
-            ? 'placeholder:timeout'
-            : 'placeholder:no-session',
-        data: outcome.kind === 'appeared' ? { waitedMs: outcome.waitedMs } : {},
+        event: outcome.kind === 'absorbed' ? 'paste:absorbed' : 'paste:absorb-timeout',
+        data:
+          outcome.kind === 'absorbed'
+            ? { waitedMs: outcome.waitedMs, via: outcome.via }
+            : {},
       })
     }
-    if (outcome.kind === 'appeared') {
+    if (outcome.kind === 'absorbed') {
       if (pasteId) {
         window.api.recordPasteDebugEvent(pasteId, {
           layer: 'IPC',
           event: 'write:submit-cr',
-          data: { strategy: 'event-driven', waitedMs: outcome.waitedMs },
+          data: { strategy: `event-driven:${outcome.via}`, waitedMs: outcome.waitedMs },
         })
       }
       await send('\r', pasteId)
       return
     }
-    // Fall through to the wall-clock path. We've already waited some
-    // amount (up to `timeoutMs`) so subtract that from `delayMs` —
-    // otherwise the timeout + delayMs add up to noticeable lag.
-    // Floor at 0 in case the event-driven wait already exceeded delayMs.
-    // We DON'T have the actual elapsed in the no-session/timeout
-    // outcomes, but the timeout case took close to `timeoutMs`, so
-    // skip the timer entirely there.
-    if (outcome.kind === 'timeout') {
-      if (pasteId) {
-        window.api.recordPasteDebugEvent(pasteId, {
-          layer: 'IPC',
-          event: 'write:submit-cr',
-          data: { strategy: 'timeout-skip-timer' },
-        })
-      }
-      await send('\r', pasteId)
-      return
-    }
-    // no-session: the renderer thinks we have a session but main
-    // doesn't. Skip directly to the wall-clock path as a last-ditch.
+    // Absorption not detected within the safety bound. Fall through to the
+    // wall-clock floor — the rare safety net, NOT the primary path.
   }
 
   if (delayMs > 0) await wait(delayMs)
@@ -204,7 +251,7 @@ export async function sendBracketedPasteThenSubmit(
     window.api.recordPasteDebugEvent(pasteId, {
       layer: 'IPC',
       event: 'write:submit-cr',
-      data: { strategy: 'wall-clock-timer', delayMs },
+      data: { strategy: 'wall-clock-floor', delayMs },
     })
   }
   await send('\r', pasteId)

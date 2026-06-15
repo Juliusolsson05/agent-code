@@ -89,6 +89,24 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
       </div>
 
       <div className="p-3 flex flex-col gap-3">
+        {/* Pane 0 — live screen copy. Reads runtime.screen every render, so it
+            stays in lock-step with the headless TUI: paste, and you watch the
+            composer fill (placeholder or inlined text) right here. This is the
+            exact snapshot the content-match submit detector keys on. */}
+        <section>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-[9px] text-muted uppercase tracking-[0.12em]">
+              screen copy (live)
+            </span>
+            <span className="text-[10px] text-muted tabular-nums">
+              {plain.length} chars · {(plain.match(/\[Pasted text #\d+/g) ?? []).length} placeholders
+            </span>
+          </div>
+          <pre className="max-h-[140px] overflow-auto whitespace-pre-wrap break-words border border-[#222] bg-[#0b0b0b] px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
+            {plain.slice(-600) || '(screen empty)'}
+          </pre>
+        </section>
+
         {/* Pane 1 — live detection */}
         <section>
           <div className="mb-1 text-[9px] text-muted uppercase tracking-[0.12em]">live detection</div>
@@ -134,6 +152,7 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
                   <th className="text-right px-2 py-1 font-normal">issued→det</th>
                   <th className="text-right px-2 py-1 font-normal">det→cr</th>
                   <th className="text-left px-2 py-1 font-normal">outcome</th>
+                  <th className="text-left px-2 py-1 font-normal">via</th>
                   <th className="text-right px-2 py-1 font-normal">len</th>
                   <th className="text-left px-2 py-1 font-normal">strategy</th>
                 </tr>
@@ -141,7 +160,7 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
               <tbody className="text-ink-dim">
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-2 py-3 text-center text-muted">
+                    <td colSpan={7} className="px-2 py-3 text-center text-muted">
                       no submits recorded yet
                     </td>
                   </tr>
@@ -161,6 +180,17 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
                         }`}
                       >
                         {row.outcome}
+                      </td>
+                      <td
+                        className={`px-2 py-0.5 ${
+                          row.via === 'inline'
+                            ? 'text-amber-400'
+                            : row.via === 'placeholder'
+                              ? 'text-green-400'
+                              : 'text-muted'
+                        }`}
+                      >
+                        {row.via ?? '—'}
                       </td>
                       <td className="px-2 py-0.5 text-right">{row.composerLen ?? '—'}</td>
                       <td className="px-2 py-0.5 truncate">{row.strategy ?? '—'}</td>
