@@ -34,6 +34,9 @@ export type SubmitLifecycle = {
   outcome: SubmitOutcome
   composerLen: number | null
   strategy: string | null
+  /** Which absorption signal fired: 'placeholder' (collapsed paste) or
+   *  'inline' (medium paste, the #279 case) — null if it timed out. */
+  via: string | null
 }
 
 function find(events: PasteDebugEvent[], layer: string, event: string): PasteDebugEvent | undefined {
@@ -49,9 +52,14 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
   const ev = session.events
 
   const enter = find(ev, 'RENDER', 'keydown:enter')
-  const appeared = find(ev, 'SCREEN', 'placeholder:appeared')
+  // Content-match events (#279 fix) with back-compat to the older
+  // placeholder-only event names so historical journals still read.
+  const appeared =
+    find(ev, 'SCREEN', 'paste:absorbed') ?? find(ev, 'SCREEN', 'placeholder:appeared')
   const timedOut =
-    find(ev, 'SCREEN', 'placeholder:timeout') ?? find(ev, 'SCREEN', 'placeholder:no-session')
+    find(ev, 'SCREEN', 'paste:absorb-timeout') ??
+    find(ev, 'SCREEN', 'placeholder:timeout') ??
+    find(ev, 'SCREEN', 'placeholder:no-session')
   const submitCr = find(ev, 'IPC', 'write:submit-cr')
   const singleWrite = find(ev, 'IPC', 'write:paste-and-submit-single')
   const threw = ev.find(e => e.layer === 'ERROR')
@@ -82,6 +90,7 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
     outcome,
     composerLen: num(enter?.data, 'composerLen'),
     strategy,
+    via: typeof appeared?.data?.via === 'string' ? appeared.data.via : null,
   }
 }
 
