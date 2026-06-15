@@ -10,7 +10,6 @@ import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import {
   ClaudeCodeHeadless,
   createProxyServer,
-  spawnClaudeWithProxy,
   type CompactionState,
   type JsonlEntry,
   type PermissionPromptState,
@@ -265,40 +264,52 @@ export class ClaudeSession extends EventEmitter {
       await proxy.start()
       this.proxyServer = proxy
 
-      if (args.length === 0) {
-        // Fast path: no extra args, use the helper as-is.
-        this.pty = spawnClaudeWithProxy({
-          cwd: this.cwd,
-          binary: this.binary,
-          cols: this.cols,
-          rows: this.rows,
-          proxyUrl: proxy.info.proxyUrl,
-          caCertPath: proxy.info.caCertPath,
-        })
-      } else {
-        // Slower path: mirror spawnClaudeWithProxy's env setup but
-        // pass our extra argv (--resume / --dangerously-skip-perms).
-        // Kept inline rather than generalising the helper so the
-        // helper's contract stays narrow and testable.
-        const proxyEnv: Record<string, string> = { ...cleanEnv }
-        proxyEnv.HTTPS_PROXY = proxy.info.proxyUrl
-        proxyEnv.https_proxy = proxy.info.proxyUrl
-        proxyEnv.HTTP_PROXY = proxy.info.proxyUrl
-        proxyEnv.http_proxy = proxy.info.proxyUrl
-        proxyEnv.NODE_EXTRA_CA_CERTS = proxy.info.caCertPath
-        proxyEnv.SSL_CERT_FILE = proxy.info.caCertPath
-        proxyEnv.REQUESTS_CA_BUNDLE = proxy.info.caCertPath
-        proxyEnv.CURL_CA_BUNDLE = proxy.info.caCertPath
-        proxyEnv.NO_PROXY = 'localhost,127.0.0.1,::1'
-        proxyEnv.no_proxy = proxyEnv.NO_PROXY
-        this.pty = ptySpawn(this.binary, args, {
-          name: 'xterm-256color',
-          cols: this.cols,
-          rows: this.rows,
-          cwd: this.cwd,
-          env: proxyEnv,
-        })
-      }
+      // ONE env for both the no-arg and resume/dangerous spawns. Built inline
+      // (no longer via spawnClaudeWithProxy) so CA policy lives in exactly one
+      // place. The helper and this block had drifted, and BOTH injected the
+      // proxy CA as trust-store-REPLACING single-cert files (SSL_CERT_FILE /
+      // CURL_CA_BUNDLE / REQUESTS_CA_BUNDLE). That is the #281 bug: each of
+      // those vars replaces the *entire* root store with just the mitmproxy
+      // CA, so every host the proxy PASSES THROUGH (npmjs, PyPI, Azure,
+      // GitHub, …) presents its real cert and is then rejected — breaking npm,
+      // pip, az, curl and git for any tool that reads those vars. It is not a
+      // missing-tool problem; it is an actively harmful replace, and chasing it
+      // per-tool (adding npm_config_cafile, GIT_SSL_CAINFO, AZURE_*, …) is an
+      // unwinnable allowlist.
+      //
+      // The proxy only MITMs api.anthropic.com (allow_hosts in proxyServer.ts);
+      // everything else is a clean TLS passthrough with a real cert, so
+      // non-Claude tools need NO CA help whatsoever. The universal, list-free
+      // fix is to inject ONLY NODE_EXTRA_CA_CERTS — which is ADDITIVE: it
+      // augments the real root store instead of replacing it. Claude (node)
+      // then trusts the mitmproxy cert for api.anthropic.com while still
+      // trusting real certs for every other host, and every other tool keeps
+      // its normal trust and just works. Verified: node→anthropic authorized
+      // (issuer mitmproxy), node→npmjs authorized (issuer Google), npm ping OK.
+      //
+      // Trade-off: a NON-node tool that needs to reach api.anthropic.com
+      // THROUGH the proxy would no longer trust the mitm cert. That host is
+      // only ever spoken to by Claude itself (node), so this is acceptable; we
+      // deliberately do NOT maintain a per-tool CA-var allowlist.
+      //
+      // cleanEnv already carries TERM/COLORTERM/CLAUDE_CODE_ENTRYPOINT and any
+      // options.env overrides, so unifying onto it also fixes the old fast path
+      // silently dropping options.env.
+      const proxyEnv: Record<string, string> = { ...cleanEnv }
+      proxyEnv.HTTPS_PROXY = proxy.info.proxyUrl
+      proxyEnv.https_proxy = proxy.info.proxyUrl
+      proxyEnv.HTTP_PROXY = proxy.info.proxyUrl
+      proxyEnv.http_proxy = proxy.info.proxyUrl
+      proxyEnv.NODE_EXTRA_CA_CERTS = proxy.info.caCertPath
+      proxyEnv.NO_PROXY = 'localhost,127.0.0.1,::1'
+      proxyEnv.no_proxy = proxyEnv.NO_PROXY
+      this.pty = ptySpawn(this.binary, args, {
+        name: 'xterm-256color',
+        cols: this.cols,
+        rows: this.rows,
+        cwd: this.cwd,
+        env: proxyEnv,
+      })
     } else {
       this.pty = ptySpawn(this.binary, args, {
         name: 'xterm-256color',
