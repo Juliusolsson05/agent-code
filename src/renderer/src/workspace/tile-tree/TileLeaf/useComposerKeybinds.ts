@@ -239,7 +239,13 @@ export function useComposerKeybinds({
         })
         await sendBracketedPasteThenSubmit(send, input, CLAUDE_PASTE_SUBMIT_DELAY_MS, {
           pasteId,
-          eventDriven: { enabled: true, sessionId },
+          // Content-match submit: confirm Claude's composer actually shows the
+          // paste (placeholder OR inlined text) before sending Enter, via the
+          // live screen snapshot. No clock as the primary path. See #279 / #90.
+          eventDriven: {
+            enabled: true,
+            getScreen: () => workspace.latestScreenRef.current[sessionId],
+          },
         })
       } else {
         window.api.recordPasteDebugEvent(pasteId, {
