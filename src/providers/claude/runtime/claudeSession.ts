@@ -193,14 +193,18 @@ export class ClaudeSession extends EventEmitter {
 
     // Two spawn paths:
     //   useProxy=false → plain node-pty spawn, screen-driven semantics.
-    //   useProxy=true  → start per-session mitmproxy, inject HTTPS_PROXY
-    //                    + NODE_EXTRA_CA_CERTS via spawnClaudeWithProxy,
-    //                    route transport events into the adapter.
+    //   useProxy=true  → start per-session mitmproxy, spawn `claude` with the
+    //                    proxy env built inline below (HTTPS_PROXY +
+    //                    additive NODE_EXTRA_CA_CERTS), route transport events
+    //                    into the adapter.
     //
-    // Resume args are preserved on the proxy branch by passing them
-    // through node-pty's argv to spawnClaudeWithProxy. The helper
-    // currently always spawns with empty argv, so we reach around it
-    // when we need --resume or --dangerously-skip-permissions.
+    // The proxy branch builds its env inline rather than calling the
+    // claude-code-headless `spawnClaudeWithProxy` helper. We used to call the
+    // helper for the no-arg case and inline only for --resume /
+    // --dangerously-skip-permissions, but the two had drifted (the helper also
+    // injected trust-store-REPLACING CA vars — see #281 — and silently dropped
+    // options.env). Both cases now share one inline env so resume args and CA
+    // policy live in exactly one place.
     if (this.useProxy) {
       // WHY proxy runtime storage must not live under `cwd`:
       //
