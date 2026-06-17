@@ -423,6 +423,19 @@ export async function rehydrateWorkspace(
             : true,
         }
       }
+      // [xcript-diag #283] commitRehydratedState is the ONLY wholesale runtimes
+      // rebuild (out = {}), so it is the prime suspect for dropping a key whose
+      // initial-history load is still in flight. Log any key present in `prev`
+      // but absent from `out` — especially one mid-'loading' — to confirm
+      // whether this commit is what orphans the loader's 'ready' write. REMOVE
+      // once root cause is fixed.
+      for (const [id, runtime] of Object.entries(prev)) {
+        if (!out[id]) {
+          console.warn(
+            `[xcript-diag] commitRehydrated DROPS session=${id} (was transcriptStatus=${runtime.transcriptStatus}); not in idMap/freshSessions`,
+          )
+        }
+      }
       return out
     })
     return true
