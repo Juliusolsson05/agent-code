@@ -6,6 +6,10 @@ import {
   CodexToolRow,
   CodexWriteStdinRow,
 } from '@providers/codex/renderer/rows/CodexRows'
+import {
+  EditRow,
+  MultiEditRow,
+} from '@providers/claude/renderer/rows/ClaudeRows'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import {
@@ -28,6 +32,56 @@ function parseJsonRecord(text: string): Record<string, unknown> | null {
       : null
   } catch {
     return null
+  }
+}
+
+// [#285] Extract a CLOSED top-level JSON string field from a partial inputJson
+// buffer — i.e. one whose closing quote has already streamed. The regex body
+// `(?:[^"\\]|\\.)*` tolerates escaped quotes and embedded newlines, so it only
+// matches a fully-arrived value. Used ONLY during the brief streaming window
+// before the whole object is JSON-parseable; the moment `parseJsonRecord`
+// succeeds (below) the authoritative parse takes over. A value that literally
+// contains the key text mid-stream could mis-match transiently, but it
+// self-corrects on the next delta / final parse — strictly better than the raw
+// JSON blob this replaces.
+function extractClosedJsonString(raw: string, key: string): string | null {
+  const re = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`)
+  const m = re.exec(raw)
+  if (!m) return null
+  try {
+    return JSON.parse(`"${m[1]}"`) as string
+  } catch {
+    return null
+  }
+}
+
+// [#285] Build the committed Edit/MultiEdit input object from a live semantic
+// block, so the streaming path can render the SAME rich EditRow/MultiEditRow
+// (FileToolHeader + line-level DiffSlab) the committed transcript uses —
+// mirroring how Codex reuses its committed rows on the live path (see the
+// function_call branch below). Returns null until at least `file_path` has
+// streamed so we never flash an empty "Edit · (no changes)" card; the caller
+// then falls through to the raw preview until the path arrives.
+function claudeLiveEditInput(
+  block: SemanticLiveTurn['blocks'][number],
+): Record<string, unknown> | null {
+  if (block.parsedInput) return block.parsedInput
+  const raw = block.inputJson ?? ''
+  const full = raw ? parseJsonRecord(raw) : null
+  if (full) return full
+  if (!raw) return null
+  const filePath = extractClosedJsonString(raw, 'file_path')
+  if (!filePath) return null
+  if (block.toolName === 'MultiEdit') {
+    // The `edits` array can't be reliably half-parsed; show the header now
+    // (file path) and let the authoritative parse above fill in the per-edit
+    // diff chunks the instant the whole object completes.
+    return { file_path: filePath, edits: [] }
+  }
+  return {
+    file_path: filePath,
+    old_string: extractClosedJsonString(raw, 'old_string') ?? '',
+    new_string: extractClosedJsonString(raw, 'new_string') ?? '',
   }
 }
 
@@ -339,6 +393,35 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // are one unit of work. Nesting the result here preserves that
     // mental model during live streaming and avoids another round of
     // "find the matching tool later in the feed" bookkeeping.
+    // [#285] Live Edit / MultiEdit reuse the COMMITTED renderers (rich
+    // FileToolHeader + line-level DiffSlab) instead of dumping raw JSON — the
+    // exact convergence Codex already does in the function_call branch above.
+    // We return the committed row directly (no live wrapper / status badge) so
+    // the streaming card is visually identical to its committed form, and the
+    // diff fills in as old_string/new_string stream. Until `file_path` has
+    // arrived, claudeLiveEditInput returns null and we fall through to the
+    // existing raw preview — never worse than before.
+    if (block.toolName === 'Edit' || block.toolName === 'MultiEdit') {
+      const liveEditInput = claudeLiveEditInput(block)
+      if (liveEditInput) {
+        const liveBlock: ToolUseBlock = {
+          type: 'tool_use',
+          id:
+            block.toolUseId ??
+            block.callId ??
+            block.itemId ??
+            `live:${block.blockIndex}`,
+          name: block.toolName,
+          input: liveEditInput,
+        }
+        return block.toolName === 'Edit' ? (
+          <EditRow block={liveBlock} />
+        ) : (
+          <MultiEditRow block={liveBlock} />
+        )
+      }
+    }
+
     const todos =
       block.toolName === 'TodoWrite'
         ? parseSemanticTodos(block.parsedInput)
