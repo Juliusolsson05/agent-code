@@ -330,6 +330,8 @@ export function TileLeaf({
       ? 'loading transcript'
       : runtime.transcriptStatus === 'error'
         ? `transcript unavailable${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
+        : runtime.transcriptStatus === 'disconnected'
+          ? `transcript disconnected${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
         // WHY exited beats "not input ready":
         //
         // A resumed agent can die before the renderer finishes the

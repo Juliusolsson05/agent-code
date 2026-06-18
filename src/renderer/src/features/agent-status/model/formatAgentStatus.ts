@@ -153,7 +153,7 @@ function processTone(value: string): AgentStatusField['tone'] {
 
 function transcriptTone(value: string): AgentStatusField['tone'] {
   if (value === 'error') return 'bad'
-  if (value === 'loading') return 'warn'
+  if (value === 'loading' || value === 'disconnected') return 'warn'
   if (value === 'ready' || value === 'idle') return 'good'
   return 'neutral'
 }

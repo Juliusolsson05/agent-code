@@ -28,6 +28,11 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import * as perf from '@renderer/performance/client'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
+import {
+  hasDurableProviderSession,
+  resumableProviderSessionId,
+  withoutProvisionalProviderSession,
+} from '@renderer/workspace/providerSessionIdentity'
 
 // Remap a persisted tree by replacing every sessionId with a freshly
 // spawned one (spawn happens as we walk). Returns the remapped tree
@@ -380,10 +385,13 @@ export async function rehydrateWorkspace(
         out[newId] = {
           ...base,
           ...(draft && !base.draftInput ? { draftInput: draft } : {}),
-          hasOlderHistory: Boolean(freshSessions[newId]?.providerSessionId),
-          transcriptStatus: base.transcriptStatus === 'ready' || base.transcriptStatus === 'error'
-            ? base.transcriptStatus
-            : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready',
+          hasOlderHistory: hasDurableProviderSession(freshSessions[newId]),
+          transcriptStatus:
+            base.transcriptStatus === 'ready' ||
+            base.transcriptStatus === 'error' ||
+            base.transcriptStatus === 'disconnected'
+              ? base.transcriptStatus
+              : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready',
           transcriptError: base.transcriptError,
           // WHY preserve an already-observed lifecycle state:
           //
@@ -408,9 +416,11 @@ export async function rehydrateWorkspace(
         const existing = prev[id]
         out[id] = {
           ...(existing ?? emptyRuntime()),
-          hasOlderHistory: Boolean(freshSessions[id]?.providerSessionId),
+          hasOlderHistory: hasDurableProviderSession(freshSessions[id]),
           transcriptStatus:
-            existing?.transcriptStatus === 'ready' || existing?.transcriptStatus === 'error'
+            existing?.transcriptStatus === 'ready' ||
+            existing?.transcriptStatus === 'error' ||
+            existing?.transcriptStatus === 'disconnected'
               ? existing.transcriptStatus
               : freshSessions[id]?.providerSessionId ? 'loading' : 'ready',
           transcriptError: existing?.transcriptError ?? null,
@@ -486,10 +496,12 @@ export async function rehydrateWorkspace(
           // loopback URLs/tokens for every new provider process. If rehydrate
           // respawns without the saved domains, the pane visually restores but
           // its tool surface silently changes underneath the user.
+          const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
+          const restoredMeta = withoutProvisionalProviderSession(meta)
           const { sessionId: newId, tmuxName: nextTmuxName } = await window.api.spawnSession({
             kind,
             cwd: meta.cwd,
-            resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
+            resumeSessionId,
             dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
@@ -503,12 +515,12 @@ export async function rehydrateWorkspace(
           // tmuxName is replaced with whatever main reported
           // (recovered name when alive, fresh name when respawned).
           freshSessions[newId] = {
-            ...meta,
+            ...restoredMeta,
             ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
             ...(nextTmuxName ? { tmuxName: nextTmuxName } : {}),
           }
           commitRehydratedState()
-          if (kind !== 'terminal' && freshSessions[newId].providerSessionId) {
+          if (kind !== 'terminal' && resumeSessionId) {
             void loadInitialHistoryForSession({
               sessionId: newId,
               meta: freshSessions[newId],
