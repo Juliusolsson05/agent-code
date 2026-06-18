@@ -1,6 +1,7 @@
 import { basename, dirname, join } from 'node:path'
 import type { JsonlEntry, SubAgentState } from '@preload/api/types.js'
 import { SubAgentWatcher } from './SubAgentWatcher.js'
+import { CodexSubAgentTracker, isCodexRolloutEntry } from './codexSubagentState.js'
 
 // Owns one SubAgentWatcher per active session and the parent-completion
 // bookkeeping that flips a subagent running→done.
@@ -28,6 +29,7 @@ function subagentsDirFromTranscript(file: string): string | null {
 
 export class SubAgentWatcherManager {
   private watchers = new Map<string, SubAgentWatcher>()
+  private codexTrackers = new Map<string, CodexSubAgentTracker>()
   // sessionId -> (parent Agent tool_use id -> terminal status)
   private completed = new Map<string, Map<string, ParentStatus>>()
 
@@ -40,6 +42,11 @@ export class SubAgentWatcherManager {
    * subagent flips to done/error.
    */
   observeParentEntry(sessionId: string, entry: JsonlEntry, file: string): void {
+    if (isCodexRolloutEntry(entry)) {
+      this.ensureCodex(sessionId).observeParentEntry(entry, file)
+      return
+    }
+
     this.ensure(sessionId, file)
 
     const message = (entry as { message?: { content?: unknown } }).message
@@ -78,15 +85,32 @@ export class SubAgentWatcherManager {
     watcher.start()
   }
 
+  private ensureCodex(sessionId: string): CodexSubAgentTracker {
+    const existing = this.codexTrackers.get(sessionId)
+    if (existing) return existing
+    // Codex subagents are not sidecar files below the parent rollout; they are
+    // first-class rollout sessions linked by spawn_agent output and child
+    // session_meta.source. Keep the Codex producer separate so the Claude
+    // watcher can preserve its tight sidecar assumptions instead of becoming a
+    // provider-shaped switch statement.
+    const tracker = new CodexSubAgentTracker(subAgents => this.emit(sessionId, subAgents))
+    this.codexTrackers.set(sessionId, tracker)
+    return tracker
+  }
+
   stop(sessionId: string): void {
     this.watchers.get(sessionId)?.stop()
     this.watchers.delete(sessionId)
+    this.codexTrackers.get(sessionId)?.stop()
+    this.codexTrackers.delete(sessionId)
     this.completed.delete(sessionId)
   }
 
   stopAll(): void {
     for (const w of this.watchers.values()) w.stop()
+    for (const w of this.codexTrackers.values()) w.stop()
     this.watchers.clear()
+    this.codexTrackers.clear()
     this.completed.clear()
   }
 }

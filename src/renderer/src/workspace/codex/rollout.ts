@@ -70,8 +70,16 @@ function isCodexAgentsMdPreambleText(text: string): boolean {
   return /^\s*# AGENTS\.md instructions for /.test(text)
 }
 
+function isCodexSubagentNotificationText(text: string): boolean {
+  return /^\s*<subagent_notification>\s*[\s\S]*<\/subagent_notification>\s*$/.test(text)
+}
+
 function isCodexBootstrapBlockText(text: string): boolean {
   return isCodexEnvironmentContextText(text) || isCodexAgentsMdPreambleText(text)
+}
+
+function isCodexSyntheticUserBlockText(text: string): boolean {
+  return isCodexBootstrapBlockText(text) || isCodexSubagentNotificationText(text)
 }
 
 function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {
@@ -126,16 +134,20 @@ function codexConversationEntryFromMessageItem(
 
   if (content.length === 0) return null
 
-  // Bootstrap shim filter. Drops the synthetic first-turn user
-  // messages Codex injects (AGENTS.md preamble + <environment_context>;
-  // see the predicate comments above). The check requires EVERY block
-  // to be bootstrap-shaped so a real user prompt that happens to
-  // quote either marker still passes through with the user's content
-  // intact — only messages whose entire content is bootstrap noise
-  // get dropped.
+  // Synthetic user-message filter. Codex persists model-context messages as
+  // role=user response items: first-turn bootstrap shims and later
+  // <subagent_notification> envelopes emitted when a spawned agent completes.
+  // They are crucial for Codex resume semantics, but they are not human
+  // prompts. Filtering here keeps every downstream surface honest: the feed,
+  // visible-decision extraction, debug replay, and history loader all see the
+  // same cleaned conversation instead of each renderer hiding its own copy.
+  //
+  // The check requires EVERY block to be synthetic-shaped so a real user prompt
+  // that quotes either marker still survives. Only messages whose whole content
+  // is runtime bookkeeping are dropped.
   if (
     role === 'user' &&
-    content.every(block => isCodexBootstrapBlockText(block.text))
+    content.every(block => isCodexSyntheticUserBlockText(block.text))
   ) {
     return null
   }
