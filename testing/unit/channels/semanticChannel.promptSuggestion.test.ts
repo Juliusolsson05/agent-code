@@ -29,3 +29,33 @@ describe('publishPromptSuggestion', () => {
     expect(typeof (named[0] as { ts: number }).ts).toBe('number')
   })
 })
+
+describe('publishProviderSessionObserved', () => {
+  it('emits provider_session_observed on both the named and catch-all channels', () => {
+    const channel = new SemanticChannel()
+    const named: SemanticEvent[] = []
+    const all: SemanticEvent[] = []
+    channel.on('provider_session_observed', e => named.push(e))
+    channel.on('event', e => all.push(e))
+
+    channel.publishProviderSessionObserved({
+      provider: 'claude',
+      providerSessionId: 'claude-session-1',
+      flowId: 'flow-1',
+      source: 'proxy',
+      confidence: 'high',
+    })
+
+    expect(named).toHaveLength(1)
+    expect(all).toHaveLength(1)
+    expect(named[0]).toMatchObject({
+      type: 'provider_session_observed',
+      provider: 'claude',
+      providerSessionId: 'claude-session-1',
+      flowId: 'flow-1',
+      source: 'proxy',
+      confidence: 'high',
+    })
+    expect(typeof (named[0] as { ts: number }).ts).toBe('number')
+  })
+})

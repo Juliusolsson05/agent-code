@@ -96,6 +96,22 @@ function entryUuid(entry: Entry): string | null {
   return typeof entry.uuid === 'string' ? entry.uuid : null
 }
 
+function providerSessionObservedEvent(event: unknown): {
+  providerSessionId: string
+  flowId: string | null
+} | null {
+  const record = asRecord(event)
+  if (!record || record.type !== 'provider_session_observed') return null
+  const providerSessionId = typeof record.providerSessionId === 'string'
+    ? record.providerSessionId
+    : ''
+  if (!providerSessionId) return null
+  return {
+    providerSessionId,
+    flowId: typeof record.flowId === 'string' ? record.flowId : null,
+  }
+}
+
 type WorktreeCacheEntry = {
   worktrees: WorktreeIdentity[]
   refreshedAt: number
@@ -669,6 +685,58 @@ export function useIpcSubscriptions(
         span.end(data)
       }
       const semanticEvent = asRecord(event) ?? {}
+      const observedProvider = providerSessionObservedEvent(event)
+      if (observedProvider) {
+        setState(prev => {
+          const meta = prev.sessions[sessionId]
+          if (!meta) return prev
+          if (meta.providerSessionId) return prev
+          return {
+            ...prev,
+            sessions: {
+              ...prev.sessions,
+              [sessionId]: {
+                ...meta,
+                providerSessionId: observedProvider.providerSessionId,
+                providerSessionIdSource: 'proxy-header',
+              },
+            },
+          }
+        })
+        setRuntimes(prev => {
+          const current = prev[sessionId] ?? emptyRuntime()
+          const shouldMarkDisconnected =
+            current.lastJsonlEntryAt === null && current.totalEntries === 0
+          const next = appendFeedDebugLog(
+            {
+              ...current,
+              ...(shouldMarkDisconnected
+                ? {
+                    transcriptStatus: 'disconnected' as const,
+                    transcriptError:
+                      `Claude session ${observedProvider.providerSessionId} was observed in proxy traffic, ` +
+                      'but no committed JSONL transcript has arrived yet.',
+                  }
+                : {}),
+            },
+            {
+              layer: 'SEM',
+              kind: 'provider_session_observed',
+              summary: shouldMarkDisconnected
+                ? 'provider session observed · transcript not yet committed'
+                : 'provider session observed',
+              data: observedProvider,
+            },
+          )
+          return { ...prev, [sessionId]: next }
+        })
+        closeSpan({
+          sessionId,
+          eventType: 'provider_session_observed',
+          changed: true,
+        })
+        return
+      }
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         // WHY `?? 'claude'` default: Claude is the pre-fix
@@ -1014,14 +1082,44 @@ export function useIpcSubscriptions(
         setState(prev => {
           const meta = prev.sessions[sessionId]
           if (!meta) return prev
-          if (meta.providerSessionId) return prev
           const id = capturedClaudeId ?? capturedCodexId
           if (!id) return prev
+          const source = 'jsonl-entry' as const
+          if (meta.providerSessionId === id && meta.providerSessionIdSource === source) {
+            return prev
+          }
+          if (
+            meta.providerSessionId &&
+            meta.providerSessionId !== id &&
+            meta.providerSessionIdSource !== 'proxy-header'
+          ) {
+            // WHY a conflicting durable id is not auto-adopted:
+            //
+            // The #290 symptom is not just "missing transcript"; it is a pane
+            // becoming attached to the wrong committed provider transcript and
+            // then rendering another agent's conversation as if it were its own.
+            // Once a resume request or earlier JSONL entry has established a
+            // durable identity, a later different id is more likely an ambiguous
+            // attach/replay bug than useful recovery data. The one exception is
+            // proxy-header state: that is intentionally provisional, so the
+            // first JSONL-backed id is allowed to replace it.
+            console.warn('[workspace] ignoring conflicting providerSessionId from JSONL', {
+              sessionId,
+              current: meta.providerSessionId,
+              incoming: id,
+              currentSource: meta.providerSessionIdSource ?? null,
+            })
+            return prev
+          }
           return {
             ...prev,
             sessions: {
               ...prev.sessions,
-              [sessionId]: { ...meta, providerSessionId: id },
+              [sessionId]: {
+                ...meta,
+                providerSessionId: id,
+                providerSessionIdSource: source,
+              },
             },
           }
         })

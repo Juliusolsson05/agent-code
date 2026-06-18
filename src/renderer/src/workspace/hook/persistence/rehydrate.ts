@@ -381,9 +381,12 @@ export async function rehydrateWorkspace(
           ...base,
           ...(draft && !base.draftInput ? { draftInput: draft } : {}),
           hasOlderHistory: Boolean(freshSessions[newId]?.providerSessionId),
-          transcriptStatus: base.transcriptStatus === 'ready' || base.transcriptStatus === 'error'
-            ? base.transcriptStatus
-            : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready',
+          transcriptStatus:
+            base.transcriptStatus === 'ready' ||
+            base.transcriptStatus === 'error' ||
+            base.transcriptStatus === 'disconnected'
+              ? base.transcriptStatus
+              : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready',
           transcriptError: base.transcriptError,
           // WHY preserve an already-observed lifecycle state:
           //
@@ -410,7 +413,9 @@ export async function rehydrateWorkspace(
           ...(existing ?? emptyRuntime()),
           hasOlderHistory: Boolean(freshSessions[id]?.providerSessionId),
           transcriptStatus:
-            existing?.transcriptStatus === 'ready' || existing?.transcriptStatus === 'error'
+            existing?.transcriptStatus === 'ready' ||
+            existing?.transcriptStatus === 'error' ||
+            existing?.transcriptStatus === 'disconnected'
               ? existing.transcriptStatus
               : freshSessions[id]?.providerSessionId ? 'loading' : 'ready',
           transcriptError: existing?.transcriptError ?? null,

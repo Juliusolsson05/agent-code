@@ -78,25 +78,21 @@ export type SessionMeta = {
    */
   kind?: SessionKind
   /**
-   * CC's own session UUID (distinct from Agent Code's SessionId which is
-   * a per-launch routing key). Captured from the `sessionId` field on
-   * the first JSONL entry that lands for this session, and persisted
-   * to disk so we can pass `--resume <uuid>` on the next launch and
-   * rehydrate the conversation history, tool calls, and everything
-   * else CC tracks in its transcript file.
+   * Provider's own session UUID (distinct from Agent Code's SessionId which is
+   * a per-launch routing key). For Claude this is either confirmed by the
+   * committed JSONL `sessionId` field, supplied by an explicit resume request,
+   * or provisionally observed from the proxy's `x-claude-code-session-id`
+   * header before the root JSONL file exists.
    *
-   * Without this, a workspace reload / hot-reload / app crash lands
-   * the user in a new blank session every time — the tile tree comes
-   * back but every pane's conversation is gone, which was causing
-   * real frustration during development. See the load path in
-   * workspaceStore.rehydrate() and the jsonl-entry handler that
-   * captures it.
+   * WHY proxy-observed identity is allowed here:
    *
-   * Only meaningful for kind === 'claude'. Terminal sessions don't
-   * have a JSONL transcript so there's nothing to resume; a reload
-   * just spawns a fresh shell in the same cwd.
+   * The proxy header proves Claude has assigned a session id, but it does not
+   * prove the committed transcript is durable/reloadable. The optional source
+   * tag below lets the renderer persist that provisional identity while still
+   * keeping transcriptStatus disconnected until JSONL confirms durability.
    */
   providerSessionId?: string
+  providerSessionIdSource?: 'jsonl-entry' | 'proxy-header' | 'resume-request'
   /**
    * For tmux-backed terminals (P1): the registry-managed tmux
    * session name. Captured from the spawn IPC response and passed

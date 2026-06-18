@@ -60,6 +60,73 @@ const TOOLS = new Array(10).fill({ name: 'Bash' })
 const SYSTEM = [{ type: 'text', text: 'You are Claude Code' }]
 
 describe('prompt-suggestion flow routing', () => {
+  it('emits a provisional provider-session observation from Claude Code headers', () => {
+    const calls: Call[] = []
+    const adapter = new ClaudeProxyAdapter({
+      channel: makeChannel(calls),
+      getSessionModel: () => 'claude-opus-4-8',
+    })
+
+    adapter.handleTransportEvent({
+      kind: 'request',
+      flow_id: 101,
+      method: 'POST',
+      url: 'https://api.anthropic.com/v1/messages',
+      host: 'api.anthropic.com',
+      path: '/v1/messages',
+      headers: {
+        'x-claude-code-session-id': 'claude-session-1',
+      },
+      body_b64: b64({
+        model: 'claude-opus-4-8',
+        max_tokens: 64000,
+        tools: TOOLS,
+        system: SYSTEM,
+        messages: [{ role: 'user', content: 'fix the bug' }],
+      }),
+    } as never)
+
+    const observed = calls.find(c => c.method === 'publishProviderSessionObserved')
+    expect(observed?.arg).toMatchObject({
+      provider: 'claude',
+      providerSessionId: 'claude-session-1',
+      flowId: '101',
+      source: 'proxy',
+      confidence: 'high',
+    })
+  })
+
+  it('dedupes repeated provider-session header observations', () => {
+    const calls: Call[] = []
+    const adapter = new ClaudeProxyAdapter({
+      channel: makeChannel(calls),
+      getSessionModel: () => 'claude-opus-4-8',
+    })
+    const event = {
+      kind: 'request',
+      flow_id: 102,
+      method: 'POST',
+      url: 'https://api.anthropic.com/v1/messages',
+      host: 'api.anthropic.com',
+      path: '/v1/messages',
+      headers: {
+        'X-Claude-Code-Session-Id': 'claude-session-1',
+      },
+      body_b64: b64({
+        model: 'claude-opus-4-8',
+        max_tokens: 64000,
+        tools: TOOLS,
+        system: SYSTEM,
+        messages: [{ role: 'user', content: 'fix the bug' }],
+      }),
+    } as never
+
+    adapter.handleTransportEvent(event)
+    adapter.handleTransportEvent({ ...event, flow_id: 103 } as never)
+
+    expect(calls.filter(c => c.method === 'publishProviderSessionObserved')).toHaveLength(1)
+  })
+
   it('does NOT emit turn_started for a suggestion flow, and emits prompt_suggestion with the text', () => {
     const calls: Call[] = []
     const adapter = new ClaudeProxyAdapter({

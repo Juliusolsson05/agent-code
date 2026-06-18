@@ -78,6 +78,27 @@ export type SessionActions = {
 }
 
 function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean): SessionRuntime {
+  if (!hasProviderSession) {
+    // WHY no-provider soft reload is non-destructive:
+    //
+    // Soft reload used to mean "discard renderer-derived state, then replay the
+    // committed transcript from disk." That only works when a providerSessionId
+    // points at a transcript we can load. In the #290 failure mode Claude is
+    // still alive through proxy/semantic/screen, but the committed JSONL is
+    // missing and the pane may have no provider id yet. Resetting entries,
+    // ghosts, and semantic state in that condition erases the only visible
+    // progress and then labels the empty pane "ready." Preserve the live-only
+    // state and make the durability problem explicit instead.
+    return {
+      ...current,
+      scrollToLatestRequest: current.scrollToLatestRequest + 1,
+      hasOlderHistory: false,
+      transcriptStatus: 'disconnected',
+      transcriptError:
+        'Cannot soft reload this agent view because no committed provider transcript is known yet.',
+    }
+  }
+
   const reset = emptyRuntime()
 
   // WHY this is a selective reset instead of a fresh `emptyRuntime()`:
@@ -121,8 +142,8 @@ function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean)
     turnStartedAt: current.turnStartedAt,
     phaseChangedAt: current.phaseChangedAt,
     submittedAt: current.submittedAt,
-    hasOlderHistory: hasProviderSession,
-    transcriptStatus: hasProviderSession ? 'loading' : 'ready',
+    hasOlderHistory: true,
+    transcriptStatus: 'loading',
     transcriptError: null,
   }
 }
@@ -189,7 +210,10 @@ export function useSessionActions(
         kind,
         ...(tmuxName ? { tmuxName } : {}),
         ...(kind !== 'terminal' && opts?.resumeSessionId
-          ? { providerSessionId: opts.resumeSessionId }
+          ? {
+              providerSessionId: opts.resumeSessionId,
+              providerSessionIdSource: 'resume-request' as const,
+            }
           : {}),
         ...(kind !== 'terminal' && builtInMcpDomains
           ? { builtInMcpDomains }
@@ -445,7 +469,12 @@ export function useSessionActions(
           ...(sessions[newId] ?? { cwd, kind: nextKind }),
           cwd,
           kind: nextKind,
-          ...(spawnOpts.resumeSessionId ? { providerSessionId: spawnOpts.resumeSessionId } : {}),
+          ...(spawnOpts.resumeSessionId
+            ? {
+                providerSessionId: spawnOpts.resumeSessionId,
+                providerSessionIdSource: 'resume-request' as const,
+              }
+            : {}),
           ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
         }
         const detachedSessions = { ...prev.detachedSessions }
@@ -607,7 +636,9 @@ export function useSessionActions(
           restored.hasOlderHistory =
             Boolean(existing?.hasOlderHistory) || Boolean(freshSessions[newId]?.providerSessionId)
           restored.transcriptStatus =
-            existing?.transcriptStatus === 'ready' || existing?.transcriptStatus === 'error'
+            existing?.transcriptStatus === 'ready' ||
+            existing?.transcriptStatus === 'error' ||
+            existing?.transcriptStatus === 'disconnected'
               ? existing.transcriptStatus
               : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready'
           restored.transcriptError = existing?.transcriptError ?? null
@@ -747,6 +778,16 @@ export function useSessionActions(
       if (kind !== 'claude' && kind !== 'codex') return null
 
       const hasProviderSession = Boolean(meta.providerSessionId)
+      if (!hasProviderSession) {
+        setRuntimes(prev => {
+          const current = prev[sessionId] ?? emptyRuntime()
+          return {
+            ...prev,
+            [sessionId]: softReloadRuntime(current, false),
+          }
+        })
+        return sessionId
+      }
 
       const timer = refs.bootstrapTimersRef.current.get(sessionId)
       if (timer) {

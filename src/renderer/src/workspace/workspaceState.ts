@@ -257,7 +257,7 @@ export type SemanticRuntimeState = {
 
 export type SessionStatus = 'idle' | 'running' | 'exited'
 export type SessionStatusSource = 'none' | 'submit' | 'process' | 'semantic' | 'exit'
-export type TranscriptStatus = 'idle' | 'loading' | 'ready' | 'error'
+export type TranscriptStatus = 'idle' | 'loading' | 'ready' | 'error' | 'disconnected'
 export type ProcessStatus = 'idle' | 'spawning' | 'started' | 'failed' | 'exited'
 
 /** In-feed "what is the agent doing" phase. Mirrors the upstream
