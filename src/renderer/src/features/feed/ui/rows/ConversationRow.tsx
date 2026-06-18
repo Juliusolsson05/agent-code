@@ -13,11 +13,16 @@ import { Block } from '@renderer/features/feed/ui/rows/Block'
 import { SubagentGroupHeader } from '@renderer/features/feed/ui/rows/SubagentGroupHeader'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 
-// True for a subagent-spawn block. The model batches several of these into one
-// assistant turn when it fans out, so we group adjacent ones under a single
-// "Spawned N agents" header (see renderBlocks below).
+// True for a subagent-spawn block. Claude calls this tool `Agent`; Codex calls
+// the same operation `spawn_agent`. Treating both names as the same semantic
+// row keeps the grouping rule tied to user-visible behavior rather than a
+// provider's wire vocabulary.
 function isAgentBlock(block: ContentBlock): block is ToolUseBlock {
-  return block.type === 'tool_use' && (block as ToolUseBlock).name === 'Agent'
+  return (
+    block.type === 'tool_use' &&
+    ((block as ToolUseBlock).name === 'Agent' ||
+      (block as ToolUseBlock).name === 'spawn_agent')
+  )
 }
 
 // The main renderer for a single assistant or user conversation

@@ -32,10 +32,18 @@ export const TaskSubagentRow = memo(function TaskSubagentRow({
   const input = block.input as Record<string, unknown> | undefined
   const agentType =
     sa?.agentType ??
-    (typeof input?.subagent_type === 'string' ? input.subagent_type : 'agent')
+    (typeof input?.subagent_type === 'string'
+      ? input.subagent_type
+      : typeof input?.agent_type === 'string'
+        ? input.agent_type
+        : 'agent')
   const description =
     sa?.description ??
-    (typeof input?.description === 'string' ? input.description : '')
+    (typeof input?.description === 'string'
+      ? input.description
+      : typeof input?.message === 'string'
+        ? input.message
+        : '')
 
   const glyph =
     sa?.status === 'done' ? '✓' : sa?.status === 'error' ? '✗' : '◐'

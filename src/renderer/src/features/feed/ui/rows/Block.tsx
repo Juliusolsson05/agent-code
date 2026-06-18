@@ -146,6 +146,15 @@ export const Block = memo(function Block({
         }
       }
 
+      if (tu.name === 'Agent' || tu.name === 'spawn_agent') {
+        // Claude records subagent fanout as an `Agent` tool_use; Codex records
+        // the same user-visible operation as a normal `spawn_agent`
+        // function_call. Route both through the fleet row before provider
+        // dispatch so Codex does not fall back to a generic tool card while the
+        // main process is already publishing compatible SubAgentState.
+        return <TaskSubagentRow block={tu} />
+      }
+
       if (currentProvider === 'codex') {
         if (tu.name === 'apply_patch') {
           return <CodexApplyPatchRow block={tu} />
@@ -168,12 +177,6 @@ export const Block = memo(function Block({
           return <WriteRow block={tu} />
         case 'TodoWrite':
           return <TodoRow block={tu} />
-        // A subagent spawn. The generic ToolUseRow showed a dead "Agent" +
-        // description card; TaskSubagentRow makes it live — status + tool
-        // count + an expandable tool-call timeline — by joining this block's
-        // id against runtime.subAgents (see SubAgentsContext).
-        case 'Agent':
-          return <TaskSubagentRow block={tu} />
         default:
           return <ToolUseRow block={tu} />
       }
@@ -195,6 +198,15 @@ export const Block = memo(function Block({
         }
       }
       if (currentProvider === 'codex') {
+        const sourceTu = toolUseIndex.get(tr.tool_use_id)
+        if (sourceTu?.name === 'spawn_agent') {
+          // Codex's spawn_agent result is the renderer join payload
+          // ({agent_id,nickname}), not the child agent's work. Once the
+          // spawn call renders as a TaskSubagentRow, showing that raw JSON
+          // below it is both noisy and misleading; wait_agent and child
+          // notifications carry the user-relevant completion state instead.
+          return null
+        }
         return <CodexToolResultRow block={tr} />
       }
       return <ToolResultRow block={tr} />
