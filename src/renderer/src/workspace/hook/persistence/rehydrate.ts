@@ -8,6 +8,7 @@ import type {
   Tab,
   TileNode,
 } from '@renderer/workspace/types'
+import { warnRehydrateForcedLoading } from '@renderer/workspace/runtime/transcriptStatusTrace'
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
 import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { remapSessionMetaRelationships } from '@renderer/workspace/idRemap'
@@ -377,6 +378,29 @@ export async function rehydrateWorkspace(
         const existing = prev[newId]
         const base = existing ?? emptyRuntime()
         const draft = persisted.drafts?.[oldId]
+        // #283: two diagnostic hazards converge in this rebuild.
+        //
+        // (a) Re-key drop: `out` is a fresh {} keyed by newId only, so if
+        //     oldId !== newId the prev[oldId] runtime is dropped. An
+        //     initial-history load still in flight under oldId will resolve
+        //     into a missing key and silently lose its 'ready' write.
+        // (b) Force-to-loading: a still-'loading' base is re-asserted as
+        //     'loading' here. Harmless IF a loader later drives it to
+        //     'ready' — the bug is when nothing does.
+        const droppedLoadingOldKey =
+          oldId !== newId && prev[oldId]?.transcriptStatus === 'loading'
+        const willForceLoading =
+          base.transcriptStatus !== 'ready' &&
+          base.transcriptStatus !== 'error' &&
+          Boolean(freshSessions[newId]?.providerSessionId)
+        if (droppedLoadingOldKey || willForceLoading) {
+          warnRehydrateForcedLoading({
+            sessionId: droppedLoadingOldKey ? `${oldId}->${newId}` : newId,
+            baseStatus: (droppedLoadingOldKey ? prev[oldId] : base).transcriptStatus,
+            hasProviderSessionId: Boolean(freshSessions[newId]?.providerSessionId),
+            site: 'rehydrate:rebuild-remapped',
+          })
+        }
         out[newId] = {
           ...base,
           ...(draft && !base.draftInput ? { draftInput: draft } : {}),
@@ -406,6 +430,20 @@ export async function rehydrateWorkspace(
       for (const id of Object.keys(freshSessions)) {
         if (out[id]) continue
         const existing = prev[id]
+        // #283: same force-to-loading hazard (b) as the remap loop, for
+        // sessions that arrive without an idMap remap.
+        if (
+          existing?.transcriptStatus !== 'ready' &&
+          existing?.transcriptStatus !== 'error' &&
+          Boolean(freshSessions[id]?.providerSessionId)
+        ) {
+          warnRehydrateForcedLoading({
+            sessionId: id,
+            baseStatus: existing?.transcriptStatus ?? 'idle',
+            hasProviderSessionId: true,
+            site: 'rehydrate:rebuild-fresh',
+          })
+        }
         out[id] = {
           ...(existing ?? emptyRuntime()),
           hasOlderHistory: Boolean(freshSessions[id]?.providerSessionId),

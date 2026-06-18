@@ -20,6 +20,10 @@ import {
 import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
 import { appendFeedDebugLog } from '@renderer/workspace/runtime/feedDebug'
 import {
+  traceTranscriptStatus,
+  warnTranscriptWriteDiscarded,
+} from '@renderer/workspace/runtime/transcriptStatusTrace'
+import {
   ghostsToPersist,
   reconcileUpstream,
 } from '@renderer/workspace/ghosts'
@@ -97,10 +101,15 @@ export async function loadInitialHistoryForSession({
   if (!meta.providerSessionId) {
     setRuntimes(prev => {
       const current = prev[sessionId] ?? emptyRuntime()
+      const traced = traceTranscriptStatus(
+        current,
+        'ready',
+        'initial-history:no-provider-id',
+      )
       return {
         ...prev,
         [sessionId]: {
-          ...current,
+          ...traced,
           transcriptStatus: 'ready',
           transcriptError: null,
         },
@@ -117,10 +126,11 @@ export async function loadInitialHistoryForSession({
 
   setRuntimes(prev => {
     const current = prev[sessionId] ?? emptyRuntime()
+    const traced = traceTranscriptStatus(current, 'loading', 'initial-history:loading')
     return {
       ...prev,
       [sessionId]: {
-        ...current,
+        ...traced,
         transcriptStatus: 'loading',
         transcriptError: null,
       },
@@ -142,7 +152,18 @@ export async function loadInitialHistoryForSession({
 
     setRuntimes(prev => {
       const current = prev[sessionId]
-      if (!current) return prev
+      if (!current) {
+        // #283: the load resolved but our runtime key is gone (dropped or
+        // re-keyed by an idMap remap while we awaited IPC). This 'ready'
+        // write is about to be discarded — which is exactly how a pane gets
+        // parked at 'loading' forever. Make that discard visible.
+        warnTranscriptWriteDiscarded({
+          sessionId,
+          intended: 'ready',
+          site: 'initial-history:ready',
+        })
+        return prev
+      }
       const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
       seedSeenFromRuntime(current, seen)
 
@@ -237,9 +258,19 @@ export async function loadInitialHistoryForSession({
         }
       }
 
+      // #283: record the loading -> ready transition on the runtime that
+      // actually survives to carry it. Threaded through the same updater as
+      // the status flip so the timeline shows the write landing (vs. the
+      // warn above when it gets discarded).
+      const tracedCurrent = traceTranscriptStatus(
+        current,
+        'ready',
+        'initial-history:ready',
+        { mappedEntries: initialEntries.length },
+      )
       const nextRuntime = appendFeedDebugLog(
         {
-          ...current,
+          ...tracedCurrent,
           entries: initialEntries.length > 0
             ? [...initialEntries, ...current.entries]
             : current.entries,
@@ -287,11 +318,23 @@ export async function loadInitialHistoryForSession({
     console.warn('[history] load initial failed', err)
     setRuntimes(prev => {
       const current = prev[sessionId]
-      if (!current) return prev
+      if (!current) {
+        // #283: same discard hazard as the 'ready' path — an in-flight load
+        // that failed also loses its terminal write if the key vanished.
+        warnTranscriptWriteDiscarded({
+          sessionId,
+          intended: 'error',
+          site: 'initial-history:error',
+        })
+        return prev
+      }
+      const traced = traceTranscriptStatus(current, 'error', 'initial-history:error', {
+        message,
+      })
       return {
         ...prev,
         [sessionId]: {
-          ...current,
+          ...traced,
           transcriptStatus: 'error',
           transcriptError: message,
         },
