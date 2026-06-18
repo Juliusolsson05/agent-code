@@ -16,6 +16,7 @@ import type { ClosedPane, ClosedTab } from '@renderer/lib/undoClose'
 import type { WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 
 type RestoreResult = 'restored' | 'stale' | 'retryable-failure'
 
@@ -80,7 +81,7 @@ export function useUndoCloseAction(
       try {
         newSessionId = await sessionActions.spawn(meta.cwd, {
           kind: meta.kind ?? 'claude',
-          resumeSessionId: meta.providerSessionId,
+          resumeSessionId: resumableProviderSessionId(meta),
           recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
         })
       } catch {
@@ -152,7 +153,7 @@ export function useUndoCloseAction(
           // agents.
           const newId = await sessionActions.spawn(meta.cwd, {
             kind,
-            resumeSessionId: kind !== 'terminal' ? meta.providerSessionId : undefined,
+            resumeSessionId: kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
           })
           idMap.set(oldId, newId)
@@ -211,7 +212,9 @@ export function useUndoCloseAction(
           // detached terminals doesn't silently drop tmuxName.
           const newId = await sessionActions.spawn(detached.meta.cwd, {
             kind,
-            resumeSessionId: kind !== 'terminal' ? detached.meta.providerSessionId : undefined,
+            resumeSessionId: kind !== 'terminal'
+              ? resumableProviderSessionId(detached.meta)
+              : undefined,
             recoverTmuxName: kind === 'terminal' ? detached.meta.tmuxName : undefined,
           })
           restoredDetached[newId] = {

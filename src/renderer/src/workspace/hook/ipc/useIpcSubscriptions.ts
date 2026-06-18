@@ -73,6 +73,10 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
+import {
+  applyJsonlProviderSessionId,
+  shouldMarkProviderSessionDisconnected,
+} from '@renderer/workspace/providerSessionIdentity'
 
 // Codex rollout is delivered as many small IPC bursts, but `turn_context`
 // is only one line near the beginning of the task. The bundle that
@@ -705,8 +709,8 @@ export function useIpcSubscriptions(
         })
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
-          const shouldMarkDisconnected =
-            current.lastJsonlEntryAt === null && current.totalEntries === 0
+          const meta = refs.stateRef.current.sessions[sessionId] ?? null
+          const shouldMarkDisconnected = shouldMarkProviderSessionDisconnected(current, meta)
           const next = appendFeedDebugLog(
             {
               ...current,
@@ -1084,15 +1088,11 @@ export function useIpcSubscriptions(
           if (!meta) return prev
           const id = capturedClaudeId ?? capturedCodexId
           if (!id) return prev
-          const source = 'jsonl-entry' as const
-          if (meta.providerSessionId === id && meta.providerSessionIdSource === source) {
+          const resolution = applyJsonlProviderSessionId(meta, id)
+          if (resolution.status === 'unchanged') {
             return prev
           }
-          if (
-            meta.providerSessionId &&
-            meta.providerSessionId !== id &&
-            meta.providerSessionIdSource !== 'proxy-header'
-          ) {
+          if (resolution.status === 'conflict') {
             // WHY a conflicting durable id is not auto-adopted:
             //
             // The #290 symptom is not just "missing transcript"; it is a pane
@@ -1105,9 +1105,9 @@ export function useIpcSubscriptions(
             // first JSONL-backed id is allowed to replace it.
             console.warn('[workspace] ignoring conflicting providerSessionId from JSONL', {
               sessionId,
-              current: meta.providerSessionId,
-              incoming: id,
-              currentSource: meta.providerSessionIdSource ?? null,
+              current: resolution.current,
+              incoming: resolution.incoming,
+              currentSource: resolution.currentSource,
             })
             return prev
           }
@@ -1115,11 +1115,7 @@ export function useIpcSubscriptions(
             ...prev,
             sessions: {
               ...prev.sessions,
-              [sessionId]: {
-                ...meta,
-                providerSessionId: id,
-                providerSessionIdSource: source,
-              },
+              [sessionId]: resolution.meta,
             },
           }
         })

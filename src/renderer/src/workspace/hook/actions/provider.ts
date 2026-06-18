@@ -7,6 +7,7 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
 
 // Provider-level actions on the focused pane.
 //
@@ -49,7 +50,8 @@ export function useProviderActions(
     const targetKind = sourceKind === 'claude' ? 'codex' : 'claude'
 
     try {
-      if (!meta.providerSessionId) {
+      const sourceProviderSessionId = resumableProviderSessionId(meta)
+      if (!sourceProviderSessionId) {
         const draftImages =
           refs.latestRuntimesRef.current[sourceSessionId]?.draftImages ?? []
 
@@ -110,7 +112,7 @@ export function useProviderActions(
       // dead pane.
       const result = await window.api.switchProvider({
         sourceKind,
-        sourceProviderSessionId: meta.providerSessionId,
+        sourceProviderSessionId,
         cwd: meta.cwd,
       })
 
@@ -146,7 +148,8 @@ export function useProviderActions(
       showPaneToast(sourceSessionId, 'Only Claude and Codex panes can reload')
       return
     }
-    if (!meta.providerSessionId) {
+    const resumeSessionId = resumableProviderSessionId(meta)
+    if (!resumeSessionId) {
       showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
       return
     }
@@ -154,7 +157,7 @@ export function useProviderActions(
     try {
       const newSessionId = await sessionActions.replaceSession(meta.cwd, {
         kind,
-        resumeSessionId: meta.providerSessionId,
+        resumeSessionId,
         builtInMcpDomains: meta.builtInMcpDomains,
       })
       if (!newSessionId) return
@@ -209,11 +212,11 @@ export function useProviderActions(
         showPaneToast(sourceSessionId, 'Only Claude and Codex panes support rewind')
         return
       }
-      if (!meta.providerSessionId) {
+      const previousProviderSessionId = resumableProviderSessionId(meta)
+      if (!previousProviderSessionId) {
         showPaneToast(sourceSessionId, 'Provider session id is not ready yet')
         return
       }
-      const previousProviderSessionId = meta.providerSessionId
       if (kind !== anchor.kind) {
         showPaneToast(
           sourceSessionId,

@@ -31,6 +31,7 @@ import {
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
+import { hasDurableProviderSession } from '@renderer/workspace/providerSessionIdentity'
 import {
   codexEventType,
   codexTurnIdFromEventPayload,
@@ -94,15 +95,18 @@ export async function loadInitialHistoryForSession({
   const kind = meta?.kind ?? 'claude'
   if (!meta || (kind !== 'claude' && kind !== 'codex')) return
 
-  if (!meta.providerSessionId) {
+  if (!hasDurableProviderSession(meta)) {
     setRuntimes(prev => {
       const current = prev[sessionId] ?? emptyRuntime()
+      const isProvisional = meta.providerSessionIdSource === 'proxy-header'
       return {
         ...prev,
         [sessionId]: {
           ...current,
-          transcriptStatus: 'ready',
-          transcriptError: null,
+          transcriptStatus: isProvisional ? 'disconnected' : 'ready',
+          transcriptError: isProvisional
+            ? 'Provider session was observed in proxy traffic, but no committed transcript is known yet.'
+            : null,
         },
       }
     })

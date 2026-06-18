@@ -29,6 +29,11 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/initialHistory'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import {
+  hasDurableProviderSession,
+  resumableProviderSessionId,
+  withoutProvisionalProviderSession,
+} from '@renderer/workspace/providerSessionIdentity'
+import {
   collectLiveProcessIds,
   collectOwnedSessionIds,
   collectUnownedSessionIds,
@@ -233,7 +238,7 @@ export function useSessionActions(
         ...prev,
         [sessionId]: {
           ...emptyRuntime(),
-          hasOlderHistory: kind !== 'terminal' && Boolean(meta.providerSessionId),
+          hasOlderHistory: kind !== 'terminal' && hasDurableProviderSession(meta),
           transcriptStatus:
             kind !== 'terminal' && meta.providerSessionId ? 'loading' : 'ready',
           transcriptError: null,
@@ -596,17 +601,19 @@ export function useSessionActions(
             kind !== 'terminal'
               ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)
               : undefined
+          const resumeSessionId = resumableProviderSessionId(meta)
+          const restoredMeta = withoutProvisionalProviderSession(meta)
           const { sessionId: newId } = await window.api.spawnSession({
             kind,
             cwd: meta.cwd,
-            resumeSessionId: meta.providerSessionId,
+            resumeSessionId,
             dangerousMode,
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
             builtInMcpDomains,
           })
           idMap.set(oldId, newId)
           freshSessions[newId] = {
-            ...meta,
+            ...restoredMeta,
             ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
           }
         } catch {
@@ -634,7 +641,7 @@ export function useSessionActions(
           const restored: SessionRuntime = { ...(existing ?? emptyRuntime()) }
           restored.draftInput = oldRuntimes[oldId]?.draftInput ?? existing?.draftInput ?? ''
           restored.hasOlderHistory =
-            Boolean(existing?.hasOlderHistory) || Boolean(freshSessions[newId]?.providerSessionId)
+            Boolean(existing?.hasOlderHistory) || hasDurableProviderSession(freshSessions[newId])
           restored.transcriptStatus =
             existing?.transcriptStatus === 'ready' ||
             existing?.transcriptStatus === 'error' ||
@@ -741,7 +748,7 @@ export function useSessionActions(
         }
       })
       for (const [newId, meta] of Object.entries(freshSessions)) {
-        if (!meta.providerSessionId) continue
+        if (!hasDurableProviderSession(meta)) continue
         void loadInitialHistoryForSession({
           sessionId: newId,
           meta,
@@ -777,8 +784,13 @@ export function useSessionActions(
       const kind = meta.kind ?? 'claude'
       if (kind !== 'claude' && kind !== 'codex') return null
 
-      const hasProviderSession = Boolean(meta.providerSessionId)
+      const hasProviderSession = hasDurableProviderSession(meta)
       if (!hasProviderSession) {
+        const timer = refs.bootstrapTimersRef.current.get(sessionId)
+        if (timer) {
+          clearTimeout(timer)
+          refs.bootstrapTimersRef.current.delete(sessionId)
+        }
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
           return {
