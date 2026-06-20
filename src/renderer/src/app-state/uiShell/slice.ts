@@ -35,6 +35,7 @@ export const createUiShellSlice: StateCreator<
   globalEditorOpen: false,
   promptSearchOpen: false,
   agentActivityOpen: false,
+  closeOldAgentsOpen: false,
   rewindPromptSessionId: null,
   // Default keeps the dispatch list at 25% (matching the
   // previous-hardcoded `basis-1/4`) so the migration is visually a
@@ -204,6 +205,10 @@ export const createUiShellSlice: StateCreator<
     set({ agentActivityOpen: true }, false, 'uiShell/openAgentActivity'),
   closeAgentActivity: () =>
     set({ agentActivityOpen: false }, false, 'uiShell/closeAgentActivity'),
+  openCloseOldAgents: () =>
+    set({ closeOldAgentsOpen: true }, false, 'uiShell/openCloseOldAgents'),
+  closeCloseOldAgents: () =>
+    set({ closeOldAgentsOpen: false }, false, 'uiShell/closeCloseOldAgents'),
 
   openRewindPrompt: sessionId =>
     set({ rewindPromptSessionId: sessionId }, false, 'uiShell/openRewindPrompt'),
