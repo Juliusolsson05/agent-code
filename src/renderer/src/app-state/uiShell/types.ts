@@ -121,6 +121,15 @@ export type UiShellState = {
    *  panes during a long session. Derived from existing transcript
    *  data — no separate tracking store. */
   agentActivityOpen: boolean
+  /** When true, the Close Old Agents modal is open.
+   *
+   * WHY this is a separate modal flag instead of a mode inside Agent
+   * Activity: the activity view is a manual inspector with row-level
+   * actions, while Close Old Agents is a batch-destructive workflow with
+   * threshold inputs, project scoping, and a computed preview. Keeping the
+   * flags separate lets either surface evolve without inheriting the other
+   * surface's keyboard model or confirmation semantics. */
+  closeOldAgentsOpen: boolean
   /** Non-null when the Rewind-to-Prompt modal is open. Value is the
    *  sessionId whose transcript the modal is showing prompts for.
    *  Selecting a prompt in the modal calls
