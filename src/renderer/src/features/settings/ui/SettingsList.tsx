@@ -169,6 +169,47 @@ function SettingRow({
               {control.label}
             </button>
           ) : null}
+
+          {/* Command-visibility control: one toggle row per command plus a
+              reset action. Purely presentational — every state transition
+              flows out through the control's callbacks (which patch the
+              sparse override map in settings); this branch never owns or
+              derives visibility itself. The toggle row reuses the same
+              border/checkbox styling as the `toggle` control above so the
+              long list reads as a single coherent group. */}
+          {control.type === 'command-visibility' ? (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex max-h-[320px] flex-col gap-1 overflow-auto">
+                {control.commands.map(command => {
+                  const visible = control.isVisible(settings, command)
+                  return (
+                    <button
+                      key={command.id}
+                      type="button"
+                      onClick={() => control.onToggleCommand(context, command, !visible)}
+                      className="flex w-full items-center justify-between border border-border px-3 py-2 text-left text-[12px] text-ink-dim hover:border-border-hi hover:text-ink"
+                    >
+                      <span className="min-w-0 truncate">{command.title}</span>
+                      <span
+                        className={`ml-3 flex h-3.5 w-3.5 shrink-0 border ${
+                          visible
+                            ? 'border-accent bg-accent'
+                            : 'border-border-hi bg-transparent'
+                        }`}
+                      />
+                    </button>
+                  )
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => control.onResetVisibility(context)}
+                className="w-full border border-border px-3 py-2 text-left text-[12px] text-ink-dim hover:border-border-hi hover:text-ink"
+              >
+                Reset command visibility
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

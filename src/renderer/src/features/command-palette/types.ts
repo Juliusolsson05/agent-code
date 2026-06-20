@@ -46,6 +46,40 @@ export type CommandState = {
  */
 export type CommandSurface = 'app' | 'grid' | 'dispatch' | 'session' | 'editor' | 'debug'
 
+/**
+ * How visible a command should be in the command PICKER specifically.
+ *
+ * WHY this is separate from `surface`: `surface` answers "does this
+ * command apply to the current mode at all" (a grid command in Dispatch
+ * is meaningless and silently hidden). `pickerVisibility` answers a
+ * different question — "even when this command IS applicable, should it
+ * clutter the fuzzy-search list, or is it niche/dangerous/dev-only
+ * enough that we'd rather it stay out of the picker unless the user
+ * opts in?" The two are orthogonal: a command can be perfectly
+ * applicable (`surface: 'app'`) yet be a debug toggle most users never
+ * want surfaced.
+ *
+ * CRUCIAL invariant: this affects the PICKER LIST ONLY. A non-`default`
+ * visibility never disables `run()` — the command remains fully
+ * executable via its keybinding or any programmatic call site. Hiding
+ * here is purely about list noise, not capability. Breaking that
+ * invariant (e.g. gating keybindings on visibility) would turn a
+ * cosmetic preference into a functional regression.
+ *
+ *  - `default`      — shown in the picker (absence of the field ≡ this).
+ *  - `advanced`     — hidden from the picker by default; power-user
+ *                     command still reachable by keybinding.
+ *  - `experimental` — hidden by default; in-progress / unstable.
+ *  - `debug`        — hidden by default; developer/diagnostic tooling.
+ *
+ * The non-`default` tiers are distinct labels rather than a single
+ * `hidden` boolean so a future UI can group/explain them, but the
+ * registry gate treats every non-`default` value identically: hidden
+ * unless an explicit per-command override (or the global
+ * showHiddenCommands escape hatch) says otherwise.
+ */
+export type CommandPickerVisibility = 'default' | 'advanced' | 'experimental' | 'debug'
+
 export type CommandContext = {
   workspace: Workspace
   ui: {
@@ -137,6 +171,25 @@ export type CommandContext = {
     fileTreeVisible: boolean
     dispatchModeEnabled: boolean
     globalDispatchEnabled: boolean
+    /**
+     * Sparse per-command picker-visibility overrides, keyed by the
+     * command's stable `id`. A present boolean wins over the command's
+     * declared `pickerVisibility`: `true` forces the command into the
+     * picker, `false` forces it out. Absent ids fall back to the
+     * declared default. Source of truth is the persisted
+     * `Settings.commandVisibilityOverrides`; it threads through here so
+     * the registry's single filter chokepoint can consult it without
+     * importing the settings store.
+     */
+    commandVisibilityOverrides: Record<string, boolean>
+    /**
+     * Global escape hatch: when true, the picker shows EVERY applicable
+     * command regardless of declared visibility or per-command override.
+     * Lets a "show hidden commands" affordance reveal the full list in
+     * one shot. Wired to a constant `false` for now (issue #249 ships the
+     * mechanism only); a future toggle can flip it.
+     */
+    showHiddenCommands: boolean
   }
 }
 
@@ -155,6 +208,15 @@ export type CommandDef = {
    * an agent, the overlay is open); `surface` is for mode availability.
    */
   surface: CommandSurface
+  /**
+   * Declared picker visibility. OPTIONAL on purpose: absence ≡
+   * `'default'` (shown), so this stays purely additive — no existing
+   * command has to be touched, and the field only appears on commands
+   * that genuinely want to hide themselves from the picker by default.
+   * A per-command override in settings can still flip this either way;
+   * see `CommandContext.flags.commandVisibilityOverrides`.
+   */
+  pickerVisibility?: CommandPickerVisibility
   shortcut?: string
   keywords?: string[]
   keepPaletteOpen?: boolean

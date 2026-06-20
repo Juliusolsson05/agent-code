@@ -797,6 +797,11 @@ export default function App() {
         toggleStatusMode={toggleStatusMode}
         toggleWorktreeBadges={toggleWorktreeBadges}
         customRenderingEnabled={settings.customRendering}
+        commandVisibilityOverrides={settings.commandVisibilityOverrides}
+        // Hard-coded false for now: issue #249 ships the per-command
+        // override mechanism only. A future "show hidden commands"
+        // affordance can flip this to reveal the full list in one shot.
+        showHiddenCommands={false}
         statusModeEnabled={settings.showStatusMode}
         worktreeBadgesEnabled={settings.showWorktreeBadges}
         dangerousAgentsEnabled={dangerousAgentsEnabled}
