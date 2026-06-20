@@ -17,6 +17,7 @@ import { TileTabsModal } from '@renderer/features/tile-tabs/ui/TileTabsModal'
 import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
 import { AgentActivityModal } from '@renderer/features/workspace/ui/AgentActivityModal'
 import { BuryPanePrompt } from '@renderer/features/workspace/ui/BuryPanePrompt'
+import { CloseOldAgentsModal } from '@renderer/features/workspace/ui/CloseOldAgentsModal'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
 import { TiledDispatchCountOverlay } from '@renderer/features/workspace/ui/TiledDispatchCountOverlay'
 import { PromptSearchModal } from '@renderer/features/workspace/ui/PromptSearchModal'
@@ -158,6 +159,9 @@ export default function App() {
   const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
+  const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
+  const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
+  const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
   const rewindPromptSessionId = useAppStore(state => state.rewindPromptSessionId)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
@@ -787,6 +791,7 @@ export default function App() {
         openViewPrompts={openViewPrompts}
         openPromptSearch={openPromptSearch}
         openAgentActivity={openAgentActivity}
+        openCloseOldAgents={openCloseOldAgents}
         openRewindPrompt={openRewindPrompt}
         toggleCustomRendering={toggleCustomRendering}
         toggleStatusMode={toggleStatusMode}
@@ -941,6 +946,12 @@ export default function App() {
         open={agentActivityOpen}
         workspace={workspace}
         onClose={closeAgentActivity}
+      />
+
+      <CloseOldAgentsModal
+        open={closeOldAgentsOpen}
+        workspace={workspace}
+        onClose={closeCloseOldAgents}
       />
 
       <RewindToPromptModal

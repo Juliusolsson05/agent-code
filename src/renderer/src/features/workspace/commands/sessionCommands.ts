@@ -184,6 +184,36 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Close Old Agents — batch cleanup for stale provider panes.
+    //
+    // WHY this is an app-surface command instead of a session command:
+    // the user is cleaning the workspace, not acting on the focused pane.
+    // The modal defaults to all projects and then lets the user narrow by
+    // cwd, so hiding it when no agent is focused would make exactly the
+    // "cleanup the mess from anywhere" use case harder. The modal itself
+    // handles the empty workspace case with a preview empty state.
+    id: 'close-old-agents',
+    surface: 'app',
+    title: 'Close Old Agents…',
+    description: '**What it does:** Opens a batch cleanup modal for **Claude and Codex agents** inactive longer than a chosen time.\n\n**Use when:** You want to close stale agents across all projects or selected projects.\n\n**Notes:** Defaults to 4 hours and excludes currently-running agents unless you opt in.',
+    keywords: [
+      'close',
+      'old',
+      'agents',
+      'stale',
+      'inactive',
+      'idle',
+      'cleanup',
+      'projects',
+      'batch',
+      'kill',
+    ],
+    run: ({ ui }) => {
+      ui.openCloseOldAgents()
+      ui.closePalette()
+    },
+  },
+  {
     // Cross-session prompt search — session names are useless for
     // finding a conversation, so this command opens a modal that
     // ranks every session on disk by its user-prompt text instead.
