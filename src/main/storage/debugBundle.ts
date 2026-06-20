@@ -1,10 +1,11 @@
-import { mkdir, writeFile } from 'fs/promises'
+import { mkdir, rename, rm, writeFile } from 'fs/promises'
 import { dirname, join, normalize } from 'path'
 
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import {
   appendDebugBundleSaved,
   debugBundleRootForReason,
+  isAutosaveDebugBundleReason,
 } from '@main/storage/debugBundleLog.js'
 
 // Debug-bundle writer.
@@ -90,6 +91,27 @@ function buildBundleFolderName(sessionId: string, now: Date): string {
   return `${stamp}-${short}`
 }
 
+// Autosave folder naming — DELIBERATELY stable (no timestamp), one folder
+// per session.
+//
+// WHY this differs from manual saves: aggressiveDebugPersistence ticks every
+// AUTO_DEBUG_BUNDLE_INTERVAL_MS (60s) and saves a bundle for EVERY active
+// claude/codex pane. With the timestamped naming used by manual saves, a
+// workspace with N panes minted N new ~1MB folders every minute — thousands
+// per session. debugRetention caps the autosave bucket, so it then deleted the
+// oldest ~285 folders on every save just to have them regenerated seconds
+// later: a permanent ~310 MiB/cycle churn loop (the `[debug-retention] pruned
+// 285 artifacts` spam) plus pointless SSD wear, for history nothing ever reads.
+//
+// Autosave is a crash-recovery snapshot: only the LATEST capture per session is
+// useful, and nothing in the app consumes these dirs programmatically. Keying
+// the folder on the (full, path-sanitized) session id collapses the firehose to
+// at most one folder per active session — bounded, no churn — while manual
+// saves keep their timestamped before/after history below.
+function buildAutosaveFolderName(sessionId: string): string {
+  return sanitizeForPath(sessionId)
+}
+
 // Validate that a bundle file path stays inside the timestamped
 // folder. Root-level debug files still pass (`manifest.json`), and
 // trace files can now live in controlled subfolders
@@ -120,25 +142,50 @@ export async function saveDebugBundle(
     }
   }
 
-  const bundleFolderName = buildBundleFolderName(params.sessionId, new Date())
+  const isAutosave = isAutosaveDebugBundleReason(params.reason)
   const bundleRoot = debugBundleRootForReason(params.reason)
-  const bundlePath = join(bundleRoot, bundleFolderName)
+  const bundlePath = join(
+    bundleRoot,
+    isAutosave
+      ? buildAutosaveFolderName(params.sessionId)
+      : buildBundleFolderName(params.sessionId, new Date()),
+  )
 
-  // mkdir recursive handles both the manual/autosave root (first invocation
-  // ever) and the new per-bundle folder in one call.
-  await mkdir(bundlePath, { recursive: true })
+  if (isAutosave) {
+    // Autosave reuses one folder per session (see buildAutosaveFolderName), so
+    // we must REPLACE the previous snapshot rather than write over it in place.
+    // In-place writes would (a) leave stale files behind if the file set ever
+    // shrinks, breaking the "one folder = one coherent snapshot" invariant, and
+    // (b) expose a half-written mix if a reader inspects the folder during an
+    // in-place rewrite. We write to a unique temp dir first, then replace the
+    // stable cache path. Directory replacement is intentionally "good cache
+    // hygiene", not a durable transaction: there is a tiny rm->rename window
+    // where the latest autosave folder may be absent, which is acceptable for
+    // best-effort debug recovery and much better than retaining stale files.
+    // The temp name is unique (pid+time) because a beforeunload save can race an
+    // in-flight interval save for the same session; the `finally` drops any temp
+    // the rename didn't consume so a failed/raced write never orphans cache.
+    const tmpPath = `${bundlePath}.tmp-${process.pid}-${Date.now()}`
+    try {
+      await writeBundleFiles(tmpPath, params.files)
+      await rm(bundlePath, { recursive: true, force: true })
+      await rename(tmpPath, bundlePath)
+    } finally {
+      await rm(tmpPath, { recursive: true, force: true }).catch(() => {})
+    }
 
-  // Sequential writes. Could parallelize with Promise.all but bundles
-  // are small (a few files, typically < 1MB total) and a serial loop
-  // keeps error messages unambiguous — a failure names the file that
-  // actually failed, not an aggregate rejection that's harder to act
-  // on when debugging Agent Code itself (which is the whole point of
-  // this feature).
-  for (const file of params.files) {
-    const target = join(bundlePath, file.name)
-    await mkdir(dirname(target), { recursive: true })
-    await writeFile(target, file.content, 'utf8')
+    // No ledger append for autosave: the autosaved-debug-bundles.jsonl file is
+    // write-only (nothing reads it — retention classifies autosave purely by
+    // directory), so appending one line per 60s-per-pane tick was an unbounded
+    // leak of its own. Retention also already understands these bundles by
+    // their root dir, so the ledger adds nothing.
+    scheduleDebugStoragePrune('debug-bundle-save')
+    return { bundlePath }
   }
+
+  // Manual saves keep the timestamped before/after history and the lookup
+  // ledger — they are user-intentional captures, not a high-frequency cache.
+  await writeBundleFiles(bundlePath, params.files)
 
   try {
     await appendDebugBundleSaved({
@@ -161,4 +208,21 @@ export async function saveDebugBundle(
   scheduleDebugStoragePrune('debug-bundle-save')
 
   return { bundlePath }
+}
+
+// Sequential writes. Could parallelize with Promise.all but bundles
+// are small (a few files, typically < 1MB total) and a serial loop
+// keeps error messages unambiguous — a failure names the file that
+// actually failed, not an aggregate rejection that's harder to act
+// on when debugging Agent Code itself (which is the whole point of
+// this feature).
+async function writeBundleFiles(bundlePath: string, files: DebugBundleFile[]): Promise<void> {
+  // mkdir recursive handles both the manual/autosave root (first invocation
+  // ever) and the new per-bundle folder in one call.
+  await mkdir(bundlePath, { recursive: true })
+  for (const file of files) {
+    const target = join(bundlePath, file.name)
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, file.content, 'utf8')
+  }
 }
