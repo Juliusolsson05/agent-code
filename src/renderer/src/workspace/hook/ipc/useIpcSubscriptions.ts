@@ -155,6 +155,23 @@ const GHOST_ORPHAN_TTL_MS = 30000
 const GHOST_ORPHAN_SWEEP_MS = 1000
 const GHOST_SUPERSEDED_GC_MS = 5000
 
+// WHY this quiet-window exists (Codex queued-message idle reconciliation):
+// The three edge-site clears (onSessionProcessState, onSessionSemanticEvent,
+// bootstrap_complete) fire the instant a single idle signal lands. That is
+// the fast path. But idle for Codex is assembled from several channels —
+// process-state, semantic phase transitions, and JSONL tail ingestion — and
+// the LAST signal to arrive may come through a channel that doesn't re-run
+// the invariant, so the queue can stick. The orphan sweep (below) re-checks
+// the invariant on a timer as a backstop. The danger of a timer backstop is
+// the sub-second gap between a turn_completed (everything momentarily looks
+// idle) and the next queued follow-up's turn_started: if we cleared during
+// that gap we'd delete a prompt the engine is about to run. So the sweep
+// only acts once idle has been STABLE for this long — i.e. the most recent
+// phase/JSONL transition is older than QUEUE_IDLE_RECONCILE_MS. That makes
+// this a convergence-triggered clear: we wait for signals to quiesce, then
+// reconcile, rather than reacting to any single edge.
+const QUEUE_IDLE_RECONCILE_MS = 2000
+
 function canIngestWorkContext(raw: unknown, hasWorktreeCache: boolean): boolean {
   const type = (raw as { type?: unknown })?.type
   return type === 'worktree-state' || hasWorktreeCache
@@ -284,33 +301,98 @@ export function useIpcSubscriptions(
         let changed = false
         const next = { ...prev }
         for (const [sessionId, runtime] of Object.entries(prev)) {
-          if (runtime.ghosts.size === 0) continue
-          const orphanedGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
-          const nextGhosts = gcSupersededGhosts(
-            orphanedGhosts,
-            now,
-            GHOST_SUPERSEDED_GC_MS,
-          )
-          if (nextGhosts === runtime.ghosts) continue
-          for (const ghost of ghostsToPersist(runtime.ghosts, nextGhosts)) {
-            window.api.ghostAppend(sessionId, ghost)
+          // `working` accumulates every change this tick produces for this
+          // session so the two independent passes (ghost GC, then the Codex
+          // queued-message reconciliation) compose into a SINGLE setRuntimes
+          // patch. We must NOT `continue` between them: a session with no
+          // ghosts can still hold a stale Codex queue row, and a session that
+          // GC'd ghosts can also need its queue cleared in the same tick.
+          let working = runtime
+
+          // --- Pass 1: ghost orphan flagging + superseded GC ---
+          // Only runs when there are ghosts to consider; otherwise leaves
+          // `working` untouched so the queue pass below still gets a chance.
+          if (runtime.ghosts.size > 0) {
+            const orphanedGhosts = orphanStale(runtime.ghosts, now, GHOST_ORPHAN_TTL_MS)
+            const nextGhosts = gcSupersededGhosts(
+              orphanedGhosts,
+              now,
+              GHOST_SUPERSEDED_GC_MS,
+            )
+            if (nextGhosts !== runtime.ghosts) {
+              for (const ghost of ghostsToPersist(runtime.ghosts, nextGhosts)) {
+                window.api.ghostAppend(sessionId, ghost)
+              }
+              working = appendFeedDebugLog(
+                { ...working, ghosts: nextGhosts },
+                {
+                  layer: 'STATE',
+                  kind: 'ghost_orphan_sweep',
+                  summary: 'stale ghosts marked orphaned',
+                  data: {
+                    ghostCount: nextGhosts.size,
+                    orphanedCount: [...nextGhosts.values()].filter(
+                      ghost => ghost._atp.orphanedAt !== undefined &&
+                        runtime.ghosts.get(ghost.uuid)?._atp.orphanedAt === undefined,
+                    ).length,
+                  },
+                },
+              )
+            }
           }
-          next[sessionId] = appendFeedDebugLog(
-            { ...runtime, ghosts: nextGhosts },
-            {
-              layer: 'STATE',
-              kind: 'ghost_orphan_sweep',
-              summary: 'stale ghosts marked orphaned',
-              data: {
-                ghostCount: nextGhosts.size,
-                orphanedCount: [...nextGhosts.values()].filter(
-                  ghost => ghost._atp.orphanedAt !== undefined &&
-                    runtime.ghosts.get(ghost.uuid)?._atp.orphanedAt === undefined,
-                ).length,
-              },
-            },
-          )
-          changed = true
+
+          // --- Pass 2: Codex queued-message idle reconciliation (backstop) ---
+          // The edge-site clears are the fast path; this is the convergence
+          // backstop for when the last idle signal arrives via a channel that
+          // never re-runs the invariant (see issue #241). We re-evaluate the
+          // SAME predicate the edge sites use, but only after idle has been
+          // STABLE past QUEUE_IDLE_RECONCILE_MS so we never clear in the
+          // sub-second gap between a turn_completed and the next queued
+          // follow-up's turn_started.
+          const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
+          if (
+            working.queuedMessages.length > 0 &&
+            shouldClearIdleCodexQueuedMessages({
+              awaitingAssistant: working.awaitingAssistant,
+              processActive: working.processActive,
+              provider: sessionKind,
+              queuedMessagesLength: working.queuedMessages.length,
+              streamPhase: working.streamPhase,
+            })
+          ) {
+            // idleStable: the most recent activity/phase transition must be
+            // older than the quiet window. We take the NEWEST of the two
+            // available activity timestamps (phaseChangedAt, lastJsonlEntryAt)
+            // — whichever moved most recently is what defines "last activity".
+            // A null timestamp means that channel has never fired, so it
+            // can't argue for recent activity and is ignored. If BOTH are
+            // null the session has produced no observable activity at all,
+            // which (given queuedMessages > 0 and the idle predicate already
+            // true) is itself a quiesced state, so we treat it as stable.
+            const lastActivityAt = Math.max(
+              working.phaseChangedAt ?? 0,
+              working.lastJsonlEntryAt ?? 0,
+            )
+            const idleStable = lastActivityAt === 0 || now - lastActivityAt >= QUEUE_IDLE_RECONCILE_MS
+            if (idleStable) {
+              working = withDerivedSessionStatus(
+                appendFeedDebugLog(
+                  { ...working, queuedMessages: [] },
+                  {
+                    layer: 'STATE',
+                    kind: 'queue_idle_reconcile',
+                    summary: 'cleared stale Codex queue after idle convergence',
+                    data: { clearedQueuedMessages: working.queuedMessages.length },
+                  },
+                ),
+              )
+            }
+          }
+
+          if (working !== runtime) {
+            next[sessionId] = working
+            changed = true
+          }
         }
         return changed ? next : prev
       })
