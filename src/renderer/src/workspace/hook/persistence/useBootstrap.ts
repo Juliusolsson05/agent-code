@@ -12,7 +12,17 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { DispatchModeState } from '@renderer/workspace/types'
 
 import { rehydrateWorkspace } from '@renderer/workspace/hook/persistence/rehydrate'
+import { reconcileStuckTranscriptLoads } from '@renderer/workspace/hook/actions/initialHistory'
 import * as perf from '@renderer/performance/client'
+
+// #283 auto-heal cadence. After rehydrate, panes whose committed-transcript
+// load was dropped mid-flight sit stuck (spinner or empty feed) with nothing
+// driving them. We sweep a few times with growing spacing: the first pass
+// gives a genuinely slow first load time to finish (the reconciler skips
+// in-flight loads), and later passes catch panes that only became stuck once
+// their dropped load settled. Detached timers (not awaited) so this never
+// delays first paint.
+const STUCK_TRANSCRIPT_HEAL_DELAYS_MS = [1500, 4000, 8000]
 
 // Once-only mount effect.
 //
@@ -140,6 +150,21 @@ export function useBootstrap(
           canAutosaveBootState =
             restoreResult.complete && refs.latestStateRef.current.tabs.length > 0
           finalStatus = restoreResult.complete ? 'complete-restore' : 'partial-restore'
+
+          // #283 auto-heal: re-drive any pane left stuck (spinner or empty
+          // feed) because its transcript load was dropped during rehydrate id
+          // churn. Equivalent to the user manually reloading each stuck pane,
+          // done automatically. Conservative — a no-op when nothing is stuck.
+          for (const delayMs of STUCK_TRANSCRIPT_HEAL_DELAYS_MS) {
+            setTimeout(() => {
+              const healed = reconcileStuckTranscriptLoads({ refs, setRuntimes })
+              if (healed > 0) {
+                console.warn(
+                  `[xcript-heal #283] re-drove ${healed} stuck pane(s) at +${delayMs}ms`,
+                )
+              }
+            }, delayMs)
+          }
           if (!restoreResult.complete) {
             // WHY partial rehydrate is treated as "view-only until fixed":
             //
