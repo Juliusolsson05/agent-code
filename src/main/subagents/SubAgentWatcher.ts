@@ -1,3 +1,4 @@
+import { createReadStream } from 'node:fs'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SubAgentState } from '@preload/api/types.js'
@@ -13,6 +14,7 @@ import { buildSubAgentState, type SubAgentMeta } from './subagentState.js'
 // something actually changed (dirty flag) to avoid spamming IPC.
 
 const POLL_MS = 600
+const MAX_RETAINED_ENTRIES_PER_AGENT = 500
 
 type ParentResult = (toolUseId: string) => { done: boolean; error: boolean }
 
@@ -21,6 +23,7 @@ type RawEntry = Parameters<typeof buildSubAgentState>[3][number]
 export class SubAgentWatcher {
   private timer: NodeJS.Timeout | null = null
   private offsets = new Map<string, number>() // agentId -> byte offset consumed
+  private partialByAgent = new Map<string, string>()
   private entriesByAgent = new Map<string, RawEntry[]>()
   private metaByAgent = new Map<string, SubAgentMeta>()
   private dirty = false
@@ -44,6 +47,10 @@ export class SubAgentWatcher {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    this.offsets.clear()
+    this.partialByAgent.clear()
+    this.entriesByAgent.clear()
+    this.metaByAgent.clear()
   }
 
   /** Force a re-emit (e.g. the parent transcript just produced a tool_result
@@ -92,15 +99,30 @@ export class SubAgentWatcher {
     const { size } = await stat(path)
     const from = this.offsets.get(agentId) ?? 0
     if (size <= from) return
-    const buf = await readFile(path)
-    const text = buf.subarray(from).toString('utf8')
-    // Only consume complete lines; leave the trailing partial for next tick.
+
+    // WHY stream the appended byte range instead of `readFile(path)`:
+    //
+    // PR #277's design and comments promised offset-based tailing, but the
+    // implementation still read the entire growing subagent transcript on
+    // every poll and sliced the buffer afterwards. That is read amplification
+    // in exactly the path that appears during large Task fan-outs: one busy
+    // subagent makes every 600ms tick allocate its whole JSONL file again.
+    // Reading only `[from, size)` keeps the watcher proportional to new bytes,
+    // which is the actual invariant future code should preserve.
+    const appended = await readRange(path, from, size)
+    const text = (this.partialByAgent.get(agentId) ?? '') + appended
     const lastNl = text.lastIndexOf('\n')
-    if (lastNl < 0) return
-    const consumedBytes = Buffer.byteLength(text.slice(0, lastNl + 1))
-    this.offsets.set(agentId, from + consumedBytes)
+    if (lastNl < 0) {
+      this.partialByAgent.set(agentId, text)
+      this.offsets.set(agentId, size)
+      return
+    }
+
+    const complete = text.slice(0, lastNl)
+    this.partialByAgent.set(agentId, text.slice(lastNl + 1))
+    this.offsets.set(agentId, size)
     const arr = this.entriesByAgent.get(agentId) ?? []
-    for (const line of text.slice(0, lastNl).split('\n')) {
+    for (const line of complete.split('\n')) {
       const t = line.trim()
       if (!t) continue
       try {
@@ -108,6 +130,19 @@ export class SubAgentWatcher {
       } catch {
         /* skip a malformed line */
       }
+    }
+    if (arr.length > MAX_RETAINED_ENTRIES_PER_AGENT) {
+      // WHY cap parsed entries even though the renderer timeline is already
+      // capped in buildSubAgentState:
+      //
+      // The IPC payload cap only protects the renderer. Keeping every parsed
+      // RawEntry here still makes main-process heap grow with long-running
+      // subagents and duplicates large tool-result strings in memory. The
+      // mini-feed is a liveness/status affordance, not a full transcript
+      // archive; the durable source remains the on-disk JSONL if a future UI
+      // wants deep drill-in. Retaining a generous tail preserves current
+      // activity and recent tool context while bounding this watcher.
+      arr.splice(0, arr.length - MAX_RETAINED_ENTRIES_PER_AGENT)
     }
     this.entriesByAgent.set(agentId, arr)
     this.dirty = true
@@ -131,4 +166,20 @@ export class SubAgentWatcher {
     }
     this.onChange(out)
   }
+}
+
+function readRange(path: string, from: number, size: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let out = ''
+    const stream = createReadStream(path, {
+      start: from,
+      end: size - 1,
+      encoding: 'utf8',
+    })
+    stream.on('data', chunk => {
+      out += chunk
+    })
+    stream.on('error', reject)
+    stream.on('end', () => resolve(out))
+  })
 }
