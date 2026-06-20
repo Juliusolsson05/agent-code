@@ -615,6 +615,34 @@ export function CommandPalette({
     [commandContext, onClose],
   )
 
+  // Native menu → command dispatch (issue #148).
+  //
+  // The macOS File menu lives in main, but its actions are renderer commands
+  // that need the live CommandContext (workspace store + UI callbacks) to run.
+  // Main can't run them; it only knows the command's string id. So main emits
+  // the id over `menu:command` and we resolve + run it here, where `commands`
+  // (the resolved registry) and `commandContext` are in scope.
+  //
+  // WHY this effect sits ABOVE the `if (!open) return null` early return at the
+  // bottom of this component: the File menu must work whether or not the palette
+  // is open. If this subscription lived below the early return, React would
+  // never register it while the palette is closed (the common case), and the
+  // menu items would silently do nothing. Hooks must be unconditional, so the
+  // listener is attached at mount and stays attached regardless of `open`.
+  //
+  // We resolve against the SAME `commands` memo the palette renders, so a menu
+  // item and its palette row run byte-identical logic. Unknown ids are ignored
+  // (defensive — the menu only ever sends ids we put there). We do NOT call
+  // onClose() here: a menu click should not implicitly close an open palette,
+  // and when the palette is closed there is nothing to close.
+  useEffect(() => {
+    const unsub = window.api.onMenuCommand(commandId => {
+      const command = commands.find(c => c.id === commandId)
+      if (command) void command.run(commandContext)
+    })
+    return unsub
+  }, [commands, commandContext])
+
   const executeResume = useCallback(
     (session: SessionInfo) => {
       onClose()

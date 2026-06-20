@@ -4,7 +4,7 @@
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
 
-import { app, BrowserWindow, dialog } from 'electron'
+import { app, BrowserWindow, dialog, Menu } from 'electron'
 import { readFile } from 'fs/promises'
 import { performance } from 'perf_hooks'
 
@@ -39,6 +39,7 @@ import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
+import { buildAppMenu } from '@main/menu/appMenu.js'
 
 // Main process — thin Electron host.
 //
@@ -299,6 +300,9 @@ async function startApp(): Promise<void> {
   })
   performanceService.mark('app.main.ipc.registered')
   createMainWindow()
+  // Install the application menu right after the window exists — the File
+  // items dispatch command ids to THIS window's renderer (issue #148).
+  Menu.setApplicationMenu(buildAppMenu())
   performanceService.mark('app.main.window.created')
 
   app.on('activate', () => {
