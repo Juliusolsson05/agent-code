@@ -41,6 +41,15 @@ const INITIAL_HISTORY_CONCURRENCY = 2
 let activeInitialHistoryLoads = 0
 const initialHistoryWaiters: Array<() => void> = []
 
+// Sessions with a loadInitialHistoryForSession call currently in flight —
+// added before the 'loading' write, removed when the load settles (success OR
+// failure). The auto-heal reconciler (reconcileStuckTranscriptLoads) reads
+// this to tell apart "stuck because its terminal write was dropped" (#283 —
+// nothing is driving it, must re-kick) from "legitimately still fetching" (a
+// load is running, leave it alone). Module-level because the load is
+// fire-and-forget (`void`) and there is no per-call handle to await.
+const inFlightInitialLoads = new Set<SessionId>()
+
 async function acquireInitialHistorySlot(): Promise<() => void> {
   if (activeInitialHistoryLoads < INITIAL_HISTORY_CONCURRENCY) {
     activeInitialHistoryLoads++
@@ -125,6 +134,9 @@ export async function loadInitialHistoryForSession({
   // mid-load, the session is stuck at 'loading'. These warns make the timeline
   // (and the exact drop) visible. REMOVE once root cause is fixed.
   console.warn(`[xcript-diag] loading-set session=${sessionId} kind=${kind}`)
+  // Mark in-flight BEFORE the 'loading' write so the reconciler never sees a
+  // window where status is 'loading' but the load looks idle.
+  inFlightInitialLoads.add(sessionId)
   setRuntimes(prev => {
     const current = prev[sessionId] ?? emptyRuntime()
     return {
@@ -324,5 +336,68 @@ export async function loadInitialHistoryForSession({
         },
       }
     })
+  } finally {
+    // Always clear in-flight, even on the dropped-write paths above. If the
+    // terminal write was discarded the runtime is left at 'loading' but the
+    // load is genuinely done, so the reconciler must be allowed to see it as
+    // idle-and-stuck and re-kick it.
+    inFlightInitialLoads.delete(sessionId)
   }
+}
+
+// Auto-heal for the resume/startup "stuck transcript" class (#283/#290). After
+// rehydrate, a Claude/Codex pane can be left either spinning at 'loading' or
+// painting an empty "waiting for…" feed (committed entries never arrived) even
+// though the conversation exists on disk. Both come from the same upstream
+// failure: the committed-transcript load's terminal write was discarded when
+// its runtime key was dropped/re-keyed mid-flight (the RESOLVE-DROPPED /
+// ERROR-DROPPED paths above), or rehydrate marked the pane without ever kicking
+// a loader. The renderer is correct — it shows "waiting" because the runtime
+// genuinely holds no entries — so the fix is upstream: re-run the load, exactly
+// what a manual reload does.
+//
+// This reconciler automates that reload. It re-drives the load for any pane
+// that is backed by a DURABLE provider session, is NOT currently loading, and
+// is visibly stuck — either status 'loading' (spinner) or zero entries (empty
+// feed). It is conservative: re-loading is idempotent (seen-uuid dedup) and a
+// genuinely empty new session simply re-fetches its (few) entries, so the
+// healthy case is a cheap no-op. Provisional proxy-header sessions are skipped
+// (hasDurableProviderSession === false) — they have no durable id to reload and
+// are owned by the 'disconnected' recovery path instead.
+//
+// WHY no infinite loop: a re-kicked load adds itself to inFlightInitialLoads
+// (next pass skips it) and on success populates entries / flips to 'ready' (no
+// longer matched). By the time this runs — a beat after rehydrate — the id
+// churn that caused the original drop has settled, so the retry lands, same as
+// the proven manual-reload path.
+export function reconcileStuckTranscriptLoads({
+  refs,
+  setRuntimes,
+}: {
+  refs: WorkspaceRefs
+  setRuntimes: WorkspaceSetRuntimes
+}): number {
+  const runtimes = refs.latestRuntimesRef.current
+  const sessions = refs.latestStateRef.current.sessions
+  let reKicked = 0
+  for (const [sessionId, runtime] of Object.entries(runtimes) as Array<
+    [SessionId, (typeof runtimes)[SessionId]]
+  >) {
+    if (inFlightInitialLoads.has(sessionId)) continue
+    const stuckSpinner = runtime.transcriptStatus === 'loading'
+    const emptyFeed = runtime.entries.length === 0
+    if (!stuckSpinner && !emptyFeed) continue
+    const meta = sessions[sessionId]
+    if (!meta || (meta.kind !== 'claude' && meta.kind !== 'codex')) continue
+    // Only durable sessions have a reloadable transcript. Provisional
+    // proxy-header sessions are left to the 'disconnected' path.
+    if (!hasDurableProviderSession(meta)) continue
+    reKicked++
+    console.warn(
+      `[xcript-heal #283] re-driving stuck transcript load session=${sessionId} ` +
+        `kind=${meta.kind} status=${runtime.transcriptStatus} entries=${runtime.entries.length}`,
+    )
+    void loadInitialHistoryForSession({ sessionId, refs, setRuntimes, meta })
+  }
+  return reKicked
 }
