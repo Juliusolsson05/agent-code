@@ -205,6 +205,19 @@ export class ClaudeSession extends EventEmitter {
     // injected trust-store-REPLACING CA vars — see #281 — and silently dropped
     // options.env). Both cases now share one inline env so resume args and CA
     // policy live in exactly one place.
+    // WHY this timestamp is captured before the PTY exists:
+    //
+    // Claude can create its root JSONL transcript almost immediately
+    // after spawn. The headless layer needs an IPty instance before it
+    // can be constructed, so there is an unavoidable spawn -> tailer
+    // wiring window. Passing this timestamp down lets the tailer treat
+    // a just-created file as the fresh session transcript even if it
+    // already exists by the time the directory watcher snapshots the
+    // project dir. Without this, the renderer can receive proxy
+    // semantic events forever while committed JSONL stays at zero and
+    // providerSessionId is never persisted.
+    const freshSessionStartedAtMs = this.resumeSessionId ? null : Date.now()
+
     if (this.useProxy) {
       // WHY proxy runtime storage must not live under `cwd`:
       //
@@ -331,6 +344,7 @@ export class ClaudeSession extends EventEmitter {
       rows: this.rows,
       snapshotIntervalMs: this.snapshotIntervalMs,
       resumeSessionId: this.resumeSessionId ?? undefined,
+      freshSessionStartedAtMs: freshSessionStartedAtMs ?? undefined,
       // Enabling proxy on the headless instance is what flips the
       // semantic source of truth from screen to proxy inside
       // ClaudeCodeHeadless. Even without this, subscribing to
