@@ -83,8 +83,21 @@ condition's contract and the machinery to route + dispatch:
 The **generic outlet** (`ConditionOutlet.tsx`) takes `{ snapshot, registry,
 dispatch }`, iterates `Object.values(snapshot.conditions)`, looks each record's
 `kind` up in `registry`, and renders `<View.Component state actions dispatch/>`.
-It **preserves snapshot key order** so blocking modals stack identically to the
-old outlets, and it **skips unknown kinds** (an older app paired with a newer
+
+**On render order.** The old per-provider outlets rendered their modals in a
+fixed, hand-written JSX order. The new outlet instead renders in
+`Object.values(snapshot.conditions)` **insertion order** (the order the headless
+emitter inserted kinds into the snapshot map). These are NOT guaranteed to be
+the same sequence — so this is not "byte-identical render order" in general.
+They ARE behaviorally equivalent under the system's current invariant: **at most
+one live overlay is shown at a time**, so there is never a stack to order. While
+that invariant holds, render order is unobservable and the difference is moot.
+If a future change ever ships **multiple simultaneous overlays**, insertion
+order would become load-bearing and is the wrong thing to depend on; at that
+point the outlet should sort by an explicit per-view `priority` field (a
+forward reference — `priority` is not defined on `ConditionView` today).
+
+The outlet also **skips unknown kinds** (an older app paired with a newer
 headless emitter simply doesn't draw a condition it has no view for — the same
 graceful-old-client posture the wire format already assumes).
 
@@ -97,23 +110,58 @@ Type-safety guardrail: the core stores **erased** views
 erasure is sound precisely because the core's only job is to route by `kind`; it
 never reads `state`. The strongly-typed `S` is re-established inside each view
 module (which knows its own kind). No `any` in the core — `unknown` + the
-kind-keyed registry.
+kind-keyed registry. The precise→erased crossing is performed by a single
+documented helper, `eraseRegistry` (`view.ts`), whose input is a checked
+`Partial<ViewRegistry<M>>`; this proves the kind↔view binding BEFORE erasing `S`,
+replacing the earlier per-view `as unknown as ConditionView` casts that bypassed
+the check. See "Layer 2" for the call shape.
 
 ### Layer 2 — provider modules (adapters over existing modals)
 
 Each provider owns a `views.tsx` that wraps its **existing** modal components as
-thin view adapters and exports a `Record<string, ConditionView>` registry built
-from an `as const` list:
+thin view adapters and exports a `Record<string, ConditionView>` registry. The
+registry is an **explicit object literal** checked against a per-provider
+`StateByKind` map (the source of truth binding each kind to its concrete state
+type) by the `eraseRegistry` helper:
 
 ```ts
+type CodexStateByKind = {
+  'codex.approval': CodexApprovalState
+  'codex.trust-dialog': CodexTrustDialogState
+  'codex.switch-model-prompt': unknown   // emitted, no view yet
+}
+
 export const CODEX_VIEW_LIST = [approvalView, codexTrustView] as const
-export const CODEX_VIEWS = Object.fromEntries(
-  CODEX_VIEW_LIST.map(v => [v.kind, v as unknown as ConditionView]),
-)
+
+export const CODEX_VIEWS: Record<string, ConditionView> = eraseRegistry<CodexStateByKind>({
+  'codex.approval': approvalView,
+  'codex.trust-dialog': codexTrustView,
+})
 ```
 
-The `as const` list is the source of truth, so later PRs can derive the
-provider's kind union via `typeof CODEX_VIEW_LIST[number]['kind']` without
+with `ViewRegistry<M> = { [K in keyof M & string]: ConditionView<K, M[K]> }` and
+`eraseRegistry<M>(reg: Partial<ViewRegistry<M>>): Record<string, ConditionView>`
+(both in `view.ts`). The literal is type-checked against `CodexStateByKind` by
+`eraseRegistry`'s parameter, so filing `approvalView` under `'codex.trust-dialog'`
+is a **compile error at the call site**. `Partial` is needed because not every
+declared kind has a view yet (`codex.switch-model-prompt`).
+
+**Why a helper instead of a plain `satisfies` + annotation.** The outlet stores
+erased views and renders each Component with `state: unknown`. Because `state`
+sits in the Component's (contravariant) parameter position, a precise
+`ConditionView<'codex.approval', CodexApprovalState>` is genuinely NOT a subtype
+of the erased `ConditionView<string, unknown>` — so assigning the precise literal
+to a `Record<string, ConditionView>` annotation does not type-check, and the old
+code reached for a per-view `as unknown as ConditionView` (which ALSO discarded
+the kind↔view check). `eraseRegistry` localizes that unavoidable erasure to a
+SINGLE documented cast whose INPUT is fully checked (`Partial<ViewRegistry<M>>`):
+the kind↔view binding is proven before the cast, and the cast only erases `S` for
+routing. The erasure is sound by the runtime invariant the types can't see — the
+outlet only ever feeds a Component the state from the same snapshot record under
+the same kind. See `eraseRegistry`'s WHY block in `view.ts`.
+
+The `as const` list is retained as the source of truth for later PRs to derive
+the provider's kind union via `typeof CODEX_VIEW_LIST[number]['kind']` without
 restating it.
 
 **Adapter shape.** We do NOT rewrite the modals. Each adapter renders the

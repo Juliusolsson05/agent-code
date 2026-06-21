@@ -103,7 +103,32 @@ export type ConditionSnapshot<P extends string = string> = {
 // path in this PR (the renderer framework only consumes the VIEW half — see
 // view.ts). Migrating the live emitters onto these modules is a later PR.
 
-export type ConditionModule<K extends string, I, S> = {
+// WHY the 4th generic `Ctx` (defaulting to `unknown`)
+// ---------------------------------------------------
+// `resolve` is the slot a headless module uses to settle a `custom` action
+// through something OTHER than a single keystroke. The first real consumer
+// (PR roadmap step 4-5: the AskUserQuestion module + the `sendThenReparse`
+// answering driver) needs to write a keystroke, wait for the screen to settle,
+// re-run detect, and possibly send again — a MULTI-STEP exchange. That driver
+// must hand `resolve` a live handle (the terminal / `sendThenReparse`
+// capability) so the module can drive the back-and-forth.
+//
+// We make that handle a GENERIC `Ctx` rather than baking a concrete type in now
+// for two reasons: (1) the handle's exact shape isn't designed yet (it lands
+// with the driver PR), and pinning it prematurely would force a contract change
+// — and a re-sync of the vendored headless copy — the moment it's wrong; (2)
+// different modules may need different capabilities, so each module specifies
+// the `Ctx` it actually consumes while the contract itself stays stable.
+// Defaulting to `unknown` keeps every forward-looking module that DOESN'T
+// resolve (all of them today) writing `ConditionModule<K, I, S>` with no extra
+// param and no behavior change.
+//
+// The action arg is narrowed to `ConditionCustomAction` (not the full
+// `ConditionAction` union): `pty` actions resolve via the dispatch pty arm and
+// never reach `resolve`, so a resolver only ever sees `custom` actions.
+// Narrowing here means consumers don't have to re-discriminate the union inside
+// every resolver body.
+export type ConditionModule<K extends string, I, S, Ctx = unknown> = {
   kind: K
   // Free-form detector. Returns the condition state when live, else null.
   detect: (input: I) => S | null
@@ -111,14 +136,16 @@ export type ConditionModule<K extends string, I, S> = {
   actions: (state: S) => ConditionAction[]
   // Optional structured resolver for `custom` actions. Dormant today; present
   // so headless modules that one day need non-keystroke resolution have a slot.
-  resolve?: (action: ConditionAction, ctx: unknown) => void | Promise<void>
+  // `ctx` carries the live-terminal / `sendThenReparse` handle for multi-step
+  // answering — see the `Ctx` generic WHY above.
+  resolve?: (action: ConditionCustomAction, ctx: Ctx) => void | Promise<void>
 }
 
 // Identity helper. Exists purely so module-definition call sites read as
-// `defineModule({ ... })` and get full inference of K/I/S from the literal,
+// `defineModule({ ... })` and get full inference of K/I/S/Ctx from the literal,
 // mirroring `defineView`. No runtime behavior — it returns its argument.
-export function defineModule<K extends string, I, S>(
-  module: ConditionModule<K, I, S>,
-): ConditionModule<K, I, S> {
+export function defineModule<K extends string, I, S, Ctx = unknown>(
+  module: ConditionModule<K, I, S, Ctx>,
+): ConditionModule<K, I, S, Ctx> {
   return module
 }

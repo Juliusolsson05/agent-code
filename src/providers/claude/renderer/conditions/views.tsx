@@ -17,7 +17,7 @@ import { CompactionStrip } from '@renderer/workspace/tile-tree/TileLeaf/Compacti
 import { PermissionPromptModal } from '@providers/claude/renderer/PermissionPromptModal'
 import { ResumePromptModal } from '@providers/claude/renderer/ResumePromptModal'
 import { TrustDialogModal } from '@providers/claude/renderer/TrustDialogModal'
-import { defineView } from '@shared/conditions-core/view'
+import { defineView, eraseRegistry } from '@shared/conditions-core/view'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type {
   ClaudeTrustDialogState,
@@ -25,6 +25,21 @@ import type {
   ClaudeResumePromptState,
   ClaudeCompactionState,
 } from '@shared/types/providerConditions'
+
+// ClaudeStateByKind — per-provider SOURCE OF TRUTH binding each Claude condition
+// kind to its concrete `state` type. The registry literal below is validated
+// against this through `eraseRegistry`'s `Partial<ViewRegistry<ClaudeStateByKind>>`
+// parameter, making a kind→wrong-view mapping a COMPILE error (the old
+// `as unknown as ConditionView` erasure let any kind point at any component).
+// State shapes come from providerConditions.ts. `claude.slash-picker` exists on
+// the wire but is NOT rendered through this outlet, so it's intentionally absent
+// here (Partial).
+type ClaudeStateByKind = {
+  'claude.trust-dialog': ClaudeTrustDialogState
+  'claude.permission-prompt': ClaudePermissionPromptState
+  'claude.resume-prompt': ClaudeResumePromptState
+  'claude.compaction': ClaudeCompactionState
+}
 
 const raw = (data: string) => ({ kind: 'pty' as const, id: 'raw', label: '', data })
 
@@ -115,7 +130,8 @@ export const compactionView = defineView<'claude.compaction', ClaudeCompactionSt
   ),
 })
 
-// `as const` source-of-truth list (see Codex views WHY).
+// `as const` source-of-truth list (see Codex views WHY) — retained for future
+// `typeof CLAUDE_VIEW_LIST[number]['kind']` union derivation.
 export const CLAUDE_VIEW_LIST = [
   claudeTrustView,
   permissionView,
@@ -123,6 +139,15 @@ export const CLAUDE_VIEW_LIST = [
   compactionView,
 ] as const
 
-export const CLAUDE_VIEWS: Record<string, ConditionView> = Object.fromEntries(
-  CLAUDE_VIEW_LIST.map((v) => [v.kind, v as unknown as ConditionView]),
-)
+// Kind → view registry as an EXPLICIT literal so the per-key kind↔view binding
+// is checked (see Codex views WHY for why Object.fromEntries can't do this and
+// why the old `as unknown as ConditionView` erasure was unsound). `eraseRegistry`
+// takes `Partial<ViewRegistry<ClaudeStateByKind>>`, so a wrong mapping (e.g.
+// filing permissionView under 'claude.trust-dialog') is a compile error at this
+// call, and the single documented precise→erased cast lives in view.ts.
+export const CLAUDE_VIEWS: Record<string, ConditionView> = eraseRegistry<ClaudeStateByKind>({
+  'claude.trust-dialog': claudeTrustView,
+  'claude.permission-prompt': permissionView,
+  'claude.resume-prompt': resumeView,
+  'claude.compaction': compactionView,
+})

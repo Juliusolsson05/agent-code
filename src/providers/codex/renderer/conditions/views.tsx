@@ -17,12 +17,28 @@
 
 import { CodexApprovalModal } from '@providers/codex/renderer/CodexApprovalModal'
 import { CodexTrustDialogModal } from '@providers/codex/renderer/conditions/CodexTrustDialogModal'
-import { defineView } from '@shared/conditions-core/view'
+import { defineView, eraseRegistry } from '@shared/conditions-core/view'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type {
   CodexApprovalState,
   CodexTrustDialogState,
 } from '@shared/types/providerConditions'
+
+// CodexStateByKind — the per-provider SOURCE OF TRUTH binding each Codex
+// condition kind to its concrete `state` type. The registry literal below is
+// checked against this through `eraseRegistry`'s `Partial<ViewRegistry<
+// CodexStateByKind>>` parameter, so filing a view under the wrong kind
+// (mismatched state shape) is a COMPILE error rather than something the old
+// `as unknown as ConditionView` erasure let slip through.
+// `codex.switch-model-prompt` is declared here (it IS emitted over the wire) but
+// has no view yet — hence `Partial`. State shapes come from
+// providerConditions.ts; `switch-model-prompt` has no dedicated state type, so
+// it's typed `unknown` until a view (and its state) lands.
+type CodexStateByKind = {
+  'codex.approval': CodexApprovalState
+  'codex.trust-dialog': CodexTrustDialogState
+  'codex.switch-model-prompt': unknown
+}
 
 // A `pty` action whose only meaningful field is `data`. The id/label are
 // cosmetic here because the modal already owns its own button labels and only
@@ -77,14 +93,26 @@ export const codexTrustView = defineView<'codex.trust-dialog', CodexTrustDialogS
   ),
 })
 
-// `as const` array → the registry below + (future) typeof-derived unions.
-// Keeping the source-of-truth list as a const tuple lets later PRs derive the
-// provider's kind union from `typeof CODEX_VIEW_LIST` without restating it.
+// `as const` array → kept for (future) typeof-derived kind unions. Keeping the
+// source-of-truth list as a const tuple lets later PRs derive the provider's
+// kind union from `typeof CODEX_VIEW_LIST[number]['kind']` without restating it.
 export const CODEX_VIEW_LIST = [approvalView, codexTrustView] as const
 
-// Kind → erased view registry consumed by the generic ConditionOutlet. The
-// core routes by kind and never reads state, so erasing to ConditionView here
-// is sound (see ConditionOutlet WHY).
-export const CODEX_VIEWS: Record<string, ConditionView> = Object.fromEntries(
-  CODEX_VIEW_LIST.map((v) => [v.kind, v as unknown as ConditionView]),
-)
+// Kind → view registry, written as an EXPLICIT object literal (not derived from
+// the list via Object.fromEntries) precisely so the per-key kind↔view binding is
+// checked. With Object.fromEntries the pairing is computed at runtime and the
+// compiler can't verify alignment — which is why the old code had to erase with
+// `as unknown as ConditionView` and lost the guarantee entirely.
+//
+// `eraseRegistry` takes a `Partial<ViewRegistry<CodexStateByKind>>`, so this
+// literal is FULLY type-checked against CodexStateByKind by the function's
+// parameter: a wrong mapping (e.g. `'codex.trust-dialog': approvalView`) is a
+// compile error at THIS call. The helper then performs the single, documented
+// precise→erased cast the outlet needs (see eraseRegistry's WHY in view.ts —
+// the outlet routes by `kind` and only ever feeds a Component its own kind's
+// state, so erasing S for routing is sound). One checked erasure replaces N
+// unchecked per-view casts.
+export const CODEX_VIEWS: Record<string, ConditionView> = eraseRegistry<CodexStateByKind>({
+  'codex.approval': approvalView,
+  'codex.trust-dialog': codexTrustView,
+})
