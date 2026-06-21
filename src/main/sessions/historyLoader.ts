@@ -4,6 +4,7 @@ import { readdir, stat } from 'fs/promises'
 import { getMainProvider } from '@providers/registry.main.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
+import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
 
 const CODEX_ROLLOUT_RE =
   /^rollout-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
@@ -146,6 +147,14 @@ async function readInitialTranscriptTail(
   let parsed = 0
   const entries: Record<string, unknown>[] = []
 
+  // #288: one local pool per load. Every parsed line freshly allocates its
+  // cwd/sessionId/role/type metadata strings; interning them against a pool
+  // scoped to this single load collapses them to one instance each. The pool
+  // dies with this function, so it can never become the global leak that a
+  // shared pool would. See internEntry.ts for the full retainer-trace
+  // evidence (cwd ×30k, role/type ×23k, sessionId ×20k per session).
+  const intern = makeStringPool()
+
   // WHY we stream even for the initial load: the UI only needs the newest
   // `limit` records, but several crash reports came from main holding the
   // raw transcript string, split-line array, parsed-object array, and IPC
@@ -158,6 +167,7 @@ async function readInitialTranscriptTail(
         continue
       }
       parsed++
+      internEntryFields(raw, intern)
       pushCapped(entries, raw, limit)
     }
   } catch {
@@ -188,6 +198,13 @@ async function readOlderTranscriptWindow(
   let foundMarker = false
   const entries: Record<string, unknown>[] = []
 
+  // #288: local pool for this older-window load (same rationale as the
+  // initial-tail reader above — intern the duplicated metadata, drop the
+  // pool when the load returns). Note we intern only the entries we keep,
+  // i.e. those before the marker; the ones we scan-and-discard while
+  // hunting the anchor never need it.
+  const intern = makeStringPool()
+
   // WHY the older-page loader stops at the anchor marker instead of parsing
   // the whole transcript: older pagination is frequently driven by scrolling,
   // and the previous implementation reread a 100+ MB file for every page.
@@ -206,6 +223,7 @@ async function readOlderTranscriptWindow(
         break
       }
       countBeforeCutoff++
+      internEntryFields(raw, intern)
       pushCapped(entries, raw, params.limit)
     }
   } catch {
