@@ -77,7 +77,13 @@ function surfaceAvailable(surface: CommandSurface, ctx: CommandContext): boolean
 function commandVisible(command: CommandDef, ctx: CommandContext): boolean {
   if (ctx.flags.showHiddenCommands) return true
 
-  const override = ctx.flags.commandVisibilityOverrides[command.id]
+  // Optional-chain defensively: this gate runs inside the first render's
+  // useMemo, so if `commandVisibilityOverrides` is ever undefined (e.g. a
+  // persisted-settings shape that predates the field and slipped past
+  // coercion), a bare `[id]` index throws and takes the WHOLE app to a black
+  // screen — exactly the #249 launch regression. A missing override map must
+  // degrade to "no per-command override", never crash the registry build.
+  const override = ctx.flags.commandVisibilityOverrides?.[command.id]
   if (typeof override === 'boolean') return override
 
   return (command.pickerVisibility ?? 'default') === 'default'
