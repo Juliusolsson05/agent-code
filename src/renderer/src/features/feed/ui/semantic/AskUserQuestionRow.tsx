@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react'
+import { useContext, useRef, useState } from 'react'
 
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
@@ -16,18 +16,33 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 //   dead indicator with a real, clickable picker driven entirely by the
 //   already-parsed semantic input.
 //
-// WHY we answer single-select by sending the option's NUMBER to the PTY:
-//   Claude's on-screen picker renders the options numbered 1..N (in the
-//   same order they appear in `parsedInput.questions[].options`), then an
-//   auto-injected free-text entry and a footer that we deliberately
-//   ignore. The picker selects AND submits ATOMICALLY when a digit key is
-//   pressed — proven live. So to answer the option at 0-based index `i`
-//   we write the string `String(i + 1)` to the PTY via the same
-//   `sendInput` keystroke path the terminal uses. No cursor tracking, no
-//   arrow-key navigation, no separate "submit" keystroke — one digit does
-//   the whole thing. That atomicity is the entire reason this PR can ship
-//   single-select answering without a screen parser: we never need to
-//   read the terminal back to know where the cursor is.
+// WHY native answering is enabled for EXACTLY ONE shape — a single,
+// single-select question — and nothing else:
+//   An `AskUserQuestion` call can carry 1–4 questions. Claude's TUI shows
+//   them ONE AT A TIME and auto-advances to the next as each is answered;
+//   the tool does NOT resolve until ALL of them are answered. We only know
+//   how to send an answer SAFELY when the on-screen picker selects AND
+//   submits the WHOLE tool ATOMICALLY on a single digit key — and that
+//   only happens in the lone `hideSubmitTab` case: ONE question, NOT
+//   multi-select. In that case the options are numbered 1..N (in
+//   `parsedInput.questions[0].options` order) and pressing a digit commits
+//   the choice instantly — proven live. So to answer the option at 0-based
+//   index `i` we write `String(i + 1)` to the PTY via the same `sendInput`
+//   keystroke path the terminal uses. No cursor tracking, no arrow-key
+//   navigation, no separate "submit" keystroke — one digit does it all,
+//   and that atomicity is the entire reason this PR can ship answering
+//   without a screen parser: we never read the terminal back.
+//
+//   Everything else is DEFERRED to the screen-parser PR and rendered
+//   read-only here, because the number-key trick breaks:
+//     - MULTIPLE questions: a digit answers the CURRENTLY-active question
+//       on screen (#1), not the one whose option was clicked in the card.
+//       Clicking under question #2 would misroute the answer to #1, and
+//       the answering latch would then freeze the card while the terminal
+//       still waits for the remaining questions. So we gate answerability
+//       on the WHOLE CALL (`questions.length === 1`), never per-question.
+//     - MULTI-SELECT: a digit TOGGLES rather than submits, so "number =
+//       answer" doesn't hold even for a single question.
 //
 // WHY this is driven by `parsedInput`, not by parsing the screen:
 //   The semantic layer (foldEvent.ts) already parses the full tool input
@@ -39,12 +54,23 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 //   semantic path was built to kill.
 //
 // SCOPE / deferred follow-ups (intentionally NOT handled here):
+//   - multi-question calls: answered one-at-a-time by the live TUI;
+//     rendered read-only (see the WHY block above). Deferred to the
+//     screen-parser PR.
 //   - multi-select: a digit key TOGGLES rather than submits, so the
 //     "number = answer" trick doesn't hold. Rendered read-only with a
 //     note; answering is a follow-up PR.
 //   - free-text answers: the auto-injected "write your own" option needs
 //     a text field + a different submit path. Deferred.
 //   - screen parsing: explicitly out of scope for this PR.
+//
+// KNOWN small race (deliberately left open here): if the user answers via
+// the TERMINAL instead of clicking, this row stays briefly clickable until
+// the tool_result lands and `resultAt` unmounts it — a click in that window
+// would send a stray digit to whatever prompt comes next. Gating on a
+// SINGLE question shrinks the window (a multi-question call is read-only and
+// can't be clicked at all); the screen-parser PR closes it fully by reading
+// the live picker state back. No code fix now — documented on purpose.
 //
 // WHY the row disappears on its own after answering:
 //   An UNRESOLVED block (`!block.resultAt`) means the picker is LIVE and
@@ -55,10 +81,14 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 type SemanticLiveBlock = SemanticLiveTurn['blocks'][number]
 
 // Defensive shapes for the parsed input. `parsedInput` is a
-// `Record<string, unknown>` that may be PARTIALLY streamed (foldEvent
-// can populate it mid-flight), so every field is narrowed at read time
-// rather than trusted. A malformed / half-arrived payload must degrade
-// to a "loading" placeholder, never throw.
+// `Record<string, unknown>`. The defensive narrowing here is NOT about
+// partial objects: foldEvent.ts populates `parsedInput` only on
+// `tool_input_finalized` / `block_completed`, from a fully-parsed object —
+// so when it's present it's complete. What we actually guard is the
+// NOT-YET-FINALIZED case where `parsedInput` is `undefined` (no finalize
+// event has arrived yet), which must degrade to the "Question loading…"
+// placeholder rather than throw. Every field is still narrowed at read
+// time so an unexpected/malformed payload also degrades gracefully.
 type AskOption = {
   label: string
   description?: string
@@ -130,6 +160,17 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   // unmounts; we never need to clear it.
   const [answering, setAnswering] = useState(false)
 
+  // Synchronous double-submit guard. `answering` (React state) only drives
+  // the VISUAL disabled/"Answering…" affordance — but `disabled` doesn't
+  // take effect until the next render, so two clicks dispatched in the SAME
+  // tick (e.g. a fast double-click) both pass the `if (answering)` check and
+  // fire two `sendInput` digits. The second digit lands on whatever prompt
+  // follows the picker → corruption. A ref is read+written SYNCHRONOUSLY at
+  // the top of the handler, before any await/sendInput, so the second call
+  // in the same tick sees `true` and bails. It only ever latches true once
+  // (the row unmounts on `resultAt`), so there's nothing to reset.
+  const submittedRef = useRef(false)
+
   const questions = readQuestions(block.parsedInput)
 
   if (questions.length === 0) {
@@ -144,9 +185,23 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
     )
   }
 
+  // Answerability is a property of the WHOLE CALL, never of an individual
+  // question. The number-key answer trick is only safe when Claude's picker
+  // selects+submits the entire tool atomically on one digit — which happens
+  // ONLY for a single, single-select question (the `hideSubmitTab` case).
+  // Any multi-question call (digit answers the live on-screen question, not
+  // the clicked one → misrouted) or any multi-select question (digit toggles
+  // instead of submitting) is rendered fully read-only. Computed once so the
+  // gate can't drift between questions.
+  const answerable = questions.length === 1 && !questions[0].multiSelect
+
   const handleAnswer = (optionIndex: number) => {
+    // Synchronous latch FIRST — before the state check — so a same-tick
+    // second click can't slip a second digit through (see `submittedRef`).
+    if (submittedRef.current) return
     if (answering) return
     if (!sessionId) return
+    submittedRef.current = true
     // Atomic select+submit: the on-screen options are numbered 1..N in
     // parsedInput order, and Claude's picker commits the choice the
     // instant a digit is pressed. So the answer for the option at
@@ -159,10 +214,12 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
     <MarkerRow marker="⏺">
       <div className="flex flex-col gap-3">
         {questions.map((q, qi) => {
-          // multiSelect deferred: a digit key toggles instead of
-          // submitting, so the number trick is unsafe here. Render the
-          // options read-only and tell the user to use the terminal.
-          const readOnly = q.multiSelect
+          // readOnly is driven by the WHOLE-CALL `answerable` gate, not by
+          // this question alone: a multi-question call makes EVERY question
+          // read-only (even single-select ones), because the digit would hit
+          // the live on-screen question rather than the clicked one. Only the
+          // lone single-select question is clickable.
+          const readOnly = !answerable
           return (
             <div key={qi} className="flex flex-col gap-1.5">
               {q.header ? (
@@ -211,7 +268,9 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
               </div>
               {readOnly ? (
                 <div className="text-[11px] text-muted italic">
-                  Multi-select — answer in the terminal for now
+                  {questions.length > 1
+                    ? 'This question set is answered one-at-a-time — use the terminal for now'
+                    : 'Multi-select — answer in the terminal for now'}
                 </div>
               ) : answering ? (
                 <div className="text-[11px] text-muted italic">Answering…</div>
