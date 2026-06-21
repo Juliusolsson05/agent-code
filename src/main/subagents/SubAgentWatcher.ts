@@ -45,6 +45,11 @@ const MAX_RETAINED_ENTRIES_PER_AGENT = 500
 // from any single field, so no rendered value can ever be clipped by this cap,
 // yet it turns a multi-MB Read result into a few KB. We truncate per-field
 // (not per-entry) so an entry with several blocks each keeps its own budget.
+//
+// NOTE on units: this is a UTF-16 *character* cap (`String.length` counts code
+// units, not bytes) — the truncation marker says "chars" to match. We don't
+// convert to bytes because the goal is a generous BOUND, not an exact size, and
+// a char count is the cheapest thing to compute on this per-appended-line path.
 const MAX_ENTRY_FIELD_BYTES = 8 * 1024
 
 // truncateEntryBodies: clamp the large free-text string fields of a freshly
@@ -52,18 +57,56 @@ const MAX_ENTRY_FIELD_BYTES = 8 * 1024
 // reads (entry `type`/`uuid`, `message.role`/`type`, each block's `type`, tool
 // `name`/`id`/`tool_use_id`, `is_error`/status, timestamps). We only shrink the
 // payloads that carry the megabytes:
-//   - text blocks' `text`
+//   - TOP-LEVEL `entry.content` string and `entry.attachment.content` string.
+//     Some entries have NO `message` field at all — most importantly the
+//     `skill_listing` attachment whose `content` is the full skills list. That
+//     shape was the single LARGEST duplicated leak category in the heap (×803).
+//     It is handled at the entry root, BEFORE/independent of the message walk,
+//     because there is no `message.content` array to descend into — the old
+//     early-return ("not an array") skipped these entries entirely and made the
+//     per-block `attachment.content` clamp below dead code for the real shape.
+//   - `message.content` when it is a plain STRING. Claude transcripts use a
+//     string body (large pasted user prompts, compact/user string messages,
+//     string-shaped system reminders) as readily as the array-of-blocks shape;
+//     the old early-return pinned every string body full-size.
+//   - text/thinking blocks' `text`/`thinking`
 //   - tool_result blocks' `content`/`output` (string OR array-of-{text} shape)
-//   - large string values inside a tool_use `input`
-//   - a skills/system attachment's `content`
+//   - string values inside a tool_use `input`, INCLUDING NESTED ones — e.g.
+//     MultiEdit's `input.edits[].old_string`/`new_string`, which a flat
+//     top-level-only walk left pinned. We recurse (bounded) so nested text is
+//     clamped while every key and the input's structure stay intact.
+//   - a per-block `attachment.content` (skills lists can also ride inside blocks)
 // Each clamp appends an honest marker so a future reader of the in-memory entry
-// knows bytes were dropped and where the full body lives. This runs once per
+// knows chars were dropped and where the full body lives. This runs once per
 // appended line at the single parse/push site below — never on a hot render
 // path — so the cost is bounded by new bytes, matching the watcher's invariant.
 function clampString(value: string, cap: number): string {
   if (value.length <= cap) return value
   const dropped = value.length - cap
-  return value.slice(0, cap) + `… [truncated ${dropped} bytes — full body on disk]`
+  return value.slice(0, cap) + `… [truncated ${dropped} chars — full body on disk]`
+}
+
+// clampDeep: recursively clamp every string VALUE reachable inside an arbitrary
+// tool_use `input`, preserving all keys, array order, and object structure.
+// WHY recursion (not the old flat top-level-only loop): structured tool inputs
+// bury their large text below the first level — MultiEdit puts each edit's
+// `old_string`/`new_string` under `input.edits[i]`, and other tools nest text
+// under sub-objects/arrays. A flat walk only saw the top-level string values
+// and left those nested megabytes pinned. We bound recursion at `depth` (≤6) so
+// a pathologically deep object can't blow the stack or burn the per-line budget;
+// nothing deeper than that is a realistic tool-input text payload, and the
+// durable full copy is on disk regardless. Only string VALUES are rewritten —
+// keys and the shape headlineFromInput reads (command/file_path/…) are untouched.
+function clampDeep(value: unknown, cap: number, depth: number): unknown {
+  if (typeof value === 'string') return clampString(value, cap)
+  if (depth <= 0 || !value || typeof value !== 'object') return value
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) value[i] = clampDeep(value[i], cap, depth - 1)
+    return value
+  }
+  const obj = value as Record<string, unknown>
+  for (const k of Object.keys(obj)) obj[k] = clampDeep(obj[k], cap, depth - 1)
+  return obj
 }
 
 function clampResultContent(content: unknown, cap: number): unknown {
@@ -87,8 +130,35 @@ function clampResultContent(content: unknown, cap: number): unknown {
 function truncateEntryBodies(entry: unknown, cap: number): void {
   if (!entry || typeof entry !== 'object') return
   const e = entry as Record<string, unknown>
+
+  // FIX 2 (CRITICAL) — top-level attachment/content shapes that carry NO
+  // `message` field. The `skill_listing` attachment lives here: the entry is
+  // `{ type: 'attachment', attachment: { type: 'skill_listing', content: '<huge>' } }`
+  // with the skills list as a top-level string. The same entries can also surface
+  // a bare top-level `content` string. These never reached the per-block walk
+  // below (it early-returned when `message.content` wasn't an array), so the
+  // ×803 skills-list bytes stayed pinned. Clamp them at the entry root, always,
+  // regardless of whether a `message` exists.
+  const topAttachment = e.attachment
+  if (topAttachment && typeof topAttachment === 'object' && !Array.isArray(topAttachment)) {
+    const a = topAttachment as Record<string, unknown>
+    if (typeof a.content === 'string') a.content = clampString(a.content, cap)
+  }
+  if (typeof e.content === 'string') e.content = clampString(e.content, cap)
+
   const message = e.message as Record<string, unknown> | undefined
   const content = message?.content
+
+  // FIX 1 — string-shaped `message.content`. Claude transcripts allow the
+  // message body to be a plain string (large pasted user prompts, compact/user
+  // string messages, string system reminders), not only an array of blocks. The
+  // old `if (!Array.isArray) return` dropped every such body full-size into the
+  // pinned set. Clamp the string here, then fall through to the array walk only
+  // when content actually is an array.
+  if (typeof content === 'string') {
+    message!.content = clampString(content, cap)
+    return
+  }
   if (!Array.isArray(content)) return
   for (const block of content) {
     if (!block || typeof block !== 'object') continue
@@ -105,17 +175,15 @@ function truncateEntryBodies(entry: unknown, cap: number): void {
         if (typeof b.output === 'string') b.output = clampString(b.output, cap)
         break
       case 'tool_use': {
-        // Clamp large string values inside the tool input (e.g. a Write/Edit
-        // file body or a giant pasted blob) while keeping the input object and
-        // its keys intact — headlineFromInput reads keys like command/file_path,
-        // and it already slices to 80 chars, so clamping at 8 KB can't change it.
-        const input = b.input
-        if (input && typeof input === 'object' && !Array.isArray(input)) {
-          const obj = input as Record<string, unknown>
-          for (const k of Object.keys(obj)) {
-            const v = obj[k]
-            if (typeof v === 'string') obj[k] = clampString(v, cap)
-          }
+        // FIX 3 — clamp string values inside the tool input RECURSIVELY (e.g. a
+        // Write/Edit file body, a giant pasted blob, or MultiEdit's nested
+        // `edits[].old_string`/`new_string`) while keeping the input object, its
+        // keys, and array order intact — headlineFromInput reads keys like
+        // command/file_path and slices to 80 chars, so clamping can't change it.
+        // The previous flat top-level-only loop missed nested text; clampDeep
+        // descends (bounded to 6 levels) so structured tool inputs don't leak.
+        if (b.input && typeof b.input === 'object') {
+          b.input = clampDeep(b.input, cap, 6)
         }
         break
       }
