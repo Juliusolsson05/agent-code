@@ -34,6 +34,22 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
   )
 }
 
+// WHY this carve-out exists: a Dispatch index row is a <button>, so
+// isInteractiveTarget() classifies it as a real action element and the keydown
+// handler bails before it can hand Enter to a composer. But a Dispatch row is
+// NOT a real action button in the Enter sense — clicking it only *selects* a
+// session (focusSessionInTab), and pressing Enter again to re-select is a
+// no-op. So when the active pane already has a submittable draft, the user's
+// Enter clearly means "send my draft," not "re-select the row I just clicked."
+// The row carries data-dispatch-row="true" (DispatchAgentList / DispatchMiniList)
+// precisely so this router can tell it apart from a genuine action button and
+// relax the interactive guard for it alone. See issue #236.
+function isDispatchRowTarget(target: EventTarget | null): boolean {
+  const element = targetElement(target)
+  if (!element) return false
+  return Boolean(element.closest('[data-dispatch-row="true"]'))
+}
+
 function hasOpenKeyboardOwner(): boolean {
   return Boolean(
     document.querySelector(
@@ -69,11 +85,33 @@ function ensureListener(): void {
     if (event.key !== 'Enter') return
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return
     if (isEditableTarget(event.target)) return
-    if (isInteractiveTarget(event.target)) return
+
+    // WHY the interactive guard now skips Dispatch rows: a real action button
+    // or link must keep its native Enter (activating it). A Dispatch row only
+    // selects a session, so re-activating it via Enter is meaningless — the
+    // composer should win instead. We therefore exempt Dispatch rows from the
+    // interactive bail-out here and let pickTarget() decide below. Every other
+    // interactive target still returns, so this relaxation is scoped to
+    // Dispatch rows alone. See issue #236.
+    if (isInteractiveTarget(event.target) && !isDispatchRowTarget(event.target)) {
+      return
+    }
+
+    // Modals / menus / listboxes own the keyboard while open; never steal Enter
+    // from them, even when the focus happens to be a Dispatch row underneath.
     if (hasOpenKeyboardOwner()) return
 
+    // pickTarget() returns null when there is no submittable draft (empty
+    // composer, or the focused composer is in slash-command mode). For a
+    // Dispatch row that means we fall through WITHOUT preventDefault, so the
+    // row keeps its native Enter behaviour (a harmless re-select). The draft is
+    // only intercepted when one actually exists.
     const target = pickTarget()
     if (!target) return
+    // preventDefault() here also suppresses the Dispatch row button's native
+    // Enter→click, so onSelect (focusSessionInTab) does NOT also fire when we
+    // redirect Enter to the composer. Without this the row would re-select at
+    // the same time the draft submits.
     event.preventDefault()
     target.focus()
     target.submit()
