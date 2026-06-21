@@ -31,6 +31,7 @@ import {
   resolveDispatchSpawnTarget,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
   clearTiledLaneSessions,
   dispatchFocusedSessionId,
@@ -1615,10 +1616,51 @@ function dispatchModeAfterSessionRemoval(
   const beforeRows = buildVisibleDispatchRows(before)
   const afterRows = buildVisibleDispatchRows(after)
   const removedIndex = beforeRows.findIndex(row => row.sessionId === removedSessionId)
-  const successor =
-    removedIndex >= 0
-      ? (afterRows[removedIndex] ?? afterRows[removedIndex - 1])
-      : undefined
+
+  // Project-first successor selection (issue #261).
+  //
+  // In this codebase a "project" IS a tab — every Dispatch row carries a
+  // `tabId`, and that is the ONLY reliable project key (cwd is not: two tabs
+  // can share a directory, and a tab's cwd can change). The old logic picked
+  // the successor purely by flat-list position
+  // (`afterRows[removedIndex] ?? afterRows[removedIndex - 1]`). That is fine
+  // mid-project, but when the closed row was its project's LAST row,
+  // `afterRows[removedIndex]` is the FIRST row of the *next* project, so focus
+  // silently jumped across the project boundary and the user lost the context
+  // they were working in. We never want a single close to evict you from your
+  // project unless the project itself is now gone.
+  //
+  // So: as long as the closed row's project still has any rows, keep the
+  // cursor INSIDE that project — prefer the next pane down (first surviving
+  // same-project row at or after the removed index, preserving the "cursor
+  // trails the deletion" feel), and only when nothing survives below do we
+  // fall back to the last same-project pane above (the bottom-of-project
+  // close — the actual bug being fixed here).
+  //
+  // Only when the project is fully emptied (e.g. closing a single-pane
+  // project) do we defer to the legacy GLOBAL fallback and let focus leave the
+  // project — there is no in-project row left to land on, so the flat-list
+  // neighbour is the sane "same visual position" choice.
+  //
+  // removedIndex < 0 stays unchanged: the closed session wasn't in the visible
+  // scope, so we clear focus (undefined successor) and let DispatchLayout's
+  // fallback effect pick a first-row default in the new scope.
+  let successor: DispatchAgentRow | undefined
+  if (removedIndex >= 0) {
+    const removedTabId = beforeRows[removedIndex].tabId
+    const sameProjectAfter = afterRows.filter(row => row.tabId === removedTabId)
+    if (sameProjectAfter.length > 0) {
+      // Project survives: never cross the boundary. Next pane down in-project,
+      // else nearest pane up in-project.
+      successor =
+        sameProjectAfter.find(row => afterRows.indexOf(row) >= removedIndex) ??
+        sameProjectAfter[sameProjectAfter.length - 1]
+    } else {
+      // Project is now empty: only NOW may focus leave the project. Legacy
+      // global "same visual position, trailing on last-row close" rule.
+      successor = afterRows[removedIndex] ?? afterRows[removedIndex - 1]
+    }
+  }
 
   return {
     ...cleared,
