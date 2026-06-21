@@ -2,6 +2,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
+import {
+  buildHistoryScoreMap,
+  loadRecentHistory,
+  recordCommandUse,
+} from '@renderer/features/command-palette/lib/recentCommandHistory'
+import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
 import {
   allPromptTemplates,
@@ -551,16 +557,27 @@ export function CommandPalette({
         : aiWorkspaces,
     [aiWorkspaces, queryText],
   )
+  // Snapshot the recent-command history into a score map once per
+  // palette open. We deliberately depend on `open` (not on every
+  // keystroke) so the ranking is stable for the lifetime of one palette
+  // session: recording a use happens on execute, which closes the
+  // palette, so re-reading mid-session would never change anything here
+  // anyway — and re-parsing localStorage on every query change would be
+  // wasted work. recordCommandUse persists; this memo is the read side
+  // that picks the new state up the next time the palette opens.
+  const historyScoreMap = useMemo(
+    () => buildHistoryScoreMap(loadRecentHistory()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on `open`: re-read history each time the palette is shown.
+    [open],
+  )
+  // rankCommands owns all ordering now (tier-first text match, with
+  // history as a same-tier tiebreaker; empty query returns registry
+  // order unchanged). Everything downstream of this is index-based and
+  // unaware that ordering changed, so this is the only line that needs
+  // to swap from the old boolean filter to the ranked list.
   const filteredCommands = useMemo(
-    () =>
-      queryText
-        ? commands.filter(
-            command =>
-              fuzzyMatch(command.title, queryText) ||
-              command.keywords.some(keyword => fuzzyMatch(keyword, queryText)),
-          )
-        : commands,
-    [commands, queryText],
+    () => rankCommands(commands, queryText, historyScoreMap),
+    [commands, queryText, historyScoreMap],
   )
 
   const filteredLength =
@@ -609,6 +626,11 @@ export function CommandPalette({
 
   const executeCommand = useCallback(
     (command: ResolvedCommand) => {
+      // Record the use BEFORE running. This is the single funnel every
+      // command execution passes through (keyboard Enter and click both
+      // route here), so it's the one correct place to update history.
+      // recordCommandUse never throws, so it can't block command.run.
+      recordCommandUse(command.id)
       if (command.keepPaletteOpen) {
         void command.run(commandContext)
         return
