@@ -52,7 +52,25 @@ function headlineFromInput(
   ]) {
     const v = input[k]
     if (typeof v === 'string' && v.length > 0) {
-      return v.length > 80 ? v.slice(0, 80) + '…' : v
+      // V8 SLICE-TRAP: `bigString.slice(0, 80)` returns a SlicedString that
+      // retains a pointer to its ENTIRE parent string — so an 80-char headline
+      // cut from a multi-MB tool input (a Write/Edit `content`, a giant
+      // `command`/`query`) would PIN that whole parent in the heap. Unlike a
+      // transient render value, THIS headline is RETAINED in the accumulator's
+      // toolCalls ring (up to SUBAGENT_RING_MAX entries) long after the raw
+      // transcript entry is dropped — exactly the residual leak #288's
+      // derive-and-drop is meant to kill (measured: slice-truncating 2000×200KB
+      // left 194MB pinned; a flat Buffer copy left 19MB). This is why the deleted
+      // `clampString` helper forced a flat copy, and why we must here too.
+      //
+      // Force a parent-INDEPENDENT copy by round-tripping the 80-char prefix
+      // through a Buffer (UTF-16 in and out preserves the chars exactly,
+      // surrogate pairs included). Only force the copy when v actually exceeds the
+      // cap: for v.length <= 80 the whole string is already small, has no large
+      // parent to pin, and is returned as-is. Visible output is identical — the
+      // same ≤ 80 chars plus the ellipsis.
+      if (v.length <= 80) return v
+      return Buffer.from(v.slice(0, 80), 'utf16le').toString('utf16le') + '…'
     }
   }
   return null
@@ -296,7 +314,22 @@ export function accumulateSubAgentEntry(
       // INVARIANT 1: track unresolved ids independently of the ring. Only ids
       // not already resolved are "open"; a tool_use whose result already
       // arrived is not open.
-      if (id && !acc.resolvedToolCallIds.has(id)) acc.openToolCallIds.add(id)
+      if (id) {
+        if (acc.resolvedToolCallIds.has(id)) {
+          // BOUND resolvedToolCallIds (consume side): this id's tool_result
+          // arrived BEFORE its tool_use (result-before-use — the ONLY reason this
+          // set exists). The pending result has now been consumed (the `status`
+          // field above is already resolved to 'done'), so this id is provably
+          // never needed again: ids are unique per call, so a consumed id can't be
+          // re-resolved. Deleting it bounds the set to the tiny out-of-order
+          // window instead of letting it grow O(total calls) for the agent's whole
+          // lifetime. This does NOT change the resolved outcome — the status flip
+          // already happened at push time; we only free memory.
+          acc.resolvedToolCallIds.delete(id)
+        } else {
+          acc.openToolCallIds.add(id)
+        }
+      }
       // INVARIANT 2: push then evict the OLDEST (front) past the ring cap. The
       // evicted call leaves the ring but its id STAYS in openToolCallIds if
       // still unresolved, so a later tool_result still decrements the open count.
@@ -306,9 +339,20 @@ export function accumulateSubAgentEntry(
       acc.currentActivity = `running ${b.name ?? 'tool'}`
     } else if (b.type === 'tool_result' && typeof b.tool_use_id === 'string') {
       const rid = b.tool_use_id
-      acc.resolvedToolCallIds.add(rid)
       // INVARIANT 1: flip status / drop from open set independently of the ring.
-      acc.openToolCallIds.delete(rid)
+      // `delete` returns true iff rid was open, i.e. iff its tool_use was ALREADY
+      // seen (in-order — the dominant case). When that's true the ring flip below
+      // fully resolves the call and rid is never consumed again (ids are unique),
+      // so it must NOT be recorded in resolvedToolCallIds: doing so would leak one
+      // entry per resolved call for the agent's whole lifetime — the very
+      // unboundedness this fix removes. We stash rid ONLY for the result-before-use
+      // case (tool_use not yet seen → delete returns false), so a later tool_use
+      // can find it, mark itself done, and prune it (consume side above). Net:
+      // resolvedToolCallIds holds only the still-pending out-of-order window
+      // (observed max 8), not O(total calls). Outcome is unchanged — the in-order
+      // ring flip below is identical; only the no-longer-needed stash is dropped.
+      const wasOpen = acc.openToolCallIds.delete(rid)
+      if (!wasOpen) acc.resolvedToolCallIds.add(rid)
       for (const c of acc.toolCalls) {
         if (c.id === rid) c.status = 'done'
       }

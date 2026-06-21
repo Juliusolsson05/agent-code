@@ -13,7 +13,7 @@ afterEach(async () => {
 })
 
 describe('SubAgentWatcher', () => {
-  it('buffers partial JSONL lines and caps retained parsed entries', async () => {
+  it('buffers partial JSONL lines and folds every entry without retaining them', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'agent-code-subagents-'))
     tmpDirs.push(dir)
     const jsonlPath = join(dir, 'agent-child.jsonl')
