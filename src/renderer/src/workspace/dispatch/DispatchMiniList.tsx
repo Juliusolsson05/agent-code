@@ -93,6 +93,13 @@ const DispatchMiniChip = memo(function DispatchMiniChip({
       onClick={onClick}
       title={`${row.label} · ${title}`}
       data-dispatch-mini-active={active ? 'true' : undefined}
+      // WHY tiled Dispatch carries the same marker as the full index row: a
+      // mini-chip click also lands DOM focus on this <button>, so without it
+      // the bare-Enter composer router (composerEnterRegistry) would bail on
+      // its isInteractiveTarget guard and Enter could not submit an active
+      // pane's draft. Tagging it keeps tiled Dispatch behaving identically to
+      // the classic list. See issue #236.
+      data-dispatch-row="true"
       className={`
         flex w-full items-center justify-center border-t border-border
         py-1.5 text-[10px] font-semibold tabular-nums

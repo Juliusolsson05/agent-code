@@ -244,6 +244,16 @@ const DispatchAgentListRow = memo(function DispatchAgentListRow({
       disabled={disabled}
       title={disabled ? 'shown in another lane' : title}
       data-dispatch-active={active ? 'true' : undefined}
+      // WHY this marker exists: clicking a Dispatch row lands DOM focus on this
+      // <button>, which the bare-Enter composer router (composerEnterRegistry)
+      // would otherwise treat as a real action button and bail on (its
+      // isInteractiveTarget guard). This data attribute lets that router tell a
+      // Dispatch row apart from a genuine action button, so when the active
+      // pane has a non-empty submittable draft, Enter is handed to the composer
+      // instead of being swallowed as a no-op re-select. See issue #236.
+      // One component renders both pinned and grouped rows, so this single
+      // marker covers every row in the index.
+      data-dispatch-row="true"
       className={`
         relative flex w-full items-stretch text-left pr-2.5 border-t border-border overflow-hidden [contain:layout_paint]
         ${activityClasses.row}
