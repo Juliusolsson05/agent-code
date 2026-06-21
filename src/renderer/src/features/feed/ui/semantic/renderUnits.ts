@@ -316,10 +316,19 @@ export function buildSemanticRenderUnits(
       ? turn.lookups.toolCallsById[block.toolUseId] ?? null
       : null
     const activity = classifySemanticToolActivity(block)
+    // AskUserQuestion must NEVER fold into a collapsed_activity run — it
+    // is a live, blocking picker the user has to act on, not low-signal
+    // read/search/bash churn. classifySemanticToolActivity already
+    // returns collapsible:false for it (it isn't Read/Grep/Glob/Bash), so
+    // this is belt-and-suspenders: if a future tweak to that classifier
+    // ever marks it collapsible, this guard keeps the picker rendering as
+    // its own answerable AskUserQuestionRow rather than vanishing into a
+    // "worked: N reads" summary the user can't click.
     const isCollapsibleTool =
       (block.kind === 'tool_use' ||
         block.kind === 'server_tool_use' ||
         block.kind === 'mcp_tool_use') &&
+      block.toolName !== 'AskUserQuestion' &&
       activity.collapsible &&
       activity.category !== null
 

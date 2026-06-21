@@ -22,6 +22,7 @@ import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamin
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
+import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
 
 function parseJsonRecord(text: string): Record<string, unknown> | null {
@@ -379,6 +380,19 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         </div>
       </MarkerRow>
     )
+  }
+
+  // AskUserQuestion gets a dedicated native picker BEFORE the generic
+  // tool_use handler. An unresolved AskUserQuestion block (`!resultAt`)
+  // is a LIVE picker blocking the agent on user input; rendering it as
+  // the usual "AskUserQuestion · running" tool row (with a raw-JSON
+  // input dump) left the user no way to answer except via the terminal.
+  // The guard mirrors BlockRow's route-in condition exactly: once the
+  // tool_result lands and sets `resultAt`, we fall through to the normal
+  // tool_use branch so the answered question renders as a plain
+  // committed-style row instead of a stale clickable picker.
+  if (block.toolName === 'AskUserQuestion' && !block.resultAt) {
+    return <AskUserQuestionRow block={block} />
   }
 
   if (
