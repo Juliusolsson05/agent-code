@@ -13,7 +13,7 @@ afterEach(async () => {
 })
 
 describe('SubAgentWatcher', () => {
-  it('buffers partial JSONL lines and caps retained parsed entries', async () => {
+  it('buffers partial JSONL lines and folds every entry without retaining them', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'agent-code-subagents-'))
     tmpDirs.push(dir)
     const jsonlPath = join(dir, 'agent-child.jsonl')
@@ -49,12 +49,17 @@ describe('SubAgentWatcher', () => {
       // WHY 520 entries instead of a tiny fixture:
       //
       // The renderer-facing builder already caps the mini-feed to 40 tool
-      // calls. To prove the watcher now bounds MAIN-process retained RawEntry
-      // memory too, the fixture must exceed the watcher cap (500), not only the
-      // renderer cap. Without the watcher cap this would report 481 dropped
-      // tool calls (521 total - 40 visible); with the watcher cap it reports
-      // 460 (500 retained - 40 visible), proving older parsed entries were
-      // discarded before building state.
+      // calls. This large fixture proves the watcher's #288 derive-and-drop
+      // accumulator folds EVERY appended entry (no raw entries retained) while
+      // still bounding what it ships to the renderer.
+      //
+      // CONSCIOUS BEHAVIOR DELTA (#288): the old watcher retained at most 500
+      // raw entries and folded only that 500-entry tail, so `droppedToolCalls`
+      // was relative-to-500 and this asserted 460 (500 retained - 40 visible).
+      // The accumulator folds from the start, so `droppedToolCalls` is now the
+      // TRUE total: 521 tool_uses - 40 visible = 481. That is more correct (the
+      // "+N earlier" count reflects the real number dropped, not an artifact of
+      // a retention cap), and it no longer depends on retaining any entries.
       await appendFile(
         jsonlPath,
         Array.from({ length: 520 }, (_, i) => assistantToolUseLine(i + 1)).join(''),
@@ -65,7 +70,7 @@ describe('SubAgentWatcher', () => {
       await eventually(() => {
         const state = emissions.at(-1)?.['tool-parent']
         expect(state?.toolCalls).toHaveLength(40)
-        expect(state?.droppedToolCalls).toBe(460)
+        expect(state?.droppedToolCalls).toBe(481)
         expect(state?.toolCalls.at(-1)).toMatchObject({
           name: 'Read',
           headline: '/tmp/file-520.txt',
