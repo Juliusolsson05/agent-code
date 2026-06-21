@@ -1,6 +1,7 @@
 import type { JsonlEntry } from 'claude-code-headless'
 
 import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
 
 // Per-session jsonl-entry coalescer.
 //
@@ -31,6 +32,15 @@ import { sendToMainWindow } from '@main/window/mainWindow.js'
 type PendingJsonlBuffer = {
   entries: Array<{ entry: JsonlEntry; file: string }>
   flushScheduled: boolean
+  // #288: per-session string pool. The coalescer is the choke point every
+  // live `jsonl-entry` flows through, and the entries it forwards are the
+  // exact ~24k objects main retains. Interning their duplicated metadata
+  // (cwd/sessionId/role/type — see internEntry.ts) here means the canonical
+  // strings are shared across the whole session's worth of entries, not
+  // re-minted per `JSON.parse` upstream. The pool lives on the per-session
+  // buffer so it is dropped together with the buffer in flushAndDropJsonl
+  // when the session exits — a session-scoped lifetime, never a global leak.
+  intern: (s: unknown) => unknown
 }
 
 const jsonlPending = new Map<string, PendingJsonlBuffer>()
@@ -54,9 +64,14 @@ export function enqueueJsonl(
 ): void {
   let pending = jsonlPending.get(sessionId)
   if (!pending) {
-    pending = { entries: [], flushScheduled: false }
+    pending = { entries: [], flushScheduled: false, intern: makeStringPool() }
     jsonlPending.set(sessionId, pending)
   }
+  // #288: intern the duplicated metadata before buffering. Mutates the
+  // entry in place; value-equality is preserved so the renderer sees an
+  // identical payload. The pool is the session's own (created above),
+  // so first-seen-wins de-dup spans the whole session, not just one burst.
+  internEntryFields(entry as Record<string, unknown>, pending.intern)
   pending.entries.push({ entry, file })
   if (!pending.flushScheduled) {
     pending.flushScheduled = true

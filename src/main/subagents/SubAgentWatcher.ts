@@ -3,6 +3,7 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SubAgentState } from '@preload/api/types.js'
 import { buildSubAgentState, type SubAgentMeta } from './subagentState.js'
+import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
 
 // One poller per session, watching <sessionDir>/subagents/.
 //
@@ -28,6 +29,15 @@ export class SubAgentWatcher {
   private metaByAgent = new Map<string, SubAgentMeta>()
   private dirty = false
   private stopped = false
+  // #288: per-watcher string pool. This watcher retains up to
+  // MAX_RETAINED_ENTRIES_PER_AGENT parsed RawEntry objects PER subagent
+  // across a whole Task fan-out, each freshly JSON.parsed below, so the
+  // same cwd/role/type metadata is re-minted on every appended line.
+  // Interning against a pool scoped to this watcher shares the canonical
+  // strings across all of its agents' entries. The pool's lifetime is the
+  // watcher's — cleared in stop() (one watcher per session) — so it can
+  // never grow into the global leak a shared pool would be.
+  private intern = makeStringPool()
 
   constructor(
     private readonly subagentsDir: string,
@@ -51,6 +61,10 @@ export class SubAgentWatcher {
     this.partialByAgent.clear()
     this.entriesByAgent.clear()
     this.metaByAgent.clear()
+    // #288: drop the interning pool's backing Map so the strings it pinned
+    // are released with the rest of this watcher's state. Reassigning a
+    // fresh empty pool is the cheapest way to let the old Map GC.
+    this.intern = makeStringPool()
   }
 
   /** Force a re-emit (e.g. the parent transcript just produced a tool_result
@@ -126,7 +140,14 @@ export class SubAgentWatcher {
       const t = line.trim()
       if (!t) continue
       try {
-        arr.push(JSON.parse(t) as RawEntry)
+        const parsed = JSON.parse(t) as RawEntry
+        // #288: intern the duplicated metadata (type, message.role/type, …)
+        // before retaining. internEntryFields is defensive and never throws,
+        // so a malformed entry that slipped past JSON.parse still can't take
+        // down this loop. Value-equality is preserved — buildSubAgentState
+        // reads the same fields it always did.
+        internEntryFields(parsed as Record<string, unknown>, this.intern)
+        arr.push(parsed)
       } catch {
         /* skip a malformed line */
       }
