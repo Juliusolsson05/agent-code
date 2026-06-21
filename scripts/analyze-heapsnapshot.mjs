@@ -127,12 +127,21 @@ function main() {
     process.exit(1)
   }
 
-  // JSON.parse the whole thing. The .heapsnapshot is one JSON document; there
-  // is no streaming JSON parser in core, and the snapshot's biggest cost is the
-  // `strings` array we have to keep anyway. The --max-old-space-size note in
-  // the header is precisely so this parse succeeds on the big dumps.
-  const raw = readFileSync(file, 'utf8')
-  const snap = JSON.parse(raw)
+  // Parse the snapshot inside a helper that returns only the parsed object
+  // (review fix #3): the .heapsnapshot is one JSON document and there is no
+  // streaming JSON parser in core, so we must JSON.parse the whole ~300 MB
+  // source string. The bug we are fixing is that the raw UTF-8 source used to
+  // stay referenced (`const raw = ...`) for the entire run, so at peak we held
+  // BOTH the ~300 MB source AND the parsed structure simultaneously. By doing
+  // readFileSync + JSON.parse inside parseSnapshot() — whose only return is the
+  // parsed object — the `raw` reference dies the moment that function returns,
+  // letting V8 reclaim the source string before the heavy aggregation passes
+  // (and well before the O(edges) CSR build in --retain). On the snapshots this
+  // tool targets — the ones that already blew the heap — dropping the
+  // source-vs-parsed peak is what keeps the analyzer from OOMing on itself.
+  // The --max-old-space-size note in the header still applies to the parse
+  // itself; this fix only shrinks the post-parse peak.
+  const snap = parseSnapshot(file)
 
   const meta = snap.snapshot.meta
   const nodeFields = meta.node_fields
@@ -147,9 +156,24 @@ function main() {
 
   const nodeCount = snap.snapshot.node_count ?? nodes.length / NF
 
-  // The "string" and "object" type enums drive the per-type buckets below.
-  const stringTypeId = nodeTypes.indexOf('string')
+  // The "object" type enum drives the constructor buckets below.
   const objectTypeId = nodeTypes.indexOf('object')
+
+  // String-like node types (review fix #1): V8 snapshots represent string data
+  // under THREE distinct node types, not just "string":
+  //   - "string"              — a flat/external string
+  //   - "concatenated string" — a cons-string (the result of `a + b` before
+  //                             flattening); extremely common in real dumps
+  //   - "sliced string"       — a substring view sharing a parent's backing
+  // All three carry their resolved content via the `name` field (an index into
+  // the strings array, exactly like a plain "string" node). The original code
+  // only counted `stringTypeId`, which UNDERREPORTED string memory — fatal for
+  // a #288 tool whose entire job is measuring the "84% strings" claim. We build
+  // a Set of the string-like type ids and treat membership as "is a string"
+  // everywhere strings are aggregated, bucketed, listed, or --retain-matched.
+  // Using a Set (not 3 scalar compares) keeps the hot per-node loop branch-cheap
+  // and means adding a future string subtype is a one-line change here.
+  const stringTypeIds = stringLikeTypeIds(nodeTypes)
 
   // --- aggregation accumulators (all small relative to the snapshot) ---
   let totalSelf = 0
@@ -177,7 +201,10 @@ function main() {
       // For object nodes `name` is the constructor name.
       const ctor = strings[nameIdx] ?? '(anonymous)'
       ctorSelf.set(ctor, (ctorSelf.get(ctor) || 0) + selfSize)
-    } else if (typeId === stringTypeId) {
+    } else if (stringTypeIds.has(typeId)) {
+      // string / concatenated string / sliced string all land here (fix #1):
+      // their `name` indexes into the strings array for the resolved content,
+      // so they bucket and aggregate identically to a plain string node.
       stringsSelf += selfSize
       const content = strings[nameIdx] ?? ''
       const key = bucketKey(content)
@@ -263,8 +290,29 @@ function main() {
   console.log(L.join('\n'))
 
   if (retain && retain.length) {
-    reportRetainers({ snap, nodeFields, nodeTypes, strings, stringTypeId, prefixes: retain, top })
+    reportRetainers({ snap, nodeFields, nodeTypes, strings, stringTypeIds, prefixes: retain, top })
   }
+}
+
+// parseSnapshot: read + JSON.parse in an isolated scope so the raw source
+// string is unreferenced (and GC-eligible) the instant we return (review fix
+// #3). See the long note at the call site for why this matters on the big dumps.
+function parseSnapshot(file) {
+  const raw = readFileSync(file, 'utf8')
+  return JSON.parse(raw)
+}
+
+// stringLikeTypeIds: resolve the node_types enum indices for every string-like
+// V8 node type (review fix #1). Returns a Set of numeric type ids. Any type the
+// snapshot doesn't declare simply yields -1 from indexOf, which we drop — so on
+// an exotic snapshot missing "sliced string" we just don't add a phantom id.
+function stringLikeTypeIds(nodeTypes) {
+  const ids = new Set()
+  for (const name of ['string', 'concatenated string', 'sliced string']) {
+    const id = nodeTypes.indexOf(name)
+    if (id !== -1) ids.add(id)
+  }
+  return ids
 }
 
 // ---------------------------------------------------------------------------
@@ -279,7 +327,7 @@ function main() {
 //   revSrc[]     = the source node ordinal of each incoming edge
 //   revEdgeName[]= the edge's name index (paired with revSrc)
 // Building it is O(edges) time and memory, which is exactly why this is opt-in.
-function reportRetainers({ snap, nodeFields, nodeTypes, strings, stringTypeId, prefixes, top }) {
+function reportRetainers({ snap, nodeFields, nodeTypes, strings, stringTypeIds, prefixes, top }) {
   const nodes = snap.nodes
   const edges = snap.edges
   const meta = snap.snapshot.meta
@@ -299,6 +347,25 @@ function reportRetainers({ snap, nodeFields, nodeTypes, strings, stringTypeId, p
 
   const nodeCount = nodes.length / NF
   const edgeCount = edges.length / EF
+
+  // Edge-count sanity check (review fix #4): the whole CSR build assumes the
+  // per-node `edge_count` fields partition the flat `edges` array exactly — node
+  // n owns the next edge_count[n] edges, in order. If a snapshot was truncated
+  // mid-write or otherwise corrupted, the sum of edge_counts won't equal
+  // edges.length / EF, and the `edgeCursor` walk above/below would read past the
+  // intended boundaries and silently mis-attribute (or index OOB into) edges —
+  // producing confident-but-wrong owner output, the worst failure mode for a
+  // forensic tool. We can't cheaply repair it, so we just WARN loudly and let
+  // the pass continue (a partial answer beats refusing on a slightly-off dump).
+  // This is O(nodeCount) and runs once, so it's effectively free.
+  let summedEdgeCount = 0
+  for (let n = 0; n < nodeCount; n++) summedEdgeCount += nodes[n * NF + idxEdgeCount]
+  if (summedEdgeCount !== edgeCount) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[warn] snapshot edge counts inconsistent: sum(edge_count)=${summedEdgeCount.toLocaleString()} but edges.length/edge_field_count=${edgeCount.toLocaleString()} — retainer attribution may be wrong (truncated/corrupt snapshot?)`,
+    )
+  }
 
   // to_node in the edge array is the BYTE-style offset into `nodes` (a multiple
   // of NF), per the V8 format. Convert to a node ordinal by dividing by NF.
@@ -355,7 +422,10 @@ function reportRetainers({ snap, nodeFields, nodeTypes, strings, stringTypeId, p
     let matchBytes = 0
     for (let n = 0; n < nodeCount; n++) {
       const off = n * NF
-      if (nodes[off + idxType] !== stringTypeId) continue
+      // Match string / concatenated string / sliced string (fix #1): the prefix
+      // attribution must cover the same node types the summary counts, or the
+      // bytes reported here would disagree with the summary's strings total.
+      if (!stringTypeIds.has(nodes[off + idxType])) continue
       const content = strings[nodes[off + idxName]] ?? ''
       if (!content.startsWith(prefix)) continue
       matchCount++

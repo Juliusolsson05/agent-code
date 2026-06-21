@@ -159,10 +159,20 @@ function maybeLogHeapSummary(snapshotPath: string): void {
       process.execPath,
       ['--max-old-space-size=4096', scriptPath, snapshotPath, '--top', '20'],
       {
-        // Inherit nothing on stdin; pipe stdout/stderr so we can tee a few
-        // lines. detached:false so the child dies with us if we exit — we
-        // don't want a runaway analyzer outliving a crash.
-        stdio: ['ignore', 'pipe', 'pipe'],
+        // stdin ignored; stdout piped so we can tee a few summary lines.
+        // stderr is 'ignore' (review fix #2): we previously piped stderr but
+        // never attached a 'data' listener to drain it. A piped stream that is
+        // never read has a bounded OS pipe buffer (~64 KB); if the analyzer
+        // wrote more than that to stderr — e.g. a V8 GC/--trace warning, an
+        // ELIFECYCLE dump, or a stack trace on a malformed snapshot — it would
+        // block on write() against a full pipe and hang indefinitely, holding
+        // the child alive on the very capture path that must stay non-blocking.
+        // 'ignore' routes the child's stderr to /dev/null so it can never
+        // back-pressure; we don't surface analyzer stderr in the log anyway, so
+        // nothing is lost. stdout stays piped+drained for the summary tee below.
+        // detached:false so the child dies with us if we exit — we don't want a
+        // runaway analyzer outliving a crash.
+        stdio: ['ignore', 'pipe', 'ignore'],
         // ELECTRON_RUN_AS_NODE makes the Electron binary behave as plain node,
         // so process.execPath (the Electron exe) can run a .mjs script.
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
@@ -184,6 +194,12 @@ function maybeLogHeapSummary(snapshotPath: string): void {
       }
     }
     child.stdout?.on('data', (chunk: Buffer) => {
+      // Once emit() has fired (done=true) the summary is already logged, so
+      // there's nothing left to buffer (review nit #5): keep appending and the
+      // re-split would just churn the heap on a child that's still streaming
+      // its (now-irrelevant) tail. Early-return so post-emit chunks are dropped
+      // cheaply; the child still drains naturally and exits on its own.
+      if (done) return
       if (buf.length < 64 * 1024) buf += chunk.toString('utf8')
       if (buf.split('\n').length > MAX_LINES) emit()
     })
