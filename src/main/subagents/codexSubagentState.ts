@@ -20,12 +20,24 @@ const CODEX_SUBAGENT_NOTIFICATION_CLOSE = '</subagent_notification>'
 // entry, and `turnCount` / tool-call counts undercount because earlier turns are
 // gone. The fix below SPLITS the responsibility: the SubAgentState that emit()
 // ships is derived from the FULL, uncapped read and stored in
-// childStateByAgentId (correct values, head intact); childEntriesByAgentId keeps
-// only a bounded TAIL of raw entries, retained purely as a memory bound for a
-// future live mini-feed display and never fed back into the derived values. The
-// derivation now happens against the whole file, so the cap can no longer
-// corrupt startedAt/turnCount/childMeta/tool counts. See `readKnownChildren`.
-const MAX_RETAINED_ENTRIES_PER_AGENT = 500
+// childStateByAgentId (correct values, head intact). The derivation now happens
+// against the whole file, so the cap can no longer corrupt
+// startedAt/turnCount/childMeta/tool counts. See `readKnownChildren`.
+//
+// #288 ROOT-CAUSE FOLLOW-UP: PR #317 also retained a bounded 500-entry TAIL of
+// raw rollout entries in `childEntriesByAgentId`, justified ONLY as a buffer for
+// a "future live mini-feed" that nothing ever read. The dominator-tree analysis
+// that pinned the Claude SubAgentWatcher as 263 MB / 88% of the heap (see
+// SubAgentWatcher.ts) showed retained raw entries are exactly the multi-MB
+// liability — each entry pins its full tool-result/Read body. Since that tail
+// was write-only dead weight here, the cleanest fix is to DROP it entirely
+// rather than add per-field truncation to bytes nothing displays. The derived
+// SubAgentState (childStateByAgentId) already carries everything emit() ships,
+// so removing the tail is invisible. If a mini-feed is ever built, it should
+// re-derive small previews from the on-disk rollout (the durable source), not
+// pin raw entries in main-process heap. The former
+// MAX_RETAINED_ENTRIES_PER_AGENT constant is gone with the tail it bounded; the
+// uncapped-count dirty signal lives on in childEntryCountByAgentId.
 
 // Codex child sessions do not use Claude's `<parent>/subagents/agent-*.jsonl`
 // layout. They are normal rollout files whose session_meta.source says they
@@ -408,20 +420,17 @@ export class CodexSubAgentTracker {
   private readonly callIdByAgentId = new Map<string, string>()
   private readonly notificationsByAgentId = new Map<string, Notification>()
   private readonly childPathByAgentId = new Map<string, string>()
-  // Bounded TAIL of raw entries per agent. Retained ONLY as a memory-capped
-  // buffer for a future live mini-feed display; it must never be the source for
-  // any derived SubAgentState value (see MAX_RETAINED_ENTRIES_PER_AGENT note).
-  private readonly childEntriesByAgentId = new Map<string, CodexRolloutEntry[]>()
   // Derived SubAgentState computed from the FULL uncapped read (PR #317). emit()
-  // reads from here so startedAt/turnCount/childMeta/tool counts stay correct
-  // even after a child exceeds MAX_RETAINED_ENTRIES_PER_AGENT and its retained
-  // entries are tail-capped.
+  // reads from here so startedAt/turnCount/childMeta/tool counts stay correct.
+  // This is the ONLY per-agent payload the tracker retains now that the raw
+  // entry tail (#288 follow-up) is gone — and it is small and bounded by shape.
   private readonly childStateByAgentId = new Map<string, SubAgentState>()
-  // Uncapped source entry count per agent — the dirty signal. We cannot compare
-  // childEntriesByAgentId.length anymore: once a child passes the cap that length
-  // pins at 500 while the file keeps growing, so a length-vs-length check would
-  // either never fire again or fire forever. Mirrors SubAgentWatcher's size/offset
-  // dirty trigger (#300): gate on the UNCAPPED count changing. See readKnownChildren.
+  // Uncapped source entry count per agent — the dirty signal. We gate on the
+  // entry COUNT changing rather than re-deriving every tick: readRolloutEntries
+  // re-reads the whole child rollout each poll, so a quiescent child would
+  // otherwise re-emit identical IPC forever. Mirrors SubAgentWatcher's
+  // size/offset dirty trigger (#300): a child stops being dirty the moment its
+  // entry count stops growing. See readKnownChildren.
   private readonly childEntryCountByAgentId = new Map<string, number>()
   private timer: NodeJS.Timeout | null = null
   private parentFile: string | null = null
@@ -482,7 +491,6 @@ export class CodexSubAgentTracker {
     this.callIdByAgentId.clear()
     this.notificationsByAgentId.clear()
     this.childPathByAgentId.clear()
-    this.childEntriesByAgentId.clear()
     this.childStateByAgentId.clear()
     this.childEntryCountByAgentId.clear()
   }
@@ -557,24 +565,15 @@ export class CodexSubAgentTracker {
         }),
       )
 
-      // (b) Bounded TAIL of raw entries — retained ONLY as a memory cap for a
-      // future live mini-feed display. `readRolloutEntries` re-reads the whole
-      // child rollout every tick, so without a cap a long-running child grows
-      // this map without limit and duplicates large tool-result strings in
-      // main-process heap. Retain the TAIL (most recent) because that is where
-      // current activity, completion events, and recent tool context live; the
-      // durable full transcript stays on disk in the rollout file. Nothing on
-      // the emit path reads this — derived values come from (a).
-      //
-      // NOTE: unlike Claude's append-only offset tail (#300), this still reads
-      // the entire file each tick. An offset/incremental read would also cut
-      // read amplification, but it is a larger change against these helpers; the
-      // tail-cap plus full-read derivation is the safe, correct bound for now.
-      const bounded =
-        entries.length > MAX_RETAINED_ENTRIES_PER_AGENT
-          ? entries.slice(entries.length - MAX_RETAINED_ENTRIES_PER_AGENT)
-          : entries
-      this.childEntriesByAgentId.set(agentId, bounded)
+      // #288 ROOT-CAUSE FOLLOW-UP: we deliberately DO NOT retain the raw entries
+      // here. PR #317 kept a bounded TAIL of them in childEntriesByAgentId "for a
+      // future mini-feed," but nothing on the emit path (or anywhere else) read
+      // it — it was write-only dead weight that still pinned every entry's full
+      // tool-result/Read body in main-process heap, the same liability the
+      // dominator tree found in the Claude watcher. The derived state in (a) is
+      // the only thing emit() needs, so the `entries` array (and the megabytes it
+      // references) becomes GC-eligible the instant this iteration ends. We keep
+      // only the uncapped COUNT as the dirty signal.
       this.childEntryCountByAgentId.set(agentId, entries.length)
       this.dirty = true
     }
