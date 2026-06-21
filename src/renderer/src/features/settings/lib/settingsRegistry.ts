@@ -166,7 +166,10 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
 // settings layer doesn't depend on the registry's CommandContext-typed
 // internals — it only needs the static rule.
 function resolveCommandVisible(settings: Settings, command: PickerCommandMeta): boolean {
-  const override = settings.commandVisibilityOverrides[command.id]
+  // Defensive optional-chain for the same reason as commandVisible in the
+  // registry: never let a missing override map (pre-#249 persisted settings)
+  // crash the Settings page render. Degrade to declared default.
+  const override = settings.commandVisibilityOverrides?.[command.id]
   if (typeof override === 'boolean') return override
   return command.pickerVisibility === 'default'
 }
