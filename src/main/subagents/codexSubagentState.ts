@@ -6,6 +6,12 @@ import { asRecord } from '@shared/lib/asRecord.js'
 const CODEX_SUBAGENT_NOTIFICATION_OPEN = '<subagent_notification>'
 const CODEX_SUBAGENT_NOTIFICATION_CLOSE = '</subagent_notification>'
 
+// Match SubAgentWatcher's cap name/value (PR #300) on purpose: this is the
+// Codex twin of the Claude subagent retention leak that #300 fixed. Keeping the
+// constant identical means a future reader who knows one watcher's bound knows
+// the other's, and a single value to tune covers both providers.
+const MAX_RETAINED_ENTRIES_PER_AGENT = 500
+
 // Codex child sessions do not use Claude's `<parent>/subagents/agent-*.jsonl`
 // layout. They are normal rollout files whose session_meta.source says they
 // were spawned by a parent thread, while the parent thread only learns the child
@@ -426,6 +432,18 @@ export class CodexSubAgentTracker {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    // Mirror SubAgentWatcher.stop() (PR #300): clearing the timer alone left
+    // every retained child rollout entry — plus the spawn/output/notification
+    // correlation maps — pinned in main-process heap for the lifetime of the
+    // process even though a stopped tracker can never emit again. A stopped
+    // session must release its memory; the durable source stays the on-disk
+    // rollout if the tracker is ever re-created for the same parent.
+    this.spawnsByCallId.clear()
+    this.outputsByCallId.clear()
+    this.callIdByAgentId.clear()
+    this.notificationsByAgentId.clear()
+    this.childPathByAgentId.clear()
+    this.childEntriesByAgentId.clear()
   }
 
   async refresh(): Promise<void> {
@@ -458,7 +476,26 @@ export class CodexSubAgentTracker {
       const entries = await readRolloutEntries(path)
       const previous = this.childEntriesByAgentId.get(agentId)
       if (!previous || previous.length !== entries.length) {
-        this.childEntriesByAgentId.set(agentId, entries)
+        // Bound retained entries per agent — the Codex twin of PR #300's cap on
+        // SubAgentWatcher. `readRolloutEntries` re-reads the whole child rollout
+        // every ~1.2s tick, so without a cap a long-running child grows this
+        // map's arrays without limit and duplicates large tool-result strings in
+        // main-process heap. The renderer payload is separately capped inside
+        // buildCodexSubAgentState (buildToolCalls keeps the last 40 calls), so
+        // this cap only protects the main process. Retain the TAIL — the most
+        // recent entries — because that is where current activity, completion
+        // events, and recent tool context live; the durable full transcript
+        // stays on disk in the rollout file.
+        //
+        // NOTE: unlike Claude's append-only offset tail (#300), this still reads
+        // the entire file each tick. An offset/incremental read would also cut
+        // read amplification, but it is a larger change against these helpers;
+        // the tail-cap is the safe, sufficient memory bound for this PR.
+        const bounded =
+          entries.length > MAX_RETAINED_ENTRIES_PER_AGENT
+            ? entries.slice(entries.length - MAX_RETAINED_ENTRIES_PER_AGENT)
+            : entries
+        this.childEntriesByAgentId.set(agentId, bounded)
         this.dirty = true
       }
     }
