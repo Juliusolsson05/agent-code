@@ -16,7 +16,7 @@
 // subsequent fix should be validated by re-running this and watching the
 // top retainers / duplicated-string buckets shrink.
 //
-// TWO MODES:
+// THREE MODES:
 //
 //   1. SUMMARY (default): exactly one streaming pass over the flat `nodes`
 //      array. Reports totals, self_size by node type, the heaviest object
@@ -34,11 +34,32 @@
 //      holding the duplicated strings. This costs O(edges) memory and time, so
 //      it is opt-in only.
 //
+//   3. OWNERS (--owners): the COMPREHENSIVE owner-attribution mode, and the one
+//      that definitively cracked #288. SUMMARY ranks by self_size — "how big is
+//      this one object" — which is useless when the leak is a small container
+//      (a Map, a class instance) transitively pinning a huge subgraph: the Map
+//      itself is a few KB of self_size and never shows up. OWNERS instead builds
+//      the DOMINATOR TREE (Cooper-Harvey-Kennedy) of the whole reachable graph
+//      and computes RETAINED size per node = "how much memory is freed if this
+//      object is removed" = self_size of everything this node alone keeps alive.
+//      It then prints (a) the top individual retainers by retained size with
+//      their `type:name`, and (b) retained size aggregated by constructor/owner
+//      name. Running this on the #288 dump is what printed `SubAgentWatcher` ×7 =
+//      263 MB / 88% of the reachable heap — a result no self_size ranking could
+//      ever surface, because each watcher's own object is tiny; it's the
+//      entriesByAgent Map → entry → message.content → huge string subgraph it
+//      DOMINATES that is the 263 MB. Use this mode for any "what truly owns the
+//      heap" / leak-hunt investigation (#288-class). It is the heaviest mode:
+//      O(nodes+edges) for the postorder/predecessor/idom passes, plus a few
+//      Typed Arrays sized to node/edge count.
+//
 // MEMORY: for the large dumps you MUST raise the old-space cap, e.g.
 //   node --max-old-space-size=8192 scripts/analyze-heapsnapshot.mjs <file>
 // The watchdog auto-summary (PART B) spawns us with --max-old-space-size=4096,
 // which is plenty for the summary pass on a ~300 MB snapshot. --retain on a
-// 300 MB snapshot wants the full 8192.
+// 300 MB snapshot wants the full 8192. --owners builds the dominator tree over
+// the WHOLE graph and is the most memory-hungry mode — for the large forensic
+// dumps run it with `node --max-old-space-size=12288`.
 //
 // SNAPSHOT FORMAT (V8 "HeapSnapshot" JSON, the .heapsnapshot on-disk shape):
 //   {
@@ -64,6 +85,7 @@ function parseArgs(argv) {
   const file = argv[2]
   let top = 25
   let retain = null
+  let owners = false
   for (let i = 3; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--top') {
@@ -73,9 +95,13 @@ function parseArgs(argv) {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean)
+    } else if (a === '--owners') {
+      // Dominator-tree retained-size mode (see header, MODE 3). A boolean flag —
+      // it analyzes the whole graph, so it takes no prefix/selector argument.
+      owners = true
     }
   }
-  return { file, top, retain }
+  return { file, top, retain, owners }
 }
 
 function fmtBytes(n) {
@@ -118,11 +144,11 @@ function pad(s, n) {
 // main
 // ---------------------------------------------------------------------------
 function main() {
-  const { file, top, retain } = parseArgs(process.argv)
+  const { file, top, retain, owners } = parseArgs(process.argv)
   if (!file) {
     // eslint-disable-next-line no-console
     console.error(
-      'usage: node [--max-old-space-size=8192] analyze-heapsnapshot.mjs <file.heapsnapshot> [--top N] [--retain "prefix1,prefix2"]',
+      'usage: node [--max-old-space-size=12288] analyze-heapsnapshot.mjs <file.heapsnapshot> [--top N] [--retain "prefix1,prefix2"] [--owners]',
     )
     process.exit(1)
   }
@@ -142,6 +168,17 @@ function main() {
   // The --max-old-space-size note in the header still applies to the parse
   // itself; this fix only shrinks the post-parse peak.
   const snap = parseSnapshot(file)
+
+  // OWNERS mode (#288, MODE 3): the dominator-tree retained-size report is a
+  // standalone analysis that answers a fundamentally different question than the
+  // SUMMARY pass (retained size vs self_size). Running both would just print the
+  // big self_size table nobody needs when they asked "what truly owns the heap,"
+  // and the dominator build is the heavy part — so when --owners is set we run
+  // ONLY that report and return. --top still controls how many rows it prints.
+  if (owners) {
+    reportOwners({ snap, top })
+    return
+  }
 
   const meta = snap.snapshot.meta
   const nodeFields = meta.node_fields
@@ -467,6 +504,232 @@ function reportRetainers({ snap, nodeFields, nodeTypes, strings, stringTypeIds, 
       // eslint-disable-next-line no-console
       console.log(`  ${pad(fmtBytes(rec.totalSize), 11)} x${pad(String(rec.count), 7)}  ${key}`)
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// --owners mode: dominator tree + retained size per owner (#288, MODE 3)
+// ---------------------------------------------------------------------------
+//
+// WHY retained size and not self_size: self_size is "how many bytes is THIS one
+// object," which makes the SUMMARY pass blind to the real #288 leak — a handful
+// of small container objects (7 SubAgentWatcher instances, a few KB each)
+// transitively pinning a 263 MB subgraph. Retained size is "how much memory is
+// reclaimed if this single object is freed," i.e. the self_size of everything
+// the object DOMINATES — every node you can only reach by going through it. The
+// dominator tree is what makes that computable: node D dominates node X iff every
+// path from the GC root to X passes through D, and retained(D) = self(D) + sum of
+// retained(children of D in the dominator tree). Aggregating retained size by the
+// owner's `type:name` is what printed `SubAgentWatcher ×7 = 263 MB / 88%` and
+// named the leak no self_size ranking could see.
+//
+// Algorithm (ported from the /tmp/heap-dom.mjs prototype that cracked #288):
+//   1. iterative DFS from the synthetic GC root (node 0) → postorder numbering
+//   2. reverse-CSR predecessor index (who points AT each node)
+//   3. Cooper-Harvey-Kennedy iterative dominators over reverse-postorder
+//      (simple, fast, and avoids Lengauer-Tarjan's bookkeeping; converges in a
+//      few passes on real heap graphs)
+//   4. retained size: seed each node with its self_size, then in postorder add
+//      each node's retained total to its immediate dominator (children before
+//      parents, so every node's subtree is summed before it rolls up)
+//   5. report top individual retainers + retained aggregated by owner name
+function reportOwners({ snap, top }) {
+  const meta = snap.snapshot.meta
+  const nodeFields = meta.node_fields
+  const nodeTypes = meta.node_types[0]
+  const edgeFields = meta.edge_fields
+  const nodes = snap.nodes
+  const edges = snap.edges
+  const strings = snap.strings
+  const NF = nodeFields.length
+  const EF = edgeFields.length
+
+  const idxType = nodeFields.indexOf('type')
+  const idxName = nodeFields.indexOf('name')
+  const idxSelfSize = nodeFields.indexOf('self_size')
+  const idxEdgeCount = nodeFields.indexOf('edge_count')
+  const eIdxTo = edgeFields.indexOf('to_node')
+
+  const N = nodes.length / NF
+
+  // Small accessors. `to_node` in the edge array is a byte-style offset into
+  // `nodes` (a multiple of NF) per the V8 format, so divide by NF for an ordinal.
+  const nm = (k) => strings[nodes[k * NF + idxName]] ?? ''
+  const ty = (k) => nodeTypes[nodes[k * NF + idxType]] ?? `type#${nodes[k * NF + idxType]}`
+  const selfSize = (k) => nodes[k * NF + idxSelfSize]
+  const outCount = (k) => nodes[k * NF + idxEdgeCount]
+
+  // firstEdge[k] = index (in edge units) of node k's first outgoing edge. The
+  // per-node edge_count fields partition the flat edges array in node order, so a
+  // single prefix sum gives every node's edge slice without a lookup table.
+  const firstEdge = new Uint32Array(N)
+  {
+    let c = 0
+    for (let k = 0; k < N; k++) {
+      firstEdge[k] = c
+      c += outCount(k)
+    }
+  }
+  const edgeTo = (i) => edges[i * EF + eIdxTo] / NF
+
+  // 1) iterative DFS from root → postorder. Iterative (explicit stack + a
+  // per-node resume cursor) because a multi-million-node graph would blow the
+  // call stack with recursion. `post[node]` is the postorder index; `order` is
+  // its inverse (postorder index → node).
+  const ROOT = 0
+  const post = new Int32Array(N).fill(-1)
+  const order = new Int32Array(N)
+  let postN = 0
+  {
+    const stack = [ROOT]
+    const iter = new Uint32Array(N) // resume edge index per node
+    const seen = new Uint8Array(N)
+    seen[ROOT] = 1
+    while (stack.length) {
+      const node = stack[stack.length - 1]
+      const base = firstEdge[node]
+      const cnt = outCount(node)
+      let pushed = false
+      while (iter[node] < cnt) {
+        const c = edgeTo(base + iter[node])
+        iter[node]++
+        if (!seen[c]) {
+          seen[c] = 1
+          stack.push(c)
+          pushed = true
+          break
+        }
+      }
+      if (!pushed) {
+        post[node] = postN
+        order[postN] = node
+        postN++
+        stack.pop()
+      }
+    }
+  }
+  const reachable = postN
+
+  // 2) predecessors as a reverse CSR (inOff offsets + preds source-node array).
+  // Built over ALL nodes; unreachable preds are simply skipped in step 3.
+  const inOff = new Uint32Array(N + 1)
+  for (let from = 0; from < N; from++) {
+    const b = firstEdge[from]
+    const c = outCount(from)
+    for (let e = 0; e < c; e++) inOff[edgeTo(b + e) + 1]++
+  }
+  for (let k = 0; k < N; k++) inOff[k + 1] += inOff[k]
+  const preds = new Uint32Array(inOff[N])
+  {
+    const cur = inOff.slice()
+    for (let from = 0; from < N; from++) {
+      const b = firstEdge[from]
+      const c = outCount(from)
+      for (let e = 0; e < c; e++) preds[cur[edgeTo(b + e)]++] = from
+    }
+  }
+
+  // 3) Cooper-Harvey-Kennedy iterative dominators. intersect() walks two nodes up
+  // the partially-built idom tree by postorder number until they meet — that meet
+  // is their nearest common dominator. We sweep nodes in reverse postorder (root
+  // highest) until no idom changes; real heap graphs settle in a handful of passes.
+  const idom = new Int32Array(N).fill(-1)
+  idom[ROOT] = ROOT
+  const intersect = (a, b) => {
+    while (a !== b) {
+      while (post[a] < post[b]) a = idom[a]
+      while (post[b] < post[a]) b = idom[b]
+    }
+    return a
+  }
+  let changed = true
+  let passes = 0
+  while (changed) {
+    changed = false
+    passes++
+    for (let i = reachable - 1; i >= 0; i--) {
+      const b = order[i]
+      if (b === ROOT) continue
+      let newIdom = -1
+      for (let p = inOff[b]; p < inOff[b + 1]; p++) {
+        const pr = preds[p]
+        if (post[pr] === -1) continue // unreachable pred
+        if (idom[pr] === -1) continue // not processed yet this round
+        newIdom = newIdom === -1 ? pr : intersect(pr, newIdom)
+      }
+      if (newIdom !== -1 && idom[b] !== newIdom) {
+        idom[b] = newIdom
+        changed = true
+      }
+    }
+  }
+
+  // 4) retained size. Seed with self_size, then roll each node UP to its idom in
+  // postorder so every subtree is fully summed before its dominator absorbs it.
+  // Float64 because a 263 MB subtree summed in bytes exceeds a Uint32.
+  const retained = new Float64Array(N)
+  for (let k = 0; k < N; k++) retained[k] = selfSize(k)
+  for (let i = 0; i < reachable; i++) {
+    const n = order[i]
+    if (n !== ROOT && idom[n] !== -1) retained[idom[n]] += retained[n]
+  }
+
+  // 5a) top individual retainers, named. Threshold at 1 MB retained so the list
+  // is the actual heavyweights, not thousands of tiny leaves.
+  let totalSelf = 0
+  for (let k = 0; k < N; k++) totalSelf += selfSize(k)
+  const ranked = []
+  for (let k = 0; k < N; k++) if (retained[k] > 1024 * 1024) ranked.push(k)
+  ranked.sort((a, b) => retained[b] - retained[a])
+
+  // eslint-disable-next-line no-console
+  console.log(
+    `nodes=${N.toLocaleString()}  reachable=${reachable.toLocaleString()}  idom passes=${passes}`,
+  )
+  // eslint-disable-next-line no-console
+  console.log(`total self_size=${fmtBytes(totalSelf)}  root retained=${fmtBytes(retained[ROOT])}`)
+  // eslint-disable-next-line no-console
+  console.log(`\nTOP INDIVIDUAL RETAINERS (retained = freed if this node is removed) — top ${top}:`)
+  for (const k of ranked.slice(0, top)) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `  ${pad(fmtBytes(retained[k]), 11)} ${pct(retained[k], totalSelf).padStart(6)}  ${ty(k)}:${
+        nm(k) || '(anon)'
+      }  [self ${fmtBytes(selfSize(k))}, node ${k}]`,
+    )
+  }
+
+  // 5b) retained aggregated by OWNER name (constructor for objects, the closure
+  // name, or the synthetic root group). We exclude the structural Object/Array
+  // buckets — they are the generic containers a leak flows THROUGH, not the named
+  // owner you act on. Summing per-instance retained double-counts nested
+  // same-class instances, but for naming "which class owns the heap" that is
+  // exactly what you want: it is how SubAgentWatcher's ×7 instances summed to the
+  // 263 MB / 88% headline.
+  const byName = new Map()
+  for (let k = 0; k < N; k++) {
+    const t = ty(k)
+    if (t !== 'object' && t !== 'closure' && t !== 'synthetic') continue
+    const name = nm(k) || (t === 'closure' ? '(closure)' : '(anon)')
+    if (name === 'Object' || name === 'Array') continue
+    const e = byName.get(name) || { ret: 0, cnt: 0 }
+    e.ret += retained[k]
+    e.cnt++
+    byName.set(name, e)
+  }
+  // eslint-disable-next-line no-console
+  console.log(
+    `\nRETAINED by CONSTRUCTOR/owner name (sum over instances; nested same-name may double-count) — top ${top}:`,
+  )
+  const sortedByName = [...byName.entries()].sort((a, b) => b[1].ret - a[1].ret)
+  for (const [name, e] of sortedByName.slice(0, top)) {
+    // eslint-disable-next-line no-console
+    console.log(
+      `  ${pad(fmtBytes(e.ret), 11)} ${pct(e.ret, totalSelf).padStart(6)}  x${pad(
+        String(e.cnt),
+        6,
+      )}  ${name}`,
+    )
   }
 }
 

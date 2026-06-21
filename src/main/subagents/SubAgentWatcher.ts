@@ -17,6 +17,126 @@ import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js
 const POLL_MS = 600
 const MAX_RETAINED_ENTRIES_PER_AGENT = 500
 
+// #288 (root cause): cap the BYTE SIZE of every retained free-text field, not
+// just the entry COUNT.
+//
+// A dominator-tree heap analysis (scripts/analyze-heapsnapshot.mjs --owners)
+// proved that 7 live SubAgentWatcher instances retained 263 MB — 88% of the
+// entire reachable main-process heap — via the chain
+//   SubAgentWatcher.entriesByAgent (Map<agentId, RawEntry[]>)
+//     → entry → message.content → huge string.
+// PR #300 capped MAX_RETAINED_ENTRIES_PER_AGENT=500 but did NOT bound the bytes
+// per entry, so each of those 500 retained entries still pinned its FULL body:
+// Read tool outputs, tool_result bodies, the skills-list attachment, and
+// `[Truncated: PARTIAL view]` system-reminders. 500 entries × multi-MB bodies ×
+// several agents × 7 watchers = 263 MB, and churning those multi-MB strings on
+// every 600 ms poll fragments V8 into ~1.5 GB RSS.
+//
+// The mini-feed this watcher feeds is a LIVENESS affordance, not a transcript
+// archive. buildSubAgentState only reads structure (block types, tool names,
+// tool_use_id, is_error, timestamps) plus an ≤80-char headline per tool call —
+// it never renders a full body. So truncating the large free-text payloads at
+// retention to a cap well above what the renderer shows is invisible to the
+// user while removing the bytes that caused the leak. The durable full
+// transcript always stays on disk in the agent-<id>.jsonl, which is the source
+// of truth if a future UI wants deep drill-in.
+//
+// 8 KB is generous: it is ~100× the 80-char headline buildSubAgentState renders
+// from any single field, so no rendered value can ever be clipped by this cap,
+// yet it turns a multi-MB Read result into a few KB. We truncate per-field
+// (not per-entry) so an entry with several blocks each keeps its own budget.
+const MAX_ENTRY_FIELD_BYTES = 8 * 1024
+
+// truncateEntryBodies: clamp the large free-text string fields of a freshly
+// parsed RawEntry in place, PRESERVING every structural field buildSubAgentState
+// reads (entry `type`/`uuid`, `message.role`/`type`, each block's `type`, tool
+// `name`/`id`/`tool_use_id`, `is_error`/status, timestamps). We only shrink the
+// payloads that carry the megabytes:
+//   - text blocks' `text`
+//   - tool_result blocks' `content`/`output` (string OR array-of-{text} shape)
+//   - large string values inside a tool_use `input`
+//   - a skills/system attachment's `content`
+// Each clamp appends an honest marker so a future reader of the in-memory entry
+// knows bytes were dropped and where the full body lives. This runs once per
+// appended line at the single parse/push site below — never on a hot render
+// path — so the cost is bounded by new bytes, matching the watcher's invariant.
+function clampString(value: string, cap: number): string {
+  if (value.length <= cap) return value
+  const dropped = value.length - cap
+  return value.slice(0, cap) + `… [truncated ${dropped} bytes — full body on disk]`
+}
+
+function clampResultContent(content: unknown, cap: number): unknown {
+  // tool_result `content` is either a plain string or an array of blocks like
+  // { type: 'text', text: '…' }. Preserve the array shape and each block's
+  // `type`; only clamp the inner text so buildSubAgentState's block walk is
+  // unaffected.
+  if (typeof content === 'string') return clampString(content, cap)
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block && typeof block === 'object') {
+        const b = block as Record<string, unknown>
+        if (typeof b.text === 'string') b.text = clampString(b.text, cap)
+        if (typeof b.content === 'string') b.content = clampString(b.content, cap)
+      }
+    }
+  }
+  return content
+}
+
+function truncateEntryBodies(entry: unknown, cap: number): void {
+  if (!entry || typeof entry !== 'object') return
+  const e = entry as Record<string, unknown>
+  const message = e.message as Record<string, unknown> | undefined
+  const content = message?.content
+  if (!Array.isArray(content)) return
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue
+    const b = block as Record<string, unknown>
+    switch (b.type) {
+      case 'text':
+      case 'thinking':
+        if (typeof b.text === 'string') b.text = clampString(b.text, cap)
+        // Some thinking blocks carry the prose under `thinking` instead of `text`.
+        if (typeof b.thinking === 'string') b.thinking = clampString(b.thinking, cap)
+        break
+      case 'tool_result':
+        if ('content' in b) b.content = clampResultContent(b.content, cap)
+        if (typeof b.output === 'string') b.output = clampString(b.output, cap)
+        break
+      case 'tool_use': {
+        // Clamp large string values inside the tool input (e.g. a Write/Edit
+        // file body or a giant pasted blob) while keeping the input object and
+        // its keys intact — headlineFromInput reads keys like command/file_path,
+        // and it already slices to 80 chars, so clamping at 8 KB can't change it.
+        const input = b.input
+        if (input && typeof input === 'object' && !Array.isArray(input)) {
+          const obj = input as Record<string, unknown>
+          for (const k of Object.keys(obj)) {
+            const v = obj[k]
+            if (typeof v === 'string') obj[k] = clampString(v, cap)
+          }
+        }
+        break
+      }
+      default:
+        // System-reminder / skills attachments ride in as plain text blocks too,
+        // but defensively clamp any stray top-level `text`/`content` strings on
+        // an unrecognized block type so a new block shape can't reintroduce the leak.
+        if (typeof b.text === 'string') b.text = clampString(b.text, cap)
+        if (typeof b.content === 'string') b.content = clampString(b.content, cap)
+        break
+    }
+    // Skill blocks attach their (often multi-KB) skills list under
+    // attachment.content regardless of block type — clamp it wherever it appears.
+    const attachment = b.attachment
+    if (attachment && typeof attachment === 'object') {
+      const a = attachment as Record<string, unknown>
+      if (typeof a.content === 'string') a.content = clampString(a.content, cap)
+    }
+  }
+}
+
 type ParentResult = (toolUseId: string) => { done: boolean; error: boolean }
 
 type RawEntry = Parameters<typeof buildSubAgentState>[3][number]
@@ -141,6 +261,12 @@ export class SubAgentWatcher {
       if (!t) continue
       try {
         const parsed = JSON.parse(t) as RawEntry
+        // #288 (root cause): clamp the large free-text bodies BEFORE retaining,
+        // so the 263 MB the dominator tree attributed to entriesByAgent → entry
+        // → message.content → huge string can never accumulate. Done here, at the
+        // single parse/push site, the cap applies to every entry exactly once and
+        // the durable full body stays on disk. See truncateEntryBodies above.
+        truncateEntryBodies(parsed, MAX_ENTRY_FIELD_BYTES)
         // #288: intern the duplicated metadata (type, message.role/type, …)
         // before retaining. internEntryFields is defensive and never throws,
         // so a malformed entry that slipped past JSON.parse still can't take
