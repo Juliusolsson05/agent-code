@@ -83,7 +83,17 @@ const MAX_ENTRY_FIELD_BYTES = 8 * 1024
 function clampString(value: string, cap: number): string {
   if (value.length <= cap) return value
   const dropped = value.length - cap
-  return value.slice(0, cap) + `… [truncated ${dropped} chars — full body on disk]`
+  // CRITICAL (#288): `value.slice(0, cap)` returns a V8 SlicedString that RETAINS
+  // the entire parent string — so truncating with a bare slice frees ZERO memory
+  // (the multi-MB body we are trying to drop stays alive behind the slice, which
+  // is exactly why #320 reduced the heap by nothing). Proven empirically: clamping
+  // 2000×200KB strings via slice left ~194MB pinned; via the Buffer round-trip
+  // below, ~19MB. Round-tripping the prefix through a Buffer copies its bytes into
+  // fresh, parent-independent storage, so the original body becomes GC-eligible.
+  // `utf16le` preserves every JS code unit exactly (incl. lone surrogates), so the
+  // visible prefix is byte-identical to a plain slice — only the retention differs.
+  const head = Buffer.from(value.slice(0, cap), 'utf16le').toString('utf16le')
+  return head + `… [truncated ${dropped} chars — full body on disk]`
 }
 
 // clampDeep: recursively clamp every string VALUE reachable inside an arbitrary
@@ -109,100 +119,33 @@ function clampDeep(value: unknown, cap: number, depth: number): unknown {
   return obj
 }
 
-function clampResultContent(content: unknown, cap: number): unknown {
-  // tool_result `content` is either a plain string or an array of blocks like
-  // { type: 'text', text: '…' }. Preserve the array shape and each block's
-  // `type`; only clamp the inner text so buildSubAgentState's block walk is
-  // unaffected.
-  if (typeof content === 'string') return clampString(content, cap)
-  if (Array.isArray(content)) {
-    for (const block of content) {
-      if (block && typeof block === 'object') {
-        const b = block as Record<string, unknown>
-        if (typeof b.text === 'string') b.text = clampString(b.text, cap)
-        if (typeof b.content === 'string') b.content = clampString(b.content, cap)
-      }
-    }
-  }
-  return content
-}
+// Deepest nesting we recurse when clamping an entry. The big bodies sit shallow
+// (`entry.toolUseResult.file.content` ≈ depth 3; `message.content[i].content[j]
+// .text` ≈ depth 6); 12 is generous headroom while still bounding the walk so a
+// pathological object can't blow the stack or burn the per-line budget.
+const ENTRY_CLAMP_DEPTH = 12
 
 function truncateEntryBodies(entry: unknown, cap: number): void {
-  if (!entry || typeof entry !== 'object') return
-  const e = entry as Record<string, unknown>
-
-  // FIX 2 (CRITICAL) — top-level attachment/content shapes that carry NO
-  // `message` field. The `skill_listing` attachment lives here: the entry is
-  // `{ type: 'attachment', attachment: { type: 'skill_listing', content: '<huge>' } }`
-  // with the skills list as a top-level string. The same entries can also surface
-  // a bare top-level `content` string. These never reached the per-block walk
-  // below (it early-returned when `message.content` wasn't an array), so the
-  // ×803 skills-list bytes stayed pinned. Clamp them at the entry root, always,
-  // regardless of whether a `message` exists.
-  const topAttachment = e.attachment
-  if (topAttachment && typeof topAttachment === 'object' && !Array.isArray(topAttachment)) {
-    const a = topAttachment as Record<string, unknown>
-    if (typeof a.content === 'string') a.content = clampString(a.content, cap)
-  }
-  if (typeof e.content === 'string') e.content = clampString(e.content, cap)
-
-  const message = e.message as Record<string, unknown> | undefined
-  const content = message?.content
-
-  // FIX 1 — string-shaped `message.content`. Claude transcripts allow the
-  // message body to be a plain string (large pasted user prompts, compact/user
-  // string messages, string system reminders), not only an array of blocks. The
-  // old `if (!Array.isArray) return` dropped every such body full-size into the
-  // pinned set. Clamp the string here, then fall through to the array walk only
-  // when content actually is an array.
-  if (typeof content === 'string') {
-    message!.content = clampString(content, cap)
-    return
-  }
-  if (!Array.isArray(content)) return
-  for (const block of content) {
-    if (!block || typeof block !== 'object') continue
-    const b = block as Record<string, unknown>
-    switch (b.type) {
-      case 'text':
-      case 'thinking':
-        if (typeof b.text === 'string') b.text = clampString(b.text, cap)
-        // Some thinking blocks carry the prose under `thinking` instead of `text`.
-        if (typeof b.thinking === 'string') b.thinking = clampString(b.thinking, cap)
-        break
-      case 'tool_result':
-        if ('content' in b) b.content = clampResultContent(b.content, cap)
-        if (typeof b.output === 'string') b.output = clampString(b.output, cap)
-        break
-      case 'tool_use': {
-        // FIX 3 — clamp string values inside the tool input RECURSIVELY (e.g. a
-        // Write/Edit file body, a giant pasted blob, or MultiEdit's nested
-        // `edits[].old_string`/`new_string`) while keeping the input object, its
-        // keys, and array order intact — headlineFromInput reads keys like
-        // command/file_path and slices to 80 chars, so clamping can't change it.
-        // The previous flat top-level-only loop missed nested text; clampDeep
-        // descends (bounded to 6 levels) so structured tool inputs don't leak.
-        if (b.input && typeof b.input === 'object') {
-          b.input = clampDeep(b.input, cap, 6)
-        }
-        break
-      }
-      default:
-        // System-reminder / skills attachments ride in as plain text blocks too,
-        // but defensively clamp any stray top-level `text`/`content` strings on
-        // an unrecognized block type so a new block shape can't reintroduce the leak.
-        if (typeof b.text === 'string') b.text = clampString(b.text, cap)
-        if (typeof b.content === 'string') b.content = clampString(b.content, cap)
-        break
-    }
-    // Skill blocks attach their (often multi-KB) skills list under
-    // attachment.content regardless of block type — clamp it wherever it appears.
-    const attachment = b.attachment
-    if (attachment && typeof attachment === 'object') {
-      const a = attachment as Record<string, unknown>
-      if (typeof a.content === 'string') a.content = clampString(a.content, cap)
-    }
-  }
+  // #288 (fix for the #320 miss): clamp EVERY large free-text string ANYWHERE in
+  // the entry by recursing the whole object — not a hand-maintained list of fields.
+  //
+  // WHY the previous field-by-field walk was wrong: it only visited
+  // `message.content` / `attachment` / bare `content`, but Claude writes the FULL
+  // Read/tool output to the TOP-LEVEL `toolUseResult` field
+  // (`toolUseResult.file.content`, `stdout`, `stderr`) — *in addition* to the
+  // tool_result block. The dominator tree's bytes actually lived in
+  // `toolUseResult`, which the targeted walk never touched, so retained entries
+  // stayed full-size and #320 freed almost nothing. A recursive clamp catches
+  // toolUseResult, message.content (string OR array), attachments, tool_use input,
+  // and any future shape — no more whack-a-mole.
+  //
+  // WHY it's safe / invisible: `clampString` is a no-op for strings under `cap`,
+  // so short structural fields (type/uuid/role/name/id/tool_use_id/timestamps) are
+  // returned untouched; only multi-KB bodies are clamped. `buildSubAgentState`
+  // only ever renders ≤80-char headlines, so clamping at `cap` (8 KB) can never
+  // change a rendered value. `clampDeep` rewrites string VALUES in place and
+  // preserves all keys and array order. Durable full bodies stay on disk.
+  clampDeep(entry, cap, ENTRY_CLAMP_DEPTH)
 }
 
 type ParentResult = (toolUseId: string) => { done: boolean; error: boolean }
