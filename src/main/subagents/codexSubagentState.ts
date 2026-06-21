@@ -6,6 +6,27 @@ import { asRecord } from '@shared/lib/asRecord.js'
 const CODEX_SUBAGENT_NOTIFICATION_OPEN = '<subagent_notification>'
 const CODEX_SUBAGENT_NOTIFICATION_CLOSE = '</subagent_notification>'
 
+// Match SubAgentWatcher's cap name/value (PR #300) on purpose: this is the
+// Codex twin of the Claude subagent retention leak that #300 fixed. Keeping the
+// constant identical means a future reader who knows one watcher's bound knows
+// the other's, and a single value to tune covers both providers.
+//
+// REVIEW NOTE (PR #317): the original #288 fix tail-sliced the RETAINED entries
+// to this many and then fed that capped slice straight into the emit path. Both
+// reviewers (Claude + Codex) caught that this corrupts every value derived from
+// the HEAD of the rollout: `childMetaFromEntries` finds session_meta at the
+// front (so role/nickname/parentThreadId and the startedAt anchor vanish once
+// the head is dropped), `startedAt` jumps forward to the oldest *surviving*
+// entry, and `turnCount` / tool-call counts undercount because earlier turns are
+// gone. The fix below SPLITS the responsibility: the SubAgentState that emit()
+// ships is derived from the FULL, uncapped read and stored in
+// childStateByAgentId (correct values, head intact); childEntriesByAgentId keeps
+// only a bounded TAIL of raw entries, retained purely as a memory bound for a
+// future live mini-feed display and never fed back into the derived values. The
+// derivation now happens against the whole file, so the cap can no longer
+// corrupt startedAt/turnCount/childMeta/tool counts. See `readKnownChildren`.
+const MAX_RETAINED_ENTRIES_PER_AGENT = 500
+
 // Codex child sessions do not use Claude's `<parent>/subagents/agent-*.jsonl`
 // layout. They are normal rollout files whose session_meta.source says they
 // were spawned by a parent thread, while the parent thread only learns the child
@@ -387,7 +408,21 @@ export class CodexSubAgentTracker {
   private readonly callIdByAgentId = new Map<string, string>()
   private readonly notificationsByAgentId = new Map<string, Notification>()
   private readonly childPathByAgentId = new Map<string, string>()
+  // Bounded TAIL of raw entries per agent. Retained ONLY as a memory-capped
+  // buffer for a future live mini-feed display; it must never be the source for
+  // any derived SubAgentState value (see MAX_RETAINED_ENTRIES_PER_AGENT note).
   private readonly childEntriesByAgentId = new Map<string, CodexRolloutEntry[]>()
+  // Derived SubAgentState computed from the FULL uncapped read (PR #317). emit()
+  // reads from here so startedAt/turnCount/childMeta/tool counts stay correct
+  // even after a child exceeds MAX_RETAINED_ENTRIES_PER_AGENT and its retained
+  // entries are tail-capped.
+  private readonly childStateByAgentId = new Map<string, SubAgentState>()
+  // Uncapped source entry count per agent — the dirty signal. We cannot compare
+  // childEntriesByAgentId.length anymore: once a child passes the cap that length
+  // pins at 500 while the file keeps growing, so a length-vs-length check would
+  // either never fire again or fire forever. Mirrors SubAgentWatcher's size/offset
+  // dirty trigger (#300): gate on the UNCAPPED count changing. See readKnownChildren.
+  private readonly childEntryCountByAgentId = new Map<string, number>()
   private timer: NodeJS.Timeout | null = null
   private parentFile: string | null = null
   private dirty = false
@@ -406,11 +441,21 @@ export class CodexSubAgentTracker {
     if (output) {
       this.outputsByCallId.set(output.callId, output)
       this.callIdByAgentId.set(output.agentId, output.callId)
+      // Correlation changed for this agent → the cached derived state is stale
+      // (description/agentType depend on spawn+output). Invalidate the uncapped
+      // count so the next readKnownChildren re-derives from a fresh full read.
+      // Without this, the count-based dirty gate (PR #317) would skip recompute
+      // because the child's entry COUNT did not change, and emit() would ship the
+      // pre-correlation derived state.
+      this.childEntryCountByAgentId.delete(output.agentId)
       this.dirty = true
     }
     const notification = extractCodexSubagentNotification(entry)
     if (notification) {
       this.notificationsByAgentId.set(notification.agentId, notification)
+      // Same staleness reason as output above: notification.status drives the
+      // derived `status` field. Force a re-derive on the next read.
+      this.childEntryCountByAgentId.delete(notification.agentId)
       this.dirty = true
     }
     if (!this.timer) {
@@ -426,11 +471,33 @@ export class CodexSubAgentTracker {
     this.stopped = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
+    // Mirror SubAgentWatcher.stop() (PR #300): clearing the timer alone left
+    // every retained child rollout entry — plus the spawn/output/notification
+    // correlation maps — pinned in main-process heap for the lifetime of the
+    // process even though a stopped tracker can never emit again. A stopped
+    // session must release its memory; the durable source stays the on-disk
+    // rollout if the tracker is ever re-created for the same parent.
+    this.spawnsByCallId.clear()
+    this.outputsByCallId.clear()
+    this.callIdByAgentId.clear()
+    this.notificationsByAgentId.clear()
+    this.childPathByAgentId.clear()
+    this.childEntriesByAgentId.clear()
+    this.childStateByAgentId.clear()
+    this.childEntryCountByAgentId.clear()
   }
 
   async refresh(): Promise<void> {
     if (this.stopped || !this.parentFile) return
     await this.readKnownChildren()
+    // POST-AWAIT stop guard (PR #317, race fix). The pre-await check above only
+    // proves we were not stopped when refresh() started. readKnownChildren()
+    // awaits file IO, and stop() can run during that window — clearing every map
+    // and the timer. Without this guard a refresh already in flight would sail
+    // past stop(), repopulate state via readKnownChildren()'s writes, and emit()
+    // a payload for a session the rest of the system believes is dead. Re-check
+    // after every await so a stopped tracker can never repopulate or emit.
+    if (this.stopped) return
     if (!this.dirty) return
     this.dirty = false
     this.emit()
@@ -449,31 +516,87 @@ export class CodexSubAgentTracker {
     const root = this.parentFile ? sessionsRootFromRolloutPath(this.parentFile) : null
     if (!root) return
     for (const agentId of this.knownAgentIds()) {
+      // Per-iteration stop guard (PR #317). This loop awaits IO between every
+      // child; stop() can land mid-loop and clear the maps. Bail immediately so
+      // we never write derived state back into a tracker that has been torn down.
+      if (this.stopped) return
       let path = this.childPathByAgentId.get(agentId) ?? null
       if (!path) {
         path = await findFileContaining(root, agentId)
+        if (this.stopped) return
         if (path) this.childPathByAgentId.set(agentId, path)
       }
       if (!path) continue
       const entries = await readRolloutEntries(path)
-      const previous = this.childEntriesByAgentId.get(agentId)
-      if (!previous || previous.length !== entries.length) {
-        this.childEntriesByAgentId.set(agentId, entries)
-        this.dirty = true
-      }
+      if (this.stopped) return
+
+      // DIRTY on the UNCAPPED source count, not on the retained array length
+      // (PR #317, over-emit fix). The old check compared the stored CAPPED array
+      // (≤500) against the fresh uncapped read (501+). Once a child crossed the
+      // cap the stored length pinned at 500 forever, so `previousLength !==
+      // entries.length` stayed true on EVERY ~1.2s tick and re-emitted IPC even
+      // when the file had not changed. Tracking the uncapped count separately —
+      // the analogue of SubAgentWatcher's byte-offset dirty trigger (#300) —
+      // makes "nothing changed" detectable again: a quiescent child stops being
+      // dirty the moment its entry count stops growing.
+      const previousCount = this.childEntryCountByAgentId.get(agentId)
+      if (previousCount === entries.length) continue
+
+      // (a) Derived state — computed from the FULL, uncapped read so every
+      // head-anchored value (childMeta, startedAt, turnCount, tool counts) is
+      // correct. This is what emit() ships.
+      this.childStateByAgentId.set(
+        agentId,
+        buildCodexSubAgentState({
+          toolUseId: this.callIdByAgentId.get(agentId) ?? agentId,
+          agentId,
+          spawn: this.spawnsByCallId.get(this.callIdByAgentId.get(agentId) ?? '') ?? null,
+          output: this.outputsByCallId.get(this.callIdByAgentId.get(agentId) ?? '') ?? null,
+          notification: this.notificationsByAgentId.get(agentId) ?? null,
+          childEntries: entries,
+        }),
+      )
+
+      // (b) Bounded TAIL of raw entries — retained ONLY as a memory cap for a
+      // future live mini-feed display. `readRolloutEntries` re-reads the whole
+      // child rollout every tick, so without a cap a long-running child grows
+      // this map without limit and duplicates large tool-result strings in
+      // main-process heap. Retain the TAIL (most recent) because that is where
+      // current activity, completion events, and recent tool context live; the
+      // durable full transcript stays on disk in the rollout file. Nothing on
+      // the emit path reads this — derived values come from (a).
+      //
+      // NOTE: unlike Claude's append-only offset tail (#300), this still reads
+      // the entire file each tick. An offset/incremental read would also cut
+      // read amplification, but it is a larger change against these helpers; the
+      // tail-cap plus full-read derivation is the safe, correct bound for now.
+      const bounded =
+        entries.length > MAX_RETAINED_ENTRIES_PER_AGENT
+          ? entries.slice(entries.length - MAX_RETAINED_ENTRIES_PER_AGENT)
+          : entries
+      this.childEntriesByAgentId.set(agentId, bounded)
+      this.childEntryCountByAgentId.set(agentId, entries.length)
+      this.dirty = true
     }
   }
 
   private emit(): void {
     const out: Record<string, SubAgentState> = {}
     for (const [agentId, callId] of this.callIdByAgentId) {
-      out[callId] = buildCodexSubAgentState({
+      // Prefer the state derived from the FULL read in readKnownChildren (PR
+      // #317). It is correct precisely because it was computed before any cap.
+      // Fall back to deriving from empty entries only when the child file has not
+      // been read yet (e.g. spawn_output just arrived but readKnownChildren has
+      // not located/read the rollout) — this yields the spawn/output-only header
+      // the old code would have produced for an unread child, never a capped slice.
+      const derived = this.childStateByAgentId.get(agentId)
+      out[callId] = derived ?? buildCodexSubAgentState({
         toolUseId: callId,
         agentId,
         spawn: this.spawnsByCallId.get(callId) ?? null,
         output: this.outputsByCallId.get(callId) ?? null,
         notification: this.notificationsByAgentId.get(agentId) ?? null,
-        childEntries: this.childEntriesByAgentId.get(agentId) ?? [],
+        childEntries: [],
       })
     }
     this.onChange(out)
