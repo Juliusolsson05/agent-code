@@ -1,18 +1,20 @@
-export type ConditionPtyAction = {
-  kind: 'pty'
-  id: string
-  label: string
-  data: string
-}
+// The generic wire ACTION primitives now live in conditions-core/contract.ts
+// (the provider-agnostic source of truth for the registry framework). We
+// import them here so the provider condition unions below can keep referencing
+// `ConditionAction`, AND re-export them so every existing import of these names
+// from '@shared/types/providerConditions' keeps working byte-for-byte — this
+// file remains the home of the provider-SPECIFIC state shapes + condition
+// unions below. A bare `export type { … } from` would NOT bind these names into
+// this module's local scope, so the unions below (which use `ConditionAction`)
+// would fail to resolve; importing first is what keeps them visible here.
+// See docs/design/conditions-system.md.
+import type {
+  ConditionPtyAction,
+  ConditionCustomAction,
+  ConditionAction,
+} from '@shared/conditions-core/contract'
 
-export type ConditionCustomAction = {
-  kind: 'custom'
-  id: string
-  label: string
-  name: string
-}
-
-export type ConditionAction = ConditionPtyAction | ConditionCustomAction
+export type { ConditionPtyAction, ConditionCustomAction, ConditionAction }
 
 export type ClaudeTrustDialogState = {
   visible: boolean
