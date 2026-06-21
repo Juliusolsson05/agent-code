@@ -6,12 +6,28 @@ export function shouldClearIdleCodexQueuedMessages({
   provider,
   queuedMessagesLength,
   streamPhase,
+  providerReportsPendingQueue = false,
 }: {
   awaitingAssistant: boolean
   processActive: boolean
   provider: string | undefined
   queuedMessagesLength: number
   streamPhase: StreamPhase
+  // WHY this param exists (and defaults false): this predicate is the
+  // authority that lets the lifecycle reconciler DELETE a local queued
+  // prompt row once Codex looks idle. The whole reason it is safe to do
+  // that is the absence of any provider-owned queue authority for Codex —
+  // Codex queue rows are local UI placeholders, not durable provider
+  // records (unlike Claude's `queue-operation` transcript records). If a
+  // future Codex protocol ever surfaces a real "you still have N prompts
+  // queued server-side" signal, clearing on idle would silently drop work
+  // the provider still intends to run. This flag is the documented hook
+  // for that case: when the provider reports a pending queue, we must NOT
+  // clear, no matter how idle the local lifecycle looks. Today Codex emits
+  // no such signal, so every caller passes the default (false). The
+  // `provider === 'codex'` clause below keeps this entire mechanism
+  // Codex-scoped; Claude's provider-owned queue is never touched here.
+  providerReportsPendingQueue?: boolean
 }): boolean {
   // WHY this invariant is Codex-only:
   // Claude has explicit `queue-operation` transcript records, so a
@@ -29,6 +45,7 @@ export function shouldClearIdleCodexQueuedMessages({
     queuedMessagesLength > 0 &&
     !processActive &&
     streamPhase === 'idle' &&
-    !awaitingAssistant
+    !awaitingAssistant &&
+    !providerReportsPendingQueue
   )
 }
