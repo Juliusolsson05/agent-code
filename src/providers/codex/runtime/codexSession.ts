@@ -110,6 +110,10 @@ export type CodexScreenSnapshot = {
   recent: string
   recentMarkdown: string
   picker: SlashPickerState
+  // Always null for Codex (no AskUserQuestion tool). Declared for shape
+  // parity with ClaudeSession's ScreenSnapshot, which sessionManager's
+  // `screen` event is typed against.
+  askUserQuestion: null
 }
 
 export type CodexSessionEvents = {
@@ -309,6 +313,10 @@ export class CodexSession extends EventEmitter {
         // Codex doesn't have a slash picker yet — static "not visible"
         // so the renderer's picker component stays hidden.
         picker: { visible: false, items: [] },
+        // Codex has no AskUserQuestion tool — always null so the shared
+        // ScreenSnapshot shape is satisfied and the renderer's native
+        // picker row never mounts for codex panes.
+        askUserQuestion: null,
       })
     })
 

@@ -3,6 +3,7 @@ import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import type { SlashPickerState } from '@preload/index.js'
+import type { AskUserQuestionState } from 'claude-code-headless'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { getToolPath } from '@main/setup/toolchain.js'
@@ -60,6 +61,14 @@ export type ScreenSnapshot = {
   recent: string
   recentMarkdown: string
   picker: SlashPickerState
+  // Live AskUserQuestion picker state, or null when no picker is on screen.
+  // Carried on the screen snapshot — NOT a separate event — for the exact
+  // same reason `picker` is: it's the authoritative live truth the renderer
+  // needs on every frame, and riding the existing screen channel reuses the
+  // already-wired transport instead of inventing a new one. Its NULL value
+  // is load-bearing: a null tells the renderer the picker left the screen,
+  // which is what dismisses the (otherwise-ghosting) native picker row.
+  askUserQuestion: AskUserQuestionState | null
 }
 
 export type ClaudeSessionEvents = {
@@ -115,6 +124,11 @@ export class ClaudeSession extends EventEmitter {
   // captures `this.headless` and delays GC of the session object.
   private proxyEventHandler: ((ev: unknown) => void) | null = null
   private picker: SlashPickerState = { visible: false, items: [] }
+  // Latest AskUserQuestion picker state (null = no picker). Mirrors how
+  // `this.picker` shadows the slash-picker so the `screen` snapshot can
+  // always attach the current value even on a frame that didn't itself
+  // carry a transition.
+  private askUserQuestion: AskUserQuestionState | null = null
   private exited = false
   /** Gate for the committed `tool_result` bridge. False until the
    *  JSONL tailer's initial replay has quiesced (250 ms without a new
@@ -423,6 +437,14 @@ export class ClaudeSession extends EventEmitter {
       this.picker = picker
     })
 
+    // Shadow the AskUserQuestion state exactly like the slash picker so the
+    // screen emit below can always read the current value. The headless
+    // getter is the primary source; this shadow is the fallback for the
+    // (theoretical) window before the first transition event lands.
+    this.headless.on('ask-user-question', state => {
+      this.askUserQuestion = state
+    })
+
     this.headless.on('screen', snap => {
       this.emit('screen', {
         plain: snap.plain,
@@ -430,6 +452,8 @@ export class ClaudeSession extends EventEmitter {
         recent: snap.recent,
         recentMarkdown: snap.recentMarkdown,
         picker: this.headless?.getSlashPickerState() ?? this.picker,
+        askUserQuestion:
+          this.headless?.getAskUserQuestionState() ?? this.askUserQuestion,
       })
     })
 

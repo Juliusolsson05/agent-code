@@ -1,4 +1,4 @@
-import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+import type { ProviderConditionSnapshot, ClaudeAskUserQuestionState } from '@shared/types/providerConditions.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
@@ -95,6 +95,13 @@ export type ScreenSnapshot = {
   /** Markdown counterpart of `recent`. */
   recentMarkdown: string
   picker: SlashPickerState
+  /** Live AskUserQuestion picker state, or null when no picker is on
+   *  screen. Rides the screen snapshot exactly like `picker` (see the
+   *  claudeSession ScreenSnapshot note). The renderer uses its PRESENCE as
+   *  the "AskUserQuestion picker is live right now" signal that gates the
+   *  native picker row — a null (picker gone) dismisses the row, fixing the
+   *  stale/ghost render. */
+  askUserQuestion: ClaudeAskUserQuestionState | null
 }
 
 export type SessionKind = 'claude' | 'codex' | 'terminal'

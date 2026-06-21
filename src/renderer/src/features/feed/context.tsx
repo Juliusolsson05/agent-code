@@ -7,6 +7,7 @@ import type {
 
 import type { AgentProvider } from '@renderer/features/feed/types'
 import type { SubAgentState } from '@renderer/workspace/workspaceState'
+import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
 // ---------------------------------------------------------------------------
 // Feed contexts.
@@ -67,6 +68,25 @@ export const CodeRenderContext = createContext<{
   sessionId: '',
   workspaceRoot: null,
 })
+
+// Live AskUserQuestion picker state for THIS session, or null when no
+// picker is on screen. Provided by Feed (which has the runtime) and read by
+// AskUserQuestionRow, which only sees its own block and needs the
+// session-wide "is the picker live right now?" signal that lives on the
+// runtime one level up — the same side-channel pattern as SubAgentsContext
+// below and the ToolResult/ToolUse index contexts above.
+//
+// WHY this is the gate for the stale-render fix: an unanswered
+// AskUserQuestion tool_use block stays unresolved (`!resultAt`) in the
+// transcript forever if the user interrupts or moves on. The block alone
+// can't tell whether the picker is still on screen, so without this signal
+// the row would ghost-render many messages later. A NON-NULL value here
+// means CC is drawing the picker right now; a null means it's gone and the
+// row must not render. Only one AskUserQuestion picker is ever on screen at
+// a time, so this single live state corresponds to the current unresolved
+// AskUserQuestion block.
+export const AskUserQuestionLiveContext =
+  createContext<ClaudeAskUserQuestionState | null>(null)
 
 // Subagent fleet state for this session, keyed by parent `Agent` tool_use id.
 // The `Agent` tool_use row (and the "Spawned N agents" group header) read this

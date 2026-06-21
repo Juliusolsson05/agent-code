@@ -1,5 +1,6 @@
 import type { SessionId, TileNode } from '@renderer/workspace/types'
 import type { SlashPickerState, TileTabsState } from '@renderer/workspace/workspaceState'
+import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
 // Layout & picker utilities for the workspace store.
 //
@@ -87,6 +88,37 @@ export function pickerEqual(
     const x = a.items[i]
     const y = b.items[i]
     if (x.id !== y.id || x.selected !== y.selected) return false
+  }
+  return true
+}
+
+/** Structural equality for the live AskUserQuestion state, used by the
+ *  screen IPC handler's no-op bail (screen frames fire ~60Hz; without a
+ *  cheap equality check every idle frame would churn `runtimes` state).
+ *
+ *  The transition that MATTERS most for the stale-render fix is
+ *  presence↔absence (null ↔ non-null) — that's the edge that mounts or
+ *  dismisses the picker row — so we check that first. We then compare the
+ *  cursor/toggle fields so the LATER answering PR (which reads them live)
+ *  gets fresh state without needing to touch this function. Options are
+ *  compared by number+toggled (label changes don't happen mid-picker). */
+export function askUserQuestionEqual(
+  a: ClaudeAskUserQuestionState | null,
+  b: ClaudeAskUserQuestionState | null,
+): boolean {
+  if (a === b) return true
+  if (!a || !b) return false // presence differs — the load-bearing edge
+  if (a.mode !== b.mode) return false
+  if (a.cursorNumber !== b.cursorNumber) return false
+  if (a.submitFocused !== b.submitFocused) return false
+  if (a.options.length !== b.options.length) return false
+  for (let i = 0; i < a.options.length; i++) {
+    if (
+      a.options[i].number !== b.options[i].number ||
+      a.options[i].toggled !== b.options[i].toggled
+    ) {
+      return false
+    }
   }
   return true
 }

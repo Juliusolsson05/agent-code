@@ -861,10 +861,70 @@ export function foldSemanticEvent(
     case 'turn_stopped': {
       if (!currentTurn) break
       if (eventTargetsDifferentTurn(ev, currentTurn)) break
+
+      // Belt-and-suspenders for the AskUserQuestion ghost-render (#289
+      // PR-2a). The PRIMARY fix is the live screen-condition gate in
+      // BlockRow — when the picker leaves the screen the row stops
+      // rendering. This is the SECONDARY guard for the case where that
+      // signal is somehow missed (condition never fired, or the picker was
+      // never on a screen we parsed): when the turn STOPS/ABORTS, an
+      // unresolved AskUserQuestion tool_use can never resolve normally
+      // (there will be no tool_result — the turn is over), so we stamp a
+      // benign `resultAt` on it here. That flips `!block.resultAt` to false
+      // and BlockRow routes the (now-resolved) block to the plain tool row
+      // instead of the picker, so it can't linger.
+      //
+      // WHY scoped to AskUserQuestion only, not every pending tool_use:
+      //   A non-AskUserQuestion tool can legitimately resolve via a
+      //   tool_result that arrives AFTER turn_stopped in some abort/retry
+      //   orderings; blanket-stamping every pending block here would race
+      //   that and mark a still-running tool as done. AskUserQuestion is the
+      //   one tool whose "pending" state IS a blocking on-screen picker, so
+      //   it's the only one that ghosts — scope the fix to it and leave
+      //   normal tool resolution untouched.
+      let stoppedBlocks = currentTurn.blocks
+      let stampedAny = false
+      for (const [key, block] of Object.entries(currentTurn.blocks)) {
+        if (
+          block.kind === 'tool_use' &&
+          block.toolName === 'AskUserQuestion' &&
+          block.resultAt == null
+        ) {
+          if (!stampedAny) {
+            // Copy-on-first-write so the common (nothing-to-stamp) path
+            // doesn't allocate a new blocks object.
+            stoppedBlocks = { ...currentTurn.blocks }
+            stampedAny = true
+          }
+          stoppedBlocks[Number(key)] = {
+            ...block,
+            // Benign synthetic result: the question was abandoned when the
+            // turn stopped. Not an error — the user simply didn't answer.
+            resultContent: block.resultContent ?? '(question dismissed — turn stopped)',
+            resultIsError: false,
+            resultAt: now,
+          }
+        }
+      }
+
       currentTurn = {
         ...currentTurn,
+        blocks: stoppedBlocks,
         stopReason: typeof ev.stopReason === 'string' ? ev.stopReason : null,
         endedAt: now,
+      }
+
+      // If we resolved a pending AskUserQuestion, re-derive so
+      // `lookups`/`task` reflect the now-resolved tool (otherwise the
+      // derived "in-progress tools" view would still list it). Cheap and
+      // only runs on the rare stamp path.
+      if (stampedAny) {
+        const derived = deriveSemanticTaskSnapshot(currentTurn.blocks)
+        currentTurn = {
+          ...currentTurn,
+          task: derived.task,
+          lookups: derived.lookups,
+        }
       }
       break
     }

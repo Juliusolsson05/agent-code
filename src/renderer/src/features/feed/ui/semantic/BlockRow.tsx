@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useContext } from 'react'
 
 import {
   CodexApplyPatchRow,
@@ -23,6 +23,7 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
 import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
+import { AskUserQuestionLiveContext } from '@renderer/features/feed/context'
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
 
 function parseJsonRecord(text: string): Record<string, unknown> | null {
@@ -197,6 +198,11 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   block: SemanticLiveTurn['blocks'][number]
   toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
 }) {
+  // Live AskUserQuestion picker state for this session (null = no picker on
+  // screen). Read unconditionally at the top so the hook order is stable;
+  // only the AskUserQuestion branch below consumes it. See the gate there.
+  const askUserQuestionLive = useContext(AskUserQuestionLiveContext)
+
   if (block.kind === 'thinking' || block.kind === 'reasoning') {
     // Live thinking — for Claude this is the ONLY time the plaintext is
     // available (`thinking` is stripped on the final message before
@@ -387,11 +393,31 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   // is a LIVE picker blocking the agent on user input; rendering it as
   // the usual "AskUserQuestion · running" tool row (with a raw-JSON
   // input dump) left the user no way to answer except via the terminal.
-  // The guard mirrors BlockRow's route-in condition exactly: once the
-  // tool_result lands and sets `resultAt`, we fall through to the normal
-  // tool_use branch so the answered question renders as a plain
-  // committed-style row instead of a stale clickable picker.
-  if (block.toolName === 'AskUserQuestion' && !block.resultAt) {
+  //
+  // TWO conditions must BOTH hold to render the picker:
+  //   1. `!block.resultAt` — the tool hasn't resolved (existing guard).
+  //      Once the tool_result lands we fall through to the normal tool_use
+  //      branch so the answered question renders as a plain committed row.
+  //   2. `askUserQuestionLive` is non-null — the picker is ACTUALLY ON
+  //      SCREEN right now (authoritative live signal from the screen
+  //      parser). This is the stale-render fix (#289 PR-2a): an
+  //      AskUserQuestion that was interrupted / answered in the terminal /
+  //      left behind when the turn moved on stays UNRESOLVED in the
+  //      transcript forever, so guard (1) alone would ghost-render the
+  //      picker many messages later. The moment CC removes the picker from
+  //      the screen the parser returns null, this context goes null, and we
+  //      fall through to the normal tool_use row instead of ghosting.
+  //
+  // Only one AskUserQuestion picker is ever on screen at a time, so a single
+  // live state corresponds to the current unresolved AskUserQuestion block;
+  // we don't need to disambiguate WHICH block the live state belongs to.
+  //
+  // NOTE (possible flicker / follow-up): the live signal can briefly go null
+  // during a CC redraw (the parser sees a transient frame without the
+  // fingerprint), which would blink the picker out and back. We keep it
+  // simple for this PR — a debounce on the null edge may be warranted and a
+  // follow-up consult is refining exactly that. Do not add it speculatively.
+  if (block.toolName === 'AskUserQuestion' && !block.resultAt && askUserQuestionLive) {
     return <AskUserQuestionRow block={block} />
   }
 

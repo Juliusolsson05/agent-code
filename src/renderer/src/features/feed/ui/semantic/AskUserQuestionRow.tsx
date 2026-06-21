@@ -72,11 +72,17 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 // can't be clicked at all); the screen-parser PR closes it fully by reading
 // the live picker state back. No code fix now — documented on purpose.
 //
-// WHY the row disappears on its own after answering:
-//   An UNRESOLVED block (`!block.resultAt`) means the picker is LIVE and
-//   awaiting the user. When the tool_result lands, `resultAt` is set and
-//   BlockRow stops routing to this component, so the row unmounts. We
-//   never hide ourselves manually — ownership is decided one level up.
+// WHY the row disappears on its own after answering / dismissal:
+//   Ownership is decided ONE LEVEL UP in BlockRow, which routes to this
+//   component only while BOTH hold: the block is unresolved (`!resultAt`)
+//   AND there is a LIVE `claude.ask-user-question` screen signal for the
+//   session (AskUserQuestionLiveContext is non-null). When the tool_result
+//   lands (`resultAt` set) OR the picker leaves the screen (interrupted /
+//   answered in the terminal / turn moved on → the screen parser returns
+//   null), BlockRow stops routing here and this row unmounts. We never hide
+//   ourselves manually. The live-signal half of that gate is the #289 PR-2a
+//   stale-render fix: before it, an interrupted unanswered AskUserQuestion
+//   ghosted forever because `!resultAt` alone never cleared.
 
 type SemanticLiveBlock = SemanticLiveTurn['blocks'][number]
 

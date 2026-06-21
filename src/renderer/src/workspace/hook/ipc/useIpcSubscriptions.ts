@@ -43,7 +43,7 @@ import {
   indexEntryIntoMaps,
   summarizeEntryForDebug,
 } from '@renderer/workspace/entries/utils'
-import { pickerEqual } from '@renderer/workspace/layout/helpers'
+import { pickerEqual, askUserQuestionEqual } from '@renderer/workspace/layout/helpers'
 import {
   gcSupersededGhosts,
   ghostsFromSemanticTurn,
@@ -510,7 +510,7 @@ export function useIpcSubscriptions(
     })
 
     const offScreen = window.api.onSessionScreen(
-      ({ sessionId, plain, markdown, recent, recentMarkdown, picker }) => {
+      ({ sessionId, plain, markdown, recent, recentMarkdown, picker, askUserQuestion }) => {
         const startedAt = performance.now()
         // latestScreenRef is the synchronous source of truth for
         // the Enter-baseline capture in TileLeaf — always update
@@ -542,7 +542,8 @@ export function useIpcSubscriptions(
             current.screenMarkdown === markdown &&
             current.recentScreen === recent &&
             current.recentScreenMarkdown === recentMarkdown &&
-            pickerEqual(current.picker, picker)
+            pickerEqual(current.picker, picker) &&
+            askUserQuestionEqual(current.askUserQuestion, askUserQuestion)
           ) {
             const durationMs = performance.now() - startedAt
             if (durationMs > 8) {
@@ -558,6 +559,8 @@ export function useIpcSubscriptions(
           if (current.recentScreen !== recent) changed.push('recent')
           if (current.screenMarkdown !== markdown) changed.push('markdown')
           if (!pickerEqual(current.picker, picker)) changed.push('picker')
+          if (!askUserQuestionEqual(current.askUserQuestion, askUserQuestion))
+            changed.push('askUserQuestion')
           // Screen frames can differ only by transient TUI chrome
           // (cursor blink, spinner tick, timestamp) while the
           // visible transcript is unchanged. We still commit the
@@ -568,7 +571,11 @@ export function useIpcSubscriptions(
             changed.every(k => k === 'screen' || k === 'recent' || k === 'markdown') &&
             changed.length > 0 &&
             recent.length === current.recentScreen.length &&
-            pickerEqual(current.picker, picker)
+            pickerEqual(current.picker, picker) &&
+            // An AskUserQuestion transition (incl. picker appearing/leaving) is
+            // never "chrome only" — it mounts/dismisses the native picker row,
+            // which must be logged like any other meaningful screen change.
+            askUserQuestionEqual(current.askUserQuestion, askUserQuestion)
 
           const nextBody = {
             ...current,
@@ -577,6 +584,7 @@ export function useIpcSubscriptions(
             recentScreen: recent,
             recentScreenMarkdown: recentMarkdown,
             picker,
+            askUserQuestion,
             // activityStatus is owned by the process-state IPC
             // handler below — it carries the provider-correct verb
             // (Claude's spinner verb, Codex's bottom-row text).

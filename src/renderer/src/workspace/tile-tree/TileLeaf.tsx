@@ -481,6 +481,10 @@ export function TileLeaf({
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
           subAgents={runtime.subAgents}
+          // Live AskUserQuestion picker state — gates the native picker row
+          // so it dismisses the instant CC removes the picker (fixes the
+          // ghost render). Null when no picker is on screen.
+          askUserQuestion={runtime.askUserQuestion}
           // Keep render-decision logging tied to mounted feeds, not
           // to the debug panel or the transient focus flag. The
           // state/semantic layers already persist aggressively in

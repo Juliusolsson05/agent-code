@@ -13,7 +13,10 @@ import type {
   AgentWorkContext,
   WorktreeActivityState,
 } from '@shared/work-context/types'
-import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import type {
+  ProviderConditionSnapshot,
+  ClaudeAskUserQuestionState,
+} from '@shared/types/providerConditions'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import type { SubAgentState } from '@preload/api/types'
 export type { SubAgentState, SubAgentToolCall } from '@preload/api/types'
@@ -318,6 +321,13 @@ export type SessionRuntime = {
   workContext: AgentWorkContext | null
   workActivity: WorktreeActivityState | null
   picker: SlashPickerState
+  /** Live AskUserQuestion picker state, or null when no picker is on
+   *  screen. Fed from each `screen` snapshot (rides the same channel as
+   *  `picker`). The native AskUserQuestionRow gates its render on this
+   *  being non-null for the session — when it's null the picker has left
+   *  the screen (answered / interrupted / turn moved on) and the row must
+   *  not render, which is what fixes the stale/ghost render (#289 PR-2a). */
+  askUserQuestion: ClaudeAskUserQuestionState | null
   conditions: ProviderConditionSnapshot | null
   draftInput: string
   draftImages: ClaudeDraftImage[]
@@ -579,6 +589,7 @@ export function emptyRuntime(): SessionRuntime {
     workContext: null,
     workActivity: null,
     picker: { visible: false, items: [] },
+    askUserQuestion: null,
     conditions: null,
     draftInput: '',
     draftImages: [],
