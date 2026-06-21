@@ -11,6 +11,10 @@ import {
 } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import {
+  listPickerCommandMeta,
+  type PickerCommandMeta,
+} from '@renderer/features/command-palette/registry'
 
 export type SettingActionContext = {
   workspace: Workspace
@@ -79,6 +83,36 @@ export type SettingDefinition =
         onTrigger: (ctx: SettingActionContext) => void | Promise<void>
       }
     }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      control: {
+        type: 'command-visibility'
+        /** Full command catalog to render rows for. Carried as a value
+         *  (not re-derived in the view) so the registry stays the single
+         *  source of "what commands exist". */
+        commands: PickerCommandMeta[]
+        /** Whether a given command currently shows in the picker, after
+         *  applying the user's override on top of the declared default.
+         *  The view only needs the resolved boolean, not the resolution
+         *  rules. */
+        isVisible: (settings: Settings, command: PickerCommandMeta) => boolean
+        /** Flip one command's visibility. Writes a sparse override entry;
+         *  setting it back to the declared default prunes the entry so the
+         *  map never accumulates no-op rows. */
+        onToggleCommand: (
+          ctx: SettingActionContext,
+          command: PickerCommandMeta,
+          visible: boolean,
+        ) => void
+        /** Drop all overrides, returning every command to its declared
+         *  default. */
+        onResetVisibility: (ctx: SettingActionContext) => void
+      }
+    }
 
 const THEME_MODE_OPTIONS: ChoiceOption<ThemeMode>[] = THEME_MODES.map(mode => ({
   value: mode.id,
@@ -123,7 +157,26 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
   },
 ]
 
+// Resolve a command's effective picker visibility from settings alone.
+// Mirrors `commandVisible` in the command registry, minus the live
+// `showHiddenCommands` escape hatch (the settings UI always edits the
+// underlying preference, never the transient reveal-all state): an
+// explicit override wins, else the declared default ('default' shows,
+// everything else is hidden). Kept here rather than imported so the
+// settings layer doesn't depend on the registry's CommandContext-typed
+// internals — it only needs the static rule.
+function resolveCommandVisible(settings: Settings, command: PickerCommandMeta): boolean {
+  const override = settings.commandVisibilityOverrides[command.id]
+  if (typeof override === 'boolean') return override
+  return command.pickerVisibility === 'default'
+}
+
 export function getSettingsRegistry(): SettingDefinition[] {
+  // Resolved once per registry build. The command catalog is static for
+  // the lifetime of the app (it's the flat `commandDefs` array), so
+  // there's no reason to recompute it per render.
+  const pickerCommands = listPickerCommandMeta()
+
   return [
     {
       id: 'theme-mode',
@@ -277,6 +330,46 @@ export function getSettingsRegistry(): SettingDefinition[] {
         type: 'toggle',
         getValue: settings => settings.autoSendPromptSuggestion,
         onToggle: (ctx, value) => ctx.onChange({ autoSendPromptSuggestion: value }),
+      },
+    },
+    {
+      id: 'command-picker-visibility',
+      category: 'commands',
+      title: 'Command Picker Visibility',
+      description:
+        'Choose which commands appear in the command picker. Hiding a command only removes it from the picker list — its keyboard shortcut still works.',
+      keywords: [
+        'command',
+        'picker',
+        'palette',
+        'visibility',
+        'hide',
+        'show',
+        'advanced',
+        'debug',
+      ],
+      control: {
+        type: 'command-visibility',
+        commands: pickerCommands,
+        isVisible: resolveCommandVisible,
+        onToggleCommand: (ctx, command, visible) => {
+          const next = { ...ctx.settings.commandVisibilityOverrides }
+          // Prune the entry when the new state equals the command's
+          // declared default, so the override map only ever holds
+          // deliberate deviations. Without this, toggling a command off
+          // then on again would leave a redundant `true` (or `false`)
+          // that survives a default change in a future release.
+          const declaredVisible = command.pickerVisibility === 'default'
+          if (visible === declaredVisible) {
+            delete next[command.id]
+          } else {
+            next[command.id] = visible
+          }
+          ctx.onChange({ commandVisibilityOverrides: next })
+        },
+        onResetVisibility: ctx => {
+          ctx.onChange({ commandVisibilityOverrides: {} })
+        },
       },
     },
     {

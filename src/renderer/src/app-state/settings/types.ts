@@ -265,6 +265,25 @@ export type Settings = {
    *  rendering — `coerceSettings` falls back to the default on any
    *  unknown id. */
   fontFamily: FontFamilyId
+  /** Sparse per-command picker-visibility overrides, keyed by each
+   *  command's STABLE string `id`. Present boolean wins over the
+   *  command's declared `pickerVisibility`: `true` = force into the
+   *  picker, `false` = force out. Absent ids fall back to the declared
+   *  default (so the map only ever stores deliberate user choices, not
+   *  the full command catalog).
+   *
+   *  WHY a sparse map keyed by id, not a per-command flag or an array
+   *  of hidden ids:
+   *   - Survives commands being added or removed across releases: an id
+   *     that no longer exists is simply never consulted (and gets
+   *     pruned only if the user re-saves), and a new command picks up
+   *     its declared default with no migration.
+   *   - Stays tiny in localStorage — only commands the user actually
+   *     touched are stored.
+   *  The override is consumed by `commandVisible` in the command
+   *  registry, the single picker-list chokepoint. It NEVER affects
+   *  `run()` or keybindings — hiding is list-only. */
+  commandVisibilityOverrides: Record<string, boolean>
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -285,4 +304,8 @@ export const DEFAULT_SETTINGS: Settings = {
   dispatchProjectTerminal: false,
   autoSendPromptSuggestion: true,
   fontFamily: 'jetbrains-mono',
+  // Empty by default: nothing is hidden until the user opts in per
+  // command. This keeps the whole feature purely additive — fresh
+  // installs and existing users see the exact same picker they do today.
+  commandVisibilityOverrides: {},
 }

@@ -109,6 +109,14 @@ type Props = {
   toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
   customRenderingEnabled: boolean
+  /** Sparse per-command picker-visibility overrides from settings, keyed
+   *  by stable command id. Threaded straight into the command context so
+   *  buildCommandRegistry's `commandVisible` gate can consult it. The
+   *  palette itself does NO filtering — it only forwards the flag. */
+  commandVisibilityOverrides: Record<string, boolean>
+  /** Global "reveal every command" escape hatch (currently always false;
+   *  see App.tsx). Forwarded, not interpreted, here. */
+  showHiddenCommands: boolean
   statusModeEnabled: boolean
   worktreeBadgesEnabled: boolean
   dangerousAgentsEnabled: boolean
@@ -182,6 +190,8 @@ export function CommandPalette({
   toggleStatusMode,
   toggleWorktreeBadges,
   customRenderingEnabled,
+  commandVisibilityOverrides,
+  showHiddenCommands,
   statusModeEnabled,
   worktreeBadgesEnabled,
   dangerousAgentsEnabled,
@@ -425,6 +435,8 @@ export function CommandPalette({
         fileTreeVisible,
         dispatchModeEnabled,
         globalDispatchEnabled,
+        commandVisibilityOverrides,
+        showHiddenCommands,
       },
     }),
     [
@@ -495,6 +507,8 @@ export function CommandPalette({
       fileTreeVisible,
       dispatchModeEnabled,
       globalDispatchEnabled,
+      commandVisibilityOverrides,
+      showHiddenCommands,
     ],
   )
 

@@ -66,7 +66,28 @@ export function coerceSettings(value: unknown): Settings {
     fontFamily: FONT_FAMILIES.some(f => f.id === parsed.fontFamily)
       ? (parsed.fontFamily as FontFamilyId)
       : DEFAULT_SETTINGS.fontFamily,
+    // Same defensive coercion philosophy as the membership checks above:
+    // a corrupt or hand-edited localStorage blob must never reach the
+    // command registry as anything but a clean `Record<string, boolean>`.
+    // We rebuild the map entry-by-entry, dropping any non-boolean value
+    // (and implicitly any non-string key — object keys are strings, but
+    // arrays/null would have failed the plain-object guard first), so the
+    // registry's `typeof override === 'boolean'` check can trust the
+    // shape. A garbage value collapses to `{}` (nothing overridden),
+    // matching the "absent ≡ declared default" semantic.
+    commandVisibilityOverrides: coerceCommandVisibilityOverrides(
+      parsed.commandVisibilityOverrides,
+    ),
   }
+}
+
+function coerceCommandVisibilityOverrides(value: unknown): Record<string, boolean> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result: Record<string, boolean> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof entry === 'boolean') result[key] = entry
+  }
+  return result
 }
 
 export function loadInitialSettings(): Settings {
