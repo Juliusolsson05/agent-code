@@ -72,9 +72,15 @@ const TARGETS = [
   },
   {
     name: 'claude-code-headless',
-    // NOTE: this package has no `conditions/` dir yet — its migration (PR-3)
-    // creates it. The path is declared now so PR-3 flips `sync: true` and reuses
-    // this script unchanged rather than re-deriving the destination.
+    // PR-3 flipped this to `sync: true`. The claude-code-headless conditions
+    // migration now exists (src/conditions/{trustDialog,permissionPrompt,
+    // resumePrompt,compaction}.ts + modules.ts + index.ts), and those modules
+    // import the vendored core via `./core/contract.js` / `./core/evaluator.js`.
+    // The destination path was already declared by PR-2 so this flip is the
+    // intended one-line change — the script body is otherwise untouched. The
+    // generated copies are byte-identical to codex-headless's copies (same
+    // source, same banner); that cross-package identity is the entire reason
+    // the core is vendored through ONE script rather than hand-copied per package.
     dest: path.join(
       REPO_ROOT,
       'packages',
@@ -83,7 +89,7 @@ const TARGETS = [
       'conditions',
       'core',
     ),
-    sync: false,
+    sync: true,
   },
 ]
 
