@@ -1,4 +1,5 @@
 import { useContext, useRef, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
@@ -284,9 +285,38 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
     !questions[0].multiSelect &&
     (textByQuestion[0]?.trim() ?? '').length === 0
 
+  const forwardTerminalNavigation = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!sessionId || !liveAskUserQuestion) return
+    const target = event.target
+    // The composer-level key bridge only runs while the textarea has focus.
+    // Once the user clicks a native AUQ button, focus moves into this row and
+    // plain ArrowUp/ArrowDown would otherwise scroll the feed instead of moving
+    // Claude's own cursor. Bridge only terminal-navigation keys here, and skip
+    // editable controls so local free-text editing keeps normal caret behavior.
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    ) return
+
+    const seq =
+      event.key === 'ArrowUp'
+        ? '\x1b[A'
+        : event.key === 'ArrowDown'
+          ? '\x1b[B'
+          : event.key === 'Escape'
+            ? '\x1b'
+            : null
+    if (!seq) return
+    event.preventDefault()
+    event.stopPropagation()
+    void window.api.sendInput(sessionId, seq)
+  }
+
   return (
     <MarkerRow marker="⏺">
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3" onKeyDownCapture={forwardTerminalNavigation}>
         {questions.map((q, qi) => {
           const selected = selectedByQuestion[qi] ?? []
           const controlsDisabled = answering

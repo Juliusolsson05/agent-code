@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { devDebugModules } from '@renderer/features/debug/devModules/registry'
-import type { DevDebugModule } from '@renderer/features/debug/devModules/types'
+import type {
+  DevDebugCopyMode,
+  DevDebugModule,
+  DevDebugModuleProps,
+} from '@renderer/features/debug/devModules/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 
@@ -17,6 +21,7 @@ type Props = {
 
 export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: Props) {
   const [enabledIds, setEnabledIds] = useState<string[]>(() => readEnabledIds())
+  const [copied, setCopied] = useState<string | null>(null)
   const moduleIds = useMemo(() => new Set(devDebugModules.map(module => module.id)), [])
 
   useEffect(() => {
@@ -40,6 +45,36 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
         : [...prev, module.id]
       writeEnabledIds(next)
       return next
+    })
+  }
+
+  const moduleProps: DevDebugModuleProps = { sessionId, runtime, kind, workspace }
+
+  const copyModule = (module: DevDebugModule, mode: DevDebugCopyMode) => {
+    const text = module.buildCopyText
+      ? module.buildCopyText(moduleProps, mode)
+      : buildDefaultCopyText(module, moduleProps, mode)
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(`${module.id}:${mode}`)
+      window.setTimeout(() => {
+        setCopied(current => current === `${module.id}:${mode}` ? null : current)
+      }, 1400)
+    })
+  }
+
+  const copyEnabledModules = (mode: DevDebugCopyMode) => {
+    const text = enabledModules
+      .map(module =>
+        module.buildCopyText
+          ? module.buildCopyText(moduleProps, mode)
+          : buildDefaultCopyText(module, moduleProps, mode),
+      )
+      .join('\n\n')
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(`all:${mode}`)
+      window.setTimeout(() => {
+        setCopied(current => current === `all:${mode}` ? null : current)
+      }, 1400)
     })
   }
 
@@ -80,6 +115,18 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
             {enabledModules.length}/{devDebugModules.length} modules
           </div>
         </div>
+        {enabledModules.length > 0 && (
+          <div className="mt-2 flex items-center gap-1.5">
+            <CopyButton
+              label={copied === 'all:useful' ? 'copied useful' : 'copy useful'}
+              onClick={() => copyEnabledModules('useful')}
+            />
+            <CopyButton
+              label={copied === 'all:full' ? 'copied full' : 'copy full'}
+              onClick={() => copyEnabledModules('full')}
+            />
+          </div>
+        )}
       </div>
 
       <div className="border-b border-border bg-[#101010] px-3 py-2">
@@ -125,18 +172,112 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
           </div>
         ) : (
           enabledModules.map(module => (
-            <module.Component
-              key={module.id}
-              sessionId={sessionId}
-              runtime={runtime}
-              kind={kind}
-              workspace={workspace}
-            />
+            <div key={module.id} className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0 text-[9px] uppercase tracking-[0.12em] text-muted truncate">
+                  {module.title}
+                </div>
+                <div className="flex flex-shrink-0 items-center gap-1.5">
+                  <CopyButton
+                    label={copied === `${module.id}:useful` ? 'copied useful' : 'copy useful'}
+                    onClick={() => copyModule(module, 'useful')}
+                  />
+                  <CopyButton
+                    label={copied === `${module.id}:full` ? 'copied full' : 'copy full'}
+                    onClick={() => copyModule(module, 'full')}
+                  />
+                </div>
+              </div>
+              <module.Component
+                sessionId={sessionId}
+                runtime={runtime}
+                kind={kind}
+                workspace={workspace}
+              />
+            </div>
           ))
         )}
       </div>
     </div>
   )
+}
+
+function CopyButton({
+  label,
+  onClick,
+}: {
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="border border-border/80 px-1.5 py-0.5 text-[10px] text-ink-dim hover:border-border-hi hover:text-ink"
+    >
+      {label}
+    </button>
+  )
+}
+
+function buildDefaultCopyText(
+  module: DevDebugModule,
+  { sessionId, runtime, kind }: DevDebugModuleProps,
+  mode: DevDebugCopyMode,
+): string {
+  const full = mode === 'full'
+  const payload = {
+    module: {
+      id: module.id,
+      title: module.title,
+      copyMode: mode,
+      copiedAt: new Date().toISOString(),
+    },
+    session: {
+      sessionId,
+      kind,
+      streamPhase: runtime.streamPhase,
+      processStatus: runtime.processStatus,
+      transcriptStatus: runtime.transcriptStatus,
+      inputReady: runtime.inputReady,
+      exited: runtime.exited,
+    },
+    runtime: {
+      conditions: runtime.conditions,
+      picker: runtime.picker,
+      assistantPicker: runtime.assistantPicker,
+      codeBlockPicker: runtime.codeBlockPicker,
+      pendingTrustDialog: runtime.pendingTrustDialog,
+      pendingPermissionPrompt: runtime.pendingPermissionPrompt,
+      pendingResumePrompt: runtime.pendingResumePrompt,
+      pendingCompaction: runtime.pendingCompaction,
+      pendingApproval: runtime.pendingApproval,
+      totalEntries: runtime.totalEntries,
+      entriesShown: runtime.entries.length,
+      lastJsonlEntryAt: runtime.lastJsonlEntryAt,
+      turnStartedAt: runtime.turnStartedAt,
+      semantic: {
+        currentTurn: runtime.semantic.currentTurn,
+        history: full ? runtime.semantic.history : runtime.semantic.history.slice(-5),
+        log: full ? runtime.semantic.log : runtime.semantic.log.slice(-20),
+      },
+      feedDebugLog: full ? runtime.feedDebugLog : runtime.feedDebugLog.slice(-30),
+      screen: full ? runtime.screen : runtime.screen.slice(-2000),
+      screenMarkdown: full ? runtime.screenMarkdown : runtime.screenMarkdown.slice(-2000),
+      entries: full ? runtime.entries : undefined,
+    },
+  }
+  return formatCopyPayload(module.title, payload)
+}
+
+function formatCopyPayload(title: string, payload: unknown): string {
+  return [
+    `# ${title}`,
+    '',
+    '```json',
+    JSON.stringify(payload, null, 2),
+    '```',
+  ].join('\n')
 }
 
 function readEnabledIds(): string[] {
