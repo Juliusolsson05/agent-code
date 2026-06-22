@@ -20,9 +20,11 @@
 // WHY it's pure + clock-injected
 // ------------------------------
 // `now` is injected rather than calling `Date.now()` inline so the whole thing
-// is deterministic and testable: the golden byte-for-byte verification (PR-2)
-// pins `ts` to a fixed value to compare the OLD and NEW paths, and any future
-// test can do the same. The evaluator holds exactly one piece of mutable state —
+// is deterministic and testable: the PR-2 byte-for-byte verification (a
+// throwaway script that pinned `ts` to a fixed value and diffed the OLD and NEW
+// serialized snapshots — run out-of-band, NOT committed, per the repo's
+// no-committed-tests policy) relied on this, and any future test can do the
+// same. The evaluator holds exactly one piece of mutable state —
 // `lastKey` for dedupe — and nothing else; everything else is a pure function of
 // its arguments.
 //
@@ -80,6 +82,20 @@ export function makeEvaluator<P extends string, I>(
   modules: readonly ConditionModule<string, I, any>[],
   now: () => number,
 ): ConditionEvaluator<P, I> {
+  // DEFENSIVE COPY of the module list. The caller hands us a `modules` array
+  // (e.g. the exported CODEX_MODULES), and that array is a shared, importable
+  // object that anything could push/splice/reorder after we're constructed.
+  // Snapshotting it once here means a running evaluator's behavior — which
+  // modules run, in what order — is frozen at construction and cannot be changed
+  // out from under it by mutating the original array. Order is load-bearing (it
+  // IS the insertion order of the conditions map, see the header invariant), so
+  // a late reorder of the source array would otherwise silently drift the dedupe
+  // key. `[...modules]` is a shallow copy, which is exactly right: we must not
+  // clone the module objects themselves (their identity/closures matter), only
+  // detach our iteration from the caller's array container. Every internal loop
+  // below iterates `registry`, never `modules`.
+  const registry = [...modules]
+
   // The dedupe cell. Seeded to '{}' so the FIRST evaluation of an empty
   // conditions map is correctly treated as "no change from the initial empty
   // snapshot" — matching CodexHeadless, whose `lastConditionKey` starts at '{}'
@@ -92,7 +108,7 @@ export function makeEvaluator<P extends string, I>(
     // plain object gives us. Keys are added in module-array order below.
     const conditions: Record<string, ConditionRecord> = {}
 
-    for (const module of modules) {
+    for (const module of registry) {
       const state = module.detect(inputs)
       // `detect` returning null means the condition is not live this tick — skip
       // it. (A module never emits a record for a condition that isn't present;
@@ -142,7 +158,7 @@ export function makeEvaluator<P extends string, I>(
     // has a wired path. The first module that defines `resolve` wins — if more
     // than one ever does, the registration order decides, matching how the
     // detect loop above is order-sensitive.
-    for (const module of modules) {
+    for (const module of registry) {
       if (module.resolve) return module.resolve(action, ctx)
     }
   }
