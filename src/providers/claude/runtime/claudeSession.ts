@@ -10,6 +10,7 @@ import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import {
   ClaudeCodeHeadless,
   createProxyServer,
+  type ClaudeConditionSnapshot,
   type CompactionState,
   type JsonlEntry,
   type PermissionPromptState,
@@ -76,6 +77,22 @@ export type ClaudeSessionEvents = {
   'resume-prompt': [ResumePromptState]
   'permission-prompt': [PermissionPromptState]
   'compaction-state': [CompactionState]
+  /** Unified conditions snapshot (PR-3). Forwarded verbatim from the
+   *  headless `conditions` channel. The sessionManager relays this
+   *  generically (`session.on('conditions')` →
+   *  `manager.emit('conditions', { sessionId, snapshot })` → forwarder →
+   *  `session:conditions` → `onSessionConditions` → applyConditionSnapshot
+   *  → CLAUDE_VIEWS). This is the wire that RESTORES Claude's dead
+   *  trust/permission/resume/compaction modals — previously Claude never
+   *  emitted a snapshot so that whole relay was dead for it.
+   *
+   *  KEPT ALONGSIDE the per-event trust-dialog/resume-prompt/
+   *  permission-prompt/compaction-state emissions above: this PR is
+   *  additive; the old per-event surface is removed in a later cleanup PR.
+   *  `ClaudeConditionSnapshot` is a member of the generic
+   *  `ProviderConditionSnapshot` union the sessionManager listens for, so
+   *  the relay accepts it without a cast. */
+  conditions: [ClaudeConditionSnapshot]
   /** New. The flat union of semantic-channel events (see
    *  claude-code-headless EVENT_SPEC.md). Forwarded verbatim so the
    *  renderer can treat it as the authoritative live-turn stream —
@@ -463,6 +480,15 @@ export class ClaudeSession extends EventEmitter {
     )
     this.headless.on('compaction-state', state =>
       this.emit('compaction-state', state),
+    )
+    // PR-3: forward the unified conditions snapshot. Mirrors codexSession's
+    // `this.headless.on('conditions', s => this.emit('conditions', s))`. This is
+    // the single new line that lights up the already-built renderer relay for
+    // Claude (the generic sessionManager `conditions` handler does the rest).
+    // KEPT ALONGSIDE the four per-event forwards above — additive by design; the
+    // old per-event surface is removed in a later cleanup PR.
+    this.headless.on('conditions', snapshot =>
+      this.emit('conditions', snapshot),
     )
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
