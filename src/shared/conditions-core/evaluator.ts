@@ -68,7 +68,7 @@ export type ConditionEvaluator<P extends string, I> = {
   resolveAction: (
     action: ConditionCustomAction,
     ctx: unknown,
-  ) => void | Promise<void>
+  ) => unknown | Promise<unknown>
 }
 
 export function makeEvaluator<P extends string, I>(
@@ -79,7 +79,12 @@ export function makeEvaluator<P extends string, I>(
   // form the evaluator routes over (it only ever reads `kind` and calls
   // `actions(state)`; it never inspects the state's shape), so erasing S to
   // `any` here is sound and matches how ConditionOutlet erases the view side.
-  modules: readonly ConditionModule<string, I, any>[],
+  // The fourth `any` erases each module's resolver context too: a heterogeneous
+  // registry can include modules with different live-driver handles, while the
+  // evaluator only receives an opaque `ctx` and forwards it to the resolver that
+  // opted in. The provider that constructs the evaluator owns making that ctx
+  // match the modules it registers.
+  modules: readonly ConditionModule<string, I, any, any>[],
   now: () => number,
 ): ConditionEvaluator<P, I> {
   // DEFENSIVE COPY of the module list. The caller hands us a `modules` array
@@ -148,18 +153,16 @@ export function makeEvaluator<P extends string, I>(
   function resolveAction(
     action: ConditionCustomAction,
     ctx: unknown,
-  ): void | Promise<void> {
-    // First module whose `resolve` exists handles it. We don't try to match by
-    // kind because a custom action's `name` (not `kind`) identifies its
-    // resolver, and the dispatch contract narrows to ConditionCustomAction
-    // already. Returns the first resolver's result (which may be a Promise the
-    // caller awaits). No live module defines `resolve` yet, so today this is a
-    // no-op fall-through; it exists so the multi-step answering driver (later PR)
-    // has a wired path. The first module that defines `resolve` wins — if more
-    // than one ever does, the registration order decides, matching how the
-    // detect loop above is order-sensitive.
+  ): unknown | Promise<unknown> {
+    // Resolver modules return `undefined` when the action name is not theirs.
+    // That keeps `name` as the routing key without forcing core to maintain a
+    // separate name→module registry. It also prevents the first module that ever
+    // grows a resolver (AUQ) from accidentally swallowing every future custom
+    // action just because it appears earlier in registration order.
     for (const module of registry) {
-      if (module.resolve) return module.resolve(action, ctx)
+      if (!module.resolve) continue
+      const result = module.resolve(action, ctx)
+      if (result !== undefined) return result
     }
   }
 

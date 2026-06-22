@@ -10,7 +10,10 @@ import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
-import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+import type {
+  ConditionCustomAction,
+  ProviderConditionSnapshot,
+} from '@shared/types/providerConditions.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 
@@ -200,6 +203,9 @@ interface AgentSessionLike {
     | { kind: 'timeout' }
     | { kind: 'no-headless' }
   >
+  resolveCondition?(
+    action: ConditionCustomAction,
+  ): Promise<ResolveConditionResult>
   getProcessPid?(): number | null
   isExited?(): boolean
   removeAllListeners?(event?: string): this
@@ -228,6 +234,22 @@ const TERMINAL_BUFFER_CAP = 256 * 1024
 // small. We still cap aggressively because this buffer is debug-only
 // replay state, not the durable transcript source of truth.
 const AGENT_PTY_BUFFER_CAP = 512 * 1024
+
+export type ResolveConditionResult =
+  | { ok: true; state?: unknown }
+  | {
+      ok: false
+      reason:
+        | 'timeout'
+        | 'aborted'
+        | 'invalid-payload'
+        | 'option-not-found'
+        | 'no-session'
+        | 'no-headless'
+        | 'no-resolver'
+      lastState?: unknown
+      failedAtStep?: string
+    }
 
 function appendCappedBuffer(prev: string, data: string, cap: number): string {
   let next = prev + data
@@ -853,6 +875,20 @@ export class SessionManager extends EventEmitter {
       return { kind: 'no-session' }
     }
     return session.awaitPastePlaceholder(opts)
+  }
+
+  async resolveCondition(
+    sessionId: string,
+    action: ConditionCustomAction,
+  ): Promise<ResolveConditionResult> {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || entry.kind !== 'claude') {
+      return { ok: false, reason: 'no-session' }
+    }
+    if (typeof entry.session.resolveCondition !== 'function') {
+      return { ok: false, reason: 'no-resolver' }
+    }
+    return entry.session.resolveCondition(action)
   }
 
   async awaitCodexReadyForPrompt(

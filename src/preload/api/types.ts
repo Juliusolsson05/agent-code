@@ -1,4 +1,7 @@
-import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+import type {
+  ConditionCustomAction,
+  ProviderConditionSnapshot,
+} from '@shared/types/providerConditions.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
@@ -98,6 +101,24 @@ export type ScreenSnapshot = {
 }
 
 export type SessionKind = 'claude' | 'codex' | 'terminal'
+
+export type ResolveConditionResult =
+  | { ok: true; state?: unknown }
+  | {
+      ok: false
+      reason:
+        | 'timeout'
+        | 'aborted'
+        | 'invalid-payload'
+        | 'option-not-found'
+        | 'no-session'
+        | 'no-headless'
+        | 'no-resolver'
+      lastState?: unknown
+      failedAtStep?: string
+    }
+
+export type { ConditionCustomAction }
 
 export type SessionStartedEvent = {
   sessionId: string

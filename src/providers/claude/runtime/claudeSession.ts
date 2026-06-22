@@ -11,7 +11,9 @@ import {
   ClaudeCodeHeadless,
   createProxyServer,
   type ClaudeConditionSnapshot,
+  type ConditionCustomAction,
   type CompactionState,
+  type DriveResult,
   type JsonlEntry,
   type PermissionPromptState,
   type ProxyServer,
@@ -628,6 +630,18 @@ export class ClaudeSession extends EventEmitter {
   ): Promise<{ kind: 'appeared'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }> {
     if (!this.headless) return { kind: 'no-headless' }
     return this.headless.awaitPastePlaceholder(opts ?? {})
+  }
+
+  async resolveCondition(
+    action: ConditionCustomAction,
+  ): Promise<DriveResult | { ok: false; reason: 'no-headless' }> {
+    // WHY this wrapper exists instead of letting SessionManager reach into
+    // `headless` directly: ClaudeSession owns the lifecycle boundary. During
+    // startup/shutdown the headless instance can legitimately be absent, and the
+    // manager should not need to know that provider-internal detail just to run
+    // a structured condition resolver.
+    if (!this.headless) return { ok: false, reason: 'no-headless' }
+    return this.headless.resolveConditionAction(action)
   }
 
   isExited(): boolean {

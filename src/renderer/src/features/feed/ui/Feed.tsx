@@ -23,6 +23,7 @@ import {
   ToolResultIndexContext,
   CodeRenderContext,
   SubAgentsContext,
+  AskUserQuestionConditionContext,
 } from '@renderer/features/feed/context'
 import {
   type AgentProvider,
@@ -48,6 +49,7 @@ import {
 } from '@renderer/features/feed/ui/rows'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SubAgentState } from '@renderer/workspace/workspaceState'
+import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import * as perf from '@renderer/performance/client'
 
 // Re-export — many external callers import these types from Feed
@@ -162,6 +164,10 @@ type Props = {
    *  Threaded from runtime.subAgents and provided to rows via
    *  SubAgentsContext so the `Agent` card can render live status + drill-in. */
   subAgents?: Record<string, SubAgentState>
+  /** Live AUQ screen condition, used only to gate clickability in the inline
+   *  semantic row. Undefined means no snapshot yet; null means latest snapshot
+   *  positively lacks the picker. Rendering still gates on the transcript block. */
+  askUserQuestionState?: ClaudeAskUserQuestionState | null
   onDebugLog?: (entry: {
     layer: 'RENDER'
     kind: string
@@ -265,6 +271,7 @@ function FeedImpl({
   toolUseIndex: toolUseIndexProp,
   toolResultIndex: toolResultIndexProp,
   subAgents = {},
+  askUserQuestionState,
   onDebugLog,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
@@ -892,6 +899,7 @@ function FeedImpl({
     <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
     <SubAgentsContext.Provider value={subAgents}>
+    <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
     <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
       <div
         ref={scrollerRef}
@@ -922,6 +930,7 @@ function FeedImpl({
         </div>
       </div>
     </CodeRenderContext.Provider>
+    </AskUserQuestionConditionContext.Provider>
     </SubAgentsContext.Provider>
     </ToolResultIndexContext.Provider>
     </ToolUseIndexContext.Provider>
