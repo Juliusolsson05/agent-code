@@ -13,8 +13,7 @@ export function hasActionCondition(
   }
   return Boolean(
     conditions.conditions['codex.trust-dialog'] ||
-    conditions.conditions['codex.approval'] ||
-    conditions.conditions['codex.switch-model-prompt'],
+    conditions.conditions['codex.approval'],
   )
 }
 
@@ -39,7 +38,6 @@ export function dispatchAttentionLabelFromConditions(
     return null
   }
   if (conditions.conditions['codex.approval']) return 'ACTION'
-  if (conditions.conditions['codex.switch-model-prompt']) return 'ACTION'
   if (conditions.conditions['codex.trust-dialog']) return 'TRUST'
   return null
 }

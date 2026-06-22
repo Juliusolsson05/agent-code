@@ -30,14 +30,9 @@ import type {
 // CodexStateByKind>>` parameter, so filing a view under the wrong kind
 // (mismatched state shape) is a COMPILE error rather than something the old
 // `as unknown as ConditionView` erasure let slip through.
-// `codex.switch-model-prompt` is declared here (it IS emitted over the wire) but
-// has no view yet — hence `Partial`. State shapes come from
-// providerConditions.ts; `switch-model-prompt` has no dedicated state type, so
-// it's typed `unknown` until a view (and its state) lands.
 type CodexStateByKind = {
   'codex.approval': CodexApprovalState
   'codex.trust-dialog': CodexTrustDialogState
-  'codex.switch-model-prompt': unknown
 }
 
 // A `pty` action whose only meaningful field is `data`. The id/label are
