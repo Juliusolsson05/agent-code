@@ -905,10 +905,21 @@ export function usePaneActions(
     }
     if (snapshot.dispatchMode) return
 
-    const tab = state.tabs.find(t => t.id === state.activeTabId)
+    const tab = activeTab
     if (!tab) return
+    const commandTargetId = commandTargetSessionIdForState(snapshot)
+    if (commandTargetId && commandTargetId !== tab.focusedSessionId) {
+      // WHY related child close delegates to explicit closeSession:
+      // the grid leaf is still physically owned by the parent, but the visible
+      // feed/composer can be a detached linked/orchestration child. Continuing
+      // through the normal grid close path would remove the parent tile and,
+      // for linked children, cascade-kill the very child the user intended to
+      // close. closeSession already owns detached explicit-id semantics.
+      await closeSessionRef.current?.(commandTargetId)
+      return
+    }
     const targetId = tab.focusedSessionId
-    const sessionMeta = state.sessions[targetId]
+    const sessionMeta = snapshot.sessions[targetId]
 
     // Cascade-close any linked agents whose parent is this grid pane.
     // The dispatch close path above already routes through

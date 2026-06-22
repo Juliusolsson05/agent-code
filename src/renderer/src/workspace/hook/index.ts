@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
@@ -113,6 +113,20 @@ export function useWorkspace(
   // says "are we past the once-only effect", not "is the on-disk state
   // intact". See useBootstrap for the four possible terminal values.
   const [restoreStatus, setRestoreStatus] = useState<WorkspaceRestoreStatus>('pending')
+  const selectGridRelatedSession = useCallback((ownerSessionId: string, selectedSessionId: string) => {
+    setState(prev => {
+      const nextSelections = { ...(prev.gridRelatedSelections ?? {}) }
+      if (ownerSessionId === selectedSessionId) {
+        delete nextSelections[ownerSessionId]
+      } else {
+        nextSelections[ownerSessionId] = selectedSessionId
+      }
+      return {
+        ...prev,
+        gridRelatedSelections: nextSelections,
+      }
+    })
+  }, [setState])
 
   // ---- Runtime helpers (updateRuntime / appendFeedDebug / getRuntime / etc) ----
   const { updateRuntime, appendFeedDebug, acknowledgeSession, getRuntime, toggleTailMode, scrollFocusedToLatest } =
@@ -492,6 +506,7 @@ export function useWorkspace(
     killBuried: paneActions.killBuried,
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
+    selectGridRelatedSession,
     navigate: paneActions.navigate,
     activateTab: tabActions.activateTab,
     activateTabByIndex: tabActions.activateTabByIndex,

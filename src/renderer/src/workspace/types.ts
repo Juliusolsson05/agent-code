@@ -306,6 +306,20 @@ export type WorkspaceState = {
   tabs: Tab[]
   activeTabId: TabId
   /**
+   * Grid panes can temporarily render a related detached child (linked agent or
+   * orchestration worker) inside the parent's physical tile. This map is keyed
+   * by the physical grid leaf id, not by the rendered child id.
+   *
+   * WHY this is view state instead of tile-tree state:
+   * linked/orchestration children are intentionally detached Dispatch sessions.
+   * Pretending they are tile leaves would violate the grid invariant that
+   * `tab.root` owns the mounted layout and would make a harmless "peek at
+   * worker" click mutate the user's splits. Keeping the selected child here
+   * lets input/commands target the visible child while the layout still says
+   * "this pane belongs to the parent."
+   */
+  gridRelatedSelections?: Record<SessionId, SessionId>
+  /**
    * Dispatch Mode is part of the workspace layout, not a global user
    * preference. Persisting it here means a reload preserves the user's
    * command-center view for this project while other workspaces can keep

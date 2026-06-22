@@ -101,3 +101,17 @@ export function remapPinnedSessionIds(
 ): SessionId[] {
   return pinned.map(id => idMap.get(id) ?? id)
 }
+
+export function remapGridRelatedSelections(
+  selections: Record<SessionId, SessionId> | undefined,
+  idMap: Map<SessionId, SessionId>,
+): Record<SessionId, SessionId> {
+  const out: Record<SessionId, SessionId> = {}
+  for (const [ownerId, selectedId] of Object.entries(selections ?? {})) {
+    const nextOwnerId = idMap.get(ownerId) ?? ownerId
+    const nextSelectedId = idMap.get(selectedId) ?? selectedId
+    if (nextOwnerId === nextSelectedId) continue
+    out[nextOwnerId] = nextSelectedId
+  }
+  return out
+}

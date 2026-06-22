@@ -9,6 +9,7 @@ import {
   remapTiledLanes,
 } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import {
+  remapGridRelatedSelections,
   remapPinnedSessionIds,
   remapSessionsRelationships,
 } from '@renderer/workspace/idRemap'
@@ -509,6 +510,7 @@ export function useSessionActions(
           // A pinned agent that gets a fresh id on reload/switch must follow
           // to the new id instead of silently dropping out of the Pinned list.
           pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
+          gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
           detachedSessions,
           // Remap the swapped session id everywhere Dispatch holds it: the
           // classic single-view focus AND every Tiled Dispatch lane selection
@@ -742,6 +744,7 @@ export function useSessionActions(
           // parent) and remap the pinned list (pins follow to the new ids).
           sessions: remapSessionsRelationships(nextSessions, idMap),
           pinnedSessionIds: remapPinnedSessionIds(prev.pinnedSessionIds, idMap),
+          gridRelatedSelections: remapGridRelatedSelections(prev.gridRelatedSelections, idMap),
           detachedSessions: nextDetachedSessions,
           buried: nextBuried,
           dispatchMode: nextDispatchMode,
