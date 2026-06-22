@@ -19,6 +19,8 @@ import type {
   SessionResumePromptEvent,
   SessionCompactionStateEvent,
   SessionConditionsEvent,
+  ConditionCustomAction,
+  ResolveConditionResult,
   SessionSubAgentsEvent,
   BuiltInMcpDomain,
   TranscriptPathRequest,
@@ -106,6 +108,12 @@ export const sessionApi = {
   // etc.) so we don't journal unrelated traffic.
   sendInput: (sessionId: string, data: string, pasteId?: string): Promise<boolean> =>
     ipcRenderer.invoke('session:input', sessionId, data, pasteId),
+
+  resolveCondition: (
+    sessionId: string,
+    action: ConditionCustomAction,
+  ): Promise<ResolveConditionResult> =>
+    ipcRenderer.invoke('session:resolveCondition', sessionId, action),
 
   resize: (sessionId: string, cols: number, rows: number): Promise<void> =>
     ipcRenderer.invoke('session:resize', sessionId, cols, rows),

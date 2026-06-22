@@ -21,19 +21,21 @@
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
 import { makeDispatchFromOnSend } from '@shared/conditions-core/dispatch'
+import type { ConditionCustomAction } from '@shared/conditions-core/contract'
 import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
 import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
 
 type Props = {
   conditions: ProviderConditionSnapshot | null
   onSend: (data: string) => Promise<void>
+  onResolveCustom?: (action: ConditionCustomAction) => Promise<unknown>
 }
 
-export function ProviderConditionOutlet({ conditions, onSend }: Props) {
+export function ProviderConditionOutlet({ conditions, onSend, onResolveCustom }: Props) {
   if (!conditions) return null
 
   const registry = conditions.provider === 'claude' ? CLAUDE_VIEWS : CODEX_VIEWS
-  const dispatch = makeDispatchFromOnSend(onSend)
+  const dispatch = makeDispatchFromOnSend(onSend, onResolveCustom)
 
   return (
     <ConditionOutlet snapshot={conditions} registry={registry} dispatch={dispatch} />

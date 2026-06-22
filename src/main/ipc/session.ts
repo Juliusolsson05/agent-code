@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 
 import type { SessionManager } from '@main/sessionManager.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
+import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
 import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList.js'
 import { listCodexSessions } from '@providers/codex/runtime/sessionList.js'
@@ -115,6 +116,13 @@ export function registerSessionIpc(
         }
       }
       return ok
+    },
+  )
+
+  ipcMain.handle(
+    'session:resolveCondition',
+    async (_evt, sessionId: string, action: ConditionCustomAction) => {
+      return await manager.resolveCondition(sessionId, action)
     },
   )
 

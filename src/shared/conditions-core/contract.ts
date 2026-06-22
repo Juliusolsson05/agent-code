@@ -58,6 +58,13 @@ export type ConditionCustomAction = {
   // until a later PR introduces the first custom condition + a
   // `session:resolveCondition` IPC channel. See dispatch.ts WHY comment.
   name: string
+  // Optional structured payload consumed by the named resolver. This stays
+  // deliberately untyped at the core layer: a parser/driver pair owns its own
+  // protocol, and forcing every condition through a shared payload schema would
+  // recreate the rigid, hardcoded plumbing the conditions framework is meant to
+  // retire. Provider-specific modules narrow this value at the edge where they
+  // know what their resolver accepts.
+  payload?: unknown
 }
 
 export type ConditionAction = ConditionPtyAction | ConditionCustomAction
@@ -138,7 +145,7 @@ export type ConditionModule<K extends string, I, S, Ctx = unknown> = {
   // so headless modules that one day need non-keystroke resolution have a slot.
   // `ctx` carries the live-terminal / `sendThenReparse` handle for multi-step
   // answering — see the `Ctx` generic WHY above.
-  resolve?: (action: ConditionCustomAction, ctx: Ctx) => void | Promise<void>
+  resolve?: (action: ConditionCustomAction, ctx: Ctx) => unknown | Promise<unknown>
 }
 
 // Identity helper. Exists purely so module-definition call sites read as

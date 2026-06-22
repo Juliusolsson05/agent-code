@@ -2,27 +2,18 @@
 //
 // The dispatch driver: turns a chosen ConditionAction into a real side effect.
 //
-// WHY only the pty arm is wired (and `custom` is intentionally dormant)
-// --------------------------------------------------------------------
-// Every condition that is LIVE today (Claude trust/permission/resume/compaction,
-// Codex approval/trust) resolves by writing a raw keystroke string into the
-// session PTY. That is the entire contract with the underlying provider TUI:
-// the real terminal program reads '\r' / '3\r' / '\x1b' etc. and advances its
-// own state machine. So the only arm that needs to do anything is `pty`, and it
-// does exactly what every modal does today — call sendInput with the action's
-// raw data.
-//
-// `custom` actions are part of the wire union (contract.ts) but NO live
-// condition emits one. Wiring a "resolve via structured IPC" path now would
-// mean inventing a `session:resolveCondition` channel and a main-side resolver
-// with zero callers — dead code that could rot before its first real use. So
-// the custom arm deliberately THROWS. The first PR that introduces a genuine
-// custom condition will add the IPC + resolver and replace this throw. Keeping
-// it loud-failing (rather than silently no-op) means we find out immediately if
-// some future code path accidentally emits a custom action before that wiring
-// exists.
+// WHY `custom` needs an explicit resolver callback
+// ------------------------------------------------
+// PTY actions are universal: every caller can write `action.data` into the
+// session. Custom actions are different: they are structured requests that must
+// route to the owning session's headless resolver (for PR-5, the
+// AskUserQuestion driver that writes, reparses, and writes again). Keeping the
+// resolver as an injected callback prevents this provider-agnostic helper from
+// importing Electron IPC or knowing about `session:resolveCondition`.
 
-import type { ConditionAction } from './contract'
+import type { ConditionAction, ConditionCustomAction } from './contract'
+
+type ResolveCustomAction = (action: ConditionCustomAction) => Promise<unknown>
 
 // makeDispatch builds a dispatcher bound to a specific session, given a
 // sendInput(sessionId, data) function (i.e. window.api.sendInput). Used when a
@@ -30,14 +21,15 @@ import type { ConditionAction } from './contract'
 export function makeDispatch(
   sessionId: string,
   sendInput: (sessionId: string, data: string) => Promise<unknown>,
+  resolveCustom?: (sessionId: string, action: ConditionCustomAction) => Promise<unknown>,
 ): (action: ConditionAction) => Promise<void> {
   return async (action: ConditionAction) => {
     if (action.kind === 'pty') {
       await sendInput(sessionId, action.data)
       return
     }
-    // custom — intentionally dormant. See file header WHY.
-    throw new Error('custom condition actions not yet wired')
+    if (!resolveCustom) throw new Error('custom condition action resolver missing')
+    await resolveCustom(sessionId, action)
   }
 }
 
@@ -48,13 +40,14 @@ export function makeDispatch(
 // is byte-for-byte the same send path every modal uses today.
 export function makeDispatchFromOnSend(
   onSend: (data: string) => Promise<void>,
+  resolveCustom?: ResolveCustomAction,
 ): (action: ConditionAction) => Promise<void> {
   return async (action: ConditionAction) => {
     if (action.kind === 'pty') {
       await onSend(action.data)
       return
     }
-    // custom — intentionally dormant. See file header WHY.
-    throw new Error('custom condition actions not yet wired')
+    if (!resolveCustom) throw new Error('custom condition action resolver missing')
+    await resolveCustom(action)
   }
 }
