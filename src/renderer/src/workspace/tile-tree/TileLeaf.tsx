@@ -481,6 +481,13 @@ export function TileLeaf({
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
           subAgents={runtime.subAgents}
+          askUserQuestionState={
+            runtime.conditions
+              ? runtime.conditions.provider === 'claude'
+                ? runtime.conditions.conditions['claude.ask-user-question']?.state ?? null
+                : null
+              : undefined
+          }
           // Keep render-decision logging tied to mounted feeds, not
           // to the debug panel or the transient focus flag. The
           // state/semantic layers already persist aggressively in
@@ -510,6 +517,7 @@ export function TileLeaf({
       <ProviderConditionOutlet
         conditions={runtime.conditions}
         onSend={send}
+        onResolveCustom={(action) => window.api.resolveCondition(sessionId, action)}
       />
 
       <PaneToast message={runtime.paneToast} />

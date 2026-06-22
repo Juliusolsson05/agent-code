@@ -861,9 +861,58 @@ export function foldSemanticEvent(
     case 'turn_stopped': {
       if (!currentTurn) break
       if (eventTargetsDifferentTurn(ev, currentTurn)) break
+      const stopReason = typeof ev.stopReason === 'string' ? ev.stopReason : null
+
+      // Ghost-render fix (PR-4), narrowed after review: dismiss an unresolved
+      // AskUserQuestion only for TERMINAL stops, not normal `tool_use` pauses.
+      //
+      // WHY this is needed: an AskUserQuestion tool_use BLOCKS the agent and
+      // only resolves when a tool_result lands. If the user INTERRUPTS instead
+      // of answering (Esc, or just sends a new prompt), NO tool_result is ever
+      // emitted, so the block stays `resultAt == null` forever and BlockRow
+      // keeps routing it to the live, clickable AskUserQuestionRow — the picker
+      // "ghosts" in the feed many messages later (the precise bug reported:
+      // "a question being interrupted might still render even tho we are 4
+      // messages past").
+      //
+      // The important constraint: Claude also emits `turn_stopped` for the
+      // ordinary assistant stop_reason `tool_use`, which is exactly when a LIVE
+      // AskUserQuestion picker first appears. Stamping on that stop would unmount
+      // the clickable picker while the terminal is still blocked waiting for an
+      // answer. So only non-`tool_use` stops are transcript-backed dismissal
+      // signals; `tool_use` is a normal pause, not a cancellation.
+      //
+      // SCOPED STRICTLY to `toolName === 'AskUserQuestion'`: every OTHER pending
+      // tool (a long Bash, an in-flight MCP call) can still legitimately resolve
+      // with a late tool_result even across a stop, so stamping them here would
+      // DROP their real result and show a tool as "done" with no output. The
+      // AskUserQuestion case is unique — it cannot resolve after an interrupt
+      // because it needs interactive input that is no longer being collected —
+      // which is exactly why this dismissal is safe ONLY for it.
+      //
+      // Copy-on-write: we only clone `blocks` once we find a block to stamp, so
+      // the common no-pending-picker stop allocates nothing new.
+      let stoppedBlocks = currentTurn.blocks
+      if (stopReason !== 'tool_use') {
+        let stampedPicker = false
+        for (const [key, block] of Object.entries(currentTurn.blocks)) {
+          if (block.toolName === 'AskUserQuestion' && block.resultAt == null) {
+            if (!stampedPicker) {
+              stoppedBlocks = { ...currentTurn.blocks }
+              stampedPicker = true
+            }
+            // `blocks` is keyed by NUMERIC index; Object.entries hands back string
+            // keys, so coerce back to number for the write (same `Number(...)`
+            // dance the tool_result branch does above).
+            stoppedBlocks[Number(key)] = { ...block, resultAt: now }
+          }
+        }
+      }
+
       currentTurn = {
         ...currentTurn,
-        stopReason: typeof ev.stopReason === 'string' ? ev.stopReason : null,
+        blocks: stoppedBlocks,
+        stopReason,
         endedAt: now,
       }
       break

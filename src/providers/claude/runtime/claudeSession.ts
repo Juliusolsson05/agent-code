@@ -10,7 +10,10 @@ import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import {
   ClaudeCodeHeadless,
   createProxyServer,
+  type ClaudeConditionSnapshot,
+  type ConditionCustomAction,
   type CompactionState,
+  type DriveResult,
   type JsonlEntry,
   type PermissionPromptState,
   type ProxyServer,
@@ -76,6 +79,22 @@ export type ClaudeSessionEvents = {
   'resume-prompt': [ResumePromptState]
   'permission-prompt': [PermissionPromptState]
   'compaction-state': [CompactionState]
+  /** Unified conditions snapshot (PR-3). Forwarded verbatim from the
+   *  headless `conditions` channel. The sessionManager relays this
+   *  generically (`session.on('conditions')` →
+   *  `manager.emit('conditions', { sessionId, snapshot })` → forwarder →
+   *  `session:conditions` → `onSessionConditions` → applyConditionSnapshot
+   *  → CLAUDE_VIEWS). This is the wire that RESTORES Claude's dead
+   *  trust/permission/resume/compaction modals — previously Claude never
+   *  emitted a snapshot so that whole relay was dead for it.
+   *
+   *  KEPT ALONGSIDE the per-event trust-dialog/resume-prompt/
+   *  permission-prompt/compaction-state emissions above: this PR is
+   *  additive; the old per-event surface is removed in a later cleanup PR.
+   *  `ClaudeConditionSnapshot` is a member of the generic
+   *  `ProviderConditionSnapshot` union the sessionManager listens for, so
+   *  the relay accepts it without a cast. */
+  conditions: [ClaudeConditionSnapshot]
   /** New. The flat union of semantic-channel events (see
    *  claude-code-headless EVENT_SPEC.md). Forwarded verbatim so the
    *  renderer can treat it as the authoritative live-turn stream —
@@ -114,7 +133,6 @@ export class ClaudeSession extends EventEmitter {
   // proxy shutdown path drop the emitter isn't enough — the closure
   // captures `this.headless` and delays GC of the session object.
   private proxyEventHandler: ((ev: unknown) => void) | null = null
-  private picker: SlashPickerState = { visible: false, items: [] }
   private exited = false
   /** Gate for the committed `tool_result` bridge. False until the
    *  JSONL tailer's initial replay has quiesced (250 ms without a new
@@ -419,17 +437,13 @@ export class ClaudeSession extends EventEmitter {
 
     this.pty.onData((data: string) => this.emit('pty-data', data))
 
-    this.headless.on('slash-picker', picker => {
-      this.picker = picker
-    })
-
     this.headless.on('screen', snap => {
       this.emit('screen', {
         plain: snap.plain,
         markdown: snap.markdown,
         recent: snap.recent,
         recentMarkdown: snap.recentMarkdown,
-        picker: this.headless?.getSlashPickerState() ?? this.picker,
+        picker: this.headless?.getSlashPickerState() ?? { visible: false, items: [] },
       })
     })
 
@@ -463,6 +477,15 @@ export class ClaudeSession extends EventEmitter {
     )
     this.headless.on('compaction-state', state =>
       this.emit('compaction-state', state),
+    )
+    // PR-3: forward the unified conditions snapshot. Mirrors codexSession's
+    // `this.headless.on('conditions', s => this.emit('conditions', s))`. This is
+    // the single new line that lights up the already-built renderer relay for
+    // Claude (the generic sessionManager `conditions` handler does the rest).
+    // KEPT ALONGSIDE the four per-event forwards above — additive by design; the
+    // old per-event surface is removed in a later cleanup PR.
+    this.headless.on('conditions', snapshot =>
+      this.emit('conditions', snapshot),
     )
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
@@ -602,6 +625,18 @@ export class ClaudeSession extends EventEmitter {
   ): Promise<{ kind: 'appeared'; waitedMs: number } | { kind: 'timeout' } | { kind: 'no-headless' }> {
     if (!this.headless) return { kind: 'no-headless' }
     return this.headless.awaitPastePlaceholder(opts ?? {})
+  }
+
+  async resolveCondition(
+    action: ConditionCustomAction,
+  ): Promise<DriveResult | { ok: false; reason: 'no-headless' }> {
+    // WHY this wrapper exists instead of letting SessionManager reach into
+    // `headless` directly: ClaudeSession owns the lifecycle boundary. During
+    // startup/shutdown the headless instance can legitimately be absent, and the
+    // manager should not need to know that provider-internal detail just to run
+    // a structured condition resolver.
+    if (!this.headless) return { ok: false, reason: 'no-headless' }
+    return this.headless.resolveConditionAction(action)
   }
 
   isExited(): boolean {

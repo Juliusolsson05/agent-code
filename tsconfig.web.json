@@ -50,6 +50,17 @@
     "src/shared/renderedContent/**/*",
     "src/shared/work-context/**/*",
     "src/mcp/shared/**/*",
+    // conditions-core is split across both projects: contract.ts/view.ts/
+    // dispatch.ts are node-safe (checked by tsconfig.node.json), and
+    // ConditionOutlet.tsx is renderer-only JSX (the node project EXCLUDES it
+    // and the web project checks it under jsx: react-jsx). Today ConditionOutlet
+    // is only reached TRANSITIVELY (via ProviderConditionOutlet's import graph),
+    // so if nothing imported it, it would silently fall out of every project's
+    // file list and go un-type-checked. Including the whole tree explicitly here
+    // makes the web project the authoritative checker for the renderer-only file
+    // regardless of who imports it. (The .tsx stays excluded from the node
+    // project — see tsconfig.node.json — so node never sees JSX.)
+    "src/shared/conditions-core/**/*",
     "src/providers/*/parsers/**/*",
     "src/providers/*/renderer/**/*",
     // registry.renderer.ts lives at providers/ root, outside the
