@@ -45,6 +45,45 @@ export type ClaudeCompactionState = {
   errorText?: string
 }
 
+// AskUserQuestion picker state (PR-4). This MUST stay structurally identical to
+// `AskUserQuestionState` / `AskUserQuestionOption` in claude-code-headless's
+// AskUserQuestionParser.ts — that parser produces the value, this is the
+// app-side mirror the wire snapshot is typed against (the submodule import wall
+// means we can't import the headless type directly). If the parser's shape
+// changes, this must change with it.
+//
+// Unlike the modal states above there is NO `visible: boolean` field: the parser
+// returns `null` when no picker is on screen and a `{ active: true, … }` record
+// when one is, so presence is "the record exists", not a flag. `active` is
+// always true when present (a convenience for consumers that destructure without
+// a null-check first).
+export type ClaudeAskUserQuestionOption = {
+  // The on-screen 1-based number; in single-select it is ALSO the exact answer
+  // keystroke (see the askUserQuestion module's action contract).
+  number: number
+  label: string
+  // Multi-select only: the live checkbox state. `undefined` in single-select.
+  toggled?: boolean
+}
+
+export type ClaudeAskUserQuestionState = {
+  active: true
+  mode: 'single' | 'multi'
+  header: string | null
+  question: string | null
+  // Real numbered options INCLUDING the auto-injected "Type something" row,
+  // EXCLUDING the below-divider "Chat about this" footer.
+  options: ClaudeAskUserQuestionOption[]
+  // Row the `❯` cursor sits on, or null when the cursor is on the Submit row.
+  cursorNumber: number | null
+  // Multi-select: true when `❯` is on the focusable "Submit" row.
+  submitFocused: boolean
+  // The "Type something" free-text row's number, or null if absent.
+  otherNumber: number | null
+  // The "Chat about this" footer row's number, or null if absent.
+  chatNumber: number | null
+}
+
 export type PickerItem = {
   id: string
   label: string
@@ -98,6 +137,11 @@ export type ClaudeCondition =
   | {
       kind: 'claude.slash-picker'
       state: ClaudeSlashPickerState
+      actions: ConditionAction[]
+    }
+  | {
+      kind: 'claude.ask-user-question'
+      state: ClaudeAskUserQuestionState
       actions: ConditionAction[]
     }
 

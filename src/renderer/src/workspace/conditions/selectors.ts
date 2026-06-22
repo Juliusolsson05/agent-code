@@ -24,6 +24,15 @@ export function dispatchAttentionLabelFromConditions(
   if (!conditions) return null
   if (conditions.provider === 'claude') {
     if (conditions.conditions['claude.permission-prompt']) return 'ACTION'
+    // A live AskUserQuestion picker means the agent is BLOCKED waiting for the
+    // user to choose — it needs attention just like a permission/trust prompt,
+    // so it surfaces a dispatch badge ('QUESTION') the same way. This is the
+    // ONLY renderer consumer of the new claude.ask-user-question condition in
+    // PR-4: a purely informational badge that cannot affect the inline picker's
+    // render gate (that stays semantic — `!resultAt`) or its answering path, so
+    // it can't regress the working single-select flow. The richer consumers
+    // (answerability gate, multi-step driver) land with PR-5.
+    if (conditions.conditions['claude.ask-user-question']) return 'QUESTION'
     if (conditions.conditions['claude.trust-dialog']) return 'TRUST'
     if (conditions.conditions['claude.resume-prompt']) return 'RESUME'
     if (conditions.conditions['claude.compaction']?.state.phase === 'error') return 'ERROR'
