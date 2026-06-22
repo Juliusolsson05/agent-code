@@ -147,6 +147,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   // bounded failure, so this latch is cleared on failed/ rejected IPC and the
   // user can retry without remounting the row.
   const [answering, setAnswering] = useState(false)
+  const [resolveError, setResolveError] = useState<string | null>(null)
   const [selectedByQuestion, setSelectedByQuestion] =
     useState<Record<number, number[]>>({})
   const [textByQuestion, setTextByQuestion] = useState<Record<number, string>>({})
@@ -212,6 +213,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
     // the renderer guess about liveness from a racing snapshot.
     submittedRef.current = true
     setAnswering(true)
+    setResolveError(null)
     void window.api
       .resolveCondition(sessionId, action)
       .then(result => {
@@ -223,11 +225,13 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
           // interactive is the safer failure mode.
           submittedRef.current = false
           setAnswering(false)
+          setResolveError(`${result.reason} at ${result.failedAtStep}`)
         }
       })
       .catch(() => {
         submittedRef.current = false
         setAnswering(false)
+        setResolveError('resolver IPC failed')
       })
   }
 
@@ -248,6 +252,19 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   }
 
   const toggleOption = (questionIndex: number, number: number) => {
+    const q = questions[questionIndex]
+    if (!q) return
+    setResolveError(null)
+    if (!q.multiSelect) {
+      setSelectedByQuestion(prev => ({ ...prev, [questionIndex]: [number] }))
+      setTextByQuestion(prev => {
+        if (!prev[questionIndex]) return prev
+        const next = { ...prev }
+        delete next[questionIndex]
+        return next
+      })
+      return
+    }
     setSelectedByQuestion(prev => {
       const current = prev[questionIndex] ?? []
       const next = current.includes(number)
@@ -255,6 +272,40 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
         : [...current, number]
       return { ...prev, [questionIndex]: next }
     })
+  }
+
+  const activateCustomText = (questionIndex: number) => {
+    setResolveError(null)
+    const q = questions[questionIndex]
+    if (!q?.multiSelect) {
+      setSelectedByQuestion(prev => {
+        if (!prev[questionIndex]?.length) return prev
+        const next = { ...prev }
+        delete next[questionIndex]
+        return next
+      })
+    }
+    setTextByQuestion(prev => ({
+      ...prev,
+      [questionIndex]: prev[questionIndex] ?? '',
+    }))
+  }
+
+  const updateCustomText = (questionIndex: number, value: string) => {
+    setResolveError(null)
+    const q = questions[questionIndex]
+    if (!q?.multiSelect) {
+      setSelectedByQuestion(prev => {
+        if (!prev[questionIndex]?.length) return prev
+        const next = { ...prev }
+        delete next[questionIndex]
+        return next
+      })
+    }
+    setTextByQuestion(prev => ({
+      ...prev,
+      [questionIndex]: value,
+    }))
   }
 
   const submitStructuredAnswers = () => {
@@ -347,16 +398,10 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
                         immediate
                           ? handleSingleOption(qi, opt)
                           : freeTextOption
-                            ? setTextByQuestion(prev => ({
-                                ...prev,
-                                [qi]: prev[qi] ?? '',
-                              }))
+                            ? activateCustomText(qi)
                           : q.multiSelect
                             ? toggleOption(qi, optionNumber)
-                            : setSelectedByQuestion(prev => ({
-                                ...prev,
-                                [qi]: [optionNumber],
-                              }))
+                            : toggleOption(qi, optionNumber)
                       }
                       className={`
                         group flex w-full items-baseline gap-2 rounded border px-2.5 py-1.5
@@ -374,7 +419,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
                       `}
                     >
                       <span className="flex-shrink-0 text-muted tabular-nums group-hover:text-accent">
-                        {q.multiSelect ? (isSelected ? '[x]' : '[ ]') : `${oi + 1}.`}
+                        {q.multiSelect ? (isSelected ? '[x]' : '[ ]') : isSelected ? '(*)' : `${oi + 1}.`}
                       </span>
                       <span className="flex flex-col gap-0.5">
                         <span className="text-ink">{opt.label}</span>
@@ -386,18 +431,21 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
                   )
                 })}
                 {!useImmediateSingle || !q.multiSelect ? (
-                  <input
-                    value={textByQuestion[qi] ?? ''}
-                    disabled={controlsDisabled}
-                    onChange={event =>
-                      setTextByQuestion(prev => ({
-                        ...prev,
-                        [qi]: event.target.value,
-                      }))
-                    }
-                    placeholder="Type something"
-                    className="mt-1 rounded border border-border bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent disabled:opacity-60"
-                  />
+                  <div className="mt-1 flex flex-col gap-1">
+                    {!q.multiSelect && (
+                      <div className="text-[10px] uppercase tracking-[0.12em] text-muted">
+                        or custom answer
+                      </div>
+                    )}
+                    <input
+                      value={textByQuestion[qi] ?? ''}
+                      disabled={controlsDisabled}
+                      onFocus={() => activateCustomText(qi)}
+                      onChange={event => updateCustomText(qi, event.target.value)}
+                      placeholder="Type something"
+                      className="rounded border border-border bg-surface px-2.5 py-1.5 text-[13px] text-ink outline-none focus:border-accent disabled:opacity-60"
+                    />
+                  </div>
                 ) : null}
               </div>
             </div>
@@ -421,6 +469,11 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
           </button>
         ) : answering ? (
           <div className="text-[11px] text-muted italic">Answering…</div>
+        ) : null}
+        {resolveError ? (
+          <div className="border border-red-500/40 bg-red-950/20 px-2 py-1 text-[11px] text-red-300">
+            Answer failed: {resolveError}
+          </div>
         ) : null}
         {pickerKnownGone ? (
           <div className="text-[11px] text-muted italic">
