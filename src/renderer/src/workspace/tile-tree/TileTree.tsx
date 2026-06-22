@@ -1,8 +1,13 @@
-import { useCallback, useRef } from 'react'
+import { useCallback, useRef, type ComponentType } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
+import {
+  buildGridRelatedAgentTabs,
+  selectedGridRelatedSessionId,
+} from '@renderer/workspace/gridRelatedAgents'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 
@@ -37,6 +42,8 @@ export function TileTree({
       tabId,
       showStatusMode,
       showWorktreeBadges,
+      undefined,
+      true,
     )
   }
 
@@ -83,8 +90,16 @@ export function renderWorkspaceLeaf(
   showStatusMode = true,
   showWorktreeBadges = true,
   onFocusRequest: () => void = () => workspace.focusSessionInTab(tabId, sessionId),
+  showRelatedAgentTabs = false,
 ) {
-  const meta = workspace.state.sessions[sessionId]
+  const relatedTabs = showRelatedAgentTabs
+    ? buildGridRelatedAgentTabs(workspace.state, tabId, sessionId)
+    : []
+  const selectedSessionId = showRelatedAgentTabs
+    ? selectedGridRelatedSessionId(workspace.state, tabId, sessionId) ?? sessionId
+    : sessionId
+  const renderedSessionId = workspace.state.sessions[selectedSessionId] ? selectedSessionId : sessionId
+  const meta = workspace.state.sessions[renderedSessionId]
   const kind = meta?.kind ?? 'claude'
   const paneLabel = paneLabelForSession(workspace.state, tabId, sessionId)
 
@@ -101,11 +116,29 @@ export function renderWorkspaceLeaf(
   }
 
   const provider = getRendererProvider(kind)
-  const runtime = workspace.getRuntime(sessionId)
-  const LeafComponent = provider.TileLeaf
+  const runtime = workspace.getRuntime(renderedSessionId)
+  // WHY widen the provider TileLeaf type at this call site:
+  // providerConfig.ts intentionally exposes only the stable provider-neutral
+  // pane props. Related-agent tabs are shell chrome, not provider API. The
+  // concrete in-repo TileLeaf understands these optional props; future provider
+  // panes can ignore them without changing the public renderer contract.
+  const LeafComponent = provider.TileLeaf as ComponentType<{
+    sessionId: SessionId
+    runtime: unknown
+    paneLabel?: string
+    focused: boolean
+    onFocusRequest: () => void
+    workspace: Workspace
+    showStatusMode?: boolean
+    showWorktreeBadges?: boolean
+    ownerSessionId?: SessionId
+    relatedAgentTabs?: GridRelatedAgentTab[]
+    selectedRelatedSessionId?: SessionId
+    onSelectRelatedSession?: (sessionId: SessionId) => void
+  }>
   return (
     <LeafComponent
-      sessionId={sessionId}
+      sessionId={renderedSessionId}
       runtime={runtime}
       paneLabel={paneLabel}
       focused={sessionId === focusedSessionId}
@@ -113,6 +146,13 @@ export function renderWorkspaceLeaf(
       workspace={workspace}
       showStatusMode={showStatusMode}
       showWorktreeBadges={showWorktreeBadges}
+      ownerSessionId={sessionId}
+      relatedAgentTabs={relatedTabs}
+      selectedRelatedSessionId={renderedSessionId}
+      onSelectRelatedSession={(nextSessionId: SessionId) => {
+        workspace.selectGridRelatedSession(sessionId, nextSessionId)
+        workspace.focusSessionInTab(tabId, sessionId)
+      }}
     />
   )
 }

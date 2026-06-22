@@ -28,6 +28,7 @@ import {
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
@@ -37,7 +38,19 @@ export function commandTargetSessionId(workspace: Workspace): string | null {
 
 export function commandTargetSessionIdForState(state: WorkspaceState): SessionId | null {
   const activeTab = state.tabs.find(tab => tab.id === state.activeTabId)
-  if (!state.dispatchMode) return activeTab?.focusedSessionId ?? null
+  if (!state.dispatchMode) {
+    // WHY grid related selection participates in command targeting:
+    // the physical tile focus must remain the parent leaf, but once the pane is
+    // visibly rendering a related child, global commands like reload/close/copy
+    // need to act on the same session the composer is commanding. The selector
+    // validates the child against current relationship state and falls back to
+    // the parent if the child was closed or detached elsewhere.
+    return selectedGridRelatedSessionId(
+      state,
+      activeTab?.id ?? state.activeTabId,
+      activeTab?.focusedSessionId,
+    )
+  }
 
   // dispatchFocusedSessionId is the single tiled-aware reader: the focused
   // lane's agent in Tiled Dispatch (falling back to classic focus when the
