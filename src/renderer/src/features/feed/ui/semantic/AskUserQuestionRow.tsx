@@ -89,6 +89,11 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function isFreeTextOption(option: AskOption): boolean {
+  const label = option.label.trim().toLowerCase()
+  return label === 'type something' || label === 'other'
+}
+
 // Narrow the loosely-typed `parsedInput` into the questions we know how
 // to render. Returns [] when nothing usable has streamed yet so the
 // caller can show a compact placeholder instead of an empty card.
@@ -134,26 +139,25 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   const { sessionId } = useContext(CodeRenderContext)
   const liveAskUserQuestion = useContext(AskUserQuestionConditionContext)
 
-  // Local "answering" latch. Once the user clicks an option we send the
-  // digit and immediately disable every option, both to give feedback
-  // ("Answering…") and to GUARD AGAINST DOUBLE-SUBMIT — a second digit
-  // would be interpreted by whatever prompt comes next, not the picker.
-  // The latch lives only until the block gains `resultAt` and this row
-  // unmounts; we never need to clear it.
+  // Local "answering" latch. Once the user submits an answer we disable every
+  // control, both to give feedback ("Answering…") and to guard against
+  // double-submit while the headless driver is writing to the real terminal.
+  // Unlike the old raw-keystroke path, the structured resolver can return a
+  // bounded failure, so this latch is cleared on failed/ rejected IPC and the
+  // user can retry without remounting the row.
   const [answering, setAnswering] = useState(false)
   const [selectedByQuestion, setSelectedByQuestion] =
-    useState<Record<number, string[]>>({})
+    useState<Record<number, number[]>>({})
   const [textByQuestion, setTextByQuestion] = useState<Record<number, string>>({})
 
   // Synchronous double-submit guard. `answering` (React state) only drives
   // the VISUAL disabled/"Answering…" affordance — but `disabled` doesn't
   // take effect until the next render, so two clicks dispatched in the SAME
   // tick (e.g. a fast double-click) both pass the `if (answering)` check and
-  // fire two `sendInput` digits. The second digit lands on whatever prompt
-  // follows the picker → corruption. A ref is read+written SYNCHRONOUSLY at
-  // the top of the handler, before any await/sendInput, so the second call
-  // in the same tick sees `true` and bails. It only ever latches true once
-  // (the row unmounts on `resultAt`), so there's nothing to reset.
+  // fire two resolver calls. The second call could interleave keystrokes with
+  // the first in the provider TUI. A ref is read+written SYNCHRONOUSLY at the
+  // top of the handler, before any IPC, so the second call in the same tick sees
+  // `true` and bails. It is reset only for structured/rejected failures.
   const submittedRef = useRef(false)
 
   const questions = readQuestions(block.parsedInput)
@@ -176,6 +180,10 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
       question: string
       header?: string
       multiSelect?: boolean
+      selectedOptions?: Array<{
+        label: string
+        number?: number
+      }>
       selectedLabels?: string[]
       text?: string
     }>,
@@ -193,20 +201,33 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
     if (submittedRef.current) return
     if (answering) return
     if (!sessionId) return
-    if (pickerKnownGone) return
+    // WHY this does NOT gate on `pickerKnownGone` anymore:
+    // transcript rows and screen conditions are two independent streams. The
+    // semantic AUQ block can mount before the parser has detected the terminal
+    // picker, which made a real live question intermittently unclickable. The
+    // headless resolver is now the safety boundary: it reparses the current xterm
+    // before writing anything and returns a structured failure if the picker is
+    // absent or ambiguous. That removes the stray-keystroke race without making
+    // the renderer guess about liveness from a racing snapshot.
     submittedRef.current = true
     setAnswering(true)
-    void window.api.resolveCondition(sessionId, action).then(result => {
-      if (!result.ok) {
-        // Let the user try again when the structured driver reports a bounded
-        // failure. The old single-keystroke path latched forever because there
-        // was no meaningful recovery signal; the driver can now say "timeout" or
-        // "option not found" without corrupting the terminal, so keeping the row
-        // interactive is the safer failure mode.
+    void window.api
+      .resolveCondition(sessionId, action)
+      .then(result => {
+        if (!result.ok) {
+          // Let the user try again when the structured driver reports a bounded
+          // failure. The old single-keystroke path latched forever because there
+          // was no meaningful recovery signal; the driver can now say "timeout" or
+          // "option not found" without corrupting the terminal, so keeping the row
+          // interactive is the safer failure mode.
+          submittedRef.current = false
+          setAnswering(false)
+        }
+      })
+      .catch(() => {
         submittedRef.current = false
         setAnswering(false)
-      }
-    })
+      })
   }
 
   const handleSingleOption = (questionIndex: number, option: AskOption) => {
@@ -218,18 +239,19 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
           question: q.question,
           header: q.header,
           multiSelect: q.multiSelect,
+          selectedOptions: [{ label: option.label, number: q.options.indexOf(option) + 1 }],
           selectedLabels: [option.label],
         },
       ]),
     )
   }
 
-  const toggleOption = (questionIndex: number, label: string) => {
+  const toggleOption = (questionIndex: number, number: number) => {
     setSelectedByQuestion(prev => {
       const current = prev[questionIndex] ?? []
-      const next = current.includes(label)
-        ? current.filter(item => item !== label)
-        : [...current, label]
+      const next = current.includes(number)
+        ? current.filter(item => item !== number)
+        : [...current, number]
       return { ...prev, [questionIndex]: next }
     })
   }
@@ -239,7 +261,13 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
       question: q.question,
       header: q.header,
       multiSelect: q.multiSelect,
-      selectedLabels: selectedByQuestion[qi] ?? [],
+      selectedOptions: (selectedByQuestion[qi] ?? []).map(number => ({
+        label: q.options[number - 1]?.label ?? '',
+        number,
+      })),
+      selectedLabels: (selectedByQuestion[qi] ?? [])
+        .map(number => q.options[number - 1]?.label)
+        .filter((label): label is string => Boolean(label)),
       text: textByQuestion[qi]?.trim() || undefined,
     }))
     dispatchAnswer(buildAction(answers))
@@ -251,14 +279,17 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
     if (q.multiSelect) return selected.length > 0 || text.length > 0
     return questions.length === 1 || selected.length > 0 || text.length > 0
   })
-  const useImmediateSingle = questions.length === 1 && !questions[0].multiSelect
+  const useImmediateSingle =
+    questions.length === 1 &&
+    !questions[0].multiSelect &&
+    (textByQuestion[0]?.trim() ?? '').length === 0
 
   return (
     <MarkerRow marker="⏺">
       <div className="flex flex-col gap-3">
         {questions.map((q, qi) => {
           const selected = selectedByQuestion[qi] ?? []
-          const controlsDisabled = answering || pickerKnownGone
+          const controlsDisabled = answering
           return (
             <div key={qi} className="flex flex-col gap-1.5">
               {q.header ? (
@@ -273,8 +304,10 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
               ) : null}
               <div className="flex flex-col gap-1">
                 {q.options.map((opt, oi) => {
-                  const isSelected = selected.includes(opt.label)
-                  const immediate = useImmediateSingle
+                  const optionNumber = oi + 1
+                  const freeTextOption = isFreeTextOption(opt)
+                  const isSelected = selected.includes(optionNumber)
+                  const immediate = useImmediateSingle && !freeTextOption
                   return (
                     <button
                       key={oi}
@@ -283,11 +316,16 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
                       onClick={() =>
                         immediate
                           ? handleSingleOption(qi, opt)
+                          : freeTextOption
+                            ? setTextByQuestion(prev => ({
+                                ...prev,
+                                [qi]: prev[qi] ?? '',
+                              }))
                           : q.multiSelect
-                            ? toggleOption(qi, opt.label)
+                            ? toggleOption(qi, optionNumber)
                             : setSelectedByQuestion(prev => ({
                                 ...prev,
-                                [qi]: [opt.label],
+                                [qi]: [optionNumber],
                               }))
                       }
                       className={`
@@ -317,7 +355,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
                     </button>
                   )
                 })}
-                {!useImmediateSingle ? (
+                {!useImmediateSingle || !q.multiSelect ? (
                   <input
                     value={textByQuestion[qi] ?? ''}
                     disabled={controlsDisabled}
@@ -338,12 +376,12 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
         {!useImmediateSingle ? (
           <button
             type="button"
-            disabled={!structuredReady || answering || pickerKnownGone}
+            disabled={!structuredReady || answering}
             onClick={submitStructuredAnswers}
             className={`
               self-start rounded border border-border px-3 py-1.5 text-[13px] transition-colors
               ${
-                !structuredReady || answering || pickerKnownGone
+                !structuredReady || answering
                   ? 'cursor-default opacity-60'
                   : 'cursor-pointer hover:border-accent hover:bg-surface-hi'
               }
@@ -356,7 +394,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
         ) : null}
         {pickerKnownGone ? (
           <div className="text-[11px] text-muted italic">
-            The terminal picker is no longer active.
+            Terminal picker not detected; retry will fail safely if it is gone.
           </div>
         ) : null}
       </div>

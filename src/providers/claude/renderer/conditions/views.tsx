@@ -7,11 +7,11 @@
 // flow through the dispatch pty arm → sendInput, identical to the old
 // ClaudeConditionOutlet.
 //
-// NOTE ON LIVENESS: Claude's headless emitter does not yet emit a `conditions`
-// snapshot (that lands in a later PR). So these views are REGISTERED and READY
-// but currently DORMANT — nothing flips them on until the Claude emitter ships.
-// Wiring them now (a) proves the registry is provider-symmetric and (b) means
-// the emitter PR is "turn on the wire", not "also build the renderer".
+// NOTE ON LIVENESS: Claude now emits the unified `conditions` snapshot on the
+// same screen tick that updates the legacy modal fields. These views are live.
+// Keep this registry as a thin adapter layer only; provider-specific detection
+// and resolver policy stays in claude-code-headless so the renderer does not
+// grow a second source of truth for terminal state.
 
 import { CompactionStrip } from '@renderer/workspace/tile-tree/TileLeaf/CompactionStrip'
 import { PermissionPromptModal } from '@providers/claude/renderer/PermissionPromptModal'

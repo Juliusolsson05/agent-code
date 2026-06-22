@@ -34,11 +34,11 @@
 // permission prompt). The keystrokes ARE the contract with the underlying TUI —
 // the provider's real terminal program reads them and advances its own state.
 //
-// `custom` actions are defined but DORMANT (see dispatch.ts). They model a
-// future world where a condition resolves through a structured IPC call instead
-// of a keystroke. No live condition emits one today; the type exists so the
-// contract is complete and the dispatch driver can be written against the full
-// union now rather than being retrofitted later.
+// `custom` actions are the escape hatch for conditions that cannot be safely
+// represented as one raw keystroke. AskUserQuestion uses this path: the renderer
+// sends semantic labels/text, then the Claude headless resolver reparses the
+// live terminal between writes so multi-question and multi-select prompts fail
+// closed instead of spraying stale digits into the PTY.
 
 export type ConditionPtyAction = {
   kind: 'pty'
@@ -54,9 +54,10 @@ export type ConditionCustomAction = {
   kind: 'custom'
   id: string
   label: string
-  // Logical name of a resolver the headless/main side knows how to run. Unused
-  // until a later PR introduces the first custom condition + a
-  // `session:resolveCondition` IPC channel. See dispatch.ts WHY comment.
+  // Logical name of a resolver the headless/main side knows how to run. The
+  // renderer routes this through `session:resolveCondition`; provider modules
+  // claim only the names they own and unknown names must become structured
+  // failures, not silent success.
   name: string
   // Optional structured payload consumed by the named resolver. This stays
   // deliberately untyped at the core layer: a parser/driver pair owns its own
