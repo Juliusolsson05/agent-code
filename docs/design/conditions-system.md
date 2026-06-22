@@ -17,15 +17,17 @@ user resolve. Today's live conditions:
 | Claude   | `claude.resume-prompt`     | inline strip                | keystroke   |
 | Claude   | `claude.compaction`        | inline strip (read-only)    | —           |
 | Claude   | `claude.slash-picker`      | (not rendered via outlet)   | keystroke   |
+| Claude   | `claude.ask-user-question` | feed row + terminal picker  | custom      |
 | Codex    | `codex.trust-dialog`       | modal "Trust this dir?"     | keystroke   |
 | Codex    | `codex.approval`           | inline approval strip       | keystroke   |
-| Codex    | `codex.switch-model-prompt`| (emitted, no view yet)      | keystroke   |
 
-Every live condition today resolves by writing a **raw keystroke string into
-the session PTY**. Those keystrokes are the entire contract with the underlying
+Most live conditions resolve by writing a **raw keystroke string into the
+session PTY**. Those keystrokes are the entire contract with the underlying
 provider's real terminal program: `'\r'` accepts, `'3\r'` denies a permission
 prompt, `'\x1b'` cancels, arrow escapes (`'\x1b[A'` / `'\x1b[B'`) move a
-selection. The provider's TUI reads them and advances its own state machine.
+selection. AskUserQuestion is the exception: it resolves through a named
+`custom` action because a single semantic answer can require several reparsed
+terminal steps.
 
 ## Wire format (UNCHANGED by the registry framework)
 
@@ -39,8 +41,8 @@ ProviderConditionSnapshot =
 
 where each map is `Partial<Record<kind, { kind, state, actions }>>` — at most
 one live record per kind. `state` is provider-specific; `actions` is the
-generic `ConditionAction[]` (a `pty` keystroke action, or the dormant `custom`
-action). See `src/shared/types/providerConditions.ts` (provider state shapes +
+generic `ConditionAction[]` (a `pty` keystroke action, or a named `custom`
+resolver action). See `src/shared/types/providerConditions.ts` (provider state shapes +
 unions) and `src/shared/conditions-core/contract.ts` (the generic action/record
 primitives that file now re-exports).
 
@@ -54,7 +56,7 @@ primitives that file now re-exports).
 │    view.ts           ConditionView / ConditionViewProps / AttentionLevel      │
 │    ConditionOutlet.tsx  the ONE generic outlet (routes snapshot by kind)      │
 │    dispatch.ts       makeDispatch / makeDispatchFromOnSend (pty arm wired,    │
-│                      custom arm dormant)                                       │
+│                      custom arm delegates to a resolver when provided)         │
 ├─ Layer 2: provider modules ─────────────────────────────────────────────────┤
 │  src/providers/claude/renderer/conditions/views.tsx  → CLAUDE_VIEWS           │
 │  src/providers/codex/renderer/conditions/views.tsx   → CODEX_VIEWS            │
@@ -75,10 +77,11 @@ condition's contract and the machinery to route + dispatch:
   (`React.ComponentType<ConditionViewProps<S>>`), an optional `attention(state)`
   classifier, and a `layout` hint. `ConditionViewProps<S> =
   { state: S; actions: ConditionAction[]; dispatch }`.
-- **The headless half** (`contract.ts`, FORWARD-LOOKING, not consumed in this
-  PR): a `ConditionModule<K,I,S>` bundles a `detect(input) → state | null`, an
-  `actions(state) → ConditionAction[]`, and an optional `resolve`. This is the
-  contract the headless emitters will be authored against in a later PR.
+- **The headless half** (`contract.ts`): a `ConditionModule<K,I,S>` bundles a
+  `detect(input) → state | null`, an `actions(state) → ConditionAction[]`, and
+  an optional `resolve`. The app-side copy is the source that is vendored into
+  the headless submodules so provider emitters and resolvers share the same
+  contract.
 
 The **generic outlet** (`ConditionOutlet.tsx`) takes `{ snapshot, registry,
 dispatch }`, iterates `Object.values(snapshot.conditions)`, looks each record's
@@ -103,7 +106,8 @@ graceful-old-client posture the wire format already assumes).
 
 The **dispatch driver** (`dispatch.ts`) turns a chosen action into a side
 effect. The `pty` arm calls `sendInput`/`onSend` with the action's raw `data`.
-The `custom` arm **throws** — see "Why custom is dormant".
+The `custom` arm calls the resolver callback passed by the host surface; if no
+resolver is provided it throws rather than silently dropping the action.
 
 Type-safety guardrail: the core stores **erased** views
 (`ConditionView<string, unknown>`) in `Record<string, ConditionView>`. That
@@ -128,7 +132,6 @@ type) by the `eraseRegistry` helper:
 type CodexStateByKind = {
   'codex.approval': CodexApprovalState
   'codex.trust-dialog': CodexTrustDialogState
-  'codex.switch-model-prompt': unknown   // emitted, no view yet
 }
 
 export const CODEX_VIEW_LIST = [approvalView, codexTrustView] as const
@@ -143,8 +146,9 @@ with `ViewRegistry<M> = { [K in keyof M & string]: ConditionView<K, M[K]> }` and
 `eraseRegistry<M>(reg: Partial<ViewRegistry<M>>): Record<string, ConditionView>`
 (both in `view.ts`). The literal is type-checked against `CodexStateByKind` by
 `eraseRegistry`'s parameter, so filing `approvalView` under `'codex.trust-dialog'`
-is a **compile error at the call site**. `Partial` is needed because not every
-declared kind has a view yet (`codex.switch-model-prompt`).
+is a **compile error at the call site**. `Partial` is needed because some
+conditions intentionally have no outlet view (`claude.slash-picker` is consumed
+by the composer path instead).
 
 **Why a helper instead of a plain `satisfies` + annotation.** The outlet stores
 erased views and renders each Component with `state: unknown`. Because `state`
@@ -197,16 +201,25 @@ headless emitter
 reaches `window.api.sendInput(sessionId, data)` → `session:input`. PR-1 reuses
 that `onSend` verbatim via `makeDispatchFromOnSend`.
 
-## Why `custom` actions are dormant
+## Why `custom` actions exist
 
 The wire `ConditionAction` union includes a `custom` action (resolve via a named
-structured resolver instead of a keystroke). **No live condition emits one.**
-Wiring a `session:resolveCondition` IPC + a main-side resolver now would be dead
-code with zero callers — code that can rot before its first real use. So the
-dispatch `custom` arm **throws loudly** rather than silently no-op'ing: if some
-future path ever emits a custom action before the wiring exists, we find out
-immediately. The first PR that introduces a genuine custom condition adds the
-IPC + resolver and replaces the throw.
+structured resolver instead of a keystroke). AskUserQuestion uses it because the
+renderer has semantic answers while Claude's TUI exposes only the currently
+visible question. The resolver path is:
+
+```
+AskUserQuestionRow
+  → window.api.resolveCondition(sessionId, action)
+  → main session:resolveCondition
+  → ClaudeSession.resolveCondition
+  → ClaudeCodeHeadless.resolveConditionAction
+  → claude.askUserQuestion.answer module resolver
+```
+
+The dispatch `custom` arm still throws if a surface does not pass a resolver.
+That is intentional: a custom action without its named resolver would otherwise
+look clickable while doing nothing.
 
 ## CRITICAL DESIGN NOTE — `detect()` is free-form
 
@@ -215,13 +228,11 @@ helper library, never a straitjacket; any parser may use its own regex/cursor
 logic and reach for shared helpers only where they fit.**
 
 `ConditionModule.detect` is typed as an arbitrary `(input: I) => S | null`. The
-type imposes NO structure on HOW detection happens. The planned shared detection
-toolkit (regex/cursor helpers) and the planned `sendThenReparse` driver (write a
-keystroke, wait for the screen to settle, re-run detect to confirm the new
-state) are **helper libraries** a parser may opt into. A parser is free to use
-entirely ad-hoc regex/cursor logic and reach for shared helpers only where they
-happen to fit. Neither the toolkit nor `sendThenReparse` is built in PR-1; they
-are PLANNED.
+type imposes NO structure on HOW detection happens. Shared detection helpers
+(regex/cursor helpers) and provider-local drivers such as Claude's
+`sendThenReparse` loop are **helper libraries** a parser may opt into. A parser
+is free to use entirely ad-hoc regex/cursor logic and reach for shared helpers
+only where they happen to fit.
 
 ## Registration model
 
@@ -236,9 +247,9 @@ are PLANNED.
 
 `packages/claude-code-headless` and `packages/codex-headless` are **git
 submodules**. The condition-module headless core (the `detect`/`actions`/
-`resolve` implementations that will eventually run inside the headless
-processes) cannot simply `import` from the app's `src/shared/conditions-core`
-across the submodule boundary. The plan:
+`resolve` implementations that run inside the headless processes) cannot simply
+`import` from the app's `src/shared/conditions-core` across the submodule
+boundary. The rule:
 
 - The app's `src/shared/conditions-core/contract.ts` is the **authoritative**
   definition of the `ConditionModule` contract and the wire action primitives.
@@ -246,32 +257,17 @@ across the submodule boundary. The plan:
   app, not a live import) so the submodule stays self-contained and buildable on
   its own. A check (golden/diff) keeps the vendored copy byte-identical to the
   app's source of truth; drift is a CI/review failure.
-- App↔headless agreement is verified by a **byte-for-byte golden snapshot
-  check**: feed a recorded screen buffer through both the old emitter and the
-  new module-based emitter and assert the emitted `ProviderConditionSnapshot` is
-  identical.
+- App↔headless agreement is verified by keeping the vendored files synced in
+  review and CI. If `src/shared/conditions-core/{contract,evaluator}.ts`
+  changes, run `node scripts/sync-conditions-core.mjs` and commit the submodule
+  copies too.
 
-(Mechanics land in the headless-migration PRs, not here. PR-1 is app-repo only
-and touches no submodule.)
+## Current integration state
 
-## PR roadmap
-
-1. **PR-1 (this PR) — renderer framework.** Introduce `conditions-core` (the
-   contract, view, generic outlet, dispatch) and route the EXISTING modals
-   through it as drop-in view modules. Delete the per-provider hand-switch
-   outlets. Behavior byte-identical. Codex is live-proven through the new path;
-   Claude views are registered but DORMANT (no Claude emitter yet). The
-   denormalization seam (applyConditionSnapshot, selectors, keybinds) is left
-   untouched; the `attention` field is defined but not yet consumed.
-2. **Codex headless onto the core**, with a byte-for-byte golden snapshot check
-   proving the module-based emitter matches the current one exactly.
-3. **Claude evaluator + slash-picker + shared toolkit** — builds the Claude
-   headless emitter and the detection toolkit; this is what RESTORES Claude's
-   currently-dead modals (PR-1's dormant Claude views light up here).
-4. **AskUserQuestion module (hybrid)** — semantic liveness + screen-driven
-   answering for the native question picker.
-5. **Answering driver** — `sendThenReparse` and friends.
-6. **Migrate remaining conditions + delete dead paths** — retire selectors.ts,
-   the legacy per-event channels, and the denormalization seam left alone in
-   PR-1; consume `attention` off the registered views.
-```
+The integration branch has the renderer framework, Codex/Claude headless
+module evaluators, Claude AskUserQuestion liveness/answering, and Claude
+slash-picker snapshot migration wired. Remaining cleanup is intentionally
+smaller than the original roadmap: retire the legacy per-event Claude modal
+channels once all consumers are proven gone, collapse duplicate public wire
+types where practical, and keep docs/API references aligned with the vendored
+submodule surfaces.
