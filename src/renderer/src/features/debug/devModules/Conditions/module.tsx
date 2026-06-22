@@ -13,7 +13,11 @@
 import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 
-import type { DevDebugModule, DevDebugModuleProps } from '@renderer/features/debug/devModules/types'
+import type {
+  DevDebugCopyMode,
+  DevDebugModule,
+  DevDebugModuleProps,
+} from '@renderer/features/debug/devModules/types'
 import {
   dispatchAttentionLabelFromConditions,
   hasActionCondition,
@@ -31,6 +35,7 @@ export const conditionsDebugModule: DevDebugModule = {
   title: 'Conditions',
   description: 'Condition snapshots, derived runtime state, AUQ render gates, exact probes, and raw screens.',
   Component: ConditionsDebug,
+  buildCopyText: buildConditionsCopyText,
 }
 
 const CONDITION_CATALOG = [
@@ -280,6 +285,96 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
       </Section>
     </Panel>
   )
+}
+
+function buildConditionsCopyText(
+  { sessionId, runtime, kind }: DevDebugModuleProps,
+  mode: DevDebugCopyMode,
+): string {
+  const snapshot = runtime.conditions
+  const conditionKeys = snapshot ? Object.keys(snapshot.conditions) : []
+  const attention = dispatchAttentionLabelFromConditions(snapshot)
+  const actionCondition = hasActionCondition(snapshot)
+  const slashFromConditions = slashPickerFromConditions(snapshot)
+  const auqFromConditions =
+    snapshot?.provider === 'claude'
+      ? snapshot.conditions['claude.ask-user-question']?.state ?? null
+      : null
+  const auqBlocks = collectAskUserQuestionBlocks(runtime.semantic.currentTurn, runtime.semantic.history)
+  const full = mode === 'full'
+  const payload = {
+    module: {
+      id: 'conditions',
+      title: 'Conditions',
+      copyMode: mode,
+      copiedAt: new Date().toISOString(),
+    },
+    session: {
+      sessionId,
+      kind,
+    },
+    summary: {
+      snapshotProvider: snapshot?.provider ?? null,
+      snapshotTs: snapshot?.ts ?? null,
+      snapshotAgeMs: snapshot ? Date.now() - snapshot.ts : null,
+      conditionKeys,
+      hasActionCondition: actionCondition,
+      attentionLabel: attention,
+    },
+    expectedConditions: CONDITION_CATALOG.map(row => ({
+      ...row,
+      present: conditionPresent(snapshot, row.kind),
+    })),
+    derivedRendererState: {
+      pendingTrustDialog: runtime.pendingTrustDialog,
+      pendingPermissionPrompt: runtime.pendingPermissionPrompt,
+      pendingResumePrompt: runtime.pendingResumePrompt,
+      pendingCompaction: runtime.pendingCompaction,
+      pendingApproval: runtime.pendingApproval,
+      runtimePicker: runtime.picker,
+      slashFromConditions,
+      slashParity: jsonEqual(runtime.picker, slashFromConditions ?? { visible: false, items: [] }),
+    },
+    askUserQuestion: {
+      liveConditionState: auqFromConditions,
+      semanticBlockCount: auqBlocks.length,
+      unresolvedSemanticBlockCount: auqBlocks.filter(block => block.resultAt == null).length,
+      anyParsedQuestions: auqBlocks.some(block => hasParsedQuestions(block)),
+      semanticBlocks: auqBlocks.map(block => ({
+        turnId: block.turnId,
+        blockIndex: block.blockIndex,
+        resultAt: block.resultAt ?? null,
+        inputJsonValid: block.inputJsonValid ?? null,
+        parsedQuestionCount: readQuestionCount(block.parsedInput),
+        parsedInput: block.parsedInput ?? null,
+        inputJson: full ? block.inputJson ?? null : undefined,
+      })),
+    },
+    screenDetectionProbes: AUQ_SCREEN_PROBES.map(probe => ({
+      label: probe.label,
+      why: probe.why,
+      pattern: String(probe.pattern),
+      result: summarizeMatch(runtime.screen, probe.pattern),
+    })),
+    raw: {
+      conditions: snapshot,
+      plainScreen: full ? runtime.screen : runtime.screen.slice(-2400),
+      markdownScreen: full ? runtime.screenMarkdown : runtime.screenMarkdown.slice(-2400),
+      conditionAndSemanticEvents: full
+        ? runtime.feedDebugLog.filter(entry => entry.kind === 'conditions' || entry.layer === 'SEM')
+        : runtime.feedDebugLog
+            .filter(entry => entry.kind === 'conditions' || entry.layer === 'SEM')
+            .slice(-20),
+      semanticLog: full ? runtime.semantic.log : runtime.semantic.log.slice(-20),
+    },
+  }
+  return [
+    '# Conditions',
+    '',
+    '```json',
+    JSON.stringify(payload, null, 2),
+    '```',
+  ].join('\n')
 }
 
 type AskUserQuestionBlockSummary = SemanticLiveBlock & {
