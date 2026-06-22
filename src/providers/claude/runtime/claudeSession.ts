@@ -133,7 +133,6 @@ export class ClaudeSession extends EventEmitter {
   // proxy shutdown path drop the emitter isn't enough — the closure
   // captures `this.headless` and delays GC of the session object.
   private proxyEventHandler: ((ev: unknown) => void) | null = null
-  private picker: SlashPickerState = { visible: false, items: [] }
   private exited = false
   /** Gate for the committed `tool_result` bridge. False until the
    *  JSONL tailer's initial replay has quiesced (250 ms without a new
@@ -438,17 +437,13 @@ export class ClaudeSession extends EventEmitter {
 
     this.pty.onData((data: string) => this.emit('pty-data', data))
 
-    this.headless.on('slash-picker', picker => {
-      this.picker = picker
-    })
-
     this.headless.on('screen', snap => {
       this.emit('screen', {
         plain: snap.plain,
         markdown: snap.markdown,
         recent: snap.recent,
         recentMarkdown: snap.recentMarkdown,
-        picker: this.headless?.getSlashPickerState() ?? this.picker,
+        picker: this.headless?.getSlashPickerState() ?? { visible: false, items: [] },
       })
     })
 

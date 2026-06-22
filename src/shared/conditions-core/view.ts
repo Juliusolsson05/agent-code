@@ -85,8 +85,8 @@ export function defineView<K extends string, S>(
 // whose kind AND state both line up with the declaration.
 //
 // Provider literals are checked with `... satisfies Partial<ViewRegistry<M>>`
-// (Partial because not every declared kind needs a view yet — e.g.
-// `codex.switch-model-prompt` is emitted but has no renderer). `satisfies`
+// (Partial because a provider may expose a condition for non-modal consumption
+// before it has an outlet view). `satisfies`
 // validates the literal against the registry shape WITHOUT widening it (so the
 // concrete per-key view types are preserved), and a kind→wrong-view mapping
 // becomes a compile error HERE, at the provider boundary, before the registry is

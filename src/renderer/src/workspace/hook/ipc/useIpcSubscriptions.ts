@@ -230,7 +230,11 @@ function applyConditionSnapshot(
             errorText: compaction.errorText,
           }
         : null,
-      picker: slashPicker ?? runtime.picker,
+      // Slash picker now lives on the conditions snapshot. The old fallback kept
+      // the previous picker when a new snapshot omitted it, which was useful for
+      // the legacy per-event path but is wrong for condition semantics: absence
+      // from the map means "not live" and must clear the composer picker.
+      picker: slashPicker ?? { visible: false, items: [] },
     }
   }
 

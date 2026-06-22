@@ -168,16 +168,6 @@ export type CodexCondition =
       state: CodexApprovalState
       actions: ConditionAction[]
     }
-  | {
-      kind: 'codex.switch-model-prompt'
-      state: {
-        visible: true
-        message: string
-        selectedIndex?: number
-        options?: string[]
-      }
-      actions: ConditionAction[]
-    }
 
 export type CodexConditionKind = CodexCondition['kind']
 
