@@ -175,42 +175,6 @@ export default function App() {
   }, [settings])
 
   useEffect(() => {
-    if (settings.agentViewMode !== 'terminal') return
-    // WHY hard Terminal mode force-clears rendered interaction state:
-    // Hybrid leases are intentionally allowed to mount TileLeaf for a feature,
-    // but Terminal mode is the user's explicit "do not mount Agent Code's
-    // rendered agent surface" setting. If a picker lease survives the setting
-    // transition, switching back to Hybrid later can resurrect a stale picker
-    // that was invisible while Terminal mode was active. Clearing at the app
-    // boundary keeps the mode switch semantic: Terminal is an immediate hard
-    // reset of rendered-only affordances, not a pause button for them.
-    for (const sessionId of Object.keys(workspace.runtimes)) {
-      const runtime = workspace.runtimes[sessionId]
-      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
-      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
-      workspace.releaseAllRenderedViewLeases(sessionId)
-    }
-  }, [settings.agentViewMode, workspace])
-
-  useEffect(() => {
-    if (!workspace.reader && !workspace.spotlight && !settingsPageOpen) return
-    // WHY reader/spotlight/settings clear picker leases:
-    // these surfaces hide or replace the feed interaction layer while global
-    // keybinds are still alive. If a Copy Assistant or Copy Code Block picker
-    // survives underneath them, Escape/Enter/arrows either act on hidden state
-    // or force Hybrid to keep TileLeaf mounted for UI the user cannot see.
-    // Draft-driven rendering is intentionally unaffected because composer
-    // draft text is real user state; picker leases are transient affordances.
-    for (const sessionId of Object.keys(workspace.runtimes)) {
-      const runtime = workspace.runtimes[sessionId]
-      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
-      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
-      workspace.releaseRenderedViewLease(sessionId, 'copy-assistant-message')
-      workspace.releaseRenderedViewLease(sessionId, 'copy-code-block')
-    }
-  }, [settingsPageOpen, workspace])
-
-  useEffect(() => {
     const off = window.api.onAiWorkspaceOpenRequest(request => {
       useGlobalEditorStore.getState().openAiWorkspace(request.workspaceId)
       useAppStore.getState().openGlobalEditor()
@@ -299,6 +263,42 @@ export default function App() {
   useEffect(() => {
     workspaceRef.current = workspace
   }, [workspace])
+
+  useEffect(() => {
+    if (settings.agentViewMode !== 'terminal') return
+    // WHY hard Terminal mode force-clears rendered interaction state:
+    // Hybrid leases are intentionally allowed to mount TileLeaf for a feature,
+    // but Terminal mode is the user's explicit "do not mount Agent Code's
+    // rendered agent surface" setting. If a picker lease survives the setting
+    // transition, switching back to Hybrid later can resurrect a stale picker
+    // that was invisible while Terminal mode was active. Clearing at the app
+    // boundary keeps the mode switch semantic: Terminal is an immediate hard
+    // reset of rendered-only affordances, not a pause button for them.
+    for (const sessionId of Object.keys(workspace.runtimes)) {
+      const runtime = workspace.runtimes[sessionId]
+      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
+      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
+      workspace.releaseAllRenderedViewLeases(sessionId)
+    }
+  }, [settings.agentViewMode, workspace])
+
+  useEffect(() => {
+    if (!workspace.reader && !workspace.spotlight && !settingsPageOpen) return
+    // WHY reader/spotlight/settings clear picker leases:
+    // these surfaces hide or replace the feed interaction layer while global
+    // keybinds are still alive. If a Copy Assistant or Copy Code Block picker
+    // survives underneath them, Escape/Enter/arrows either act on hidden state
+    // or force Hybrid to keep TileLeaf mounted for UI the user cannot see.
+    // Draft-driven rendering is intentionally unaffected because composer
+    // draft text is real user state; picker leases are transient affordances.
+    for (const sessionId of Object.keys(workspace.runtimes)) {
+      const runtime = workspace.runtimes[sessionId]
+      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
+      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
+      workspace.releaseRenderedViewLease(sessionId, 'copy-assistant-message')
+      workspace.releaseRenderedViewLease(sessionId, 'copy-code-block')
+    }
+  }, [settingsPageOpen, workspace])
 
   useEffect(() => {
     if (!aggressiveDebugPersistenceEnabled) return
