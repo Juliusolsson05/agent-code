@@ -2,29 +2,31 @@
 //
 // Why this module exists at all:
 // useComposerDictation used to subscribe to onDictationHotkeyDown/Up directly.
-// Each TileLeaf created its own subscription, and the down handler was gated on
-// `focusedRef.current`. On a fresh app launch, no composer has focus yet, so
+// Each pane created its own subscription, and the down handler was gated on
+// `focusedRef.current`. On a fresh app launch, no target had focus yet, so
 // every subscriber bailed and the press was a silent no-op. The user pressed
-// Fn, nothing happened, and they had to click into a composer before dictation
+// Fn, nothing happened, and they had to click into a pane before dictation
 // would respond. The 30-second "doesn't work after launch" report turned out
 // to be exactly that: the helper was ready in <1s, but the renderer had no
-// focused composer to consume the event.
+// focused target to consume the event.
 //
 // Two architectural pieces moved here:
 //   1. ONE process-wide subscription to the native hotkey IPC. Multiple
 //      subscribers were redundant: only one composer can record at a time.
 //   2. A "currently active dictation target" picker that prefers the focused
-//      composer but falls back to the most-recently-focused one. This is the
+//      pane but falls back to the most-recently-focused one. This is the
 //      thing that actually makes Fn work after launch even when the input
 //      isn't focused yet.
 //
 // Each useComposerDictation hook calls registerDictationTarget() when it
-// mounts/updates and unregisters on cleanup. The registry owns the IPC
-// subscription so the cost is constant in the number of tiles open.
+// mounts/updates and unregisters on cleanup. Composer-mode targets render the
+// inline mic affordance; terminal-mode targets render the floating overlay.
+// The registry owns the IPC subscription so the cost is constant in the number
+// of tiles open.
 
 export type DictationTargetHandle = {
   enabled: boolean
-  // True iff the leaf's input element currently has DOM focus.
+  // True iff this target's pane/input currently has focus.
   focused: boolean
   // Last wall-clock timestamp that this target was focused. Updated on every
   // focused=true register call so the fallback picks the genuinely most
@@ -86,8 +88,8 @@ const pickTarget = (): DictationTargetHandle | null => {
   let best: DictationTargetHandle | null = null
   for (const t of targets) {
     if (!t.enabled) continue
-    // Currently-focused composer always wins. This matches user intent: if
-    // they are typing into composer A, Fn should record there, full stop.
+    // Currently-focused target always wins. This matches user intent: if
+    // they are typing into pane A, Fn should record there, full stop.
     if (t.focused) return t
     if (!best || t.lastFocusedAt > best.lastFocusedAt) best = t
   }
