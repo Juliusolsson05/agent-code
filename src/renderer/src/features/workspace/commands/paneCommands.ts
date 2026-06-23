@@ -357,6 +357,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Tail',
     description: '**What it does:** Toggles feed **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection.',
+    renderedViewPolicy: { kind: 'requires-rendered-feed' },
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const tailMode = sessionId

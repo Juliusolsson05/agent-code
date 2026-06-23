@@ -22,16 +22,29 @@ type Props = {
   sessionId: string
   runtime: SessionRuntime
   kind: string
+  inlineRawTerminalDisabled?: boolean
   onClose: () => void
 }
 
-export function DebugPanel({ sessionId, runtime, kind, onClose }: Props) {
+export function DebugPanel({
+  sessionId,
+  runtime,
+  kind,
+  inlineRawTerminalDisabled = false,
+  onClose,
+}: Props) {
   const [rawTerminalOpen, setRawTerminalOpen] = useState(false)
-  const canOpenRawTerminal = kind === 'claude' || kind === 'codex'
+  // WHY disable the inline xterm while the pane itself is terminal:
+  // AgentInlineTerminal is not a passive transcript viewer; it attaches to and
+  // resizes the same provider PTY as AgentTerminalLeaf. If both are mounted,
+  // the tiny debug rail and the full pane fight over dimensions and make the
+  // provider TUI repaint between two sizes. The raw screen text remains useful
+  // diagnostics, so only the interactive inline terminal path is suppressed.
+  const canOpenRawTerminal = (kind === 'claude' || kind === 'codex') && !inlineRawTerminalDisabled
 
   useEffect(() => {
     setRawTerminalOpen(false)
-  }, [sessionId])
+  }, [inlineRawTerminalDisabled, sessionId])
 
   const screenTail = useMemo(() => {
     const lines = runtime.screen.split('\n')

@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
 import {
   buildVisibleDispatchRows,
   selectVisibleDispatchRow,
@@ -74,6 +75,16 @@ function isTextEditingTarget(target: EventTarget | null): boolean {
   return el.isContentEditable
 }
 
+function renderedAgentSurfaceIsVisible(workspace: Workspace, agentViewMode: string, sessionId: string): boolean {
+  const kind = workspace.state.sessions[sessionId]?.kind
+  if (!isAgentKind(kind)) return false
+  return getEffectiveAgentSurface({
+    kind,
+    mode: agentViewMode === 'terminal' || agentViewMode === 'hybrid' ? agentViewMode : 'agent',
+    runtime: workspace.getRuntime(sessionId),
+  }) === 'rendered'
+}
+
 export function useKeybinds(
   workspace: Workspace,
   onNewTabRequest: NewTabRequester,
@@ -81,6 +92,7 @@ export function useKeybinds(
   onCommandPalette?: CommandPaletteToggle,
 ): void {
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
+  const agentViewMode = useAppStore(state => state.settings.agentViewMode)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
@@ -215,10 +227,16 @@ export function useKeybinds(
       // are active (shouldn't happen — picker is feed-only — but the
       // ordering keeps the intent local).
       const focusedSessionId = commandTargetSessionId(workspace)
+      const renderedPickerSurfaceVisible = focusedSessionId
+        ? renderedAgentSurfaceIsVisible(workspace, agentViewMode, focusedSessionId) &&
+          !workspace.spotlight &&
+          !workspace.reader &&
+          !settingsPageOpen
+        : false
       const picker = focusedSessionId
         ? workspace.runtimes[focusedSessionId]?.assistantPicker
         : null
-      if (picker && focusedSessionId) {
+      if (picker && focusedSessionId && renderedPickerSurfaceVisible) {
         if (k === 'ArrowUp') {
           e.preventDefault()
           workspace.pickerMove(focusedSessionId, -1)
@@ -257,7 +275,7 @@ export function useKeybinds(
       const cbPicker = focusedSessionId
         ? workspace.runtimes[focusedSessionId]?.codeBlockPicker
         : null
-      if (cbPicker && focusedSessionId) {
+      if (cbPicker && focusedSessionId && renderedPickerSurfaceVisible) {
         if (k === 'ArrowUp' || k === 'ArrowDown') {
           e.preventDefault()
           const ids = enumerateCodeBlockIds(focusedSessionId)
@@ -662,6 +680,10 @@ export function useKeybinds(
       }
 
       if (!cmd && !alt && !shift && k === 'End' && !isTextEditingTarget(e.target)) {
+        const sessionId = commandTargetSessionId(workspace)
+        if (!sessionId || !renderedAgentSurfaceIsVisible(workspace, agentViewMode, sessionId)) {
+          return
+        }
         e.preventDefault()
         workspace.scrollFocusedToLatest()
         return
@@ -693,6 +715,7 @@ export function useKeybinds(
       window.removeEventListener('blur', onBlur)
     }
   }, [
+    agentViewMode,
     closeSettingsPage,
     closeBuryPrompt,
     closeNewAgentPlacement,

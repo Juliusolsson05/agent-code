@@ -134,6 +134,7 @@ export function renderWorkspaceLeaf(
         focused={sessionId === focusedSessionId}
         onFocusRequest={onFocusRequest}
         workspace={workspace}
+        runtime={runtime}
         projectDir={runtime.projectDir ?? meta?.cwd ?? null}
         provider={kind}
       />
