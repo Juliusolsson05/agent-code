@@ -1,6 +1,6 @@
 import { Menu, type MenuItemConstructorOptions } from 'electron'
 
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { sendToMainWindow, zoomMainWindow } from '@main/window/mainWindow.js'
 
 // macOS application menu (issue #148).
 //
@@ -97,6 +97,22 @@ export function buildAppMenu(): Menu {
         { role: 'reload' },
         { role: 'forceReload' },
         { role: 'toggleDevTools' },
+        { type: 'separator' },
+        {
+          label: 'Actual Size',
+          accelerator: 'CommandOrControl+0',
+          click: () => zoomMainWindow('reset'),
+        },
+        {
+          label: 'Zoom In',
+          accelerator: 'CommandOrControl+Plus',
+          click: () => zoomMainWindow('in'),
+        },
+        {
+          label: 'Zoom Out',
+          accelerator: 'CommandOrControl+-',
+          click: () => zoomMainWindow('out'),
+        },
         { type: 'separator' },
         { role: 'togglefullscreen' },
       ],
