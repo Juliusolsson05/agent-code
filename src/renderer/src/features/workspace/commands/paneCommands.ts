@@ -389,6 +389,7 @@ export const paneCommands: CommandDef[] = [
     title: 'Jump to Latest Message',
     description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only.',
     shortcut: 'End',
+    renderedViewPolicy: { kind: 'requires-rendered-feed' },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false

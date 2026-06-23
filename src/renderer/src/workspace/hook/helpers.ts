@@ -1,6 +1,10 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import {
+  emptyRuntime,
+  type RenderedViewLeaseFeature,
+  type SessionRuntime,
+} from '@renderer/workspace/workspaceState'
 import type { SessionId } from '@renderer/workspace/types'
 import {
   appendFeedDebugLog,
@@ -34,8 +38,9 @@ export function useWorkspaceHelpers(
   acknowledgeSession: (sessionId: SessionId) => void
   getRuntime: (sessionId: SessionId) => SessionRuntime
   toggleTailMode: (sessionId: SessionId) => void
-  setAgentTerminalMode: (sessionId: SessionId, enabled: boolean) => void
-  toggleAgentTerminalMode: (sessionId: SessionId) => void
+  acquireRenderedViewLease: (sessionId: SessionId, feature: RenderedViewLeaseFeature) => void
+  releaseRenderedViewLease: (sessionId: SessionId, feature: RenderedViewLeaseFeature) => void
+  releaseAllRenderedViewLeases: (sessionId: SessionId) => void
   scrollFocusedToLatest: () => void
 } {
   const updateRuntime = useCallback(
@@ -107,16 +112,19 @@ export function useWorkspaceHelpers(
     [setRuntimes],
   )
 
-  const setAgentTerminalMode = useCallback(
-    (sessionId: SessionId, enabled: boolean) => {
+  const acquireRenderedViewLease = useCallback(
+    (sessionId: SessionId, feature: RenderedViewLeaseFeature) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
-        if (current.agentTerminalMode === enabled) return prev
+        const currentCount = current.renderedViewLeases[feature] ?? 0
         return {
           ...prev,
           [sessionId]: {
             ...current,
-            agentTerminalMode: enabled,
+            renderedViewLeases: {
+              ...current.renderedViewLeases,
+              [feature]: currentCount + 1,
+            },
           },
         }
       })
@@ -124,15 +132,41 @@ export function useWorkspaceHelpers(
     [setRuntimes],
   )
 
-  const toggleAgentTerminalMode = useCallback(
-    (sessionId: SessionId) => {
+  const releaseRenderedViewLease = useCallback(
+    (sessionId: SessionId, feature: RenderedViewLeaseFeature) => {
       setRuntimes(prev => {
-        const current = prev[sessionId] ?? emptyRuntime()
+        const current = prev[sessionId]
+        if (!current) return prev
+        const currentCount = current.renderedViewLeases[feature] ?? 0
+        if (currentCount <= 0) return prev
+        const renderedViewLeases = { ...current.renderedViewLeases }
+        if (currentCount === 1) {
+          delete renderedViewLeases[feature]
+        } else {
+          renderedViewLeases[feature] = currentCount - 1
+        }
         return {
           ...prev,
           [sessionId]: {
             ...current,
-            agentTerminalMode: !current.agentTerminalMode,
+            renderedViewLeases,
+          },
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
+  const releaseAllRenderedViewLeases = useCallback(
+    (sessionId: SessionId) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current || Object.keys(current.renderedViewLeases).length === 0) return prev
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            renderedViewLeases: {},
           },
         }
       })
@@ -174,8 +208,9 @@ export function useWorkspaceHelpers(
     acknowledgeSession,
     getRuntime,
     toggleTailMode,
-    setAgentTerminalMode,
-    toggleAgentTerminalMode,
+    acquireRenderedViewLease,
+    releaseRenderedViewLease,
+    releaseAllRenderedViewLeases,
     scrollFocusedToLatest,
   }
 }

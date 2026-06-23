@@ -633,15 +633,16 @@ export default function App() {
           ) : activeTab && workspace.readerMode && workspace.readerMode.tabId === activeTab.id ? (
             <ReaderView workspace={workspace} />
           ) : activeTab && workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
-            <SpotlightView workspace={workspace} />
+            <SpotlightView workspace={workspace} agentViewMode={settings.agentViewMode} />
           ) : (
             <GlobalEditorShell workspace={workspace}>
               {workspace.tileTabs ? (
-                <TileTabsView workspace={workspace} />
+                <TileTabsView workspace={workspace} agentViewMode={settings.agentViewMode} />
               ) : activeTab && workspace.dispatchMode ? (
                 <div className="relative h-full min-h-0 min-w-0">
                   <DispatchLayout
                     workspace={workspace}
+                    agentViewMode={settings.agentViewMode}
                     showStatusMode={settings.showStatusMode}
                     showWorktreeBadges={settings.showWorktreeBadges}
                   />
@@ -660,6 +661,7 @@ export default function App() {
                     node={activeTab.root}
                     focusedSessionId={activeTab.focusedSessionId}
                     workspace={workspace}
+                    agentViewMode={settings.agentViewMode}
                     showStatusMode={settings.showStatusMode}
                     showWorktreeBadges={settings.showWorktreeBadges}
                   />
@@ -797,6 +799,7 @@ export default function App() {
         toggleStatusMode={toggleStatusMode}
         toggleWorktreeBadges={toggleWorktreeBadges}
         customRenderingEnabled={settings.customRendering}
+        agentViewMode={settings.agentViewMode}
         commandVisibilityOverrides={settings.commandVisibilityOverrides}
         // Hard-coded false for now: issue #249 ships the per-command
         // override mechanism only. A future "show hidden commands"

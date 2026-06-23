@@ -201,21 +201,17 @@ export function AgentTerminalLeaf({
             {shortenCwd(projectDir)}
           </span>
         </div>
-        <button
-          type="button"
-          className="flex-shrink-0 rounded-[3px] border border-border-hi px-2 py-0.5 text-[10px] text-muted hover:border-accent hover:text-ink"
-          title="Return to Agent Code rendered view"
-          onMouseDown={event => event.stopPropagation()}
-          onClick={() => workspace.setAgentTerminalMode(sessionId, false)}
-        >
-          rendered view
-        </button>
+        <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+          terminal view
+        </span>
       </div>
 
-      <div
-        ref={containerRef}
-        className="flex-1 min-h-0 min-w-0 overflow-hidden relative"
-      />
+      <div className="flex-1 min-h-0 min-w-0 overflow-hidden p-2">
+        <div
+          ref={containerRef}
+          className="h-full min-h-0 min-w-0 overflow-hidden relative"
+        />
+      </div>
     </div>
   )
 }

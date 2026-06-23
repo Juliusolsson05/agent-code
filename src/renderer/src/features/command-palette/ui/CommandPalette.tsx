@@ -19,6 +19,7 @@ import {
 } from '@renderer/features/prompt-templates/templates'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import {
   SessionPreviewPane,
   type PreviewTarget,
@@ -109,6 +110,7 @@ type Props = {
   toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
   customRenderingEnabled: boolean
+  agentViewMode: AgentViewMode
   /** Sparse per-command picker-visibility overrides from settings, keyed
    *  by stable command id. Threaded straight into the command context so
    *  buildCommandRegistry's `commandVisible` gate can consult it. The
@@ -190,6 +192,7 @@ export function CommandPalette({
   toggleStatusMode,
   toggleWorktreeBadges,
   customRenderingEnabled,
+  agentViewMode,
   commandVisibilityOverrides,
   showHiddenCommands,
   statusModeEnabled,
@@ -435,6 +438,7 @@ export function CommandPalette({
         fileTreeVisible,
         dispatchModeEnabled,
         globalDispatchEnabled,
+        agentViewMode,
         commandVisibilityOverrides,
         showHiddenCommands,
       },
@@ -507,6 +511,7 @@ export function CommandPalette({
       fileTreeVisible,
       dispatchModeEnabled,
       globalDispatchEnabled,
+      agentViewMode,
       commandVisibilityOverrides,
       showHiddenCommands,
     ],

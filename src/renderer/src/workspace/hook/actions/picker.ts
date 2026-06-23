@@ -51,9 +51,11 @@ export function usePickerActions(
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         if (current.assistantPicker) {
+          const renderedViewLeases = { ...current.renderedViewLeases }
+          delete renderedViewLeases['copy-assistant-message']
           return {
             ...prev,
-            [sessionId]: { ...current, assistantPicker: null },
+            [sessionId]: { ...current, renderedViewLeases, assistantPicker: null },
           }
         }
         const uuids = assistantUuidsWithText(current.entries)
@@ -62,6 +64,11 @@ export function usePickerActions(
           ...prev,
           [sessionId]: {
             ...current,
+            renderedViewLeases: {
+              ...current.renderedViewLeases,
+              'copy-assistant-message':
+                (current.renderedViewLeases['copy-assistant-message'] ?? 0) + 1,
+            },
             assistantPicker: { selectedUuid: uuids[uuids.length - 1] },
           },
         }
@@ -109,7 +116,9 @@ export function usePickerActions(
       setRuntimes(prev => {
         const c = prev[sessionId]
         if (!c?.assistantPicker) return prev
-        return { ...prev, [sessionId]: { ...c, assistantPicker: null } }
+        const renderedViewLeases = { ...c.renderedViewLeases }
+        delete renderedViewLeases['copy-assistant-message']
+        return { ...prev, [sessionId]: { ...c, renderedViewLeases, assistantPicker: null } }
       })
     },
     [setRuntimes],
@@ -129,7 +138,9 @@ export function usePickerActions(
       setRuntimes(prev => {
         const c = prev[sessionId]
         if (!c) return prev
-        return { ...prev, [sessionId]: { ...c, assistantPicker: null } }
+        const renderedViewLeases = { ...c.renderedViewLeases }
+        delete renderedViewLeases['copy-assistant-message']
+        return { ...prev, [sessionId]: { ...c, renderedViewLeases, assistantPicker: null } }
       })
       if (!text) {
         showPaneToast(sessionId, 'Nothing to copy')

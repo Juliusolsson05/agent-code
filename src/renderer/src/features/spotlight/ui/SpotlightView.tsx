@@ -1,13 +1,15 @@
 import { renderWorkspaceLeaf } from '@renderer/workspace/tile-tree/TileTree'
+import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import { dispatchSessionIdsForTab } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {
   workspace: Workspace
+  agentViewMode: AgentViewMode
 }
 
-export function SpotlightView({ workspace }: Props) {
+export function SpotlightView({ workspace, agentViewMode }: Props) {
   const spotlight = workspace.spotlight
   if (!spotlight) return null
   const tab = workspace.state.tabs.find(item => item.id === spotlight.tabId)
@@ -61,6 +63,7 @@ export function SpotlightView({ workspace }: Props) {
           focusedSessionId,
           workspace,
           tab.id,
+          agentViewMode,
         )}
       </div>
     </div>

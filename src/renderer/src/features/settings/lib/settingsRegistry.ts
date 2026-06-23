@@ -1,9 +1,11 @@
 import {
   ACCENTS,
+  AGENT_VIEW_MODES,
   FONT_FAMILIES,
   THEME_MODES,
   WORKSPACE_MODES,
   type AccentId,
+  type AgentViewMode,
   type FontFamilyId,
   type Settings,
   type ThemeMode,
@@ -149,6 +151,12 @@ const WORKSPACE_MODE_OPTIONS: ChoiceOption<WorkspaceModeId>[] = WORKSPACE_MODES.
       : 'Open with the classic tiled grid.',
 }))
 
+const AGENT_VIEW_MODE_OPTIONS: ChoiceOption<AgentViewMode>[] = AGENT_VIEW_MODES.map(mode => ({
+  value: mode.id,
+  label: mode.label,
+  description: mode.description,
+}))
+
 const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] = [
   {
     value: 'deepgram',
@@ -277,6 +285,26 @@ export function getSettingsRegistry(): SettingDefinition[] {
         columns: 2,
         onSelect: (ctx, value) =>
           ctx.onChange({ defaultWorkspaceMode: value as WorkspaceModeId }),
+      },
+    },
+    {
+      // WHY this setting belongs in Workspace rather than Commands:
+      // terminal/agent/hybrid is the pane surface contract that commands must
+      // respect, not a single command's preference. Commands only declare
+      // whether they require a rendered feed; the central display policy turns
+      // that into "available, disabled, or temporarily render in hybrid."
+      id: 'agent-view-mode',
+      category: 'workspace',
+      title: 'Agent View Mode',
+      description:
+        'Choose whether Claude and Codex panes show Agent Code rendering, the provider terminal, or terminal-first Hybrid mode that renders only while a feature needs the feed.',
+      keywords: ['agent', 'view', 'mode', 'terminal', 'raw', 'hybrid', 'renderer', 'feed', 'tui'],
+      control: {
+        type: 'select',
+        getValue: settings => settings.agentViewMode,
+        options: AGENT_VIEW_MODE_OPTIONS,
+        columns: 3,
+        onSelect: (ctx, value) => ctx.onChange({ agentViewMode: value as AgentViewMode }),
       },
     },
     {
