@@ -38,7 +38,6 @@ export type QueuedMessage = {
 export type RenderedViewLeaseFeature =
   | 'copy-assistant-message'
   | 'copy-code-block'
-  | 'jump-latest'
 
 export type ClaudeDraftImage = {
   id: string

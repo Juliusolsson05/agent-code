@@ -17,6 +17,7 @@ export const promptTemplateCommands: CommandDef[] = [
     description: '**What it does:** Inserts a saved **prompt template** into the focused composer.\n\n**Use when:** You want reusable prompt text without retyping it.\n\n**Notes:** Agent panes only.',
     keywords: ['prompt', 'template', 'snippet', 'insert', 'draft'],
     keepPaletteOpen: true,
+    renderedViewPolicy: { kind: 'opens-rendered-feed' },
     when: ({ workspace }) => focusedAgentSessionId(workspace) !== null,
     run: ({ ui }) => ui.enterPromptTemplateMode(),
   },
@@ -27,6 +28,7 @@ export const promptTemplateCommands: CommandDef[] = [
     description: '**What it does:** Saves current composer text as a **custom prompt template**.\n\n**Use when:** You wrote a prompt you expect to reuse.\n\n**Notes:** Only appears when the composer has text.',
     keywords: ['prompt', 'template', 'save', 'composer', 'custom', 'snippet'],
     keepPaletteOpen: true,
+    renderedViewPolicy: { kind: 'requires-rendered-feed' },
     when: ({ workspace }) => {
       const sessionId = focusedAgentSessionId(workspace)
       if (!sessionId) return false

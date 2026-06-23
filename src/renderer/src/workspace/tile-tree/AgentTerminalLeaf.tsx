@@ -7,8 +7,10 @@ import {
   getActiveAppFontFamily,
 } from '@renderer/app-state/settings/theme'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
+import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
 
 type Props = {
   sessionId: SessionId
@@ -16,6 +18,7 @@ type Props = {
   focused: boolean
   onFocusRequest: () => void
   workspace: Workspace
+  runtime: SessionRuntime
   projectDir: string | null
   provider: Exclude<SessionKind, 'terminal'>
 }
@@ -39,6 +42,7 @@ export function AgentTerminalLeaf({
   focused,
   onFocusRequest,
   workspace,
+  runtime,
   projectDir,
   provider,
 }: Props) {
@@ -212,6 +216,14 @@ export function AgentTerminalLeaf({
           className="h-full min-h-0 min-w-0 overflow-hidden relative"
         />
       </div>
+      {/* WHY terminal mode still renders PaneToast:
+        Pane toasts are runtime feedback from commands/actions, not a feed-only
+        visual. Hybrid can legitimately fall back to AgentTerminalLeaf right
+        after an action completes (for example Copy Assistant releases its
+        picker lease before showing "Copied assistant message"). Without this
+        shared slot, the action succeeds but the confirmation disappears with
+        TileLeaf. */}
+      <PaneToast message={runtime.paneToast} />
     </div>
   )
 }

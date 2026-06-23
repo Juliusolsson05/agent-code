@@ -53,6 +53,26 @@ describe('agent display mode policy', () => {
     ).toBe('rendered')
   })
 
+  it('uses rendered-only runtime state to wake Hybrid', () => {
+    const cases = [
+      { draftInput: 'prefilled prompt' },
+      { draftImages: [{ id: 'img', mediaType: 'image/png', base64Data: 'x', previewUrl: 'blob:x', filename: 'x.png' }] },
+      { promptSuggestion: { text: 'try this next', receivedAt: 1 } },
+      { conditions: { kind: 'approval', prompts: [] } as never },
+      { queuedMessages: [{ content: 'queued', timestamp: '2026-06-23T00:00:00.000Z' }] },
+    ]
+
+    for (const patch of cases) {
+      expect(
+        getEffectiveAgentSurface({
+          kind: 'claude',
+          mode: 'hybrid',
+          runtime: { ...emptyRuntime(), ...patch },
+        }),
+      ).toBe('rendered')
+    }
+  })
+
   it('allows leasing commands in Hybrid but not hard Terminal mode', () => {
     const policy = {
       kind: 'leases-rendered-feed' as const,
@@ -72,6 +92,26 @@ describe('agent display mode policy', () => {
       commandAllowedByRenderedViewPolicy({
         policy,
         kind: 'claude',
+        mode: 'terminal',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(false)
+  })
+
+  it('allows commands that open rendered state in Hybrid but not hard Terminal mode', () => {
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: { kind: 'opens-rendered-feed' },
+        kind: 'codex',
+        mode: 'hybrid',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(true)
+
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: { kind: 'opens-rendered-feed' },
+        kind: 'codex',
         mode: 'terminal',
         runtime: emptyRuntime(),
       }),
