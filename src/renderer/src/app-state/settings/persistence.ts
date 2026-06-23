@@ -1,5 +1,6 @@
 import {
   ACCENTS,
+  AGENT_VIEW_MODES,
   DEFAULT_SETTINGS,
   FONT_FAMILIES,
   THEME_MODES,
@@ -60,6 +61,12 @@ export function coerceSettings(value: unknown): Settings {
     defaultWorkspaceMode: WORKSPACE_MODES.some(m => m.id === parsed.defaultWorkspaceMode)
       ? (parsed.defaultWorkspaceMode as Settings['defaultWorkspaceMode'])
       : DEFAULT_SETTINGS.defaultWorkspaceMode,
+    // Agent view mode is a product contract, not a loose string. A typo in
+    // localStorage must fall back to the compatible custom-rendered Agent mode
+    // rather than accidentally booting every pane into raw terminal mode.
+    agentViewMode: AGENT_VIEW_MODES.some(m => m.id === parsed.agentViewMode)
+      ? (parsed.agentViewMode as Settings['agentViewMode'])
+      : DEFAULT_SETTINGS.agentViewMode,
     // Same membership-check pattern as accent/mode: garbage / typo / a
     // removed font id from a future migration falls back to the default
     // rather than crashing applyTheme with an undefined family string.

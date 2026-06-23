@@ -135,8 +135,9 @@ export function useWorkspace(
     acknowledgeSession,
     getRuntime,
     toggleTailMode,
-    setAgentTerminalMode,
-    toggleAgentTerminalMode,
+    acquireRenderedViewLease,
+    releaseRenderedViewLease,
+    releaseAllRenderedViewLeases,
     scrollFocusedToLatest,
   } =
     useWorkspaceHelpers(runtimes, setRuntimes, refs)
@@ -557,8 +558,9 @@ export function useWorkspace(
     resizeFocusedTiledTab,
     resizeTiledTabByIndex,
     toggleTailMode,
-    setAgentTerminalMode,
-    toggleAgentTerminalMode,
+    acquireRenderedViewLease,
+    releaseRenderedViewLease,
+    releaseAllRenderedViewLeases,
     scrollFocusedToLatest,
     pickerEnter,
     pickerMove,

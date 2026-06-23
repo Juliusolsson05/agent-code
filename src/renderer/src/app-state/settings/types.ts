@@ -82,6 +82,32 @@ export const WORKSPACE_MODES: WorkspaceModeMeta[] = [
   { id: 'dispatch', label: 'Dispatch' },
 ]
 
+export type AgentViewMode = 'agent' | 'terminal' | 'hybrid'
+
+export type AgentViewModeMeta = {
+  id: AgentViewMode
+  label: string
+  description: string
+}
+
+export const AGENT_VIEW_MODES: AgentViewModeMeta[] = [
+  {
+    id: 'agent',
+    label: 'Agent',
+    description: 'Always show Agent Code rendering.',
+  },
+  {
+    id: 'terminal',
+    label: 'Terminal',
+    description: 'Always show the provider TUI.',
+  },
+  {
+    id: 'hybrid',
+    label: 'Hybrid',
+    description: 'Use terminal by default; render only when a feature needs it.',
+  },
+]
+
 export type DictationProviderId = 'deepgram'
 
 // Font choice for the entire app. This is the single source of truth for
@@ -202,6 +228,20 @@ export type Settings = {
    *  semantic the user asked for: the setting seeds initial state and
    *  then gets out of the way. */
   defaultWorkspaceMode: WorkspaceModeId
+  /** App-wide default surface for Claude/Codex agent panes.
+   *
+   * WHY this is global settings instead of per-session metadata:
+   * terminal mode attaches an interactive xterm to the provider PTY and
+   * resizes that PTY while mounted. Persisting "this specific session should
+   * reopen raw" in workspace metadata would let a stale workspace silently
+   * seize provider terminal dimensions on launch. The durable user intent is
+   * broader and clearer: choose how Agent Code should present agent panes.
+   *
+   * The transient part of Hybrid ("render while Copy Assistant is active") is
+   * deliberately runtime-only in SessionRuntime.renderedViewLeases. That
+   * split keeps app preference durable while feature lifetimes stay tied to
+   * the UI state that actually requested them. */
+  agentViewMode: AgentViewMode
   /** When true, Claude sessions are spawned through a per-session
    *  mitmproxy that decrypts Anthropic `/v1/messages` SSE in real
    *  time and feeds structured per-block semantic events to the
@@ -301,6 +341,7 @@ export const DEFAULT_SETTINGS: Settings = {
   dictationShortcut: 'Fn',
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
+  agentViewMode: 'agent',
   dispatchProjectTerminal: false,
   autoSendPromptSuggestion: true,
   fontFamily: 'jetbrains-mono',

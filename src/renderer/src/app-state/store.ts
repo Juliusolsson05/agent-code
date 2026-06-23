@@ -28,7 +28,12 @@ export const useAppStore = create<AppStore>()(
         // skipped coercion, loaded settings without that field, and the command
         // registry's `commandVisible` dereferenced `undefined[id]` → black
         // screen on launch. v3 forces a re-coerce so the field is backfilled.
-        version: 3,
+        //
+        // v4 adds `settings.agentViewMode`. Without a bump, existing v3 users
+        // would skip coercion and thread `undefined` into the render-policy
+        // selector, making the app's most central pane decision depend on a
+        // missing persisted key.
+        version: 4,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
         migrate: persisted => {

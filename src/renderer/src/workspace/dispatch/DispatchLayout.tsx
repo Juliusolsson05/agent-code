@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
+import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
@@ -22,6 +23,7 @@ import { TiledDispatchLayout } from '@renderer/workspace/dispatch/TiledDispatchL
 
 type Props = {
   workspace: Workspace
+  agentViewMode: AgentViewMode
   showStatusMode: boolean
   showWorktreeBadges: boolean
 }
@@ -41,6 +43,7 @@ export function DispatchLayout(props: Props) {
 
 function ClassicDispatchLayout({
   workspace,
+  agentViewMode,
   showStatusMode,
   showWorktreeBadges,
 }: Props) {
@@ -191,6 +194,7 @@ function ClassicDispatchLayout({
             activeRow.sessionId,
             workspace,
             activeRow.tabId,
+            agentViewMode,
             showStatusMode,
             showWorktreeBadges,
             () => workspace.focusDispatchSession(activeRow.tabId, activeRow.sessionId),

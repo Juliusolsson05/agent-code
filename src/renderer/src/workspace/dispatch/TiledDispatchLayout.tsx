@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 
+import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
@@ -19,6 +20,7 @@ import type { SessionId, TabId } from '@renderer/workspace/types'
 
 type Props = {
   workspace: Workspace
+  agentViewMode: AgentViewMode
   showStatusMode: boolean
   showWorktreeBadges: boolean
 }
@@ -62,6 +64,7 @@ type LaneResolution = { sessionId: SessionId; tabId: TabId } | null
 
 export function TiledDispatchLayout({
   workspace,
+  agentViewMode,
   showStatusMode,
   showWorktreeBadges,
 }: Props) {
@@ -245,6 +248,7 @@ export function TiledDispatchLayout({
                     focused ? resolved.sessionId : null,
                     workspace,
                     resolved.tabId,
+                    agentViewMode,
                     showStatusMode,
                     showWorktreeBadges,
                     () => workspace.setTiledFocusedLane(laneIndex),

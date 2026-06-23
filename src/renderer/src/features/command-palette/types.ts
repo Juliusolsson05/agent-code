@@ -1,4 +1,6 @@
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { AgentViewMode } from '@renderer/app-state/settings/types'
+import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
 
 export type CommandState = {
   label: string
@@ -171,6 +173,12 @@ export type CommandContext = {
     fileTreeVisible: boolean
     dispatchModeEnabled: boolean
     globalDispatchEnabled: boolean
+    /** App-wide agent pane surface policy from Settings. The command registry
+     *  uses it to decide whether render-dependent commands are applicable.
+     *  Threading it through flags keeps command modules declarative: commands
+     *  say what kind of surface they need, while the registry owns the
+     *  Terminal/Hybrid availability rule in one place. */
+    agentViewMode: AgentViewMode
     /**
      * Sparse per-command picker-visibility overrides, keyed by the
      * command's stable `id`. A present boolean wins over the command's
@@ -217,6 +225,15 @@ export type CommandDef = {
    * see `CommandContext.flags.commandVisibilityOverrides`.
    */
   pickerVisibility?: CommandPickerVisibility
+  /** Whether this command needs Agent Code's rendered feed surface.
+   *
+   * WHY this is separate from `surface` and `pickerVisibility`:
+   * `surface` answers workspace-layout applicability, while
+   * `pickerVisibility` is only command-palette list noise. Agent View Mode is
+   * a capability constraint: hard Terminal mode intentionally refuses features
+   * that depend on rendered feed DOM or feed scroll ownership, while Hybrid can
+   * allow feature commands that acquire a temporary rendered-view lease. */
+  renderedViewPolicy?: RenderedViewPolicy
   shortcut?: string
   keywords?: string[]
   keepPaletteOpen?: boolean

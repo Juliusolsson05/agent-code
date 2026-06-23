@@ -1,13 +1,15 @@
 import { Fragment, useEffect, useRef } from 'react'
 
+import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 type Props = {
   workspace: Workspace
+  agentViewMode: AgentViewMode
 }
 
-export function TileTabsView({ workspace }: Props) {
+export function TileTabsView({ workspace, agentViewMode }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<{
     dividerIndex: number
@@ -111,6 +113,7 @@ export function TileTabsView({ workspace }: Props) {
                     node={tab.root}
                     focusedSessionId={focused ? tab.focusedSessionId : null}
                     workspace={workspace}
+                    agentViewMode={agentViewMode}
                   />
                 </div>
               </section>

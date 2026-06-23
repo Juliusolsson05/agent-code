@@ -35,6 +35,11 @@ export type QueuedMessage = {
   timestamp: string
 }
 
+export type RenderedViewLeaseFeature =
+  | 'copy-assistant-message'
+  | 'copy-code-block'
+  | 'jump-latest'
+
 export type ClaudeDraftImage = {
   id: string
   mediaType: string
@@ -406,17 +411,21 @@ export type SessionRuntime = {
   toolUseIndex: Map<string, ToolUseBlock>
   toolResultIndex: Map<string, ToolResultBlock>
   tailMode: boolean
-  /** Runtime-only view override for #247's raw provider terminal.
+  /** Runtime-only leases that temporarily request Agent Code's rendered feed.
    *
-   * WHY this is not persisted in SessionMeta:
-   * mounting the raw terminal attaches an interactive xterm to the live
-   * provider PTY and resizes that PTY to the pane's dimensions. Persisting the
-   * flag would make app restart/rehydrate silently attach and resize provider
-   * terminals before the user asks. Keeping it in runtime still survives tab
-   * unmount/remount within the current app run, which is the recovery case the
-   * toggle exists for, while every fresh launch starts in the normal rendered
-   * feed by default. */
-  agentTerminalMode: boolean
+   * WHY leases instead of a boolean:
+   * Hybrid mode is a cooperative contract between independent features. Copy
+   * Assistant can need the rendered feed while a future feature also needs it;
+   * either feature ending must not snap the pane back to the terminal under
+   * the other. A small per-feature ref count mirrors the main-process agent PTY
+   * attach count and makes acquire/release balanced without inventing hidden
+   * ownership rules.
+   *
+   * WHY runtime-only:
+   * these leases describe active UI affordances, not durable session identity.
+   * Persisting them would reopen workspaces into a feature state whose picker,
+   * DOM nodes, and keyboard owner no longer exist. */
+  renderedViewLeases: Partial<Record<RenderedViewLeaseFeature, number>>
   scrollToLatestRequest: number
   assistantPicker: { selectedUuid: string } | null
   // Copy Code Block picker. Non-null while the "Copy Code Block…"
@@ -611,7 +620,7 @@ export function emptyRuntime(): SessionRuntime {
     toolUseIndex: new Map(),
     toolResultIndex: new Map(),
     tailMode: false,
-    agentTerminalMode: false,
+    renderedViewLeases: {},
     scrollToLatestRequest: 0,
     assistantPicker: null,
     codeBlockPicker: null,
