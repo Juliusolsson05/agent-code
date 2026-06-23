@@ -208,9 +208,24 @@ export function TileLeaf({
       )
       return
     }
-    const ok = await window.api.sendInput(sessionId, data, pasteId)
+    let ok = await window.api.sendInput(sessionId, data, pasteId)
     if (!ok) {
-      throw new Error(`sendInput failed for missing session ${sessionId}`)
+      try {
+        await workspace.ensureSessionLive(sessionId)
+        ok = await window.api.sendInput(sessionId, data, pasteId)
+      } catch (err) {
+        workspace.showPaneToast(
+          sessionId,
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Could not wake agent; draft preserved',
+        )
+        return
+      }
+      if (!ok) {
+        workspace.showPaneToast(sessionId, 'Agent backend is unavailable; draft preserved')
+        return
+      }
     }
     // Clear any prompt-suggestion chip on submit so a stale offer never
     // lingers past the input it was suggesting. turn_started clears it too,

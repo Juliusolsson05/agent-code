@@ -237,7 +237,7 @@ export function useWorkspace(
 
   // Session lifecycle + derivatives that depend on it
   const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
-  const { spawn, killSession, replaceSession, reloadAgentSessions, softReloadAgentView } =
+  const { spawn, ensureSessionLive, killSession, replaceSession, reloadAgentSessions, softReloadAgentView } =
     sessionActions
 
   const tabActions = useTabActions(
@@ -367,6 +367,39 @@ export function useWorkspace(
           return
         }
 
+        if (request.type === 'ensure-agent-live') {
+          // WHY orchestration wake is renderer-mediated:
+          // main can tell whether a provider process exists, but only the
+          // renderer owns durable workspace metadata and orchestration
+          // visibility. After a full app restart, parked/listed agents can
+          // still be valid children in workspace.json while main's in-memory
+          // SessionManager has no PTY for that SessionId. Waking here keeps the
+          // same id and therefore preserves Dispatch nesting, parent/root
+          // ownership, and any MCP caller that already named the child.
+          readOrchestrationAgent({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            maxMessages: 1,
+          })
+          await sessionActions.ensureSessionLive(request.sessionId)
+          const agent = readOrchestrationAgent({
+            state: refs.stateRef.current,
+            runtimes: refs.latestRuntimesRef.current,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            maxMessages: 1,
+          }).agent
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'ensure-agent-live',
+            agent,
+          })
+          return
+        }
+
         if (request.type === 'mark-bootstrap-prompt-delivered') {
           const output = readOrchestrationAgent({
             state: snapshot,
@@ -418,7 +451,7 @@ export function useWorkspace(
       }
     })
     return off
-  }, [paneActions, refs.stateRef])
+  }, [paneActions, refs.latestRuntimesRef, refs.stateRef, sessionActions, setState])
 
   const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
@@ -498,6 +531,7 @@ export function useWorkspace(
     newTab: tabActions.newTab,
     closeTab: tabActions.closeTab,
     spawn,
+    ensureSessionLive,
     killSession,
     splitFocused: paneActions.splitFocused,
     startNewAgentPlacement: paneActions.startNewAgentPlacement,

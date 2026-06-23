@@ -125,14 +125,14 @@ export function usePaneActions(
     runId?: string
     builtInMcpDomains?: BuiltInMcpDomain[]
   }) => Promise<OrchestrationAgentRecord>
-  attachDetachedToGrid: (sessionId: SessionId, target: PlacementTarget) => void
-  attachAllDetachedForTab: (tabId: string) => void
+  attachDetachedToGrid: (sessionId: SessionId, target: PlacementTarget) => Promise<void>
+  attachAllDetachedForTab: (tabId: string) => Promise<void>
   detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
   closeSession: (targetId: SessionId) => Promise<void>
   requestBuryFocused: () => void
   buryFocused: (note?: string, targetSessionId?: SessionId) => void
-  reviveBuried: (buriedId: string) => void
+  reviveBuried: (buriedId: string) => Promise<void>
   killBuried: (buriedId: string) => Promise<void>
   focusSession: (sessionId: SessionId) => void
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
@@ -576,16 +576,19 @@ export function usePaneActions(
     }
   }, [refs.stateRef])
 
-  // Promote a detached dispatch session into the grid at a chosen
-  // placement target.
+  // Promote a detached dispatch session into the grid at a chosen placement
+  // target.
   //
-  // WHY this is a synchronous setState and not an IPC round-trip:
-  // attaching is purely a workspace-state mutation. The session is
-  // already running in the backend and already has a renderer runtime
-  // entry — we are just moving its identity from `detachedSessions`
-  // into a leaf in `tab.root`. No spawn, no kill, no IPC. That also
-  // means no ghost window and no transcript flicker; the UI seam is
-  // invisible to the user beyond the layout change.
+  // WHY this wakes before the state move:
+  // Detached sessions are "live" only inside a single app process. After a full
+  // Agent Code restart, rehydrate intentionally keeps their SessionMeta but
+  // does not respawn their provider PTY; otherwise a workspace with dozens of
+  // parked agents would fork-bomb on launch. Attaching one back to the grid is
+  // the explicit user action that makes it live again. We wake under the same
+  // SessionId before inserting the leaf so every relationship pointer
+  // (orchestrationParentId/rootId, linkedParentId, tiled lanes, pins) remains
+  // intact and the pane never becomes visibly commandable while main would drop
+  // writes for a missing session.
   //
   // The target tab need not equal the detached record's projectTabId.
   // projectTabId was always *affinity* (cwd defaults / dispatch
@@ -593,7 +596,17 @@ export function usePaneActions(
   // user pin a project-A detached agent into project-B's grid is the
   // whole point of having a placement step.
   const attachDetachedToGrid = useCallback(
-    (sessionId: SessionId, target: PlacementTarget) => {
+    async (sessionId: SessionId, target: PlacementTarget) => {
+      try {
+        await sessionActions.ensureSessionLive(sessionId)
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Could not wake detached session before attaching it.',
+        )
+        return
+      }
       setState(prev => {
         const detached = prev.detachedSessions[sessionId]
         if (!detached) return prev
@@ -651,21 +664,37 @@ export function usePaneActions(
         }
       })
     },
-    [setState],
+    [sessionActions, setState, showToast],
   )
 
   const attachAllDetachedForTab = useCallback(
-    (tabId: string) => {
+    async (tabId: string) => {
       let attachedCount = 0
+      const snapshot = refs.stateRef.current
+      const detachedIds = detachedDispatchSessionIdsForTab(snapshot, tabId)
+      if (detachedIds.length === 0) return
+      const liveIds: SessionId[] = []
+      for (const sessionId of detachedIds) {
+        try {
+          await sessionActions.ensureSessionLive(sessionId)
+          liveIds.push(sessionId)
+        } catch (err) {
+          console.warn('[workspace] failed to wake detached session before bulk attach:', err)
+        }
+      }
+      if (liveIds.length === 0) {
+        showToast('Could not wake any detached sessions for this tab')
+        return
+      }
       setState(prev => {
         const tab = prev.tabs.find(t => t.id === tabId)
         if (!tab) return prev
-        const detachedIds = detachedDispatchSessionIdsForTab(prev, tabId)
-        if (detachedIds.length === 0) return prev
-        attachedCount = detachedIds.length
+        const attachableIds = liveIds.filter(sessionId => prev.detachedSessions[sessionId])
+        if (attachableIds.length === 0) return prev
+        attachedCount = attachableIds.length
 
         const detachedSessions = { ...prev.detachedSessions }
-        for (const sessionId of detachedIds) {
+        for (const sessionId of attachableIds) {
           delete detachedSessions[sessionId]
         }
 
@@ -676,14 +705,14 @@ export function usePaneActions(
         // arrangement are not flattened. This gives users a predictable
         // "pin all background work beside my current grid" action
         // without punishing the layout they already curated.
-        const attachedSubtree = normalizeTree(detachedIds)
+        const attachedSubtree = normalizeTree(attachableIds)
         const nextRoot = wrapRootWithNode(
           tab.root,
           'vertical',
           'b',
           attachedSubtree,
         )
-        const focusedSessionId = detachedIds[0]
+        const focusedSessionId = attachableIds[0]
 
         return {
           ...prev,
@@ -713,7 +742,7 @@ export function usePaneActions(
         )
       }
     },
-    [setState, showToast],
+    [refs.stateRef, sessionActions, setState, showToast],
   )
 
   // The reverse direction: take the focused grid pane out of the tile
@@ -1328,10 +1357,20 @@ export function usePaneActions(
   // affinity, and finally a fresh single-pane tab if no good target
   // exists.
   const reviveBuried = useCallback(
-    (buriedId: string) => {
+    async (buriedId: string) => {
       const current = refs.stateRef.current
       const entry = current.buried.find(item => item.id === buriedId)
       if (!entry) return
+      try {
+        await sessionActions.ensureSessionLive(entry.sessionId)
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Could not wake buried session before reviving it.',
+        )
+        return
+      }
 
       const chooseFallbackTab = (): Tab | null => {
         const scored = current.tabs
@@ -1446,7 +1485,7 @@ export function usePaneActions(
         }
       })
     },
-    [refs.stateRef, setState],
+    [refs.stateRef, sessionActions, setState, showToast],
   )
 
   const killBuried = useCallback(

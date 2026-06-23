@@ -210,7 +210,7 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => {
       const tabId = attachAllCommandTabId(workspace)
       if (!tabId) return
-      workspace.attachAllDetachedForTab(tabId)
+      void workspace.attachAllDetachedForTab(tabId)
     },
   },
   {

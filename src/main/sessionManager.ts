@@ -104,6 +104,20 @@ type ManagerEvents = {
 // shapes inline. Privatizing prevents accidental cross-module coupling
 // to a type that will keep evolving alongside spawn() internals.
 type SpawnOptions = {
+  /**
+   * Trusted renderer restore path only: reuse an existing workspace SessionId
+   * when a persisted renderer record needs a fresh backend after app restart.
+   *
+   * WHY this exists instead of always minting and remapping:
+   * normal user actions can tolerate a new Agent Code routing id because the
+   * renderer is actively performing the replacement and can remap tile leaves,
+   * pins, tiled lanes, parent/child links, and MCP ownership in one commit.
+   * Restart wake is different: callers already hold a durable SessionId from
+   * workspace.json and may be inside an MCP request that names that id. Reusing
+   * the id lets "metadata exists but main has no PTY" become a pure backend
+   * repair, not a cross-store identity migration.
+   */
+  preferredSessionId?: string
   /** Which kind of session to spawn. Defaults to 'claude' so the
    *  pre-existing call sites keep working without a kind arg. */
   kind?: SessionKind
@@ -349,7 +363,10 @@ export class SessionManager extends EventEmitter {
    */
   async spawn(options: SpawnOptions): Promise<SpawnResult> {
     const kind: SessionKind = options.kind ?? 'claude'
-    const sessionId = randomUUID()
+    const sessionId = options.preferredSessionId ?? randomUUID()
+    if (this.sessions.has(sessionId)) {
+      throw new Error(`Session ${sessionId} is already live`)
+    }
     const spawnStartedAt = performance.now()
     performanceService.mark('session.spawn.start', {
       sessionId,

@@ -43,6 +43,7 @@ export const sessionApi = {
      *  callers don't need to change. Pass 'terminal' to spawn a
      *  plain shell session instead. */
     kind?: SessionKind
+    preferredSessionId?: string
     cwd: string
     cols?: number
     rows?: number
@@ -67,6 +68,9 @@ export const sessionApi = {
 
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
+
+  getLiveSessionKind: (sessionId: string): Promise<SessionKind | null> =>
+    ipcRenderer.invoke('session:kind', sessionId),
 
   /**
    * Attach this renderer to a terminal session's live data stream.

@@ -37,6 +37,7 @@ export function registerSessionIpc(
       _evt,
       options: {
         kind?: 'claude' | 'codex' | 'terminal'
+        preferredSessionId?: string
         cwd: string
         cols?: number
         rows?: number
@@ -53,6 +54,10 @@ export function registerSessionIpc(
 
   ipcMain.handle('session:kill', async (_evt, sessionId: string) => {
     return await manager.kill(sessionId)
+  })
+
+  ipcMain.handle('session:kind', (_evt, sessionId: string) => {
+    return manager.getSessionKind(sessionId)
   })
 
   // Terminal attach/replay. Called once by TerminalLeaf on mount.

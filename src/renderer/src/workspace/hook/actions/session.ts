@@ -66,9 +66,11 @@ export type SessionActions = {
       kind?: SessionKind
       dangerousMode?: boolean
       recoverTmuxName?: string
+      preferredSessionId?: SessionId
       builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
+  ensureSessionLive: (sessionId: SessionId) => Promise<SessionId>
   killSession: (sessionId: SessionId) => Promise<void>
   replaceSession: (
     cwd: string,
@@ -178,6 +180,7 @@ export function useSessionActions(
         kind?: SessionKind
         dangerousMode?: boolean
         recoverTmuxName?: string
+        preferredSessionId?: SessionId
         builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
@@ -199,6 +202,7 @@ export function useSessionActions(
       try {
         const result = await window.api.spawnSession({
           kind,
+          preferredSessionId: opts?.preferredSessionId,
           cwd,
           resumeSessionId: opts?.resumeSessionId,
           dangerousMode,
@@ -211,7 +215,9 @@ export function useSessionActions(
       } catch (err) {
         throw new Error(sessionSpawnErrorMessage(kind, err, useProxy === true))
       }
+      const previousMeta = refs.stateRef.current.sessions[sessionId]
       const meta: SessionMeta = {
+        ...(previousMeta ?? {}),
         cwd,
         kind,
         ...(tmuxName ? { tmuxName } : {}),
@@ -329,6 +335,67 @@ export function useSessionActions(
       return sessionId
     },
     [refs.dangerousAgentsRef, refs.useProxyStreamingRef, setRuntimes, setState],
+  )
+
+  const ensureSessionLive = useCallback(
+    async (sessionId: SessionId): Promise<SessionId> => {
+      const snapshot = refs.stateRef.current
+      const meta = snapshot.sessions[sessionId]
+      if (!meta) {
+        throw new Error(`Cannot wake ${sessionId}; no persisted session metadata exists.`)
+      }
+      const kind: SessionKind = meta.kind ?? 'claude'
+
+      const liveKind = await window.api.getLiveSessionKind(sessionId)
+      if (liveKind === kind) return sessionId
+      if (liveKind !== null) {
+        throw new Error(`Cannot wake ${sessionId}; main has a live ${liveKind} session at that id.`)
+      }
+
+      const builtInMcpDomains =
+        kind !== 'terminal' ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains) : undefined
+      const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
+      const restoredMeta = withoutProvisionalProviderSession(meta)
+
+      // WHY this respawns under the SAME SessionId instead of using
+      // replaceSession/idMap:
+      //
+      // This action repairs a split-brain state created by process restart:
+      // renderer workspace metadata survived, but main's provider registry did
+      // not. The renderer id is already referenced by Dispatch rows, buried
+      // records, tiled lanes, pins, grid-related selections, orchestration MCP
+      // ownership, and possibly a tool call that is currently trying to send
+      // to that exact id. A new id would force a broad remap while a command is
+      // in flight. Reusing the id makes wake equivalent to "main caught up with
+      // workspace.json" and keeps every existing reference valid.
+      await spawn(meta.cwd, {
+        kind,
+        preferredSessionId: sessionId,
+        resumeSessionId,
+        builtInMcpDomains,
+        recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+        dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
+      })
+
+      setState(prev => {
+        const current = prev.sessions[sessionId]
+        if (!current) return prev
+        return {
+          ...prev,
+          sessions: {
+            ...prev.sessions,
+            [sessionId]: {
+              ...current,
+              ...restoredMeta,
+              ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+            },
+          },
+        }
+      })
+
+      return sessionId
+    },
+    [refs.dangerousAgentsRef, refs.stateRef, setState, spawn],
   )
 
   const killSession = useCallback(
@@ -840,5 +907,5 @@ export function useSessionActions(
     ],
   )
 
-  return { spawn, killSession, replaceSession, reloadAgentSessions, softReloadAgentView }
+  return { spawn, ensureSessionLive, killSession, replaceSession, reloadAgentSessions, softReloadAgentView }
 }

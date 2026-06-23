@@ -69,12 +69,18 @@ export function TerminalLeaf({
   // mount/unmount contract.
   const acknowledgeSessionRef = useRef(acknowledgeSession)
   acknowledgeSessionRef.current = acknowledgeSession
+  const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
+  ensureSessionLiveRef.current = workspace.ensureSessionLive
+  const showPaneToastRef = useRef(workspace.showPaneToast)
+  showPaneToastRef.current = workspace.showPaneToast
   // The DOM node xterm.js renders into. We give it a fresh ref on
   // every mount; xterm's open() attaches on top.
   const containerRef = useRef<HTMLDivElement>(null)
   // The xterm instance itself. Kept in a ref so the effects below
   // can access it without triggering re-renders on every data tick.
   const termRef = useRef<Terminal | null>(null)
+  const focusedRef = useRef(focused)
+  focusedRef.current = focused
   // FitAddon instance — held for resize callbacks.
   const fitRef = useRef<FitAddon | null>(null)
 
@@ -230,29 +236,46 @@ export function TerminalLeaf({
           term?.write(data)
         },
       )
-      void window.api.attachTerminal(sessionId).then(buffer => {
-        // The cleanup below may have disposed the term already
-        // (transient remount, rapid tab switch). Check before
-        // touching it.
-        if (!termRef.current) return
-        if (buffer) termRef.current.write(buffer)
-        // Drain any live events that arrived between subscribe
-        // and attach-response. These are strictly AFTER the
-        // buffer's last byte because main buffered silently
-        // until we called attach.
-        if (backlogQueue.length > 0) termRef.current.write(backlogQueue.join(''))
-        backlogQueue.length = 0
-        attachedBackfillDone = true
-        // Now that content has landed, force-focus the terminal
-        // so the very first keystroke the user makes lands in
-        // xterm. The focus-on-mount effect above already called
-        // focus() once, but the attach replay can take a moment
-        // (IPC round trip + first paint) and during that window
-        // focus might have drifted to somewhere else — this
-        // re-focus closes the gap if the pane is still the
-        // workspace-focused one.
-        if (focused) termRef.current.focus()
-      })
+      // WHY wake uses callback refs instead of making workspace an effect
+      // dependency: this effect owns xterm's lifetime. The workspace object is
+      // rebuilt for ordinary renderer state changes, but the shell attachment
+      // should only remount when its session id changes. Re-running this effect
+      // for helper identity churn would destroy scrollback and re-open the
+      // attach race that the subscribe/attach/drain sequence below exists to
+      // avoid.
+      void ensureSessionLiveRef.current(sessionId)
+        .then(() => window.api.attachTerminal(sessionId))
+        .then(buffer => {
+          // The cleanup below may have disposed the term already
+          // (transient remount, rapid tab switch). Check before
+          // touching it.
+          if (!termRef.current) return
+          if (buffer) termRef.current.write(buffer)
+          // Drain any live events that arrived between subscribe
+          // and attach-response. These are strictly AFTER the
+          // buffer's last byte because main buffered silently
+          // until we called attach.
+          if (backlogQueue.length > 0) termRef.current.write(backlogQueue.join(''))
+          backlogQueue.length = 0
+          attachedBackfillDone = true
+          // Now that content has landed, force-focus the terminal
+          // so the very first keystroke the user makes lands in
+          // xterm. The focus-on-mount effect above already called
+          // focus() once, but the attach replay can take a moment
+          // (IPC round trip + first paint) and during that window
+          // focus might have drifted to somewhere else — this
+          // re-focus closes the gap if the pane is still the
+          // workspace-focused one.
+          if (focusedRef.current) termRef.current.focus()
+        })
+        .catch(err => {
+          showPaneToastRef.current(
+            sessionId,
+            err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Could not wake terminal',
+          )
+        })
 
       // Container resize observer. Whenever the tile's cell area
       // changes size (split drag, window resize, tab activation),

@@ -54,6 +54,10 @@ export function AgentTerminalLeaf({
   const acknowledgeSession = workspace.acknowledgeSession
   const acknowledgeSessionRef = useRef(acknowledgeSession)
   acknowledgeSessionRef.current = acknowledgeSession
+  const ensureSessionLiveRef = useRef(workspace.ensureSessionLive)
+  ensureSessionLiveRef.current = workspace.ensureSessionLive
+  const showPaneToastRef = useRef(workspace.showPaneToast)
+  showPaneToastRef.current = workspace.showPaneToast
 
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -150,16 +154,32 @@ export function AgentTerminalLeaf({
         term?.write(data)
       })
 
-      void window.api.attachAgentPty(sessionId).then(buffer => {
-        if (disposed || termRef.current !== term) return
-        const liveTerm = term
-        if (!liveTerm) return
-        if (buffer) liveTerm.write(buffer)
-        if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
-        backlogQueue.length = 0
-        attachedBackfillDone = true
-        if (focusedRef.current) liveTerm.focus()
-      })
+      // WHY this goes through refs instead of effect deps: mounting xterm is
+      // the expensive lifecycle boundary here. The workspace object is rebuilt
+      // as renderer state changes, but those helper identity changes should not
+      // tear down the raw PTY view, lose scrollback, and re-run attach. The
+      // session id is the actual attachment identity; refs keep the wake/toast
+      // callbacks current without making them part of xterm's mount contract.
+      void ensureSessionLiveRef.current(sessionId)
+        .then(() => window.api.attachAgentPty(sessionId))
+        .then(buffer => {
+          if (disposed || termRef.current !== term) return
+          const liveTerm = term
+          if (!liveTerm) return
+          if (buffer) liveTerm.write(buffer)
+          if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
+          backlogQueue.length = 0
+          attachedBackfillDone = true
+          if (focusedRef.current) liveTerm.focus()
+        })
+        .catch(err => {
+          showPaneToastRef.current(
+            sessionId,
+            err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Could not wake agent terminal',
+          )
+        })
 
       onThemeChangedListener = (): void => {
         if (term) term.options.fontFamily = getActiveAppFontFamily()
