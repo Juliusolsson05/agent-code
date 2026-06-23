@@ -5,6 +5,7 @@ import {
   buildGridRelatedAgentTabs,
   selectedGridRelatedSessionId,
 } from '@renderer/workspace/gridRelatedAgents'
+import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
@@ -117,6 +118,20 @@ export function renderWorkspaceLeaf(
 
   const provider = getRendererProvider(kind)
   const runtime = workspace.getRuntime(renderedSessionId)
+  if ((kind === 'claude' || kind === 'codex') && runtime.agentTerminalMode) {
+    return (
+      <AgentTerminalLeaf
+        sessionId={renderedSessionId}
+        paneLabel={paneLabel}
+        focused={sessionId === focusedSessionId}
+        onFocusRequest={onFocusRequest}
+        workspace={workspace}
+        projectDir={runtime.projectDir ?? meta?.cwd ?? null}
+        provider={kind}
+      />
+    )
+  }
+
   // WHY widen the provider TileLeaf type at this call site:
   // providerConfig.ts intentionally exposes only the stable provider-neutral
   // pane props. Related-agent tabs are shell chrome, not provider API. The

@@ -34,6 +34,8 @@ export function useWorkspaceHelpers(
   acknowledgeSession: (sessionId: SessionId) => void
   getRuntime: (sessionId: SessionId) => SessionRuntime
   toggleTailMode: (sessionId: SessionId) => void
+  setAgentTerminalMode: (sessionId: SessionId, enabled: boolean) => void
+  toggleAgentTerminalMode: (sessionId: SessionId) => void
   scrollFocusedToLatest: () => void
 } {
   const updateRuntime = useCallback(
@@ -105,6 +107,39 @@ export function useWorkspaceHelpers(
     [setRuntimes],
   )
 
+  const setAgentTerminalMode = useCallback(
+    (sessionId: SessionId, enabled: boolean) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        if (current.agentTerminalMode === enabled) return prev
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            agentTerminalMode: enabled,
+          },
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
+  const toggleAgentTerminalMode = useCallback(
+    (sessionId: SessionId) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            agentTerminalMode: !current.agentTerminalMode,
+          },
+        }
+      })
+    },
+    [setRuntimes],
+  )
+
   const scrollFocusedToLatest = useCallback(() => {
     const snap = refs.stateRef.current
     // WHY command-target instead of tab.focusedSessionId:
@@ -139,6 +174,8 @@ export function useWorkspaceHelpers(
     acknowledgeSession,
     getRuntime,
     toggleTailMode,
+    setAgentTerminalMode,
+    toggleAgentTerminalMode,
     scrollFocusedToLatest,
   }
 }

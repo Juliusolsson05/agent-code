@@ -494,6 +494,35 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'toggle-agent-terminal-mode',
+    surface: 'session',
+    title: 'Agent Terminal Mode',
+    description: '**What it does:** Switches the focused **Claude or Codex agent** between Agent Code rendering and the provider raw terminal.\n\n**Use when:** The feed, composer, or custom renderer is broken but the underlying provider TUI is still usable.\n\n**Notes:** This is a per-agent recovery view. It keeps the same live provider process.',
+    keywords: ['terminal', 'raw', 'tui', 'fallback', 'agent', 'claude', 'codex', 'renderer', 'feed'],
+    getState: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      const runtime = sessionId ? workspace.getRuntime(sessionId) : null
+      const enabled = Boolean(runtime?.agentTerminalMode)
+      return {
+        label: enabled ? 'On' : 'Off',
+        tone: enabled ? 'accent' : 'neutral',
+      }
+    },
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? 'claude'
+      return kind === 'claude' || kind === 'codex'
+    },
+    run: ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      ui.closePalette()
+      workspace.toggleAgentTerminalMode(sessionId)
+    },
+  },
+  {
     id: 'copy-resume-command',
     surface: 'session',
     title: 'Copy Resume Command',

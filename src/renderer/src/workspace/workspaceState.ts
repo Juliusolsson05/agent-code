@@ -406,6 +406,17 @@ export type SessionRuntime = {
   toolUseIndex: Map<string, ToolUseBlock>
   toolResultIndex: Map<string, ToolResultBlock>
   tailMode: boolean
+  /** Runtime-only view override for #247's raw provider terminal.
+   *
+   * WHY this is not persisted in SessionMeta:
+   * mounting the raw terminal attaches an interactive xterm to the live
+   * provider PTY and resizes that PTY to the pane's dimensions. Persisting the
+   * flag would make app restart/rehydrate silently attach and resize provider
+   * terminals before the user asks. Keeping it in runtime still survives tab
+   * unmount/remount within the current app run, which is the recovery case the
+   * toggle exists for, while every fresh launch starts in the normal rendered
+   * feed by default. */
+  agentTerminalMode: boolean
   scrollToLatestRequest: number
   assistantPicker: { selectedUuid: string } | null
   // Copy Code Block picker. Non-null while the "Copy Code Block…"
@@ -600,6 +611,7 @@ export function emptyRuntime(): SessionRuntime {
     toolUseIndex: new Map(),
     toolResultIndex: new Map(),
     tailMode: false,
+    agentTerminalMode: false,
     scrollToLatestRequest: 0,
     assistantPicker: null,
     codeBlockPicker: null,

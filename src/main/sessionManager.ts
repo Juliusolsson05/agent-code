@@ -321,17 +321,18 @@ export class SessionManager extends EventEmitter {
   // structured feed but not enough for a real inline terminal: xterm
   // needs the raw byte stream, including ANSI cursor movement and full
   // repaint sequences. We therefore keep a capped byte-string replay
-  // buffer per Claude/Codex session and expose it only when the debug
-  // panel explicitly attaches.
+  // buffer per Claude/Codex session and expose it only when a raw terminal
+  // consumer explicitly attaches (DebugPanel or #247's pane-level terminal
+  // mode).
   //
   // This deliberately uses the same attach/replay contract as
   // TerminalLeaf instead of forwarding every agent byte to the
   // renderer from process start: most users never open the raw inline
   // terminal, and agent PTYs can be noisy. Buffer in main, broadcast
-  // only after an attach, and let the debug component replay the
-  // buffer before draining live bytes.
+  // only after an attach, and let the renderer replay the buffer before
+  // draining live bytes.
   private readonly agentPtyBuffers = new Map<string, string>()
-  private readonly agentPtyAttached = new Set<string>()
+  private readonly agentPtyAttachCounts = new Map<string, number>()
   private readonly agentPtyRestoreSizes = new Map<string, PtySize>()
 
   private markActivity(sessionId: string): void {
@@ -429,7 +430,7 @@ export class SessionManager extends EventEmitter {
           sessionId,
           appendCappedBuffer(prev, data, AGENT_PTY_BUFFER_CAP),
         )
-        if (this.agentPtyAttached.has(sessionId)) {
+        if ((this.agentPtyAttachCounts.get(sessionId) ?? 0) > 0) {
           this.emit('agent-pty-data', { sessionId, data })
         }
         this.emit('pty-data', { sessionId, data })
@@ -490,7 +491,7 @@ export class SessionManager extends EventEmitter {
         this.builtInMcpHost?.revokeSession(sessionId)
         this.sessions.delete(sessionId)
         this.agentPtyBuffers.delete(sessionId)
-        this.agentPtyAttached.delete(sessionId)
+        this.agentPtyAttachCounts.delete(sessionId)
         this.agentPtyRestoreSizes.delete(sessionId)
         this.sessionSizes.delete(sessionId)
         // Mirrors `kill()`: a session that exits naturally (provider
@@ -524,7 +525,7 @@ export class SessionManager extends EventEmitter {
         // EventEmitter — nothing outside the registry subscribed.
         this.sessions.delete(sessionId)
         this.agentPtyBuffers.delete(sessionId)
-        this.agentPtyAttached.delete(sessionId)
+        this.agentPtyAttachCounts.delete(sessionId)
         this.agentPtyRestoreSizes.delete(sessionId)
         this.sessionSizes.delete(sessionId)
         this.builtInMcpHost?.revokeSession(sessionId)
@@ -767,11 +768,18 @@ export class SessionManager extends EventEmitter {
    * This is the Claude/Codex counterpart to attachTerminal(). It is
    * intentionally separate because agent panes are not terminal panes:
    * their primary renderer is the structured feed, while this inline
-   * terminal is a debug-only view into the underlying provider TUI.
+   * terminal is an opt-in view into the underlying provider TUI.
    * Returning the buffered raw bytes lets the inline xterm reconstruct
    * the provider's latest terminal state, then `agent-pty-data`
    * carries subsequent live bytes for as long as the session remains
    * open.
+   *
+   * Multiple renderer consumers can attach to the same session (for example a
+   * debug panel plus a Tiled Dispatch lane). The attach count is intentionally
+   * session-scoped: the first attach captures the provider PTY size to restore
+   * later, and the final detach performs that restore. This prevents one
+   * unmounted consumer from cutting off live bytes for another still-mounted
+   * raw terminal.
    */
   attachAgentPty(sessionId: string): string {
     const entry = this.sessions.get(sessionId)
@@ -784,24 +792,30 @@ export class SessionManager extends EventEmitter {
       return ''
     }
     const buffer = this.agentPtyBuffers.get(sessionId) ?? ''
-    if (!this.agentPtyAttached.has(sessionId)) {
+    const attachCount = this.agentPtyAttachCounts.get(sessionId) ?? 0
+    if (attachCount === 0) {
       const currentSize = this.sessionSizes.get(sessionId)
       if (currentSize) {
         this.agentPtyRestoreSizes.set(sessionId, { ...currentSize })
       }
     }
-    this.agentPtyAttached.add(sessionId)
+    this.agentPtyAttachCounts.set(sessionId, attachCount + 1)
     return buffer
   }
 
   /**
-   * Detach the debug inline terminal from a Claude/Codex session.
-   * This disables raw PTY IPC forwarding and restores the provider PTY
-   * size that was active before the inline terminal took ownership.
+   * Detach a raw inline terminal from a Claude/Codex session.
+   * The final detach disables raw PTY IPC forwarding and restores the provider
+   * PTY size that was active before the first inline terminal took ownership.
    */
   detachAgentPty(sessionId: string): void {
     const entry = this.sessions.get(sessionId)
-    this.agentPtyAttached.delete(sessionId)
+    const attachCount = this.agentPtyAttachCounts.get(sessionId) ?? 0
+    if (attachCount > 1) {
+      this.agentPtyAttachCounts.set(sessionId, attachCount - 1)
+      return
+    }
+    this.agentPtyAttachCounts.delete(sessionId)
     const restoreSize = this.agentPtyRestoreSizes.get(sessionId)
     this.agentPtyRestoreSizes.delete(sessionId)
     if (!entry || (entry.kind !== 'claude' && entry.kind !== 'codex')) return
@@ -978,7 +992,7 @@ export class SessionManager extends EventEmitter {
     this.builtInMcpHost?.revokeSession(sessionId)
     if (entry.kind === 'claude' || entry.kind === 'codex') {
       this.agentPtyBuffers.delete(sessionId)
-      this.agentPtyAttached.delete(sessionId)
+      this.agentPtyAttachCounts.delete(sessionId)
       this.agentPtyRestoreSizes.delete(sessionId)
     }
     this.sessionSizes.delete(sessionId)
