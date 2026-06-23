@@ -16,6 +16,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 
 let mainWindow: BrowserWindow | null = null
 
+const MIN_ZOOM_LEVEL = -2
+const MAX_ZOOM_LEVEL = 2
+const ZOOM_STEP = 1
+
+function clampZoomLevel(level: number): number {
+  return Math.max(MIN_ZOOM_LEVEL, Math.min(MAX_ZOOM_LEVEL, level))
+}
+
 /**
  * Push the traffic light (close/minimize/zoom) right-edge inset to the
  * renderer as a CSS custom property. The renderer uses this to pad the
@@ -68,6 +76,56 @@ export function sendToMainWindow(channel: string, ...args: unknown[]): void {
   }
 }
 
+export function zoomMainWindow(direction: 'in' | 'out' | 'reset'): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+
+  const current = mainWindow.webContents.getZoomLevel()
+  const next =
+    direction === 'reset'
+      ? 0
+      : direction === 'in'
+        ? current + ZOOM_STEP
+        : current - ZOOM_STEP
+
+  // WHY Agent Code owns zoom instead of using Electron's native zoom roles:
+  // the native roles restore the missing shortcuts, but they also let Chromium
+  // continue toward browser-scale extremes. Agent Code is a dense application
+  // shell with fixed chrome, terminal panes, overlays, and tab geometry; very
+  // high page zoom makes the UI look broken and can strand controls off-screen.
+  // The intended contract is "zoom is available for comfort/accessibility, but
+  // only inside the range we design and debug against." Keeping the clamp here
+  // gives menu items, keyboard fallbacks, and future buttons the same policy.
+  mainWindow.webContents.setZoomLevel(clampZoomLevel(next))
+  pushTrafficLightInset()
+}
+
+function handleZoomInput(
+  event: Electron.Event,
+  input: Electron.Input,
+): void {
+  const isCommandZoom =
+    process.platform === 'darwin' ? input.meta : input.control
+  if (!isCommandZoom || input.alt) return
+
+  const key = input.key.toLowerCase()
+  if (key === '+' || key === '=') {
+    event.preventDefault()
+    zoomMainWindow('in')
+    return
+  }
+
+  if (key === '-' || key === '_') {
+    event.preventDefault()
+    zoomMainWindow('out')
+    return
+  }
+
+  if (key === '0') {
+    event.preventDefault()
+    zoomMainWindow('reset')
+  }
+}
+
 export function createMainWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -102,6 +160,19 @@ export function createMainWindow(): void {
   // doesn't offer a "traffic light moved" event, but resize covers
   // every case that shifts them.
   mainWindow.on('resize', pushTrafficLightInset)
+
+  mainWindow.webContents.on('before-input-event', handleZoomInput)
+
+  mainWindow.webContents.on('zoom-changed', (event, zoomDirection) => {
+    // WHY the menu accelerator is not the only zoom entry point: Chromium can
+    // still produce zoom gestures outside the menu path on some platforms and
+    // keyboard layouts. If those gestures use Chromium's default behavior, the
+    // app drifts back into unbounded browser zoom even though the visible menu
+    // is capped. Preventing the default here translates every user zoom gesture
+    // back through the same clamped helper as the menu commands.
+    event.preventDefault()
+    zoomMainWindow(zoomDirection === 'in' ? 'in' : 'out')
+  })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     void openAllowedExternalUrl(url).catch(err => {
