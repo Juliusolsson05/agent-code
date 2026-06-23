@@ -2,6 +2,19 @@ import type { CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 
+function afterRenderedPaneCommit(callback: () => void): void {
+  // WHY two animation frames instead of immediate enumeration:
+  // in Hybrid mode, invoking this command can be the event that acquires the
+  // render lease. React still has to swap AgentTerminalLeaf for TileLeaf before
+  // `[data-code-block-id]` nodes exist. One frame schedules after the command's
+  // state update has been observed; the second gives the browser a committed
+  // DOM tree to query. This is intentionally local to the DOM-backed picker:
+  // transcript-backed commands do not need a render-turn handshake.
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(callback)
+  })
+}
+
 // "Copy Code Block…" — the code-block analogue of "Copy Assistant
 // Message…" (features/copy-assistant). It opens a picker on the
 // focused pane; Up/Down move between the code blocks in that pane's
@@ -22,6 +35,10 @@ export const copyCodeBlockCommands: CommandDef[] = [
     surface: 'session',
     title: 'Copy Code Block…',
     description: '**What it does:** Opens a picker to copy a specific **code block** from the focused pane.\n\n**Use when:** You want one fenced block — a command, a snippet, a generated file — without copying the whole message.\n\n**Notes:** Use arrows to move between blocks, **Enter** to copy, **Esc** to cancel. Starts on the most recent block.',
+    renderedViewPolicy: {
+      kind: 'leases-rendered-feed',
+      feature: 'copy-code-block',
+    },
     keywords: ['copy', 'code', 'block', 'snippet', 'fenced', 'pick'],
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -45,13 +62,21 @@ export const copyCodeBlockCommands: CommandDef[] = [
         return
       }
 
-      const ids = enumerateCodeBlockIds(sessionId)
-      if (ids.length === 0) {
-        workspace.showPaneToast(sessionId, 'No code blocks in this pane')
-        return
-      }
-      // Seed on the most recent (last in document order).
-      workspace.setCodeBlockPicker(sessionId, { selectedId: ids[ids.length - 1] })
+      workspace.acquireRenderedViewLease(sessionId, 'copy-code-block')
+      afterRenderedPaneCommit(() => {
+        const ids = enumerateCodeBlockIds(sessionId)
+        if (ids.length === 0) {
+          workspace.releaseRenderedViewLease(sessionId, 'copy-code-block')
+          workspace.showPaneToast(sessionId, 'No code blocks in this pane')
+          return
+        }
+        // Seed on the most recent (last in document order). setCodeBlockPicker
+        // takes ownership of the ongoing picker lease; release this short
+        // command-start lease after the picker is parked so Hybrid stays
+        // rendered for navigation but does not retain two counts.
+        workspace.setCodeBlockPicker(sessionId, { selectedId: ids[ids.length - 1] })
+        workspace.releaseRenderedViewLease(sessionId, 'copy-code-block')
+      })
     },
   },
 ]

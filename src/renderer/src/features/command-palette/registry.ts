@@ -10,6 +10,8 @@ import { copyAssistantCommands } from '@renderer/features/copy-assistant/command
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
 import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
 import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
+import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
+import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type {
   CommandContext,
   CommandDef,
@@ -89,12 +91,26 @@ function commandVisible(command: CommandDef, ctx: CommandContext): boolean {
   return (command.pickerVisibility ?? 'default') === 'default'
 }
 
+function renderedViewAvailable(command: CommandDef, ctx: CommandContext): boolean {
+  const sessionId = commandTargetSessionId(ctx.workspace)
+  if (!sessionId) return true
+  const kind = ctx.workspace.state.sessions[sessionId]?.kind
+  const runtime = ctx.workspace.getRuntime(sessionId)
+  return commandAllowedByRenderedViewPolicy({
+    policy: command.renderedViewPolicy,
+    kind,
+    mode: ctx.flags.agentViewMode,
+    runtime,
+  })
+}
+
 export function buildCommandRegistry(ctx: CommandContext): ResolvedCommand[] {
   return commandDefs
     .filter(
       command =>
         surfaceAvailable(command.surface, ctx) &&
         (command.when ? command.when(ctx) : true) &&
+        renderedViewAvailable(command, ctx) &&
         commandVisible(command, ctx),
     )
     .map(command => {

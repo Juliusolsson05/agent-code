@@ -28,9 +28,31 @@ export const useAppStore = create<AppStore>()(
         // skipped coercion, loaded settings without that field, and the command
         // registry's `commandVisible` dereferenced `undefined[id]` → black
         // screen on launch. v3 forces a re-coerce so the field is backfilled.
-        version: 3,
+        //
+        // v4 adds `settings.agentViewMode`. Without a bump, existing v3 users
+        // would skip coercion and thread `undefined` into the render-policy
+        // selector, making the app's most central pane decision depend on a
+        // missing persisted key.
+        version: 4,
         storage: createJSONStorage(() => localStorage),
         partialize: state => ({ settings: state.settings }),
+        merge: (persisted, current) => {
+          const data = persisted as { settings?: Partial<Settings> } | undefined
+          return {
+            ...current,
+            // WHY coerce on merge as well as migrate:
+            // Zustand only calls `migrate` when the stored version is older
+            // than the current version. Same-version blobs can still be
+            // incomplete: interrupted writes, localStorage edits, dev builds,
+            // or a field added during a branch before the version bump lands.
+            // A missing settings.agentViewMode is especially dangerous
+            // because the pane renderer treats anything other than explicit
+            // "agent" / "terminal" as Hybrid-like terminal-first behavior.
+            // Running the same coercion at the final merge point makes every
+            // launch shape-safe, not just older-version launches.
+            settings: coerceSettings(data?.settings),
+          }
+        },
         migrate: persisted => {
           const data = persisted as { settings?: Partial<Settings> } | undefined
           return {

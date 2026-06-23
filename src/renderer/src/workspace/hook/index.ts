@@ -129,7 +129,17 @@ export function useWorkspace(
   }, [setState])
 
   // ---- Runtime helpers (updateRuntime / appendFeedDebug / getRuntime / etc) ----
-  const { updateRuntime, appendFeedDebug, acknowledgeSession, getRuntime, toggleTailMode, scrollFocusedToLatest } =
+  const {
+    updateRuntime,
+    appendFeedDebug,
+    acknowledgeSession,
+    getRuntime,
+    toggleTailMode,
+    acquireRenderedViewLease,
+    releaseRenderedViewLease,
+    releaseAllRenderedViewLeases,
+    scrollFocusedToLatest,
+  } =
     useWorkspaceHelpers(runtimes, setRuntimes, refs)
 
   // ---- Pane toast (needs updateRuntime, so after helpers) ----
@@ -548,6 +558,9 @@ export function useWorkspace(
     resizeFocusedTiledTab,
     resizeTiledTabByIndex,
     toggleTailMode,
+    acquireRenderedViewLease,
+    releaseRenderedViewLease,
+    releaseAllRenderedViewLeases,
     scrollFocusedToLatest,
     pickerEnter,
     pickerMove,

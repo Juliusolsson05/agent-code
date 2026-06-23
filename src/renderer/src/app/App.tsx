@@ -28,6 +28,7 @@ import { GitBar } from '@renderer/features/git/ui/GitBar'
 import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
+import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
@@ -172,6 +173,42 @@ export default function App() {
   useEffect(() => {
     applyTheme(settings)
   }, [settings])
+
+  useEffect(() => {
+    if (settings.agentViewMode !== 'terminal') return
+    // WHY hard Terminal mode force-clears rendered interaction state:
+    // Hybrid leases are intentionally allowed to mount TileLeaf for a feature,
+    // but Terminal mode is the user's explicit "do not mount Agent Code's
+    // rendered agent surface" setting. If a picker lease survives the setting
+    // transition, switching back to Hybrid later can resurrect a stale picker
+    // that was invisible while Terminal mode was active. Clearing at the app
+    // boundary keeps the mode switch semantic: Terminal is an immediate hard
+    // reset of rendered-only affordances, not a pause button for them.
+    for (const sessionId of Object.keys(workspace.runtimes)) {
+      const runtime = workspace.runtimes[sessionId]
+      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
+      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
+      workspace.releaseAllRenderedViewLeases(sessionId)
+    }
+  }, [settings.agentViewMode, workspace])
+
+  useEffect(() => {
+    if (!workspace.reader && !workspace.spotlight && !settingsPageOpen) return
+    // WHY reader/spotlight/settings clear picker leases:
+    // these surfaces hide or replace the feed interaction layer while global
+    // keybinds are still alive. If a Copy Assistant or Copy Code Block picker
+    // survives underneath them, Escape/Enter/arrows either act on hidden state
+    // or force Hybrid to keep TileLeaf mounted for UI the user cannot see.
+    // Draft-driven rendering is intentionally unaffected because composer
+    // draft text is real user state; picker leases are transient affordances.
+    for (const sessionId of Object.keys(workspace.runtimes)) {
+      const runtime = workspace.runtimes[sessionId]
+      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
+      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
+      workspace.releaseRenderedViewLease(sessionId, 'copy-assistant-message')
+      workspace.releaseRenderedViewLease(sessionId, 'copy-code-block')
+    }
+  }, [settingsPageOpen, workspace])
 
   useEffect(() => {
     const off = window.api.onAiWorkspaceOpenRequest(request => {
@@ -633,15 +670,16 @@ export default function App() {
           ) : activeTab && workspace.readerMode && workspace.readerMode.tabId === activeTab.id ? (
             <ReaderView workspace={workspace} />
           ) : activeTab && workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
-            <SpotlightView workspace={workspace} />
+            <SpotlightView workspace={workspace} agentViewMode={settings.agentViewMode} />
           ) : (
             <GlobalEditorShell workspace={workspace}>
               {workspace.tileTabs ? (
-                <TileTabsView workspace={workspace} />
+                <TileTabsView workspace={workspace} agentViewMode={settings.agentViewMode} />
               ) : activeTab && workspace.dispatchMode ? (
                 <div className="relative h-full min-h-0 min-w-0">
                   <DispatchLayout
                     workspace={workspace}
+                    agentViewMode={settings.agentViewMode}
                     showStatusMode={settings.showStatusMode}
                     showWorktreeBadges={settings.showWorktreeBadges}
                   />
@@ -660,6 +698,7 @@ export default function App() {
                     node={activeTab.root}
                     focusedSessionId={activeTab.focusedSessionId}
                     workspace={workspace}
+                    agentViewMode={settings.agentViewMode}
                     showStatusMode={settings.showStatusMode}
                     showWorktreeBadges={settings.showWorktreeBadges}
                   />
@@ -714,6 +753,13 @@ export default function App() {
             sessionId={commandTargetId}
             runtime={workspace.getRuntime(commandTargetId)}
             kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
+            inlineRawTerminalDisabled={
+              getEffectiveAgentSurface({
+                kind: workspace.state.sessions[commandTargetId]?.kind ?? 'claude',
+                mode: settings.agentViewMode,
+                runtime: workspace.getRuntime(commandTargetId),
+              }) === 'terminal'
+            }
             onClose={toggleDebugPanel}
           />
         )}
@@ -797,6 +843,7 @@ export default function App() {
         toggleStatusMode={toggleStatusMode}
         toggleWorktreeBadges={toggleWorktreeBadges}
         customRenderingEnabled={settings.customRendering}
+        agentViewMode={settings.agentViewMode}
         commandVisibilityOverrides={settings.commandVisibilityOverrides}
         // Hard-coded false for now: issue #249 ships the per-command
         // override mechanism only. A future "show hidden commands"

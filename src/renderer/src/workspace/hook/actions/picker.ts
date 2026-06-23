@@ -51,9 +51,11 @@ export function usePickerActions(
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         if (current.assistantPicker) {
+          const renderedViewLeases = { ...current.renderedViewLeases }
+          delete renderedViewLeases['copy-assistant-message']
           return {
             ...prev,
-            [sessionId]: { ...current, assistantPicker: null },
+            [sessionId]: { ...current, renderedViewLeases, assistantPicker: null },
           }
         }
         const uuids = assistantUuidsWithText(current.entries)
@@ -62,6 +64,11 @@ export function usePickerActions(
           ...prev,
           [sessionId]: {
             ...current,
+            renderedViewLeases: {
+              ...current.renderedViewLeases,
+              'copy-assistant-message':
+                (current.renderedViewLeases['copy-assistant-message'] ?? 0) + 1,
+            },
             assistantPicker: { selectedUuid: uuids[uuids.length - 1] },
           },
         }
@@ -109,7 +116,9 @@ export function usePickerActions(
       setRuntimes(prev => {
         const c = prev[sessionId]
         if (!c?.assistantPicker) return prev
-        return { ...prev, [sessionId]: { ...c, assistantPicker: null } }
+        const renderedViewLeases = { ...c.renderedViewLeases }
+        delete renderedViewLeases['copy-assistant-message']
+        return { ...prev, [sessionId]: { ...c, renderedViewLeases, assistantPicker: null } }
       })
     },
     [setRuntimes],
@@ -129,7 +138,9 @@ export function usePickerActions(
       setRuntimes(prev => {
         const c = prev[sessionId]
         if (!c) return prev
-        return { ...prev, [sessionId]: { ...c, assistantPicker: null } }
+        const renderedViewLeases = { ...c.renderedViewLeases }
+        delete renderedViewLeases['copy-assistant-message']
+        return { ...prev, [sessionId]: { ...c, renderedViewLeases, assistantPicker: null } }
       })
       if (!text) {
         showPaneToast(sessionId, 'Nothing to copy')
@@ -156,7 +167,28 @@ export function usePickerActions(
         if ((c.codeBlockPicker?.selectedId ?? null) === (picker?.selectedId ?? null)) {
           return prev
         }
-        return { ...prev, [sessionId]: { ...c, codeBlockPicker: picker } }
+        const renderedViewLeases = { ...c.renderedViewLeases }
+        if (picker && !c.codeBlockPicker) {
+          // WHY the code-block picker owns a render lease:
+          // code block identity lives in rendered DOM attributes, not in the
+          // transcript. In Hybrid, opening the picker must keep TileLeaf
+          // mounted for arrow navigation, highlighting, clipboard lookup, and
+          // stale-id recovery. Clearing the picker releases the lease so Hybrid
+          // can fall back to the raw terminal immediately after the copy/cancel
+          // interaction finishes.
+          renderedViewLeases['copy-code-block'] =
+            (renderedViewLeases['copy-code-block'] ?? 0) + 1
+        } else if (!picker && c.codeBlockPicker) {
+          delete renderedViewLeases['copy-code-block']
+        }
+        return {
+          ...prev,
+          [sessionId]: {
+            ...c,
+            renderedViewLeases,
+            codeBlockPicker: picker,
+          },
+        }
       })
     },
     [setRuntimes],

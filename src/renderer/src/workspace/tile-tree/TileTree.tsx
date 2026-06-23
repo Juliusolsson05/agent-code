@@ -1,10 +1,13 @@
 import { useCallback, useRef, type ComponentType } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
+import type { AgentViewMode } from '@renderer/app-state/settings/types'
+import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
 import {
   buildGridRelatedAgentTabs,
   selectedGridRelatedSessionId,
 } from '@renderer/workspace/gridRelatedAgents'
+import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
@@ -22,6 +25,7 @@ type Props = {
   node: TileNode
   focusedSessionId: SessionId | null
   workspace: Workspace
+  agentViewMode: AgentViewMode
   showStatusMode?: boolean
   showWorktreeBadges?: boolean
 }
@@ -31,6 +35,7 @@ export function TileTree({
   node,
   focusedSessionId,
   workspace,
+  agentViewMode,
   showStatusMode = true,
   showWorktreeBadges = true,
 }: Props) {
@@ -40,6 +45,7 @@ export function TileTree({
       focusedSessionId,
       workspace,
       tabId,
+      agentViewMode,
       showStatusMode,
       showWorktreeBadges,
       undefined,
@@ -57,6 +63,7 @@ export function TileTree({
           node={node.a}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
+          agentViewMode={agentViewMode}
           showStatusMode={showStatusMode}
           showWorktreeBadges={showWorktreeBadges}
         />
@@ -67,6 +74,7 @@ export function TileTree({
           node={node.b}
           focusedSessionId={focusedSessionId}
           workspace={workspace}
+          agentViewMode={agentViewMode}
           showStatusMode={showStatusMode}
           showWorktreeBadges={showWorktreeBadges}
         />
@@ -87,6 +95,7 @@ export function renderWorkspaceLeaf(
   focusedSessionId: SessionId | null,
   workspace: Workspace,
   tabId: TabId = workspace.state.activeTabId,
+  agentViewMode: AgentViewMode = 'agent',
   showStatusMode = true,
   showWorktreeBadges = true,
   onFocusRequest: () => void = () => workspace.focusSessionInTab(tabId, sessionId),
@@ -117,6 +126,21 @@ export function renderWorkspaceLeaf(
 
   const provider = getRendererProvider(kind)
   const runtime = workspace.getRuntime(renderedSessionId)
+  if (getEffectiveAgentSurface({ kind, mode: agentViewMode, runtime }) === 'terminal') {
+    return (
+      <AgentTerminalLeaf
+        sessionId={renderedSessionId}
+        paneLabel={paneLabel}
+        focused={sessionId === focusedSessionId}
+        onFocusRequest={onFocusRequest}
+        workspace={workspace}
+        runtime={runtime}
+        projectDir={runtime.projectDir ?? meta?.cwd ?? null}
+        provider={kind}
+      />
+    )
+  }
+
   // WHY widen the provider TileLeaf type at this call site:
   // providerConfig.ts intentionally exposes only the stable provider-neutral
   // pane props. Related-agent tabs are shell chrome, not provider API. The

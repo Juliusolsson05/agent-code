@@ -82,6 +82,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Rewind to Prompt…',
     description: '**What it does:** Rewinds the focused **agent session** to an earlier prompt.\n\n**Use when:** You want to branch from a previous point.\n\n**Notes:** The original transcript file is not edited.',
+    renderedViewPolicy: { kind: 'opens-rendered-feed' },
     keywords: [
       'rewind',
       'prompt',
@@ -458,6 +459,7 @@ export const sessionCommands: CommandDef[] = [
     surface: 'session',
     title: 'Soft Reload Agent',
     description: '**What it does:** Refreshes the focused **agent view** without restarting its backend process.\n\n**Use when:** The feed or rendering state looks stale, duplicated, or corrupted while the agent is still working.\n\n**Notes:** Keeps the same session, draft, pane placement, and running process.',
+    renderedViewPolicy: { kind: 'requires-rendered-feed' },
     keywords: [
       'soft',
       'reload',

@@ -357,6 +357,7 @@ export const paneCommands: CommandDef[] = [
     surface: 'session',
     title: 'Tail',
     description: '**What it does:** Toggles feed **auto-follow** for the focused target.\n\n**Use when:** You want output to stay pinned to the bottom.\n\n**Notes:** Applies to the visible command target, including **Dispatch** selection.',
+    renderedViewPolicy: { kind: 'requires-rendered-feed' },
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const tailMode = sessionId
@@ -389,6 +390,7 @@ export const paneCommands: CommandDef[] = [
     title: 'Jump to Latest Message',
     description: '**What it does:** Scrolls to the **latest agent message**.\n\n**Use when:** You are far up in the feed and want to return to the bottom.\n\n**Notes:** Agent panes only.',
     shortcut: 'End',
+    renderedViewPolicy: { kind: 'requires-rendered-feed' },
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
