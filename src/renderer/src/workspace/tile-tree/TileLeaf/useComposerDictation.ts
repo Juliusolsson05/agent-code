@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
 import type { DictationProviderId } from '@renderer/app-state/settings/types'
+import {
+  resetDictationOverlay,
+  setDictationOverlayState,
+} from '@renderer/features/voice-dictation/dictationStatusStore'
 import { keyboardEventMatchesBinding } from '@renderer/lib/hotkeyBinding'
 import {
   registerDictationTarget,
   type DictationTargetHandle,
 } from '@renderer/workspace/tile-tree/TileLeaf/dictationHotkeyRegistry'
+import type { SessionId } from '@renderer/workspace/types'
 import type { DictationDebugLayer } from '@preload/api/types'
 
 type DictationStatus = 'idle' | 'starting' | 'recording' | 'stopping' | 'error'
@@ -210,12 +215,13 @@ const VOICE_BANDS_HZ: Array<[number, number]> = [
   [2600, 3800],
 ]
 
-// Composer dictation is intentionally pane-local. The standalone
-// agent-voice-dictation app uses an OS overlay because it has to paste
-// into arbitrary apps; Agent Code already owns the target composer, so a
-// floating knob would be the wrong abstraction here. Keeping state in this
-// hook lets the transcript land as normal editable draft text and keeps
-// every provider/secret decision behind the preload IPC boundary.
+// Dictation is intentionally target-local. Rendered Agent mode owns a real
+// composer, so the existing inline composer affordance stays the right UI and
+// transcripts land as editable draft text. Terminal mode has no composer DOM;
+// it reuses this same recorder/provider lifecycle but swaps the sink to a
+// bracketed paste into the raw PTY and mirrors state into the floating overlay.
+// Keeping both paths in one hook preserves the delicate recorder/Deepgram race
+// fixes instead of duplicating that lifecycle in a second terminal-only hook.
 export type ComposerDictationController = {
   enabled: boolean
   status: DictationStatus
@@ -227,28 +233,39 @@ export type ComposerDictationController = {
   handleShortcut: (event: KeyboardEvent<HTMLTextAreaElement>) => boolean
 }
 
+type DictationSink =
+  | {
+      kind: 'composer'
+      sessionId: SessionId
+      input: string
+      setInputText: (next: string) => void
+    }
+  | {
+      kind: 'terminal'
+      sessionId: SessionId
+    }
+
 export function useComposerDictation({
   enabled,
   focused,
   provider,
   shortcut,
-  input,
-  setInputText,
+  sink,
   onMessage,
 }: {
   enabled: boolean
   focused: boolean
   provider: DictationProviderId
   shortcut: string
-  input: string
-  setInputText: (next: string) => void
+  sink: DictationSink
   onMessage: (message: string) => void
 }): ComposerDictationController {
   const [status, setStatus] = useState<DictationStatus>('idle')
   const [levels, setLevels] = useState<number[]>(EMPTY_LEVELS)
   const [hasTranscriptPreview, setHasTranscriptPreview] = useState(false)
   const activeRef = useRef<ActiveRecording | null>(null)
-  const inputRef = useRef(input)
+  const inputRef = useRef(sink.kind === 'composer' ? sink.input : '')
+  const sinkRef = useRef(sink)
   const statusRef = useRef<DictationStatus>('idle')
   const focusedRef = useRef(focused)
   const startRef = useRef<() => Promise<void>>(async () => {})
@@ -288,23 +305,32 @@ export function useComposerDictation({
   // call stop. Reading every prop callback through a ref keeps subscriptions
   // and effects pinned to stable primitives while still giving async paths the
   // latest props.
-  const setInputTextRef = useRef(setInputText)
   const onMessageRef = useRef(onMessage)
   useEffect(() => {
-    setInputTextRef.current = setInputText
+    sinkRef.current = sink
     onMessageRef.current = onMessage
-  })
+  }, [sink, onMessage])
   // Single chokepoint for every dictation-side write to the composer input.
   // Each caller passes a `source` tag so the terminal log can answer "who
   // wrote what, when, and what did the input look like before/after?". This
   // is how we will reproduce the rare bug where the composer shows phantom
   // text after dictation: just rewind through the trace.
   const writeInput = useCallback((next: string, source: string) => {
-    inputRef.current = next
-    setInputTextRef.current(next)
+    const activeSink = sinkRef.current
+    if (activeSink.kind === 'composer') {
+      inputRef.current = next
+      activeSink.setInputText(next)
+    } else {
+      // Terminal-mode dictation should behave like paste-on-release, not a
+      // series of keystrokes. The STT wrapper contains newlines; sending it raw
+      // can be interpreted as Enter by provider TUIs. Bracketed paste is the
+      // existing safe path for multiline text into Claude/Codex terminals.
+      void window.api.sendInput(activeSink.sessionId, `\x1b[200~${next}\x1b[201~`)
+    }
     // eslint-disable-next-line no-console
     console.debug('[dictation:write-input]', {
       source,
+      sink: activeSink.kind,
       chars: next.length,
       lifecycle: statusRef.current,
     })
@@ -347,8 +373,8 @@ export function useComposerDictation({
   }, [])
 
   useEffect(() => {
-    inputRef.current = input
-  }, [input])
+    if (sink.kind === 'composer') inputRef.current = sink.input
+  }, [sink])
 
   useEffect(() => {
     focusedRef.current = focused
@@ -363,6 +389,17 @@ export function useComposerDictation({
     // this ref is the synchronous source of truth for recorder control.
     statusRef.current = next
     setStatus(next)
+    if (sinkRef.current.kind === 'composer') return
+    if (next === 'idle') {
+      resetDictationOverlay()
+      return
+    }
+    setDictationOverlayState({
+      status: next,
+      levels: next === 'recording' ? levelRefs.current : EMPTY_LEVELS,
+      targetSessionId: sinkRef.current.sessionId,
+      ...(next !== 'error' ? { errorMessage: null } : {}),
+    })
   }, [])
 
   const renderTranscriptPreview = useCallback((recording: ActiveRecording, text: string) => {
@@ -372,9 +409,13 @@ export function useComposerDictation({
     // not as user-owned draft text. On stop we replace this preview with the
     // final STT-wrapped text; on cancel/no-speech/error we can restore the base.
     recording.previewText = text
-    const base = recording.baseInput
-    const separator = base.trim().length > 0 && text.trim().length > 0 ? '\n\n' : ''
-    writeInput(`${base}${separator}${text}`, 'preview')
+    if (sinkRef.current.kind === 'composer') {
+      const base = recording.baseInput
+      const separator = base.trim().length > 0 && text.trim().length > 0 ? '\n\n' : ''
+      writeInput(`${base}${separator}${text}`, 'preview')
+    } else {
+      setDictationOverlayState({ previewText: text })
+    }
     setHasTranscriptPreview(true)
   }, [writeInput])
 
@@ -400,7 +441,11 @@ export function useComposerDictation({
   }, [writeInput])
 
   const restoreBaseInput = useCallback((recording: ActiveRecording) => {
-    writeInput(recording.baseInput, 'restore')
+    if (sinkRef.current.kind === 'composer') {
+      writeInput(recording.baseInput, 'restore')
+    } else {
+      setDictationOverlayState({ previewText: '' })
+    }
     setHasTranscriptPreview(false)
   }, [writeInput])
 
@@ -498,6 +543,9 @@ export function useComposerDictation({
       })
       levelRefs.current = next
       setLevels(next)
+      if (sinkRef.current.kind === 'terminal') {
+        setDictationOverlayState({ levels: next })
+      }
       // Throttle to ~10 Hz. rAF fires at ~60 Hz; 10 Hz is dense enough
       // to see the meter move on a 250 ms-per-syllable basis and sparse
       // enough that a 30-second utterance lands ~300 sample events, not
@@ -682,13 +730,20 @@ export function useComposerDictation({
 
       restoreBaseInput(recording)
       reportMessage(result.message)
+      if (sinkRef.current.kind === 'terminal') {
+        setDictationOverlayState({ errorMessage: result.message })
+      }
       setLifecycleStatus('error')
       window.setTimeout(() => setLifecycleStatus('idle'), 1600)
     } catch (err) {
       cleanup(recording)
       activeRef.current = null
       restoreBaseInput(recording)
-      reportMessage(err instanceof Error ? err.message : 'Dictation failed')
+      const message = err instanceof Error ? err.message : 'Dictation failed'
+      reportMessage(message)
+      if (sinkRef.current.kind === 'terminal') {
+        setDictationOverlayState({ errorMessage: message })
+      }
       setLifecycleStatus('error')
       window.setTimeout(() => setLifecycleStatus('idle'), 1600)
     }
@@ -722,6 +777,7 @@ export function useComposerDictation({
     // refs, and never put a prop-derived callback in here.
     const recording = activeRef.current
     if (!recording) return
+    if (sinkRef.current.kind === 'terminal') resetDictationOverlay()
     activeRef.current = null
     if (recording.streamStartTimer !== null) {
       window.clearTimeout(recording.streamStartTimer)
@@ -774,6 +830,13 @@ export function useComposerDictation({
     })
     debug('start:begin', { provider, focused: focusedRef.current })
     setHasTranscriptPreview(false)
+    if (sinkRef.current.kind === 'terminal') {
+      setDictationOverlayState({
+        previewText: '',
+        errorMessage: null,
+        levels: EMPTY_LEVELS,
+      })
+    }
     setLifecycleStatus('starting')
 
     try {
@@ -825,7 +888,7 @@ export function useComposerDictation({
         stream,
         mimeType: recorderMimeType,
         startedAt: Date.now(),
-        baseInput: inputRef.current,
+        baseInput: sinkRef.current.kind === 'composer' ? inputRef.current : '',
         previewText: '',
         queuedChunks: [],
         pendingPushes: [],
@@ -1012,7 +1075,11 @@ export function useComposerDictation({
           message: event.error?.message ?? null,
           name: event.error?.name ?? null,
         }, 'ERROR')
-        reportMessage(event.error?.message ?? 'Dictation recorder failed')
+        const message = event.error?.message ?? 'Dictation recorder failed'
+        reportMessage(message)
+        if (sinkRef.current.kind === 'terminal') {
+          setDictationOverlayState({ errorMessage: message })
+        }
         recording.discarded = true
         if (recording.id) void window.api.cancelDictationStream({ id: recording.id })
         cleanup(recording)
@@ -1043,7 +1110,11 @@ export function useComposerDictation({
       debug('start:error', {
         message: err instanceof Error ? err.message : String(err),
       }, 'ERROR')
-      reportMessage(err instanceof Error ? err.message : 'Could not start dictation')
+      const message = err instanceof Error ? err.message : 'Could not start dictation'
+      reportMessage(message)
+      if (sinkRef.current.kind === 'terminal') {
+        setDictationOverlayState({ errorMessage: message })
+      }
       setLifecycleStatus('error')
       window.setTimeout(() => setLifecycleStatus('idle'), 1600)
     }
@@ -1098,12 +1169,12 @@ export function useComposerDictation({
   }, [enabled, start, stop])
 
   // Hotkey wiring goes through a shared registry instead of one IPC
-  // subscription per TileLeaf. Two reasons:
-  //   1. Multiple TileLeaf hooks were each subscribing AND each gating on
+  // subscription per pane. Two reasons:
+  //   1. Multiple pane hooks were each subscribing AND each gating on
   //      their own focus. On a fresh launch nothing is focused, so the press
   //      was a silent no-op everywhere — that was the "doesn't work for 30s
-  //      after launch" report. The registry picks the focused composer if
-  //      there is one, and otherwise the most-recently-focused composer, so
+  //      after launch" report. The registry picks the focused dictation target
+  //      if there is one, and otherwise the most-recently-focused target, so
   //      Fn always lands somewhere as soon as the helper says "ready".
   //   2. One IPC subscription instead of N also fixes the case where the
   //      registry picks a different target between press and release. The

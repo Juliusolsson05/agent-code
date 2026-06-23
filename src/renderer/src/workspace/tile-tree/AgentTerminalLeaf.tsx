@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 
+import { useAppStore } from '@renderer/app-state/hooks'
 import {
   THEME_CHANGED_EVENT,
   getActiveAppFontFamily,
@@ -11,6 +12,7 @@ import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
 import { shortenCwd } from '@renderer/workspace/tile-tree/TileLeaf/labels'
 import { PaneToast } from '@renderer/workspace/tile-tree/TileLeaf/PaneToast'
+import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 
 type Props = {
   sessionId: SessionId
@@ -46,6 +48,9 @@ export function AgentTerminalLeaf({
   projectDir,
   provider,
 }: Props) {
+  const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
+  const dictationProvider = useAppStore(state => state.settings.dictationProvider)
+  const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
   const acknowledgeSession = workspace.acknowledgeSession
   const acknowledgeSessionRef = useRef(acknowledgeSession)
   acknowledgeSessionRef.current = acknowledgeSession
@@ -54,6 +59,15 @@ export function AgentTerminalLeaf({
   const termRef = useRef<Terminal | null>(null)
   const focusedRef = useRef(focused)
   focusedRef.current = focused
+
+  useComposerDictation({
+    enabled: dictationEnabled,
+    focused,
+    provider: dictationProvider,
+    shortcut: dictationShortcut,
+    sink: { kind: 'terminal', sessionId },
+    onMessage: message => workspace.showPaneToast(sessionId, message),
+  })
 
   useEffect(() => {
     const container = containerRef.current

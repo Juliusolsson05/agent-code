@@ -28,6 +28,7 @@ import { GitBar } from '@renderer/features/git/ui/GitBar'
 import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
+import { VoiceDictationOverlay } from '@renderer/features/voice-dictation/ui/VoiceDictationOverlay'
 import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
@@ -799,6 +800,8 @@ export default function App() {
           />
         )}
       </div>
+
+      <VoiceDictationOverlay />
 
       <CommandPalette
         open={commandPaletteOpen}

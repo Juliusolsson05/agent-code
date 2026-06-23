@@ -290,8 +290,12 @@ export function TileLeaf({
     focused,
     provider: dictationProvider,
     shortcut: dictationShortcut,
-    input,
-    setInputText,
+    sink: {
+      kind: 'composer',
+      sessionId,
+      input,
+      setInputText,
+    },
     onMessage: message => workspace.showPaneToast(sessionId, message),
   })
 
