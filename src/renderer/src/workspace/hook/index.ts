@@ -115,7 +115,16 @@ export function useWorkspace(
   const [restoreStatus, setRestoreStatus] = useState<WorkspaceRestoreStatus>('pending')
 
   // ---- Runtime helpers (updateRuntime / appendFeedDebug / getRuntime / etc) ----
-  const { updateRuntime, appendFeedDebug, acknowledgeSession, getRuntime, toggleTailMode, scrollFocusedToLatest } =
+  const {
+    updateRuntime,
+    appendFeedDebug,
+    acknowledgeSession,
+    getRuntime,
+    toggleTailMode,
+    setAgentTerminalMode,
+    toggleAgentTerminalMode,
+    scrollFocusedToLatest,
+  } =
     useWorkspaceHelpers(runtimes, setRuntimes, refs)
 
   // ---- Pane toast (needs updateRuntime, so after helpers) ----
@@ -533,6 +542,8 @@ export function useWorkspace(
     resizeFocusedTiledTab,
     resizeTiledTabByIndex,
     toggleTailMode,
+    setAgentTerminalMode,
+    toggleAgentTerminalMode,
     scrollFocusedToLatest,
     pickerEnter,
     pickerMove,

@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
+import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
@@ -102,6 +103,20 @@ export function renderWorkspaceLeaf(
 
   const provider = getRendererProvider(kind)
   const runtime = workspace.getRuntime(sessionId)
+  if ((kind === 'claude' || kind === 'codex') && runtime.agentTerminalMode) {
+    return (
+      <AgentTerminalLeaf
+        sessionId={sessionId}
+        paneLabel={paneLabel}
+        focused={sessionId === focusedSessionId}
+        onFocusRequest={onFocusRequest}
+        workspace={workspace}
+        projectDir={runtime.projectDir ?? meta?.cwd ?? null}
+        provider={kind}
+      />
+    )
+  }
+
   const LeafComponent = provider.TileLeaf
   return (
     <LeafComponent
