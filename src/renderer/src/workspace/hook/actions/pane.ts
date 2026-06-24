@@ -39,6 +39,7 @@ import type {
   OrchestrationAgentKind,
   OrchestrationAgentRecord,
 } from '@mcp/shared/orchestrationTypes'
+import { forgetDebugTrace } from '@renderer/features/debug/renderTrace'
 
 import type {
   WorkspaceSetRuntimes,
@@ -56,6 +57,17 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 // closeFocused, closeSession, requestBuryFocused, buryFocused,
 // reviveBuried, killBuried, focusSession, focusSessionInTab, navigate.
 // -----------------------------------------------------------------------------
+
+function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId): void {
+  delete refs.seenUuidsRef.current[sessionId]
+  delete refs.latestScreenRef.current[sessionId]
+  // Render traces are intentionally not stored in SessionRuntime: they are
+  // large, debug-only forensic buffers populated by DOM/screen capture paths
+  // that do not need to re-render the app. That module-level map must still
+  // follow the session lifecycle, or every close leaves another bounded-but-
+  // permanent trace behind for the life of the renderer process.
+  forgetDebugTrace(sessionId)
+}
 
 // Update dispatchMode after a new dispatch agent is spawned. In Tiled
 // Dispatch the new agent takes over the lane the user is commanding
@@ -984,8 +996,7 @@ export function usePaneActions(
       delete next[targetId]
       return next
     })
-    delete refs.seenUuidsRef.current[targetId]
-    delete refs.latestScreenRef.current[targetId]
+    forgetClosedSessionDebugState(refs, targetId)
 
     setState(prev => {
       const tabs = [...prev.tabs]
@@ -1063,8 +1074,7 @@ export function usePaneActions(
           delete next[targetId]
           return next
         })
-        delete refs.seenUuidsRef.current[targetId]
-        delete refs.latestScreenRef.current[targetId]
+        forgetClosedSessionDebugState(refs, targetId)
 
         setState(prev => {
           const sessions = { ...prev.sessions }
@@ -1129,8 +1139,7 @@ export function usePaneActions(
         delete next[targetId]
         return next
       })
-      delete refs.seenUuidsRef.current[targetId]
-      delete refs.latestScreenRef.current[targetId]
+      forgetClosedSessionDebugState(refs, targetId)
 
       setState(prev => {
         const tabs = [...prev.tabs]
@@ -1475,8 +1484,7 @@ export function usePaneActions(
         delete next[entry.sessionId]
         return next
       })
-      delete refs.seenUuidsRef.current[entry.sessionId]
-      delete refs.latestScreenRef.current[entry.sessionId]
+      forgetClosedSessionDebugState(refs, entry.sessionId)
       const bootstrapTimer = refs.bootstrapTimersRef.current.get(entry.sessionId)
       if (bootstrapTimer) {
         clearTimeout(bootstrapTimer)

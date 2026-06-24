@@ -7,7 +7,7 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 // Ship runtime feed-debug entries to the main process on every
 // runtime update. The main-side queue writes them to
-// <userData>/feed-debug/<sessionId>.jsonl.
+// STATE_DIR/feed-debug/<sessionId>.jsonl.
 //
 // `persistedFeedDebugIdRef` tracks the largest feed-debug entry id
 // main has confirmed as written. `inFlightFeedDebugIdRef` tracks the

@@ -2,6 +2,7 @@ import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
+import type { DictationProvider } from '@shared/types/dictation.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 // Local binding for in-file uses (SessionStartedEvent.kind, etc.). The
 // `export type { SessionKind }` re-export below is a separate statement that
@@ -33,7 +34,7 @@ export type DevDebugConfig = {
 // renderer/preload imports of these names from @preload/api/types still work.
 export type { CaffeinateStatus, CaffeinateCommandResult } from '@shared/types/caffeinate.js'
 
-export type DictationProvider = 'deepgram' | 'assemblyai' | 'openai' | 'gladia' | 'elevenlabs'
+export type { DictationProvider }
 
 export type DictationStartResult =
   | { kind: 'started'; id: string }
@@ -443,14 +444,17 @@ export type AddDebugBundleNoteParams = {
 // Section of a debug bundle filled by readProxyEvents IPC.
 // Carries the renderer-readable form of whatever
 // ~/.config/agent-code/proxy/<project>/<session>/<run>/proxy-events.jsonl
-// existed for the target session at bundle-save time. Nulls signal
-// "no record found" — callers must tolerate them. See
-// main/storage/proxyEventsReader.ts for the search strategy and
+// existed for the target session at bundle-save time. Null payloads plus
+// `match:'none'` signal "no exact record found" — callers must tolerate them.
+// See main/storage/proxyEventsReader.ts for the search strategy and
 // PROXY_EVENTS_BUNDLE_MAX_BYTES tail cap.
 export type ProxyEventsBundleSection = {
   proxyEvents: string | null
   runDir: string | null
   sessionMeta: string | null
+  match: 'exact' | 'fallback' | 'none'
+  requestedSessionKey: string | null
+  matchedSessionSegment: string | null
 }
 
 export type WorktreeActivityCounts = {

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 
 import type { SessionManager } from '@main/sessionManager.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
+import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
 import {
@@ -76,7 +77,7 @@ export function registerSessionIpc(
       // against main-received chunks (PR #68).
       if (typeof pasteId === 'string' && pasteId.length > 0) {
         const bytes = Buffer.byteLength(data, 'utf8')
-        const sha8 = createHash('sha256').update(data).digest('hex').slice(0, 8)
+        const sha8 = sha8FromDigestBytes(createHash('sha256').update(data).digest())
         // Head preview is escape-safe: replace ESC with `\e` and CR
         // with `\r` so the JSONL line is readable when you cat the
         // file. The raw bytes are never logged — sha8 is the

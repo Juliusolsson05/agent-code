@@ -11,9 +11,6 @@ import type {
 } from '@preload/api/types.js'
 
 export const dictationApi = {
-  listDictationProviders: (): Promise<DictationProvider[]> =>
-    ipcRenderer.invoke('dictation:list-providers'),
-
   configureDictationHotkey: (params: {
     binding: string
   }): Promise<DictationHotkeyConfigureResult> =>

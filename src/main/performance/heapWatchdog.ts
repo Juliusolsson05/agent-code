@@ -31,7 +31,7 @@ import { join } from 'node:path'
 
 import { app } from 'electron'
 
-import { STATE_DIR } from '@main/storage/paths.js'
+import { HEAP_SNAPSHOT_DIR } from '@main/storage/paths.js'
 
 // Threshold rationale: use the lower of 3 GiB and 75% of the ACTUAL
 // V8 heap limit for this Electron process. The original watchdog used
@@ -76,7 +76,7 @@ async function sampleAndMaybeSnapshot(): Promise<void> {
   if (snapshotWritten) return
   snapshotWritten = true
 
-  const dir = join(STATE_DIR, 'heap-snapshots')
+  const dir = HEAP_SNAPSHOT_DIR
   try {
     await mkdir(dir, { recursive: true })
   } catch (err) {

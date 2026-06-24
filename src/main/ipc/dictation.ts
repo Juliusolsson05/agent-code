@@ -5,7 +5,6 @@ import { join } from 'node:path'
 
 import {
   deepgramStreaming,
-  listSelectableProviders,
   transcribeBatch,
   type DictationProvider,
 } from '@main/dictation/index.js'
@@ -16,6 +15,7 @@ import {
 import { sendToMainWindow } from '@main/window/mainWindow.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 import type { DictationDebugEventInput } from '@preload/api/types.js'
+import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import { wrapWithSttTag } from 'agent-voice-dictation/composer'
 import type { SpeechTraceEvent } from 'agent-voice-dictation/speech'
 
@@ -56,7 +56,7 @@ const activeSessions = new Map<string, ActiveDictationSession>()
 // (not a same-size sibling). 4 bytes is more than enough — even a 1000-chunk
 // stream's collision probability is negligible for a debug fingerprint.
 const sha8 = (buf: Uint8Array): string =>
-  createHash('sha256').update(buf).digest('hex').slice(0, 8)
+  sha8FromDigestBytes(createHash('sha256').update(buf).digest())
 
 export function registerDictationIpc(deps: {
   dictationDebugJournals: DictationDebugJournalRegistry
@@ -76,8 +76,6 @@ export function registerDictationIpc(deps: {
       .get(debugSessionId)
       .append({ layer, event, ...(data !== undefined ? { data } : {}) })
   }
-
-  ipcMain.handle('dictation:list-providers', async () => listSelectableProviders())
 
   ipcMain.handle('dictation:hotkey-configure', async (_evt, params: { binding?: string }) => {
     try {

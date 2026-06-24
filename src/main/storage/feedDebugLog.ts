@@ -103,7 +103,7 @@ export function queueFeedDebugAppend(
 /** Drop in-memory bookkeeping for a session that has ended. The
  *  on-disk JSONL is intentionally LEFT IN PLACE — debug bundles for
  *  long-since-closed panes still benefit from reading the trail. The
- *  retention sweep in pruneStaleFeedDebugLogs is what eventually
+ *  unified sweep in storage/debugRetention.ts is what eventually
  *  deletes the file. */
 export function forgetFeedDebugSession(sessionId: string): void {
   // We never delete `feedDebugWriteQueues` synchronously here —

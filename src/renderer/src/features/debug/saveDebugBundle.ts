@@ -390,6 +390,11 @@ function buildManifest(
   files: string[],
   reason: string,
   proxyRunDir: string | null,
+  proxyMatch: {
+    match: 'exact' | 'fallback' | 'none'
+    requestedSessionKey: string | null
+    matchedSessionSegment: string | null
+  },
 ): string {
   const manifest = {
     schemaVersion: BUNDLE_SCHEMA_VERSION,
@@ -405,8 +410,14 @@ function buildManifest(
     // PROXY_EVENTS_BUNDLE_MAX_BYTES (5 MiB at the time of writing —
     // see main/storage/proxyEventsReader.ts); anything older than
     // that tail still lives at this path. Null when the session had
-    // no proxy capture at all.
+    // no exact proxy capture at all.
     proxyRunDir,
+    // The proxy payload is forensic evidence, so this manifest records the
+    // provenance decision even when no proxy-events.jsonl file was bundled.
+    // A missing exact match is less complete than the old broad fallback, but
+    // it prevents a bundle for session A from silently carrying session B's
+    // wire log under the normal proxy-events filename.
+    proxyMatch,
     // Small bits of runtime state that help orient a consumer
     // without parsing state-snapshot.json first. Deliberately a
     // flat summary, not a duplicate.
@@ -528,6 +539,11 @@ export async function assembleAndSaveDebugBundle(params: {
       // at PROXY_EVENTS_BUNDLE_MAX_BYTES, anything earlier is still
       // available there.
       proxySection?.runDir ?? null,
+      {
+        match: proxySection?.match ?? 'none',
+        requestedSessionKey: proxySection?.requestedSessionKey ?? (providerSessionId ? `resume-${providerSessionId}` : null),
+        matchedSessionSegment: proxySection?.matchedSessionSegment ?? null,
+      },
     ),
   }
 

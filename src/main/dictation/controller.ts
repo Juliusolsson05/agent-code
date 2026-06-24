@@ -18,20 +18,13 @@
 
 import {
   createDeepgramStreamingProvider,
-  isSpeechProviderSelectable,
-  STT_PROVIDER_SUPPORT,
-  transcribeAssemblyAi,
   transcribeDeepgram,
-  transcribeElevenLabs,
-  transcribeGladia,
-  transcribeOpenAi,
-  type SpeechProviderId,
   type SpeechTraceEvent,
   type SpeechTranscript,
 } from 'agent-voice-dictation/speech'
-import { polishTranscriptWithOpenRouter } from 'agent-voice-dictation/openrouter'
+import type { DictationProvider } from '@shared/types/dictation.js'
 
-export type DictationProvider = SpeechProviderId
+export type { DictationProvider }
 
 export type DictationBatchInput = {
   provider: DictationProvider
@@ -43,10 +36,6 @@ export type DictationBatchInput = {
    *  this configurable here keeps the option available for Agent Code to
    *  expose multilingual dictation later without a controller refactor. */
   language?: string
-  /** Optional polish step. Agent Code will eventually feed this with
-   *  per-project glossary context (the MCP feedback loop), but Phase 1
-   *  keeps it as a plain on/off toggle to stay scoped. */
-  polish?: { openRouterApiKey: string; model?: string }
   onTrace?: (event: SpeechTraceEvent) => void
 }
 
@@ -60,43 +49,26 @@ export type DictationBatchOutcome =
   | { kind: 'no-speech' }
 
 export async function transcribeBatch(input: DictationBatchInput): Promise<DictationBatchOutcome> {
-  if (!isSpeechProviderSelectable(input.provider)) {
-    // Mirrors the package's product-level gate: the renderer should never
-    // reach this branch because Settings won't expose unselectable
-    // providers, but the controller refuses to silently accept one if a
-    // bad settings file does end up requesting it.
-    throw new Error(`Provider "${input.provider}" is not selectable in v1`)
+  if (input.provider !== 'deepgram') {
+    // Main IPC rejects non-Deepgram before sessions are created, but this
+    // controller is also a programmatic boundary. Keep the runtime guard so a
+    // stale settings file or future test helper cannot accidentally revive the
+    // dead multi-provider path the app no longer ships.
+    throw new Error(`Provider "${input.provider}" is not wired in Agent Code v1`)
   }
 
   const transcript = await runProvider(input)
   if (!transcript.text.trim()) return { kind: 'no-speech' }
 
-  if (!input.polish) {
-    return { kind: 'success', raw: transcript.text, polished: null, transcript }
-  }
-
-  // Polish failures must NOT swallow the raw transcript — STT is the
-  // irreplaceable artifact, polish is a nice-to-have. flow-electron had
-  // a real bug where a transient OpenRouter outage made the user lose
-  // the whole dictation; we surface raw on polish failure here.
-  try {
-    const result = await polishTranscriptWithOpenRouter({
-      apiKey: input.polish.openRouterApiKey,
-      rawTranscript: transcript.text,
-      ...(input.polish.model ? { model: input.polish.model } : {}),
-    })
-    return { kind: 'success', raw: transcript.text, polished: result.text || null, transcript }
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn('[dictation] polish failed; surfacing raw transcript:', err)
-    return { kind: 'success', raw: transcript.text, polished: null, transcript }
-  }
+  return { kind: 'success', raw: transcript.text, polished: null, transcript }
 }
 
 function runProvider(input: DictationBatchInput): Promise<SpeechTranscript> {
-  // Provider-specific request construction stays in the package. The
-  // controller's job is to route the call and forward traces — never to
-  // know the shape of any one provider's request body.
+  // Agent Code's product surface is Deepgram-only. The package still owns the
+  // broader STT provider matrix for other hosts, but keeping those imports here
+  // made this app look more configurable than it is and shipped dead provider
+  // code into the main bundle. This thin wrapper preserves the request-shaping
+  // boundary without pretending there are live app-side alternatives.
   const audio = {
     data: input.audio,
     ...(input.mimeType ? { mimeType: input.mimeType } : {}),
@@ -107,13 +79,7 @@ function runProvider(input: DictationBatchInput): Promise<SpeechTranscript> {
     ...(input.language ? { language: input.language } : {}),
     ...(input.onTrace ? { onTrace: input.onTrace } : {}),
   }
-  switch (input.provider) {
-    case 'deepgram': return transcribeDeepgram({}, opts)
-    case 'assemblyai': return transcribeAssemblyAi({}, opts)
-    case 'openai': return transcribeOpenAi({}, opts)
-    case 'gladia': return transcribeGladia({}, opts)
-    case 'elevenlabs': return transcribeElevenLabs({}, opts)
-  }
+  return transcribeDeepgram({}, opts)
 }
 
 // Singleton streaming provider. The package's createDeepgramStreamingProvider
@@ -128,15 +94,4 @@ export function deepgramStreaming(): ReturnType<typeof createDeepgramStreamingPr
     deepgramStreamingSingleton = createDeepgramStreamingProvider()
   }
   return deepgramStreamingSingleton
-}
-
-export function listSelectableProviders(): DictationProvider[] {
-  // Source-of-truth for "which providers the UI should expose" is the
-  // package, not Agent Code. Re-exporting through the controller (rather
-  // than letting renderer code import the package directly) keeps the
-  // boundary clean: renderer talks to controller, controller talks to
-  // package. Future additions like an Agent Code-only "DEMO" provider
-  // would slot in here without touching the package.
-  return (Object.keys(STT_PROVIDER_SUPPORT) as DictationProvider[])
-    .filter(id => isSpeechProviderSelectable(id))
 }
