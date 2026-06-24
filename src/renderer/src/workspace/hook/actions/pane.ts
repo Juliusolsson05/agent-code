@@ -1358,11 +1358,10 @@ export function usePaneActions(
   // exists.
   const reviveBuried = useCallback(
     async (buriedId: string) => {
-      const current = refs.stateRef.current
-      const entry = current.buried.find(item => item.id === buriedId)
-      if (!entry) return
+      const initialEntry = refs.stateRef.current.buried.find(item => item.id === buriedId)
+      if (!initialEntry) return
       try {
-        await sessionActions.ensureSessionLive(entry.sessionId)
+        await sessionActions.ensureSessionLive(initialEntry.sessionId)
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0
@@ -1371,6 +1370,15 @@ export function usePaneActions(
         )
         return
       }
+
+      // WHY re-read after wake: ensureSessionLive can update runtime metadata,
+      // clear stale backend errors, or lose a race to another revive/kill action.
+      // Placement should be based on the workspace that actually exists after
+      // the backend is live, not the pre-wake snapshot we used only to discover
+      // which session needed waking.
+      const current = refs.stateRef.current
+      const entry = current.buried.find(item => item.id === buriedId)
+      if (!entry) return
 
       const chooseFallbackTab = (): Tab | null => {
         const scored = current.tabs

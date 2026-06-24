@@ -37,6 +37,23 @@ class FakeAgentSession extends EventEmitter {
   resize(): void {}
 }
 
+class BlockingAgentSession extends EventEmitter {
+  constructor(private readonly releaseStart: Promise<void>) {
+    super()
+  }
+
+  async start(): Promise<void> {
+    await this.releaseStart
+    this.emit('started', { projectDir: '/tmp/project' })
+  }
+
+  async stop(): Promise<void> {}
+
+  write(): void {}
+
+  resize(): void {}
+}
+
 describe('SessionManager restart wake spawn', () => {
   beforeEach(() => {
     createSession.mockReset()
@@ -78,6 +95,32 @@ describe('SessionManager restart wake spawn', () => {
       cwd: '/tmp/project',
       preferredSessionId: 'live-session',
     })).rejects.toThrow('Session live-session is already live')
+    expect(createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses to reuse an id while the first backend spawn is still starting', async () => {
+    const { SessionManager } = await import('./sessionManager')
+    let releaseStart!: () => void
+    const startGate = new Promise<void>(resolve => {
+      releaseStart = resolve
+    })
+    createSession.mockImplementation(() => new BlockingAgentSession(startGate))
+    const manager = new SessionManager()
+
+    const firstSpawn = manager.spawn({
+      kind: 'claude',
+      cwd: '/tmp/project',
+      preferredSessionId: 'waking-session',
+    })
+
+    await expect(manager.spawn({
+      kind: 'claude',
+      cwd: '/tmp/project',
+      preferredSessionId: 'waking-session',
+    })).rejects.toThrow('Session waking-session is already live')
+
+    releaseStart()
+    await expect(firstSpawn).resolves.toEqual({ sessionId: 'waking-session' })
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 })

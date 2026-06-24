@@ -891,10 +891,16 @@ async function submitPrompt(
   }
 
   if (kind === 'claude') {
-    await manager.awaitClaudePastePlaceholder(sessionId, {
+    const placeholder = await manager.awaitClaudePastePlaceholder(sessionId, {
       timeoutMs: 2000,
       pollIntervalMs: 50,
     })
+    if (placeholder.kind !== 'appeared') {
+      return {
+        ok: false,
+        message: `Claude session ${sessionId} did not confirm pasted prompt before submit (${placeholder.kind})`,
+      }
+    }
   }
 
   if (!manager.write(sessionId, '\r')) {

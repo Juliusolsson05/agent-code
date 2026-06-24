@@ -87,8 +87,17 @@ export function AgentTerminalLeaf({
     let attachedBackfillDone = false
     let lastCols = 0
     let lastRows = 0
+    let pendingResize: { cols: number; rows: number } | null = null
+    const pendingInput: string[] = []
     const backlogQueue: string[] = []
     let onThemeChangedListener: ((e: Event) => void) | null = null
+
+    const sendResizeIfChanged = (cols: number, rows: number) => {
+      if (cols === lastCols && rows === lastRows) return
+      lastCols = cols
+      lastRows = rows
+      void window.api.resize(sessionId, cols, rows)
+    }
 
     const fitAndResizeBackend = () => {
       resizeFrame = null
@@ -101,10 +110,17 @@ export function AgentTerminalLeaf({
         // mounted. ResizeObserver fires frequently during split drags, and
         // forwarding no-op dimensions makes Claude/Codex repaint needlessly
         // while the same byte stream is also feeding xterm.
-        if (cols === lastCols && rows === lastRows) return
-        lastCols = cols
-        lastRows = rows
-        void window.api.resize(sessionId, cols, rows)
+        if (!attachedBackfillDone) {
+          // WHY queue instead of sending early: lazy wake intentionally leaves
+          // restored agents without a main-process RegistryEntry until attach or
+          // send asks for one. Resize before attach can therefore be rejected,
+          // and remembering those cols/rows as "sent" would prevent the real PTY
+          // from receiving its first size. Preserve only the latest measurement
+          // and replay it once attach confirms the backend exists.
+          pendingResize = { cols, rows }
+          return
+        }
+        sendResizeIfChanged(cols, rows)
       } catch {
         // Hidden/zero-sized panes can throw until layout settles. The next
         // observer tick or focus remount will retry with a measurable box.
@@ -135,6 +151,15 @@ export function AgentTerminalLeaf({
 
       onDataDisposable = term.onData(data => {
         acknowledgeSessionRef.current(sessionId)
+        if (!attachedBackfillDone) {
+          pendingInput.push(data)
+          // Holding a key while an agent terminal is waking should not turn an
+          // unavailable backend into an unbounded renderer buffer. Keep the most
+          // recent input bytes; if wake fails the pane toast explains the failure
+          // and the queue dies with this mount.
+          if (pendingInput.length > 256) pendingInput.splice(0, pendingInput.length - 256)
+          return
+        }
         void window.api.sendInput(sessionId, data)
       })
 
@@ -161,8 +186,12 @@ export function AgentTerminalLeaf({
       // session id is the actual attachment identity; refs keep the wake/toast
       // callbacks current without making them part of xterm's mount contract.
       void ensureSessionLiveRef.current(sessionId)
-        .then(() => window.api.attachAgentPty(sessionId))
+        .then(() => {
+          if (disposed || termRef.current !== term) return null
+          return window.api.attachAgentPty(sessionId)
+        })
         .then(buffer => {
+          if (buffer === null) return
           if (disposed || termRef.current !== term) return
           const liveTerm = term
           if (!liveTerm) return
@@ -170,6 +199,14 @@ export function AgentTerminalLeaf({
           if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
           backlogQueue.length = 0
           attachedBackfillDone = true
+          if (pendingResize) {
+            sendResizeIfChanged(pendingResize.cols, pendingResize.rows)
+            pendingResize = null
+          }
+          if (pendingInput.length > 0) {
+            void window.api.sendInput(sessionId, pendingInput.join(''))
+            pendingInput.length = 0
+          }
           if (focusedRef.current) liveTerm.focus()
         })
         .catch(err => {

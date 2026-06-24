@@ -414,23 +414,28 @@ export async function rehydrateWorkspace(
       for (const id of Object.keys(freshSessions)) {
         if (out[id]) continue
         const existing = prev[id]
+        // WHY these restored sessions are deliberately dormant:
+        //
+        // Any id that reaches this loop exists in durable workspace metadata
+        // but did not get a backend in the liveProcessIds spawn loop above.
+        // That is intentional for detached/buried/orchestration-list sessions:
+        // startup should restore the UI cheaply without forking every parked
+        // provider process. Marking them started/inputReady was the broken
+        // middle state: the pane looked writable while main had no PTY, so the
+        // first post-restart prompt could be dropped before lazy wake ran. Keep
+        // the feed/draft metadata, but make process readiness honest until
+        // ensureSessionLive wakes this same SessionId.
         out[id] = {
           ...(existing ?? emptyRuntime()),
           hasOlderHistory: hasDurableProviderSession(freshSessions[id]),
-          transcriptStatus:
-            existing?.transcriptStatus === 'ready' ||
-            existing?.transcriptStatus === 'error' ||
+          transcriptStatus: existing?.transcriptStatus === 'error' ||
             existing?.transcriptStatus === 'disconnected'
               ? existing.transcriptStatus
-              : freshSessions[id]?.providerSessionId ? 'loading' : 'ready',
+              : 'ready',
           transcriptError: existing?.transcriptError ?? null,
-          processStatus: existing && existing.processStatus !== 'idle'
-            ? existing.processStatus
-            : 'started',
+          processStatus: 'idle',
           processError: existing?.processError ?? null,
-          inputReady: existing && existing.processStatus !== 'idle'
-            ? existing.inputReady
-            : true,
+          inputReady: false,
         }
       }
       // [xcript-diag #283] commitRehydratedState is the ONLY wholesale runtimes

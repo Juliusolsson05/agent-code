@@ -383,7 +383,7 @@ export function useWorkspace(
             sessionId: request.sessionId,
             maxMessages: 1,
           })
-          await sessionActions.ensureSessionLive(request.sessionId)
+          await ensureSessionLive(request.sessionId)
           const agent = readOrchestrationAgent({
             state: refs.stateRef.current,
             runtimes: refs.latestRuntimesRef.current,
@@ -451,7 +451,7 @@ export function useWorkspace(
       }
     })
     return off
-  }, [paneActions, refs.latestRuntimesRef, refs.stateRef, sessionActions, setState])
+  }, [ensureSessionLive, paneActions, refs.latestRuntimesRef, refs.stateRef, setState])
 
   const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)

@@ -198,15 +198,22 @@ export function TileLeaf({
       runtime.processStatus !== 'started' ||
       runtime.exited !== null
     ) {
-      workspace.showPaneToast(
-        sessionId,
-        runtime.processStatus === 'failed'
+      if (runtime.processStatus === 'failed' || runtime.processStatus === 'exited') {
+        const message = runtime.processStatus === 'failed'
           ? (runtime.processError ?? 'Agent failed to start')
-          : runtime.processStatus === 'exited'
-            ? 'Agent has exited'
-            : 'Agent is still starting; draft preserved',
-      )
-      return
+          : 'Agent has exited'
+        workspace.showPaneToast(sessionId, message)
+        throw new Error(message)
+      }
+      try {
+        await workspace.ensureSessionLive(sessionId)
+      } catch (err) {
+        const message = err instanceof Error && err.message.length > 0
+          ? err.message
+          : 'Agent is still starting; draft preserved'
+        workspace.showPaneToast(sessionId, message)
+        throw new Error(message)
+      }
     }
     let ok = await window.api.sendInput(sessionId, data, pasteId)
     if (!ok) {
@@ -220,11 +227,12 @@ export function TileLeaf({
             ? err.message
             : 'Could not wake agent; draft preserved',
         )
-        return
+        throw err
       }
       if (!ok) {
-        workspace.showPaneToast(sessionId, 'Agent backend is unavailable; draft preserved')
-        return
+        const message = 'Agent backend is unavailable; draft preserved'
+        workspace.showPaneToast(sessionId, message)
+        throw new Error(message)
       }
     }
     // Clear any prompt-suggestion chip on submit so a stale offer never

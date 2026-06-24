@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
@@ -67,6 +67,7 @@ export type SessionActions = {
       dangerousMode?: boolean
       recoverTmuxName?: string
       preferredSessionId?: SessionId
+      preserveRuntime?: boolean
       builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
@@ -156,12 +157,51 @@ function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean)
   }
 }
 
+function waitForSessionInputReady(
+  refs: WorkspaceRefs,
+  sessionId: SessionId,
+  timeoutMs = 30_000,
+): Promise<void> {
+  const startedAt = Date.now()
+
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      const runtime = refs.latestRuntimesRef.current[sessionId]
+      if (
+        runtime &&
+        runtime.inputReady &&
+        runtime.processStatus === 'started' &&
+        runtime.exited === null
+      ) {
+        resolve()
+        return
+      }
+      if (runtime?.processStatus === 'failed') {
+        reject(new Error(runtime.processError ?? 'Agent failed to start'))
+        return
+      }
+      if (runtime?.exited !== null && runtime?.exited !== undefined) {
+        reject(new Error('Agent exited before it became ready for input'))
+        return
+      }
+      if (Date.now() - startedAt >= timeoutMs) {
+        reject(new Error('Timed out waiting for agent to become ready for input'))
+        return
+      }
+      window.setTimeout(tick, 50)
+    }
+    tick()
+  })
+}
+
 export function useSessionActions(
   state: { activeTabId: string; sessions: Record<SessionId, SessionMeta>; tabs: Tab[] },
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
   refs: WorkspaceRefs,
 ): SessionActions {
+  const wakeInFlightRef = useRef(new Map<SessionId, Promise<SessionId>>())
+
   // spawn — wrapped so callers don't have to touch window.api
   // directly. Updates state.sessions synchronously after main
   // responds with an id.
@@ -181,6 +221,7 @@ export function useSessionActions(
         dangerousMode?: boolean
         recoverTmuxName?: string
         preferredSessionId?: SessionId
+        preserveRuntime?: boolean
         builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
@@ -241,19 +282,37 @@ export function useSessionActions(
           [sessionId]: meta,
         },
       }))
-      setRuntimes(prev => ({
-        ...prev,
-        [sessionId]: {
-          ...emptyRuntime(),
-          hasOlderHistory: kind !== 'terminal' && hasDurableProviderSession(meta),
-          transcriptStatus:
-            kind !== 'terminal' && meta.providerSessionId ? 'loading' : 'ready',
-          transcriptError: null,
-          processStatus: 'started',
-          processError: null,
-          inputReady: true,
-        },
-      }))
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        // WHY preserveRuntime exists only for same-id restart wake:
+        //
+        // Normal spawn creates a new pane identity, so an empty runtime is the
+        // right source of truth. Wake is different: the renderer already owns a
+        // live-looking pane with feed rows, draft text, ghost state, semantic
+        // phase, debug logs, and possibly an in-flight submit. The only missing
+        // piece is main's backend process after an app restart. Replacing that
+        // runtime with emptyRuntime() during Enter handling erases the user's
+        // visible context and can make the submit caller clear a prompt that
+        // never reached the PTY. Same-id wake therefore updates just the backend
+        // lifecycle fields and leaves renderer-owned history intact.
+        const base = opts?.preserveRuntime && current ? current : emptyRuntime()
+        return {
+          ...prev,
+          [sessionId]: {
+            ...base,
+            hasOlderHistory: kind !== 'terminal' && hasDurableProviderSession(meta),
+            transcriptStatus:
+              opts?.preserveRuntime && current
+                ? current.transcriptStatus
+                : kind !== 'terminal' && meta.providerSessionId ? 'loading' : 'ready',
+            transcriptError: opts?.preserveRuntime && current ? current.transcriptError : null,
+            processStatus: opts?.preserveRuntime && current ? current.processStatus : 'started',
+            processError: null,
+            inputReady: opts?.preserveRuntime && current ? current.inputReady : true,
+            exited: opts?.preserveRuntime && current ? current.exited : null,
+          },
+        }
+      })
       if (kind !== 'terminal' && meta.providerSessionId) {
         void loadInitialHistoryForSession({
           sessionId,
@@ -339,63 +398,130 @@ export function useSessionActions(
 
   const ensureSessionLive = useCallback(
     async (sessionId: SessionId): Promise<SessionId> => {
-      const snapshot = refs.stateRef.current
-      const meta = snapshot.sessions[sessionId]
-      if (!meta) {
-        throw new Error(`Cannot wake ${sessionId}; no persisted session metadata exists.`)
-      }
-      const kind: SessionKind = meta.kind ?? 'claude'
+      const inFlight = wakeInFlightRef.current.get(sessionId)
+      if (inFlight) return await inFlight
 
-      const liveKind = await window.api.getLiveSessionKind(sessionId)
-      if (liveKind === kind) return sessionId
-      if (liveKind !== null) {
-        throw new Error(`Cannot wake ${sessionId}; main has a live ${liveKind} session at that id.`)
-      }
+      const wake = (async (): Promise<SessionId> => {
+        const snapshot = refs.stateRef.current
+        const meta = snapshot.sessions[sessionId]
+        if (!meta) {
+          throw new Error(`Cannot wake ${sessionId}; no persisted session metadata exists.`)
+        }
+        const kind: SessionKind = meta.kind ?? 'claude'
 
-      const builtInMcpDomains =
-        kind !== 'terminal' ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains) : undefined
-      const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
-      const restoredMeta = withoutProvisionalProviderSession(meta)
+        const liveKind = await window.api.getLiveSessionKind(sessionId)
+        if (liveKind === kind) {
+          await waitForSessionInputReady(refs, sessionId)
+          return sessionId
+        }
+        if (liveKind !== null) {
+          throw new Error(`Cannot wake ${sessionId}; main has a live ${liveKind} session at that id.`)
+        }
 
-      // WHY this respawns under the SAME SessionId instead of using
-      // replaceSession/idMap:
-      //
-      // This action repairs a split-brain state created by process restart:
-      // renderer workspace metadata survived, but main's provider registry did
-      // not. The renderer id is already referenced by Dispatch rows, buried
-      // records, tiled lanes, pins, grid-related selections, orchestration MCP
-      // ownership, and possibly a tool call that is currently trying to send
-      // to that exact id. A new id would force a broad remap while a command is
-      // in flight. Reusing the id makes wake equivalent to "main caught up with
-      // workspace.json" and keeps every existing reference valid.
-      await spawn(meta.cwd, {
-        kind,
-        preferredSessionId: sessionId,
-        resumeSessionId,
-        builtInMcpDomains,
-        recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
-        dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
-      })
+        const builtInMcpDomains =
+          kind !== 'terminal' ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains) : undefined
+        const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
+        const restoredMeta = withoutProvisionalProviderSession(meta)
 
-      setState(prev => {
-        const current = prev.sessions[sessionId]
-        if (!current) return prev
-        return {
-          ...prev,
-          sessions: {
-            ...prev.sessions,
+        setRuntimes(prev => {
+          const current = prev[sessionId]
+          if (!current) return prev
+          return {
+            ...prev,
             [sessionId]: {
               ...current,
-              ...restoredMeta,
-              ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+              processStatus: 'spawning',
+              processError: null,
+              inputReady: false,
+              exited: null,
             },
-          },
-        }
-      })
+          }
+        })
 
-      return sessionId
+        // WHY this respawns under the SAME SessionId instead of using
+        // replaceSession/idMap:
+        //
+        // This action repairs a split-brain state created by process restart:
+        // renderer workspace metadata survived, but main's provider registry did
+        // not. The renderer id is already referenced by Dispatch rows, buried
+        // records, tiled lanes, pins, grid-related selections, orchestration MCP
+        // ownership, and possibly a tool call that is currently trying to send
+        // to that exact id. A new id would force a broad remap while a command is
+        // in flight. Reusing the id makes wake equivalent to "main caught up with
+        // workspace.json" and keeps every existing reference valid.
+        let readyError: unknown = null
+        try {
+          await spawn(meta.cwd, {
+            kind,
+            preferredSessionId: sessionId,
+            preserveRuntime: true,
+            resumeSessionId,
+            builtInMcpDomains,
+            recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
+            dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
+          })
+        } catch (err) {
+          const racedKind = await window.api.getLiveSessionKind(sessionId)
+          if (racedKind !== kind) readyError = err
+        }
+
+        if (!readyError) {
+          try {
+            await waitForSessionInputReady(refs, sessionId)
+          } catch (err) {
+            readyError = err
+          }
+        }
+
+        if (readyError) {
+          const message = readyError instanceof Error && readyError.message.length > 0
+            ? readyError.message
+            : `Could not wake session ${sessionId}`
+          setRuntimes(prev => {
+            const current = prev[sessionId]
+            if (!current) return prev
+            return {
+              ...prev,
+              [sessionId]: {
+                ...current,
+                processStatus: 'idle',
+                processError: message,
+                inputReady: false,
+              },
+            }
+          })
+          throw readyError
+        }
+
+        setState(prev => {
+          const current = prev.sessions[sessionId]
+          if (!current) return prev
+          return {
+            ...prev,
+            sessions: {
+              ...prev.sessions,
+              [sessionId]: {
+                ...current,
+                ...restoredMeta,
+                ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+              },
+            },
+          }
+        })
+
+        return sessionId
+      })()
+
+      wakeInFlightRef.current.set(sessionId, wake)
+      try {
+        return await wake
+      } finally {
+        if (wakeInFlightRef.current.get(sessionId) === wake) {
+          wakeInFlightRef.current.delete(sessionId)
+        }
+      }
     },
-    [refs.dangerousAgentsRef, refs.stateRef, setState, spawn],
+    [refs.dangerousAgentsRef, refs.stateRef, setRuntimes, setState, spawn],
   )
 
   const killSession = useCallback(

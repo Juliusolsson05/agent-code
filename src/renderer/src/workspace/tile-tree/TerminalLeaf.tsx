@@ -105,12 +105,23 @@ export function TerminalLeaf({
     let offTerminalData: (() => void) | null = null
     let resizeObserver: ResizeObserver | null = null
     let resizeFrame: number | null = null
+    let disposed = false
+    let attachedBackfillDone = false
     let lastCols = 0
     let lastRows = 0
+    let pendingResize: { cols: number; rows: number } | null = null
+    const pendingInput: string[] = []
     // Tracked here (not inside the try block) so cleanup can detach
     // the global event listener whether mount succeeded or failed
     // before the listener was attached.
     let onThemeChangedListenerRef: ((e: Event) => void) | null = null
+
+    const sendResizeIfChanged = (cols: number, rows: number) => {
+      if (cols === lastCols && rows === lastRows) return
+      lastCols = cols
+      lastRows = rows
+      void window.api.resize(sessionId, cols, rows)
+    }
 
     const fitAndNotifyResize = () => {
       resizeFrame = null
@@ -123,10 +134,17 @@ export function TerminalLeaf({
         // Sending every observer tick through IPC makes node-pty process a
         // stream of resize no-ops and multiplies the layout-drag cost across
         // every terminal pane.
-        if (cols === lastCols && rows === lastRows) return
-        lastCols = cols
-        lastRows = rows
-        void window.api.resize(sessionId, cols, rows)
+        if (!attachedBackfillDone) {
+          // WHY queue instead of sending early: after restart, terminal panes can
+          // mount while ensureSessionLive is still recreating the backend. Main
+          // returns false for resize/input before the RegistryEntry exists, and
+          // recording lastCols/lastRows at that point would suppress the exact
+          // size the newly attached PTY needs. Keep only the latest size; once
+          // attach succeeds, replay it through the normal de-duped path.
+          pendingResize = { cols, rows }
+          return
+        }
+        sendResizeIfChanged(cols, rows)
       } catch {
         // Zero-dimension containers still throw. A later observer tick will
         // recover when layout produces a measurable terminal box.
@@ -188,6 +206,15 @@ export function TerminalLeaf({
       // cycling, no composer — this is a raw terminal.
       onDataDisposable = term.onData(data => {
         acknowledgeSessionRef.current(sessionId)
+        if (!attachedBackfillDone) {
+          pendingInput.push(data)
+          // A held key during restart wake should not grow without bound if the
+          // backend fails to attach. Keep the tail; terminal input is inherently
+          // sequential and the most recent bytes are the only useful recovery
+          // signal once the user sees the pane still waking.
+          if (pendingInput.length > 256) pendingInput.splice(0, pendingInput.length - 256)
+          return
+        }
         void window.api.sendInput(sessionId, data)
       })
 
@@ -224,7 +251,6 @@ export function TerminalLeaf({
       // fires BEFORE the renderer even mounts TerminalLeaf) is
       // silently dropped and the user sees a blank terminal with
       // just a blinking cursor. Exactly the bug reported.
-      let attachedBackfillDone = false
       const backlogQueue: string[] = []
       offTerminalData = window.api.onSessionTerminalData(
         ({ sessionId: sid, data }) => {
@@ -244,20 +270,34 @@ export function TerminalLeaf({
       // attach race that the subscribe/attach/drain sequence below exists to
       // avoid.
       void ensureSessionLiveRef.current(sessionId)
-        .then(() => window.api.attachTerminal(sessionId))
+        .then(() => {
+          if (disposed || termRef.current !== term) return null
+          return window.api.attachTerminal(sessionId)
+        })
         .then(buffer => {
+          if (buffer === null) return
           // The cleanup below may have disposed the term already
           // (transient remount, rapid tab switch). Check before
           // touching it.
-          if (!termRef.current) return
-          if (buffer) termRef.current.write(buffer)
+          if (disposed || termRef.current !== term) return
+          const liveTerm = term
+          if (!liveTerm) return
+          if (buffer) liveTerm.write(buffer)
           // Drain any live events that arrived between subscribe
           // and attach-response. These are strictly AFTER the
           // buffer's last byte because main buffered silently
           // until we called attach.
-          if (backlogQueue.length > 0) termRef.current.write(backlogQueue.join(''))
+          if (backlogQueue.length > 0) liveTerm.write(backlogQueue.join(''))
           backlogQueue.length = 0
           attachedBackfillDone = true
+          if (pendingResize) {
+            sendResizeIfChanged(pendingResize.cols, pendingResize.rows)
+            pendingResize = null
+          }
+          if (pendingInput.length > 0) {
+            void window.api.sendInput(sessionId, pendingInput.join(''))
+            pendingInput.length = 0
+          }
           // Now that content has landed, force-focus the terminal
           // so the very first keystroke the user makes lands in
           // xterm. The focus-on-mount effect above already called
@@ -266,7 +306,7 @@ export function TerminalLeaf({
           // focus might have drifted to somewhere else — this
           // re-focus closes the gap if the pane is still the
           // workspace-focused one.
-          if (focusedRef.current) termRef.current.focus()
+          if (focusedRef.current) liveTerm.focus()
         })
         .catch(err => {
           showPaneToastRef.current(
@@ -316,6 +356,7 @@ export function TerminalLeaf({
     }
 
     return () => {
+      disposed = true
       if (resizeFrame !== null) cancelAnimationFrame(resizeFrame)
       resizeObserver?.disconnect()
       onDataDisposable?.dispose()

@@ -284,6 +284,7 @@ function appendCappedBuffer(prev: string, data: string, cap: number): string {
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
+  private readonly spawningSessionIds = new Set<string>()
   private readonly lastActivityAt = new Map<string, number>()
   private readonly sessionSizes = new Map<string, PtySize>()
 
@@ -364,9 +365,19 @@ export class SessionManager extends EventEmitter {
   async spawn(options: SpawnOptions): Promise<SpawnResult> {
     const kind: SessionKind = options.kind ?? 'claude'
     const sessionId = options.preferredSessionId ?? randomUUID()
-    if (this.sessions.has(sessionId)) {
+    if (this.sessions.has(sessionId) || this.spawningSessionIds.has(sessionId)) {
       throw new Error(`Session ${sessionId} is already live`)
     }
+    // WHY reserve before any provider/tmux await: restored sessions can be
+    // woken by attach, send, and orchestration at almost the same time. The
+    // renderer single-flights the common path, but main still has to defend the
+    // invariant because IPC callers are not all in the same React closure. The
+    // terminal tmux path awaited sessionExists/createSession before registering
+    // the RegistryEntry, which left a small duplicate-spawn window during
+    // restart wake. This reservation makes "spawning" observable to every
+    // concurrent caller without pretending the backend is ready yet.
+    this.spawningSessionIds.add(sessionId)
+    try {
     const spawnStartedAt = performance.now()
     performanceService.mark('session.spawn.start', {
       sessionId,
@@ -725,6 +736,9 @@ export class SessionManager extends EventEmitter {
       provider: 'terminal',
     })
     return { sessionId, tmuxName: tmuxSessionName ?? undefined }
+    } finally {
+      this.spawningSessionIds.delete(sessionId)
+    }
   }
 
   /**
