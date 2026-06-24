@@ -67,7 +67,9 @@ export function useReaderModeSanity(
 ): void {
   useEffect(() => {
     if (!readerMode) return
-    const validSessionIds = validFocusSessionIdsForMode(state, readerMode.tabId)
+    const validSessionIds = validFocusSessionIdsForMode(state, readerMode.tabId, {
+      agentOnly: true,
+    })
     if (!validSessionIds) {
       setReaderMode(null)
       return
@@ -85,6 +87,7 @@ export function useReaderModeSanity(
 function validFocusSessionIdsForMode(
   state: WorkspaceState,
   tabId: TabId,
+  options: { agentOnly?: boolean } = {},
 ): SessionId[] | null {
   const tab = state.tabs.find(t => t.id === tabId)
   if (!tab) return null
@@ -104,13 +107,15 @@ function validFocusSessionIdsForMode(
   // user clicks a detached row in non-Dispatch Reader → validator
   // sees the id isn't a grid leaf → forces focus back to the first
   // grid pane → user's selection silently disappears.
-  if (state.dispatchMode) {
-    return buildVisibleDispatchRows(state)
+  const sessionIds = state.dispatchMode
+    ? buildVisibleDispatchRows(state)
       .filter(row => row.tabId === tabId)
       .map(row => row.sessionId)
-  }
+    : resolveTabSessions(state, tabId)
 
-  return resolveTabSessions(state, tabId)
+  return options.agentOnly
+    ? sessionIds.filter(sessionId => state.sessions[sessionId]?.kind !== 'terminal')
+    : sessionIds
 }
 
 // Picker invalidation. If the selected uuid is no longer present in

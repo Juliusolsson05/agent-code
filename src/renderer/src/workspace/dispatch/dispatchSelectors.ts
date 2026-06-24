@@ -165,9 +165,18 @@ export function dispatchSessionIdsForTab(
   state: WorkspaceState,
   tabId: TabId,
 ): SessionId[] {
-  return buildDispatchGroups(state)
-    .find(group => group.tab.id === tabId)
-    ?.rows.map(row => row.sessionId) ?? []
+  // WHY this goes through buildVisibleDispatchRows instead of
+  // buildDispatchGroups:
+  // pinned sessions are intentionally removed from their project group and
+  // rendered in a separate Dispatch section. Focus takeovers such as Reader and
+  // Spotlight still need to answer "which sessions are visible for this owning
+  // tab?", not "which sessions remain after the pinned section was peeled off".
+  // Using the same visible-row stream as command targeting and sanity checks
+  // keeps a pinned row from being a valid command target but missing from the
+  // Reader/Spotlight session switcher.
+  return buildVisibleDispatchRows(state)
+    .filter(row => row.tabId === tabId)
+    .map(row => row.sessionId)
 }
 
 export function detachedDispatchSessionIdsForTab(

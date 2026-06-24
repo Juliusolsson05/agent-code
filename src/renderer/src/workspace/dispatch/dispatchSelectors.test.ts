@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { resolveDispatchSpawnTarget } from '@renderer/workspace/dispatch/dispatchSelectors'
+import {
+  dispatchSessionIdsForTab,
+  resolveDispatchSpawnTarget,
+} from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { resolveFocusSurfaceTarget } from '@renderer/workspace/hook/actions/focusSurfaceTarget'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { DispatchModeState, TileNode, WorkspaceState } from '@renderer/workspace/types'
 
@@ -69,6 +73,64 @@ describe('resolveDispatchSpawnTarget', () => {
   it('no Dispatch mode: targets the active tab', () => {
     const target = resolveDispatchSpawnTarget(makeState(null))
     expect(target).toEqual({ tabId: 'tabA', cwdSessionId: null, laneIndex: null })
+  })
+})
+
+describe('dispatchSessionIdsForTab', () => {
+  it('includes pinned rows owned by the tab even though project groups strip them', () => {
+    const state = makeState({ scope: 'global', focusedSessionId: 'b1' })
+    state.pinnedSessionIds = ['b1']
+
+    expect(dispatchSessionIdsForTab(state, 'tabB')).toEqual(['b1'])
+  })
+
+  it('uses visible Dispatch row order, with pinned rows before grouped rows for the same tab', () => {
+    const state = makeState({ scope: 'global', focusedSessionId: 'b2' })
+    state.tabs[1] = {
+      ...state.tabs[1]!,
+      root: {
+        type: 'split',
+        direction: 'vertical',
+        ratio: 0.5,
+        a: leaf('b1'),
+        b: leaf('b2'),
+      },
+    }
+    state.sessions.b2 = { cwd: '/work/project-b', kind: 'codex' }
+    state.pinnedSessionIds = ['b2']
+
+    expect(dispatchSessionIdsForTab(state, 'tabB')).toEqual(['b2', 'b1'])
+  })
+})
+
+describe('resolveFocusSurfaceTarget', () => {
+  it('returns the focused tiled lane session and its owner tab, not the stale active tab', () => {
+    const state = makeState({
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
+      },
+    })
+
+    expect(resolveFocusSurfaceTarget(state)).toEqual({
+      tabId: 'tabB',
+      sessionId: 'b1',
+    })
+  })
+
+  it('returns null when the focused tiled lane has no strict command target', () => {
+    const state = makeState({
+      scope: 'global',
+      focusedSessionId: 'b1',
+      tiled: {
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, {}],
+      },
+    })
+
+    expect(resolveFocusSurfaceTarget(state)).toBeNull()
   })
 })
 
