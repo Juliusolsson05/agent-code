@@ -108,24 +108,38 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const copyResetRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const workspaceRef = useRef(workspace)
+  workspaceRef.current = workspace
+  const refreshInFlightRef = useRef<Promise<void> | null>(null)
 
-  const refresh = useCallback(async (forceActivityRefresh = false) => {
-    setLoading(true)
-    try {
-      setDump(await loadWorktreeDump({ cwd, workspace, forceActivityRefresh }))
-    } catch {
-      setDump({
-        cwd,
-        generatedAt: Date.now(),
-        rows: [],
-        indexStatus: null,
-        gitUnavailable: Boolean(cwd),
-        activityUnavailable: true,
-      })
-    } finally {
-      setLoading(false)
-    }
-  }, [cwd, workspace])
+  const refresh = useCallback((forceActivityRefresh = false) => {
+    if (refreshInFlightRef.current) return refreshInFlightRef.current
+    const run = (async () => {
+      setLoading(true)
+      try {
+        setDump(await loadWorktreeDump({
+          cwd,
+          workspace: workspaceRef.current,
+          forceActivityRefresh,
+        }))
+      } catch {
+        setDump({
+          cwd,
+          generatedAt: Date.now(),
+          rows: [],
+          indexStatus: null,
+          gitUnavailable: Boolean(cwd),
+          activityUnavailable: true,
+        })
+      } finally {
+        setLoading(false)
+      }
+    })().finally(() => {
+      if (refreshInFlightRef.current === run) refreshInFlightRef.current = null
+    })
+    refreshInFlightRef.current = run
+    return run
+  }, [cwd])
 
   const copyDump = useCallback(async () => {
     const currentDump = dump ?? {
@@ -150,7 +164,8 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
   // effect can decide whether to reuse a fresh dump WITHOUT taking `dump`
   // as a dependency (which would re-run the effect — and restart the
   // poll timer — on every dump change). The effect should fire only when
-  // the cwd/workspace identity behind `refresh` changes.
+  // cwd changes; the latest workspace snapshot is read through workspaceRef so
+  // agent runtime churn does not restart git/worktree scans.
   const dumpRef = useRef(dump)
   dumpRef.current = dump
 
@@ -369,4 +384,3 @@ function shortenPath(path: string): string {
   if (parts.length <= 3) return path
   return `…/${parts.slice(-3).join('/')}`
 }
-

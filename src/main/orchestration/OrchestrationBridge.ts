@@ -17,6 +17,12 @@ type PendingRequest = {
   timer: NodeJS.Timeout
 }
 
+type QueuedRendererRequest = {
+  request: OrchestrationRendererRequest
+  resolve: (response: OrchestrationRendererResponse) => void
+  reject: (err: Error) => void
+}
+
 type PromptDeliveryMetadata = {
   createdAt: number
   lastPromptSubmittedAt?: number
@@ -33,9 +39,12 @@ const MAX_CLOSED_AGENTS = 500
 const MAX_CLOSED_AGENT_MESSAGES = 100
 const ORCHESTRATION_METADATA_TTL_MS = 24 * 60 * 60 * 1000
 const PRUNE_INTERVAL_MS = 5 * 60 * 1000
+const MAX_ACTIVE_RENDERER_REQUESTS = 1
 
 export class OrchestrationBridge {
   private readonly pending = new Map<string, PendingRequest>()
+  private readonly rendererQueue: QueuedRendererRequest[] = []
+  private activeRendererRequests = 0
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
   private lastPrunedAt = 0
@@ -269,11 +278,44 @@ export class OrchestrationBridge {
     // renderer to perform the workspace mutation and only handles MCP/PTY work
     // around it.
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
+      this.rendererQueue.push({ request, resolve, reject })
+      this.drainRendererQueue()
+    })
+  }
+
+  private drainRendererQueue(): void {
+    while (
+      this.activeRendererRequests < MAX_ACTIVE_RENDERER_REQUESTS &&
+      this.rendererQueue.length > 0
+    ) {
+      const next = this.rendererQueue.shift()!
+      this.activeRendererRequests += 1
+      void this.dispatchRendererRequest(next.request)
+        .then(next.resolve, next.reject)
+        .finally(() => {
+          this.activeRendererRequests -= 1
+          this.drainRendererQueue()
+        })
+    }
+  }
+
+  private async dispatchRendererRequest(
+    request: OrchestrationRendererRequest,
+  ): Promise<OrchestrationRendererResponse> {
+    return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(request.requestId)
         reject(new Error('Timed out waiting for renderer orchestration response'))
       }, 30_000)
       this.pending.set(request.requestId, { resolve, reject, timer })
+      // WHY main serializes renderer-backed orchestration requests:
+      // every request crosses into the renderer's workspace model, and some of
+      // them used to perform transcript/status scans over every child. Bulk
+      // parent prompts can otherwise enqueue a burst of read/list/ensure/mark
+      // events that competes with React state updates and makes the bridge miss
+      // its own 30s timeout. Serializing preserves correctness and backpressure:
+      // callers wait in main, while the renderer only handles one orchestration
+      // mutation/read at a time.
       sendToMainWindow('orchestration:request', request)
     })
   }

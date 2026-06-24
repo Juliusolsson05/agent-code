@@ -117,6 +117,7 @@ export type OrchestrationAgentRecord = {
   statusSummary?: string
   errorSummary?: string
   latestAssistantText?: string
+  finalAssistantText?: string
   messageCount?: number
 }
 
@@ -124,6 +125,7 @@ export type OrchestrationAgentOutput = {
   agent: OrchestrationAgentRecord
   messages: OrchestrationAgentMessage[]
   latestAssistantText?: string
+  finalAssistantText?: string
 }
 
 export type OrchestrationCloseResult = {

@@ -11,6 +11,11 @@ import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>
+type VisibleMessageSummary = {
+  messages: OrchestrationAgentMessage[]
+  messageCount: number
+  latestAssistantText?: string
+}
 
 const DEFAULT_MAX_MESSAGES = 20
 
@@ -29,6 +34,7 @@ export function listOrchestrationAgents(params: {
         meta,
         parentSessionId: params.parentSessionId,
         runtime: params.runtimes[sessionId] ?? null,
+        mode: 'status',
       })
     })
     .filter((agent): agent is OrchestrationAgentRecord => agent !== null)
@@ -175,24 +181,29 @@ function buildAgentOutput(params: {
   runtime: SessionRuntime | null
   maxMessages?: number
 }): OrchestrationAgentOutput {
-  const messages = visibleMessages(params.runtime, params.meta)
-  const cappedMessages = messages.slice(-boundedMaxMessages(params.maxMessages))
-  const latestAssistantText = latestAssistant(messages)
+  const summary = visibleMessageSummary(
+    params.runtime,
+    params.meta,
+    boundedMaxMessages(params.maxMessages),
+  )
+  const { messages, messageCount, latestAssistantText } = summary
   const agent = buildAgentRecord({
     sessionId: params.sessionId,
     meta: params.meta,
     parentSessionId: params.parentSessionId,
     runtime: params.runtime,
     messages,
+    messageCount,
+    latestAssistantText,
   })
   return {
     agent: {
       ...agent,
-      ...(latestAssistantText ? { latestAssistantText } : {}),
-      messageCount: messages.length,
+      ...(latestAssistantText ? { latestAssistantText, finalAssistantText: latestAssistantText } : {}),
+      messageCount,
     },
-    messages: cappedMessages,
-    ...(latestAssistantText ? { latestAssistantText } : {}),
+    messages,
+    ...(latestAssistantText ? { latestAssistantText, finalAssistantText: latestAssistantText } : {}),
   }
 }
 
@@ -202,10 +213,26 @@ function buildAgentRecord(params: {
   parentSessionId: string
   runtime: SessionRuntime | null
   messages?: OrchestrationAgentMessage[]
+  messageCount?: number
+  latestAssistantText?: string
+  mode?: 'status' | 'output'
 }): OrchestrationAgentRecord {
-  const messages = params.messages ?? visibleMessages(params.runtime, params.meta)
-  const latestAssistantText = latestAssistant(messages)
-  const lifecycleState = lifecycleStateForRuntime(params.runtime, latestAssistantText)
+  const statusOnly = params.mode === 'status' && params.messages === undefined
+  // WHY list/status avoids visibleMessages(): orchestration_wait_agents polls
+  // this path while children are actively writing huge tool/worktree outputs.
+  // Materializing every user/assistant text block for every child turns a cheap
+  // status poll into O(children * transcript text) renderer work and can starve
+  // the bridge that must answer the poll. Full message extraction remains on
+  // read-agent/read-run-outputs; list only needs enough information to classify
+  // lifecycle and activity.
+  const messages = statusOnly ? [] : (params.messages ?? visibleMessages(params.runtime, params.meta))
+  const latestAssistantText = statusOnly
+    ? undefined
+    : (params.latestAssistantText ?? latestAssistant(messages))
+  const hasDurableOutput = statusOnly
+    ? hasAssistantOutput(params.runtime, params.meta)
+    : Boolean(latestAssistantText)
+  const lifecycleState = lifecycleStateForRuntime(params.runtime, hasDurableOutput)
   const activityAt = lastActivityAt(params.runtime, messages)
   return {
     sessionId: params.sessionId,
@@ -237,14 +264,15 @@ function buildAgentRecord(params: {
       ? { completedAt: activityAt }
       : {}),
     ...(params.runtime?.processError ? { errorSummary: params.runtime.processError } : {}),
-    ...(latestAssistantText ? { latestAssistantText } : {}),
-    messageCount: messages.length,
+    ...(latestAssistantText ? { latestAssistantText, finalAssistantText: latestAssistantText } : {}),
+    messageCount: params.messageCount
+      ?? (statusOnly ? cheapMessageCount(params.runtime, params.meta) : messages.length),
   }
 }
 
 function lifecycleStateForRuntime(
   runtime: SessionRuntime | null,
-  latestAssistantText?: string,
+  hasDurableOutput = false,
 ): OrchestrationLifecycleState {
   // STAGE 1 of 2: renderer-derived lifecycle. Main overlays prompt-delivery
   // timing to report `prompt_sent`; see OrchestrationBridge.lifecycleWithPromptDelivery.
@@ -265,7 +293,7 @@ function lifecycleStateForRuntime(
   ) {
     return 'running'
   }
-  if (latestAssistantText) return 'completed'
+  if (hasDurableOutput) return 'completed'
   if (runtime.inputReady || runtime.processStatus === 'started') return 'waiting'
   return 'created'
 }
@@ -306,6 +334,92 @@ function visibleMessages(
     })
   }
   return messages
+}
+
+function visibleMessageSummary(
+  runtime: SessionRuntime | null,
+  meta: SessionMeta | undefined,
+  maxMessages: number,
+): VisibleMessageSummary {
+  if (!runtime) {
+    return {
+      messages: [],
+      messageCount: 0,
+    }
+  }
+  // WHY this scans from the tail and only extracts text for messages that can
+  // affect the bounded response: orchestration_send_prompt preflights children
+  // with maxMessages=1, and wait/read-run-output may ask every child for a
+  // small tail. The previous implementation materialized every visible message
+  // and sliced afterward, so a tiny read still paid for huge tool transcripts
+  // on the renderer thread. We keep messageCount as a cheap visible-entry count
+  // rather than exact non-empty text count because exactness would require the
+  // same full text extraction this path exists to avoid.
+  const messagesReversed: OrchestrationAgentMessage[] = []
+  let messageCount = 0
+  let latestAssistantText: string | undefined
+
+  const liveText = runtime.semantic.currentTurn?.text?.trim()
+  if (liveText) {
+    messageCount += 1
+    latestAssistantText = liveText
+    messagesReversed.push({
+      role: 'assistant',
+      text: liveText,
+    })
+  }
+
+  const entries = orchestrationVisibleEntries(runtime, meta)
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!
+    if (entry.type !== 'user' && entry.type !== 'assistant') continue
+    messageCount += 1
+
+    const needsTailMessage = messagesReversed.length < maxMessages
+    const needsLatestAssistant = entry.type === 'assistant' && !latestAssistantText
+    if (!needsTailMessage && !needsLatestAssistant) continue
+
+    const text = entryTextContent(entry)
+    if (!text?.trim()) continue
+    if (needsLatestAssistant) latestAssistantText = text
+    if (needsTailMessage) {
+      messagesReversed.push({
+        role: entry.type,
+        text,
+        ...((entry as { timestamp?: string }).timestamp ? { timestamp: (entry as { timestamp?: string }).timestamp } : {}),
+      })
+    }
+  }
+
+  return {
+    messages: messagesReversed.reverse(),
+    messageCount,
+    ...(latestAssistantText ? { latestAssistantText } : {}),
+  }
+}
+
+function hasAssistantOutput(
+  runtime: SessionRuntime | null,
+  meta?: SessionMeta,
+): boolean {
+  if (!runtime) return false
+  if (runtime.semantic.currentTurn?.text?.trim()) return true
+  return orchestrationVisibleEntries(runtime, meta).some(entry => (
+    entry.type === 'assistant'
+  ))
+}
+
+function cheapMessageCount(
+  runtime: SessionRuntime | null,
+  meta?: SessionMeta,
+): number {
+  if (!runtime) return 0
+  let count = 0
+  for (const entry of orchestrationVisibleEntries(runtime, meta)) {
+    if (entry.type === 'assistant' || entry.type === 'user') count += 1
+  }
+  if (runtime.semantic.currentTurn?.text?.trim()) count += 1
+  return count
 }
 
 function orchestrationVisibleEntries(
@@ -382,9 +496,12 @@ function lastActivityAt(
   if (!runtime) return undefined
   if (runtime.phaseChangedAt) return runtime.phaseChangedAt
   if (runtime.turnStartedAt) return runtime.turnStartedAt
-  const latestTimestamp = [...messages].reverse().find(message => message.timestamp)?.timestamp
-  const parsed = latestTimestamp ? Date.parse(latestTimestamp) : NaN
-  return Number.isFinite(parsed) ? parsed : undefined
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const timestamp = messages[index]?.timestamp
+    const parsed = timestamp ? Date.parse(timestamp) : NaN
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return undefined
 }
 
 function boundedMaxMessages(value: number | undefined): number {

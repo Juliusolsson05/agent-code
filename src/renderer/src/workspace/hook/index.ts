@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
@@ -192,6 +192,8 @@ export function useWorkspace(
   const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
   const { spawn, ensureSessionLive, killSession, replaceSession, reloadAgentSessions, softReloadAgentView } =
     sessionActions
+  const ensureSessionLiveRef = useRef(ensureSessionLive)
+  ensureSessionLiveRef.current = ensureSessionLive
 
   const tabActions = useTabActions(
     state,
@@ -220,12 +222,16 @@ export function useWorkspace(
     closeNewAgentPlacement,
     sessionActions,
   )
+  const createOrchestrationAgentRef = useRef(paneActions.createOrchestrationAgent)
+  createOrchestrationAgentRef.current = paneActions.createOrchestrationAgent
+  const closeOrchestrationSessionRef = useRef(paneActions.closeSession)
+  closeOrchestrationSessionRef.current = paneActions.closeSession
 
   useEffect(() => {
     const off = window.api.onOrchestrationRequest(async request => {
       try {
         if (request.type === 'create-agent') {
-          const agent = await paneActions.createOrchestrationAgent({
+          const agent = await createOrchestrationAgentRef.current({
             parentId: request.parentSessionId,
             kind: request.kind,
             cwd: request.cwd,
@@ -308,7 +314,7 @@ export function useWorkspace(
             state: snapshot,
             parentSessionId: request.parentSessionId,
             sessionId: request.sessionId,
-            closeSession: paneActions.closeSession,
+            closeSession: closeOrchestrationSessionRef.current,
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,
@@ -335,7 +341,7 @@ export function useWorkspace(
             sessionId: request.sessionId,
             maxMessages: 1,
           })
-          await ensureSessionLive(request.sessionId)
+          await ensureSessionLiveRef.current(request.sessionId)
           const agent = readOrchestrationAgent({
             state: refs.stateRef.current,
             runtimes: refs.latestRuntimesRef.current,
@@ -383,7 +389,7 @@ export function useWorkspace(
           state: snapshot,
           parentSessionId: request.parentSessionId,
           runId: request.runId,
-          closeSession: paneActions.closeSession,
+          closeSession: closeOrchestrationSessionRef.current,
         })
         await window.api.resolveOrchestrationRequest({
           requestId: request.requestId,
@@ -403,7 +409,7 @@ export function useWorkspace(
       }
     })
     return off
-  }, [ensureSessionLive, paneActions, refs.latestRuntimesRef, refs.stateRef, setState])
+  }, [refs.latestRuntimesRef, refs.stateRef, setState])
 
   const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
