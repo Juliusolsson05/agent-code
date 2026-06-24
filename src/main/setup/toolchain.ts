@@ -104,8 +104,14 @@ function applyToolEnv(): void {
     .join(':')
 
   if (cachedPaths.mitmdump) {
+    // CLAUDE_HEADLESS_MITMDUMP is the primary override consumed by the proxy
+    // resolver. Keep the old CC_PROXY_TEST_MITMDUMP alias in sync during the
+    // deprecation window because the headless package still accepts it, but do
+    // not let setup be the producer that keeps the legacy name alive forever.
+    process.env.CLAUDE_HEADLESS_MITMDUMP = cachedPaths.mitmdump
     process.env.CC_PROXY_TEST_MITMDUMP = cachedPaths.mitmdump
   } else {
+    delete process.env.CLAUDE_HEADLESS_MITMDUMP
     delete process.env.CC_PROXY_TEST_MITMDUMP
   }
 }

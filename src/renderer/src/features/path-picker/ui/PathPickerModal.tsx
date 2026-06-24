@@ -2,22 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 
 import { PathInput } from '@renderer/ui/PathInput'
 import { relativeTime } from '@renderer/lib/relativeTime'
-
-// Duplicate of the SessionInfo shape preload exposes. Inlined here so
-// the renderer's tsconfig doesn't need to reach across into src/preload
-// — the renderer include set covers only .tsx under src/renderer + the
-// preload .d.ts, and the .d.ts only declares window.api, not types.
-type SessionInfo = {
-  sessionId: string
-  summary: string
-  lastModified: number
-  fileSize: number
-  customTitle?: string
-  firstPrompt?: string
-  gitBranch?: string
-  cwd?: string
-  createdAt?: number
-}
+// Canonical session listing shape — was a local duplicate of the preload
+// SessionInfo. The renderer tsconfig already includes `src/shared/types/**`,
+// so importing the shared type needs no preload reach-across. See
+// @shared/types/session.
+import type { SessionInfo } from '@shared/types/session'
 
 // PathPickerModal — modal that asks the user for a working directory
 // when they press ⌘T (or click the + button in the tab bar).
@@ -447,4 +436,3 @@ function ResumeRow({
     </button>
   )
 }
-

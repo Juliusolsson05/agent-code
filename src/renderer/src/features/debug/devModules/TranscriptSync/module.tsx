@@ -32,7 +32,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
     [workspace.state.sessions],
   )
   const duplicateForFocused = meta?.providerSessionId
-    ? duplicateProviderSessions.find(group => group.providerSessionId === meta.providerSessionId)
+    ? duplicateProviderSessions.find(group => group.providerSessionId === meta.providerSessionId) ?? null
     : null
   const diagnostics = useMemo(
     () => buildDiagnostics({

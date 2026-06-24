@@ -2,7 +2,7 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'path'
 
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
-import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
+import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 
 // Reader for the on-disk proxy-events.jsonl files.
 //
@@ -66,6 +66,13 @@ export type ProxyEventsBundleSection = {
    *  Carries the cwd / sessionKey / createdAt context the proxy
    *  recorded at start. Null if file is missing or unreadable. */
   sessionMeta: string | null
+  /** Forensic match quality for the bundled payload. `exact` means the
+   * requested sessionKey matched a proxy session directory. `fallback` is only
+   * possible when the caller explicitly opts into broader project scanning.
+   * `none` means no payload was included. */
+  match: 'exact' | 'fallback' | 'none'
+  requestedSessionKey: string | null
+  matchedSessionSegment: string | null
 }
 
 
@@ -79,36 +86,39 @@ export type ProxyEventsBundleSection = {
  *       collapse-dashes → trim). Mismatched sanitiser would silently
  *       miss every bundle.
  *    2. Optionally narrow to a session-segment subdir matching
- *       `sessionKey`. If absent or the dir doesn't exist, fall back
- *       to scanning ALL session subdirs under the project — this
- *       handles cases where the session id changed between proxy
- *       launch and bundle capture (e.g. Codex resume after a
- *       provider id remap).
+ *       `sessionKey`. If absent or the dir doesn't exist, return no
+ *       payload unless the caller explicitly opts into fallback.
+ *       Bundles are evidence; missing proxy evidence is safer than
+ *       silently attaching a different session's wire log.
  *    3. Of all run subdirs containing a proxy-events.jsonl, pick the
  *       one with the newest mtime on its events file.
  *
- *  Returns {proxyEvents:null, runDir:null, sessionMeta:null} when no
- *  matching log exists. Never throws — bundle save must not fail
- *  because the proxy log is missing or unreadable.
+ *  Returns a `match:'none'` section when no matching log exists. Never
+ *  throws — bundle save must not fail because the proxy log is missing
+ *  or unreadable.
  */
 export async function readProxyEventsForBundle(opts: {
   cwd: string
   sessionKey?: string | null
+  allowFallback?: boolean
 }): Promise<ProxyEventsBundleSection> {
   const empty: ProxyEventsBundleSection = {
     proxyEvents: null,
     runDir: null,
     sessionMeta: null,
+    match: 'none',
+    requestedSessionKey: opts.sessionKey ?? null,
+    matchedSessionSegment: null,
   }
   try {
     const canonical = await canonicalizePath(opts.cwd)
     const projectSegment = sanitiseSegment(canonical)
     if (!projectSegment) return empty
     const projectDir = join(PROXY_ROOT, projectSegment)
-    const sessionSegments = await pickSessionSegments(projectDir, opts.sessionKey ?? null)
-    if (sessionSegments.length === 0) return empty
+    const selection = await pickSessionSegments(projectDir, opts.sessionKey ?? null, opts.allowFallback === true)
+    if (selection.segments.length === 0) return empty
 
-    const latest = await findLatestRun(projectDir, sessionSegments)
+    const latest = await findLatestRun(projectDir, selection.segments)
     if (!latest) return empty
 
     const eventsPath = join(latest.runDir, 'proxy-events.jsonl')
@@ -119,6 +129,9 @@ export async function readProxyEventsForBundle(opts: {
       proxyEvents,
       runDir: latest.runDir,
       sessionMeta,
+      match: selection.match,
+      requestedSessionKey: opts.sessionKey ?? null,
+      matchedSessionSegment: latest.sessionSegment,
     }
   } catch {
     // Bundle save must NEVER fail because of an unreadable proxy
@@ -128,38 +141,48 @@ export async function readProxyEventsForBundle(opts: {
 }
 
 
+// Reader segment sanitiser MUST match the proxy writers' segment exactly or a
+// bundle silently misses the proxy log. Keep the same empty-input fallback as
+// the writers so a degenerate but valid writer segment does not become an
+// unreadable bundle path.
 function sanitiseSegment(value: string): string {
-  const sanitized = sanitizePath(value).replace(/-+/g, '-').replace(/^-|-$/g, '')
-  return sanitized
+  return sanitizePathSegment(value) || 'unknown'
 }
 
 
 async function pickSessionSegments(
   projectDir: string,
   sessionKey: string | null,
-): Promise<string[]> {
-  // If we have a sessionKey, prefer its sanitised form. Fall back to
-  // every session-segment subdir if the targeted one doesn't exist —
-  // a session id can change between proxy launch and bundle save in
-  // edge cases (provider remap, restart with fresh providerSessionId)
-  // and we'd rather hand the user the wrong session's log than no
-  // log at all.
+  allowFallback: boolean,
+): Promise<{ segments: string[]; match: 'exact' | 'fallback' }> {
+  // Debug bundles are evidence. If the caller asked for a specific
+  // sessionKey, an unrelated latest run from the same project is more
+  // dangerous than an omitted proxy payload: it looks authoritative while
+  // describing a different provider conversation. Fallback remains an
+  // explicit opt-in for local troubleshooting, but the normal bundle path
+  // requires exact session provenance.
   if (sessionKey) {
     const segment = sanitiseSegment(sessionKey)
     if (segment) {
       try {
         const stats = await stat(join(projectDir, segment))
-        if (stats.isDirectory()) return [segment]
+        if (stats.isDirectory()) return { segments: [segment], match: 'exact' }
       } catch {
-        // fall through to broad scan
+        if (!allowFallback) return { segments: [], match: 'fallback' }
       }
     }
+    if (!allowFallback) return { segments: [], match: 'fallback' }
   }
+  if (!allowFallback) return { segments: [], match: 'fallback' }
+
   try {
     const entries = await readdir(projectDir, { withFileTypes: true })
-    return entries.filter(e => e.isDirectory()).map(e => e.name)
+    return {
+      segments: entries.filter(e => e.isDirectory()).map(e => e.name),
+      match: 'fallback',
+    }
   } catch {
-    return []
+    return { segments: [], match: 'fallback' }
   }
 }
 
@@ -167,8 +190,8 @@ async function pickSessionSegments(
 async function findLatestRun(
   projectDir: string,
   sessionSegments: string[],
-): Promise<{ runDir: string; size: number; mtimeMs: number } | null> {
-  let best: { runDir: string; size: number; mtimeMs: number } | null = null
+): Promise<{ runDir: string; size: number; mtimeMs: number; sessionSegment: string } | null> {
+  let best: { runDir: string; size: number; mtimeMs: number; sessionSegment: string } | null = null
   for (const sessionSegment of sessionSegments) {
     const sessionDir = join(projectDir, sessionSegment)
     let runEntries: string[]
@@ -184,7 +207,7 @@ async function findLatestRun(
         const stats = await stat(eventsPath)
         if (!stats.isFile()) continue
         if (best === null || stats.mtimeMs > best.mtimeMs) {
-          best = { runDir, size: stats.size, mtimeMs: stats.mtimeMs }
+          best = { runDir, size: stats.size, mtimeMs: stats.mtimeMs, sessionSegment }
         }
       } catch {
         // events file missing — empty run dir or fresh proxy that

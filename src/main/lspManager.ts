@@ -23,6 +23,11 @@ import {
   languageFileExtension,
   supportsLsp,
 } from '@shared/code/language.js'
+// Diagnostics event shape is the shared renderer↔main contract. Re-export so
+// existing importers of `LspDiagnostic`/`LspDiagnosticsEvent` from
+// `@main/lspManager` keep working, but the source of truth is shared.
+import type { LspDiagnostic, LspDiagnosticsEvent } from '@shared/types/lsp.js'
+export type { LspDiagnostic, LspDiagnosticsEvent } from '@shared/types/lsp.js'
 
 const require = createRequire(import.meta.url)
 
@@ -31,20 +36,6 @@ type SupportedLanguage =
   | 'javascriptreact'
   | 'typescript'
   | 'typescriptreact'
-
-export type LspDiagnostic = {
-  message: string
-  severity: 'error' | 'warning' | 'info' | 'hint'
-  startLine: number
-  startCharacter: number
-  endLine: number
-  endCharacter: number
-}
-
-export type LspDiagnosticsEvent = {
-  clientUri: string
-  diagnostics: LspDiagnostic[]
-}
 
 type OpenDocumentParams = {
   clientUri: string

@@ -69,7 +69,13 @@
     // needs the file explicitly. (The node project *excludes* this
     // file — see tsconfig.node.json — because it transitively pulls
     // the entire renderer subtree in.)
-    "src/providers/registry.renderer.ts"
+    "src/providers/registry.renderer.ts",
+    // Capability-only provider registry is imported by feed rows and
+    // ProviderConditionOutlet, but it intentionally sits beside
+    // registry.renderer.ts instead of under `*/renderer/**/*` to avoid a TileLeaf
+    // import cycle. Keep it explicit so composite tsc checks the file even when
+    // no provider pane imports it directly.
+    "src/providers/registry.renderer.capabilities.ts"
   ],
   // Project reference: tell tsc to resolve preload imports via node's
   // emitted declarations, not by walking the source tree. Without

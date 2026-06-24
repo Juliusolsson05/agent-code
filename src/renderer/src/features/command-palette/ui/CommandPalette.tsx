@@ -7,7 +7,7 @@ import {
   loadRecentHistory,
   recordCommandUse,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
-import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
+import { fuzzyMatch, rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
 import {
   allPromptTemplates,
@@ -20,6 +20,7 @@ import {
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
+import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 import {
   SessionPreviewPane,
   type PreviewTarget,
@@ -27,6 +28,12 @@ import {
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
+// Canonical session listing shape. This was a local copy that DROPPED
+// `fileSize` (and `customTitle`) — a concrete instance of the drift the
+// shared contract prevents: the palette consumes `SessionInfo[]` straight
+// from `window.api.listSessionsForCwd`, which always returns the full shape,
+// so the narrower local type was hiding fields rather than reflecting reality.
+import type { SessionInfo } from '@shared/types/session'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -34,16 +41,6 @@ import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 // sub-mode UI. The command registry lives outside this component
 // under feature-owned folders, so adding a feature command no longer
 // requires editing the palette implementation itself.
-
-type SessionInfo = {
-  sessionId: string
-  summary: string
-  lastModified: number
-  firstPrompt?: string
-  gitBranch?: string
-  cwd?: string
-  createdAt?: number
-}
 
 type BuriedPaneInfo = {
   id: string
@@ -103,7 +100,7 @@ type Props = {
   enterGlobalDispatch: () => Promise<void> | void
   exitDispatchMode: () => void
   openTiledDispatchPrompt: () => void
-  openDispatchAttach: (sessionId: string) => void
+  openDispatchAttach: (intent: DispatchAttachIntent) => void
   openLinkedAgent: (sessionId: string) => void
   openPinAgents: () => void
   toggleCustomRendering: () => void
@@ -141,16 +138,6 @@ type Props = {
   globalDispatchEnabled: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
   setAggressiveDebugPersistence: (enabled: boolean) => void
-}
-
-function fuzzyMatch(text: string, query: string): boolean {
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
-  let j = 0
-  for (let i = 0; i < lower.length && j < q.length; i++) {
-    if (lower[i] === q[j]) j++
-  }
-  return j === q.length
 }
 
 export function CommandPalette({
@@ -703,7 +690,7 @@ export function CommandPalette({
   const executeBuried = useCallback(
     (item: BuriedPaneInfo) => {
       onClose()
-      workspace.reviveBuried(item.id)
+      void workspace.reviveBuried(item.id)
     },
     [onClose, workspace],
   )
@@ -826,7 +813,7 @@ export function CommandPalette({
           mode === 'ai-workspace-create' ||
           mode === 'ai-workspace-clear'
         ) {
-          setMode(mode === 'save-prompt-template' ? 'commands' : 'commands')
+          setMode('commands')
           setPromptTemplateForm({ id: null, title: '', body: '' })
           setQuery('')
           setSelectedIndex(0)

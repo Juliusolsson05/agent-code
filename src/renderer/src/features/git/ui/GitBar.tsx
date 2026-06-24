@@ -1,4 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+// Shared GitBar contract — the SAME type the main handler returns and the
+// preload bridge re-exports. Deriving the renderer's view shapes from it means
+// a field change in `git:status` is a compile error in this component instead
+// of a silent mismatch. See @shared/types/gitStatus for the invariants.
+import type {
+  GitBarStatusResult,
+  GitNumstatLine,
+  GitRecentCommit,
+  GitSubmoduleStatus,
+} from '@shared/types/gitStatus'
 
 // GitBar — a narrow right-edge panel showing git state for the
 // focused pane's cwd: current branch, latest 5 commits, and the
@@ -15,30 +25,20 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // per submodule; ensuring the work only happens on-screen keeps the
 // idle cost at zero.
 
-type GitFile = { file: string; additions: number; deletions: number }
-type GitCommit = {
-  hash: string
-  subject: string
-  author: string
-  relativeDate: string
-}
-// Submodule row — includes its own inner file list because the parent's
-// `git diff --numstat` only surfaces the gitlink (+1/-1), which is
-// useless signal. Main walks into each submodule and computes the real
-// per-file numbers in either `registered..HEAD` (bumped), `HEAD` (dirty),
-// or `<registered> → worktree` (both) semantics.
-type GitSubmodule = {
-  path: string
-  state: 'dirty' | 'bumped' | 'both'
-  files: GitFile[]
-  range?: { from: string; to: string }
-}
-type GitData = {
-  branch: string
-  files: GitFile[]
-  commits: GitCommit[]
-  submodules?: GitSubmodule[]
-}
+// Local aliases over the shared contract so the JSX below stays terse. These
+// are NOT redeclarations — they point at the canonical shapes so they can never
+// drift from what main actually sends.
+//   - GitFile: numstat row (binary '-' coerced to 0/0 by the shared parser).
+//   - GitSubmodule: a submodule row carries its own inner file list because the
+//     parent `git diff --numstat` only surfaces the gitlink (+1/-1), useless
+//     signal; main walks into each submodule for the real per-file numbers.
+type GitFile = GitNumstatLine
+type GitCommit = GitRecentCommit
+type GitSubmodule = GitSubmoduleStatus
+// The success branch of the discriminated union — the renderer only ever stores
+// data once it has narrowed on `result.ok`, so `GitData` is exactly the ok:true
+// variant. Extract keeps it tied to the union instead of restating its fields.
+type GitData = Extract<GitBarStatusResult, { ok: true }>
 
 type Props = {
   cwd: string | null

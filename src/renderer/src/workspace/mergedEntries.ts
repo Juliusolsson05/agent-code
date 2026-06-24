@@ -178,7 +178,7 @@ export function selectMergedEntries(
   // ghost is by predicate-3 not already owned by semantic
   // current/history and by predicate-4 newer than every committed
   // entry, so chronologically it belongs at the very end.
-  return mergeWithUpstream(entries, visible, {
+  return mergeWithUpstream(entries as GhostEntry[], visible, {
     trustSupersededFlag: true,
-  })
+  }) as Entry[]
 }

@@ -1,4 +1,5 @@
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 
 import { classifySemanticToolActivity } from '@renderer/features/feed/lib/helpers'
@@ -120,12 +121,34 @@ export function semanticTurnHasRenderableContent(
     )
   }
 
+  // WHY `.some(paintsDom)` and not `.length > 0` (feed audit Finding 3):
+  // a render unit existing is NOT the same as a unit that paints DOM. The one
+  // offending case is a RUNNING collapsed_activity run: buildSemanticRenderUnits
+  // emits a unit for it, but SemanticCollapsedActivityRow returns null while it
+  // is running (WorkIndicator owns the "busy" surface instead). Counting that
+  // null-painting unit as renderable makes render-model ownership disagree with
+  // the DOM — it suppresses the empty/work fallback and can mislead duplicate
+  // guards into thinking a row exists where the screen is blank. Asking "does any
+  // unit actually paint?" keeps the model and the DOM in agreement.
   return buildSemanticRenderUnits(
     turn,
     committedToolUseIndex,
     committedToolResultIndex,
     committedAssistantText,
-  ).length > 0
+  ).some(semanticRenderUnitPaintsDom)
+}
+
+// Does this render unit own visible feed space, or is it a no-op the row
+// component renders as null? Mirrors the row components' own null returns so the
+// render model never claims ownership for a unit that paints nothing.
+//   - A RUNNING collapsed_activity run paints null (CollapsedActivityRow defers
+//     to WorkIndicator); a FINISHED run paints a "worked: …" receipt.
+//   - 'block' units are only emitted AFTER the invisible-block filters in
+//     buildSemanticRenderUnits (empty write_stdin, empty reasoning, committed-
+//     owned dupes), so a surviving block unit always owns DOM.
+export function semanticRenderUnitPaintsDom(unit: SemanticRenderUnit): boolean {
+  if (unit.type === 'collapsed_activity') return !unit.isRunning
+  return true
 }
 
 function semanticToolUseCorrelationId(block: SemanticLiveTurn['blocks'][number]): string | null {
@@ -144,28 +167,11 @@ function isSemanticToolOutputBlock(block: SemanticLiveTurn['blocks'][number]): b
   )
 }
 
-function parseRecord(text: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(text)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null
-  } catch {
-    return null
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
-
 function writeStdinChars(block: SemanticLiveTurn['blocks'][number]): string {
   const parsed = asRecord(block.parsedInput)
   if (typeof parsed?.chars === 'string') return parsed.chars
   const raw = block.argumentsJson ?? block.inputJson ?? ''
-  const rawParsed = raw ? parseRecord(raw) : null
+  const rawParsed = parseJsonRecord(raw)
   return typeof rawParsed?.chars === 'string' ? rawParsed.chars : ''
 }
 

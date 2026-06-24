@@ -15,6 +15,7 @@ import type {
   AiWorkspaceReadFileResult,
   AiWorkspaceRecord,
   AiWorkspaceSummary,
+  AiWorkspaceWriteFileParams,
   AiWorkspaceWriteFileResult,
 } from '@mcp/shared/aiWorkspaceTypes.js'
 
@@ -237,11 +238,7 @@ export class AiWorkspaceRegistry {
     }
   }
 
-  async writeFile(params: {
-    path: string
-    text: string
-    expectedMtimeMs?: number | null
-  }): Promise<AiWorkspaceWriteFileResult> {
+  async writeFile(params: AiWorkspaceWriteFileParams): Promise<AiWorkspaceWriteFileResult> {
     try {
       const target = normalizePath(params.path)
       const before = await stat(target).catch(() => null)

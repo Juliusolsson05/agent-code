@@ -6,6 +6,7 @@ import type {
   OrchestrationLifecycleState,
 } from '@mcp/shared/orchestrationTypes'
 import { entryTextContent } from '@renderer/workspace/entries/utils'
+import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
@@ -273,6 +274,8 @@ function lifecycleStateForRuntime(
   runtime: SessionRuntime | null,
   hasDurableOutput = false,
 ): OrchestrationLifecycleState {
+  // STAGE 1 of 2: renderer-derived lifecycle. Main overlays prompt-delivery
+  // timing to report `prompt_sent`; see OrchestrationBridge.lifecycleWithPromptDelivery.
   // WHY this derives from renderer runtime instead of provider internals:
   // orchestration's contract is "what can the parent safely coordinate on?"
   // The feed/runtime state is the same user-visible truth Dispatch and panes
@@ -281,7 +284,7 @@ function lifecycleStateForRuntime(
   // into fields that survive Claude/Codex implementation differences.
   if (!runtime) return 'created'
   if (runtime.processStatus === 'failed' || runtime.processError) return 'failed'
-  if (runtime.exited !== null || runtime.processStatus === 'exited') return 'closed'
+  if (isSessionExited(runtime)) return 'closed'
   if (
     runtime.sessionStatus === 'running' ||
     runtime.processActive ||
@@ -423,6 +426,10 @@ function orchestrationVisibleEntries(
   runtime: SessionRuntime,
   meta?: SessionMeta,
 ): SessionRuntime['entries'] {
+  // DORMANT: current agent creation explicitly disables inherited parent
+  // transcript context, so fresh agents never set inheritedParentContext=true.
+  // Keep the cut below for pre-disable persisted sessions and the active
+  // inheritance redesign, but do not treat it as part of the normal read path.
   // WHY inherited children need a transcript cut point:
   // context inheritance deliberately resumes a duplicated parent transcript so
   // the child can read the conversation that led to its task. That history is

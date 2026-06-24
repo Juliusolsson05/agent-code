@@ -89,16 +89,11 @@ import {
 
 import type { Entry } from '@shared/types/transcript'
 import { isConversationEntry } from '@shared/types/transcript'
+import { asRecord } from '@shared/lib/asRecord'
 import type {
   SemanticLiveBlock,
   SemanticLiveTurn,
 } from '@renderer/workspace/workspaceState'
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
 
 // -----------------------------------------------------------------------------
 // Semantic block → Claude content blocks

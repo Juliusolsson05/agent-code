@@ -5,7 +5,7 @@ import { listSessionsForCwd } from '@providers/claude/runtime/sessionList.js'
 import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
 import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import { asRecord } from '@shared/lib/asRecord.js'
+import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
 
 // Session Prompt Index — power source for the "Search Conversation
 // Prompts" command.
@@ -113,14 +113,6 @@ const promptCache = new Map<string, CacheEntry>()
 
 function cacheKey(kind: 'claude' | 'codex', id: string): string {
   return `${kind}:${id}`
-}
-
-function parseJsonRecord(line: string): Record<string, unknown> | null {
-  try {
-    return asRecord(JSON.parse(line))
-  } catch {
-    return null
-  }
 }
 
 function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {

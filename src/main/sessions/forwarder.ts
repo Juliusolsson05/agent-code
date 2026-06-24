@@ -53,18 +53,28 @@ export function wireSessionForwarder(
     sendToMainWindow('session:agent-pty-data', payload),
   )
   manager.on('process-state', payload => sendToMainWindow('session:process-state', payload))
-  manager.on('trust-dialog', payload => sendToMainWindow('session:trust-dialog', payload))
-  manager.on('resume-prompt', payload => sendToMainWindow('session:resume-prompt', payload))
-  manager.on('permission-prompt', payload => sendToMainWindow('session:permission-prompt', payload))
-  manager.on('compaction-state', payload => sendToMainWindow('session:compaction-state', payload))
+  // Legacy per-condition channels (session:trust-dialog / :resume-prompt /
+  // :permission-prompt / :compaction-state) are no longer forwarded to the
+  // renderer. The renderer consumes only the unified `session:conditions`
+  // snapshot and derives every pending-prompt field from it; no renderer or
+  // harness ever subscribed to the granular channels (confirmed by rg before
+  // removal — see docs/audit-plans/execution/ipc-shared-contracts-implementation-log.md).
+  // The manager STILL emits the granular events internally (provider runtimes
+  // drive them); we simply stop bridging them over IPC. Re-deprecating the
+  // manager-level events is owned by the conditions-framework cluster.
   manager.on('conditions', payload => sendToMainWindow('session:conditions', payload))
   manager.on('semantic-event', payload => sendToMainWindow('session:semantic-event', payload))
-  manager.on('exit', payload => {
-    // Final flush — any entries still buffered from the last
-    // bootstrapTail tick must land before exit so the renderer sees a
-    // consistent final entries list.
+  manager.on('removed', payload => {
+    // Final cleanup is keyed to removal, not renderer-facing exit. Some provider
+    // stop() paths resolve without emitting exit, and SessionManager.kill() must
+    // still be authoritative over the JSONL coalescer buffer and subagent
+    // watchers. Natural exits emit `removed` before `exit`, preserving the old
+    // ordering where the final bulk JSONL flush reaches the renderer before the
+    // pane is marked exited.
     flushAndDropJsonl(payload.sessionId)
     subAgents.stop(payload.sessionId)
+  })
+  manager.on('exit', payload => {
     sendToMainWindow('session:exit', payload)
   })
   lspManager.on('diagnostics', payload => sendToMainWindow('lsp:diagnostics', payload))

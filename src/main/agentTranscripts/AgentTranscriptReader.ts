@@ -2,6 +2,10 @@ import { access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
+import {
+  asRecord as asSharedRecord,
+  parseJsonRecord,
+} from '@shared/lib/asRecord.js'
 import type {
   AgentTranscriptErrorResult,
   AgentTranscriptIncludeOptions,
@@ -703,7 +707,7 @@ function extractCodexResponseItem(
 }
 
 function extractClaudeToolUse(
-  block: JsonRecord | undefined,
+  block: JsonRecord | null | undefined,
   timestamp: number | undefined,
 ): AgentTranscriptItem | null {
   if (!block || block.type !== 'tool_use') return null
@@ -714,11 +718,12 @@ function extractClaudeToolUse(
 
 function classifyToolCall(
   name: string,
-  input: JsonRecord | undefined,
+  input: JsonRecord | null | undefined,
   timestamp: number | undefined,
 ): AgentTranscriptItem {
   const target = toolTarget(input)
-  const command = stringField(input, 'cmd') ?? stringField(input, 'command')
+  const recordInput = input ?? undefined
+  const command = stringField(recordInput, 'cmd') ?? stringField(recordInput, 'command')
   if (name === 'exec_command' || name === 'Bash' || command) {
     const text = command ?? target ?? ''
     const shellItem: AgentTranscriptItem = {
@@ -726,7 +731,7 @@ function classifyToolCall(
       timestamp,
       command: text,
     }
-    const cwd = stringField(input, 'workdir') ?? stringField(input, 'cwd')
+    const cwd = stringField(recordInput, 'workdir') ?? stringField(recordInput, 'cwd')
     if (cwd) shellItem.cwd = cwd
     return shellItem
   }
@@ -764,7 +769,7 @@ function isWriteTool(name: string): boolean {
   )
 }
 
-function toolTarget(input: JsonRecord | undefined): string | undefined {
+function toolTarget(input: JsonRecord | null | undefined): string | undefined {
   if (!input) return undefined
   for (const key of ['path', 'file_path', 'filename', 'workdir', 'cwd', 'query', 'pattern']) {
     const value = stringField(input, key)
@@ -952,18 +957,15 @@ function extractTimestamp(raw: JsonRecord): number | undefined {
 }
 
 function parseMaybeJsonObject(value: string | undefined): JsonRecord | undefined {
-  if (!value) return undefined
-  try {
-    return asRecord(JSON.parse(value))
-  } catch {
-    return undefined
-  }
+  return parseJsonRecord(value) ?? undefined
 }
 
+// Delegates to the shared "object but not array, not null" guard so the
+// predicate has one source of truth. This reader's 10 call sites rely on an
+// `undefined` (not `null`) absence value, so we adapt with `?? undefined`
+// rather than changing the shared semantics. See @shared/lib/asRecord.
 function asRecord(value: unknown): JsonRecord | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : undefined
+  return asSharedRecord(value) ?? undefined
 }
 
 function stringField(record: JsonRecord | undefined, key: string): string | undefined {

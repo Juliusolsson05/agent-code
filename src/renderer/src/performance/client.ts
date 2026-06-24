@@ -12,6 +12,13 @@ import type {
   PerformanceMetricType,
   PerformanceRecord,
 } from '@shared/performance/types'
+// Shared with main's PerformanceService so the privacy redaction rule is
+// single-sourced. See @shared/performance/serialization for the invariants.
+import {
+  serializePerformanceError,
+  sanitizePerformanceData,
+  areaFromPerformanceName,
+} from '@shared/performance/serialization'
 
 const FLUSH_INTERVAL_MS = 500
 const MAX_BATCH = 200
@@ -88,23 +95,12 @@ function nowRecordBase(): Pick<PerformanceRecord, 'ts' | 'tsIso' | 'monotonicMs'
   }
 }
 
-function areaFromName(name: string): string {
-  const parts = name.split('.')
-  return parts.length >= 2 ? `${parts[0]}.${parts[1]}` : parts[0] || 'renderer'
-}
+// Renderer's area fallback is 'renderer'. Verbose comes from the live module
+// `config`, so sanitizeData reads it at call time (preserving prior behavior).
+const areaFromName = (name: string): string => areaFromPerformanceName(name, 'renderer')
 
 function sanitizeData(data?: Record<string, unknown>): Record<string, unknown> | undefined {
-  if (!data) return undefined
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(data)) {
-    if (!config.verbose && /prompt|content|text|env|token|secret|key/i.test(key)) continue
-    if (typeof value === 'string' && value.length > (config.verbose ? 2000 : 300)) {
-      out[key] = `${value.slice(0, config.verbose ? 2000 : 300)}...`
-    } else {
-      out[key] = value
-    }
-  }
-  return out
+  return sanitizePerformanceData(data, { verbose: config.verbose })
 }
 
 function enqueue(record: PerformanceRecord): void {
@@ -304,16 +300,7 @@ function performanceMemory():
   return maybePerformance.memory ?? null
 }
 
-function serializeError(err: unknown): PerformanceRecord['error'] {
-  if (err instanceof Error) {
-    return {
-      name: err.name,
-      message: err.message,
-      stack: err.stack,
-    }
-  }
-  return { message: String(err) }
-}
+const serializeError = serializePerformanceError
 
 function toAttributes(data: Record<string, unknown> | undefined): Attributes | undefined {
   if (!data) return undefined

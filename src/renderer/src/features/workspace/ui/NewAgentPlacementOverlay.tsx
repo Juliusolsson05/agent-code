@@ -8,6 +8,7 @@ import {
 } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
 type Props = {
   open: boolean
@@ -26,7 +27,7 @@ type Props = {
    * App.tsx — same place that closes the create-mode overlay — so
    * Escape, click-outside, and post-commit close all converge there.
    */
-  attachDetachedSessionId: SessionId | null
+  attachIntent: DispatchAttachIntent | null
   /**
    * Non-null = "Linked Agent" mode. The value is the parent session
    * id. The overlay shows ONLY the Claude/Codex kind picker — no
@@ -54,14 +55,14 @@ export function NewAgentPlacementOverlay({
   open,
   workspace,
   onClose,
-  attachDetachedSessionId,
+  attachIntent,
   linkedAgentParentId,
 }: Props) {
   // Attach mode is "user wants to move this existing detached session
   // into the grid." The overlay still does placement, just no spawn.
   // We compute it once at the top so every downstream branch reads
   // from the same value rather than null-checking the prop everywhere.
-  const attachMode = attachDetachedSessionId !== null
+  const attachMode = attachIntent !== null
   // Linked mode is "spawn a new agent linked to a parent." Kind-only:
   // no placement step at all (the linked agent is always a detached
   // dispatch agent in the parent's tab — see createLinkedAgent).
@@ -82,7 +83,10 @@ export function NewAgentPlacementOverlay({
   const committingRef = useRef(false)
 
   const activeTab = workspace.activeTab
-  const anchorSessionId = activeTab?.focusedSessionId ?? null
+  const placementTab = attachIntent
+    ? workspace.state.tabs.find(tab => tab.id === attachIntent.targetTabId) ?? null
+    : activeTab
+  const anchorSessionId = placementTab?.focusedSessionId ?? null
   const dispatchMode = workspace.dispatchMode !== null
   // Both dispatch mode and linked mode are "kind only": pick Claude
   // or Codex, no placement, no terminal option.
@@ -135,8 +139,8 @@ export function NewAgentPlacementOverlay({
     // for the attach commit path because attach goes through
     // attachDetachedToGrid which doesn't take a kind argument.
     if (attachMode) {
-      const kind = attachDetachedSessionId
-        ? workspace.state.sessions[attachDetachedSessionId]?.kind ?? 'claude'
+      const kind = attachIntent
+        ? workspace.state.sessions[attachIntent.sessionId]?.kind ?? 'claude'
         : 'claude'
       setSelectedKind(kind)
     } else {
@@ -147,7 +151,7 @@ export function NewAgentPlacementOverlay({
     // a user could open → commit → close → reopen and the second
     // session would be suppressed.
     committingRef.current = false
-  }, [attachDetachedSessionId, attachMode, open, workspace.state.sessions])
+  }, [attachIntent, attachMode, open, workspace.state.sessions])
 
   useEffect(() => {
     if (!open) return
@@ -163,14 +167,14 @@ export function NewAgentPlacementOverlay({
   }, [open])
 
   const placementTargets = useMemo<PlacementTarget[]>(() => {
-    if (!open || !activeTab || !anchorSessionId || !selectedKind) return []
+    if (!open || !placementTab || !anchorSessionId || !selectedKind) return []
     if (bounds.width <= 0 || bounds.height <= 0) return []
     return buildPlacementTargets(
-      activeTab.root,
+      placementTab.root,
       anchorSessionId,
       { x: 0, y: 0, width: bounds.width, height: bounds.height },
     )
-  }, [activeTab, anchorSessionId, bounds.height, bounds.width, open, selectedKind])
+  }, [anchorSessionId, bounds.height, bounds.width, open, placementTab, selectedKind])
 
   useEffect(() => {
     if (!selectedKind || !anchorSessionId) return
@@ -288,13 +292,18 @@ export function NewAgentPlacementOverlay({
         // the latch the next time the overlay opens.
         if (committingRef.current) return
         committingRef.current = true
-        if (attachMode && attachDetachedSessionId) {
-          // Attach is synchronous: it's a pure state move from
-          // detachedSessions into a tile leaf, no spawn round-trip.
+        if (attachMode && attachIntent) {
+          // Attach may wake a post-restart parked backend before the state move.
+          // Fire-and-forget here because the action owns failure toasts and
+          // refuses to insert a dead leaf if wake fails.
           // We close the overlay ourselves because attachDetachedToGrid
           // doesn't own that lifecycle (closeNewAgentPlacement is the
           // create-mode close; the parent owns onClose for both modes).
-          workspace.attachDetachedToGrid(attachDetachedSessionId, placementTarget)
+          void workspace.attachDetachedToGrid(
+            attachIntent.sessionId,
+            attachIntent.targetTabId,
+            placementTarget,
+          )
           onClose()
           return
         }
@@ -306,7 +315,7 @@ export function NewAgentPlacementOverlay({
     return () => document.removeEventListener('keydown', onKeyDown, true)
   }, [
     anchorSessionId,
-    attachDetachedSessionId,
+    attachIntent,
     attachMode,
     dispatchMode,
     kindOptions,
@@ -326,7 +335,7 @@ export function NewAgentPlacementOverlay({
   //     relative to the focused grid pane). If the active tab has no
   //     leaves, the user has to add a pane first — refused at the
   //     command-palette `when` check, but guarded here as well.
-  if (!open || !activeTab) return null
+  if (!open || !placementTab) return null
   if (attachMode && !anchorSessionId) return null
   if (!attachMode && !dispatchMode && !anchorSessionId) return null
 

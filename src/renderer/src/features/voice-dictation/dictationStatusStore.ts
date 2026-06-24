@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import type { DictationStatus } from '@shared/types/dictation'
 
 // dictationStatusStore — process-wide source of truth for the terminal-mode
 // floating voice-dictation overlay (VoiceDictationOverlay).
@@ -31,12 +32,7 @@ import { useSyncExternalStore } from 'react'
 //   - errorMessage: short human-readable failure text during the brief
 //     'error' window before the chip auto-dismisses.
 
-export type DictationOverlayStatus =
-  | 'idle'
-  | 'starting'
-  | 'recording'
-  | 'stopping'
-  | 'error'
+export type DictationOverlayStatus = DictationStatus
 
 export type DictationOverlayState = {
   status: DictationOverlayStatus

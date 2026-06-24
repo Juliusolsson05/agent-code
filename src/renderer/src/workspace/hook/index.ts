@@ -4,7 +4,6 @@ import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
 
-import type { WorkspaceHookContext } from '@renderer/workspace/hook/context'
 import { useWorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { usePaneToast, useWorkspaceHelpers } from '@renderer/workspace/hook/helpers'
 import { useDraftActions } from '@renderer/workspace/hook/actions/draft'
@@ -48,8 +47,8 @@ import {
 // Every piece of functionality the hook used to contain inline now
 // lives in its own file under ./actions, ./ipc, ./persistence, or
 // ./invalidation. This composer reads state from zustand, sets up
-// the WorkspaceHookContext (refs + setters + helpers), and wires
-// each sub-hook into a single returned object.
+// refs, setters, and helpers, then wires each sub-hook into a single returned
+// object.
 //
 // Returning a stable shape is the only hard contract: consumers
 // destructure fields off `Workspace` and if a sub-hook moves a
@@ -145,52 +144,6 @@ export function useWorkspace(
   // ---- Pane toast (needs updateRuntime, so after helpers) ----
   const showPaneToast = usePaneToast(refs.paneToastTimers, updateRuntime)
 
-  // ---- Build the canonical context object ----
-  //
-  // Memoized on identity-stable inputs so ctx itself stays
-  // reference-stable for the hook's lifetime. That's critical for
-  // useCallback deps downstream — ctx never churns, so callbacks
-  // that only depend on ctx stay stable too.
-  const ctx: WorkspaceHookContext = useMemo(
-    () => ({
-      setState,
-      setRuntimes,
-      setSpotlight,
-      setTileTabs,
-      setReaderMode,
-      openBuryPrompt,
-      closeBuryPrompt,
-      openNewAgentPlacement,
-      closeNewAgentPlacement,
-      showToast,
-      stateRef: refs.stateRef,
-      latestStateRef: refs.latestStateRef,
-      latestRuntimesRef: refs.latestRuntimesRef,
-      latestTileTabsRef: refs.latestTileTabsRef,
-      dangerousAgentsRef: refs.dangerousAgentsRef,
-      useProxyStreamingRef: refs.useProxyStreamingRef,
-      seenUuidsRef: refs.seenUuidsRef,
-      latestScreenRef: refs.latestScreenRef,
-      undoStackRef: refs.undoStackRef,
-      bootstrapTimersRef: refs.bootstrapTimersRef,
-      persistedFeedDebugIdRef: refs.persistedFeedDebugIdRef,
-      inFlightFeedDebugIdRef: refs.inFlightFeedDebugIdRef,
-      paneToastTimers: refs.paneToastTimers,
-      saveTimerRef: refs.saveTimerRef,
-      bootRef: refs.bootRef,
-      updateRuntime,
-      appendFeedDebug,
-      setDraftVersion,
-    }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
-  )
-  // Silence the unused-ctx warning — other sub-hooks consume it
-  // through the destructured args below. Keeping `ctx` built here
-  // so future sub-hooks that want a single-param signature have a
-  // stable object to consume.
-  void ctx
-
   // ---- Actions ----
   const { setDraftInput, setDraftImages } = useDraftActions(
     setRuntimes,
@@ -237,8 +190,10 @@ export function useWorkspace(
 
   // Session lifecycle + derivatives that depend on it
   const sessionActions = useSessionActions(state, setState, setRuntimes, refs)
-  const { spawn, killSession, replaceSession, reloadAgentSessions, softReloadAgentView } =
+  const { spawn, ensureSessionLive, killSession, replaceSession, reloadAgentSessions, softReloadAgentView } =
     sessionActions
+  const ensureSessionLiveRef = useRef(ensureSessionLive)
+  ensureSessionLiveRef.current = ensureSessionLive
 
   const tabActions = useTabActions(
     state,
@@ -284,14 +239,13 @@ export function useWorkspace(
             role: request.role,
             runId: request.runId,
             builtInMcpDomains: request.builtInMcpDomains,
-            // WHY the request field is intentionally not forwarded:
+            // WHY the request field is intentionally omitted:
             // older MCP tool schemas can still send `inheritParentContext`,
             // but context inheritance is disabled until it can be rebuilt on a
             // stable provider-resume contract. The renderer spawn path is the
             // final authority for whether a child receives a cloned transcript,
             // so forcing clean children here prevents stale clients from
             // accidentally reviving the broken behavior.
-            inheritParentContext: false,
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,
@@ -367,6 +321,39 @@ export function useWorkspace(
             ok: true,
             type: 'close-agent',
             result,
+          })
+          return
+        }
+
+        if (request.type === 'ensure-agent-live') {
+          // WHY orchestration wake is renderer-mediated:
+          // main can tell whether a provider process exists, but only the
+          // renderer owns durable workspace metadata and orchestration
+          // visibility. After a full app restart, parked/listed agents can
+          // still be valid children in workspace.json while main's in-memory
+          // SessionManager has no PTY for that SessionId. Waking here keeps the
+          // same id and therefore preserves Dispatch nesting, parent/root
+          // ownership, and any MCP caller that already named the child.
+          readOrchestrationAgent({
+            state: snapshot,
+            runtimes,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            maxMessages: 1,
+          })
+          await ensureSessionLiveRef.current(request.sessionId)
+          const agent = readOrchestrationAgent({
+            state: refs.stateRef.current,
+            runtimes: refs.latestRuntimesRef.current,
+            parentSessionId: request.parentSessionId,
+            sessionId: request.sessionId,
+            maxMessages: 1,
+          }).agent
+          await window.api.resolveOrchestrationRequest({
+            requestId: request.requestId,
+            ok: true,
+            type: 'ensure-agent-live',
+            agent,
           })
           return
         }
@@ -502,6 +489,7 @@ export function useWorkspace(
     newTab: tabActions.newTab,
     closeTab: tabActions.closeTab,
     spawn,
+    ensureSessionLive,
     killSession,
     splitFocused: paneActions.splitFocused,
     startNewAgentPlacement: paneActions.startNewAgentPlacement,

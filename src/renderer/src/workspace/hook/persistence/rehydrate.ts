@@ -31,6 +31,7 @@ import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/i
 import {
   hasDurableProviderSession,
   resumableProviderSessionId,
+  seedResumedRuntimeFields,
   withoutProvisionalProviderSession,
 } from '@renderer/workspace/providerSessionIdentity'
 
@@ -385,14 +386,6 @@ export async function rehydrateWorkspace(
         out[newId] = {
           ...base,
           ...(draft && !base.draftInput ? { draftInput: draft } : {}),
-          hasOlderHistory: hasDurableProviderSession(freshSessions[newId]),
-          transcriptStatus:
-            base.transcriptStatus === 'ready' ||
-            base.transcriptStatus === 'error' ||
-            base.transcriptStatus === 'disconnected'
-              ? base.transcriptStatus
-              : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready',
-          transcriptError: base.transcriptError,
           // WHY preserve an already-observed lifecycle state:
           //
           // Provider start is not a quiet boundary. Codex resume can
@@ -402,48 +395,34 @@ export async function rehydrateWorkspace(
           // "started/inputReady" here makes dead resumed sessions look
           // alive until the user presses Enter and hits the backend
           // guard.
-          processStatus: existing && existing.processStatus !== 'idle'
-            ? existing.processStatus
-            : 'started',
-          processError: existing?.processError ?? null,
-          inputReady: existing && existing.processStatus !== 'idle'
-            ? existing.inputReady
-            : true,
+          ...seedResumedRuntimeFields(existing, freshSessions[newId]),
         }
       }
       for (const id of Object.keys(freshSessions)) {
         if (out[id]) continue
         const existing = prev[id]
+        // WHY these restored sessions are deliberately dormant:
+        //
+        // Any id that reaches this loop exists in durable workspace metadata
+        // but did not get a backend in the liveProcessIds spawn loop above.
+        // That is intentional for detached/buried/orchestration-list sessions:
+        // startup should restore the UI cheaply without forking every parked
+        // provider process. Marking them started/inputReady was the broken
+        // middle state: the pane looked writable while main had no PTY, so the
+        // first post-restart prompt could be dropped before lazy wake ran. Keep
+        // the feed/draft metadata, but make process readiness honest until
+        // ensureSessionLive wakes this same SessionId.
         out[id] = {
           ...(existing ?? emptyRuntime()),
           hasOlderHistory: hasDurableProviderSession(freshSessions[id]),
-          transcriptStatus:
-            existing?.transcriptStatus === 'ready' ||
-            existing?.transcriptStatus === 'error' ||
+          transcriptStatus: existing?.transcriptStatus === 'error' ||
             existing?.transcriptStatus === 'disconnected'
               ? existing.transcriptStatus
-              : freshSessions[id]?.providerSessionId ? 'loading' : 'ready',
+              : 'ready',
           transcriptError: existing?.transcriptError ?? null,
-          processStatus: existing && existing.processStatus !== 'idle'
-            ? existing.processStatus
-            : 'started',
+          processStatus: 'idle',
           processError: existing?.processError ?? null,
-          inputReady: existing && existing.processStatus !== 'idle'
-            ? existing.inputReady
-            : true,
-        }
-      }
-      // [xcript-diag #283] commitRehydratedState is the ONLY wholesale runtimes
-      // rebuild (out = {}), so it is the prime suspect for dropping a key whose
-      // initial-history load is still in flight. Log any key present in `prev`
-      // but absent from `out` — especially one mid-'loading' — to confirm
-      // whether this commit is what orphans the loader's 'ready' write. REMOVE
-      // once root cause is fixed.
-      for (const [id, runtime] of Object.entries(prev)) {
-        if (!out[id]) {
-          console.warn(
-            `[xcript-diag] commitRehydrated DROPS session=${id} (was transcriptStatus=${runtime.transcriptStatus}); not in idMap/freshSessions`,
-          )
+          inputReady: false,
         }
       }
       return out

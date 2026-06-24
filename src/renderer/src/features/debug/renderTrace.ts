@@ -146,25 +146,24 @@ function tailLines(text: string, count: number): string {
 function pruneHtmlTrace(trace: SessionTrace): void {
   if (trace.htmlCommits.length <= HTML_MAX_COMMITS) return
   const overflow = trace.htmlCommits.length - HTML_MAX_COMMITS
-  const checkpointIndex = trace.htmlCommits.findIndex((commit, index) => index >= overflow && commit.checkpoint)
-  if (checkpointIndex <= 0) {
-    trace.htmlCommits.splice(0, overflow)
-  } else {
-    trace.htmlCommits.splice(0, checkpointIndex)
+  let checkpointIndex = 0
+  for (let index = 0; index <= overflow; index++) {
+    if (trace.htmlCommits[index]?.checkpoint) checkpointIndex = index
   }
+  // Replay correctness beats an exact commit cap. A previous implementation
+  // promoted the first retained non-checkpoint commit and filled its checkpoint
+  // content with `lastHtml`, which paired an old hash with new HTML. That made
+  // debug bundles worse than incomplete: replay metadata could confidently show
+  // the wrong DOM. We instead keep the nearest real checkpoint at or before the
+  // target window, so the cap is soft by at most HTML_CHECKPOINT_EVERY - 1
+  // commits and every checkpoint hash still describes its own content.
+  trace.htmlCommits.splice(0, checkpointIndex)
 
   const first = trace.htmlCommits[0]
   if (first) {
     first.parentId = null
     first.checkpoint = true
     delete first.delta
-    if (!trace.htmlCheckpoints.some(checkpoint => checkpoint.commitId === first.id)) {
-      trace.htmlCheckpoints.push({
-        commitId: first.id,
-        hash: first.hash,
-        content: trace.lastHtml,
-      })
-    }
   }
 
   const keepIds = new Set(trace.htmlCommits.filter(commit => commit.checkpoint).map(commit => commit.id))
@@ -302,4 +301,12 @@ export function exportDebugTraceFiles(sessionId: string): BundleFile[] {
   }
 
   return files
+}
+
+export function forgetDebugTrace(sessionId: string): void {
+  // Traces are module-level because capture calls come from several renderer
+  // surfaces that do not share React state. That shape is correct for active
+  // sessions but dangerous after teardown: bounded-per-session arrays still
+  // become unbounded if closed session ids stay in the map forever.
+  traces.delete(sessionId)
 }

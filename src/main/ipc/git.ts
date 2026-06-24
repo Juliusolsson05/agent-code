@@ -5,6 +5,15 @@ import { join } from 'path'
 import { stat } from 'fs/promises'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { getToolPath } from '@main/setup/toolchain.js'
+// GitBar IPC contract + numstat parser are shared so preload/renderer can't
+// drift from this producer. See @shared/types/gitStatus and @shared/git/numstat.
+import type {
+  GitNumstatLine,
+  GitRecentCommit,
+  GitSubmoduleStatus,
+  GitBarStatusResult,
+} from '@shared/types/gitStatus.js'
+import { parseNumstat } from '@shared/git/numstat.js'
 
 // Git status IPC — powers GitBar.
 //
@@ -28,7 +37,9 @@ import { getToolPath } from '@main/setup/toolchain.js'
 
 const exec = promisify(execFile)
 
-type NumstatLine = { file: string; additions: number; deletions: number }
+// Local aliases over the shared GitBar contract types — keeps the many internal
+// uses unchanged while the canonical shapes live in @shared/types/gitStatus.
+type NumstatLine = GitNumstatLine
 const WORKTREE_CACHE_TTL_MS = 30_000
 const WORKTREE_STATUS_CONCURRENCY = 6
 const GIT_PROCESS_CONCURRENCY = 8
@@ -355,29 +366,9 @@ function cloneStatuses(worktrees: GitWorktreeStatus[]): GitWorktreeStatus[] {
   return worktrees.map(worktree => ({ ...worktree }))
 }
 
-// numstat → rows. Binary files emit '-' for both counts; we coerce
-// those to 0 so the UI doesn't special-case them.
-function parseNumstat(text: string): NumstatLine[] {
-  const out: NumstatLine[] = []
-  for (const line of text.trim().split('\n')) {
-    if (!line) continue
-    const [a, d, f] = line.split('\t')
-    if (!f) continue
-    out.push({
-      file: f,
-      additions: a === '-' ? 0 : parseInt(a, 10) || 0,
-      deletions: d === '-' ? 0 : parseInt(d, 10) || 0,
-    })
-  }
-  return out
-}
+// parseNumstat moved to @shared/git/numstat (pure + unit-tested). Imported above.
 
-type SubmoduleInfo = {
-  path: string
-  state: 'dirty' | 'bumped' | 'both'
-  files: NumstatLine[]
-  range?: { from: string; to: string }
-}
+type SubmoduleInfo = GitSubmoduleStatus
 
 // .gitmodules is the source of truth for which paths ARE submodules
 // — `git submodule` the CLI needs the working tree checked out but
@@ -472,7 +463,9 @@ export function registerGitIpc(): void {
     }
   })
 
-  ipcMain.handle('git:status', async (_evt, cwd: string) => {
+  // Return annotated with the shared contract so a field change here is a
+  // compile error rather than silent drift from preload/renderer.
+  ipcMain.handle('git:status', async (_evt, cwd: string): Promise<GitBarStatusResult> => {
     try {
       // Parent repo — branch is the cheap "is this a git repo at all"
       // probe; if it returns empty we bail to { ok: false } instead of
@@ -497,12 +490,7 @@ export function registerGitIpc(): void {
       const submoduleSet = new Set(submodulePaths)
       const files = parseNumstat(diffStat).filter(f => !submoduleSet.has(f.file))
 
-      const commits: Array<{
-        hash: string
-        subject: string
-        author: string
-        relativeDate: string
-      }> = []
+      const commits: GitRecentCommit[] = []
       for (const line of logOut.trim().split('\n')) {
         if (!line) continue
         const [hash, subject, author, relativeDate] = line.split('\t')

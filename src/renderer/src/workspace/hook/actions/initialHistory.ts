@@ -128,12 +128,6 @@ export async function loadInitialHistoryForSession({
     limit,
   })
 
-  // [xcript-diag #283] Trace the load lifecycle. The bug: this sets 'loading'
-  // unconditionally, but the terminal 'ready'/'error' below only land if the
-  // runtime entry still exists at resolve. If a rebuild/remap drops the key
-  // mid-load, the session is stuck at 'loading'. These warns make the timeline
-  // (and the exact drop) visible. REMOVE once root cause is fixed.
-  console.warn(`[xcript-diag] loading-set session=${sessionId} kind=${kind}`)
   // Mark in-flight BEFORE the 'loading' write so the reconciler never sees a
   // window where status is 'loading' but the load looks idle.
   inFlightInitialLoads.add(sessionId)
@@ -165,13 +159,6 @@ export async function loadInitialHistoryForSession({
     setRuntimes(prev => {
       const current = prev[sessionId]
       if (!current) {
-        // [xcript-diag #283] SMOKING GUN: the load finished but the runtime
-        // entry for this id is gone, so the 'ready' write below is discarded
-        // and the pane stays stuck at 'loading'. Log which keys DO exist so we
-        // can see what it got remapped/rebuilt to.
-        console.warn(
-          `[xcript-diag] RESOLVE-DROPPED session=${sessionId} — runtime missing at resolve; 'ready' discarded (STUCK). liveKeys=[${Object.keys(prev).join(',')}]`,
-        )
         return prev
       }
       const seen = (refs.seenUuidsRef.current[sessionId] ??= new Set())
@@ -184,6 +171,11 @@ export async function loadInitialHistoryForSession({
       let codexTurnId: string | null = null
       const toolUseIndex = current.toolUseIndex
       const toolResultIndex = current.toolResultIndex
+      // Bump `toolIndexVersion` once if this bootstrap load actually populated
+      // either tool-index map, so Feed's tool-index context picks up the
+      // resumed pairings instead of staying on the empty-map identity from
+      // emptyRuntime() (feed audit Finding 1).
+      let toolIndexChanged = false
 
       for (const raw of chunk.entries) {
         workActivity = ingestWorktreeRawEvent({
@@ -208,7 +200,9 @@ export async function loadInitialHistoryForSession({
             if (uuid && seen.has(uuid)) continue
             if (uuid) seen.add(uuid)
             initialEntries.push(entry)
-            indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)
+            if (indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)) {
+              toolIndexChanged = true
+            }
           }
           const eventType = codexEventType(raw)
           if (
@@ -237,7 +231,9 @@ export async function loadInitialHistoryForSession({
         if (uuid && seen.has(uuid)) continue
         if (uuid) seen.add(uuid)
         initialEntries.push(feedEntry)
-        indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)
+        if (indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)) {
+          toolIndexChanged = true
+        }
       }
 
       let nextGhosts = current.ghosts
@@ -290,6 +286,9 @@ export async function loadInitialHistoryForSession({
           workContext,
           toolUseIndex,
           toolResultIndex,
+          toolIndexVersion: toolIndexChanged
+            ? current.toolIndexVersion + 1
+            : current.toolIndexVersion,
           ghosts: nextGhosts,
           lastJsonlEntryAt,
         },
@@ -305,9 +304,6 @@ export async function loadInitialHistoryForSession({
         },
       )
 
-      console.warn(
-        `[xcript-diag] ready-set session=${sessionId} entries=${initialEntries.length}`,
-      )
       return { ...prev, [sessionId]: nextRuntime }
     })
 
@@ -322,9 +318,6 @@ export async function loadInitialHistoryForSession({
     setRuntimes(prev => {
       const current = prev[sessionId]
       if (!current) {
-        console.warn(
-          `[xcript-diag] ERROR-DROPPED session=${sessionId} — runtime missing at error resolve; 'error' discarded (STUCK at 'loading'). msg=${message}`,
-        )
         return prev
       }
       return {
@@ -393,10 +386,6 @@ export function reconcileStuckTranscriptLoads({
     // proxy-header sessions are left to the 'disconnected' path.
     if (!hasDurableProviderSession(meta)) continue
     reKicked++
-    console.warn(
-      `[xcript-heal #283] re-driving stuck transcript load session=${sessionId} ` +
-        `kind=${meta.kind} status=${runtime.transcriptStatus} entries=${runtime.entries.length}`,
-    )
     void loadInitialHistoryForSession({ sessionId, refs, setRuntimes, meta })
   }
   return reKicked

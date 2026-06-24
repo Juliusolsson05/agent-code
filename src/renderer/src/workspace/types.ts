@@ -1,4 +1,8 @@
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
+// Local binding for in-file uses (SessionMeta.kind, etc.). The
+// `export type { SessionKind }` re-export below does not bind the name
+// locally, so this import is also required.
+import type { SessionKind } from '@shared/types/providerKind'
 
 // Tile tree data model.
 //
@@ -63,8 +67,14 @@ export type Tab = {
  * Persisted in SessionMeta so a reload restores each pane to the
  * right component. Absent (= undefined) in pre-terminal workspace.json
  * blobs, treated as 'claude' at load time.
+ *
+ * Re-exported from the shared source of truth (@shared/types/providerKind)
+ * rather than redeclared, so this renderer union can never drift from the
+ * preload bridge / main manager spelling. The many renderer files that
+ * `import type { SessionKind } from '@renderer/workspace/types'` keep
+ * working unchanged.
  */
-export type SessionKind = 'claude' | 'codex' | 'terminal'
+export type { SessionKind } from '@shared/types/providerKind'
 
 export type SessionMeta = {
   /** cwd the session was spawned with — needed to respawn on relaunch. */

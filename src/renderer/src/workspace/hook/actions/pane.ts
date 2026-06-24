@@ -29,13 +29,9 @@ import {
   buildVisibleDispatchRows,
   detachedDispatchSessionIdsForTab,
   resolveDispatchSpawnTarget,
-  selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
-import {
-  clearTiledLaneSessions,
-  dispatchFocusedSessionId,
-} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
@@ -43,6 +39,7 @@ import type {
   OrchestrationAgentKind,
   OrchestrationAgentRecord,
 } from '@mcp/shared/orchestrationTypes'
+import { forgetDebugTrace } from '@renderer/features/debug/renderTrace'
 
 import type {
   WorkspaceSetRuntimes,
@@ -60,6 +57,17 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 // closeFocused, closeSession, requestBuryFocused, buryFocused,
 // reviveBuried, killBuried, focusSession, focusSessionInTab, navigate.
 // -----------------------------------------------------------------------------
+
+function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId): void {
+  delete refs.seenUuidsRef.current[sessionId]
+  delete refs.latestScreenRef.current[sessionId]
+  // Render traces are intentionally not stored in SessionRuntime: they are
+  // large, debug-only forensic buffers populated by DOM/screen capture paths
+  // that do not need to re-render the app. That module-level map must still
+  // follow the session lifecycle, or every close leaves another bounded-but-
+  // permanent trace behind for the life of the renderer process.
+  forgetDebugTrace(sessionId)
+}
 
 // Update dispatchMode after a new dispatch agent is spawned. In Tiled
 // Dispatch the new agent takes over the lane the user is commanding
@@ -125,14 +133,14 @@ export function usePaneActions(
     runId?: string
     builtInMcpDomains?: BuiltInMcpDomain[]
   }) => Promise<OrchestrationAgentRecord>
-  attachDetachedToGrid: (sessionId: SessionId, target: PlacementTarget) => void
-  attachAllDetachedForTab: (tabId: string) => void
+  attachDetachedToGrid: (sessionId: SessionId, targetTabId: string, target: PlacementTarget) => Promise<void>
+  attachAllDetachedForTab: (tabId: string) => Promise<void>
   detachFocusedToDispatch: () => void
   closeFocused: () => Promise<void>
   closeSession: (targetId: SessionId) => Promise<void>
   requestBuryFocused: () => void
   buryFocused: (note?: string, targetSessionId?: SessionId) => void
-  reviveBuried: (buriedId: string) => void
+  reviveBuried: (buriedId: string) => Promise<void>
   killBuried: (buriedId: string) => Promise<void>
   focusSession: (sessionId: SessionId) => void
   focusSessionInTab: (tabId: string, sessionId: SessionId) => void
@@ -337,13 +345,12 @@ export function usePaneActions(
   // and the close path cascade-closes it when the parent goes away.
   //
   // WHY this is a sibling of createDetachedDispatchAgent rather than
-  // a flag on it: createDetachedDispatchAgent always targets the
-  // ACTIVE tab and the active dispatch focus. A linked agent is
-  // anchored to wherever its PARENT lives — possibly a background
-  // tab, possibly a grid pane — so the tab resolution and the
-  // linkedParentId stamp are enough extra logic to warrant their own
-  // action. Closing the overlay is the caller's job (the overlay
-  // owns its own lifecycle via closeLinkedAgent).
+  // a flag on it: ordinary detached creation resolves a spawn target
+  // from the current Dispatch/grid focus; linked creation is anchored
+  // to the explicit parent selected when the command ran. The common
+  // behavior is the post-spawn Dispatch focus patch, which both paths
+  // route through applyDispatchSpawnFocus so Tiled lanes and classic
+  // focus cannot drift.
   const createLinkedAgent = useCallback(
     async (kind: Exclude<SessionKind, 'terminal'>, parentId: SessionId) => {
       const snapshot = refs.stateRef.current
@@ -358,6 +365,13 @@ export function usePaneActions(
       // note on SessionMeta.linkedParentId).
       const rootParentId = parentMeta.linkedParentId ?? parentId
       const rootParentMeta = snapshot.sessions[rootParentId] ?? parentMeta
+      const tiled = snapshot.dispatchMode?.tiled
+      const focusedLane = tiled?.focusedLane ?? null
+      const targetLaneIndex =
+        focusedLane !== null &&
+        tiled?.lanes[focusedLane]?.selectedSessionId === parentId
+          ? focusedLane
+          : null
 
       // Resolve the parent's tab: a detached parent carries its tab
       // id on the detachedSessions record; a grid parent is found by
@@ -416,9 +430,14 @@ export function usePaneActions(
           },
           // Focus the new agent in dispatch — the user spawned it to
           // immediately hand it a prompt (typically a review prompt).
-          dispatchMode: prev.dispatchMode
-            ? { ...prev.dispatchMode, focusedSessionId: sessionId }
-            : prev.dispatchMode,
+          //
+          // WHY the lane index is captured before await:
+          // spawn() crosses IPC and may take long enough for the user to move
+          // focus. The command was initiated from a specific visual lane, so
+          // that lane is the one that should flip to the child. Using the
+          // latest focusedLane here would make an unrelated lane change race
+          // with the child spawn and steal the next prompt target.
+          dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, targetLaneIndex),
         }
       })
     },
@@ -576,16 +595,19 @@ export function usePaneActions(
     }
   }, [refs.stateRef])
 
-  // Promote a detached dispatch session into the grid at a chosen
-  // placement target.
+  // Promote a detached dispatch session into the grid at a chosen placement
+  // target.
   //
-  // WHY this is a synchronous setState and not an IPC round-trip:
-  // attaching is purely a workspace-state mutation. The session is
-  // already running in the backend and already has a renderer runtime
-  // entry — we are just moving its identity from `detachedSessions`
-  // into a leaf in `tab.root`. No spawn, no kill, no IPC. That also
-  // means no ghost window and no transcript flicker; the UI seam is
-  // invisible to the user beyond the layout change.
+  // WHY this wakes before the state move:
+  // Detached sessions are "live" only inside a single app process. After a full
+  // Agent Code restart, rehydrate intentionally keeps their SessionMeta but
+  // does not respawn their provider PTY; otherwise a workspace with dozens of
+  // parked agents would fork-bomb on launch. Attaching one back to the grid is
+  // the explicit user action that makes it live again. We wake under the same
+  // SessionId before inserting the leaf so every relationship pointer
+  // (orchestrationParentId/rootId, linkedParentId, tiled lanes, pins) remains
+  // intact and the pane never becomes visibly commandable while main would drop
+  // writes for a missing session.
   //
   // The target tab need not equal the detached record's projectTabId.
   // projectTabId was always *affinity* (cwd defaults / dispatch
@@ -593,11 +615,21 @@ export function usePaneActions(
   // user pin a project-A detached agent into project-B's grid is the
   // whole point of having a placement step.
   const attachDetachedToGrid = useCallback(
-    (sessionId: SessionId, target: PlacementTarget) => {
+    async (sessionId: SessionId, targetTabId: string, target: PlacementTarget) => {
+      try {
+        await sessionActions.ensureSessionLive(sessionId)
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Could not wake detached session before attaching it.',
+        )
+        return
+      }
       setState(prev => {
         const detached = prev.detachedSessions[sessionId]
         if (!detached) return prev
-        const targetTab = prev.tabs.find(t => t.id === prev.activeTabId)
+        const targetTab = prev.tabs.find(t => t.id === targetTabId)
         if (!targetTab) return prev
         // For a split-leaf target, the anchor must still exist in the
         // chosen tab's tree. The placement overlay computes targets from
@@ -614,9 +646,18 @@ export function usePaneActions(
         delete detachedSessions[sessionId]
         return {
           ...prev,
+          // WHY activeTabId follows the explicit attach target:
+          // attaching into a tab is a visible grid-focus change. Classic
+          // Dispatch used to make this incidental because row focus synced
+          // activeTabId before the overlay opened; Tiled Dispatch does not
+          // touch activeTabId when a lane is selected. Capturing the tab in the
+          // attach intent and committing it here keeps the grid focus context
+          // aligned with the actual insertion tab instead of whatever tab was
+          // active before the user entered global Tiled Dispatch.
+          activeTabId: targetTabId,
           detachedSessions,
           tabs: prev.tabs.map(currentTab => {
-            if (currentTab.id !== prev.activeTabId) return currentTab
+            if (currentTab.id !== targetTabId) return currentTab
             return {
               ...currentTab,
               root:
@@ -651,21 +692,37 @@ export function usePaneActions(
         }
       })
     },
-    [setState],
+    [sessionActions, setState, showToast],
   )
 
   const attachAllDetachedForTab = useCallback(
-    (tabId: string) => {
+    async (tabId: string) => {
       let attachedCount = 0
+      const snapshot = refs.stateRef.current
+      const detachedIds = detachedDispatchSessionIdsForTab(snapshot, tabId)
+      if (detachedIds.length === 0) return
+      const liveIds: SessionId[] = []
+      for (const sessionId of detachedIds) {
+        try {
+          await sessionActions.ensureSessionLive(sessionId)
+          liveIds.push(sessionId)
+        } catch (err) {
+          console.warn('[workspace] failed to wake detached session before bulk attach:', err)
+        }
+      }
+      if (liveIds.length === 0) {
+        showToast('Could not wake any detached sessions for this tab')
+        return
+      }
       setState(prev => {
         const tab = prev.tabs.find(t => t.id === tabId)
         if (!tab) return prev
-        const detachedIds = detachedDispatchSessionIdsForTab(prev, tabId)
-        if (detachedIds.length === 0) return prev
-        attachedCount = detachedIds.length
+        const attachableIds = liveIds.filter(sessionId => prev.detachedSessions[sessionId])
+        if (attachableIds.length === 0) return prev
+        attachedCount = attachableIds.length
 
         const detachedSessions = { ...prev.detachedSessions }
-        for (const sessionId of detachedIds) {
+        for (const sessionId of attachableIds) {
           delete detachedSessions[sessionId]
         }
 
@@ -676,14 +733,14 @@ export function usePaneActions(
         // arrangement are not flattened. This gives users a predictable
         // "pin all background work beside my current grid" action
         // without punishing the layout they already curated.
-        const attachedSubtree = normalizeTree(detachedIds)
+        const attachedSubtree = normalizeTree(attachableIds)
         const nextRoot = wrapRootWithNode(
           tab.root,
           'vertical',
           'b',
           attachedSubtree,
         )
-        const focusedSessionId = detachedIds[0]
+        const focusedSessionId = attachableIds[0]
 
         return {
           ...prev,
@@ -713,7 +770,7 @@ export function usePaneActions(
         )
       }
     },
-    [setState, showToast],
+    [refs.stateRef, sessionActions, setState, showToast],
   )
 
   // The reverse direction: take the focused grid pane out of the tile
@@ -870,18 +927,8 @@ export function usePaneActions(
   // tab) with a single command within the next 2 minutes.
   const closeFocused = useCallback(async () => {
     const snapshot = refs.stateRef.current
-    const activeTab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
-    const dispatchRows = snapshot.dispatchMode
-      ? buildVisibleDispatchRows(snapshot)
-      : []
     const dispatchTargetId = snapshot.dispatchMode
-      ? selectVisibleDispatchRow(
-          dispatchRows,
-          // tiled-aware: close the FOCUSED LANE's agent, not the stale
-          // dispatchMode.focusedSessionId (which would close tile 0).
-          dispatchFocusedSessionId(snapshot.dispatchMode),
-          activeTab?.focusedSessionId,
-        )?.sessionId
+      ? commandTargetSessionIdForState(snapshot)
       : null
     if (dispatchTargetId) {
       // WHY Dispatch Mode delegates by the visible row's explicit id:
@@ -905,6 +952,7 @@ export function usePaneActions(
     }
     if (snapshot.dispatchMode) return
 
+    const activeTab = snapshot.tabs.find(t => t.id === snapshot.activeTabId)
     const tab = activeTab
     if (!tab) return
     const commandTargetId = commandTargetSessionIdForState(snapshot)
@@ -977,8 +1025,7 @@ export function usePaneActions(
       delete next[targetId]
       return next
     })
-    delete refs.seenUuidsRef.current[targetId]
-    delete refs.latestScreenRef.current[targetId]
+    forgetClosedSessionDebugState(refs, targetId)
 
     setState(prev => {
       const tabs = [...prev.tabs]
@@ -1056,8 +1103,7 @@ export function usePaneActions(
           delete next[targetId]
           return next
         })
-        delete refs.seenUuidsRef.current[targetId]
-        delete refs.latestScreenRef.current[targetId]
+        forgetClosedSessionDebugState(refs, targetId)
 
         setState(prev => {
           const sessions = { ...prev.sessions }
@@ -1122,8 +1168,7 @@ export function usePaneActions(
         delete next[targetId]
         return next
       })
-      delete refs.seenUuidsRef.current[targetId]
-      delete refs.latestScreenRef.current[targetId]
+      forgetClosedSessionDebugState(refs, targetId)
 
       setState(prev => {
         const tabs = [...prev.tabs]
@@ -1328,7 +1373,25 @@ export function usePaneActions(
   // affinity, and finally a fresh single-pane tab if no good target
   // exists.
   const reviveBuried = useCallback(
-    (buriedId: string) => {
+    async (buriedId: string) => {
+      const initialEntry = refs.stateRef.current.buried.find(item => item.id === buriedId)
+      if (!initialEntry) return
+      try {
+        await sessionActions.ensureSessionLive(initialEntry.sessionId)
+      } catch (err) {
+        showToast(
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Could not wake buried session before reviving it.',
+        )
+        return
+      }
+
+      // WHY re-read after wake: ensureSessionLive can update runtime metadata,
+      // clear stale backend errors, or lose a race to another revive/kill action.
+      // Placement should be based on the workspace that actually exists after
+      // the backend is live, not the pre-wake snapshot we used only to discover
+      // which session needed waking.
       const current = refs.stateRef.current
       const entry = current.buried.find(item => item.id === buriedId)
       if (!entry) return
@@ -1446,7 +1509,7 @@ export function usePaneActions(
         }
       })
     },
-    [refs.stateRef, setState],
+    [refs.stateRef, sessionActions, setState, showToast],
   )
 
   const killBuried = useCallback(
@@ -1468,8 +1531,7 @@ export function usePaneActions(
         delete next[entry.sessionId]
         return next
       })
-      delete refs.seenUuidsRef.current[entry.sessionId]
-      delete refs.latestScreenRef.current[entry.sessionId]
+      forgetClosedSessionDebugState(refs, entry.sessionId)
       const bootstrapTimer = refs.bootstrapTimersRef.current.get(entry.sessionId)
       if (bootstrapTimer) {
         clearTimeout(bootstrapTimer)

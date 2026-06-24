@@ -67,6 +67,33 @@ export function clearTiledLaneSessions(
 }
 
 /**
+ * Keep only lane selections present in a known-live set.
+ *
+ * WHY this is a keep-set helper instead of reusing clearTiledLaneSessions:
+ * the autosave ownership prune computes the ids that survived, not the ids
+ * that were removed. Building a removed set from stale/corrupt input would
+ * make the durability boundary depend on metadata that has already been
+ * judged untrusted. This helper answers the prune question directly: every
+ * durable session pointer must close over the same surviving session set.
+ */
+export function keepTiledLaneSessions(
+  dispatchMode: DispatchModeState | null | undefined,
+  keep: ReadonlySet<SessionId>,
+): DispatchModeState | null | undefined {
+  if (!dispatchMode?.tiled) return dispatchMode
+  let changed = false
+  const lanes = dispatchMode.tiled.lanes.map(lane => {
+    if (lane.selectedSessionId && !keep.has(lane.selectedSessionId)) {
+      changed = true
+      return { ...lane, selectedSessionId: undefined }
+    }
+    return lane
+  })
+  if (!changed) return dispatchMode
+  return { ...dispatchMode, tiled: { ...dispatchMode.tiled, lanes } }
+}
+
+/**
  * The session the user is currently focused on in Dispatch — the SINGLE
  * tiled-aware reader every "what am I commanding/focusing?" call site should
  * use. In Tiled Dispatch that's the focused lane's agent (falling back to the
@@ -84,6 +111,16 @@ export function dispatchFocusedSessionId(
     return lane?.selectedSessionId ?? dispatchMode.focusedSessionId ?? null
   }
   return dispatchMode.focusedSessionId ?? null
+}
+
+export function nextTiledRowIndex(
+  currentIndex: number,
+  delta: number,
+  length: number,
+): number {
+  if (length <= 0) return -1
+  if (currentIndex < 0) return delta < 0 ? length - 1 : 0
+  return (((currentIndex + delta) % length) + length) % length
 }
 
 // The issue caps Tiled Dispatch at 10 lanes. The floor is 1 (a single
@@ -153,12 +190,8 @@ export function buildAutoLanes(
   return lanes
 }
 
-// NOTE: there is deliberately no `sanitizeLanes` reducer-side helper. Stale
-// or duplicate lane state (dead session, hand-edited workspace.json,
-// corrupt rehydrate) is handled at RENDER time in TiledDispatchLayout: the
-// `laneResolutions` memo de-dups and drops dead/out-of-scope ids every
-// frame (so renderWorkspaceLeaf can never double-mount a session, even on
-// the first frame after rehydrate before effects run), and the heal effect
-// re-homes the affected lanes. A separate pure sanitizer was tried first but
-// (a) couldn't prevent the first-frame double-mount and (b) became dead
-// code the moment the render-time guard existed.
+// NOTE: render still performs scope validation before mounting a lane, but the
+// durability boundary must not rely on a later React effect. Autosave routes
+// through keepTiledLaneSessions so stale lane ids do not survive to the next
+// launch; render-time healing remains the user-facing repair for scope changes
+// and temporarily empty lanes.

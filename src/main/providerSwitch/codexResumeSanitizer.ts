@@ -1,4 +1,13 @@
 import type { CodexRolloutLine } from 'agent-transcript-parser'
+// WHY the shared helper and not a local one (cross-app audit Finding 10):
+// resume sanitization decides whether a rollout has unresolved tool calls by
+// probing object fields like `payload.type` / `payload.call_id`. An ARRAY is a
+// JS object but never a valid Codex payload record, and the shared helper
+// rejects arrays whereas the old local copy accepted them. Using one canonical
+// helper keeps this sanitizer's "is this a record" decision identical to ATP's
+// rewind path — both prepare resume-safe transcripts and must agree on malformed
+// input, or provider-switch and rewind could make different safety calls.
+import { asRecord } from '@shared/lib/asRecord.js'
 
 export function sanitizeCodexRolloutForResume(
   lines: readonly CodexRolloutLine[],
@@ -70,10 +79,4 @@ function isCodexToolCallPayload(payload: Record<string, unknown>): boolean {
     payload.type === 'local_shell_call' ||
     payload.type === 'tool_search_call'
   )
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null
-    ? value as Record<string, unknown>
-    : null
 }

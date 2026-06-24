@@ -1,5 +1,10 @@
 import type { TabId, SessionId } from '@renderer/workspace/types'
 
+export type DispatchAttachIntent = {
+  sessionId: SessionId
+  targetTabId: TabId
+}
+
 export type UiShellState = {
   commandPaletteOpen: boolean
   pathPickerOpen: boolean
@@ -37,9 +42,8 @@ export type UiShellState = {
   /**
    * Non-null when the placement overlay is open in "attach detached
    * session to grid" mode. The overlay reads this to skip the kind
-   * picker (the session already exists, we don't spawn a new one) and
-   * to know which detached sessionId to insert into the chosen
-   * placement target.
+   * picker (the session already exists, we don't spawn a new one), which
+   * detached sessionId to insert, and which tab owns the placement target.
    *
    * WHY a separate field instead of overloading newAgentPlacementOpen:
    * the two flows commit through different actions
@@ -47,8 +51,16 @@ export type UiShellState = {
    * attachDetachedToGrid moves an existing one), and conflating them
    * forces every overlay code path to disambiguate at the bottom of
    * the call stack instead of at the top.
+   *
+   * WHY the target tab is part of the intent:
+   * Tiled Dispatch lane selection does not mutate activeTabId. Deferring tab
+   * lookup until overlay render or reducer commit would make "attach the
+   * focused lane's row" depend on whichever tab happened to be active before
+   * the user entered global Tiled Dispatch. The visible row already carries
+   * the correct tab id, so the command captures it once and every later step
+   * treats it as the source of truth.
    */
-  dispatchAttachIntent: SessionId | null
+  dispatchAttachIntent: DispatchAttachIntent | null
   /**
    * Non-null when the placement overlay is open in "Linked Agent"
    * mode. The value is the PARENT session id — the agent that was

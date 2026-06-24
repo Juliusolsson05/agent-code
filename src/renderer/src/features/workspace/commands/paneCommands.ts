@@ -10,6 +10,7 @@ import {
   detachedDispatchSessionIdsForTab,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
@@ -113,16 +114,16 @@ export const paneCommands: CommandDef[] = [
     description: '**What it does:** Moves one **detached Dispatch session** into the grid.\n\n**Use when:** You want to pin background work into the normal layout.\n\n**Notes:** Uses the placement picker so you can choose where it lands.',
     keywords: ['attach', 'detached', 'dispatch', 'grid', 'pin', 'place'],
     when: ({ workspace }) => {
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return false
-      return isDetached(workspace.state, sessionId)
+      const target = resolveDispatchAttachTarget(workspace.state)
+      if (!target) return false
+      return isDetached(workspace.state, target.sessionId)
     },
     run: ({ workspace, ui }) => {
       if (!workspace.dispatchMode) return
-      const sessionId = commandTargetSessionId(workspace)
-      if (!sessionId) return
-      if (!isDetached(workspace.state, sessionId)) return
-      ui.openDispatchAttach(sessionId)
+      const target = resolveDispatchAttachTarget(workspace.state)
+      if (!target) return
+      if (!isDetached(workspace.state, target.sessionId)) return
+      ui.openDispatchAttach(target)
     },
   },
   {
@@ -210,7 +211,7 @@ export const paneCommands: CommandDef[] = [
     run: ({ workspace }) => {
       const tabId = attachAllCommandTabId(workspace)
       if (!tabId) return
-      workspace.attachAllDetachedForTab(tabId)
+      void workspace.attachAllDetachedForTab(tabId)
     },
   },
   {

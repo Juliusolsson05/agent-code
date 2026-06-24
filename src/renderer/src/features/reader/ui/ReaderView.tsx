@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
-import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
+import { CodeRenderContext } from '@renderer/features/feed/context'
 import { SafeInlineCode } from '@renderer/features/rendered-content/SafeInlineCode'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'

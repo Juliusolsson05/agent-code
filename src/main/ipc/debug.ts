@@ -66,9 +66,10 @@ export function registerDebugIpc(): void {
   // Codex; they share the on-disk layout). Used by saveDebugBundle
   // in the renderer to pull the wire-level capture into the bundle
   // without forcing the whole bundle assembler into the main
-  // process. Errors are swallowed inside readProxyEventsForBundle —
-  // a missing or unreadable proxy log must never break bundle
-  // save.
+  // process. Errors are swallowed inside readProxyEventsForBundle; a missing
+  // or unreadable exact proxy log must never break bundle save, but it must be
+  // reported as `match:'none'` instead of being replaced with another session's
+  // run.
   ipcMain.handle(
     'debug:read-proxy-events',
     async (
@@ -76,7 +77,14 @@ export function registerDebugIpc(): void {
       params: { cwd: string; sessionKey?: string | null },
     ): Promise<ProxyEventsBundleSection> => {
       if (!params || typeof params.cwd !== 'string') {
-        return { proxyEvents: null, runDir: null, sessionMeta: null }
+        return {
+          proxyEvents: null,
+          runDir: null,
+          sessionMeta: null,
+          match: 'none',
+          requestedSessionKey: null,
+          matchedSessionSegment: null,
+        }
       }
       return readProxyEventsForBundle({
         cwd: params.cwd,

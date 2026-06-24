@@ -42,6 +42,7 @@ import {
   type FeedRenderItem,
 } from '@renderer/features/feed/model/renderModel'
 import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
+import { semanticTurnScrollSignal } from '@renderer/workspace/semantic/helpers'
 import {
   EAGER_TAIL,
   EntryRow,
@@ -56,7 +57,12 @@ import * as perf from '@renderer/performance/client'
 // directly rather than reaching into ../types/../context. Keep the
 // alias stable until the sweep is over.
 export type { AgentProvider, ScrollInfo } from '@renderer/features/feed/types'
-export { CodeRenderContext } from '@renderer/features/feed/context'
+// NOTE: the `CodeRenderContext` re-export was removed (feed audit Finding 8).
+// The canonical home is `@renderer/features/feed/context`, shared by feed,
+// reader, preview, and provider rows; re-exporting it from the feed CONTAINER
+// module coupled provider rows to Feed.tsx (which itself imports provider row
+// dispatchers) and created a needless import cycle risk. All consumers now
+// import it directly from `context`.
 
 // -----------------------------------------------------------------------------
 // Feed — Claude Code TUI-style inline rendering.
@@ -110,10 +116,12 @@ type Props = {
   /** Which provider's row renderers to use. Default 'claude'. */
   provider?: AgentProvider
   entries: Entry[]
-  /** Spinner verb text from the headless package ("Cogitating…").
-   *  Kept for DebugPanel visibility; no longer drives feed rendering
-   *  now that `streamPhase` owns the working indicator. */
-  activityStatus?: string | null
+  // NOTE: the `activityStatus` prop was removed (feed audit Deletion Candidate
+  // 1). It was declared and destructured but never read inside Feed — once
+  // `streamPhase` took over the in-feed WorkIndicator, the spinner verb text
+  // stopped driving any rendering here. The runtime field still lives on
+  // SessionRuntime for DebugPanel/status surfaces; only the dead Feed prop and
+  // its TileLeaf pass-through are gone.
   /** Adapter-derived stream phase — drives the in-feed WorkIndicator.
    *  See SessionRuntime.streamPhase for the contract. */
   streamPhase?: StreamPhase
@@ -160,6 +168,15 @@ type Props = {
    *  now from the runtime — the store grows them at ingest time. */
   toolUseIndex?: Map<string, ToolUseBlock>
   toolResultIndex?: Map<string, ToolResultBlock>
+  /** Monotonic invalidation token for the two maps above (feed audit Finding 1).
+   *  The runtime mutates the maps in place and keeps a STABLE reference, so the
+   *  bare map identity can never tell React context consumers that a cross-entry
+   *  tool_use↔tool_result pairing changed. The runtime bumps this whenever a
+   *  pairing actually moves; Feed clones the map (cheap, only on bump) so the
+   *  context value identity changes and memoized rows — most visibly a
+   *  GitCardRow waiting on its paired result — repaint. Absent for preview
+   *  surfaces that pass no runtime maps (they rebuild from `entries`). */
+  toolIndexVersion?: number
   /** Subagent fleet for this session, keyed by parent `Agent` tool_use id.
    *  Threaded from runtime.subAgents and provided to rows via
    *  SubAgentsContext so the `Agent` card can render live status + drill-in. */
@@ -250,7 +267,6 @@ function FeedImpl({
   sessionId,
   provider = 'claude',
   entries,
-  activityStatus,
   streamPhase = 'idle',
   streamPhasePendingToolName = null,
   streamPhasePendingToolUseId = null,
@@ -270,6 +286,7 @@ function FeedImpl({
   scrollToLatestRequest = 0,
   toolUseIndex: toolUseIndexProp,
   toolResultIndex: toolResultIndexProp,
+  toolIndexVersion = 0,
   subAgents = {},
   askUserQuestionState,
   onDebugLog,
@@ -477,11 +494,15 @@ function FeedImpl({
   // Include cheap fingerprints of the current semantic turn and
   // bounded semantic history so the effect re-runs when semantic
   // deltas land, not only when committed entries append.
-  const semanticTurnSignal = semanticTurn
-    ? `${semanticTurn.turnId}:${semanticTurn.text.length}:${Object.keys(semanticTurn.blocks).length}`
-    : ''
+  // WHY semanticTurnScrollSignal and not just turnId:text.length:blockCount
+  // (feed audit Finding 2): the old signal missed per-block streaming growth
+  // (tool output / thinking / reasoning deltas inside an existing block), so the
+  // sticky-bottom effect below would not re-pin while a row visibly grew. The
+  // helper folds in each block's content lengths and status so this effect fires
+  // on the common streaming path. It is a scroll-invalidation token only.
+  const semanticTurnSignal = semanticTurn ? semanticTurnScrollSignal(semanticTurn) : ''
   const semanticHistorySignal = semanticHistory
-    .map(turn => `${turn.turnId}:${turn.text.length}:${Object.keys(turn.blocks).length}`)
+    .map(semanticTurnScrollSignal)
     .join('|')
   useEffect(() => {
     // During a bulk bootstrap burst we skip per-append auto-scroll.
@@ -691,16 +712,41 @@ function FeedImpl({
   // filtered out. The index is cheap to
   // build (single pass) and the resulting Map is handed to result rows
   // via context.
-  // Incremental indices live on the runtime and grow at entry-ingest
-  // time. When those props are present, return them directly; do not
-  // rebuild the fallback maps from entries on every append.
+  // Incremental indices live on the runtime and grow at entry-ingest time.
+  //
+  // WHY this is now a clone-on-version-bump and not a bare passthrough (feed
+  // audit Finding 1): the runtime mutates these maps IN PLACE behind a stable
+  // reference. Returning that reference straight through means the context
+  // Provider value identity never changes when only a cross-entry pairing moves
+  // (a tool_result landing in a later entry for a tool_use row mounted earlier),
+  // so memoized rows like GitCardRow keep painting their stale running/empty
+  // state. Cloning into a fresh Map gives the context a new identity that forces
+  // those consumers to re-read. The clone is O(N) but the dependency is
+  // `toolIndexVersion` (bumped only on a REAL map change), NOT `entries`, so it
+  // runs once per actual tool change — not once per append. That preserves the
+  // bootstrap-burst performance win this incremental index was built for.
+  //
+  // The fallback path (preview / no runtime maps) rebuilds from `entries` and is
+  // isolated below so the live path never depends on `entries`.
+  const fallbackToolUseIndex = useMemo(
+    () => (toolUseIndexProp ? null : buildToolUseIndex(entries)),
+    [toolUseIndexProp, entries],
+  )
+  const fallbackToolResultIndex = useMemo(
+    () => (toolResultIndexProp ? null : buildToolResultIndex(entries)),
+    [toolResultIndexProp, entries],
+  )
   const toolUseIndex = useMemo(
-    () => toolUseIndexProp ?? buildToolUseIndex(entries),
-    [entries, toolUseIndexProp],
+    () => (toolUseIndexProp ? new Map(toolUseIndexProp) : fallbackToolUseIndex!),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- toolIndexVersion is the
+    // intentional invalidation token for the in-place-mutated prop map.
+    [toolUseIndexProp, toolIndexVersion, fallbackToolUseIndex],
   )
   const toolResultIndex = useMemo(
-    () => toolResultIndexProp ?? buildToolResultIndex(entries),
-    [entries, toolResultIndexProp],
+    () =>
+      toolResultIndexProp ? new Map(toolResultIndexProp) : fallbackToolResultIndex!,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above.
+    [toolResultIndexProp, toolIndexVersion, fallbackToolResultIndex],
   )
 
   const committedProjection = useMemo(() => {
