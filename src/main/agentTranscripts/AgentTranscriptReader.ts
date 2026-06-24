@@ -722,7 +722,8 @@ function classifyToolCall(
   timestamp: number | undefined,
 ): AgentTranscriptItem {
   const target = toolTarget(input)
-  const command = stringField(input, 'cmd') ?? stringField(input, 'command')
+  const recordInput = input ?? undefined
+  const command = stringField(recordInput, 'cmd') ?? stringField(recordInput, 'command')
   if (name === 'exec_command' || name === 'Bash' || command) {
     const text = command ?? target ?? ''
     const shellItem: AgentTranscriptItem = {
@@ -730,7 +731,7 @@ function classifyToolCall(
       timestamp,
       command: text,
     }
-    const cwd = stringField(input, 'workdir') ?? stringField(input, 'cwd')
+    const cwd = stringField(recordInput, 'workdir') ?? stringField(recordInput, 'cwd')
     if (cwd) shellItem.cwd = cwd
     return shellItem
   }

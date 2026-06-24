@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
 import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
 import {
@@ -13,7 +14,7 @@ import {
 } from '@providers/codex/renderer/rows/dispatch'
 
 export type RendererProviderCapabilities = {
-  id: string
+  id: AgentProviderKind
   name: string
   conditionViews: Record<string, ConditionView>
   renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
@@ -39,7 +40,7 @@ const codexCapabilities: RendererProviderCapabilities = {
   renderToolResult: renderCodexToolResult,
 }
 
-const rendererProviderCapabilities: Record<string, RendererProviderCapabilities> = {
+const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {
   claude: claudeCapabilities,
   codex: codexCapabilities,
 }
@@ -51,6 +52,7 @@ export function getRendererProviderCapabilities(id: string): RendererProviderCap
   // -> Feed is a runtime cycle. This capability-only registry contains the
   // provider renderer tables that do not need TileLeaf, so hot feed paths can
   // route through provider-owned dispatch without depending on pane mounting.
+  if (!isAgentProviderKind(id)) throw new Error(`Unknown provider: ${id}`)
   const provider = rendererProviderCapabilities[id]
   if (!provider) throw new Error(`Unknown provider: ${id}`)
   return provider

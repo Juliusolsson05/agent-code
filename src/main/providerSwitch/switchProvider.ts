@@ -194,13 +194,13 @@ function prepareTranslatedClaudeForResume(
       type: 'last-prompt',
       leafUuid,
       sessionId,
-    } as ClaudeEntry)
+    } as unknown as ClaudeEntry)
   }
   prefix.push({
     type: 'permission-mode',
     permissionMode: 'bypassPermissions',
     sessionId,
-  } as ClaudeEntry)
+  } as unknown as ClaudeEntry)
 
   return [...prefix, ...conversation]
 }

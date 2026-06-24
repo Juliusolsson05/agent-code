@@ -3,7 +3,7 @@ import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 
 export function hasDurableProviderSession(
   meta: Pick<SessionMeta, 'providerSessionId' | 'providerSessionIdSource'> | null | undefined,
-): boolean {
+): meta is Pick<SessionMeta, 'providerSessionId' | 'providerSessionIdSource'> & { providerSessionId: string } {
   if (!meta?.providerSessionId) return false
   // WHY missing source is treated as durable:
   //

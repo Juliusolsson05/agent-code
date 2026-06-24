@@ -16,6 +16,9 @@ export function sha8FromDigestBytes(digest: Uint8Array): string {
 
 export async function sha8Web(data: ArrayBuffer | Uint8Array | string): Promise<string> {
   const payload = typeof data === 'string' ? new TextEncoder().encode(data) : data
-  const digest = await crypto.subtle.digest('SHA-256', payload)
+  const digestSource: BufferSource = payload instanceof Uint8Array
+    ? payload.slice()
+    : payload
+  const digest = await crypto.subtle.digest('SHA-256', digestSource)
   return sha8FromDigestBytes(new Uint8Array(digest))
 }

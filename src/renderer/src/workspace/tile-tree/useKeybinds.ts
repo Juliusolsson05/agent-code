@@ -231,7 +231,7 @@ export function useKeybinds(
       const renderedPickerSurfaceVisible = focusedSessionId
         ? renderedAgentSurfaceIsVisible(workspace, agentViewMode, focusedSessionId) &&
           !workspace.spotlight &&
-          !workspace.reader &&
+          workspace.readerMode === null &&
           !settingsPageOpen
         : false
       const picker = focusedSessionId

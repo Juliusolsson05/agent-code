@@ -233,14 +233,13 @@ export function useWorkspace(
             role: request.role,
             runId: request.runId,
             builtInMcpDomains: request.builtInMcpDomains,
-            // WHY the request field is intentionally not forwarded:
+            // WHY the request field is intentionally omitted:
             // older MCP tool schemas can still send `inheritParentContext`,
             // but context inheritance is disabled until it can be rebuilt on a
             // stable provider-resume contract. The renderer spawn path is the
             // final authority for whether a child receives a cloned transcript,
             // so forcing clean children here prevents stale clients from
             // accidentally reviving the broken behavior.
-            inheritParentContext: false,
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,
