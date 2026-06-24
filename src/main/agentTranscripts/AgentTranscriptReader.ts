@@ -2,6 +2,7 @@ import { access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
+import { asRecord as asRecordOrNull } from '@shared/lib/asRecord.js'
 import type {
   AgentTranscriptErrorResult,
   AgentTranscriptIncludeOptions,
@@ -960,10 +961,12 @@ function parseMaybeJsonObject(value: string | undefined): JsonRecord | undefined
   }
 }
 
+// Delegates to the shared "object but not array, not null" guard so the
+// predicate has one source of truth. This reader's 10 call sites rely on an
+// `undefined` (not `null`) absence value, so we adapt with `?? undefined`
+// rather than changing the shared semantics. See @shared/lib/asRecord.
 function asRecord(value: unknown): JsonRecord | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonRecord
-    : undefined
+  return asRecordOrNull(value) ?? undefined
 }
 
 function stringField(record: JsonRecord | undefined, key: string): string | undefined {

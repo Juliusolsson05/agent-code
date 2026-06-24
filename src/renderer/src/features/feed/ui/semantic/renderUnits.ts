@@ -1,5 +1,6 @@
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
+import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 
 import { classifySemanticToolActivity } from '@renderer/features/feed/lib/helpers'
 
@@ -144,28 +145,11 @@ function isSemanticToolOutputBlock(block: SemanticLiveTurn['blocks'][number]): b
   )
 }
 
-function parseRecord(text: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(text)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null
-  } catch {
-    return null
-  }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
-
 function writeStdinChars(block: SemanticLiveTurn['blocks'][number]): string {
   const parsed = asRecord(block.parsedInput)
   if (typeof parsed?.chars === 'string') return parsed.chars
   const raw = block.argumentsJson ?? block.inputJson ?? ''
-  const rawParsed = raw ? parseRecord(raw) : null
+  const rawParsed = raw ? parseJsonRecord(raw) : null
   return typeof rawParsed?.chars === 'string' ? rawParsed.chars : ''
 }
 

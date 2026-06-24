@@ -125,9 +125,11 @@ function wireManager(): void {
     send('session:jsonl-error', { sessionId, message: String(error.message ?? error) }),
   )
   manager.on('process-state', p => send('session:process-state', p))
-  manager.on('trust-dialog', p => send('session:trust-dialog', p))
-  manager.on('resume-prompt', p => send('session:resume-prompt', p))
-  manager.on('compaction-state', p => send('session:compaction-state', p))
+  // Legacy per-condition channels removed in lockstep with the preload
+  // listeners + production forwarder — the harness renderer never subscribed
+  // to them. (Forwarding the unified `session:conditions` snapshot into the
+  // harness is a separate improvement owned by the conditions-framework
+  // cluster's `condition-harness-support`.)
   manager.on('semantic-event', p => send('session:semantic-event', p))
   manager.on('exit', p => {
     flushJsonlFor(p.sessionId)

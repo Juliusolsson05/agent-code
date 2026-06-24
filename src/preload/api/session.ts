@@ -6,18 +6,13 @@ import type {
   SessionHistoryChunk,
   SessionInfo,
   SessionJsonlEntriesEvent,
-  SessionJsonlEntryEvent,
   SessionJsonlErrorEvent,
-  SessionPermissionPromptEvent,
   SessionAgentPtyDataEvent,
   SessionKind,
   SessionScreenEvent,
   SessionSemanticEvent,
   SessionStartedEvent,
   SessionTerminalDataEvent,
-  SessionTrustDialogEvent,
-  SessionResumePromptEvent,
-  SessionCompactionStateEvent,
   SessionConditionsEvent,
   ConditionCustomAction,
   ResolveConditionResult,
@@ -180,12 +175,15 @@ export const sessionApi = {
   onSessionScreen: (cb: (e: SessionScreenEvent) => void): Unsub =>
     subscribe('session:screen', cb),
 
-  onSessionJsonlEntry: (cb: (e: SessionJsonlEntryEvent) => void): Unsub =>
-    subscribe('session:jsonl-entry', cb),
-  // Bulk: the whole burst from one bootstrap flush, or a single live
-  // entry wrapped in a 1-element array. Renderer can treat them
-  // identically. See main/sessions/jsonlCoalescer.ts for why the
-  // bulk channel exists.
+  // The singular `session:jsonl-entry` bridge method was removed: main
+  // emits JSONL ONLY through the coalescer as `session:jsonl-entries`
+  // (see main/sessions/jsonlCoalescer.ts). A live single entry arrives as
+  // a 1-element bulk burst with ~1ms setImmediate latency, so the renderer
+  // can treat every JSONL delivery identically. The old singular channel
+  // was the pre-coalescer slow path that caused the bootstrap-replay
+  // scroll cascade; leaving a dead preload method in place invited new
+  // code to resubscribe to a channel main no longer emits, or to revive
+  // dual-emit "for compatibility" and reintroduce that bug.
   onSessionJsonlEntries: (cb: (e: SessionJsonlEntriesEvent) => void): Unsub =>
     subscribe('session:jsonl-entries', cb),
 
@@ -205,18 +203,19 @@ export const sessionApi = {
     cb: (e: { sessionId: string; active: boolean; status?: string }) => void,
   ): Unsub => subscribe('session:process-state', cb),
 
-  onSessionTrustDialog: (cb: (e: SessionTrustDialogEvent) => void): Unsub =>
-    subscribe('session:trust-dialog', cb),
-
-  onSessionResumePrompt: (cb: (e: SessionResumePromptEvent) => void): Unsub =>
-    subscribe('session:resume-prompt', cb),
-
-  onSessionPermissionPrompt: (cb: (e: SessionPermissionPromptEvent) => void): Unsub =>
-    subscribe('session:permission-prompt', cb),
-
-  onSessionCompactionState: (cb: (e: SessionCompactionStateEvent) => void): Unsub =>
-    subscribe('session:compaction-state', cb),
-
+  // NOTE: the legacy per-condition listeners (onSessionTrustDialog,
+  // onSessionResumePrompt, onSessionPermissionPrompt, onSessionCompactionState)
+  // were removed. The renderer consumes a single unified
+  // `ProviderConditionSnapshot` through `onSessionConditions` and derives
+  // pendingTrustDialog/pendingResumePrompt/pendingPermissionPrompt/
+  // pendingCompaction/picker/approval from it (see
+  // workspace/hook/ipc/useIpcSubscriptions.ts applyConditionSnapshot).
+  // No renderer ever subscribed to the legacy channels; keeping the dead
+  // preload methods made it look valid to ingest legacy derived state in
+  // parallel with the snapshot, for which there is no documented merge
+  // precedence. The manager/provider runtime still emits the granular
+  // events internally — deprecating those is owned by the
+  // conditions-framework / provider-boundary clusters.
   onSessionConditions: (cb: (e: SessionConditionsEvent) => void): Unsub =>
     subscribe('session:conditions', cb),
 

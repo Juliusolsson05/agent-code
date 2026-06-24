@@ -21,6 +21,14 @@ import {
 } from '@main/storage/performanceLog.js'
 import { LocalJsonlSpanExporter } from '@main/performance/LocalJsonlSpanExporter.js'
 import { APP_SLUG } from '@shared/appIdentity.js'
+// Privacy-sensitive sanitizer + error/area helpers are shared with the renderer
+// client so the redaction rule is single-sourced. See
+// @shared/performance/serialization for the invariants.
+import {
+  serializePerformanceError,
+  sanitizePerformanceData,
+  areaFromPerformanceName,
+} from '@shared/performance/serialization.js'
 
 const DEFAULT_SLOW_SPAN_MS = 50
 const FLUSH_INTERVAL_MS = 500
@@ -44,16 +52,15 @@ function runFolderName(now: Date, pidValue: number): string {
   return `${stamp}-main-${pidValue}`
 }
 
-function serializeError(error: unknown): PerformanceRecord['error'] {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    }
-  }
-  return { message: String(error) }
-}
+// Thin process-local aliases over the shared helpers — keep the existing call
+// sites untouched while the logic lives once in @shared/performance/serialization.
+const serializeError = serializePerformanceError
+const sanitizeData = (
+  data: Record<string, unknown> | undefined,
+  verbose: boolean,
+): Record<string, unknown> | undefined => sanitizePerformanceData(data, { verbose })
+// Main's area fallback is 'app'.
+const areaFromName = (name: string): string => areaFromPerformanceName(name, 'app')
 
 function recordFile(record: PerformanceRecord): PerformanceLogFile {
   if (record.kind === 'metric') return 'metrics'
@@ -354,28 +361,6 @@ export class PerformanceService {
     }, SAMPLE_INTERVAL_MS)
     this.sampleTimer.unref?.()
   }
-}
-
-function areaFromName(name: string): string {
-  const parts = name.split('.')
-  return parts.length >= 2 ? `${parts[0]}.${parts[1]}` : parts[0] || 'app'
-}
-
-function sanitizeData(
-  data: Record<string, unknown> | undefined,
-  verbose: boolean,
-): Record<string, unknown> | undefined {
-  if (!data) return undefined
-  const out: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(data)) {
-    if (!verbose && /prompt|content|text|env|token|secret|key/i.test(key)) continue
-    if (typeof value === 'string' && value.length > (verbose ? 2000 : 300)) {
-      out[key] = `${value.slice(0, verbose ? 2000 : 300)}...`
-    } else {
-      out[key] = value
-    }
-  }
-  return out
 }
 
 function toAttributes(data: Record<string, unknown> | undefined): Attributes | undefined {

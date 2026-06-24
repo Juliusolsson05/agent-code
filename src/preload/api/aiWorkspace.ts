@@ -11,6 +11,7 @@ import type {
   AiWorkspaceReadFileResult,
   AiWorkspaceRecord,
   AiWorkspaceSummary,
+  AiWorkspaceWriteFileParams,
   AiWorkspaceWriteFileResult,
 } from '@mcp/shared/aiWorkspaceTypes.js'
 
@@ -35,11 +36,9 @@ export const aiWorkspaceApi = {
     ipcRenderer.invoke('ai-workspace:delete', workspaceId),
   aiWorkspaceReadFile: (path: string): Promise<AiWorkspaceReadFileResult> =>
     ipcRenderer.invoke('ai-workspace:read-file', path),
-  aiWorkspaceWriteFile: (params: {
-    path: string
-    text: string
-    expectedMtimeMs?: number | null
-  }): Promise<AiWorkspaceWriteFileResult> =>
+  aiWorkspaceWriteFile: (
+    params: AiWorkspaceWriteFileParams,
+  ): Promise<AiWorkspaceWriteFileResult> =>
     ipcRenderer.invoke('ai-workspace:write-file', params),
   onAiWorkspaceOpenRequest: (
     cb: (request: AiWorkspaceOpenRequest) => void,

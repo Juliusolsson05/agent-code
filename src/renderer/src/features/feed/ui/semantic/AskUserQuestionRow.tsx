@@ -9,6 +9,7 @@ import {
 } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
+import { asRecord } from '@shared/lib/asRecord'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -82,12 +83,6 @@ type AskQuestion = {
   header?: string
   multiSelect?: boolean
   options: AskOption[]
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null
 }
 
 function isFreeTextOption(option: AskOption): boolean {

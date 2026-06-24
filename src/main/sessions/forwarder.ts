@@ -53,10 +53,15 @@ export function wireSessionForwarder(
     sendToMainWindow('session:agent-pty-data', payload),
   )
   manager.on('process-state', payload => sendToMainWindow('session:process-state', payload))
-  manager.on('trust-dialog', payload => sendToMainWindow('session:trust-dialog', payload))
-  manager.on('resume-prompt', payload => sendToMainWindow('session:resume-prompt', payload))
-  manager.on('permission-prompt', payload => sendToMainWindow('session:permission-prompt', payload))
-  manager.on('compaction-state', payload => sendToMainWindow('session:compaction-state', payload))
+  // Legacy per-condition channels (session:trust-dialog / :resume-prompt /
+  // :permission-prompt / :compaction-state) are no longer forwarded to the
+  // renderer. The renderer consumes only the unified `session:conditions`
+  // snapshot and derives every pending-prompt field from it; no renderer or
+  // harness ever subscribed to the granular channels (confirmed by rg before
+  // removal — see docs/audit-plans/execution/ipc-shared-contracts-implementation-log.md).
+  // The manager STILL emits the granular events internally (provider runtimes
+  // drive them); we simply stop bridging them over IPC. Re-deprecating the
+  // manager-level events is owned by the conditions-framework cluster.
   manager.on('conditions', payload => sendToMainWindow('session:conditions', payload))
   manager.on('semantic-event', payload => sendToMainWindow('session:semantic-event', payload))
   manager.on('exit', payload => {

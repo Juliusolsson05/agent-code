@@ -4,6 +4,16 @@ import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'f
 import { basename, dirname, join, relative, resolve } from 'path'
 
 import { EditorFsCache } from './editorFsCache'
+// Result shapes are the shared renderer↔main contract. Importing them
+// (instead of redeclaring) makes a field change here a compile error in
+// preload/renderer rather than silent drift. Validation stays in this file.
+import type {
+  EditorFsEntry,
+  EditorFsListResult,
+  EditorFsReadResult,
+  EditorFsWriteResult,
+  EditorFsMutationResult,
+} from '@shared/types/editorFs.js'
 
 // WHY a hardcoded ignore list lives in main rather than the renderer:
 //
@@ -66,30 +76,6 @@ const EDITOR_IGNORED_FILE_NAMES = new Set<string>([
   'npm-debug.log',
   'yarn-error.log',
 ])
-
-type EditorFsEntry = {
-  name: string
-  path: string
-  isDirectory: boolean
-  size: number | null
-  mtimeMs: number
-}
-
-type EditorFsListResult =
-  | { ok: true; root: string; path: string; entries: EditorFsEntry[] }
-  | { ok: false; error: string }
-
-type EditorFsReadResult =
-  | { ok: true; path: string; text: string; mtimeMs: number; size: number }
-  | { ok: false; error: string }
-
-type EditorFsWriteResult =
-  | { ok: true; path: string; mtimeMs: number; size: number }
-  | { ok: false; error: string; conflict?: boolean }
-
-type EditorFsMutationResult =
-  | { ok: true; path: string }
-  | { ok: false; error: string }
 
 function errorMessage(err: unknown): string {
   const e = err as NodeJS.ErrnoException

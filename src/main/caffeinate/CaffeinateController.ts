@@ -1,10 +1,13 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 
+// Import the IPC payload contracts from the shared boundary module, NOT
+// from @preload — a main implementation must not depend on the renderer
+// bridge for its own types. See @shared/types/caffeinate for the WHY.
 import type {
   CaffeinateCommandResult,
   CaffeinateStatus,
-} from '@preload/api/types.js'
+} from '@shared/types/caffeinate.js'
 
 const CAFFEINATE_BINARY = '/usr/bin/caffeinate'
 // WHY `-ims` and not the tempting kitchen-sink `-dimsu`:

@@ -3,6 +3,7 @@
 // sessionManager and IPC handlers import from HERE.
 
 import type { MainProviderConfig } from '@shared/types/providerConfig'
+import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { ClaudeSession } from '@providers/claude/runtime/claudeSession'
 import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
 import { CodexSession } from '@providers/codex/runtime/codexSession'
@@ -33,13 +34,22 @@ const codexMain: MainProviderConfig = {
   getProjectDir: async () => getCodexSessionsDir(),
 }
 
-const mainProviders: Record<string, MainProviderConfig> = {
+// Typed as Record<AgentProviderKind, …> (not Record<string, …>) so that
+// adding a kind to AGENT_PROVIDER_KINDS without registering a config here
+// is a COMPILE error, not a runtime "Unknown provider" surprise. That is
+// the compiler-enforced checklist for future provider integrations.
+const mainProviders: Record<AgentProviderKind, MainProviderConfig> = {
   claude: claudeMain,
   codex: codexMain,
 }
 
+// Accepts a bare string (callers pass IPC args / persisted `kind` values)
+// and validates BEFORE indexing the exhaustive record — TypeScript will
+// not let an unvalidated string index a Record<AgentProviderKind, …>, and
+// that is the point: an unknown id fails loudly here rather than deep in a
+// provider factory. 'terminal' is intentionally rejected — it has no
+// MainProviderConfig (terminal sessions are handled directly by the manager).
 export function getMainProvider(id: string): MainProviderConfig {
-  const p = mainProviders[id]
-  if (!p) throw new Error(`Unknown provider: ${id}`)
-  return p
+  if (!isAgentProviderKind(id)) throw new Error(`Unknown provider: ${id}`)
+  return mainProviders[id]
 }

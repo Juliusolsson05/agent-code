@@ -14,7 +14,7 @@ import {
   type CodexRolloutLine,
   type CodexSemanticEvent,
 } from 'codex-headless'
-import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
+import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 
@@ -63,14 +63,13 @@ async function allocateProxyEventsFile(opts: {
   return join(runDir, 'proxy-events.jsonl')
 }
 
-/** Identical to claude-code-headless' proxyServer.ts sanitizeSegment.
- *  Splitting from sanitizePath proper is intentional — sanitizePath
- *  returns 'a-b---c' for inputs like '/a/b/c' and we want 'a-b-c'
- *  with no dash runs. Run the sanitizer, then collapse runs and
- *  trim. */
+/** Provider proxy-event path segment. The collapse/trim logic now lives in the
+ *  shared `sanitizePathSegment` (one source of truth shared with the debug
+ *  bundle reader; the Claude headless package keeps its own intentional
+ *  mirror). We retain the `|| 'unknown'` fallback here to preserve the exact
+ *  historical output for the (unreachable in practice) empty-input case. */
 function sanitiseSegment(value: string): string {
-  const sanitized = sanitizePath(value).replace(/-+/g, '-').replace(/^-|-$/g, '')
-  return sanitized.length > 0 ? sanitized : 'unknown'
+  return sanitizePathSegment(value) || 'unknown'
 }
 
 // CodexSession — thin wrapper that spawns the `codex` binary in a PTY

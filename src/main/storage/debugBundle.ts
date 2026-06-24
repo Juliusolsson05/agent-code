@@ -7,6 +7,10 @@ import {
   debugBundleRootForReason,
   isAutosaveDebugBundleReason,
 } from '@main/storage/debugBundleLog.js'
+// Filename-safe session-id token — shared with feedDebugLog so the two
+// session-keyed storage layouts can't diverge on their escape rule. See
+// @shared/runtime/projectDir sanitizeFilenameToken.
+import { sanitizeFilenameToken } from '@shared/runtime/projectDir.js'
 
 // Debug-bundle writer.
 //
@@ -33,41 +37,23 @@ import {
 //   as a history: the user can compare "before / after" bundles
 //   without manual renaming.
 
-export type DebugBundleFile = {
-  /** File path relative to the bundle folder. Validated as a
-   *  portable relative path — no absolute paths, no `..` segments. */
-  name: string
-  /** Text content. Binary files are not supported because none of
-   *  the debug surfaces produce binary data today (HTML capture is
-   *  a DOM string, everything else is JSON/JSONL). */
-  content: string
-}
+// Payload shapes are the shared IPC contract — see @shared/types/debugBundle.
+// Re-exported here so `@main/ipc/debug` (and any other main importer) keeps
+// importing them from this module while the source of truth is shared.
+export type {
+  DebugBundleFile,
+  SaveDebugBundleParams,
+  SaveDebugBundleResult,
+} from '@shared/types/debugBundle.js'
+import type {
+  DebugBundleFile,
+  SaveDebugBundleParams,
+  SaveDebugBundleResult,
+} from '@shared/types/debugBundle.js'
 
-export type SaveDebugBundleParams = {
-  /** Session id the bundle is for. Used only to build the folder
-   *  name — the payload itself already encodes what session it
-   *  came from inside manifest.json. */
-  sessionId: string
-  kind?: string | null
-  reason?: string | null
-  cwd?: string | null
-  providerSessionId?: string | null
-  /** Opaque files list. Main does not look inside `content`. */
-  files: DebugBundleFile[]
-}
-
-export type SaveDebugBundleResult = {
-  /** Absolute path of the created bundle folder. Returned so the
-   *  renderer can show it in a toast and copy to clipboard. */
-  bundlePath: string
-}
-
-// Same regex as sanitizeSessionIdForPath in feedDebugLog.ts —
-// deliberately narrow to prevent path traversal via a malformed
-// session id and to keep folder names portable across macOS/Windows.
-function sanitizeForPath(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]/g, '_')
-}
+// Was a local `sanitizeForPath` duplicating feedDebugLog's regex; now the one
+// shared `sanitizeFilenameToken` (same output, single source of truth).
+const sanitizeForPath = sanitizeFilenameToken
 
 // Bundle folder naming: `<ISO-like timestamp-with-ms>-<sessionShort>`.
 //

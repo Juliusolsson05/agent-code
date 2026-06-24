@@ -1,4 +1,11 @@
 import type { CodexRolloutLine } from 'agent-transcript-parser'
+// Shared unknown-JSON guard. The previous LOCAL copy used
+// `typeof value === 'object' && value !== null`, which treats ARRAYS as
+// records — a drift from the canonical helper that excludes arrays. Codex
+// `response_item.payload` is always a JSON object, so accepting arrays here
+// could have let an array slip through `isCodexToolCallPayload`/field reads as
+// a bogus record. Using the shared helper fixes that. See @shared/lib/asRecord.
+import { asRecord } from '@shared/lib/asRecord.js'
 
 export function sanitizeCodexRolloutForResume(
   lines: readonly CodexRolloutLine[],
@@ -70,10 +77,4 @@ function isCodexToolCallPayload(payload: Record<string, unknown>): boolean {
     payload.type === 'local_shell_call' ||
     payload.type === 'tool_search_call'
   )
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null
-    ? value as Record<string, unknown>
-    : null
 }

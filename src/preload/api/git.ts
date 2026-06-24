@@ -4,6 +4,11 @@ import type {
   WorktreeActivityIndexStatus,
   WorktreeActivitySummary,
 } from '@preload/api/types'
+// Single source of truth for the GitBar `git:status` payload. The main handler
+// (`src/main/ipc/git.ts`) annotates its return with the same type, so a field
+// change there is a compile error here and in the renderer rather than a silent
+// shape drift across the IPC boundary.
+import type { GitBarStatusResult } from '@shared/types/gitStatus.js'
 
 // Git status bridge — used by GitBar.
 //
@@ -35,27 +40,6 @@ export const gitApi = {
     | { ok: false }
   > => ipcRenderer.invoke('worktree-activity:summary', cwd, refresh),
 
-  gitStatus: (cwd: string): Promise<
-    | {
-        ok: true
-        branch: string
-        files: Array<{ file: string; additions: number; deletions: number }>
-        commits: Array<{
-          hash: string
-          subject: string
-          author: string
-          relativeDate: string
-        }>
-        // Submodules with either a bumped pointer, dirty content, or
-        // both. Main filters submodule gitlink entries out of `files`
-        // so the paths shown here never duplicate parent rows.
-        submodules?: Array<{
-          path: string
-          state: 'dirty' | 'bumped' | 'both'
-          files: Array<{ file: string; additions: number; deletions: number }>
-          range?: { from: string; to: string }
-        }>
-      }
-    | { ok: false }
-  > => ipcRenderer.invoke('git:status', cwd),
+  gitStatus: (cwd: string): Promise<GitBarStatusResult> =>
+    ipcRenderer.invoke('git:status', cwd),
 }

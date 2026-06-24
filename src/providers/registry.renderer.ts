@@ -5,6 +5,7 @@
 // components and parser functions — no session factories, no fs, no pty.
 
 import type { RendererProviderConfig } from '@shared/types/providerConfig'
+import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 // Import parser functions by direct file path — NOT through the package
 // entry point. The headless packages pull in Node deps (pty, fs) through
 // their main export, but the parser files are pure TypeScript (no Node,
@@ -28,15 +29,18 @@ const codexRenderer: RendererProviderConfig = {
   TileLeaf: TileLeaf as React.ComponentType<TileLeafProps>,
 }
 
-const rendererProviders: Record<string, RendererProviderConfig> = {
+// Exhaustive Record<AgentProviderKind, …> — same compile-time checklist as
+// the main registry. A new provider kind cannot be added to the shared
+// source of truth without also giving it a renderer config here.
+const rendererProviders: Record<AgentProviderKind, RendererProviderConfig> = {
   claude: claudeRenderer,
   codex: codexRenderer,
 }
 
 export function getRendererProvider(id: string): RendererProviderConfig {
-  const p = rendererProviders[id]
-  if (!p) throw new Error(`Unknown provider: ${id}`)
-  return p
+  // Validate untrusted kind (persisted SessionMeta.kind, IPC) before indexing.
+  if (!isAgentProviderKind(id)) throw new Error(`Unknown provider: ${id}`)
+  return rendererProviders[id]
 }
 
 export function getAllRendererProviders(): RendererProviderConfig[] {

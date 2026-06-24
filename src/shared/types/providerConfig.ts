@@ -15,6 +15,7 @@
 
 import type { ComponentType } from 'react'
 import type { SessionOptions, SessionInfo } from '@shared/types/session.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 // Props the shell passes to every provider's TileLeaf.
 export type TileLeafProps = {
@@ -33,7 +34,10 @@ export type TileLeafProps = {
  * Imported by TileTree, workspaceStore, etc.
  */
 export type RendererProviderConfig = {
-  id: string
+  /** Provider identity — constrained to the shared source of truth so a
+   *  config can't be registered under an id the rest of the app doesn't
+   *  recognise. */
+  id: AgentProviderKind
   name: string
   /** Extract the assistant's in-progress text from a screen snapshot. */
   extractAssistantInProgress: (screen: string) => string
@@ -46,7 +50,8 @@ export type RendererProviderConfig = {
  * Imported by sessionManager, IPC handlers.
  */
 export type MainProviderConfig = {
-  id: string
+  /** Provider identity — see RendererProviderConfig.id. */
+  id: AgentProviderKind
   name: string
   /** Factory: create a new session instance for this provider. */
   createSession: (opts: SessionOptions) => unknown

@@ -27,6 +27,12 @@ import {
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
+// Canonical session listing shape. This was a local copy that DROPPED
+// `fileSize` (and `customTitle`) — a concrete instance of the drift the
+// shared contract prevents: the palette consumes `SessionInfo[]` straight
+// from `window.api.listSessionsForCwd`, which always returns the full shape,
+// so the narrower local type was hiding fields rather than reflecting reality.
+import type { SessionInfo } from '@shared/types/session'
 
 // CommandPalette — VS Code-style ⌘⇧P command menu.
 //
@@ -34,16 +40,6 @@ import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 // sub-mode UI. The command registry lives outside this component
 // under feature-owned folders, so adding a feature command no longer
 // requires editing the palette implementation itself.
-
-type SessionInfo = {
-  sessionId: string
-  summary: string
-  lastModified: number
-  firstPrompt?: string
-  gitBranch?: string
-  cwd?: string
-  createdAt?: number
-}
 
 type BuriedPaneInfo = {
   id: string

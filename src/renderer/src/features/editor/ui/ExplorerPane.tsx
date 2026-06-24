@@ -2,14 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { basename, dirname } from '@renderer/features/editor/lib/path'
 import { FileIcon, FolderIcon } from '@renderer/features/editor/lib/fileIcon'
-
-type EditorFsEntry = {
-  name: string
-  path: string
-  isDirectory: boolean
-  size: number | null
-  mtimeMs: number
-}
+// Shared editor FS contract — was a local duplicate of the main/preload entry
+// shape. See @shared/types/editorFs.
+import type { EditorFsEntry } from '@shared/types/editorFs'
 
 type TreeNode = {
   entry: EditorFsEntry

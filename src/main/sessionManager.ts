@@ -14,6 +14,7 @@ import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
+import type { SessionKind } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 
@@ -39,7 +40,12 @@ import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 // IPC forwarder can emit them on kind-specific channels if it wants
 // (today the renderer just checks the kind on its side).
 
-export type SessionKind = 'claude' | 'codex' | 'terminal'
+// SessionKind is the shared provider/session-kind source of truth
+// (@shared/types/providerKind). Re-exported here because MCP runtime
+// imports `SessionKind` from `@main/sessionManager`; keeping the
+// re-export preserves that import path while removing the duplicate
+// inline union that used to drift from preload/renderer copies.
+export type { SessionKind } from '@shared/types/providerKind.js'
 
 // WHY private: this is the EventEmitter event map for SessionManager.
 // It's used internally to type `on()`/`off()`/`emit()` overloads (see

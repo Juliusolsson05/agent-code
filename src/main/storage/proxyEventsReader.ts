@@ -2,7 +2,7 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'path'
 
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
-import { canonicalizePath, sanitizePath } from '@shared/runtime/projectDir.js'
+import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 
 // Reader for the on-disk proxy-events.jsonl files.
 //
@@ -128,9 +128,11 @@ export async function readProxyEventsForBundle(opts: {
 }
 
 
+// Reader segment sanitiser MUST match the proxy writers' segment exactly or a
+// bundle silently misses the proxy log. Delegates to the shared helper (no
+// fallback — an empty/no-match segment is the reader's "not found" signal).
 function sanitiseSegment(value: string): string {
-  const sanitized = sanitizePath(value).replace(/-+/g, '-').replace(/^-|-$/g, '')
-  return sanitized
+  return sanitizePathSegment(value)
 }
 
 
