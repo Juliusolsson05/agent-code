@@ -10,15 +10,14 @@
 // (feed/codex/CodexRows.tsx) without mixing provider logic.
 
 import { memo, useContext, useMemo } from 'react'
-import hljs from 'highlight.js'
 
-import { normalizeCodeLanguage } from '@shared/code/language'
-import { diffLines, type DiffLine } from '@shared/parsers/lineDiff'
+import { diffLines } from '@shared/parsers/lineDiff'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 
 /* ---------- Shared helpers ---------- */
 
@@ -92,109 +91,6 @@ function FileToolHeader({
   )
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-
-function toHighlightLanguage(language: string): string | null {
-  if (language === 'javascriptreact') return 'javascript'
-  if (language === 'typescriptreact') return 'typescript'
-  return hljs.getLanguage(language) ? language : null
-}
-
-/**
- * Render a precomputed DiffLine[] as a flat code-slab with per-line
- * red/green tinting plus syntax-highlighted text inside each line.
- *
- * Why highlight line-by-line instead of sending the whole diff through
- * a single highlighter:
- * the +/- prefix and background tint live at the ROW level. If we
- * tokenized the whole diff blob, we'd lose the easy mapping from "this
- * is an added line" to "paint this row green". Per-line tokenization
- * keeps the git-style diff semantics and still gives the user syntax
- * colors inside each row.
- */
-function DiffSlab({
-  lines,
-  filePath,
-}: {
-  lines: DiffLine[]
-  filePath?: string
-}) {
-  if (lines.length === 0) {
-    return (
-      <div className="bg-code-bg text-muted text-[11px] font-code px-3 py-2">
-        (no changes)
-      </div>
-    )
-  }
-  const highlightLanguage = useMemo(() => {
-    return toHighlightLanguage(normalizeCodeLanguage(undefined, filePath))
-  }, [filePath])
-  const renderedLines = useMemo(
-    () =>
-      lines.map(line => {
-        if (line.text === '') return '\u200b'
-        if (!highlightLanguage) return escapeHtml(line.text)
-        return hljs.highlight(line.text, { language: highlightLanguage }).value
-      }),
-    [highlightLanguage, lines],
-  )
-  return (
-    <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
-      {/* Sizer wrapper — makes the block containing the lines as wide
-          as the widest line (`w-max`) AND at least as wide as the
-          viewport (`min-w-full`). Without this, each line div is
-          block-level inside an overflow-x-auto parent, so its width
-          collapses to the parent's *content-box* width (= the visible
-          pane). When the user scrolled horizontally past the viewport,
-          the `bg-diff-add-bg` / `bg-diff-remove-bg` paint stopped at
-          the line div's right edge — the tint disappeared beyond the
-          viewport even though the text continued. The sizer now forces
-          every line div to stretch across the full scrollable width,
-          so the +/- tint covers the whole line no matter how far right
-          you scroll. */}
-      <div className="w-max min-w-full">
-        {lines.map((l, i) => {
-          const bg =
-            l.kind === '+'
-              ? 'bg-diff-add-bg'
-              : l.kind === '-'
-                ? 'bg-diff-remove-bg'
-                : ''
-          const fg =
-            l.kind === '+'
-              ? 'text-diff-add-fg'
-              : l.kind === '-'
-                ? 'text-diff-remove-fg'
-                : 'text-code-ink-dim'
-          const bodyTone = l.kind === 'ctx' ? 'text-code-ink-dim' : 'text-code-ink'
-          return (
-            <div
-              key={i}
-              className={`${bg} flex items-start px-3 whitespace-pre`}
-            >
-              <span
-                className={`${fg} select-none w-4 flex-shrink-0 tabular-nums`}
-                aria-hidden="true"
-              >
-                {l.kind === 'ctx' ? ' ' : l.kind}
-              </span>
-              <span
-                className={`${bodyTone} diff-line-code hljs flex-1 min-w-0 break-all`}
-                dangerouslySetInnerHTML={{ __html: renderedLines[i] ?? '\u200b' }}
-              />
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 /* ---------- Edit ---------- */
 
 export const EditRow = memo(function EditRow({ block }: { block: ToolUseBlock }) {
@@ -207,7 +103,7 @@ export const EditRow = memo(function EditRow({ block }: { block: ToolUseBlock })
     <MarkerRow marker="⏺">
       <div className="flex flex-col gap-1">
         <FileToolHeader name="Edit" filePath={filePath} />
-        <DiffSlab lines={lines} filePath={filePath} />
+        <DiffSlab lines={lines} filePath={filePath} emptyLabel="(no changes)" />
       </div>
     </MarkerRow>
   )
@@ -276,7 +172,7 @@ const MultiEditChunk = memo(function MultiEditChunk({
           change {index + 1} / {total}
         </div>
       )}
-      <DiffSlab lines={lines} filePath={filePath} />
+      <DiffSlab lines={lines} filePath={filePath} emptyLabel="(no changes)" />
     </div>
   )
 })

@@ -42,6 +42,15 @@ export type SessionOptions = {
 }
 
 export type SessionInfo = {
+  /**
+   * WHY this shared type is the source of truth:
+   * preload, renderer resume UI, provider listers, and main registries all pass
+   * these records across process/module boundaries. Local copies drift silently
+   * because most fields are optional and UI call sites usually touch only one or
+   * two of them. Keep new metadata here first, then let provider-specific
+   * listers populate the same contract instead of redefining compatible-looking
+   * shadows.
+   */
   sessionId: string
   summary: string
   lastModified: number

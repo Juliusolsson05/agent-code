@@ -65,31 +65,6 @@ type ManagerEvents = {
   'jsonl-entry': [{ sessionId: string; entry: JsonlEntry; file: string }]
   'jsonl-error': [{ sessionId: string; error: Error }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
-  'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
-  'resume-prompt': [{
-    sessionId: string
-    visible: boolean
-    sessionAgeText?: string
-    tokenCountText?: string
-    options?: string[]
-    selectedIndex?: number
-  }]
-  'permission-prompt': [{
-    sessionId: string
-    visible: boolean
-    title?: string
-    toolName?: string
-    command?: string
-    options?: Array<{ key: string; label: string }>
-    selectedIndex?: number
-  }]
-  'compaction-state': [{
-    sessionId: string
-    visible: boolean
-    phase?: 'running' | 'error' | 'done'
-    statusText?: string
-    errorText?: string
-  }]
   conditions: [{ sessionId: string; snapshot: ProviderConditionSnapshot }]
   /** Emitted only by terminal sessions — raw PTY output for xterm.js. */
   'terminal-data': [{ sessionId: string; data: string }]
@@ -392,8 +367,7 @@ export class SessionManager extends EventEmitter {
       // every provider that registers through the registry is
       // contracted to expose start/stop/write/resize + the standard
       // 'started'/'pty-data'/'screen'/'jsonl-entry'/'jsonl-error'/
-      // 'process-state'/'trust-dialog'/'resume-prompt'/
-      // 'compaction-state'/'semantic-event'/'exit' events. We use
+      // 'process-state'/'conditions'/'semantic-event'/'exit' events. We use
       // a narrow structural cast so provider-specific implementation
       // details don't leak into the manager.
       const session = provider.createSession({
@@ -459,30 +433,6 @@ export class SessionManager extends EventEmitter {
           this.emit('process-state', { sessionId, ...state })
         },
       )
-      session.on('trust-dialog', (state: { visible: boolean; workspace?: string }) =>
-        this.emit('trust-dialog', { sessionId, ...state }),
-      )
-      session.on('resume-prompt', (state: {
-        visible: boolean
-        sessionAgeText?: string
-        tokenCountText?: string
-        options?: string[]
-        selectedIndex?: number
-      }) => this.emit('resume-prompt', { sessionId, ...state }))
-      session.on('permission-prompt', (state: {
-        visible: boolean
-        title?: string
-        toolName?: string
-        command?: string
-        options?: Array<{ key: string; label: string }>
-        selectedIndex?: number
-      }) => this.emit('permission-prompt', { sessionId, ...state }))
-      session.on('compaction-state', (state: {
-        visible: boolean
-        phase?: 'running' | 'error' | 'done'
-        statusText?: string
-        errorText?: string
-      }) => this.emit('compaction-state', { sessionId, ...state }))
       session.on('conditions', (snapshot: ProviderConditionSnapshot) => {
         this.markActivity(sessionId)
         this.emit('conditions', { sessionId, snapshot })

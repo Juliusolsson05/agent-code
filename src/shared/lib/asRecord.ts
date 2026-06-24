@@ -17,6 +17,18 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return asRecord(value) !== null
+}
+
+export function asRecordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap(item => {
+    const record = asRecord(item)
+    return record ? [record] : []
+  })
+}
+
 // Parse a JSON string and narrow the result to a record in one step.
 //
 // WHY co-located with asRecord: several semantic-render / proxy / transcript
@@ -28,7 +40,7 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
 export function parseJsonRecord(
   text: string | null | undefined,
 ): Record<string, unknown> | null {
-  if (text == null) return null
+  if (!text) return null
   try {
     return asRecord(JSON.parse(text))
   } catch {

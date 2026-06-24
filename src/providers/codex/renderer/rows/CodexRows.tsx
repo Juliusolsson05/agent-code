@@ -1,7 +1,5 @@
 import { memo, useContext, useMemo, useState } from 'react'
-import hljs from 'highlight.js'
 
-import { normalizeCodeLanguage } from '@shared/code/language'
 import type { DiffLine } from '@shared/parsers/lineDiff'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
@@ -9,6 +7,7 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { asRecord } from '@shared/lib/asRecord'
+import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 // WHY the import switch matters here: the local copy this replaced
 // did NOT exclude arrays — it returned `value as Record<...>` for
 // any non-null object including arrays. The shared helper rejects
@@ -110,19 +109,6 @@ function parseApplyPatch(input: unknown): ApplyPatchFile[] {
   return files
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-}
-
-function toHighlightLanguage(language: string): string | null {
-  if (language === 'javascriptreact') return 'javascript'
-  if (language === 'typescriptreact') return 'typescript'
-  return hljs.getLanguage(language) ? language : null
-}
-
 function PatchFileHeader({
   action,
   path,
@@ -150,72 +136,6 @@ function PatchFileHeader({
         </span>
       )}
       <span className="text-muted ml-2 text-[11px] flex-shrink-0">{extra}</span>
-    </div>
-  )
-}
-
-function PatchDiffSlab({
-  lines,
-  filePath,
-}: {
-  lines: DiffLine[]
-  filePath?: string
-}) {
-  if (lines.length === 0) {
-    return (
-      <div className="bg-code-bg text-muted text-[11px] font-code px-3 py-2">
-        (no inline diff)
-      </div>
-    )
-  }
-  const highlightLanguage = useMemo(() => {
-    return toHighlightLanguage(normalizeCodeLanguage(undefined, filePath))
-  }, [filePath])
-  const renderedLines = useMemo(
-    () =>
-      lines.map(line => {
-        if (line.text === '') return '\u200b'
-        if (!highlightLanguage) return escapeHtml(line.text)
-        return hljs.highlight(line.text, { language: highlightLanguage }).value
-      }),
-    [highlightLanguage, lines],
-  )
-  return (
-    <div className="bg-code-bg font-code text-[12px] leading-[1.55] overflow-x-auto">
-      <div className="w-max min-w-full">
-        {lines.map((line, index) => {
-          const bg =
-            line.kind === '+'
-              ? 'bg-diff-add-bg'
-              : line.kind === '-'
-                ? 'bg-diff-remove-bg'
-                : ''
-          const fg =
-            line.kind === '+'
-              ? 'text-diff-add-fg'
-              : line.kind === '-'
-                ? 'text-diff-remove-fg'
-                : 'text-code-ink-dim'
-          const bodyTone = line.kind === 'ctx' ? 'text-code-ink-dim' : 'text-code-ink'
-          return (
-            <div
-              key={index}
-              className={`${bg} flex items-start px-3 whitespace-pre`}
-            >
-              <span
-                className={`${fg} select-none w-4 flex-shrink-0 tabular-nums`}
-                aria-hidden="true"
-              >
-                {line.kind === 'ctx' ? ' ' : line.kind}
-              </span>
-              <span
-                className={`${bodyTone} diff-line-code hljs flex-1 min-w-0 break-all`}
-                dangerouslySetInnerHTML={{ __html: renderedLines[index] ?? '\u200b' }}
-              />
-            </div>
-          )
-        })}
-      </div>
     </div>
   )
 }
@@ -567,7 +487,7 @@ export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
               path={file.path}
               movedTo={file.movedTo}
             />
-            <PatchDiffSlab lines={file.lines} filePath={file.path} />
+            <DiffSlab lines={file.lines} filePath={file.path} emptyLabel="(no inline diff)" />
           </div>
         ))}
       </div>

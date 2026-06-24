@@ -1,4 +1,5 @@
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
 import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 
@@ -149,7 +150,7 @@ function writeStdinChars(block: SemanticLiveTurn['blocks'][number]): string {
   const parsed = asRecord(block.parsedInput)
   if (typeof parsed?.chars === 'string') return parsed.chars
   const raw = block.argumentsJson ?? block.inputJson ?? ''
-  const rawParsed = raw ? parseJsonRecord(raw) : null
+  const rawParsed = parseJsonRecord(raw)
   return typeof rawParsed?.chars === 'string' ? rawParsed.chars : ''
 }
 

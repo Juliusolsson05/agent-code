@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 
 import { cloneClaudeTranscript, toClaude, toCodex } from 'agent-transcript-parser'
 import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
+import { isRecord } from '@shared/lib/asRecord.js'
 
 import { sanitizeClaudeEntriesForResume } from '@main/providerSwitch/claudeResumeSanitizer.js'
 import { sanitizeCodexRolloutForResume } from '@main/providerSwitch/codexResumeSanitizer.js'
@@ -202,8 +203,4 @@ function prepareTranslatedClaudeForResume(
   } as ClaudeEntry)
 
   return [...prefix, ...conversation]
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
 }

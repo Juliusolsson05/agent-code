@@ -5,8 +5,6 @@ import type { SessionManager } from '@main/sessionManager.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
-import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList.js'
-import { listCodexSessions } from '@providers/codex/runtime/sessionList.js'
 import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
@@ -188,14 +186,14 @@ export function registerSessionIpc(
     async (_evt, limit?: number) => {
       const cap = typeof limit === 'number' && limit > 0 ? limit : 200
       try {
-        const [claude, codex] = await Promise.all([
-          listAllClaudeSessions({ limit: cap }).catch(() => []),
-          listCodexSessions({ limit: cap }).catch(() => []),
-        ])
-        const tagged = [
-          ...claude.map(s => ({ ...s, provider: 'claude' as const })),
-          ...codex.map(s => ({ ...s, provider: 'codex' as const })),
-        ]
+        const providers = ['claude', 'codex'] as const
+        const listed = await Promise.all(providers.map(async provider => {
+          const providerConfig = getMainProvider(provider)
+          if (!providerConfig.listAllSessions) return []
+          const sessions = await providerConfig.listAllSessions(cap).catch(() => [])
+          return sessions.map(s => ({ ...s, provider }))
+        }))
+        const tagged = listed.flat()
         tagged.sort((a, b) => b.lastModified - a.lastModified)
         return tagged.slice(0, cap)
       } catch (err) {

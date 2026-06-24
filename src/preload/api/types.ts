@@ -9,6 +9,7 @@ import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 import type { SessionKind } from '@shared/types/providerKind.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
+export type { SessionInfo } from '@shared/types/session.js'
 
 // Shared payload types for the preload IPC bridge.
 //
@@ -426,18 +427,6 @@ export type ProxyEventsBundleSection = {
   proxyEvents: string | null
   runDir: string | null
   sessionMeta: string | null
-}
-
-export type SessionInfo = {
-  sessionId: string
-  summary: string
-  lastModified: number
-  fileSize: number
-  customTitle?: string
-  firstPrompt?: string
-  gitBranch?: string
-  cwd?: string
-  createdAt?: number
 }
 
 export type WorktreeActivityCounts = {

@@ -13,17 +13,21 @@
 // existing onSend so the dispatch pty arm calls onSend(data) — byte-for-byte
 // the exact send path the old outlets used.
 //
-// WHY the provider→registry pick stays a tiny switch:
-// the only thing genuinely provider-specific now is "which registry"; the
-// snapshot's `provider` tag is the source of truth. Everything else (per-kind
-// routing, render order, unknown-kind skipping) is the generic outlet's job.
+// WHY this imports the capability-only registry instead of accepting a registry
+// prop from TileLeaf:
+// condition views are provider renderer capabilities, not pane shell chrome.
+// Putting them on TileLeafProps made the shared provider contract import a
+// renderer-only ConditionView type and forced every pane mount to carry a table
+// that only this component consumes. The capability registry is intentionally
+// split from registry.renderer.ts, so this lookup does NOT import TileLeaf and
+// does not recreate the TileLeaf -> ProviderConditionOutlet -> registry ->
+// TileLeaf cycle the first-pass split was designed to avoid.
 
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
 import { makeDispatchFromOnSend } from '@shared/conditions-core/dispatch'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract'
-import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
-import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 
 type Props = {
   conditions: ProviderConditionSnapshot | null
@@ -34,7 +38,7 @@ type Props = {
 export function ProviderConditionOutlet({ conditions, onSend, onResolveCustom }: Props) {
   if (!conditions) return null
 
-  const registry = conditions.provider === 'claude' ? CLAUDE_VIEWS : CODEX_VIEWS
+  const { conditionViews: registry } = getRendererProviderCapabilities(conditions.provider)
   const dispatch = makeDispatchFromOnSend(onSend, onResolveCustom)
 
   return (

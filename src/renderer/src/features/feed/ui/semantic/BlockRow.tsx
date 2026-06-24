@@ -11,6 +11,7 @@ import {
   MultiEditRow,
 } from '@providers/claude/renderer/rows/ClaudeRows'
 import type { ToolUseBlock } from '@shared/types/transcript'
+import { parseJsonRecord } from '@shared/lib/asRecord'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import {
   parseSemanticTodos,
@@ -24,17 +25,6 @@ import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
 import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
-
-function parseJsonRecord(text: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(text)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null
-  } catch {
-    return null
-  }
-}
 
 // [#285] Extract a CLOSED top-level JSON string field from a partial inputJson
 // buffer — i.e. one whose closing quote has already streamed. The regex body

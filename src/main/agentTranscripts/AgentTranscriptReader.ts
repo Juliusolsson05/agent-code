@@ -2,7 +2,10 @@ import { access } from 'node:fs/promises'
 import { constants } from 'node:fs'
 
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
-import { asRecord as asRecordOrNull } from '@shared/lib/asRecord.js'
+import {
+  asRecord as asSharedRecord,
+  parseJsonRecord,
+} from '@shared/lib/asRecord.js'
 import type {
   AgentTranscriptErrorResult,
   AgentTranscriptIncludeOptions,
@@ -953,12 +956,7 @@ function extractTimestamp(raw: JsonRecord): number | undefined {
 }
 
 function parseMaybeJsonObject(value: string | undefined): JsonRecord | undefined {
-  if (!value) return undefined
-  try {
-    return asRecord(JSON.parse(value))
-  } catch {
-    return undefined
-  }
+  return parseJsonRecord(value) ?? undefined
 }
 
 // Delegates to the shared "object but not array, not null" guard so the
@@ -966,7 +964,7 @@ function parseMaybeJsonObject(value: string | undefined): JsonRecord | undefined
 // `undefined` (not `null`) absence value, so we adapt with `?? undefined`
 // rather than changing the shared semantics. See @shared/lib/asRecord.
 function asRecord(value: unknown): JsonRecord | undefined {
-  return asRecordOrNull(value) ?? undefined
+  return asSharedRecord(value) ?? undefined
 }
 
 function stringField(record: JsonRecord | undefined, key: string): string | undefined {

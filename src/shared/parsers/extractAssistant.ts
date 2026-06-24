@@ -19,12 +19,15 @@ export type AgentProvider = 'claude' | 'codex'
  * Extract the most-recent assistant text block from a screen snapshot,
  * dispatching to the right provider's parser.
  *
- * Falls back to claude when provider is undefined (backwards compat
- * for any call site that hasn't been updated yet).
+ * Provider is intentionally required. The old default silently treated every
+ * unknown/omitted provider as Claude, which is exactly the kind of binary
+ * fallback that makes a third provider fail in different ways per surface.
+ * Callers already know the session kind at the point they have a screen
+ * snapshot, so making that knowledge explicit is the safer contract.
  */
 export function extractAssistantInProgress(
   screen: string,
-  provider: AgentProvider = 'claude',
+  provider: AgentProvider,
 ): string {
   if (provider === 'codex') return codexExtract(screen)
   return claudeExtract(screen)

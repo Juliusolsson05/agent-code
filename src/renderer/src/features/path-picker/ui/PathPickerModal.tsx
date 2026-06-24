@@ -436,4 +436,3 @@ function ResumeRow({
     </button>
   )
 }
-
