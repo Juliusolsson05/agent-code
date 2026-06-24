@@ -4,9 +4,8 @@ import type { SessionId } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
   buildVisibleDispatchRows,
-  selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
-import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { resolveFocusSurfaceTarget } from '@renderer/workspace/hook/actions/focusSurfaceTarget'
 
 import type {
   WorkspaceSetSpotlight,
@@ -14,10 +13,12 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
-// Spotlight mode — focused-pane zoom within the active tab. toggleSpotlight
-// enters with the active tab's currently-focused session; exits if already
-// on for the active tab. setSpotlightSession switches which session is
-// showing inside Spotlight.
+// Spotlight mode — focused-pane zoom for the current command target.
+// toggleSpotlight exits whenever Spotlight is already open; otherwise it uses
+// the same command target selector as lifecycle commands so Tiled Dispatch,
+// pinned rows, and grid-related children all enter the session the user is
+// actually commanding. setSpotlightSession switches which session is showing
+// inside Spotlight.
 
 export function useSpotlightActions(
   setSpotlight: WorkspaceSetSpotlight,
@@ -29,23 +30,13 @@ export function useSpotlightActions(
 } {
   const toggleSpotlight = useCallback(() => {
     const current = refs.stateRef.current
-    const activeTab = current.tabs.find(t => t.id === current.activeTabId)
-    if (!activeTab) return
-    const dispatchRow = current.dispatchMode
-      ? selectVisibleDispatchRow(
-          buildVisibleDispatchRows(current),
-          // tiled-aware: focused lane's agent in Tiled Dispatch, not the
-          // stale dispatchMode.focusedSessionId (which would spotlight tile 0).
-          dispatchFocusedSessionId(current.dispatchMode),
-          activeTab.focusedSessionId,
-        )
-      : null
+    const target = resolveFocusSurfaceTarget(current)
     setSpotlight(prev => {
-      const tabId = dispatchRow?.tabId ?? activeTab.id
-      if (prev?.tabId === tabId) return null
+      if (prev) return null
+      if (!target) return prev
       return {
-        tabId,
-        focusedSessionId: dispatchRow?.sessionId ?? activeTab.focusedSessionId,
+        tabId: target.tabId,
+        focusedSessionId: target.sessionId,
       }
     })
   }, [refs.stateRef, setSpotlight])

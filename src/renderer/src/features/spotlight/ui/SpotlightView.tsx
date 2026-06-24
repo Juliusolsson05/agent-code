@@ -15,11 +15,12 @@ export function SpotlightView({ workspace, agentViewMode }: Props) {
   const tab = workspace.state.tabs.find(item => item.id === spotlight.tabId)
   if (!tab) return null
 
-  // Dispatch mode uses the dispatch-UI selector (which strips pinned
-  // rows because they render in a separate Pinned section). The
-  // non-Dispatch path used to walk grid leaves only — now uses the
-  // canonical resolver so Spotlight covers detached agents owned by
-  // this tab whenever Dispatch mode is off.
+  // Dispatch mode uses the visible-row selector rather than the raw project
+  // groups. Pinned rows render in their own Dispatch section, but focus
+  // takeovers must still let the user read/watch the pinned agent that command
+  // targeting selected. The non-Dispatch path uses the canonical resolver so
+  // Spotlight covers detached agents owned by this tab whenever Dispatch mode
+  // is off.
   const sessionIds = workspace.dispatchMode
     ? dispatchSessionIdsForTab(workspace.state, tab.id)
     : resolveTabSessions(workspace.state, tab.id)

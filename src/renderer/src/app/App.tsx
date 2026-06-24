@@ -447,6 +447,14 @@ export default function App() {
 
   const { state, activeTab } = workspace
   const commandTargetId = commandTargetSessionId(workspace)
+  const readerModeTabId = workspace.readerMode?.tabId ?? null
+  const spotlightTabId = workspace.spotlight?.tabId ?? null
+  const readerModeTabExists = readerModeTabId
+    ? state.tabs.some(tab => tab.id === readerModeTabId)
+    : false
+  const spotlightTabExists = spotlightTabId
+    ? state.tabs.some(tab => tab.id === spotlightTabId)
+    : false
 
   // Candidate rows for the Pin Agents modal. Built here (not inside
   // the modal) because we already have cheap access to the full
@@ -677,9 +685,9 @@ export default function App() {
               onChange={setSettings}
               onReset={resetSettings}
             />
-          ) : activeTab && workspace.readerMode && workspace.readerMode.tabId === activeTab.id ? (
+          ) : workspace.readerMode && readerModeTabExists ? (
             <ReaderView workspace={workspace} />
-          ) : activeTab && workspace.spotlight && workspace.spotlight.tabId === activeTab.id ? (
+          ) : workspace.spotlight && spotlightTabExists ? (
             <SpotlightView workspace={workspace} agentViewMode={settings.agentViewMode} />
           ) : (
             <GlobalEditorShell workspace={workspace}>

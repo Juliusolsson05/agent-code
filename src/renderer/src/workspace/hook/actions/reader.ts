@@ -4,9 +4,8 @@ import type { SessionId } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import {
   buildVisibleDispatchRows,
-  selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
-import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { resolveFocusSurfaceTarget } from '@renderer/workspace/hook/actions/focusSurfaceTarget'
 
 import type {
   WorkspaceSetReaderMode,
@@ -15,10 +14,10 @@ import type {
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
-// ReaderMode toggle. Mirrors toggleSpotlight: enters with the active
-// tab's currently-focused session, exits if already on for the active
-// tab. Closes Spotlight on entry; tile-tabs are preserved in state
-// and suppressed by App.tsx render precedence.
+// ReaderMode toggle. Mirrors toggleSpotlight: enters with the same command
+// target the palette/keybind layer exposes, exits whenever Reader is already
+// open. Closes Spotlight on entry; tile-tabs are preserved in state and
+// suppressed by App.tsx render precedence.
 
 export function useReaderActions(
   setReaderMode: WorkspaceSetReaderMode,
@@ -31,24 +30,16 @@ export function useReaderActions(
 } {
   const toggleReaderMode = useCallback(() => {
     const current = refs.stateRef.current
-    const activeTab = current.tabs.find(t => t.id === current.activeTabId)
-    if (!activeTab) return
-    const dispatchRow = current.dispatchMode
-      ? selectVisibleDispatchRow(
-          buildVisibleDispatchRows(current),
-          // tiled-aware: focused lane's agent in Tiled Dispatch, not the
-          // stale dispatchMode.focusedSessionId (which would read tile 0).
-          dispatchFocusedSessionId(current.dispatchMode),
-          activeTab.focusedSessionId,
-        )
-      : null
+    const target = resolveFocusSurfaceTarget(current)
     setSpotlight(null)
     setReaderMode(prev => {
-      const tabId = dispatchRow?.tabId ?? activeTab.id
-      if (prev?.tabId === tabId) return null
+      if (prev) return null
+      if (!target) return prev
+      const kind = current.sessions[target.sessionId]?.kind ?? 'claude'
+      if (kind !== 'claude' && kind !== 'codex') return prev
       return {
-        tabId,
-        focusedSessionId: dispatchRow?.sessionId ?? activeTab.focusedSessionId,
+        tabId: target.tabId,
+        focusedSessionId: target.sessionId,
       }
     })
   }, [refs.stateRef, setReaderMode, setSpotlight])
