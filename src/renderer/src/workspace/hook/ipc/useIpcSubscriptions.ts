@@ -79,7 +79,10 @@ import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import {
   applyJsonlProviderSessionId,
+  decideJsonlProviderBurst,
+  resumableProviderSessionId,
   shouldMarkProviderSessionDisconnected,
+  type JsonlProviderStreamState,
 } from '@renderer/workspace/providerSessionIdentity'
 
 // Codex rollout is delivered as many small IPC bursts, but `turn_context`
@@ -94,6 +97,7 @@ import {
 // Terminal Codex events and session exit clear the cursor so a new task cannot
 // inherit the previous task's turn id.
 const codexCurrentTurnIdBySession = new Map<SessionId, string>()
+const jsonlProviderStreamBySession = new Map<SessionId, JsonlProviderStreamState>()
 
 function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {
   const value = record?.[key]
@@ -676,6 +680,7 @@ export function useIpcSubscriptions(
     const offExit = window.api.onSessionExit(({ sessionId, exitCode }) => {
       recentWorkContextRawBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
+      jsonlProviderStreamBySession.delete(sessionId)
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const next = withDerivedSessionStatus(
@@ -1157,10 +1162,6 @@ export function useIpcSubscriptions(
         spanClosed = true
         span.end(data)
       }
-      appendRecentWorkContextRaw(recentWorkContextRawBySession, sessionId, entries)
-      const sessionCwd = refs.stateRef.current.sessions[sessionId]?.cwd
-      refreshWorktrees(sessionCwd)
-
       // Two passes per burst:
       //   A — accumulate workspace-state captures (providerSessionId).
       //       Apply via ONE setState if anything changed.
@@ -1188,6 +1189,72 @@ export function useIpcSubscriptions(
           }
         }
       }
+      const metaForProviderGate = refs.stateRef.current.sessions[sessionId] ?? null
+      const observedProviderSessionId = capturedClaudeId ?? capturedCodexId
+      const providerDecision = decideJsonlProviderBurst({
+        previous: jsonlProviderStreamBySession.get(sessionId),
+        expectedProviderSessionId: resumableProviderSessionId(metaForProviderGate),
+        observedProviderSessionId,
+      })
+      jsonlProviderStreamBySession.set(sessionId, providerDecision.state)
+      if (!providerDecision.accept) {
+        // WHY this drops data instead of just refusing the metadata update:
+        //
+        // A duplicated/resumed pane has a durable providerSessionId before the
+        // JSONL tailer replays anything. If a later committed burst proves a
+        // different provider id, that burst is not "history for this pane" — it
+        // is another agent's transcript arriving on this renderer route. The old
+        // guard only protected SessionMeta, then still mapped the wrong entries
+        // into Feed, which made duplicated agents render each other's messages.
+        // The small in-memory sidecar remembers a proven mismatch so follow-up
+        // Codex rollout lines without another session_meta stay quarantined until
+        // a matching provider id proves the stream recovered.
+        console.warn('[workspace] dropping JSONL burst for conflicting providerSessionId', {
+          sessionId,
+          expectedProviderSessionId: providerDecision.expectedProviderSessionId,
+          observedProviderSessionId: providerDecision.observedProviderSessionId,
+          reason: providerDecision.reason,
+          burstSize: entries.length,
+        })
+        setRuntimes(prev => {
+          const current = prev[sessionId] ?? emptyRuntime()
+          return {
+            ...prev,
+            [sessionId]: appendFeedDebugLog(
+              {
+                ...current,
+                transcriptStatus: 'error',
+                transcriptError:
+                  `Ignored JSONL from provider session ${providerDecision.observedProviderSessionId ?? 'unknown'} ` +
+                  `because this pane is bound to ${providerDecision.expectedProviderSessionId}.`,
+              },
+              {
+                layer: 'STATE',
+                kind: 'jsonl_provider_conflict',
+                summary: 'dropped JSONL burst from another provider session',
+                data: {
+                  expectedProviderSessionId: providerDecision.expectedProviderSessionId,
+                  observedProviderSessionId: providerDecision.observedProviderSessionId,
+                  reason: providerDecision.reason,
+                  burstSize: entries.length,
+                },
+              },
+            ),
+          }
+        })
+        closeSpan({
+          sessionId,
+          burstSize: entries.length,
+          dropped: true,
+          reason: providerDecision.reason,
+        })
+        return
+      }
+
+      appendRecentWorkContextRaw(recentWorkContextRawBySession, sessionId, entries)
+      const sessionCwd = metaForProviderGate?.cwd
+      refreshWorktrees(sessionCwd)
+
       if (capturedClaudeId || capturedCodexId) {
         setState(prev => {
           const meta = prev.sessions[sessionId]
