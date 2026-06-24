@@ -29,8 +29,9 @@ import { getToolPath } from '@main/setup/toolchain.js'
 const exec = promisify(execFile)
 
 type NumstatLine = { file: string; additions: number; deletions: number }
-const WORKTREE_CACHE_TTL_MS = 5_000
+const WORKTREE_CACHE_TTL_MS = 30_000
 const WORKTREE_STATUS_CONCURRENCY = 6
+const GIT_PROCESS_CONCURRENCY = 8
 
 type CacheEntry<T> = {
   expiresAt: number
@@ -38,8 +39,27 @@ type CacheEntry<T> = {
   promise: Promise<T>
 }
 
+type QueuedGitCommand = {
+  cwd: string
+  args: string[]
+  resolve: (stdout: string) => void
+  reject: (err: unknown) => void
+}
+
 const worktreeListCache = new Map<string, CacheEntry<WorktreeIdentity[]>>()
 const worktreeStatusCache = new Map<string, CacheEntry<GitWorktreeStatus[]>>()
+const gitQueue: QueuedGitCommand[] = []
+let activeGitProcesses = 0
+
+function seedCacheAliases<T>(
+  cache: Map<string, CacheEntry<T>>,
+  keys: string[],
+  entry: CacheEntry<T>,
+): void {
+  for (const key of keys) {
+    cache.set(key, entry)
+  }
+}
 
 // Centralized git runner. Returns stdout; swallows errors and returns
 // '' so callers can treat "no output" as a valid signal (clean
@@ -47,7 +67,40 @@ const worktreeStatusCache = new Map<string, CacheEntry<GitWorktreeStatus[]>>()
 // here would cascade a single bad command into an overall
 // { ok: false }, losing the rest of the data we CAN compute.
 async function git(cwd: string, args: string[]): Promise<string> {
+  return await new Promise<string>(resolve => {
+    gitQueue.push({
+      cwd,
+      args,
+      resolve,
+      reject: () => resolve(''),
+    })
+    drainGitQueue()
+  })
+}
+
+function drainGitQueue(): void {
+  while (activeGitProcesses < GIT_PROCESS_CONCURRENCY && gitQueue.length > 0) {
+    const next = gitQueue.shift()!
+    activeGitProcesses += 1
+    void runGitCommand(next.cwd, next.args)
+      .then(next.resolve, next.reject)
+      .finally(() => {
+        activeGitProcesses -= 1
+        drainGitQueue()
+      })
+  }
+}
+
+async function runGitCommand(cwd: string, args: string[]): Promise<string> {
   try {
+    // WHY every git command shares one process-wide limiter:
+    // per-feature limits are not enough when WorktreesBar, GitBar, history
+    // loading, and live work-context refreshes all wake at the same time. A
+    // 110-worktree repo can otherwise schedule hundreds of read-only git
+    // subprocesses in overlapping waves. Node's child_process APIs are
+    // asynchronous, but the OS, disk, and main-process IPC still pay for every
+    // active child. Central backpressure makes git data lag under load instead
+    // of letting housekeeping work starve orchestration coordination.
     const { stdout } = await exec(getToolPath('git', 'git'), args, { cwd, timeout: 5000 })
     return stdout
   } catch {
@@ -119,6 +172,19 @@ export async function listWorktreesForCwd(cwd: string): Promise<WorktreeIdentity
     .then(out => {
       const worktrees = out.trim() ? parseWorktreePorcelain(out) : []
       cacheableResult = worktrees.length > 0
+      if (cacheableResult) {
+        // WHY alias every returned worktree path to the same probe: during
+        // multi-agent orchestration, siblings often ask from different checkout
+        // roots of the same repo. `git worktree list` returns the same answer
+        // for all of them, so exact-cwd cache keys turn one logical query into N
+        // subprocesses right when the app is already busy creating/checking
+        // worktrees. Aliasing after the first successful probe keeps failures
+        // retryable while sharing good data across sibling roots.
+        seedCacheAliases(worktreeListCache, [
+          cwd,
+          ...worktrees.map(worktree => worktree.path),
+        ], entry)
+      }
       return worktrees
     })
     .catch(() => [])
@@ -156,6 +222,12 @@ export async function getWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeS
   entry.promise = computeWorktreeStatusForCwd(cwd)
     .then(statuses => {
       cacheableResult = statuses.length > 0
+      if (cacheableResult) {
+        seedCacheAliases(worktreeStatusCache, [
+          cwd,
+          ...statuses.map(worktree => worktree.path),
+        ], entry)
+      }
       return statuses
     })
     .catch(() => [])
@@ -171,9 +243,25 @@ async function computeWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStat
   const worktrees = await listWorktreesForCwd(cwd)
   return await mapWithConcurrency(worktrees, WORKTREE_STATUS_CONCURRENCY, async worktree => {
     const branch = worktree.branch
-    const dirty = (await git(worktree.path, ['status', '--porcelain'])).trim().length > 0
-    const lastCommitAtRaw = (await git(worktree.path, ['log', '-1', '--format=%ct'])).trim()
-    const lastCommitRelative = (await git(worktree.path, ['log', '-1', '--format=%cr'])).trim() || null
+    const [statusOut, lastCommitRaw] = await Promise.all([
+      // WHY keep untracked-files=normal instead of the faster -uno:
+      // the Worktrees panel is a cleanup tool, so brand-new files in an agent
+      // branch are real user work and must keep the row "dirty". The expensive
+      // part we can safely trim is submodule worktree inspection: for cleanup
+      // triage, a submodule's recorded commit is the repository-level signal,
+      // while scanning every submodule's own untracked/modified files across
+      // many sibling worktrees multiplies filesystem work during orchestration.
+      git(worktree.path, [
+        'status',
+        '--porcelain',
+        '--untracked-files=normal',
+        '--ignore-submodules=dirty',
+      ]),
+      git(worktree.path, ['log', '-1', '--format=%ct%x00%cr']),
+    ])
+    const dirty = statusOut.trim().length > 0
+    const [lastCommitAtRaw = '', lastCommitRelativeRaw = ''] = lastCommitRaw.trim().split('\0')
+    const lastCommitRelative = lastCommitRelativeRaw || null
     const lastCommitAt =
       /^\d+$/.test(lastCommitAtRaw) ? Number(lastCommitAtRaw) * 1000 : null
 
@@ -182,27 +270,27 @@ async function computeWorktreeStatusForCwd(cwd: string): Promise<GitWorktreeStat
     let behind: number | null = null
     let patchUniqueAhead: number | null = null
     if (branch && branch !== 'main') {
-      mergedToMain = await new Promise<boolean>(resolve => {
-        execFile(
-          getToolPath('git', 'git'),
-          ['merge-base', '--is-ancestor', branch, 'main'],
-          { cwd, timeout: 5000 },
-          err => resolve(!err),
-        )
-      })
       const counts = parseRevListCounts(
         await git(cwd, ['rev-list', '--left-right', '--count', `main...${branch}`]),
       )
       behind = counts?.behind ?? null
       ahead = counts?.ahead ?? null
-      // Raw ahead/behind is ancestry-based. Squash merges and
-      // cherry-picks leave old branch commits "ahead" by SHA even
-      // when their patches already exist on main. `git cherry`
-      // answers the cleanup question we actually care about:
-      // does this branch contain any patch-unique work?
-      patchUniqueAhead = parsePatchUniqueAhead(
-        await git(cwd, ['cherry', 'main', branch]),
-      )
+      if (ahead === 0) {
+        mergedToMain = true
+        patchUniqueAhead = 0
+      } else if (ahead !== null) {
+        mergedToMain = false
+        // Raw ahead/behind is ancestry-based. Squash merges and
+        // cherry-picks leave old branch commits "ahead" by SHA even
+        // when their patches already exist on main. `git cherry`
+        // answers the cleanup question we actually care about:
+        // does this branch contain any patch-unique work? We only need it when
+        // rev-list says the branch has commits ahead; ahead==0 is already the
+        // cheap merged-to-main proof and avoids one subprocess per branch.
+        patchUniqueAhead = parsePatchUniqueAhead(
+          await git(cwd, ['cherry', 'main', branch]),
+        )
+      }
     } else if (branch === 'main') {
       mergedToMain = true
       ahead = 0
