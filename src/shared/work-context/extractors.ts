@@ -1,6 +1,6 @@
 import type { Entry } from '@shared/types/transcript'
 import { isConversationEntry } from '@shared/types/transcript'
-import { asRecord } from '@shared/lib/asRecord'
+import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 import type {
   WorkContextConfidence,
   WorktreeActivityEvent,
@@ -267,15 +267,6 @@ function isWriteTool(toolName: string): boolean {
     toolName === 'MultiEdit' ||
     toolName === 'NotebookEdit' ||
     toolName === 'apply_patch'
-}
-
-function parseJsonRecord(value: string | null): Record<string, unknown> | null {
-  if (!value) return null
-  try {
-    return asRecord(JSON.parse(value))
-  } catch {
-    return null
-  }
 }
 
 function stringField(

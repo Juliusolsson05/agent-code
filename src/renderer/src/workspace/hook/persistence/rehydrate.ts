@@ -31,6 +31,7 @@ import { loadInitialHistoryForSession } from '@renderer/workspace/hook/actions/i
 import {
   hasDurableProviderSession,
   resumableProviderSessionId,
+  seedResumedRuntimeFields,
   withoutProvisionalProviderSession,
 } from '@renderer/workspace/providerSessionIdentity'
 
@@ -385,14 +386,6 @@ export async function rehydrateWorkspace(
         out[newId] = {
           ...base,
           ...(draft && !base.draftInput ? { draftInput: draft } : {}),
-          hasOlderHistory: hasDurableProviderSession(freshSessions[newId]),
-          transcriptStatus:
-            base.transcriptStatus === 'ready' ||
-            base.transcriptStatus === 'error' ||
-            base.transcriptStatus === 'disconnected'
-              ? base.transcriptStatus
-              : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready',
-          transcriptError: base.transcriptError,
           // WHY preserve an already-observed lifecycle state:
           //
           // Provider start is not a quiet boundary. Codex resume can
@@ -402,13 +395,7 @@ export async function rehydrateWorkspace(
           // "started/inputReady" here makes dead resumed sessions look
           // alive until the user presses Enter and hits the backend
           // guard.
-          processStatus: existing && existing.processStatus !== 'idle'
-            ? existing.processStatus
-            : 'started',
-          processError: existing?.processError ?? null,
-          inputReady: existing && existing.processStatus !== 'idle'
-            ? existing.inputReady
-            : true,
+          ...seedResumedRuntimeFields(existing, freshSessions[newId]),
         }
       }
       for (const id of Object.keys(freshSessions)) {
@@ -436,19 +423,6 @@ export async function rehydrateWorkspace(
           processStatus: 'idle',
           processError: existing?.processError ?? null,
           inputReady: false,
-        }
-      }
-      // [xcript-diag #283] commitRehydratedState is the ONLY wholesale runtimes
-      // rebuild (out = {}), so it is the prime suspect for dropping a key whose
-      // initial-history load is still in flight. Log any key present in `prev`
-      // but absent from `out` — especially one mid-'loading' — to confirm
-      // whether this commit is what orphans the loader's 'ready' write. REMOVE
-      // once root cause is fixed.
-      for (const [id, runtime] of Object.entries(prev)) {
-        if (!out[id]) {
-          console.warn(
-            `[xcript-diag] commitRehydrated DROPS session=${id} (was transcriptStatus=${runtime.transcriptStatus}); not in idMap/freshSessions`,
-          )
         }
       }
       return out

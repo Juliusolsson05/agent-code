@@ -11,6 +11,10 @@ function envFlag(name: string): boolean {
   return value === '1' || value === 'true' || value === 'yes'
 }
 
+function isDevDebugEnabled(): boolean {
+  return envFlag('AGENT_CODE_DEV_DEBUG')
+}
+
 export function registerDevDebugIpc(): void {
   ipcMain.handle('dev-debug:get-config', (): DevDebugConfig => {
     return {
@@ -20,7 +24,7 @@ export function registerDevDebugIpc(): void {
       // project-root `.env` loader as performance telemetry gives us a
       // runtime switch that works in Electron dev without requiring a
       // Vite-prefixed renderer variable or rebuild-time config.
-      enabled: envFlag('AGENT_CODE_DEV_DEBUG'),
+      enabled: isDevDebugEnabled(),
     }
   })
 
@@ -30,7 +34,13 @@ export function registerDevDebugIpc(): void {
   // them back to reconstruct issued→detected latency. Renderer-only modules get
   // main-process data exactly this way — a thin invoke handler, no per-module
   // channel proliferation.
-  ipcMain.handle('dev-debug:read-paste-events', (_evt, limit?: number) =>
-    readRecentPasteSessions(typeof limit === 'number' ? limit : 30),
-  )
+  ipcMain.handle('dev-debug:read-paste-events', (_evt, limit?: number) => {
+    // The renderer already hides DevDebugPanel when the flag is off, but IPC is
+    // the trust boundary. Paste-debug journals contain timing, session, and
+    // payload fingerprints for private user input; leaving this handler open
+    // meant any renderer code with preload access could read them even when the
+    // operator explicitly did not enable dev debugging.
+    if (!isDevDebugEnabled()) return []
+    return readRecentPasteSessions(typeof limit === 'number' ? limit : 30)
+  })
 }

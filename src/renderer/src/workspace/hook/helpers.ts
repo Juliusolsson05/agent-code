@@ -245,11 +245,3 @@ export function usePaneToast(
     [paneToastTimers, updateRuntime],
   )
 }
-
-// Re-export so callers that want to apply state setters through a
-// provided updater without reimporting here can chain cleanly.
-export function applyRuntimeUpdate<T>(prev: T, next: T | ((prev: T) => T)): T {
-  return typeof next === 'function'
-    ? (next as (prev: T) => T)(prev)
-    : next
-}

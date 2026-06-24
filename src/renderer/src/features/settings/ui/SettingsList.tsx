@@ -10,7 +10,6 @@ type Props = {
   definitions: SettingDefinition[]
   settings: Settings
   selectedCategory: string
-  onChange: (patch: Partial<Settings>) => void
   actionContext: SettingActionContext
 }
 

@@ -5,6 +5,7 @@ import type {
   AiWorkspaceAttachFileParams,
   AiWorkspaceCreateParams,
   AiWorkspaceDetachFileParams,
+  AiWorkspaceWriteFileParams,
 } from '@mcp/shared/aiWorkspaceTypes.js'
 
 export function registerAiWorkspaceIpc(registry: AiWorkspaceRegistry): void {
@@ -32,7 +33,6 @@ export function registerAiWorkspaceIpc(registry: AiWorkspaceRegistry): void {
   )
   ipcMain.handle(
     'ai-workspace:write-file',
-    (_evt, params: { path: string; text: string; expectedMtimeMs?: number | null }) =>
-      registry.writeFile(params),
+    (_evt, params: AiWorkspaceWriteFileParams) => registry.writeFile(params),
   )
 }

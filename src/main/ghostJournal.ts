@@ -346,10 +346,15 @@ async function readCompactGhostState(path: string): Promise<GhostEntry[]> {
       } catch {
         continue
       }
-      if (!isGhost(parsed)) continue
-      const existing = current.get(parsed.uuid)
-      if (!existing || parsed._atp.updatedAt >= existing._atp.updatedAt) {
-        current.set(parsed.uuid, parsed)
+      // The runtime guard accepts unknown records in the parser source, but the
+      // package's re-exported declaration currently exposes the narrower generic
+      // overload first. Keep the unsafeness at this JSON boundary: after the guard
+      // returns true, the value is a GhostEntry for the rest of compaction.
+      if (!isGhost(parsed as never)) continue
+      const ghost = parsed as GhostEntry
+      const existing = current.get(ghost.uuid)
+      if (!existing || ghost._atp.updatedAt >= existing._atp.updatedAt) {
+        current.set(ghost.uuid, ghost)
       }
     }
   } catch {

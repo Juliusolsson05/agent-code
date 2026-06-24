@@ -31,6 +31,7 @@ import { memo, useMemo, useState } from 'react'
 import hljs from 'highlight.js'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { escapeHtml, toHighlightLanguage } from '@shared/code/htmlHighlight'
 import { normalizeCodeLanguage } from '@shared/code/language'
 import type { GitIntent } from '@shared/git/gitDetect'
 import {
@@ -110,16 +111,6 @@ function PlusMinus({ added, removed }: { added: number; removed: number }) {
 // ---------------------------------------------------------------------------
 // Diff hunk renderer
 // ---------------------------------------------------------------------------
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-
-function toHighlightLanguage(language: string): string | null {
-  if (language === 'javascriptreact') return 'javascript'
-  if (language === 'typescriptreact') return 'typescript'
-  return hljs.getLanguage(language) ? language : null
-}
 
 /**
  * Render a sequence of {hunk, lines} for one file. Hunk header rows

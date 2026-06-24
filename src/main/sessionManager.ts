@@ -14,8 +14,13 @@ import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
+import type { SessionKind } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import type {
+  SessionSpawnOptions,
+  SessionSpawnResult,
+} from '@preload/api/types.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -39,7 +44,12 @@ import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 // IPC forwarder can emit them on kind-specific channels if it wants
 // (today the renderer just checks the kind on its side).
 
-export type SessionKind = 'claude' | 'codex' | 'terminal'
+// SessionKind is the shared provider/session-kind source of truth
+// (@shared/types/providerKind). Re-exported here because MCP runtime
+// imports `SessionKind` from `@main/sessionManager`; keeping the
+// re-export preserves that import path while removing the duplicate
+// inline union that used to drift from preload/renderer copies.
+export type { SessionKind } from '@shared/types/providerKind.js'
 
 // WHY private: this is the EventEmitter event map for SessionManager.
 // It's used internally to type `on()`/`off()`/`emit()` overloads (see
@@ -87,77 +97,19 @@ type ManagerEvents = {
   conditions: [{ sessionId: string; snapshot: ProviderConditionSnapshot }]
   /** Emitted only by terminal sessions — raw PTY output for xterm.js. */
   'terminal-data': [{ sessionId: string; data: string }]
-  /** Emitted only by Claude sessions. Proxy-driven per-block semantic
-   *  stream (or screen-fallback turn-level deltas when the session
-   *  was spawned without `useProxy`). Payload is a discriminated
-   *  union from claude-code-headless — see EVENT_SPEC.md and the
-   *  `SemanticEvent` type there. Forwarded as `unknown` at this layer
-   *  because the manager is deliberately provider-agnostic; the
+  /** Emitted by agent providers that expose a semantic stream — currently
+   *  BOTH Claude and Codex (this comment used to say "only by Claude", which is
+   *  stale: CodexSession forwards semantic events too, see codexSession's
+   *  'semantic-event' forwarding). Per-block stream, proxy-driven for Claude
+   *  (or screen-fallback turn-level deltas without `useProxy`) and rollout/proxy
+   *  derived for Codex. Payload is a provider discriminated union — see
+   *  EVENT_SPEC.md. Forwarded as `unknown` at this layer ON PURPOSE: the manager
+   *  is provider-agnostic and must NOT couple to one provider's schema; the
    *  renderer narrows by `ev.type`. */
   'semantic-event': [{ sessionId: string; event: unknown }]
+  /** Internal cleanup signal emitted exactly before a session leaves the manager. */
+  removed: [{ sessionId: string }]
   exit: [{ sessionId: string; exitCode: number; signal?: number }]
-}
-
-// WHY private: SpawnOptions is the argument shape for the spawn()
-// method on this class. No external file types its own spawn() wrapper
-// in terms of this — IPC handlers convert from their JSON-RPC payload
-// shapes inline. Privatizing prevents accidental cross-module coupling
-// to a type that will keep evolving alongside spawn() internals.
-type SpawnOptions = {
-  /**
-   * Trusted renderer restore path only: reuse an existing workspace SessionId
-   * when a persisted renderer record needs a fresh backend after app restart.
-   *
-   * WHY this exists instead of always minting and remapping:
-   * normal user actions can tolerate a new Agent Code routing id because the
-   * renderer is actively performing the replacement and can remap tile leaves,
-   * pins, tiled lanes, parent/child links, and MCP ownership in one commit.
-   * Restart wake is different: callers already hold a durable SessionId from
-   * workspace.json and may be inside an MCP request that names that id. Reusing
-   * the id lets "metadata exists but main has no PTY" become a pure backend
-   * repair, not a cross-store identity migration.
-   */
-  preferredSessionId?: string
-  /** Which kind of session to spawn. Defaults to 'claude' so the
-   *  pre-existing call sites keep working without a kind arg. */
-  kind?: SessionKind
-  cwd: string
-  cols?: number
-  rows?: number
-  /** Claude only: if set, spawn with --resume <uuid> and tail the
-   *  existing session file. Silently ignored for terminal sessions. */
-  resumeSessionId?: string
-  /** Agent sessions only: opt into provider-specific dangerous mode. */
-  dangerousMode?: boolean
-  /** Claude only: opt into proxy-driven semantic streaming. Default
-   *  false — screen parsing stays the semantic source and no
-   *  mitmproxy process is spawned. When true, ClaudeSession spawns a
-   *  per-session mitmproxy, launches Claude through it with CA trust
-   *  injected, and the renderer gets per-block semantic events via
-   *  `session:semantic-event`. Ignored for Codex and terminal
-   *  sessions. */
-  useProxy?: boolean
-  /** Terminal + tmux only: when set AND tmux is available, attach to
-   *  this existing tmux session instead of creating a new one. Used
-   *  by the workspace reload path to recover persistent terminals
-   *  (see Task 8 / tmuxRecovery). When the named session no longer
-   *  exists, falls back to creating a fresh one. */
-  recoverTmuxName?: string
-  /** Agent sessions only: built-in Agent Code MCP domains to expose
-   *  to this provider process. Main converts these stable domain names
-   *  into per-session loopback URLs + bearer tokens at spawn time. */
-  builtInMcpDomains?: BuiltInMcpDomain[]
-}
-
-// WHY private: same reasoning as SpawnOptions — the IPC handler that
-// returns this to the renderer flattens it into a JSON payload at the
-// boundary, so external code never sees the named type.
-type SpawnResult = {
-  sessionId: string
-  /** Set only when a tmux-backed terminal was spawned (or recovered).
-   *  Renderer must persist this so a subsequent launch can recover
-   *  the same session via `recoverTmuxName`. */
-  tmuxName?: string
 }
 
 type PtySize = { cols: number; rows: number }
@@ -354,6 +306,34 @@ export class SessionManager extends EventEmitter {
     this.lastActivityAt.set(sessionId, Date.now())
   }
 
+  private cleanupSessionState(sessionId: string, kind: SessionKind): void {
+    // WHY this helper exists even before the larger SessionState consolidation:
+    // per-session state currently lives in several maps whose lifetimes must end
+    // together. Keeping all deletes here makes the removal invariant visible and
+    // prevents the exact leak class this file had: a new per-session map being
+    // added to spawn paths but forgotten in one teardown branch. External
+    // resources (JSONL coalescer buffers and subagent watchers) are cleaned by
+    // the separate `removed` event so SessionManager does not import forwarder
+    // internals.
+    this.sessions.delete(sessionId)
+    // Keep lastActivityAt after removal. Process telemetry can be asked about a
+    // pane the renderer still knows but whose PTY already exited; deleting this
+    // tiny timestamp made those recently-exited panes look like they had never
+    // produced activity. Live ownership is `sessions`, not this map, so retaining
+    // the timestamp does not keep a process/session alive.
+    this.sessionSizes.delete(sessionId)
+    if (kind === 'terminal') {
+      this.terminalBuffers.delete(sessionId)
+      this.terminalAttached.delete(sessionId)
+    } else {
+      this.agentPtyBuffers.delete(sessionId)
+      this.agentPtyAttachCounts.delete(sessionId)
+      this.agentPtyRestoreSizes.delete(sessionId)
+      this.builtInMcpHost?.revokeSession(sessionId)
+    }
+    forgetFeedDebugSession(sessionId)
+  }
+
   /**
    * Spawn a new session and return its sessionId. Blocks until the PTY
    * is spawned — after this resolves the caller can immediately start
@@ -362,7 +342,7 @@ export class SessionManager extends EventEmitter {
    * For Claude sessions, start() also attaches the JSONL watcher; for
    * terminal sessions it's just the PTY spawn.
    */
-  async spawn(options: SpawnOptions): Promise<SpawnResult> {
+  async spawn(options: SessionSpawnOptions): Promise<SessionSpawnResult> {
     const kind: SessionKind = options.kind ?? 'claude'
     const sessionId = options.preferredSessionId ?? randomUUID()
     if (this.sessions.has(sessionId) || this.spawningSessionIds.has(sessionId)) {
@@ -414,8 +394,7 @@ export class SessionManager extends EventEmitter {
       // every provider that registers through the registry is
       // contracted to expose start/stop/write/resize + the standard
       // 'started'/'pty-data'/'screen'/'jsonl-entry'/'jsonl-error'/
-      // 'process-state'/'trust-dialog'/'resume-prompt'/
-      // 'compaction-state'/'semantic-event'/'exit' events. We use
+      // 'process-state'/'conditions'/'semantic-event'/'exit' events. We use
       // a narrow structural cast so provider-specific implementation
       // details don't leak into the manager.
       const session = provider.createSession({
@@ -481,16 +460,20 @@ export class SessionManager extends EventEmitter {
           this.emit('process-state', { sessionId, ...state })
         },
       )
-      session.on('trust-dialog', (state: { visible: boolean; workspace?: string }) =>
-        this.emit('trust-dialog', { sessionId, ...state }),
-      )
+      session.on('trust-dialog', (state: { visible: boolean; workspace?: string }) => {
+        this.markActivity(sessionId)
+        this.emit('trust-dialog', { sessionId, ...state })
+      })
       session.on('resume-prompt', (state: {
         visible: boolean
         sessionAgeText?: string
         tokenCountText?: string
         options?: string[]
         selectedIndex?: number
-      }) => this.emit('resume-prompt', { sessionId, ...state }))
+      }) => {
+        this.markActivity(sessionId)
+        this.emit('resume-prompt', { sessionId, ...state })
+      })
       session.on('permission-prompt', (state: {
         visible: boolean
         title?: string
@@ -498,13 +481,19 @@ export class SessionManager extends EventEmitter {
         command?: string
         options?: Array<{ key: string; label: string }>
         selectedIndex?: number
-      }) => this.emit('permission-prompt', { sessionId, ...state }))
+      }) => {
+        this.markActivity(sessionId)
+        this.emit('permission-prompt', { sessionId, ...state })
+      })
       session.on('compaction-state', (state: {
         visible: boolean
         phase?: 'running' | 'error' | 'done'
         statusText?: string
         errorText?: string
-      }) => this.emit('compaction-state', { sessionId, ...state }))
+      }) => {
+        this.markActivity(sessionId)
+        this.emit('compaction-state', { sessionId, ...state })
+      })
       session.on('conditions', (snapshot: ProviderConditionSnapshot) => {
         this.markActivity(sessionId)
         this.emit('conditions', { sessionId, snapshot })
@@ -515,19 +504,9 @@ export class SessionManager extends EventEmitter {
       })
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
         this.markActivity(sessionId)
+        this.emit('removed', { sessionId })
         this.emit('exit', { sessionId, exitCode, signal })
-        this.builtInMcpHost?.revokeSession(sessionId)
-        this.sessions.delete(sessionId)
-        this.agentPtyBuffers.delete(sessionId)
-        this.agentPtyAttachCounts.delete(sessionId)
-        this.agentPtyRestoreSizes.delete(sessionId)
-        this.sessionSizes.delete(sessionId)
-        // Mirrors `kill()`: a session that exits naturally (provider
-        // process died, user typed /exit, etc.) leaves a cursor entry
-        // in `lastWrittenFeedDebugId` that would otherwise live until
-        // the main process restarted. Cheap delete, idempotent if the
-        // session never produced feed-debug entries.
-        forgetFeedDebugSession(sessionId)
+        this.cleanupSessionState(sessionId, kind)
       })
 
       this.sessions.set(sessionId, { kind, session })
@@ -551,12 +530,8 @@ export class SessionManager extends EventEmitter {
         // collect the whole graph. We do NOT call removeAllListeners
         // on `session` because the wrapper already owns its own
         // EventEmitter — nothing outside the registry subscribed.
-        this.sessions.delete(sessionId)
-        this.agentPtyBuffers.delete(sessionId)
-        this.agentPtyAttachCounts.delete(sessionId)
-        this.agentPtyRestoreSizes.delete(sessionId)
-        this.sessionSizes.delete(sessionId)
-        this.builtInMcpHost?.revokeSession(sessionId)
+        if (this.sessions.has(sessionId)) this.emit('removed', { sessionId })
+        this.cleanupSessionState(sessionId, kind)
         performanceService.error('session.spawn.providerStart.error', err, {
           sessionId,
           kind,
@@ -587,10 +562,10 @@ export class SessionManager extends EventEmitter {
     if (useTmux) {
       const tmuxStartedAt = performance.now()
       const reg = this.tmuxRegistry!
-      if (
-        options.recoverTmuxName &&
-        (await reg.sessionExists(options.recoverTmuxName))
-      ) {
+      const recoveredTmux = options.recoverTmuxName
+        ? await reg.sessionExists(options.recoverTmuxName)
+        : false
+      if (options.recoverTmuxName && recoveredTmux) {
         // Reattach path — tmux owned this session through the previous
         // Agent Code launch and it's still alive. Reuse the name; do
         // NOT createSession (that would error or duplicate).
@@ -611,7 +586,7 @@ export class SessionManager extends EventEmitter {
         durationMs: performance.now() - tmuxStartedAt,
         sessionId,
         provider: 'terminal',
-        data: { recovered: Boolean(options.recoverTmuxName && tmuxSessionName) },
+        data: { recovered: recoveredTmux },
       })
     }
 
@@ -685,16 +660,9 @@ export class SessionManager extends EventEmitter {
     })
     session.on('exit', ({ exitCode, signal }) => {
       this.markActivity(sessionId)
+      this.emit('removed', { sessionId })
       this.emit('exit', { sessionId, exitCode, signal })
-      this.sessions.delete(sessionId)
-      this.terminalBuffers.delete(sessionId)
-      this.terminalAttached.delete(sessionId)
-      this.sessionSizes.delete(sessionId)
-      // Same rationale as the agent-session exit path above: drop the
-      // feed-debug cursor so it can't outlive the session it tracks.
-      // Idempotent for terminal sessions that never produced feed-debug
-      // entries.
-      forgetFeedDebugSession(sessionId)
+      this.cleanupSessionState(sessionId, 'terminal')
     })
 
     this.sessions.set(sessionId, { kind: 'terminal', session, tmuxName: tmuxSessionName })
@@ -719,10 +687,8 @@ export class SessionManager extends EventEmitter {
       // a half-dead TerminalSession that callers might still try to
       // write()/resize()/kill(). Roll back everything we added in
       // THIS spawn so the caller can retry from a clean slate.
-      this.sessions.delete(sessionId)
-      this.terminalBuffers.delete(sessionId)
-      this.terminalAttached.delete(sessionId)
-      this.sessionSizes.delete(sessionId)
+      if (this.sessions.has(sessionId)) this.emit('removed', { sessionId })
+      this.cleanupSessionState(sessionId, 'terminal')
       performanceService.error('session.spawn.terminalStart.error', err, { sessionId })
       throw err
     }
@@ -1019,20 +985,14 @@ export class SessionManager extends EventEmitter {
     // launch-time reconcile() classifies the still-alive tmux as an
     // orphan and kills it. This is the explicit "buffer for undo"
     // behavior the user asked for in the P1 brainstorm.
-    this.sessions.delete(sessionId)
-    this.builtInMcpHost?.revokeSession(sessionId)
-    if (entry.kind === 'claude' || entry.kind === 'codex') {
-      this.agentPtyBuffers.delete(sessionId)
-      this.agentPtyAttachCounts.delete(sessionId)
-      this.agentPtyRestoreSizes.delete(sessionId)
+    if (this.sessions.get(sessionId) !== entry) {
+      // stop() emitted exit synchronously and the exit handler already emitted
+      // `removed` + cleaned every map. Returning here avoids a second final JSONL
+      // flush / subagent-stop from the explicit kill path.
+      return true
     }
-    this.sessionSizes.delete(sessionId)
-    // Drop feed-debug bookkeeping for this session. The on-disk JSONL
-    // is left intact (a debug bundle saved later may still want it);
-    // we only release the in-memory cursor that would otherwise live
-    // forever in lastWrittenFeedDebugId. The write-queue Map self-
-    // reaps in queueFeedDebugAppend when its chain settles.
-    forgetFeedDebugSession(sessionId)
+    this.emit('removed', { sessionId })
+    this.cleanupSessionState(sessionId, entry.kind)
     return true
   }
 

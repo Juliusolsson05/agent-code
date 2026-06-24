@@ -16,3 +16,34 @@ export function asRecord(value: unknown): Record<string, unknown> | null {
     ? value as Record<string, unknown>
     : null
 }
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return asRecord(value) !== null
+}
+
+export function asRecordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap(item => {
+    const record = asRecord(item)
+    return record ? [record] : []
+  })
+}
+
+// Parse a JSON string and narrow the result to a record in one step.
+//
+// WHY co-located with asRecord: several semantic-render / proxy / transcript
+// call sites hand-rolled `JSON.parse(...)` wrapped in the exact same
+// object-but-not-array-not-null check (e.g. feed `renderUnits.parseRecord`).
+// Folding that into one helper means the "is this a record" rule has a single
+// definition and the try/catch-on-invalid-JSON behavior can't drift. Returns
+// null for invalid JSON, non-object JSON (string/number/bool/null), and arrays.
+export function parseJsonRecord(
+  text: string | null | undefined,
+): Record<string, unknown> | null {
+  if (!text) return null
+  try {
+    return asRecord(JSON.parse(text))
+  } catch {
+    return null
+  }
+}

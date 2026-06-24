@@ -5,6 +5,29 @@ import {
   getEffectiveAgentSurface,
 } from '@renderer/workspace/agentDisplayMode'
 import { emptyRuntime } from '@renderer/workspace/workspaceState'
+import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+
+// A claude snapshot carrying a single visible permission prompt — the canonical
+// "there is a live condition on screen" fixture for display-mode promotion.
+const visiblePermissionSnapshot: ProviderConditionSnapshot = {
+  provider: 'claude',
+  ts: 1,
+  conditions: {
+    'claude.permission-prompt': {
+      kind: 'claude.permission-prompt',
+      state: { visible: true, title: 'Run command?' },
+      actions: [],
+    },
+  },
+}
+
+// A non-null snapshot whose condition map is empty — must NOT promote Hybrid
+// (conditions audit Additional Finding A: snapshot presence ≠ active condition).
+const emptySnapshot: ProviderConditionSnapshot = {
+  provider: 'claude',
+  ts: 1,
+  conditions: {},
+}
 
 describe('agent display mode policy', () => {
   it('keeps Agent mode on the rendered surface even without leases', () => {
@@ -58,7 +81,7 @@ describe('agent display mode policy', () => {
       { draftInput: 'prefilled prompt' },
       { draftImages: [{ id: 'img', mediaType: 'image/png', base64Data: 'x', previewUrl: 'blob:x', filename: 'x.png' }] },
       { promptSuggestion: { text: 'try this next', receivedAt: 1 } },
-      { conditions: { kind: 'approval', prompts: [] } as never },
+      { conditions: visiblePermissionSnapshot },
       { queuedMessages: [{ content: 'queued', timestamp: '2026-06-23T00:00:00.000Z' }] },
     ]
 
@@ -71,6 +94,18 @@ describe('agent display mode policy', () => {
         }),
       ).toBe('rendered')
     }
+  })
+
+  it('does not promote Hybrid for a non-null but empty condition snapshot', () => {
+    // Regression for conditions audit Additional Finding A: a provider can leave
+    // an empty-but-present snapshot attached; it must not flip pane layout.
+    expect(
+      getEffectiveAgentSurface({
+        kind: 'claude',
+        mode: 'hybrid',
+        runtime: { ...emptyRuntime(), conditions: emptySnapshot },
+      }),
+    ).toBe('terminal')
   })
 
   it('allows leasing commands in Hybrid but not hard Terminal mode', () => {

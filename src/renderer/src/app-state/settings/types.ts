@@ -1,4 +1,5 @@
 import { DEFAULT_CUSTOM_APPEARANCE_JSON } from '@renderer/app-state/settings/customAppearance'
+import type { DictationProvider } from '@shared/types/dictation'
 
 export type ThemeMode =
   | 'dark'
@@ -108,7 +109,7 @@ export const AGENT_VIEW_MODES: AgentViewModeMeta[] = [
   },
 ]
 
-export type DictationProviderId = 'deepgram'
+export type DictationProviderId = DictationProvider
 
 // Font choice for the entire app. This is the single source of truth for
 // "what monospace face does Agent Code render in" — normal DOM inherits

@@ -360,6 +360,18 @@ export type SessionRuntime = {
   unreadSince: number | null
   unreadKind: 'output' | 'attention' | null
   paneToast: string | null
+  // COMPATIBILITY / CACHE FIELDS — NOT a source of truth (conditions audit
+  // Finding 1). The authoritative live-prompt state is `conditions` above; these
+  // `pending*` fields are derived caches written by `applyConditionSnapshot` from
+  // the SAME snapshot. New code must read `runtime.conditions` (via
+  // `workspace/conditions/selectors.ts`), not these mirrors — keeping two
+  // independent truth surfaces is exactly the split-authority bug the audit
+  // calls out (e.g. the unread/attention transition was moved onto
+  // `conditionRequiresAttention` precisely to stop depending on these). They are
+  // cleared together with `conditions` on session exit via
+  // `clearConditionRuntimeState`. They survive only until every remaining
+  // consumer (notably compaction status in agent-status) is migrated, after
+  // which they should be deleted.
   pendingApproval: {
     callId: string | null
     command: string[]
@@ -409,6 +421,15 @@ export type SessionRuntime = {
   // reference through context, not by shallow compare.
   toolUseIndex: Map<string, ToolUseBlock>
   toolResultIndex: Map<string, ToolResultBlock>
+  // Monotonic invalidation token for the tool-index maps above (feed audit
+  // Finding 1). The maps mutate in place, so their reference identity can NOT
+  // tell React context consumers that a cross-entry tool_use↔tool_result
+  // pairing changed. Ingest paths bump this whenever `indexEntryIntoMaps`
+  // reports a real change; Feed derives its tool-index context value identity
+  // from this number so an already-mounted tool-use row (e.g. a GitCardRow
+  // waiting on its paired result) repaints when the result lands in a later
+  // entry. This is purely a render-invalidation token, not data-model state.
+  toolIndexVersion: number
   tailMode: boolean
   /** Runtime-only leases that temporarily request Agent Code's rendered feed.
    *
@@ -618,6 +639,7 @@ export function emptyRuntime(): SessionRuntime {
     bootstrapping: false,
     toolUseIndex: new Map(),
     toolResultIndex: new Map(),
+    toolIndexVersion: 0,
     tailMode: false,
     renderedViewLeases: {},
     scrollToLatestRequest: 0,

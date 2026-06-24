@@ -3,16 +3,15 @@ import { createHash } from 'node:crypto'
 
 import type { SessionManager } from '@main/sessionManager.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
+import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
-import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList.js'
-import { listCodexSessions } from '@providers/codex/runtime/sessionList.js'
 import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
-import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
+import type { SessionSpawnOptions } from '@preload/api/types.js'
 
 // Session lifecycle + I/O IPC.
 //
@@ -35,18 +34,7 @@ export function registerSessionIpc(
     'session:spawn',
     async (
       _evt,
-      options: {
-        kind?: 'claude' | 'codex' | 'terminal'
-        preferredSessionId?: string
-        cwd: string
-        cols?: number
-        rows?: number
-        resumeSessionId?: string
-        dangerousMode?: boolean
-        useProxy?: boolean
-        recoverTmuxName?: string
-        builtInMcpDomains?: BuiltInMcpDomain[]
-      },
+      options: SessionSpawnOptions,
     ) => {
       return await manager.spawn(options)
     },
@@ -93,7 +81,7 @@ export function registerSessionIpc(
       // against main-received chunks (PR #68).
       if (typeof pasteId === 'string' && pasteId.length > 0) {
         const bytes = Buffer.byteLength(data, 'utf8')
-        const sha8 = createHash('sha256').update(data).digest('hex').slice(0, 8)
+        const sha8 = sha8FromDigestBytes(createHash('sha256').update(data).digest())
         // Head preview is escape-safe: replace ESC with `\e` and CR
         // with `\r` so the JSONL line is readable when you cat the
         // file. The raw bytes are never logged — sha8 is the
@@ -193,14 +181,14 @@ export function registerSessionIpc(
     async (_evt, limit?: number) => {
       const cap = typeof limit === 'number' && limit > 0 ? limit : 200
       try {
-        const [claude, codex] = await Promise.all([
-          listAllClaudeSessions({ limit: cap }).catch(() => []),
-          listCodexSessions({ limit: cap }).catch(() => []),
-        ])
-        const tagged = [
-          ...claude.map(s => ({ ...s, provider: 'claude' as const })),
-          ...codex.map(s => ({ ...s, provider: 'codex' as const })),
-        ]
+        const providers = ['claude', 'codex'] as const
+        const listed = await Promise.all(providers.map(async provider => {
+          const providerConfig = getMainProvider(provider)
+          if (!providerConfig.listAllSessions) return []
+          const sessions = await providerConfig.listAllSessions(cap).catch(() => [])
+          return sessions.map(s => ({ ...s, provider }))
+        }))
+        const tagged = listed.flat()
         tagged.sort((a, b) => b.lastModified - a.lastModified)
         return tagged.slice(0, cap)
       } catch (err) {

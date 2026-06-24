@@ -1,20 +1,8 @@
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCommand'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-function buildResumeCommand(kind: 'claude' | 'codex', cwd: string, providerSessionId: string): string {
-  const cd = `cd ${shellQuote(cwd)}`
-  const resume = kind === 'codex'
-    ? `codex resume ${shellQuote(providerSessionId)}`
-    : `claude --resume ${shellQuote(providerSessionId)}`
-  return `${cd} && ${resume}`
-}
 
 function builtInMcpDomainState(
   ctx: CommandContext,
@@ -524,7 +512,7 @@ export const sessionCommands: CommandDef[] = [
       const kind = meta?.kind ?? 'claude'
       if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) return
 
-      const command = buildResumeCommand(kind, meta.cwd, meta.providerSessionId)
+      const command = buildProviderResumeCommand(kind, meta.cwd, meta.providerSessionId)
       ui.closePalette()
       try {
         await navigator.clipboard.writeText(command)

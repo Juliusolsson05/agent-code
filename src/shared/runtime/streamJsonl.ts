@@ -27,9 +27,10 @@ import { createInterface } from 'readline'
 // yield mapped(line)` in their own async generator.
 //
 // NOT a tailer: this helper opens the file at a snapshot of its current
-// size and yields once. For live-growing files use FileTailer in
-// `jsonlTailer.ts`, which tracks offsets and re-reads on chokidar/poll
-// events.
+// size and yields once. Live-growing provider transcripts are tailed by the
+// package-owned JsonlTailer implementations in `packages/*-headless`; the old
+// shared runtime tailer was a superseded ancestor and was deliberately removed
+// so this folder does not look like it owns provider lifecycle watching.
 export async function* streamJsonl<T = unknown>(
   path: string,
 ): AsyncIterable<T | null> {

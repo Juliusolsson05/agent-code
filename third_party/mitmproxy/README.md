@@ -58,8 +58,7 @@ A version bump is a single-file PR to `manifest.json`:
 4. CI re-runs `fetch` + `verify` against the new hashes.
 
 That keeps the binary out of git history while making upgrades trivial to
-review. The optional `scripts/runtime-tools/bump-mitmproxy.mjs` can write
-this PR for you from the latest upstream release.
+review.
 
 ## License
 

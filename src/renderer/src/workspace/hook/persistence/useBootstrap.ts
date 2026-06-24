@@ -157,12 +157,7 @@ export function useBootstrap(
           // done automatically. Conservative — a no-op when nothing is stuck.
           for (const delayMs of STUCK_TRANSCRIPT_HEAL_DELAYS_MS) {
             setTimeout(() => {
-              const healed = reconcileStuckTranscriptLoads({ refs, setRuntimes })
-              if (healed > 0) {
-                console.warn(
-                  `[xcript-heal #283] re-drove ${healed} stuck pane(s) at +${delayMs}ms`,
-                )
-              }
+              reconcileStuckTranscriptLoads({ refs, setRuntimes })
             }, delayMs)
           }
           if (!restoreResult.complete) {

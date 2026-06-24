@@ -228,10 +228,13 @@ export class TerminalSession extends EventEmitter {
    *  tmux client (tmux mode). Idempotent. */
   async stop(): Promise<void> {
     if (this.runtime === 'tmux' && this.pty) {
-      // Detach this client cleanly so the tmux session keeps running
-      // for next launch. Sending the tmux detach prefix (^B d) is the
-      // most reliable way — killing the PTY would also work but leaves
-      // a transient "[detached]" message the next attacher would see.
+      // Detach this client cleanly so the tmux session keeps running for next
+      // launch. This assumes the Agent Code tmux config keeps tmux's default
+      // prefix binding; if src/main/tmux/tmuxConfig.ts ever adds a `prefix`
+      // flag, this keystroke must move behind a registry-owned `detach-client`
+      // command so TerminalSession does not encode stale tmux UI policy.
+      // Killing the PTY would also work but leaves a transient "[detached]"
+      // message the next attacher would see.
       try {
         this.pty.write('\x02d')   // ^B then 'd' — tmux's default detach binding
         // Give tmux ~50ms to process the detach before we kill the

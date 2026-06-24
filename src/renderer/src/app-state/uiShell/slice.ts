@@ -107,8 +107,8 @@ export const createUiShellSlice: StateCreator<
   closeTiledDispatchPrompt: () =>
     set({ tiledDispatchPromptOpen: false }, false, 'uiShell/closeTiledDispatchPrompt'),
 
-  openDispatchAttach: sessionId =>
-    set({ dispatchAttachIntent: sessionId }, false, 'uiShell/openDispatchAttach'),
+  openDispatchAttach: intent =>
+    set({ dispatchAttachIntent: intent }, false, 'uiShell/openDispatchAttach'),
   closeDispatchAttach: () =>
     set({ dispatchAttachIntent: null }, false, 'uiShell/closeDispatchAttach'),
 

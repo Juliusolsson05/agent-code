@@ -77,7 +77,6 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
             definitions={visibleDefinitions}
             settings={settings}
             selectedCategory={selectedCategory}
-            onChange={onChange}
             actionContext={{
               workspace,
               settings,

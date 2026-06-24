@@ -11,9 +11,6 @@ import {
 } from '@renderer/app-state/settings/types'
 import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
-import {
-  APP_SETTINGS_STORAGE_KEY,
-} from '@renderer/app-state/localStorageMigration'
 
 export function coerceSettings(value: unknown): Settings {
   const parsed = value && typeof value === 'object'
@@ -95,14 +92,4 @@ function coerceCommandVisibilityOverrides(value: unknown): Record<string, boolea
     if (typeof entry === 'boolean') result[key] = entry
   }
   return result
-}
-
-export function loadInitialSettings(): Settings {
-  try {
-    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY)
-    if (!raw) return DEFAULT_SETTINGS
-    return coerceSettings(JSON.parse(raw))
-  } catch {
-    return DEFAULT_SETTINGS
-  }
 }

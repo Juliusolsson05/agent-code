@@ -3,6 +3,8 @@ import { basename, join } from 'path'
 
 import { getProjectDirForCwd, getProjectsDir } from '@shared/runtime/projectDir.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
+import type { SessionInfo } from '@shared/types/session.js'
+export type { SessionInfo } from '@shared/types/session.js'
 
 // Session lister — reimplements the minimal subset of CC's
 // utils/listSessionsImpl.ts needed to power the Agent Code resume UI.
@@ -31,26 +33,6 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 // Everything here is pure Node I/O — no Electron, no React, no xterm.
 // Lives under src/core/runtime/ so main can import it directly. The
 // testbench can too, for future session-list regression tests.
-
-/** Public-facing session metadata. Matches CC's SessionInfo shape
- *  closely so if we later import CC's lister it's a drop-in swap. */
-export type SessionInfo = {
-  sessionId: string
-  /** Best-effort "what this session was about" — custom title if set,
-   *  else last user prompt, else first user prompt. */
-  summary: string
-  /** File mtime in epoch ms. Primary sort key. */
-  lastModified: number
-  fileSize: number
-  customTitle?: string
-  firstPrompt?: string
-  gitBranch?: string
-  /** Cwd recorded in the session's first entry — useful for cross-cwd
-   *  resume where the current cwd doesn't match the session's. */
-  cwd?: string
-  /** Epoch ms from the first entry's ISO timestamp if parseable. */
-  createdAt?: number
-}
 
 export type ListSessionsOptions = {
   /** Max sessions to return. Default 20. */

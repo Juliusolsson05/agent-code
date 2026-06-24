@@ -27,15 +27,10 @@ const SUPPORTED_CLAUDE_IMAGE_MEDIA_TYPES = new Set([
 
 const MAX_CLAUDE_IMAGE_BYTES = 5 * 1024 * 1024
 
-export type SaveClaudeImageParams = {
-  base64Data: string
-  mediaType: string
-  filename?: string
-}
-
-export type SavedClaudeImage = {
-  path: string
-}
+// Params/result are the shared IPC contract (also bridged from
+// @preload/api/fs and validated here). See @shared/types/claudeImage.
+export type { SaveClaudeImageParams, SavedClaudeImage } from '@shared/types/claudeImage.js'
+import type { SaveClaudeImageParams, SavedClaudeImage } from '@shared/types/claudeImage.js'
 
 function extensionForMediaType(mediaType: string, filename?: string): string {
   switch (mediaType) {

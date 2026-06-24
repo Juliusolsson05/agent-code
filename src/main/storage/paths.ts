@@ -8,7 +8,12 @@ import { APP_SLUG } from '@shared/appIdentity.js'
 // STATE_DIR follows XDG on Linux but uses ~/.config on macOS too —
 // it's simpler than mirroring Electron's per-platform userData logic,
 // the file is tiny, and the user has explicit control over it.
-// Everything persisted by Agent Code lives under this one directory.
+//
+// This is the root for app-owned state, but it is no longer the only
+// persistence root in the process: a few historical debug journals still live
+// under Electron `userData` so older investigative files stay discoverable.
+// Keep new cache-like diagnostics here unless a migration note explains why a
+// historical `userData` root must be preserved.
 
 export const STATE_DIR = join(homedir(), '.config', APP_SLUG)
 
@@ -46,3 +51,10 @@ export const PROXY_EVENTS_DIR = join(STATE_DIR, 'proxy')
 // Environment-gated app performance traces. One folder per app run,
 // written only when AGENT_CODE_PERF=1.
 export const PERFORMANCE_RUNS_DIR = join(STATE_DIR, 'performance', 'runs')
+
+// Heap snapshots are among the largest forensic artifacts the app can create.
+// Keeping the directory as a named storage root prevents the capture paths from
+// quietly drifting away from debug retention again; if a writer stores a
+// `.heapsnapshot` somewhere else, that writer is opting out of the disk budget
+// and should justify it in the diff.
+export const HEAP_SNAPSHOT_DIR = join(STATE_DIR, 'heap-snapshots')

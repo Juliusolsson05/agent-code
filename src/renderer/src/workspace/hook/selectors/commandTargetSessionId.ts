@@ -23,11 +23,7 @@
 //   useWorkspace as a derived getter that everything reads automatically;
 //   the explicit import is the documentation.
 
-import {
-  buildVisibleDispatchRows,
-  selectVisibleDispatchRow,
-} from '@renderer/workspace/dispatch/dispatchSelectors'
-import { dispatchFocusedSessionId } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import { resolveStrictDispatchCommandTarget } from '@renderer/workspace/dispatch/dispatchTarget'
 import { selectedGridRelatedSessionId } from '@renderer/workspace/gridRelatedAgents'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -37,8 +33,8 @@ export function commandTargetSessionId(workspace: Workspace): string | null {
 }
 
 export function commandTargetSessionIdForState(state: WorkspaceState): SessionId | null {
-  const activeTab = state.tabs.find(tab => tab.id === state.activeTabId)
   if (!state.dispatchMode) {
+    const activeTab = state.tabs.find(tab => tab.id === state.activeTabId)
     // WHY grid related selection participates in command targeting:
     // the physical tile focus must remain the parent leaf, but once the pane is
     // visibly rendering a related child, global commands like reload/close/copy
@@ -52,18 +48,13 @@ export function commandTargetSessionIdForState(state: WorkspaceState): SessionId
     )
   }
 
-  // dispatchFocusedSessionId is the single tiled-aware reader: the focused
-  // lane's agent in Tiled Dispatch (falling back to classic focus when the
-  // lane is empty), else dispatchMode.focusedSessionId. Passing it — not the
-  // raw dispatchMode.focusedSessionId — is what makes View Prompts / Reload /
-  // Close / provider switch / debug panels target the lane the user actually
-  // has focused instead of falling through to rows[0] (the first tile).
-  // Classic Dispatch is byte-for-byte unchanged (the helper returns
-  // dispatchMode.focusedSessionId when there is no `tiled`).
-  const rows = buildVisibleDispatchRows(state)
-  return selectVisibleDispatchRow(
-    rows,
-    dispatchFocusedSessionId(state.dispatchMode),
-    activeTab?.focusedSessionId,
-  )?.sessionId ?? null
+  // WHY strict Dispatch targeting is used here:
+  // commandTargetSessionIdForState is consumed by lifecycle and destructive
+  // commands (close, reload, provider switch, bury, debug inspectors). In
+  // Tiled Dispatch an empty/stale focused lane visually means "no agent is
+  // selected in this lane"; falling back to classic focus, grid focus, or the
+  // first visible row would make a command act on a session the user is not
+  // looking at. Spawn helpers deliberately use a different fallback-friendly
+  // resolver because "where should a new agent go?" is not the same question.
+  return resolveStrictDispatchCommandTarget(state)?.row.sessionId ?? null
 }
