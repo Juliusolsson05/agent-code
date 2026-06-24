@@ -55,6 +55,97 @@ export function resumableProviderSessionId(
   return hasDurableProviderSession(meta) ? meta?.providerSessionId : undefined
 }
 
+export type JsonlProviderStreamState = {
+  expectedProviderSessionId: string | null
+  lastObservedProviderSessionId: string | null
+  blockedAfterConflict: boolean
+}
+
+export type JsonlProviderBurstDecision =
+  | {
+      accept: true
+      state: JsonlProviderStreamState
+    }
+  | {
+      accept: false
+      state: JsonlProviderStreamState
+      reason: 'conflicting-provider-session' | 'blocked-after-conflict'
+      expectedProviderSessionId: string
+      observedProviderSessionId: string | null
+    }
+
+export function decideJsonlProviderBurst(params: {
+  previous: JsonlProviderStreamState | undefined
+  expectedProviderSessionId: string | null | undefined
+  observedProviderSessionId: string | null | undefined
+}): JsonlProviderBurstDecision {
+  const expectedProviderSessionId = params.expectedProviderSessionId ?? null
+  const observedProviderSessionId = params.observedProviderSessionId ?? null
+  const previous = params.previous
+  const expectationChanged =
+    previous?.expectedProviderSessionId !== expectedProviderSessionId
+
+  if (!expectedProviderSessionId) {
+    return {
+      accept: true,
+      state: {
+        expectedProviderSessionId: null,
+        lastObservedProviderSessionId:
+          observedProviderSessionId ?? previous?.lastObservedProviderSessionId ?? null,
+        blockedAfterConflict: false,
+      },
+    }
+  }
+
+  if (observedProviderSessionId) {
+    const matchesExpected = observedProviderSessionId === expectedProviderSessionId
+    if (!matchesExpected) {
+      return {
+        accept: false,
+        state: {
+          expectedProviderSessionId,
+          lastObservedProviderSessionId: observedProviderSessionId,
+          blockedAfterConflict: true,
+        },
+        reason: 'conflicting-provider-session',
+        expectedProviderSessionId,
+        observedProviderSessionId,
+      }
+    }
+    return {
+      accept: true,
+      state: {
+        expectedProviderSessionId,
+        lastObservedProviderSessionId: observedProviderSessionId,
+        blockedAfterConflict: false,
+      },
+    }
+  }
+
+  if (
+    previous?.blockedAfterConflict === true &&
+    !expectationChanged &&
+    previous.expectedProviderSessionId === expectedProviderSessionId
+  ) {
+    return {
+      accept: false,
+      state: previous,
+      reason: 'blocked-after-conflict',
+      expectedProviderSessionId,
+      observedProviderSessionId: previous.lastObservedProviderSessionId,
+    }
+  }
+
+  return {
+    accept: true,
+    state: {
+      expectedProviderSessionId,
+      lastObservedProviderSessionId: previous?.lastObservedProviderSessionId ?? null,
+      blockedAfterConflict: false,
+    },
+  }
+}
+
 export function withoutProvisionalProviderSession(meta: SessionMeta): SessionMeta {
   if (meta.providerSessionIdSource !== 'proxy-header') return meta
   const { providerSessionId: _providerSessionId, providerSessionIdSource: _source, ...rest } = meta
