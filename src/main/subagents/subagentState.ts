@@ -1,19 +1,22 @@
 import type { SubAgentState, SubAgentToolCall } from '@preload/api/types.js'
+import {
+  headlineFromInput,
+  SUBAGENT_TOOL_CALLS_MAX,
+  tsToMs,
+} from './shared.js'
 
-// Pure builder: turns a subagent's parsed transcript entries + its meta into a
-// SubAgentState for the renderer. No I/O here so the logic is trivially
-// testable and the watcher stays a thin file-tailing shell.
+export { SUBAGENT_TOOL_CALLS_MAX } from './shared.js'
+
+// Pure derivation helpers for Claude subagent transcript entries. No I/O here
+// so the watcher stays a thin file-tailing shell and the lifecycle boundary is
+// clear: SubAgentWatcher owns files/timers/offsets; this module owns the small
+// retained accumulator that is safe to keep in memory.
 //
 // WHY we parse JSON ourselves instead of using agent-transcript-parser: that
 // package is a Claude<->Codex *converter*, not a JSONL reader. These files are
 // already in Claude transcript shape, so we just JSON.parse each line and read
 // the tool_use / tool_result blocks. The shapes below are intentionally
 // permissive — a partial/edge entry must never throw.
-
-/** Cap the timeline so a 300 KB+ subagent transcript can't bloat the IPC
- *  payload we push on every change. Keep the most-recent N; surface the rest
- *  as a "+N earlier" count rather than silently dropping them. */
-export const SUBAGENT_TOOL_CALLS_MAX = 40
 
 type RawBlock = {
   type?: string
@@ -35,159 +38,13 @@ export type SubAgentMeta = {
   toolUseId?: string
 }
 
-function headlineFromInput(
-  input: Record<string, unknown> | undefined,
-): string | null {
-  if (!input) return null
-  // Same priority ToolUseRow uses for its `⎿` sub-line, so a subagent's
-  // mini-feed reads like the main feed.
-  for (const k of [
-    'command',
-    'file_path',
-    'path',
-    'pattern',
-    'query',
-    'url',
-    'description',
-  ]) {
-    const v = input[k]
-    if (typeof v === 'string' && v.length > 0) {
-      // V8 SLICE-TRAP: `bigString.slice(0, 80)` returns a SlicedString that
-      // retains a pointer to its ENTIRE parent string — so an 80-char headline
-      // cut from a multi-MB tool input (a Write/Edit `content`, a giant
-      // `command`/`query`) would PIN that whole parent in the heap. Unlike a
-      // transient render value, THIS headline is RETAINED in the accumulator's
-      // toolCalls ring (up to SUBAGENT_RING_MAX entries) long after the raw
-      // transcript entry is dropped — exactly the residual leak #288's
-      // derive-and-drop is meant to kill (measured: slice-truncating 2000×200KB
-      // left 194MB pinned; a flat Buffer copy left 19MB). This is why the deleted
-      // `clampString` helper forced a flat copy, and why we must here too.
-      //
-      // Force a parent-INDEPENDENT copy by round-tripping the 80-char prefix
-      // through a Buffer (UTF-16 in and out preserves the chars exactly,
-      // surrogate pairs included). Only force the copy when v actually exceeds the
-      // cap: for v.length <= 80 the whole string is already small, has no large
-      // parent to pin, and is returned as-is. Visible output is identical — the
-      // same ≤ 80 chars plus the ellipsis.
-      if (v.length <= 80) return v
-      return Buffer.from(v.slice(0, 80), 'utf16le').toString('utf16le') + '…'
-    }
-  }
-  return null
-}
-
-function tsToMs(ts: string | undefined): number | null {
-  if (!ts) return null
-  const n = Date.parse(ts)
-  return Number.isFinite(n) ? n : null
-}
-
-/**
- * Build a SubAgentState from a subagent transcript's parsed entries + meta.
- *
- * @param toolUseId   parent `Agent` tool_use id (authoritative join key)
- * @param agentId     the agent-<id> filename id
- * @param meta        contents of agent-<id>.meta.json (may be partial)
- * @param entries     parsed JSONL lines of agent-<id>.jsonl
- * @param parentDone  true if the parent transcript has a tool_result for toolUseId
- * @param parentError true if that parent tool_result is an error
- */
-export function buildSubAgentState(
-  toolUseId: string,
-  agentId: string,
-  meta: SubAgentMeta,
-  entries: RawEntry[],
-  parentDone: boolean,
-  parentError: boolean,
-): SubAgentState {
-  type Call = SubAgentToolCall & { id: string | null }
-  const calls: Call[] = []
-  const resultIds = new Set<string>()
-  let turnCount = 0
-  let firstTs: number | null = null
-  let lastTs: number | null = null
-  let lastActivity: string | null = null
-
-  for (const e of entries) {
-    const ms = tsToMs(e.timestamp)
-    if (ms != null) {
-      if (firstTs == null) firstTs = ms
-      lastTs = ms
-    }
-    const content = e.message?.content
-    if (!Array.isArray(content)) continue
-    if (e.type === 'assistant') turnCount += 1
-    for (const b of content as RawBlock[]) {
-      if (b.type === 'tool_use') {
-        calls.push({
-          id: typeof b.id === 'string' ? b.id : null,
-          name: b.name ?? 'tool',
-          headline: headlineFromInput(b.input),
-          status: 'running',
-        })
-        lastActivity = `running ${b.name ?? 'tool'}`
-      } else if (
-        b.type === 'tool_result' &&
-        typeof b.tool_use_id === 'string'
-      ) {
-        resultIds.add(b.tool_use_id)
-        // The subagent's own tool call resolved — clear the activity hint so a
-        // long gap before its next action doesn't read as "still running X".
-        lastActivity = null
-      } else if (b.type === 'thinking') {
-        lastActivity = 'thinking'
-      }
-    }
-  }
-
-  // Resolve each call's completion precisely by id (subagent transcripts carry
-  // their own tool_result blocks). Calls without an id stay 'running'.
-  for (const c of calls) {
-    c.status = c.id && resultIds.has(c.id) ? 'done' : 'running'
-  }
-
-  // Cap to the most recent N, recording how many we dropped off the front.
-  let dropped = 0
-  let kept: Call[] = calls
-  if (calls.length > SUBAGENT_TOOL_CALLS_MAX) {
-    dropped = calls.length - SUBAGENT_TOOL_CALLS_MAX
-    kept = calls.slice(dropped)
-  }
-  const toolCalls: SubAgentToolCall[] = kept.map(({ name, headline, status }) => ({
-    name,
-    headline,
-    status,
-  }))
-
-  const status: SubAgentState['status'] = parentError
-    ? 'error'
-    : parentDone
-      ? 'done'
-      : 'running'
-
-  return {
-    toolUseId,
-    agentId,
-    agentType: meta.agentType ?? 'agent',
-    description: meta.description ?? '',
-    status,
-    startedAt: firstTs,
-    lastActivityAt: lastTs,
-    turnCount,
-    toolCalls,
-    droppedToolCalls: dropped,
-    currentActivity: status === 'running' ? lastActivity : null,
-  }
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // #288 ROOT-CAUSE FIX: derive-and-drop accumulator.
 //
-// buildSubAgentState above is a pure left-to-right fold over the whole entry
-// array. SubAgentWatcher used to RETAIN that array (up to 500 RawEntry per
-// agent) just so it could re-run this fold on every emit — and a dominator-tree
-// heap analysis proved that retained array was ~85% of a 227 MB main-process
-// heap, because each entry pins its full multi-MB tool-result/Read body.
+// SubAgentWatcher used to RETAIN a RawEntry[] per agent (capped later at 500
+// entries) and re-fold that array on every emit. A dominator-tree heap analysis
+// proved the retained arrays were ~85% of a 227 MB main-process heap, because
+// each entry pins its full multi-MB tool-result/Read body.
 //
 // The insight (mirroring the Codex twin in codexSubagentState.ts, PR #317) is
 // that NOTHING downstream needs the raw entries: emit() only ever ships the
@@ -197,11 +54,13 @@ export function buildSubAgentState(
 // scalars plus a small bounded ring of tool calls — so memory is O(open calls),
 // not O(transcript length).
 //
-// `accumulateSubAgentEntry` is the per-entry step of the SAME loop body as
-// buildSubAgentState; `buildSubAgentStateFromAccumulator` is the post-loop tail
-// (status resolution + the parentDone/parentError gating). Keep the two paths
-// equivalent in semantics — they derive the same SubAgentState and any drift is
-// a silent UI regression.
+// `accumulateSubAgentEntry` is now the source of truth for per-entry derivation;
+// `buildSubAgentStateFromAccumulator` is the only projection path to
+// SubAgentState. The old array builder was intentionally deleted in the second
+// audit pass because keeping a dead "parity oracle" beside the live fold made
+// the comments drift-prone: future changes could update one path and leave the
+// other lying. If you need to validate parity with a historical entry-array
+// fold, do it in a focused test fixture, not by reviving runtime dead code.
 //
 // CONSCIOUS BEHAVIOR DELTA (see SubAgentWatcher.ts wiring + the PR): the old
 // watcher capped retained entries at 500 and folded only that 500-entry TAIL, so
@@ -236,8 +95,8 @@ type ToolCallAcc = SubAgentToolCall & { id: string | null }
 export type SubAgentAccumulator = {
   // INVARIANT 5: startedAt is the FIRST valid timestamp seen (set once);
   // lastActivityAt is the LAST valid timestamp seen (last-write-wins, NOT
-  // Math.max — real transcripts have 21 out-of-order cases and the original
-  // builder used plain assignment, so we match that exactly).
+  // Math.max — real transcripts have 21 out-of-order cases, and the pre-#288
+  // retained-entry fold used plain assignment, so we preserve that behavior).
   startedAt: number | null
   lastActivityAt: number | null
   // INVARIANT 3: monotonic fold counters, incremented as entries stream, NEVER
@@ -278,9 +137,9 @@ export function createAccumulator(): SubAgentAccumulator {
 
 /**
  * Fold one parsed transcript entry into the accumulator. This is the per-entry
- * body of buildSubAgentState's loop, lifted out so the watcher can run it as
- * each line streams in and then drop the entry. The entry is read-only here; it
- * must be GC-eligible the instant this returns (the whole point of #288).
+ * derivation step the watcher runs as each line streams in before dropping the
+ * entry. The entry is read-only here; it must be GC-eligible the instant this
+ * returns (the whole point of #288).
  */
 export function accumulateSubAgentEntry(
   acc: SubAgentAccumulator,
@@ -367,9 +226,9 @@ export function accumulateSubAgentEntry(
 }
 
 /**
- * Produce a SubAgentState from a folded accumulator — the post-loop tail of
- * buildSubAgentState. Yields the SAME shape/values the array builder does
- * (modulo the conscious true-total counter delta documented above).
+ * Produce a SubAgentState from a folded accumulator. This is the only live
+ * projection from watcher state to renderer state; keeping this boundary narrow
+ * is what lets the watcher drop raw transcript entries immediately.
  *
  * INVARIANT 6: terminal done/error and the status/currentActivity gating are
  * computed HERE at build time from parentDone/parentError (which come from
@@ -386,7 +245,7 @@ export function buildSubAgentStateFromAccumulator(
 ): SubAgentState {
   // The ring already holds at most SUBAGENT_RING_MAX (60) most-recent calls; the
   // renderer shows at most SUBAGENT_TOOL_CALLS_MAX (40). Slice the tail of the
-  // ring so the visible window matches the array builder's `kept`.
+  // ring so the visible window is always the most recent displayable calls.
   const kept =
     acc.toolCalls.length > SUBAGENT_TOOL_CALLS_MAX
       ? acc.toolCalls.slice(acc.toolCalls.length - SUBAGENT_TOOL_CALLS_MAX)
@@ -397,9 +256,8 @@ export function buildSubAgentStateFromAccumulator(
     status,
   }))
 
-  // INVARIANT 3: dropped is derived from the TRUE total tool_use count, matching
-  // the array builder's `calls.length - SUBAGENT_TOOL_CALLS_MAX` (its
-  // calls.length WAS the total). max(0, …) guards the under-cap case.
+  // INVARIANT 3: dropped is derived from the TRUE total tool_use count, not the
+  // bounded display ring. max(0, …) guards the under-cap case.
   const droppedToolCalls = Math.max(0, acc.totalToolUses - SUBAGENT_TOOL_CALLS_MAX)
 
   const status: SubAgentState['status'] = parentError
@@ -419,8 +277,8 @@ export function buildSubAgentStateFromAccumulator(
     turnCount: acc.turnCount,
     toolCalls,
     droppedToolCalls,
-    // INVARIANT 6: gate currentActivity on the build-time status, just like the
-    // array builder (only a running agent shows a live activity label).
+    // INVARIANT 6: gate currentActivity on the build-time status so only a
+    // running agent shows a live activity label.
     currentActivity: status === 'running' ? acc.currentActivity : null,
   }
 }

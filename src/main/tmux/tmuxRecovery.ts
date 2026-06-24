@@ -54,9 +54,7 @@ export async function reconcile(
   // P1: silently kill orphans. They're stale Agent Code sessions from
   // a previous run that failed to clean up. The registry's prefix
   // guarantees these are ours to kill.
-  for (const name of orphans) {
-    await registry.killSession(name)
-  }
+  await Promise.all(orphans.map(name => registry.killSession(name)))
 
   return { recoverable, lost, orphans }
 }

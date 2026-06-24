@@ -14,6 +14,7 @@ import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
 
 import { getProjectDirForCwd } from '@shared/runtime/projectDir.js'
 import { getCodexSessionsDir } from '@providers/codex/runtime/projectDir.js'
+import { getMainProvider } from '@providers/registry.main.js'
 
 // ---------------------------------------------------------------------------
 // JSONL io
@@ -91,6 +92,27 @@ export async function findCodexRolloutPathBySessionId(
   if (matches.length === 0) return null
   matches.sort((a, b) => b.mtimeMs - a.mtimeMs)
   return matches[0]?.path ?? null
+}
+
+export async function resolveProviderTranscriptPath(params: {
+  kind: 'claude' | 'codex'
+  cwd: string
+  providerSessionId: string
+}): Promise<string | null> {
+  // WHY this helper lives beside provider-switch cloning helpers instead of in
+  // one caller: transcript ownership is a provider storage contract. History
+  // pagination, transcript-template resolution, duplicate/rewind flows, and
+  // provider switching must agree on the exact same path semantics or the UI can
+  // resume one durable file while older-history pagination reads another. The
+  // provider registry owns those semantics now: Claude resolves a cwd-scoped
+  // JSONL path, while Codex resolves a global rollout file by structured thread
+  // id. Delegating here lets history loading, transcript templates, and provider
+  // switching share one call site without moving provider-specific storage rules
+  // back into each feature.
+  return getMainProvider(params.kind).resolveTranscriptPath(
+    params.cwd,
+    params.providerSessionId,
+  )
 }
 
 export async function walkCodexRollouts(

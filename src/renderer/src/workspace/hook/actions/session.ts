@@ -32,6 +32,7 @@ import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selecto
 import {
   hasDurableProviderSession,
   resumableProviderSessionId,
+  seedResumedRuntimeFields,
   withoutProvisionalProviderSession,
 } from '@renderer/workspace/providerSessionIdentity'
 import {
@@ -239,13 +240,16 @@ export function useSessionActions(
         ...prev,
         [sessionId]: {
           ...emptyRuntime(),
-          hasOlderHistory: kind !== 'terminal' && hasDurableProviderSession(meta),
-          transcriptStatus:
-            kind !== 'terminal' && meta.providerSessionId ? 'loading' : 'ready',
-          transcriptError: null,
-          processStatus: 'started',
-          processError: null,
-          inputReady: true,
+          ...(kind !== 'terminal'
+            ? seedResumedRuntimeFields(undefined, meta)
+            : {
+                hasOlderHistory: false,
+                transcriptStatus: 'ready' as const,
+                transcriptError: null,
+                processStatus: 'started' as const,
+                processError: null,
+                inputReady: true,
+              }),
         },
       }))
       if (kind !== 'terminal' && meta.providerSessionId) {
@@ -642,20 +646,7 @@ export function useSessionActions(
           const existing = prev[newId]
           const restored: SessionRuntime = { ...(existing ?? emptyRuntime()) }
           restored.draftInput = oldRuntimes[oldId]?.draftInput ?? existing?.draftInput ?? ''
-          restored.hasOlderHistory =
-            Boolean(existing?.hasOlderHistory) || hasDurableProviderSession(freshSessions[newId])
-          restored.transcriptStatus =
-            existing?.transcriptStatus === 'ready' ||
-            existing?.transcriptStatus === 'error' ||
-            existing?.transcriptStatus === 'disconnected'
-              ? existing.transcriptStatus
-              : freshSessions[newId]?.providerSessionId ? 'loading' : 'ready'
-          restored.transcriptError = existing?.transcriptError ?? null
-          restored.processStatus =
-            existing && existing.processStatus !== 'idle' ? existing.processStatus : 'started'
-          restored.processError = existing?.processError ?? null
-          restored.inputReady =
-            existing && existing.processStatus !== 'idle' ? existing.inputReady : true
+          Object.assign(restored, seedResumedRuntimeFields(existing, freshSessions[newId]))
           next[newId] = restored
         }
         return next

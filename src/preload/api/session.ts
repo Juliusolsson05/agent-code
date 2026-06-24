@@ -8,7 +8,6 @@ import type {
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
   SessionAgentPtyDataEvent,
-  SessionKind,
   SessionScreenEvent,
   SessionSemanticEvent,
   SessionStartedEvent,
@@ -17,7 +16,8 @@ import type {
   ConditionCustomAction,
   ResolveConditionResult,
   SessionSubAgentsEvent,
-  BuiltInMcpDomain,
+  SessionSpawnOptions,
+  SessionSpawnResult,
   TranscriptPathRequest,
   TranscriptPathResult,
   Unsub,
@@ -33,31 +33,7 @@ import type {
 
 export const sessionApi = {
   // --- Session lifecycle ---
-  spawnSession: (options: {
-    /** Optional. Defaults to 'claude' on the main side so existing
-     *  callers don't need to change. Pass 'terminal' to spawn a
-     *  plain shell session instead. */
-    kind?: SessionKind
-    cwd: string
-    cols?: number
-    rows?: number
-    resumeSessionId?: string
-    dangerousMode?: boolean
-    /** Claude only. Opt into proxy-driven semantic streaming. When
-     *  true, the session spawns a per-session mitmproxy, streams
-     *  decrypted Anthropic events through it, and the renderer gets
-     *  per-block semantic events via `onSessionSemanticEvent`. Needs
-     *  mitmproxy installed (see claude-code-headless/PROXY_STREAMING.md).
-     *  Default false — session behavior is unchanged. */
-    useProxy?: boolean
-    builtInMcpDomains?: BuiltInMcpDomain[]
-    /** Terminal + tmux only: when set AND tmux is available, attach
-     *  to this existing tmux session instead of creating a new one.
-     *  Used by the workspace reload path to recover persistent
-     *  terminals. Falls back to fresh spawn if the session no longer
-     *  exists. */
-    recoverTmuxName?: string
-  }): Promise<{ sessionId: string; tmuxName?: string }> =>
+  spawnSession: (options: SessionSpawnOptions): Promise<SessionSpawnResult> =>
     ipcRenderer.invoke('session:spawn', options),
 
   killSession: (sessionId: string): Promise<boolean> =>

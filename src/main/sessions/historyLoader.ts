@@ -1,9 +1,9 @@
 import { stat } from 'fs/promises'
 
-import { getMainProvider } from '@providers/registry.main.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
+import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 
 // Loader for older history chunks.
 //
@@ -59,11 +59,14 @@ function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
   return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
 }
 
-async function resolveTranscriptPath(
+async function resolveHistoryTranscriptPath(
   params: InitialHistoryChunkRequest,
 ): Promise<string | null> {
-  const provider = getMainProvider(params.kind)
-  return provider.resolveTranscriptPath(params.cwd, params.providerSessionId)
+  // Use the same resolver as transcript templates/provider-switch flows. The
+  // old history-loader-local walker returned the first lexical match; the shared
+  // resolver picks newest by mtime, which is the correct tie-break when the same
+  // Codex thread id appears in more than one rollout file.
+  return resolveProviderTranscriptPath(params)
 }
 
 function pushCapped<T>(items: T[], item: T, limit: number): void {
@@ -201,7 +204,7 @@ export async function loadOlderHistoryChunk(
   })
 
   try {
-    const filePath = await resolveTranscriptPath(params)
+    const filePath = await resolveHistoryTranscriptPath(params)
 
     if (!filePath) {
       span.end({ result: 'missing-file' })
@@ -249,7 +252,7 @@ export async function loadInitialHistoryChunk(
   })
 
   try {
-    const filePath = await resolveTranscriptPath(params)
+    const filePath = await resolveHistoryTranscriptPath(params)
     if (!filePath) {
       span.end({ result: 'missing-file' })
       return { entries: [], hasMore: false, totalEntries: 0 }

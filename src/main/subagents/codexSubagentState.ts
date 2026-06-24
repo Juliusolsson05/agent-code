@@ -1,7 +1,14 @@
 import { basename, dirname, join } from 'node:path'
-import { readFile, readdir, stat } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
 import type { JsonlEntry, SubAgentState, SubAgentToolCall } from '@preload/api/types.js'
 import { asRecord } from '@shared/lib/asRecord.js'
+import {
+  capToolCalls,
+  headlineFromInput,
+  readRange,
+  SUBAGENT_TOOL_CALLS_MAX,
+  tsToMs,
+} from './shared.js'
 
 const CODEX_SUBAGENT_NOTIFICATION_OPEN = '<subagent_notification>'
 const CODEX_SUBAGENT_NOTIFICATION_CLOSE = '</subagent_notification>'
@@ -18,11 +25,9 @@ const CODEX_SUBAGENT_NOTIFICATION_CLOSE = '</subagent_notification>'
 // front (so role/nickname/parentThreadId and the startedAt anchor vanish once
 // the head is dropped), `startedAt` jumps forward to the oldest *surviving*
 // entry, and `turnCount` / tool-call counts undercount because earlier turns are
-// gone. The fix below SPLITS the responsibility: the SubAgentState that emit()
-// ships is derived from the FULL, uncapped read and stored in
-// childStateByAgentId (correct values, head intact). The derivation now happens
-// against the whole file, so the cap can no longer corrupt
-// startedAt/turnCount/childMeta/tool counts. See `readKnownChildren`.
+// gone. The fix below SPLITS the responsibility: the emitted tool-call timeline
+// is capped, while the SubAgentState fields that depend on the HEAD of the file
+// are derived from a running accumulator that has seen every complete line.
 //
 // #288 ROOT-CAUSE FOLLOW-UP: PR #317 also retained a bounded 500-entry TAIL of
 // raw rollout entries in `childEntriesByAgentId`, justified ONLY as a buffer for
@@ -32,12 +37,13 @@ const CODEX_SUBAGENT_NOTIFICATION_CLOSE = '</subagent_notification>'
 // liability — each entry pins its full tool-result/Read body. Since that tail
 // was write-only dead weight here, the cleanest fix is to DROP it entirely
 // rather than add per-field truncation to bytes nothing displays. The derived
-// SubAgentState (childStateByAgentId) already carries everything emit() ships,
-// so removing the tail is invisible. If a mini-feed is ever built, it should
+// SubAgentState accumulator already carries everything emit() ships, so
+// removing the tail is invisible. If a mini-feed is ever built, it should
 // re-derive small previews from the on-disk rollout (the durable source), not
 // pin raw entries in main-process heap. The former
 // MAX_RETAINED_ENTRIES_PER_AGENT constant is gone with the tail it bounded; the
-// uncapped-count dirty signal lives on in childEntryCountByAgentId.
+// dirty signal is now the child rollout byte offset, matching the Claude watcher
+// and avoiding full-file re-reads.
 
 // Codex child sessions do not use Claude's `<parent>/subagents/agent-*.jsonl`
 // layout. They are normal rollout files whose session_meta.source says they
@@ -73,39 +79,40 @@ type ChildMeta = {
   timestamp: string | null
 }
 
+type CodexToolCallAcc = SubAgentToolCall & { id: string | null }
+
+type CodexSubAgentAccumulator = {
+  childMeta: ChildMeta | null
+  minTimestampMs: number | null
+  maxTimestampMs: number | null
+  taskComplete: boolean
+  turnCount: number
+  totalToolUses: number
+  currentActivity: string | null
+  toolCalls: CodexToolCallAcc[]
+  openToolCallIds: Set<string>
+  resolvedToolCallIds: Set<string>
+}
+
+const CODEX_SUBAGENT_HEADLINE_KEYS = [
+  'command',
+  'file_path',
+  'path',
+  'pattern',
+  'query',
+  'url',
+  'description',
+  'message',
+] as const
+
+// Keep a little more than the displayed 40 calls so a result arriving shortly
+// after a burst can still flip a visible row. The true dropped count comes from
+// totalToolUses, not from this ring length, so the ring is only a display cache.
+const CODEX_SUBAGENT_RING_MAX = Math.max(60, SUBAGENT_TOOL_CALLS_MAX)
+
 function stringField(record: Record<string, unknown> | null | undefined, key: string): string | null {
   const value = record?.[key]
   return typeof value === 'string' ? value : null
-}
-
-function tsToMs(ts: string | null | undefined): number | null {
-  if (!ts) return null
-  const n = Date.parse(ts)
-  return Number.isFinite(n) ? n : null
-}
-
-function headlineFromInput(input: Record<string, unknown> | null): string | null {
-  if (!input) return null
-  // Keep this intentionally aligned with the Claude subagent builder and the
-  // normal tool row headline priority. A child mini-feed is only useful if it
-  // scans like the parent feed; inventing Codex-only labels here would make the
-  // same tool call read differently depending on where it is rendered.
-  for (const key of [
-    'command',
-    'file_path',
-    'path',
-    'pattern',
-    'query',
-    'url',
-    'description',
-    'message',
-  ]) {
-    const value = input[key]
-    if (typeof value === 'string' && value.length > 0) {
-      return value.length > 80 ? `${value.slice(0, 80)}...` : value
-    }
-  }
-  return null
 }
 
 function parseJsonObject(text: string | null): Record<string, unknown> | null {
@@ -259,7 +266,11 @@ function buildToolCalls(entries: CodexRolloutEntry[]): {
       calls.push({
         id: payload.call_id,
         name,
-        headline: headlineFromInput(toolInputFromPayload(payload)),
+        headline: headlineFromInput(
+          toolInputFromPayload(payload),
+          CODEX_SUBAGENT_HEADLINE_KEYS,
+          '...',
+        ),
         status: 'running',
       })
       currentActivity = `running ${name}`
@@ -276,7 +287,7 @@ function buildToolCalls(entries: CodexRolloutEntry[]): {
       calls.push({
         id: callId,
         name: 'web_search',
-        headline: headlineFromInput(action),
+        headline: headlineFromInput(action, CODEX_SUBAGENT_HEADLINE_KEYS, '...'),
         status: 'running',
       })
       currentActivity = 'running web_search'
@@ -290,9 +301,7 @@ function buildToolCalls(entries: CodexRolloutEntry[]): {
     call.status = call.id && done.has(call.id) ? 'done' : 'running'
   }
 
-  const max = 40
-  const dropped = calls.length > max ? calls.length - max : 0
-  const kept = dropped > 0 ? calls.slice(dropped) : calls
+  const { kept, dropped } = capToolCalls(calls)
   return {
     calls: kept.map(({ name, headline, status }) => ({ name, headline, status })),
     dropped,
@@ -359,6 +368,157 @@ export function buildCodexSubAgentState(params: {
   }
 }
 
+function createCodexAccumulator(): CodexSubAgentAccumulator {
+  return {
+    childMeta: null,
+    minTimestampMs: null,
+    maxTimestampMs: null,
+    taskComplete: false,
+    turnCount: 0,
+    totalToolUses: 0,
+    currentActivity: null,
+    toolCalls: [],
+    openToolCallIds: new Set(),
+    resolvedToolCallIds: new Set(),
+  }
+}
+
+function pushCodexToolCall(
+  acc: CodexSubAgentAccumulator,
+  call: CodexToolCallAcc,
+): void {
+  acc.totalToolUses += 1
+  if (call.id) {
+    if (acc.resolvedToolCallIds.has(call.id)) {
+      call.status = 'done'
+      // This was a result-before-call case. Once the call arrives and consumes
+      // the pending result, the id is no longer needed. Keeping every resolved id
+      // would turn the incremental fold into another O(transcript) retained set.
+      acc.resolvedToolCallIds.delete(call.id)
+    } else {
+      acc.openToolCallIds.add(call.id)
+    }
+  }
+  acc.toolCalls.push(call)
+  if (acc.toolCalls.length > CODEX_SUBAGENT_RING_MAX) acc.toolCalls.shift()
+}
+
+function resolveCodexToolCall(
+  acc: CodexSubAgentAccumulator,
+  callId: string,
+): void {
+  const wasOpen = acc.openToolCallIds.delete(callId)
+  if (!wasOpen) {
+    acc.resolvedToolCallIds.add(callId)
+  }
+  for (const call of acc.toolCalls) {
+    if (call.id === callId) call.status = 'done'
+  }
+}
+
+function accumulateCodexSubAgentEntry(
+  acc: CodexSubAgentAccumulator,
+  entry: CodexRolloutEntry,
+): void {
+  const meta = extractCodexChildMeta(entry)
+  if (meta && !acc.childMeta) acc.childMeta = meta
+  const ms = typeof entry.timestamp === 'string' ? tsToMs(entry.timestamp) : null
+  if (ms !== null) {
+    acc.minTimestampMs = acc.minTimestampMs === null ? ms : Math.min(acc.minTimestampMs, ms)
+    acc.maxTimestampMs = acc.maxTimestampMs === null ? ms : Math.max(acc.maxTimestampMs, ms)
+  }
+
+  const payload = asRecord(entry.payload)
+  if (!payload) return
+  if (
+    entry.type === 'response_item' &&
+    (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
+    typeof payload.call_id === 'string'
+  ) {
+    const name = stringField(payload, 'name') ?? 'tool'
+    pushCodexToolCall(acc, {
+      id: payload.call_id,
+      name,
+      headline: headlineFromInput(
+        toolInputFromPayload(payload),
+        CODEX_SUBAGENT_HEADLINE_KEYS,
+        '...',
+      ),
+      status: 'running',
+    })
+    acc.currentActivity = `running ${name}`
+  } else if (
+    entry.type === 'response_item' &&
+    (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') &&
+    typeof payload.call_id === 'string'
+  ) {
+    resolveCodexToolCall(acc, payload.call_id)
+    acc.currentActivity = null
+  } else if (entry.type === 'response_item' && payload.type === 'web_search_call') {
+    const callId = stringField(payload, 'call_id') ?? stringField(payload, 'id')
+    const action = asRecord(payload.action)
+    pushCodexToolCall(acc, {
+      id: callId,
+      name: 'web_search',
+      headline: headlineFromInput(action, CODEX_SUBAGENT_HEADLINE_KEYS, '...'),
+      status: 'running',
+    })
+    acc.currentActivity = 'running web_search'
+  } else if (entry.type === 'event_msg' && payload.type === 'task_complete') {
+    acc.taskComplete = true
+  } else if (entry.type === 'event_msg' && payload.type === 'agent_message') {
+    const phase = stringField(payload, 'phase')
+    acc.turnCount += 1
+    acc.currentActivity = phase === 'final_answer' ? 'finalizing' : 'responding'
+  } else if (
+    entry.type === 'response_item' &&
+    payload.type === 'message' &&
+    payload.role === 'assistant'
+  ) {
+    acc.turnCount += 1
+  }
+}
+
+function buildCodexSubAgentStateFromAccumulator(params: {
+  toolUseId: string
+  agentId: string
+  spawn: SpawnCall | null
+  output: SpawnOutput | null
+  notification: Notification | null
+  acc: CodexSubAgentAccumulator | null
+}): SubAgentState {
+  const acc = params.acc ?? createCodexAccumulator()
+  const childMeta = acc.childMeta
+  const startedAt =
+    tsToMs(childMeta?.timestamp) ??
+    acc.minTimestampMs
+  const status: SubAgentState['status'] =
+    params.notification?.status === 'failed' || params.notification?.status === 'error'
+      ? 'error'
+      : params.notification?.status === 'completed' || acc.taskComplete
+        ? 'done'
+        : 'running'
+  const { kept } = capToolCalls(acc.toolCalls)
+
+  return {
+    toolUseId: params.toolUseId,
+    agentId: params.agentId,
+    agentType: childMeta?.role ?? params.spawn?.agentType ?? 'agent',
+    description:
+      params.spawn?.description ??
+      childMeta?.nickname ??
+      params.output?.nickname ??
+      '',
+    status,
+    startedAt,
+    lastActivityAt: acc.maxTimestampMs ?? startedAt,
+    turnCount: acc.turnCount,
+    toolCalls: kept.map(({ name, headline, status }) => ({ name, headline, status })),
+    droppedToolCalls: Math.max(0, acc.totalToolUses - SUBAGENT_TOOL_CALLS_MAX),
+    currentActivity: status === 'running' ? acc.currentActivity : null,
+  }
+}
+
 function sessionsRootFromRolloutPath(path: string): string | null {
   let dir = dirname(path)
   for (;;) {
@@ -397,41 +557,21 @@ async function findFileContaining(root: string, needle: string): Promise<string 
   return walk(root)
 }
 
-async function readRolloutEntries(path: string): Promise<CodexRolloutEntry[]> {
-  const text = await readFile(path, 'utf8')
-  const entries: CodexRolloutEntry[] = []
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed) continue
-    try {
-      entries.push(JSON.parse(trimmed) as CodexRolloutEntry)
-    } catch {
-      // Rollout files can be caught mid-append. Dropping one malformed line is
-      // better than poisoning the whole subagent state; the poller will read a
-      // complete version on the next tick.
-    }
-  }
-  return entries
-}
-
 export class CodexSubAgentTracker {
   private readonly spawnsByCallId = new Map<string, SpawnCall>()
   private readonly outputsByCallId = new Map<string, SpawnOutput>()
   private readonly callIdByAgentId = new Map<string, string>()
   private readonly notificationsByAgentId = new Map<string, Notification>()
   private readonly childPathByAgentId = new Map<string, string>()
-  // Derived SubAgentState computed from the FULL uncapped read (PR #317). emit()
-  // reads from here so startedAt/turnCount/childMeta/tool counts stay correct.
-  // This is the ONLY per-agent payload the tracker retains now that the raw
-  // entry tail (#288 follow-up) is gone — and it is small and bounded by shape.
-  private readonly childStateByAgentId = new Map<string, SubAgentState>()
-  // Uncapped source entry count per agent — the dirty signal. We gate on the
-  // entry COUNT changing rather than re-deriving every tick: readRolloutEntries
-  // re-reads the whole child rollout each poll, so a quiescent child would
-  // otherwise re-emit identical IPC forever. Mirrors SubAgentWatcher's
-  // size/offset dirty trigger (#300): a child stops being dirty the moment its
-  // entry count stops growing. See readKnownChildren.
-  private readonly childEntryCountByAgentId = new Map<string, number>()
+  // Byte-offset fold state per child rollout. The pre-fix Codex tracker read
+  // and parsed the whole child file every 1.2s while a child was active. That
+  // was correct but made polling cost grow with transcript length. These maps
+  // mirror the Claude SubAgentWatcher lifetime: append-only bytes are folded
+  // into a tiny accumulator, complete lines are dropped immediately, and emit()
+  // derives from the accumulator plus the parent correlation maps.
+  private readonly childOffsetByAgentId = new Map<string, number>()
+  private readonly childPartialByAgentId = new Map<string, string>()
+  private readonly childAccByAgentId = new Map<string, CodexSubAgentAccumulator>()
   private timer: NodeJS.Timeout | null = null
   private parentFile: string | null = null
   private dirty = false
@@ -450,30 +590,32 @@ export class CodexSubAgentTracker {
     if (output) {
       this.outputsByCallId.set(output.callId, output)
       this.callIdByAgentId.set(output.agentId, output.callId)
-      // Correlation changed for this agent → the cached derived state is stale
-      // (description/agentType depend on spawn+output). Invalidate the uncapped
-      // count so the next readKnownChildren re-derives from a fresh full read.
-      // Without this, the count-based dirty gate (PR #317) would skip recompute
-      // because the child's entry COUNT did not change, and emit() would ship the
-      // pre-correlation derived state.
-      this.childEntryCountByAgentId.delete(output.agentId)
+      // Correlation changed for this agent. The child rollout bytes may not grow
+      // at the same moment, but emit() still needs to rebuild the record with the
+      // parent spawn/output metadata. Mark dirty without touching the byte offset;
+      // the accumulator remains the source of truth for child-derived fields.
       this.dirty = true
     }
     const notification = extractCodexSubagentNotification(entry)
     if (notification) {
       this.notificationsByAgentId.set(notification.agentId, notification)
-      // Same staleness reason as output above: notification.status drives the
-      // derived `status` field. Force a re-derive on the next read.
-      this.childEntryCountByAgentId.delete(notification.agentId)
+      // Notification status is parent-rollout metadata, not child bytes. A
+      // completion notice must repaint even when the child file is quiescent.
       this.dirty = true
     }
+    if (this.knownAgentIds().length > 0) this.ensureTimer()
+    void this.refresh()
+  }
+
+  private ensureTimer(): void {
     if (!this.timer) {
       // Codex child rollouts are independent session files, so the parent file
       // does not grow when the child takes a tool step. Polling keeps the UI in
-      // sync without depending on private Codex runtime hooks.
+      // sync without depending on private Codex runtime hooks. We arm it only
+      // after a child id exists; ordinary Codex panes otherwise created a
+      // perpetual no-op timer for their whole lifetime.
       this.timer = setInterval(() => void this.refresh(), 1200)
     }
-    void this.refresh()
   }
 
   stop(): void {
@@ -491,8 +633,9 @@ export class CodexSubAgentTracker {
     this.callIdByAgentId.clear()
     this.notificationsByAgentId.clear()
     this.childPathByAgentId.clear()
-    this.childStateByAgentId.clear()
-    this.childEntryCountByAgentId.clear()
+    this.childOffsetByAgentId.clear()
+    this.childPartialByAgentId.clear()
+    this.childAccByAgentId.clear()
   }
 
   async refresh(): Promise<void> {
@@ -535,67 +678,68 @@ export class CodexSubAgentTracker {
         if (path) this.childPathByAgentId.set(agentId, path)
       }
       if (!path) continue
-      const entries = await readRolloutEntries(path)
+      const changed = await this.readAppendedChild(agentId, path)
       if (this.stopped) return
-
-      // DIRTY on the UNCAPPED source count, not on the retained array length
-      // (PR #317, over-emit fix). The old check compared the stored CAPPED array
-      // (≤500) against the fresh uncapped read (501+). Once a child crossed the
-      // cap the stored length pinned at 500 forever, so `previousLength !==
-      // entries.length` stayed true on EVERY ~1.2s tick and re-emitted IPC even
-      // when the file had not changed. Tracking the uncapped count separately —
-      // the analogue of SubAgentWatcher's byte-offset dirty trigger (#300) —
-      // makes "nothing changed" detectable again: a quiescent child stops being
-      // dirty the moment its entry count stops growing.
-      const previousCount = this.childEntryCountByAgentId.get(agentId)
-      if (previousCount === entries.length) continue
-
-      // (a) Derived state — computed from the FULL, uncapped read so every
-      // head-anchored value (childMeta, startedAt, turnCount, tool counts) is
-      // correct. This is what emit() ships.
-      this.childStateByAgentId.set(
-        agentId,
-        buildCodexSubAgentState({
-          toolUseId: this.callIdByAgentId.get(agentId) ?? agentId,
-          agentId,
-          spawn: this.spawnsByCallId.get(this.callIdByAgentId.get(agentId) ?? '') ?? null,
-          output: this.outputsByCallId.get(this.callIdByAgentId.get(agentId) ?? '') ?? null,
-          notification: this.notificationsByAgentId.get(agentId) ?? null,
-          childEntries: entries,
-        }),
-      )
-
-      // #288 ROOT-CAUSE FOLLOW-UP: we deliberately DO NOT retain the raw entries
-      // here. PR #317 kept a bounded TAIL of them in childEntriesByAgentId "for a
-      // future mini-feed," but nothing on the emit path (or anywhere else) read
-      // it — it was write-only dead weight that still pinned every entry's full
-      // tool-result/Read body in main-process heap, the same liability the
-      // dominator tree found in the Claude watcher. The derived state in (a) is
-      // the only thing emit() needs, so the `entries` array (and the megabytes it
-      // references) becomes GC-eligible the instant this iteration ends. We keep
-      // only the uncapped COUNT as the dirty signal.
-      this.childEntryCountByAgentId.set(agentId, entries.length)
-      this.dirty = true
+      if (changed) this.dirty = true
     }
+  }
+
+  private async readAppendedChild(agentId: string, path: string): Promise<boolean> {
+    const { size } = await stat(path)
+    let from = this.childOffsetByAgentId.get(agentId) ?? 0
+    if (size < from) {
+      // Rollouts are append-only in normal Codex operation, but editors/tests can
+      // truncate or rewrite files. A byte offset past EOF would permanently miss
+      // the new head, so reset the fold and replay from byte 0. This is a rare
+      // correctness fallback, not the hot path.
+      from = 0
+      this.childPartialByAgentId.delete(agentId)
+      this.childAccByAgentId.set(agentId, createCodexAccumulator())
+    }
+    if (size <= from) return false
+
+    const appended = await readRange(path, from, size)
+    const text = (this.childPartialByAgentId.get(agentId) ?? '') + appended
+    const lastNl = text.lastIndexOf('\n')
+    this.childOffsetByAgentId.set(agentId, size)
+    if (lastNl < 0) {
+      this.childPartialByAgentId.set(agentId, text)
+      return false
+    }
+
+    const complete = text.slice(0, lastNl)
+    this.childPartialByAgentId.set(agentId, text.slice(lastNl + 1))
+    let acc = this.childAccByAgentId.get(agentId)
+    if (!acc) {
+      acc = createCodexAccumulator()
+      this.childAccByAgentId.set(agentId, acc)
+    }
+    let changed = false
+    for (const line of complete.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        accumulateCodexSubAgentEntry(acc, JSON.parse(trimmed) as CodexRolloutEntry)
+        changed = true
+      } catch {
+        // Rollout files can be caught mid-append or externally edited. Skipping
+        // a malformed complete line matches the old full-read behavior without
+        // poisoning the accumulator or re-reading the whole file next tick.
+      }
+    }
+    return changed
   }
 
   private emit(): void {
     const out: Record<string, SubAgentState> = {}
     for (const [agentId, callId] of this.callIdByAgentId) {
-      // Prefer the state derived from the FULL read in readKnownChildren (PR
-      // #317). It is correct precisely because it was computed before any cap.
-      // Fall back to deriving from empty entries only when the child file has not
-      // been read yet (e.g. spawn_output just arrived but readKnownChildren has
-      // not located/read the rollout) — this yields the spawn/output-only header
-      // the old code would have produced for an unread child, never a capped slice.
-      const derived = this.childStateByAgentId.get(agentId)
-      out[callId] = derived ?? buildCodexSubAgentState({
+      out[callId] = buildCodexSubAgentStateFromAccumulator({
         toolUseId: callId,
         agentId,
         spawn: this.spawnsByCallId.get(callId) ?? null,
         output: this.outputsByCallId.get(callId) ?? null,
         notification: this.notificationsByAgentId.get(agentId) ?? null,
-        childEntries: [],
+        acc: this.childAccByAgentId.get(agentId) ?? null,
       })
     }
     this.onChange(out)

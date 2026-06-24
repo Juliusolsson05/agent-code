@@ -100,6 +100,30 @@ export type ScreenSnapshot = {
 // of `SessionKind` resolve to the exact same union as main/shared.
 export type { SessionKind } from '@shared/types/providerKind.js'
 
+export type SessionSpawnOptions = {
+  /** Which kind of session to spawn. Defaults to 'claude' in main. */
+  kind?: SessionKind
+  cwd: string
+  cols?: number
+  rows?: number
+  /** Agent sessions only: provider session id to resume from durable history. */
+  resumeSessionId?: string
+  /** Agent sessions only: opt into provider-specific dangerous mode. */
+  dangerousMode?: boolean
+  /** Agent sessions only: opt into provider-specific proxy/semantic streaming. */
+  useProxy?: boolean
+  /** Terminal + tmux only: attach to an existing managed tmux session if alive. */
+  recoverTmuxName?: string
+  /** Agent sessions only: built-in Agent Code MCP domains exposed to the child. */
+  builtInMcpDomains?: BuiltInMcpDomain[]
+}
+
+export type SessionSpawnResult = {
+  sessionId: string
+  /** Set only for tmux-backed terminal sessions and persisted for recovery. */
+  tmuxName?: string
+}
+
 export type ResolveConditionResult =
   | { ok: true; state?: unknown }
   | {

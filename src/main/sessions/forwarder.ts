@@ -64,12 +64,17 @@ export function wireSessionForwarder(
   // manager-level events is owned by the conditions-framework cluster.
   manager.on('conditions', payload => sendToMainWindow('session:conditions', payload))
   manager.on('semantic-event', payload => sendToMainWindow('session:semantic-event', payload))
-  manager.on('exit', payload => {
-    // Final flush — any entries still buffered from the last
-    // bootstrapTail tick must land before exit so the renderer sees a
-    // consistent final entries list.
+  manager.on('removed', payload => {
+    // Final cleanup is keyed to removal, not renderer-facing exit. Some provider
+    // stop() paths resolve without emitting exit, and SessionManager.kill() must
+    // still be authoritative over the JSONL coalescer buffer and subagent
+    // watchers. Natural exits emit `removed` before `exit`, preserving the old
+    // ordering where the final bulk JSONL flush reaches the renderer before the
+    // pane is marked exited.
     flushAndDropJsonl(payload.sessionId)
     subAgents.stop(payload.sessionId)
+  })
+  manager.on('exit', payload => {
     sendToMainWindow('session:exit', payload)
   })
   lspManager.on('diagnostics', payload => sendToMainWindow('lsp:diagnostics', payload))

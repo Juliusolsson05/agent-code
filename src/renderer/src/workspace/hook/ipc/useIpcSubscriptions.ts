@@ -543,9 +543,7 @@ export function useIpcSubscriptions(
           // only when the screen actually changed".
           if (
             current.screen === plain &&
-            current.screenMarkdown === markdown &&
             current.recentScreen === recent &&
-            current.recentScreenMarkdown === recentMarkdown &&
             pickerEqual(current.picker, picker)
           ) {
             const durationMs = performance.now() - startedAt
@@ -560,7 +558,6 @@ export function useIpcSubscriptions(
           const changed: string[] = []
           if (current.screen !== plain) changed.push('screen')
           if (current.recentScreen !== recent) changed.push('recent')
-          if (current.screenMarkdown !== markdown) changed.push('markdown')
           if (!pickerEqual(current.picker, picker)) changed.push('picker')
           // Screen frames can differ only by transient TUI chrome
           // (cursor blink, spinner tick, timestamp) while the
@@ -568,8 +565,18 @@ export function useIpcSubscriptions(
           // latest strings so DebugPanel/ReaderView stay faithful,
           // but skip the debug-log append for this shape of frame
           // to keep feed-debug readable.
+          //
+          // WHY markdown is intentionally absent from the no-op and changed-key
+          // gates above: `screenMarkdown` / `recentScreenMarkdown` are debug
+          // surfaces derived from the same provider snapshot as the plain
+          // strings. The live UI is driven by `plain`/`recent`; if those are
+          // identical, scheduling a workspace-wide runtime update solely because
+          // the markdown projection changed would spend 60Hz render budget on
+          // debug-only fields. We still store markdown whenever a plain frame
+          // changes so debug bundles remain faithful; we just do not make it a
+          // separate invalidation source.
           const chromeTickOnly =
-            changed.every(k => k === 'screen' || k === 'recent' || k === 'markdown') &&
+            changed.every(k => k === 'screen' || k === 'recent') &&
             changed.length > 0 &&
             recent.length === current.recentScreen.length &&
             pickerEqual(current.picker, picker)

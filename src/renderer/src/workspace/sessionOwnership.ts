@@ -6,6 +6,7 @@ import type {
   SessionMeta,
   TileNode,
 } from '@renderer/workspace/types'
+import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
 type SessionOwnershipTab = {
@@ -149,10 +150,22 @@ export function pruneSessionOwnership(
   }
 
   const buried = (input.buried ?? []).filter(entry => liveIds.has(entry.sessionId))
+  const droppedSessionIds = Object.keys(input.sessions).filter(id => !liveIds.has(id))
+  const droppedSet = new Set(droppedSessionIds)
   const focusedSessionId = input.dispatchMode?.focusedSessionId
+  const laneScrubbedDispatchMode = input.dispatchMode
+    ? clearTiledLaneSessions(input.dispatchMode, droppedSet)
+    : input.dispatchMode
   const dispatchMode = input.dispatchMode
     ? {
-        ...input.dispatchMode,
+        // WHY tiled lanes are scrubbed at the same durability boundary as
+        // focusedSessionId: autosave must serialize a model closed under
+        // restore. Kill/close paths already clear lanes, but corrupt or
+        // hand-edited workspace state can reach this persistence guard directly.
+        // If we only scrub classic focus, a tiled lane can keep pointing at a
+        // pruned session and force rehydrate/auto-fill to repair stale state on
+        // every launch.
+        ...(laneScrubbedDispatchMode ?? input.dispatchMode),
         focusedSessionId: focusedSessionId && liveIds.has(focusedSessionId)
           ? focusedSessionId
           : undefined,
@@ -164,6 +177,6 @@ export function pruneSessionOwnership(
     detachedSessions,
     buried,
     dispatchMode,
-    droppedSessionIds: Object.keys(input.sessions).filter(id => !liveIds.has(id)),
+    droppedSessionIds,
   }
 }

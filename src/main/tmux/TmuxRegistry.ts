@@ -164,7 +164,10 @@ export class TmuxRegistry {
    * at startup, this method just answers "what's alive right now").
    */
   async listManagedSessions(): Promise<Array<{ name: string; createdAt: number }>> {
-    if (!this.availability) return []
+    // Keep the same "detect first" contract as isAvailable(). Returning [] for
+    // the undetected null state hides startup ordering bugs as "no sessions";
+    // false after detection still means tmux is unavailable and should be quiet.
+    if (!this.isAvailable()) return []
 
     // -F format string returns one session per line, fields separated
     // by a literal '|' which is illegal in tmux session names so we

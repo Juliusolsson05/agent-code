@@ -1,4 +1,3 @@
-import { createReadStream } from 'node:fs'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SubAgentState } from '@preload/api/types.js'
@@ -9,6 +8,7 @@ import {
   type SubAgentAccumulator,
   type SubAgentMeta,
 } from './subagentState.js'
+import { readRange } from './shared.js'
 
 // One poller per session, watching <sessionDir>/subagents/.
 //
@@ -31,12 +31,13 @@ const POLL_MS = 600
 // We chased that with COUNT caps (PR #300: keep 500 entries) and then per-FIELD
 // byte caps (PR #320/#321: clamp every string in each retained entry). Both only
 // SHRANK the retained entries; they never questioned WHY we retained entries at
-// all. The answer is: we didn't need to. buildSubAgentState was a pure fold over
-// the entries, re-run on every emit, so the only reason to keep entries was to
-// re-fold them. By folding INCREMENTALLY as each line streams in (see
-// accumulateSubAgentEntry in subagentState.ts) and dropping the entry, the
-// O(transcript) retention disappears entirely — no count cap, no byte cap, no
-// string pool, no truncation. The durable full transcript still lives on disk in
+// all. The answer is: we didn't need to. The renderer only consumes the derived
+// SubAgentState, not the raw transcript entries, so retaining entries existed
+// solely to recompute a fold that can be maintained incrementally instead. By
+// folding each line as it streams in (see accumulateSubAgentEntry in
+// subagentState.ts) and dropping the entry, the O(transcript) retention
+// disappears entirely — no count cap, no byte cap, no string pool, no
+// truncation. The durable full transcript still lives on disk in
 // agent-<id>.jsonl. This mirrors the Codex twin (codexSubagentState.ts, PR #317).
 //
 // What that deletes from THIS file: truncateEntryBodies + clampDeep + clampString
@@ -47,7 +48,9 @@ const POLL_MS = 600
 
 type ParentResult = (toolUseId: string) => { done: boolean; error: boolean }
 
-// The accumulator's fold consumes the same RawEntry shape buildSubAgentState did.
+// Keep the watcher coupled only to the accumulator's accepted RawEntry shape,
+// not to a provider package type. The accumulator is intentionally permissive:
+// odd partial entries should be ignored, never crash the watcher.
 type RawEntry = Parameters<typeof accumulateSubAgentEntry>[1]
 
 export class SubAgentWatcher {
@@ -163,8 +166,8 @@ export class SubAgentWatcher {
     // 500-cap splice, NO truncate, NO intern here — nothing entry-shaped survives
     // a loop iteration, so the multi-MB tool-result/Read bodies the dominator
     // tree pinned can never accumulate. accumulateSubAgentEntry runs the SAME
-    // per-entry logic buildSubAgentState's loop did; the entry is read-only and
-    // becomes GC-eligible the instant the iteration ends.
+    // source-of-truth per-entry derivation; the entry is read-only and becomes
+    // GC-eligible the instant the iteration ends.
     let acc = this.accByAgent.get(agentId)
     if (!acc) {
       acc = createAccumulator()
@@ -210,20 +213,4 @@ export class SubAgentWatcher {
     }
     this.onChange(out)
   }
-}
-
-function readRange(path: string, from: number, size: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let out = ''
-    const stream = createReadStream(path, {
-      start: from,
-      end: size - 1,
-      encoding: 'utf8',
-    })
-    stream.on('data', chunk => {
-      out += chunk
-    })
-    stream.on('error', reject)
-    stream.on('end', () => resolve(out))
-  })
 }

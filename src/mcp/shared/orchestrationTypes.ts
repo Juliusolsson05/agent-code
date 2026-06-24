@@ -93,6 +93,8 @@ export type OrchestrationAgentRecord = {
   orchestrationRootId: string
   orchestrationRunId?: string
   orchestrationRole?: string
+  // DORMANT: current create-agent flows force inheritance off; retained for
+  // pre-disable persisted sessions and the planned inheritance redesign.
   inheritedParentContext?: boolean
   inheritedParentProviderSessionId?: string
   inheritedProviderSessionId?: string
@@ -107,7 +109,6 @@ export type OrchestrationAgentRecord = {
   statusSummary?: string
   errorSummary?: string
   latestAssistantText?: string
-  finalAssistantText?: string
   messageCount?: number
 }
 
@@ -115,7 +116,6 @@ export type OrchestrationAgentOutput = {
   agent: OrchestrationAgentRecord
   messages: OrchestrationAgentMessage[]
   latestAssistantText?: string
-  finalAssistantText?: string
 }
 
 export type OrchestrationCloseResult = {
