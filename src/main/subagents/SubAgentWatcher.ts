@@ -150,17 +150,17 @@ export class SubAgentWatcher {
     // Reading only `[from, size)` keeps the watcher proportional to new bytes,
     // which is the actual invariant future code should preserve.
     const appended = await readRange(path, from, size)
-    const text = (this.partialByAgent.get(agentId) ?? '') + appended
+    const text = (this.partialByAgent.get(agentId) ?? '') + appended.text
     const lastNl = text.lastIndexOf('\n')
     if (lastNl < 0) {
       this.partialByAgent.set(agentId, text)
-      this.offsets.set(agentId, size)
+      this.offsets.set(agentId, appended.nextOffset)
       return
     }
 
     const complete = text.slice(0, lastNl)
     this.partialByAgent.set(agentId, text.slice(lastNl + 1))
-    this.offsets.set(agentId, size)
+    this.offsets.set(agentId, appended.nextOffset)
     // #288 ROOT-CAUSE FIX: fold each appended line into the agent's accumulator
     // and let the parsed entry die. There is deliberately NO retained array, NO
     // 500-cap splice, NO truncate, NO intern here — nothing entry-shaped survives

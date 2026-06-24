@@ -45,15 +45,9 @@ import { homedir } from 'os'
 import { readdir, readFile, stat } from 'fs/promises'
 
 import { SessionManager } from '@main/sessionManager.js'
-import {
-  listAllClaudeSessions,
-  type SessionInfo as ClaudeSessionInfo,
-} from '@providers/claude/runtime/sessionList.js'
-import {
-  listCodexSessions,
-  type CodexSessionInfo,
-} from '@providers/codex/runtime/sessionList.js'
 import { getMainProvider } from '@providers/registry.main.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import type { SessionInfo } from '@shared/types/session.js'
 
 type AgentKind = 'claude' | 'codex'
 
@@ -286,14 +280,15 @@ function registerIpc(): void {
 
   ipcMain.handle('session:list-all', async (_evt, limit?: number) => {
     const cap = typeof limit === 'number' && limit > 0 ? limit : 200
-    const [claude, codex] = await Promise.all([
-      listAllClaudeSessions({ limit: cap }).catch<ClaudeSessionInfo[]>(() => []),
-      listCodexSessions({ limit: cap }).catch<CodexSessionInfo[]>(() => []),
-    ])
-    const tagged = [
-      ...claude.map(s => ({ ...s, provider: 'claude' as const })),
-      ...codex.map(s => ({ ...s, provider: 'codex' as const })),
-    ]
+    const providers: AgentProviderKind[] = ['claude', 'codex']
+    const lists = await Promise.all(providers.map(async provider => {
+      const listAllSessions = getMainProvider(provider).listAllSessions
+      const sessions = listAllSessions
+        ? await listAllSessions(cap).catch(() => [] as SessionInfo[])
+        : []
+      return sessions.map(session => ({ ...session, provider }))
+    }))
+    const tagged = lists.flat()
     tagged.sort((a, b) => b.lastModified - a.lastModified)
     return tagged.slice(0, cap)
   })

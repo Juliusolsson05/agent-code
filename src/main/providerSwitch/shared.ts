@@ -107,8 +107,10 @@ export async function resolveProviderTranscriptPath(params: {
   // provider registry owns those semantics now: Claude resolves a cwd-scoped
   // JSONL path, while Codex resolves a global rollout file by structured thread
   // id. Delegating here lets history loading, transcript templates, and provider
-  // switching share one call site without moving provider-specific storage rules
-  // back into each feature.
+  // templates share one call site without moving provider-specific storage rules
+  // back into each feature. Provider-switch/duplicate/rewind still use the
+  // Codex-specific helper above when they need the source path directly, and
+  // that helper intentionally uses the same mtime tie-break as the registry.
   return getMainProvider(params.kind).resolveTranscriptPath(
     params.cwd,
     params.providerSessionId,

@@ -31,35 +31,52 @@ async function findCodexRolloutPathByThreadId(
   sessionsDir: string,
   threadId: string,
 ): Promise<string | null> {
+  const matches: Array<{ path: string; mtimeMs: number }> = []
   try {
-    const years = await readdir(sessionsDir)
-    for (const year of years.sort().reverse()) {
-      const yearDir = join(sessionsDir, year)
-      const yStat = await stat(yearDir).catch(() => null)
-      if (!yStat?.isDirectory()) continue
-      const months = await readdir(yearDir)
-      for (const month of months.sort().reverse()) {
-        const monthDir = join(yearDir, month)
-        const mStat = await stat(monthDir).catch(() => null)
-        if (!mStat?.isDirectory()) continue
-        const days = await readdir(monthDir)
-        for (const day of days.sort().reverse()) {
-          const dayDir = join(monthDir, day)
-          const dStat = await stat(dayDir).catch(() => null)
-          if (!dStat?.isDirectory()) continue
-          const files = await readdir(dayDir)
-          const match = files.find(f => {
-            const parsed = CODEX_ROLLOUT_RE.exec(f)
-            return parsed?.[2] === threadId
-          })
-          if (match) return join(dayDir, match)
-        }
-      }
-    }
+    await collectCodexRolloutMatches(sessionsDir, threadId, matches)
   } catch {
     return null
   }
-  return null
+  if (matches.length === 0) return null
+  // WHY mtime, not reverse date-dir / first readdir match: Codex can leave more
+  // than one rollout filename for the same thread id after resume/remap flows.
+  // Provider switching, duplicate, rewind, history pagination, and prompt
+  // templates must all agree on the newest durable transcript, and file mtime is
+  // the old shared tie-break those flows already relied on.
+  matches.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return matches[0]?.path ?? null
+}
+
+async function collectCodexRolloutMatches(
+  dir: string,
+  threadId: string,
+  matches: Array<{ path: string; mtimeMs: number }>,
+  depth = 0,
+): Promise<void> {
+  if (depth > 3) return
+  let entries: string[]
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    const fullPath = join(dir, entry)
+    let entryStat
+    try {
+      entryStat = await stat(fullPath)
+    } catch {
+      continue
+    }
+    if (entryStat.isDirectory()) {
+      await collectCodexRolloutMatches(fullPath, threadId, matches, depth + 1)
+      continue
+    }
+    if (!entryStat.isFile()) continue
+    const parsed = CODEX_ROLLOUT_RE.exec(entry)
+    if (parsed?.[2] !== threadId) continue
+    matches.push({ path: fullPath, mtimeMs: entryStat.mtimeMs })
+  }
 }
 
 const claudeMain: MainProviderConfig = {

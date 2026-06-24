@@ -733,9 +733,9 @@ export class CodexSubAgentTracker {
     if (size <= from) return false
 
     const appended = await readRange(path, from, size)
-    const text = (this.childPartialByAgentId.get(agentId) ?? '') + appended
+    const text = (this.childPartialByAgentId.get(agentId) ?? '') + appended.text
     const lastNl = text.lastIndexOf('\n')
-    this.childOffsetByAgentId.set(agentId, size)
+    this.childOffsetByAgentId.set(agentId, appended.nextOffset)
     if (lastNl < 0) {
       this.childPartialByAgentId.set(agentId, text)
       return false

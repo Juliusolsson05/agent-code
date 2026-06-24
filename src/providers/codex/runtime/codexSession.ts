@@ -95,6 +95,7 @@ export type CodexSessionOptions = {
   snapshotIntervalMs?: number
   resumeSessionId?: string
   dangerousMode?: boolean
+  shellSessionId?: string
   useProxy?: boolean
   builtInMcpServers?: BuiltInMcpServerConfig[]
 }
@@ -163,6 +164,7 @@ export class CodexSession extends EventEmitter {
   private readonly snapshotIntervalMs: number
   private readonly resumeSessionId: string | null
   private readonly dangerousMode: boolean
+  private readonly shellSessionId: string | null
   private readonly useProxy: boolean
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
   private proxyServer: ResponsesProxy | null = null
@@ -176,6 +178,7 @@ export class CodexSession extends EventEmitter {
     this.binary = options.binary ?? 'codex'
     this.resumeSessionId = options.resumeSessionId ?? null
     this.dangerousMode = options.dangerousMode === true
+    this.shellSessionId = options.shellSessionId ?? null
     this.useProxy = options.useProxy === true
     this.builtInMcpServers = options.builtInMcpServers ?? []
     this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
@@ -241,13 +244,15 @@ export class CodexSession extends EventEmitter {
         cwd: this.cwd,
         sessionKey: this.resumeSessionId
           ? `resume-${this.resumeSessionId}`
-          // Fresh sessions don't have an upstream-stable id we can
-          // anchor the folder name to; pin to a per-process timestamp
-          // so multiple proxy runs from the same launch sit under one
-          // parent dir. The actual run dir below appends another
-          // timestamp, so collisions are impossible even if
-          // newCodexSessionDate fires twice in the same ms.
-          : `shell-${new Date().toISOString().replace(/[:.]/g, '-')}`,
+          // Fresh sessions do not have an upstream-stable provider id yet, but
+          // the app-local pane id is stable for the lifetime of the process and
+          // is the only identifier the renderer has when a user saves a bundle
+          // before Codex writes session_meta. Match Claude's `shell-<id>`
+          // convention so manual bundles can request exact fresh-session proxy
+          // evidence instead of falling back to "latest run in this project".
+          : (this.shellSessionId
+              ? `shell-${this.shellSessionId}`
+              : `shell-${new Date().toISOString().replace(/[:.]/g, '-')}`),
       })
       const proxy = await ResponsesProxy.create({ eventsFile })
       this.proxyServer = proxy

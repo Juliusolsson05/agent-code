@@ -455,13 +455,15 @@ export async function assembleAndSaveDebugBundle(params: {
   cwd?: string
   /** providerSessionId (Claude resume id, Codex thread id). When
    *  present, the proxy reader narrows its search to the matching
-   *  `resume-<id>` session segment. Falls back to scanning every
-   *  session segment under the cwd if absent or unmatched. */
+   *  `resume-<id>` session segment. Fresh sessions do not have that durable id
+   *  yet, so the bundle uses the app-local `shell-<sessionId>` segment that the
+   *  provider proxy writers allocate at process start. */
   providerSessionId?: string | null
 }): Promise<{ bundlePath: string }> {
   const { sessionId, runtime, kind, reason = 'manual', cwd, providerSessionId } = params
   const capturedAt = Date.now()
   const includeProxyPayload = reason === 'manual'
+  const proxySessionKey = providerSessionId ? `resume-${providerSessionId}` : `shell-${sessionId}`
   await window.api.flushPerformance().catch(() => {})
   const performanceSnapshot = await window.api.getPerformanceSnapshot().catch(() => null)
 
@@ -479,7 +481,7 @@ export async function assembleAndSaveDebugBundle(params: {
   const proxySection = cwd && includeProxyPayload
     ? await window.api.readProxyEvents({
         cwd,
-        sessionKey: providerSessionId ? `resume-${providerSessionId}` : null,
+        sessionKey: proxySessionKey,
       }).catch(() => null)
     : null
 
@@ -541,7 +543,7 @@ export async function assembleAndSaveDebugBundle(params: {
       proxySection?.runDir ?? null,
       {
         match: proxySection?.match ?? 'none',
-        requestedSessionKey: proxySection?.requestedSessionKey ?? (providerSessionId ? `resume-${providerSessionId}` : null),
+        requestedSessionKey: proxySection?.requestedSessionKey ?? (includeProxyPayload ? proxySessionKey : null),
         matchedSessionSegment: proxySection?.matchedSessionSegment ?? null,
       },
     ),

@@ -315,7 +315,11 @@ export class SessionManager extends EventEmitter {
     // the separate `removed` event so SessionManager does not import forwarder
     // internals.
     this.sessions.delete(sessionId)
-    this.lastActivityAt.delete(sessionId)
+    // Keep lastActivityAt after removal. Process telemetry can be asked about a
+    // pane the renderer still knows but whose PTY already exited; deleting this
+    // tiny timestamp made those recently-exited panes look like they had never
+    // produced activity. Live ownership is `sessions`, not this map, so retaining
+    // the timestamp does not keep a process/session alive.
     this.sessionSizes.delete(sessionId)
     if (kind === 'terminal') {
       this.terminalBuffers.delete(sessionId)

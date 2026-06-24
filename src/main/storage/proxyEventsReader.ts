@@ -142,10 +142,11 @@ export async function readProxyEventsForBundle(opts: {
 
 
 // Reader segment sanitiser MUST match the proxy writers' segment exactly or a
-// bundle silently misses the proxy log. Delegates to the shared helper (no
-// fallback — an empty/no-match segment is the reader's "not found" signal).
+// bundle silently misses the proxy log. Keep the same empty-input fallback as
+// the writers so a degenerate but valid writer segment does not become an
+// unreadable bundle path.
 function sanitiseSegment(value: string): string {
-  return sanitizePathSegment(value)
+  return sanitizePathSegment(value) || 'unknown'
 }
 
 
@@ -172,11 +173,13 @@ async function pickSessionSegments(
     }
     if (!allowFallback) return { segments: [], match: 'fallback' }
   }
+  if (!allowFallback) return { segments: [], match: 'fallback' }
+
   try {
     const entries = await readdir(projectDir, { withFileTypes: true })
     return {
       segments: entries.filter(e => e.isDirectory()).map(e => e.name),
-      match: sessionKey ? 'fallback' : 'exact',
+      match: 'fallback',
     }
   } catch {
     return { segments: [], match: 'fallback' }
