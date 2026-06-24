@@ -18,6 +18,7 @@ import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
 import { AgentActivityModal } from '@renderer/features/workspace/ui/AgentActivityModal'
 import { BuryPanePrompt } from '@renderer/features/workspace/ui/BuryPanePrompt'
 import { CloseOldAgentsModal } from '@renderer/features/workspace/ui/CloseOldAgentsModal'
+import { BulkProviderSwitchModal } from '@renderer/features/workspace/ui/BulkProviderSwitchModal'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
 import { TiledDispatchCountOverlay } from '@renderer/features/workspace/ui/TiledDispatchCountOverlay'
 import { PromptSearchModal } from '@renderer/features/workspace/ui/PromptSearchModal'
@@ -164,6 +165,9 @@ export default function App() {
   const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
   const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
   const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
+  const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
+  const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
+  const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
   const rewindPromptSessionId = useAppStore(state => state.rewindPromptSessionId)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
@@ -858,6 +862,7 @@ export default function App() {
         openPromptSearch={openPromptSearch}
         openAgentActivity={openAgentActivity}
         openCloseOldAgents={openCloseOldAgents}
+        openBulkProviderSwitch={openBulkProviderSwitch}
         openRewindPrompt={openRewindPrompt}
         toggleCustomRendering={toggleCustomRendering}
         toggleStatusMode={toggleStatusMode}
@@ -1024,6 +1029,12 @@ export default function App() {
         open={closeOldAgentsOpen}
         workspace={workspace}
         onClose={closeCloseOldAgents}
+      />
+
+      <BulkProviderSwitchModal
+        open={bulkProviderSwitchOpen}
+        workspace={workspace}
+        onClose={closeBulkProviderSwitch}
       />
 
       <RewindToPromptModal

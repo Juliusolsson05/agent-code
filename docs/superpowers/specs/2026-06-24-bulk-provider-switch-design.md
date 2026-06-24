@@ -191,17 +191,26 @@ batch's agents back (or closes it) before hitting Return, that agent is detected
 longer matching the batch's expected post-switch provider and is **skipped** on return
 (reported in the summary).
 
-### One level of memory, durable
+### One level of memory, in-memory for the working session
 
 Only **one** batch is remembered — "the most recent." A new forward switch **replaces**
 the remembered batch (the previous record is discarded; you can't return a batch from two
 switches ago). This matches the user's "most recent" framing and avoids a history-stack
-UI.
+UI. The record is cleared only when (a) the user returns the batch, or (b) a new forward
+switch supersedes it. Unlike Rewind Undo it does **not** auto-clear on the next submit —
+it stands until explicitly consumed.
 
-The record is **durable**: it is stored in workspace state and **persisted to
-`workspace.json`**, so it survives app restarts ("bring them back tomorrow"). This is
-*not* the auto-clearing transient behavior of Rewind Undo. The record is cleared only
-when (a) the user returns the batch, or (b) a new forward switch supersedes it.
+**Storage decision (refined during implementation):** the record lives in in-memory
+workspace state (`WorkspaceState.lastProviderSwitchBatch`) and is deliberately **NOT**
+added to `PersistedWorkspace`. The reason is concrete: the batch references current-launch
+cc-shell `SessionId`s, and on reload every session is re-spawned with a **remapped**
+SessionId (see `rehydrate.ts` — "persisted ids are just placeholders that get replaced").
+A persisted batch would therefore point at dead placeholder ids unless it rode the same
+remap pipeline, which is non-trivial plumbing for a convenience affordance. So the batch
+lives for the working session, which fully covers the stated workflow ("switch out, bring
+them back an hour later"). If cross-restart durability is wanted later, the record should
+be keyed by the **durable provider session id** rather than the local SessionId — the
+load-bearing comment marking that decision lives on `WorkspaceState.lastProviderSwitchBatch`.
 
 ## Data model
 
@@ -232,11 +241,11 @@ type ProviderSwitchBatch = {
 }
 ```
 
-Stored as `WorkspaceState.lastProviderSwitchBatch: ProviderSwitchBatch | null`
-(alongside existing global fields like `dispatchMode`), and added to
-`PersistedWorkspace` so it round-trips through `persistence.ts`. The persisted ids are
-the same `SessionId`s that are already keys in the persisted `sessions` map, so the
-record stays consistent with the rest of the persisted workspace.
+Stored as `WorkspaceState.lastProviderSwitchBatch?: ProviderSwitchBatch | null`
+(alongside existing global fields like `dispatchMode`), but — per the storage decision
+above — **not** added to `PersistedWorkspace`. It is optional on `WorkspaceState` so a
+rehydrated workspace simply starts with it `undefined`; the bulk action sets it during
+the session.
 
 ## Architecture / components
 

@@ -8,6 +8,7 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 import { resumableProviderSessionId } from '@renderer/workspace/providerSessionIdentity'
+import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSwitchCore'
 
 // Provider-level actions on the focused pane.
 //
@@ -47,94 +48,31 @@ export function useProviderActions(
       showPaneToast(sourceSessionId, 'Only Claude and Codex panes can switch provider')
       return
     }
+    // Focused command policy: toggle to "the other provider". The translate /
+    // replace / empty-pane mechanics live in switchAgentProvider so the bulk
+    // modal can reuse them; this command owns only the target choice and the
+    // pane-scoped toast.
     const targetKind = sourceKind === 'claude' ? 'codex' : 'claude'
 
-    try {
-      const sourceProviderSessionId = resumableProviderSessionId(meta)
-      if (!sourceProviderSessionId) {
-        const draftImages =
-          refs.latestRuntimesRef.current[sourceSessionId]?.draftImages ?? []
+    const result = await switchAgentProvider({
+      sessionId: sourceSessionId,
+      targetKind,
+      refs,
+      setRuntimes,
+      sessionActions,
+    })
 
-        // A freshly-spawned provider pane has no durable provider
-        // transcript yet. Claude's sessionId and Codex's session_meta
-        // only reach SessionMeta after the first provider JSONL/rollout
-        // entry arrives, which usually means after the first user
-        // submission. Calling main-process conversion here would be
-        // conceptually wrong as well as mechanically brittle: there is
-        // no persisted conversation to translate, and the converter
-        // derives the target resume id from transcript records that do
-        // not exist yet. The user's intent in this state is "I opened
-        // the wrong provider before starting", so a no-resume replacement
-        // is the faithful operation.
-        //
-        // `replaceSession` already preserves draftInput because several
-        // replacement flows want typed-but-unsent text to survive. It does
-        // not preserve draftImages today, and broadening that helper would
-        // change reload/rewind/resume semantics outside this issue. Image
-        // drafts are still part of the user's unsent empty-pane state, so
-        // this branch snapshots and restores them explicitly.
-        const newSessionId = await sessionActions.replaceSession(meta.cwd, {
-          kind: targetKind,
-          builtInMcpDomains: meta.builtInMcpDomains,
-        })
-        if (!newSessionId) return
-
-        setRuntimes(prev => {
-          const runtime = prev[newSessionId]
-          if (!runtime) return prev
-          const nextDraftImages = targetKind === 'claude' ? draftImages : []
-          return {
-            ...prev,
-            [newSessionId]: {
-              ...runtime,
-              // Codex panes do not render or submit draft image attachments.
-              // Carrying Claude-only image state into a Codex runtime would be
-              // worse than a visible drop: the hidden array still participates
-              // in the composer "empty submit" guard, so pressing Enter on an
-              // apparently empty Codex composer could submit a blank prompt.
-              // Preserve images only when the target provider can surface them.
-              draftImages: nextDraftImages,
-            },
-          }
-        })
-
-        showPaneToast(
-          newSessionId,
-          targetKind === 'codex' ? 'Switched to Codex' : 'Switched to Claude',
-        )
-        return
-      }
-
-      // The translated target transcript must be created BEFORE we
-      // replace the live pane. If translation fails, the current
-      // provider process should stay untouched and the user should
-      // keep their running session instead of being dropped into a
-      // dead pane.
-      const result = await window.api.switchProvider({
-        sourceKind,
-        sourceProviderSessionId,
-        cwd: meta.cwd,
-      })
-
-      const newSessionId = await sessionActions.replaceSession(meta.cwd, {
-        kind: result.targetKind,
-        resumeSessionId: result.targetProviderSessionId,
-        builtInMcpDomains: meta.builtInMcpDomains,
-      })
-      if (!newSessionId) return
-
+    if (result.status === 'switched') {
       showPaneToast(
-        newSessionId,
+        result.newSessionId,
         result.targetKind === 'codex' ? 'Switched to Codex' : 'Switched to Claude',
       )
-    } catch (err) {
-      const message =
-        err instanceof Error && err.message.length > 0
-          ? err.message
-          : 'Provider switch failed'
-      showPaneToast(sourceSessionId, message)
+    } else if (result.status === 'failed') {
+      showPaneToast(sourceSessionId, result.message)
+    } else {
+      showPaneToast(sourceSessionId, result.reason)
     }
-  }, [refs.latestRuntimesRef, refs.stateRef, sessionActions, setRuntimes, showPaneToast])
+  }, [refs, sessionActions, setRuntimes, showPaneToast])
 
   const reloadFocusedAgent = useCallback(async () => {
     const current = refs.stateRef.current

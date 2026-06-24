@@ -81,6 +81,7 @@ type Props = {
   openPromptSearch: () => void
   openAgentActivity: () => void
   openCloseOldAgents: () => void
+  openBulkProviderSwitch: () => void
   openRewindPrompt: (sessionId: string) => void
   toggleGitBar: () => void
   toggleWorktreesBar: () => void
@@ -153,6 +154,7 @@ export function CommandPalette({
   openPromptSearch,
   openAgentActivity,
   openCloseOldAgents,
+  openBulkProviderSwitch,
   openRewindPrompt,
   toggleGitBar,
   toggleWorktreesBar,
@@ -366,6 +368,7 @@ export function CommandPalette({
         openPromptSearch,
         openAgentActivity,
         openCloseOldAgents,
+        openBulkProviderSwitch,
         openRewindPrompt,
         toggleGitBar,
         toggleWorktreesBar,
@@ -441,6 +444,7 @@ export function CommandPalette({
       openPromptSearch,
       openAgentActivity,
       openCloseOldAgents,
+      openBulkProviderSwitch,
       openRewindPrompt,
       toggleGitBar,
       toggleWorktreesBar,

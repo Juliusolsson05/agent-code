@@ -142,6 +142,15 @@ export type UiShellState = {
    * flags separate lets either surface evolve without inheriting the other
    * surface's keyboard model or confirmation semantics. */
   closeOldAgentsOpen: boolean
+  /** When true, the Switch Agents (bulk provider switch) modal is open.
+   *
+   * WHY a separate flag rather than folding it into Close Old Agents: the two
+   * share a two-pane scope/preview shape, but the verbs and safety models
+   * differ — Close Old Agents is destructive and threshold-driven, while Switch
+   * Agents is a reversible round-trip with a remembered-batch return affordance
+   * living inside the same modal. Keeping the flags separate lets either modal
+   * evolve without inheriting the other's confirmation semantics. */
+  bulkProviderSwitchOpen: boolean
   /** Non-null when the Rewind-to-Prompt modal is open. Value is the
    *  sessionId whose transcript the modal is showing prompts for.
    *  Selecting a prompt in the modal calls
