@@ -1,13 +1,9 @@
-import { join } from 'path'
-import { readdir, stat } from 'fs/promises'
+import { stat } from 'fs/promises'
 
-import { getMainProvider } from '@providers/registry.main.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { streamJsonl } from '@shared/runtime/streamJsonl.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
-
-const CODEX_ROLLOUT_RE =
-  /^rollout-(.+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i
+import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 
 // Loader for older history chunks.
 //
@@ -63,68 +59,14 @@ function extractCodexHistoryMarker(entry: Record<string, unknown>): string {
   return `${String(entry.timestamp ?? '')}:${String(payload?.id ?? payload?.call_id ?? payload?.type ?? entry.type)}`
 }
 
-/**
- * Codex sessions are stored under year/month/day/<timestamp>-<threadId>.jsonl.
- * The renderer hands us only a threadId, so we walk the tree newest-
- * first (dirs sorted reverse) and pick the first file whose parsed
- * rollout UUID exactly equals the provider id.
- *
- * WHY exact parse instead of substring matching:
- *
- * Codex's rollout tree is global, not per pane or per cwd. Any helper
- * that accepts "filename contains threadId" makes transcript ownership
- * depend on an accidental substring relationship in shared storage.
- * The provider id is the UUID suffix in the structured rollout
- * filename, so older-history loading must use that exact field or
- * return nothing.
- */
-async function findCodexRolloutPathByThreadId(
-  sessionsDir: string,
-  threadId: string,
-): Promise<string | null> {
-  try {
-    const years = await readdir(sessionsDir)
-    for (const year of years.sort().reverse()) {
-      const yearDir = join(sessionsDir, year)
-      const yStat = await stat(yearDir).catch(() => null)
-      if (!yStat?.isDirectory()) continue
-      const months = await readdir(yearDir)
-      for (const month of months.sort().reverse()) {
-        const monthDir = join(yearDir, month)
-        const mStat = await stat(monthDir).catch(() => null)
-        if (!mStat?.isDirectory()) continue
-        const days = await readdir(monthDir)
-        for (const day of days.sort().reverse()) {
-          const dayDir = join(monthDir, day)
-          const dStat = await stat(dayDir).catch(() => null)
-          if (!dStat?.isDirectory()) continue
-          const files = await readdir(dayDir)
-          const match = files.find(f => {
-            const parsed = CODEX_ROLLOUT_RE.exec(f)
-            return parsed?.[2] === threadId
-          })
-          if (match) return join(dayDir, match)
-        }
-      }
-    }
-  } catch {
-    return null
-  }
-  return null
-}
-
-async function resolveTranscriptPath(
+async function resolveHistoryTranscriptPath(
   params: InitialHistoryChunkRequest,
 ): Promise<string | null> {
-  const provider = getMainProvider(params.kind)
-
-  if (params.kind === 'claude') {
-    const projectDir = await provider.getProjectDir(params.cwd)
-    return join(projectDir, `${params.providerSessionId}.jsonl`)
-  }
-
-  const sessionsDir = await provider.getProjectDir(params.cwd)
-  return findCodexRolloutPathByThreadId(sessionsDir, params.providerSessionId)
+  // Use the same resolver as transcript templates/provider-switch flows. The
+  // old history-loader-local walker returned the first lexical match; the shared
+  // resolver picks newest by mtime, which is the correct tie-break when the same
+  // Codex thread id appears in more than one rollout file.
+  return resolveProviderTranscriptPath(params)
 }
 
 function pushCapped<T>(items: T[], item: T, limit: number): void {
@@ -262,7 +204,7 @@ export async function loadOlderHistoryChunk(
   })
 
   try {
-    const filePath = await resolveTranscriptPath(params)
+    const filePath = await resolveHistoryTranscriptPath(params)
 
     if (!filePath) {
       span.end({ result: 'missing-file' })
@@ -310,7 +252,7 @@ export async function loadInitialHistoryChunk(
   })
 
   try {
-    const filePath = await resolveTranscriptPath(params)
+    const filePath = await resolveHistoryTranscriptPath(params)
     if (!filePath) {
       span.end({ result: 'missing-file' })
       return { entries: [], hasMore: false, totalEntries: 0 }

@@ -108,6 +108,14 @@ jobs:
       - name: Install dependencies
         run: npm ci --include=dev
 
+      - name: Prepare bundled runtime tools
+        # WHY this belongs in build-app, not package-macos: `npm run build`
+        # runs scripts/copy-packaged-resources.mjs in this job, and that copy
+        # step reads third_party/<tool>/cache/ into `out/main/runtime`. The
+        # package-macos job packages the uploaded `out` tree verbatim, so
+        # preparing later would still ship manifest-only runtime folders.
+        run: npm run runtime:prepare:mac
+
       - name: Build app
         run: npm run build
 

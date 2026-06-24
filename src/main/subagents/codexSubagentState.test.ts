@@ -5,6 +5,7 @@ import {
   extractCodexSpawnCall,
   extractCodexSpawnOutput,
   extractCodexSubagentNotification,
+  textFromCodexOutput,
 } from './codexSubagentState'
 
 describe('Codex subagent state', () => {
@@ -42,6 +43,66 @@ describe('Codex subagent state', () => {
       callId: 'call_spawn',
       agentId: '019eda6c-0573-7993-a01e-a1d839486a35',
       nickname: 'Cicero',
+    })
+  })
+
+  it('extracts the spawn output join key from { text } object output', () => {
+    const output = extractCodexSpawnOutput({
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_spawn',
+        output: { text: JSON.stringify({ agent_id: 'child-1', nickname: 'Plato' }) },
+      },
+    })
+    expect(output).toEqual({ callId: 'call_spawn', agentId: 'child-1', nickname: 'Plato' })
+  })
+
+  it('extracts the spawn output join key from structured array output', () => {
+    // feed audit Finding 11: array-shaped output used to drop the agent_id join
+    // key, silently breaking parent↔child correlation. Now it resolves.
+    const output = extractCodexSpawnOutput({
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_spawn',
+        output: [
+          { type: 'text', text: JSON.stringify({ agent_id: 'child-2', nickname: 'Aristotle' }) },
+        ],
+      },
+    })
+    expect(output).toEqual({ callId: 'call_spawn', agentId: 'child-2', nickname: 'Aristotle' })
+  })
+
+  it('returns null for array output that carries no agent_id', () => {
+    const output = extractCodexSpawnOutput({
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_spawn',
+        output: [{ type: 'text', text: 'no json here' }],
+      },
+    })
+    expect(output).toBeNull()
+  })
+
+  describe('textFromCodexOutput', () => {
+    it('passes a plain string through', () => {
+      expect(textFromCodexOutput('hello')).toBe('hello')
+    })
+    it('reads a { text } object', () => {
+      expect(textFromCodexOutput({ text: 'hi' })).toBe('hi')
+    })
+    it('joins array item text with newlines', () => {
+      expect(
+        textFromCodexOutput([{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }]),
+      ).toBe('a\nb')
+    })
+    it('returns null for an array with no text items', () => {
+      expect(textFromCodexOutput([{ type: 'image', data: 'x' }])).toBeNull()
+    })
+    it('returns null for an opaque object (never stringifies it)', () => {
+      expect(textFromCodexOutput({ foo: 'bar' })).toBeNull()
     })
   })
 

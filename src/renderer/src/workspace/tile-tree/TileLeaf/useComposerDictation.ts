@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
 import type { DictationProviderId } from '@renderer/app-state/settings/types'
+import type { DictationStatus } from '@shared/types/dictation'
 import {
   resetDictationOverlay,
   setDictationOverlayState,
@@ -12,8 +13,7 @@ import {
 } from '@renderer/workspace/tile-tree/TileLeaf/dictationHotkeyRegistry'
 import type { SessionId } from '@renderer/workspace/types'
 import type { DictationDebugLayer } from '@preload/api/types'
-
-type DictationStatus = 'idle' | 'starting' | 'recording' | 'stopping' | 'error'
+import { sha8Web } from '@shared/code/sha8'
 
 type QueuedAudioChunk = {
   index: number
@@ -52,13 +52,7 @@ const MIN_HOLD_TO_TRANSCRIBE_MS = 180
 // THIS exact chunk (not a different one with the same byte count).
 // `crypto.subtle.digest` is async but tiny — we await it inside the chunk
 // chain, which is already serialised, so it adds no extra ordering risk.
-async function sha8(buf: ArrayBuffer): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', buf)
-  const hex: string[] = []
-  const view = new Uint8Array(digest, 0, 4)
-  for (const b of view) hex.push(b.toString(16).padStart(2, '0'))
-  return hex.join('')
-}
+const sha8 = sha8Web
 
 // Why we pre-warm the mic before the user ever presses Fn:
 // On macOS, the FIRST `getUserMedia({audio: true})` call after the app

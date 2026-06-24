@@ -38,13 +38,18 @@ import type { ClaudeAskUserQuestionState } from '@shared/types/providerCondition
 //   The Feed level (which DOES have every entry) builds the maps and
 //   hands them down through context.
 //
-// Memo behavior: the map references change whenever `entries` change,
-// which invalidates useContext consumers. That's fine — rows that
-// care about the maps already re-render when entries grow, and rows
-// that don't call useContext are unaffected. We do NOT include the
-// maps in row memo keys; equality on the maps themselves would be
-// expensive and the interesting work (markdown parsing) is cached
-// inside TextProse by text string, so repeat renders are cheap.
+// Memo / invalidation behavior (feed audit Finding 1): the runtime maintains
+// these maps INCREMENTALLY and mutates them in place behind a stable reference,
+// so — unlike what an earlier version of this comment claimed — the map
+// reference does NOT change on every `entries` change. A contents-only mutation
+// is invisible to React context (identity is unchanged), which would leave an
+// already-mounted tool_use row (e.g. a git card) painting stale state after its
+// paired tool_result lands in a LATER entry. Feed therefore clones the map into
+// a fresh identity whenever the runtime's `toolIndexVersion` token bumps (and
+// only then), giving consumers a real invalidation signal without an O(N²)
+// per-append rebuild. We still do NOT include the maps in row memo keys;
+// equality on the maps themselves would be expensive and the interesting work
+// (markdown parsing) is cached inside TextProse by text string.
 
 export const ProviderContext = createContext<AgentProvider>('claude')
 

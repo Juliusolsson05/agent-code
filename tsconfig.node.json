@@ -91,6 +91,10 @@
     // the node program. Explicit exclude stops that walk at the
     // file.
     "src/providers/registry.renderer.ts",
+    // Capability-only renderer registry imports provider row/condition TSX
+    // modules. It is consumed by renderer feed code, not by main, so keep it
+    // out of the node project for the same reason as registry.renderer.ts.
+    "src/providers/registry.renderer.capabilities.ts",
     // conditions-core ships ONE renderer-only file: ConditionOutlet.tsx (a JSX
     // component). The rest of conditions-core (contract.ts/view.ts/dispatch.ts)
     // is node-safe and SHOULD be type-checked by this project. Excluding just

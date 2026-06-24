@@ -6,7 +6,7 @@ import { join } from 'node:path'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { ProcessTelemetry } from '@main/performance/ProcessTelemetry.js'
-import { STATE_DIR } from '@main/storage/paths.js'
+import { HEAP_SNAPSHOT_DIR } from '@main/storage/paths.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type {
   HeapSpaceStats,
@@ -188,7 +188,7 @@ export function registerPerformanceIpc(manager: SessionManager): void {
     ok: false
     error: string
   }> => {
-    const dir = join(STATE_DIR, 'heap-snapshots')
+    const dir = HEAP_SNAPSHOT_DIR
     try {
       await mkdir(dir, { recursive: true })
     } catch (err) {

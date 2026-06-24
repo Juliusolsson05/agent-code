@@ -30,6 +30,7 @@ type ClosedAgentRecord = {
 
 const MAX_PROMPT_DELIVERIES = 1000
 const MAX_CLOSED_AGENTS = 500
+const MAX_CLOSED_AGENT_MESSAGES = 100
 const ORCHESTRATION_METADATA_TTL_MS = 24 * 60 * 60 * 1000
 const PRUNE_INTERVAL_MS = 5 * 60 * 1000
 
@@ -149,7 +150,7 @@ export class OrchestrationBridge {
     const before = await this.readAgent({
       parentSessionId: params.parentSessionId,
       sessionId: params.sessionId,
-      maxMessages: 100,
+      maxMessages: MAX_CLOSED_AGENT_MESSAGES,
     }).catch(() => null)
     const response = await this.request({
       requestId: randomUUID(),
@@ -174,7 +175,7 @@ export class OrchestrationBridge {
     const before = await this.readRunOutputs({
       parentSessionId: params.parentSessionId,
       runId: params.runId,
-      maxMessagesPerAgent: 100,
+      maxMessagesPerAgent: MAX_CLOSED_AGENT_MESSAGES,
     }).catch(() => [])
     const response = await this.request({
       requestId: randomUUID(),
@@ -320,6 +321,9 @@ export class OrchestrationBridge {
     agent: OrchestrationAgentRecord,
     delivery: PromptDeliveryMetadata,
   ): OrchestrationAgentRecord['lifecycleState'] {
+    // STAGE 2 of 2: renderer state says what the child appears to be doing,
+    // while main alone knows when orchestration submitted a prompt. Keep this
+    // overlay paired with lifecycleStateForRuntime in orchestrationMcp.ts.
     if (delivery.promptSubmissionCount === 0) return agent.lifecycleState
     if (agent.lifecycleState === 'created' || agent.lifecycleState === 'waiting') {
       return 'prompt_sent'

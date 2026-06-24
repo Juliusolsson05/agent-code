@@ -1,18 +1,6 @@
 import { memo, useContext } from 'react'
 
-import {
-  EditRow,
-  MultiEditRow,
-  WriteRow,
-  TodoRow,
-} from '@providers/claude/renderer/rows/ClaudeRows'
-import {
-  CodexApplyPatchRow,
-  CodexExecCommandRow,
-  CodexToolRow,
-  CodexToolResultRow,
-  CodexWriteStdinRow,
-} from '@providers/codex/renderer/rows/CodexRows'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type {
   ContentBlock,
   ToolResultBlock,
@@ -155,31 +143,8 @@ export const Block = memo(function Block({
         return <TaskSubagentRow block={tu} />
       }
 
-      if (currentProvider === 'codex') {
-        if (tu.name === 'apply_patch') {
-          return <CodexApplyPatchRow block={tu} />
-        }
-        if (tu.name === 'exec_command') {
-          return <CodexExecCommandRow block={tu} />
-        }
-        if (tu.name === 'write_stdin') {
-          return <CodexWriteStdinRow block={tu} />
-        }
-        return <CodexToolRow block={tu} />
-      }
-      // Claude provider — dispatch by tool name.
-      switch (tu.name) {
-        case 'Edit':
-          return <EditRow block={tu} />
-        case 'MultiEdit':
-          return <MultiEditRow block={tu} />
-        case 'Write':
-          return <WriteRow block={tu} />
-        case 'TodoWrite':
-          return <TodoRow block={tu} />
-        default:
-          return <ToolUseRow block={tu} />
-      }
+      const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
+      return providerRow !== undefined ? providerRow : <ToolUseRow block={tu} />
     }
     case 'tool_result': {
       const tr = block as ToolResultBlock
@@ -197,19 +162,11 @@ export const Block = memo(function Block({
           return null
         }
       }
-      if (currentProvider === 'codex') {
-        const sourceTu = toolUseIndex.get(tr.tool_use_id)
-        if (sourceTu?.name === 'spawn_agent') {
-          // Codex's spawn_agent result is the renderer join payload
-          // ({agent_id,nickname}), not the child agent's work. Once the
-          // spawn call renders as a TaskSubagentRow, showing that raw JSON
-          // below it is both noisy and misleading; wait_agent and child
-          // notifications carry the user-relevant completion state instead.
-          return null
-        }
-        return <CodexToolResultRow block={tr} />
-      }
-      return <ToolResultRow block={tr} />
+      const sourceTool = toolUseIndex.get(tr.tool_use_id)
+      const providerRow = getRendererProviderCapabilities(currentProvider).renderToolResult?.(tr, {
+        sourceTool,
+      })
+      return providerRow !== undefined ? providerRow : <ToolResultRow block={tr} />
     }
     default:
       return (

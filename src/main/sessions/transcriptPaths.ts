@@ -1,9 +1,6 @@
 import { existsSync } from 'fs'
 
-import {
-  findCodexRolloutPathBySessionId,
-  getClaudeSessionFilePath,
-} from '@main/providerSwitch/shared.js'
+import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 
 export type TranscriptPathRequest = {
   sessionId: string
@@ -32,17 +29,7 @@ export type TranscriptPathResult = TranscriptPathRequest & {
 export async function resolveTranscriptPath(
   request: TranscriptPathRequest,
 ): Promise<TranscriptPathResult> {
-  let transcriptPath: string | null
-  if (request.kind === 'claude') {
-    transcriptPath = await getClaudeSessionFilePath(
-      request.cwd,
-      request.providerSessionId,
-    )
-  } else {
-    transcriptPath = await findCodexRolloutPathBySessionId(
-      request.providerSessionId,
-    )
-  }
+  const transcriptPath = await resolveProviderTranscriptPath(request)
 
   return {
     ...request,

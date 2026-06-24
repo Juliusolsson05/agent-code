@@ -20,7 +20,7 @@ import type { ResolvedCommand } from '@renderer/features/command-palette/types'
 // true when every char of `query` appears in `text` in order (not
 // necessarily contiguous), case-insensitively. This is the weakest
 // (tier 1) match: it's what lets "spr" find "Split Pane Right".
-function fuzzyMatch(text: string, query: string): boolean {
+export function fuzzyMatch(text: string, query: string): boolean {
   const lower = text.toLowerCase()
   const q = query.toLowerCase()
   let j = 0

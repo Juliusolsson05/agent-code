@@ -22,14 +22,6 @@ import {
   type TrustDialogState,
 } from 'claude-code-headless'
 
-// HISTORICAL: this file used to `export { terminalToMarkdown }` as a
-// compat shim left over from when the function was inlined here before
-// being moved into the headless package. The shim has zero callers in
-// the repo today — consumers either import directly from
-// claude-code-headless or from src/shared/runtime/ptyScreen — so the
-// re-export is gone. If a future caller needs it, import it where it
-// actually lives.
-
 export type ClaudeSessionOptions = {
   cwd?: string
   cols?: number

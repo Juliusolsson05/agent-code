@@ -57,6 +57,8 @@
 //     safety-net path still feels responsive.
 
 export const CLAUDE_PASTE_THRESHOLD = 100
+import { sha8Web } from '@shared/code/sha8'
+
 export const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
 export const CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS = 750
 export const CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS = 500
@@ -71,13 +73,7 @@ function wait(ms: number): Promise<void> {
 // journal. crypto.subtle is the standard renderer-side digest API;
 // 4 bytes is more than enough for cross-process pairing (collision
 // probability is negligible for a single paste's chunk set).
-async function sha8(data: string): Promise<string> {
-  const buf = new TextEncoder().encode(data)
-  const digest = await crypto.subtle.digest('SHA-256', buf)
-  const hex: string[] = []
-  for (const b of new Uint8Array(digest, 0, 4)) hex.push(b.toString(16).padStart(2, '0'))
-  return hex.join('')
-}
+const sha8 = sha8Web
 
 // --- Content-match detection helpers ---------------------------------------
 

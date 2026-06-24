@@ -3,6 +3,9 @@ import { join } from 'path'
 
 import { FEED_DEBUG_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
+// Shared filename-safe token helper — same escape rule the debug-bundle folder
+// suffix uses. See @shared/runtime/projectDir sanitizeFilenameToken.
+import { sanitizeFilenameToken } from '@shared/runtime/projectDir.js'
 
 // Per-session feed-debug log writer.
 //
@@ -32,13 +35,11 @@ export type FeedDebugPersistEntry = {
 const feedDebugWriteQueues = new Map<string, Promise<void>>()
 const lastWrittenFeedDebugId = new Map<string, number>()
 
-function sanitizeSessionIdForPath(sessionId: string): string {
-  // Session ids are user-opaque uuids but the renderer also uses them
-  // as routing keys; they must be filename-safe. Strip anything that
-  // isn't [A-Za-z0-9._-] so a malformed id can't escape FEED_DEBUG_DIR
-  // via path traversal (`../`, etc.).
-  return sessionId.replace(/[^a-zA-Z0-9._-]/g, '_')
-}
+// Session ids are user-opaque uuids but the renderer also uses them as routing
+// keys; they must be filename-safe so a malformed id can't escape
+// FEED_DEBUG_DIR via path traversal. Delegated to the shared helper so this and
+// the debug-bundle folder suffix share one escape rule.
+const sanitizeSessionIdForPath = sanitizeFilenameToken
 
 /**
  * Append `entries` to the session's feed-debug JSONL, serialized
@@ -102,7 +103,7 @@ export function queueFeedDebugAppend(
 /** Drop in-memory bookkeeping for a session that has ended. The
  *  on-disk JSONL is intentionally LEFT IN PLACE — debug bundles for
  *  long-since-closed panes still benefit from reading the trail. The
- *  retention sweep in pruneStaleFeedDebugLogs is what eventually
+ *  unified sweep in storage/debugRetention.ts is what eventually
  *  deletes the file. */
 export function forgetFeedDebugSession(sessionId: string): void {
   // We never delete `feedDebugWriteQueues` synchronously here —

@@ -5,10 +5,18 @@ import { resolve } from 'path'
 
 const repoRoot = resolve(__dirname, '../..')
 
+// WHY `packages/*` and not a bare root path: the headless workspaces live under
+// `packages/` (see the repo `packages/` dir + tsconfig `paths`). An earlier
+// version of this config aliased them to `repoRoot/claude-code-headless/...`,
+// directories that do not exist in this checkout — so `testing:rendering:build`
+// could not resolve the package imports at all. These must stay byte-for-byte
+// in step with the `paths` maps in tsconfig.node.json / tsconfig.web.json and
+// the `resolve.alias` map in the app's electron.vite.config.ts; if they drift,
+// the harness type-checks/bundles against a module graph the app cannot load.
 const headlessAlias = {
-  'claude-code-headless': resolve(repoRoot, 'claude-code-headless/src/index.ts'),
-  'codex-headless': resolve(repoRoot, 'codex-headless/src/index.ts'),
-  'agent-transcript-parser': resolve(repoRoot, 'agent-transcript-parser/src/index.ts'),
+  'claude-code-headless': resolve(repoRoot, 'packages/claude-code-headless/src/index.ts'),
+  'codex-headless': resolve(repoRoot, 'packages/codex-headless/src/index.ts'),
+  'agent-transcript-parser': resolve(repoRoot, 'packages/agent-transcript-parser/src/index.ts'),
   '@renderer': resolve(repoRoot, 'src/renderer/src'),
   '@shared': resolve(repoRoot, 'src/shared'),
   '@providers': resolve(repoRoot, 'src/providers'),

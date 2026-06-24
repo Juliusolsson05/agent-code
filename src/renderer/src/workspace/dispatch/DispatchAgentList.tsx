@@ -14,6 +14,7 @@ import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
+import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 
 // WHY this module exists separately from DispatchLayout:
 // The full Dispatch index list (sections, pinned group, activity-colored
@@ -336,6 +337,7 @@ function dispatchSubtitle(runtime: {
   streamPhase?: string
   exited?: number | null
   unreadSince?: number | null
+  processStatus?: string
 }, kind?: SessionKind): string {
   // WHY terminals get their own label path:
   // Agent subtitles describe model turn state (`thinking`, `responding`,
@@ -345,14 +347,14 @@ function dispatchSubtitle(runtime: {
   // terminal row is scan-distinct even before the badge is read.
   if (kind === 'terminal') {
     if (runtime.sessionStatus === undefined) return 'shell starting'
-    if (runtime.exited !== null && runtime.exited !== undefined) return 'shell exited'
+    if (isSessionExited(runtime)) return 'shell exited'
     if (runtime.sessionStatus === 'running') return 'shell running'
     return 'shell idle'
   }
   if (runtime.sessionStatus === undefined) return 'starting'
   if (runtime.streamPhase && runtime.streamPhase !== 'idle') return runtime.streamPhase
   if (runtime.sessionStatus === 'running') return 'running'
-  if (runtime.exited !== null && runtime.exited !== undefined) return 'exited'
+  if (isSessionExited(runtime)) return 'exited'
   return 'idle'
 }
 
@@ -421,9 +423,10 @@ export function dispatchActivity(runtime: {
   sessionStatus?: string
   streamPhase?: string
   exited?: number | null
+  processStatus?: string
 }): DispatchAgentActivity {
   if (runtime.sessionStatus === undefined) return 'starting'
-  if (runtime.exited !== null && runtime.exited !== undefined) return 'exited'
+  if (isSessionExited(runtime)) return 'exited'
   if (runtime.streamPhase && runtime.streamPhase !== 'idle') return 'working'
   if (runtime.sessionStatus === 'running') return 'running'
   return 'idle'

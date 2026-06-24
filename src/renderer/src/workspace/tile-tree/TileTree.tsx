@@ -1,4 +1,4 @@
-import { useCallback, useRef, type ComponentType } from 'react'
+import { useCallback, useRef } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
@@ -10,7 +10,6 @@ import {
 import { AgentTerminalLeaf } from '@renderer/workspace/tile-tree/AgentTerminalLeaf'
 import { TerminalLeaf } from '@renderer/workspace/tile-tree/TerminalLeaf'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import type { SessionId, TabId, TileNode } from '@renderer/workspace/types'
 import { paneLabelForSession } from '@renderer/workspace/tile-tree/paneLabels'
 
@@ -141,25 +140,7 @@ export function renderWorkspaceLeaf(
     )
   }
 
-  // WHY widen the provider TileLeaf type at this call site:
-  // providerConfig.ts intentionally exposes only the stable provider-neutral
-  // pane props. Related-agent tabs are shell chrome, not provider API. The
-  // concrete in-repo TileLeaf understands these optional props; future provider
-  // panes can ignore them without changing the public renderer contract.
-  const LeafComponent = provider.TileLeaf as ComponentType<{
-    sessionId: SessionId
-    runtime: unknown
-    paneLabel?: string
-    focused: boolean
-    onFocusRequest: () => void
-    workspace: Workspace
-    showStatusMode?: boolean
-    showWorktreeBadges?: boolean
-    ownerSessionId?: SessionId
-    relatedAgentTabs?: GridRelatedAgentTab[]
-    selectedRelatedSessionId?: SessionId
-    onSelectRelatedSession?: (sessionId: SessionId) => void
-  }>
+  const LeafComponent = provider.TileLeaf
   return (
     <LeafComponent
       sessionId={renderedSessionId}

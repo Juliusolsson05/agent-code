@@ -5,6 +5,7 @@ import {
   AUTOSAVE_DEBUG_BUNDLE_DIR,
   DEBUG_BUNDLE_DIR,
   FEED_DEBUG_DIR,
+  HEAP_SNAPSHOT_DIR,
   MANUAL_DEBUG_BUNDLE_DIR,
   PERFORMANCE_RUNS_DIR,
   PROXY_EVENTS_DIR,
@@ -32,6 +33,7 @@ export type DebugStorageBucket =
   | 'debug-bundles-legacy'
   | 'proxy'
   | 'performance'
+  | 'heap-snapshots'
   | 'ghost-logs'
 
 type Artifact = {
@@ -198,6 +200,12 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
     'debug-bundles-legacy': Math.floor(totalBudget * 0.04),
     proxy: Math.floor(totalBudget * 0.28),
     performance: Math.floor(totalBudget * 0.10),
+    // Heap snapshots are intentionally rare, but each one can be gigabytes.
+    // They are not protected like manual bundles because the user-visible
+    // action is "capture a diagnostic", not "archive an incident forever".
+    // The active-grace check in the prune passes is the safety rail that keeps
+    // a just-written snapshot around long enough to reveal/copy it.
+    'heap-snapshots': Math.floor(totalBudget * 0.10),
     // Ghost logs are recovery state, not user data. They deserve enough
     // budget to survive a recent crash/reload, but not a hidden unlimited
     // directory outside the normal debug-retention accounting. Compaction
@@ -208,13 +216,14 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
 
 async function collectArtifacts(): Promise<Artifact[]> {
   const manualLegacyBundlePaths = await loadManualLegacyBundlePaths()
-  const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, ghostLogs] = await Promise.all([
+  const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, heapSnapshots, ghostLogs] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
     collectImmediateDirs(MANUAL_DEBUG_BUNDLE_DIR, 'debug-bundles-manual'),
     collectImmediateDirs(AUTOSAVE_DEBUG_BUNDLE_DIR, 'debug-bundles-autosave'),
     collectLegacyDebugBundleDirs(DEBUG_BUNDLE_DIR, manualLegacyBundlePaths),
     collectProxyRunDirs(PROXY_EVENTS_DIR),
     collectImmediateDirs(PERFORMANCE_RUNS_DIR, 'performance'),
+    collectFiles(HEAP_SNAPSHOT_DIR, 'heap-snapshots', name => name.endsWith('.heapsnapshot')),
     collectFiles(ghostLogDir(), 'ghost-logs', name => name.endsWith('.ghost.jsonl')),
   ])
   return [
@@ -224,6 +233,7 @@ async function collectArtifacts(): Promise<Artifact[]> {
     ...legacyBundles,
     ...proxy,
     ...performance,
+    ...heapSnapshots,
     ...ghostLogs,
   ]
 }

@@ -25,6 +25,7 @@ import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/useProm
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
+import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -196,13 +197,13 @@ export function TileLeaf({
     if (
       !runtime.inputReady ||
       runtime.processStatus !== 'started' ||
-      runtime.exited !== null
+      isSessionExited(runtime)
     ) {
       workspace.showPaneToast(
         sessionId,
         runtime.processStatus === 'failed'
           ? (runtime.processError ?? 'Agent failed to start')
-          : runtime.processStatus === 'exited'
+          : isSessionExited(runtime)
             ? 'Agent has exited'
             : 'Agent is still starting; draft preserved',
       )
@@ -353,7 +354,7 @@ export function TileLeaf({
         // the composer correctly blocked Enter with "Agent has
         // exited". The process lifecycle is the stronger signal here:
         // once main has emitted exit, this pane is no longer starting.
-        : runtime.processStatus === 'exited' || runtime.exited !== null
+        : isSessionExited(runtime)
           ? `agent exited${runtime.exited !== null ? ` (code ${runtime.exited})` : ''}`
         : !runtime.inputReady || runtime.processStatus === 'spawning'
           ? 'starting agent'
@@ -456,7 +457,9 @@ export function TileLeaf({
           // `source: 'screen'`, published by the headless packages
           // with a baseline gate that prevents the previous turn's
           // text from leaking into the new turn's first delta.
-          activityStatus={runtime.activityStatus}
+          // (The dead `activityStatus={runtime.activityStatus}` pass-through was
+          // removed here — Feed no longer reads it; feed audit Deletion
+          // Candidate 1. runtime.activityStatus stays for DebugPanel.)
           // Adapter-derived stream phase — drives the in-feed
           // WorkIndicator. The renderer never re-derives; it just
           // displays whatever phase the headless package published.
@@ -498,6 +501,7 @@ export function TileLeaf({
           scrollToLatestRequest={runtime.scrollToLatestRequest}
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
+          toolIndexVersion={runtime.toolIndexVersion}
           subAgents={runtime.subAgents}
           askUserQuestionState={
             runtime.conditions

@@ -390,6 +390,11 @@ function buildManifest(
   files: string[],
   reason: string,
   proxyRunDir: string | null,
+  proxyMatch: {
+    match: 'exact' | 'fallback' | 'none'
+    requestedSessionKey: string | null
+    matchedSessionSegment: string | null
+  },
 ): string {
   const manifest = {
     schemaVersion: BUNDLE_SCHEMA_VERSION,
@@ -405,8 +410,14 @@ function buildManifest(
     // PROXY_EVENTS_BUNDLE_MAX_BYTES (5 MiB at the time of writing —
     // see main/storage/proxyEventsReader.ts); anything older than
     // that tail still lives at this path. Null when the session had
-    // no proxy capture at all.
+    // no exact proxy capture at all.
     proxyRunDir,
+    // The proxy payload is forensic evidence, so this manifest records the
+    // provenance decision even when no proxy-events.jsonl file was bundled.
+    // A missing exact match is less complete than the old broad fallback, but
+    // it prevents a bundle for session A from silently carrying session B's
+    // wire log under the normal proxy-events filename.
+    proxyMatch,
     // Small bits of runtime state that help orient a consumer
     // without parsing state-snapshot.json first. Deliberately a
     // flat summary, not a duplicate.
@@ -444,13 +455,15 @@ export async function assembleAndSaveDebugBundle(params: {
   cwd?: string
   /** providerSessionId (Claude resume id, Codex thread id). When
    *  present, the proxy reader narrows its search to the matching
-   *  `resume-<id>` session segment. Falls back to scanning every
-   *  session segment under the cwd if absent or unmatched. */
+   *  `resume-<id>` session segment. Fresh sessions do not have that durable id
+   *  yet, so the bundle uses the app-local `shell-<sessionId>` segment that the
+   *  provider proxy writers allocate at process start. */
   providerSessionId?: string | null
 }): Promise<{ bundlePath: string }> {
   const { sessionId, runtime, kind, reason = 'manual', cwd, providerSessionId } = params
   const capturedAt = Date.now()
   const includeProxyPayload = reason === 'manual'
+  const proxySessionKey = providerSessionId ? `resume-${providerSessionId}` : `shell-${sessionId}`
   await window.api.flushPerformance().catch(() => {})
   const performanceSnapshot = await window.api.getPerformanceSnapshot().catch(() => null)
 
@@ -468,7 +481,7 @@ export async function assembleAndSaveDebugBundle(params: {
   const proxySection = cwd && includeProxyPayload
     ? await window.api.readProxyEvents({
         cwd,
-        sessionKey: providerSessionId ? `resume-${providerSessionId}` : null,
+        sessionKey: proxySessionKey,
       }).catch(() => null)
     : null
 
@@ -528,6 +541,11 @@ export async function assembleAndSaveDebugBundle(params: {
       // at PROXY_EVENTS_BUNDLE_MAX_BYTES, anything earlier is still
       // available there.
       proxySection?.runDir ?? null,
+      {
+        match: proxySection?.match ?? 'none',
+        requestedSessionKey: proxySection?.requestedSessionKey ?? (includeProxyPayload ? proxySessionKey : null),
+        matchedSessionSegment: proxySection?.matchedSessionSegment ?? null,
+      },
     ),
   }
 

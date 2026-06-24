@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 
-import type { SavedClaudeImage } from '@preload/api/types.js'
+import type { SavedClaudeImage, SaveClaudeImageParams } from '@preload/api/types.js'
 
 // Filesystem bridge — path expansion + directory listing + Claude
 // image paste cache.
@@ -43,10 +43,6 @@ export const fsApi = {
     | { ok: false; error: string }
   > => ipcRenderer.invoke('fs:listDirectory', rawPath, opts),
 
-  saveClaudeImage: (params: {
-    base64Data: string
-    mediaType: string
-    filename?: string
-  }): Promise<SavedClaudeImage> =>
+  saveClaudeImage: (params: SaveClaudeImageParams): Promise<SavedClaudeImage> =>
     ipcRenderer.invoke('fs:saveClaudeImage', params),
 }

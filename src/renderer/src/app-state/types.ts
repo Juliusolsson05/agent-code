@@ -1,5 +1,5 @@
 import type { Settings } from '@renderer/app-state/settings/types'
-import type { UiShellState } from '@renderer/app-state/uiShell/types'
+import type { DispatchAttachIntent, UiShellState } from '@renderer/app-state/uiShell/types'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
 import type {
@@ -48,7 +48,7 @@ export type UiShellSlice = UiShellState & {
   closeNewAgentPlacement: () => void
   openTiledDispatchPrompt: () => void
   closeTiledDispatchPrompt: () => void
-  openDispatchAttach: (sessionId: SessionId) => void
+  openDispatchAttach: (intent: DispatchAttachIntent) => void
   closeDispatchAttach: () => void
   openLinkedAgent: (sessionId: SessionId) => void
   closeLinkedAgent: () => void

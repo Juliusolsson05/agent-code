@@ -1,5 +1,11 @@
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 
+// Re-export the provider/session kind source of truth so callers that
+// already import session types from here keep one import. The canonical
+// definition (and the rationale for the AgentProviderKind vs SessionKind
+// split) lives in providerKind.ts — see that file before adding a kind.
+export type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+
 // Base session types that all providers implement. The shell and main
 // process only interact with sessions through these types — never
 // through provider-specific session classes directly.
@@ -36,6 +42,15 @@ export type SessionOptions = {
 }
 
 export type SessionInfo = {
+  /**
+   * WHY this shared type is the source of truth:
+   * preload, renderer resume UI, provider listers, and main registries all pass
+   * these records across process/module boundaries. Local copies drift silently
+   * because most fields are optional and UI call sites usually touch only one or
+   * two of them. Keep new metadata here first, then let provider-specific
+   * listers populate the same contract instead of redefining compatible-looking
+   * shadows.
+   */
   sessionId: string
   summary: string
   lastModified: number

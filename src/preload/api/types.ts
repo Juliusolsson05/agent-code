@@ -2,9 +2,15 @@ import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
+import type { DictationProvider } from '@shared/types/dictation.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
+// Local binding for in-file uses (SessionStartedEvent.kind, etc.). The
+// `export type { SessionKind }` re-export below is a separate statement that
+// does NOT bind the name locally, so this import is required too.
+import type { SessionKind } from '@shared/types/providerKind.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
+export type { SessionInfo } from '@shared/types/session.js'
 
 // Shared payload types for the preload IPC bridge.
 //
@@ -23,22 +29,12 @@ export type DevDebugConfig = {
   enabled: boolean
 }
 
-export type CaffeinateStatus = {
-  supported: boolean
-  active: boolean
-  pid: number | null
-  startedAt: number | null
-  command: string[]
-  message: string | null
-}
+// Caffeinate payloads now live in @shared/types/caffeinate so main can own
+// the controller without importing from @preload. Re-exported here so
+// renderer/preload imports of these names from @preload/api/types still work.
+export type { CaffeinateStatus, CaffeinateCommandResult } from '@shared/types/caffeinate.js'
 
-export type CaffeinateCommandResult = {
-  ok: boolean
-  message: string
-  status: CaffeinateStatus
-}
-
-export type DictationProvider = 'deepgram' | 'assemblyai' | 'openai' | 'gladia' | 'elevenlabs'
+export type { DictationProvider }
 
 export type DictationStartResult =
   | { kind: 'started'; id: string }
@@ -100,7 +96,34 @@ export type ScreenSnapshot = {
   picker: SlashPickerState
 }
 
-export type SessionKind = 'claude' | 'codex' | 'terminal'
+// Source of truth lives in @shared/types/providerKind. Re-exported here
+// (not redeclared) so the preload bridge type and every renderer import
+// of `SessionKind` resolve to the exact same union as main/shared.
+export type { SessionKind } from '@shared/types/providerKind.js'
+
+export type SessionSpawnOptions = {
+  /** Which kind of session to spawn. Defaults to 'claude' in main. */
+  kind?: SessionKind
+  cwd: string
+  cols?: number
+  rows?: number
+  /** Agent sessions only: provider session id to resume from durable history. */
+  resumeSessionId?: string
+  /** Agent sessions only: opt into provider-specific dangerous mode. */
+  dangerousMode?: boolean
+  /** Agent sessions only: opt into provider-specific proxy/semantic streaming. */
+  useProxy?: boolean
+  /** Terminal + tmux only: attach to an existing managed tmux session if alive. */
+  recoverTmuxName?: string
+  /** Agent sessions only: built-in Agent Code MCP domains exposed to the child. */
+  builtInMcpDomains?: BuiltInMcpDomain[]
+}
+
+export type SessionSpawnResult = {
+  sessionId: string
+  /** Set only for tmux-backed terminal sessions and persisted for recovery. */
+  tmuxName?: string
+}
 
 export type ResolveConditionResult =
   | { ok: true; state?: unknown }
@@ -127,11 +150,6 @@ export type SessionStartedEvent = {
   projectDir?: string
 }
 export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot
-export type SessionJsonlEntryEvent = {
-  sessionId: string
-  entry: JsonlEntry
-  file: string
-}
 // Bulk variant used by main during bootstrap bursts. Payload is an
 // array of {entry, file} tuples for a single session — the renderer
 // folds them in one setState instead of paying one render per entry.
@@ -145,35 +163,16 @@ export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 export type SessionTerminalDataEvent = { sessionId: string; data: string }
 /** Raw PTY output for an attached Claude/Codex inline terminal. */
 export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
-export type SessionTrustDialogEvent = {
-  sessionId: string
-  visible: boolean
-  workspace?: string
-}
-export type SessionResumePromptEvent = {
-  sessionId: string
-  visible: boolean
-  sessionAgeText?: string
-  tokenCountText?: string
-  options?: string[]
-  selectedIndex?: number
-}
-export type SessionPermissionPromptEvent = {
-  sessionId: string
-  visible: boolean
-  title?: string
-  toolName?: string
-  command?: string
-  options?: Array<{ key: string; label: string }>
-  selectedIndex?: number
-}
-export type SessionCompactionStateEvent = {
-  sessionId: string
-  visible: boolean
-  phase?: 'running' | 'error' | 'done'
-  statusText?: string
-  errorText?: string
-}
+
+// The legacy per-condition bridge event payload types
+// (SessionTrustDialogEvent, SessionResumePromptEvent,
+// SessionPermissionPromptEvent, SessionCompactionStateEvent) were removed
+// alongside their preload listener methods and main-window forwarding. The
+// renderer now derives all of that state from the unified
+// `ProviderConditionSnapshot` carried by SessionConditionsEvent. The
+// equivalent shapes still exist INTERNALLY on the SessionManager event map
+// and the provider runtimes; those are owned by the conditions-framework /
+// provider-boundary clusters and are intentionally untouched here.
 
 export type SessionConditionsEvent = {
   sessionId: string
@@ -234,17 +233,17 @@ export type SessionSubAgentsEvent = {
   subAgents: Record<string, SubAgentState>
 }
 
-/** Per-block semantic stream from Claude's proxy adapter (or screen
- *  fallback when proxy is off). `event` is a `SemanticEvent` from
- *  claude-code-headless — discriminated by `event.type` (text_delta /
- *  thinking_delta / tool_input_delta / tool_input_finalized /
- *  block_started / block_completed / turn_started / turn_stopped /
- *  turn_delta / turn_completed / usage_updated / api_error /
- *  stream_error / flow_selected / flow_ignored / source_changed /
- *  tool_result / signature). We keep `event` as unknown at the
- *  preload layer so this bridge doesn't need to pin a version of the
- *  semantic schema — the renderer imports the type from
- *  claude-code-headless and narrows on `event.type`. */
+/** Per-block semantic stream from an agent provider — currently Claude AND
+ *  Codex (not Claude-only, despite earlier wording): Claude via its proxy
+ *  adapter (or screen fallback when proxy is off), Codex via its rollout/proxy
+ *  adapter. `event` is a provider `SemanticEvent` discriminated by `event.type`
+ *  (text_delta / thinking_delta / tool_input_delta / tool_input_finalized /
+ *  block_started / block_completed / turn_started / turn_stopped / turn_delta /
+ *  turn_completed / usage_updated / api_error / stream_error / flow_selected /
+ *  flow_ignored / source_changed / tool_result / signature). We keep `event` as
+ *  `unknown` at the preload layer ON PURPOSE so this bridge stays
+ *  provider-agnostic and doesn't pin a version of any one provider's semantic
+ *  schema — the renderer narrows on `event.type`. */
 export type SessionSemanticEvent = { sessionId: string; event: unknown }
 
 // --- Session prompt index ---------------------------------------------------
@@ -303,26 +302,16 @@ export type SessionExitEvent = {
   signal?: number
 }
 
-export type LspSemanticLegend = {
-  tokenTypes: string[]
-  tokenModifiers: string[]
-}
-export type LspDiagnostic = {
-  message: string
-  severity: 'error' | 'warning' | 'info' | 'hint'
-  startLine: number
-  startCharacter: number
-  endLine: number
-  endCharacter: number
-}
-export type LspDiagnosticsEvent = {
-  clientUri: string
-  diagnostics: LspDiagnostic[]
-}
+// LSP payloads now live in @shared/types/lsp (the renderer↔main contract).
+// Re-exported so preload/renderer imports of these names keep resolving.
+export type {
+  LspSemanticLegend,
+  LspDiagnostic,
+  LspDiagnosticsEvent,
+} from '@shared/types/lsp.js'
 
-export type SavedClaudeImage = {
-  path: string
-}
+// Claude image save params/result live in @shared/types/claudeImage.
+export type { SavedClaudeImage, SaveClaudeImageParams } from '@shared/types/claudeImage.js'
 
 export type FeedDebugPersistEntry = {
   id: number
@@ -437,26 +426,15 @@ export type PasteDebugSession = {
   events: PasteDebugEvent[]
 }
 
-// Debug bundle — opaque file list shipped from renderer to main.
-// See main/storage/debugBundle.ts for the layout rationale. Types
-// are duplicated here (not imported) because preload/main/renderer
-// build under different tsconfig contexts, same convention as
-// SessionIndexEntry above.
-export type DebugBundleFile = {
-  name: string
-  content: string
-}
-export type SaveDebugBundleParams = {
-  sessionId: string
-  kind?: string | null
-  reason?: string | null
-  cwd?: string | null
-  providerSessionId?: string | null
-  files: DebugBundleFile[]
-}
-export type SaveDebugBundleResult = {
-  bundlePath: string
-}
+// Debug bundle payloads now live in @shared/types/debugBundle (the shared
+// renderer↔main contract). Re-exported so renderer/preload imports keep
+// resolving. The previous "duplicated because of tsconfig contexts" comment
+// was stale — both contexts already import @shared/*.
+export type {
+  DebugBundleFile,
+  SaveDebugBundleParams,
+  SaveDebugBundleResult,
+} from '@shared/types/debugBundle.js'
 
 export type AddDebugBundleNoteParams = {
   bundlePath: string
@@ -466,26 +444,17 @@ export type AddDebugBundleNoteParams = {
 // Section of a debug bundle filled by readProxyEvents IPC.
 // Carries the renderer-readable form of whatever
 // ~/.config/agent-code/proxy/<project>/<session>/<run>/proxy-events.jsonl
-// existed for the target session at bundle-save time. Nulls signal
-// "no record found" — callers must tolerate them. See
-// main/storage/proxyEventsReader.ts for the search strategy and
+// existed for the target session at bundle-save time. Null payloads plus
+// `match:'none'` signal "no exact record found" — callers must tolerate them.
+// See main/storage/proxyEventsReader.ts for the search strategy and
 // PROXY_EVENTS_BUNDLE_MAX_BYTES tail cap.
 export type ProxyEventsBundleSection = {
   proxyEvents: string | null
   runDir: string | null
   sessionMeta: string | null
-}
-
-export type SessionInfo = {
-  sessionId: string
-  summary: string
-  lastModified: number
-  fileSize: number
-  customTitle?: string
-  firstPrompt?: string
-  gitBranch?: string
-  cwd?: string
-  createdAt?: number
+  match: 'exact' | 'fallback' | 'none'
+  requestedSessionKey: string | null
+  matchedSessionSegment: string | null
 }
 
 export type WorktreeActivityCounts = {

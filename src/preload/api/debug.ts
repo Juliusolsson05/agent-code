@@ -33,9 +33,9 @@ export const debugApi = {
 
   // Pull the latest proxy-events.jsonl tail + session-meta for a
   // given session into the renderer so the bundle assembler can
-  // include it. Returns nulls when no proxy log was found — never
-  // throws. See main/storage/proxyEventsReader.ts for caps and
-  // search strategy.
+  // include it. Returns match metadata plus null payloads when no exact proxy
+  // log was found — never throws. See main/storage/proxyEventsReader.ts for
+  // caps and search strategy.
   readProxyEvents: (params: {
     cwd: string
     sessionKey?: string | null

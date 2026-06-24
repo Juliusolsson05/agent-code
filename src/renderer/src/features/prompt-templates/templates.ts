@@ -5,6 +5,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import {
   PROMPT_TEMPLATES_STORAGE_KEY,
 } from '@renderer/app-state/localStorageMigration'
+import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCommand'
 
 export type PromptTemplateContext = {
   workspace: Workspace
@@ -34,19 +35,6 @@ type AgentTranscriptRequest = {
 type AgentTranscriptResolved = AgentTranscriptRequest & {
   transcriptPath: string | null
   exists: boolean
-}
-
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
-
-function buildResumeCommand(kind: 'claude' | 'codex', cwd: string, providerSessionId: string): string {
-  const cd = `cd ${shellQuote(cwd)}`
-  const resume = kind === 'codex'
-    ? `codex resume ${shellQuote(providerSessionId)}`
-    : `claude --resume ${shellQuote(providerSessionId)}`
-  return `${cd} && ${resume}`
 }
 
 function activeTabAgentTranscriptRequests(workspace: Workspace): AgentTranscriptRequest[] {
@@ -151,7 +139,7 @@ function buildActiveTabTranscriptPrompt(
       fenced(transcriptPath),
       `transcript exists: ${agent.exists ? 'yes' : 'no'}`,
       'resume command:',
-      fenced(buildResumeCommand(agent.kind, agent.cwd, agent.providerSessionId)),
+      fenced(buildProviderResumeCommand(agent.kind, agent.cwd, agent.providerSessionId)),
       '',
     )
   })

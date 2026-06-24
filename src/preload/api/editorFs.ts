@@ -1,28 +1,21 @@
 import { ipcRenderer } from 'electron'
 
-export type EditorFsEntry = {
-  name: string
-  path: string
-  isDirectory: boolean
-  size: number | null
-  mtimeMs: number
-}
-
-export type EditorFsListResult =
-  | { ok: true; root: string; path: string; entries: EditorFsEntry[] }
-  | { ok: false; error: string }
-
-export type EditorFsReadResult =
-  | { ok: true; path: string; text: string; mtimeMs: number; size: number }
-  | { ok: false; error: string }
-
-export type EditorFsWriteResult =
-  | { ok: true; path: string; mtimeMs: number; size: number }
-  | { ok: false; error: string; conflict?: boolean }
-
-export type EditorFsMutationResult =
-  | { ok: true; path: string }
-  | { ok: false; error: string }
+// Editor FS result types are the shared IPC contract — see
+// @shared/types/editorFs. Re-exported here so existing renderer imports of
+// these names from the preload barrel keep resolving.
+export type {
+  EditorFsEntry,
+  EditorFsListResult,
+  EditorFsReadResult,
+  EditorFsWriteResult,
+  EditorFsMutationResult,
+} from '@shared/types/editorFs.js'
+import type {
+  EditorFsListResult,
+  EditorFsReadResult,
+  EditorFsWriteResult,
+  EditorFsMutationResult,
+} from '@shared/types/editorFs.js'
 
 // Editor filesystem bridge.
 //

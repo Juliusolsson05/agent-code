@@ -4,6 +4,7 @@ import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 
 import type { SessionId } from '@renderer/workspace/types'
 import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceStore'
+import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import {
   CLAUDE_PASTE_THRESHOLD,
   CLAUDE_PASTE_SUBMIT_DELAY_MS,
@@ -83,14 +84,14 @@ export function useComposerKeybinds({
   const backendReady =
     runtime.inputReady &&
     runtime.processStatus === 'started' &&
-    runtime.exited === null
+    !isSessionExited(runtime)
   const hasBlockingCondition = hasActionCondition(runtime.conditions)
   const blockBackendWrite = () => {
     workspace.showPaneToast(
       sessionId,
       runtime.processStatus === 'failed'
         ? (runtime.processError ?? 'Agent failed to start')
-        : runtime.processStatus === 'exited'
+        : isSessionExited(runtime)
           ? 'Agent has exited'
           : 'Agent is still starting; draft preserved',
       )

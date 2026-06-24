@@ -4,6 +4,7 @@ import type {
   RenderedViewLeaseFeature,
   SessionRuntime,
 } from '@renderer/workspace/workspaceState'
+import { hasVisibleConditions } from '@renderer/workspace/conditions/selectors'
 
 export type EffectiveAgentSurface = 'rendered' | 'terminal'
 
@@ -58,7 +59,12 @@ export function getEffectiveAgentSurface(args: {
     runtime.draftInput.trim().length > 0 ||
     runtime.draftImages.length > 0 ||
     runtime.promptSuggestion !== null ||
-    runtime.conditions !== null ||
+    // WHY hasVisibleConditions and not `conditions !== null` (conditions audit
+    // Additional Finding A): a provider can leave a non-null snapshot attached
+    // whose condition map is empty or fully dismissed. Promoting to Hybrid on
+    // mere snapshot presence flips pane layout with nothing to show. We promote
+    // only when a condition is actually on screen and needs the pane chrome.
+    hasVisibleConditions(runtime.conditions) ||
     runtime.queuedMessages.length > 0
   ) {
     // WHY these runtime fields promote Hybrid:

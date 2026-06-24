@@ -28,6 +28,8 @@ import {
   type ToolUseBlock,
 } from '@shared/types/transcript'
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
+import type { SessionInfo } from '@shared/types/session'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 
@@ -61,16 +63,11 @@ import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 //
 //   See README → REND-1.
 
-type HarnessSessionInfo = {
-  sessionId: string
-  provider: 'claude' | 'codex'
-  summary: string
-  lastModified: number
-  cwd?: string
-  gitBranch?: string
-  firstPrompt?: string
-  fileSize: number
-}
+// The harness global-list row is the canonical SessionInfo plus the provider
+// tag that `session:list-all` adds. Composing it from the shared type (rather
+// than re-listing fields) keeps the harness from drifting away from the
+// production listing contract it exists to debug.
+type HarnessSessionInfo = SessionInfo & { provider: AgentProviderKind }
 
 type RawJsonlEntry = { entry: Record<string, unknown>; file: string }
 

@@ -4,41 +4,35 @@
 // This file only imports renderer configs which contain TileLeaf
 // components and parser functions — no session factories, no fs, no pty.
 
+import type { ComponentType } from 'react'
 import type { RendererProviderConfig } from '@shared/types/providerConfig'
-// Import parser functions by direct file path — NOT through the package
-// entry point. The headless packages pull in Node deps (pty, fs) through
-// their main export, but the parser files are pure TypeScript (no Node,
-// no DOM). Direct imports keep the renderer bundle browser-safe.
-import { extractAssistantInProgress as claudeExtract } from '@shared/parsers/claudeScreen'
-import { extractCodexAssistantInProgress as codexExtract } from '@shared/parsers/codexScreen'
+import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { TileLeaf } from '@renderer/workspace/tile-tree/TileLeaf'
 import type { TileLeafProps } from '@shared/types/providerConfig'
+import {
+  getRendererProviderCapabilities,
+} from '@providers/registry.renderer.capabilities'
 
 const claudeRenderer: RendererProviderConfig = {
-  id: 'claude',
-  name: 'Claude Code',
-  extractAssistantInProgress: claudeExtract,
-  TileLeaf: TileLeaf as React.ComponentType<TileLeafProps>,
+  ...getRendererProviderCapabilities('claude'),
+  TileLeaf: TileLeaf as ComponentType<TileLeafProps>,
 }
 
 const codexRenderer: RendererProviderConfig = {
-  id: 'codex',
-  name: 'Codex',
-  extractAssistantInProgress: codexExtract,
-  TileLeaf: TileLeaf as React.ComponentType<TileLeafProps>,
+  ...getRendererProviderCapabilities('codex'),
+  TileLeaf: TileLeaf as ComponentType<TileLeafProps>,
 }
 
-const rendererProviders: Record<string, RendererProviderConfig> = {
+// Exhaustive Record<AgentProviderKind, …> — same compile-time checklist as
+// the main registry. A new provider kind cannot be added to the shared
+// source of truth without also giving it a renderer config here.
+const rendererProviders: Record<AgentProviderKind, RendererProviderConfig> = {
   claude: claudeRenderer,
   codex: codexRenderer,
 }
 
 export function getRendererProvider(id: string): RendererProviderConfig {
-  const p = rendererProviders[id]
-  if (!p) throw new Error(`Unknown provider: ${id}`)
-  return p
-}
-
-export function getAllRendererProviders(): RendererProviderConfig[] {
-  return Object.values(rendererProviders)
+  // Validate untrusted kind (persisted SessionMeta.kind, IPC) before indexing.
+  if (!isAgentProviderKind(id)) throw new Error(`Unknown provider: ${id}`)
+  return rendererProviders[id]
 }
