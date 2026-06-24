@@ -293,12 +293,13 @@ export function NewAgentPlacementOverlay({
         if (committingRef.current) return
         committingRef.current = true
         if (attachMode && attachIntent) {
-          // Attach is synchronous: it's a pure state move from
-          // detachedSessions into a tile leaf, no spawn round-trip.
+          // Attach may wake a post-restart parked backend before the state move.
+          // Fire-and-forget here because the action owns failure toasts and
+          // refuses to insert a dead leaf if wake fails.
           // We close the overlay ourselves because attachDetachedToGrid
           // doesn't own that lifecycle (closeNewAgentPlacement is the
           // create-mode close; the parent owns onClose for both modes).
-          workspace.attachDetachedToGrid(
+          void workspace.attachDetachedToGrid(
             attachIntent.sessionId,
             attachIntent.targetTabId,
             placementTarget,

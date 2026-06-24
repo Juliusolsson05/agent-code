@@ -103,10 +103,14 @@ export function useComposerKeybinds({
   ) => {
     const draftImages = runtime.draftImages
     if (input.trim().length === 0 && draftImages.length === 0) return
-    if (!backendReady) {
-      blockBackendWrite()
-      return
-    }
+    // WHY submit does not stop at the renderer readiness flag:
+    //
+    // After an app restart a pane can have valid persisted SessionMeta and a
+    // visible draft/feed while main no longer has the backend process for that
+    // SessionId. The renderer readiness flag is stale in exactly that split
+    // brain. Let TileLeaf.send() perform the authoritative write, wake the
+    // backend under the same id if needed, and throw if the prompt still cannot
+    // reach the PTY. Keeping the throw path preserves the draft below.
     // Mint a paste-debug id at the EARLIEST observable moment of
     // the Enter press — before provider routing, before state
     // mutation, before any async work. If the bug is "the Enter

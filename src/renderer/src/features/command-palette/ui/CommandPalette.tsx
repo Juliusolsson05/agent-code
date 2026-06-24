@@ -690,7 +690,7 @@ export function CommandPalette({
   const executeBuried = useCallback(
     (item: BuriedPaneInfo) => {
       onClose()
-      workspace.reviveBuried(item.id)
+      void workspace.reviveBuried(item.id)
     },
     [onClose, workspace],
   )

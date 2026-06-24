@@ -104,6 +104,11 @@ export type { SessionKind } from '@shared/types/providerKind.js'
 export type SessionSpawnOptions = {
   /** Which kind of session to spawn. Defaults to 'claude' in main. */
   kind?: SessionKind
+  /**
+   * Trusted renderer restore path only: reuse an existing workspace SessionId
+   * when a persisted renderer record needs a fresh backend after app restart.
+   */
+  preferredSessionId?: string
   cwd: string
   cols?: number
   rows?: number

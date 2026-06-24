@@ -230,6 +230,23 @@ export class OrchestrationBridge {
     return this.enrichAgent(response.agent)
   }
 
+  async ensureAgentLive(params: {
+    parentSessionId: string
+    sessionId: string
+  }): Promise<OrchestrationAgentRecord> {
+    const response = await this.request({
+      requestId: randomUUID(),
+      type: 'ensure-agent-live',
+      parentSessionId: params.parentSessionId,
+      sessionId: params.sessionId,
+    })
+    if (!response.ok) throw new Error(response.message)
+    if (response.type !== 'ensure-agent-live') {
+      throw new Error(`Unexpected orchestration response: ${response.type}`)
+    }
+    return this.enrichAgent(response.agent)
+  }
+
   resolve(response: OrchestrationRendererResponse): void {
     const pending = this.pending.get(response.requestId)
     if (!pending) return

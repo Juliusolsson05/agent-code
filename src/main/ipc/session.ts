@@ -44,6 +44,10 @@ export function registerSessionIpc(
     return await manager.kill(sessionId)
   })
 
+  ipcMain.handle('session:kind', (_evt, sessionId: string) => {
+    return manager.getSessionKind(sessionId)
+  })
+
   // Terminal attach/replay. Called once by TerminalLeaf on mount.
   // Returns the full buffered output of the session so far AND flips
   // the manager's "attached" flag so subsequent PTY data events

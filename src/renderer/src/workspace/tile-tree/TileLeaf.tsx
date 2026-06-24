@@ -199,19 +199,42 @@ export function TileLeaf({
       runtime.processStatus !== 'started' ||
       isSessionExited(runtime)
     ) {
-      workspace.showPaneToast(
-        sessionId,
-        runtime.processStatus === 'failed'
+      if (runtime.processStatus === 'failed' || runtime.processStatus === 'exited') {
+        const message = runtime.processStatus === 'failed'
           ? (runtime.processError ?? 'Agent failed to start')
-          : isSessionExited(runtime)
-            ? 'Agent has exited'
-            : 'Agent is still starting; draft preserved',
-      )
-      return
+          : 'Agent has exited'
+        workspace.showPaneToast(sessionId, message)
+        throw new Error(message)
+      }
+      try {
+        await workspace.ensureSessionLive(sessionId)
+      } catch (err) {
+        const message = err instanceof Error && err.message.length > 0
+          ? err.message
+          : 'Agent is still starting; draft preserved'
+        workspace.showPaneToast(sessionId, message)
+        throw new Error(message)
+      }
     }
-    const ok = await window.api.sendInput(sessionId, data, pasteId)
+    let ok = await window.api.sendInput(sessionId, data, pasteId)
     if (!ok) {
-      throw new Error(`sendInput failed for missing session ${sessionId}`)
+      try {
+        await workspace.ensureSessionLive(sessionId)
+        ok = await window.api.sendInput(sessionId, data, pasteId)
+      } catch (err) {
+        workspace.showPaneToast(
+          sessionId,
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Could not wake agent; draft preserved',
+        )
+        throw err
+      }
+      if (!ok) {
+        const message = 'Agent backend is unavailable; draft preserved'
+        workspace.showPaneToast(sessionId, message)
+        throw new Error(message)
+      }
     }
     // Clear any prompt-suggestion chip on submit so a stale offer never
     // lingers past the input it was suggesting. turn_started clears it too,

@@ -59,6 +59,13 @@ export type OrchestrationMarkBootstrapPromptDeliveredRequest = {
   sessionId: string
 }
 
+export type OrchestrationEnsureAgentLiveRequest = {
+  requestId: string
+  type: 'ensure-agent-live'
+  parentSessionId: string
+  sessionId: string
+}
+
 export type OrchestrationRendererRequest =
   | OrchestrationCreateAgentRequest
   | OrchestrationListAgentsRequest
@@ -67,6 +74,7 @@ export type OrchestrationRendererRequest =
   | OrchestrationCloseAgentRequest
   | OrchestrationCloseRunRequest
   | OrchestrationMarkBootstrapPromptDeliveredRequest
+  | OrchestrationEnsureAgentLiveRequest
 
 export type OrchestrationLifecycleState =
   | 'created'
@@ -158,6 +166,12 @@ export type OrchestrationRendererResponse =
       requestId: string
       ok: true
       type: 'mark-bootstrap-prompt-delivered'
+      agent: OrchestrationAgentRecord
+    }
+  | {
+      requestId: string
+      ok: true
+      type: 'ensure-agent-live'
       agent: OrchestrationAgentRecord
     }
   | {

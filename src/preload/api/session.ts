@@ -5,6 +5,7 @@ import type {
   SessionExitEvent,
   SessionHistoryChunk,
   SessionInfo,
+  SessionKind,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
   SessionAgentPtyDataEvent,
@@ -38,6 +39,9 @@ export const sessionApi = {
 
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
+
+  getLiveSessionKind: (sessionId: string): Promise<SessionKind | null> =>
+    ipcRenderer.invoke('session:kind', sessionId),
 
   /**
    * Attach this renderer to a terminal session's live data stream.

@@ -549,6 +549,21 @@ function registerOrchestrationTools(
           sessionId: args.sessionId,
         })
       }
+      try {
+        await bridge.ensureAgentLive({
+          parentSessionId: scope.sessionId,
+          sessionId: args.sessionId,
+        })
+      } catch (err) {
+        return toolText({
+          ok: false,
+          error: 'agent_wake_failed',
+          message: err instanceof Error && err.message.length > 0
+            ? err.message
+            : `Could not wake orchestration agent ${args.sessionId} before prompt delivery.`,
+          sessionId: args.sessionId,
+        })
+      }
       const kind = manager.getSessionKind(args.sessionId)
       if (kind !== 'claude' && kind !== 'codex') {
         return toolText({
@@ -876,10 +891,16 @@ async function submitPrompt(
   }
 
   if (kind === 'claude') {
-    await manager.awaitClaudePastePlaceholder(sessionId, {
+    const placeholder = await manager.awaitClaudePastePlaceholder(sessionId, {
       timeoutMs: 2000,
       pollIntervalMs: 50,
     })
+    if (placeholder.kind !== 'appeared') {
+      return {
+        ok: false,
+        message: `Claude session ${sessionId} did not confirm pasted prompt before submit (${placeholder.kind})`,
+      }
+    }
   }
 
   if (!manager.write(sessionId, '\r')) {
