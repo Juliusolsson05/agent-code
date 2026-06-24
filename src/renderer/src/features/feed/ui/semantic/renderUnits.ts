@@ -1,7 +1,6 @@
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
-import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 
 import { classifySemanticToolActivity } from '@renderer/features/feed/lib/helpers'
 
