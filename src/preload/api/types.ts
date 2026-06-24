@@ -232,17 +232,17 @@ export type SessionSubAgentsEvent = {
   subAgents: Record<string, SubAgentState>
 }
 
-/** Per-block semantic stream from Claude's proxy adapter (or screen
- *  fallback when proxy is off). `event` is a `SemanticEvent` from
- *  claude-code-headless — discriminated by `event.type` (text_delta /
- *  thinking_delta / tool_input_delta / tool_input_finalized /
- *  block_started / block_completed / turn_started / turn_stopped /
- *  turn_delta / turn_completed / usage_updated / api_error /
- *  stream_error / flow_selected / flow_ignored / source_changed /
- *  tool_result / signature). We keep `event` as unknown at the
- *  preload layer so this bridge doesn't need to pin a version of the
- *  semantic schema — the renderer imports the type from
- *  claude-code-headless and narrows on `event.type`. */
+/** Per-block semantic stream from an agent provider — currently Claude AND
+ *  Codex (not Claude-only, despite earlier wording): Claude via its proxy
+ *  adapter (or screen fallback when proxy is off), Codex via its rollout/proxy
+ *  adapter. `event` is a provider `SemanticEvent` discriminated by `event.type`
+ *  (text_delta / thinking_delta / tool_input_delta / tool_input_finalized /
+ *  block_started / block_completed / turn_started / turn_stopped / turn_delta /
+ *  turn_completed / usage_updated / api_error / stream_error / flow_selected /
+ *  flow_ignored / source_changed / tool_result / signature). We keep `event` as
+ *  `unknown` at the preload layer ON PURPOSE so this bridge stays
+ *  provider-agnostic and doesn't pin a version of any one provider's semantic
+ *  schema — the renderer narrows on `event.type`. */
 export type SessionSemanticEvent = { sessionId: string; event: unknown }
 
 // --- Session prompt index ---------------------------------------------------

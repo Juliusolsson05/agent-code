@@ -284,7 +284,16 @@ export default function App() {
   }, [settings.agentViewMode, workspace])
 
   useEffect(() => {
-    if (!workspace.reader && !workspace.spotlight && !settingsPageOpen) return
+    // NOTE the field is `readerMode`, not `reader` (cross-app audit V1): the
+    // workspace object never exposed a `reader` property, so the old guard read
+    // `undefined`, collapsed to "spotlight OR settings only", and SKIPPED the
+    // lease cleanup whenever Reader Mode was the surface hiding the feed. Reader
+    // Mode replaces the feed interaction layer exactly like spotlight/settings,
+    // so a surviving Copy-Assistant / Copy-Code-Block picker lease left
+    // Escape/Enter/arrows acting on hidden state. This typo class is the reason
+    // the cross-app audit calls for a typecheck gate — `workspace.reader`
+    // compiled silently because nothing ran `tsc`.
+    if (!workspace.readerMode && !workspace.spotlight && !settingsPageOpen) return
     // WHY reader/spotlight/settings clear picker leases:
     // these surfaces hide or replace the feed interaction layer while global
     // keybinds are still alive. If a Copy Assistant or Copy Code Block picker

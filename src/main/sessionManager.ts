@@ -97,12 +97,14 @@ type ManagerEvents = {
   conditions: [{ sessionId: string; snapshot: ProviderConditionSnapshot }]
   /** Emitted only by terminal sessions — raw PTY output for xterm.js. */
   'terminal-data': [{ sessionId: string; data: string }]
-  /** Emitted only by Claude sessions. Proxy-driven per-block semantic
-   *  stream (or screen-fallback turn-level deltas when the session
-   *  was spawned without `useProxy`). Payload is a discriminated
-   *  union from claude-code-headless — see EVENT_SPEC.md and the
-   *  `SemanticEvent` type there. Forwarded as `unknown` at this layer
-   *  because the manager is deliberately provider-agnostic; the
+  /** Emitted by agent providers that expose a semantic stream — currently
+   *  BOTH Claude and Codex (this comment used to say "only by Claude", which is
+   *  stale: CodexSession forwards semantic events too, see codexSession's
+   *  'semantic-event' forwarding). Per-block stream, proxy-driven for Claude
+   *  (or screen-fallback turn-level deltas without `useProxy`) and rollout/proxy
+   *  derived for Codex. Payload is a provider discriminated union — see
+   *  EVENT_SPEC.md. Forwarded as `unknown` at this layer ON PURPOSE: the manager
+   *  is provider-agnostic and must NOT couple to one provider's schema; the
    *  renderer narrows by `ev.type`. */
   'semantic-event': [{ sessionId: string; event: unknown }]
   /** Internal cleanup signal emitted exactly before a session leaves the manager. */

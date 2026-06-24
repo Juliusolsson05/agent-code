@@ -28,6 +28,8 @@
     "runtime:verify:tmux": "node scripts/runtime-tools/verify-tmux.mjs",
     "runtime:verify": "npm run runtime:verify:mitmproxy && npm run runtime:verify:tmux",
     "upstream:check": "node scripts/check-upstream.mjs",
+    "conditions-core:sync": "node scripts/sync-conditions-core.mjs",
+    "conditions-core:check": "node scripts/sync-conditions-core.mjs --check",
     "runtime:prepare:mac": "npm run runtime:fetch:mitmproxy -- --all && npm run runtime:fetch:tmux -- --all && node scripts/runtime-tools/verify-mitmproxy.mjs --strict && node scripts/runtime-tools/verify-tmux.mjs --strict",
     "postinstall": "electron-rebuild -f -w node-pty"
   },

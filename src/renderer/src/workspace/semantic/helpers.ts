@@ -222,6 +222,52 @@ export function hasPendingSemanticTools(turn: SemanticLiveTurn): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Auto-scroll invalidation signal
+// ---------------------------------------------------------------------------
+
+// WHY this exists (feed audit Finding 2): Feed's sticky-bottom effect needs a
+// dependency that changes whenever a semantic row VISIBLY GROWS. The previous
+// signal was `turnId:turn.text.length:blockCount`, which only observes turn-level
+// text and the NUMBER of blocks. But once a block skeleton exists, the common
+// streaming path mutates that block's own fields (text/thinking/tool input/tool
+// output/reasoning deltas) WITHOUT changing the block count or turn-level text.
+// Those updates allocate fresh block objects in the reducer, so the row repaints
+// and grows — but the old scroll signal never changed, so the bottom was not
+// re-pinned and long streaming output silently scrolled out of view.
+//
+// This signature folds in the lengths of every per-block field that paints
+// growing DOM, plus status/resultAt transitions. It is intentionally a cheap
+// numeric/length scan (NOT a JSON stringify of payloads) so it can run on every
+// render without the deep-serialization cost the audit warns against. It is a
+// SCROLL-invalidation token only — it has no bearing on render ownership.
+export function semanticTurnScrollSignal(turn: SemanticLiveTurn): string {
+  const blockSignal = turn.blockOrder
+    .map(idx => {
+      const b = turn.blocks[idx]
+      if (!b) return `${idx}:`
+      return [
+        b.blockIndex,
+        b.text?.length ?? 0,
+        b.thinking?.length ?? 0,
+        b.inputJson?.length ?? 0,
+        b.argumentsJson?.length ?? 0,
+        b.resultContent?.length ?? 0,
+        b.reasoningSummary?.length ?? 0,
+        b.reasoningText?.length ?? 0,
+        // `output` may be a string or a structured array; only its string length
+        // matters for "did the rendered row grow", and most live output deltas
+        // arrive as strings. A non-string output contributes 0 here, which is
+        // fine: those land via resultContent or a block-count change instead.
+        typeof b.output === 'string' ? b.output.length : 0,
+        b.status ?? '',
+        b.resultAt ?? 0,
+      ].join(':')
+    })
+    .join(',')
+  return `${turn.turnId}:${turn.text.length}:${blockSignal}`
+}
+
+// ---------------------------------------------------------------------------
 // Empty-state factories
 // ---------------------------------------------------------------------------
 

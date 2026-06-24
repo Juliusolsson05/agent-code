@@ -457,7 +457,9 @@ export function TileLeaf({
           // `source: 'screen'`, published by the headless packages
           // with a baseline gate that prevents the previous turn's
           // text from leaking into the new turn's first delta.
-          activityStatus={runtime.activityStatus}
+          // (The dead `activityStatus={runtime.activityStatus}` pass-through was
+          // removed here — Feed no longer reads it; feed audit Deletion
+          // Candidate 1. runtime.activityStatus stays for DebugPanel.)
           // Adapter-derived stream phase — drives the in-feed
           // WorkIndicator. The renderer never re-derives; it just
           // displays whatever phase the headless package published.
@@ -499,6 +501,7 @@ export function TileLeaf({
           scrollToLatestRequest={runtime.scrollToLatestRequest}
           toolUseIndex={runtime.toolUseIndex}
           toolResultIndex={runtime.toolResultIndex}
+          toolIndexVersion={runtime.toolIndexVersion}
           subAgents={runtime.subAgents}
           askUserQuestionState={
             runtime.conditions

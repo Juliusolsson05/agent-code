@@ -171,6 +171,11 @@ export async function loadInitialHistoryForSession({
       let codexTurnId: string | null = null
       const toolUseIndex = current.toolUseIndex
       const toolResultIndex = current.toolResultIndex
+      // Bump `toolIndexVersion` once if this bootstrap load actually populated
+      // either tool-index map, so Feed's tool-index context picks up the
+      // resumed pairings instead of staying on the empty-map identity from
+      // emptyRuntime() (feed audit Finding 1).
+      let toolIndexChanged = false
 
       for (const raw of chunk.entries) {
         workActivity = ingestWorktreeRawEvent({
@@ -195,7 +200,9 @@ export async function loadInitialHistoryForSession({
             if (uuid && seen.has(uuid)) continue
             if (uuid) seen.add(uuid)
             initialEntries.push(entry)
-            indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)
+            if (indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)) {
+              toolIndexChanged = true
+            }
           }
           const eventType = codexEventType(raw)
           if (
@@ -224,7 +231,9 @@ export async function loadInitialHistoryForSession({
         if (uuid && seen.has(uuid)) continue
         if (uuid) seen.add(uuid)
         initialEntries.push(feedEntry)
-        indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)
+        if (indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)) {
+          toolIndexChanged = true
+        }
       }
 
       let nextGhosts = current.ghosts
@@ -277,6 +286,9 @@ export async function loadInitialHistoryForSession({
           workContext,
           toolUseIndex,
           toolResultIndex,
+          toolIndexVersion: toolIndexChanged
+            ? current.toolIndexVersion + 1
+            : current.toolIndexVersion,
           ghosts: nextGhosts,
           lastJsonlEntryAt,
         },

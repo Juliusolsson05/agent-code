@@ -15,7 +15,7 @@ import { diffLines } from '@shared/parsers/lineDiff'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
-import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
+import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 

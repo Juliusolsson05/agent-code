@@ -2,7 +2,7 @@ import { memo, useContext, useMemo, useState } from 'react'
 
 import type { DiffLine } from '@shared/parsers/lineDiff'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
-import { CodeRenderContext } from '@renderer/features/feed/ui/Feed'
+import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'

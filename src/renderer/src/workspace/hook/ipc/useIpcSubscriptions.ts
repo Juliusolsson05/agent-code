@@ -57,6 +57,10 @@ import {
 import { shouldClearIdleCodexQueuedMessages } from '@renderer/workspace/queueInvariants'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import {
+  clearConditionRuntimeState,
+  conditionRequiresAttention,
+} from '@renderer/workspace/conditions/selectors'
 import type { WorktreeIdentity } from '@shared/work-context/types'
 import {
   canonicalizeWorktreeActivity,
@@ -701,6 +705,13 @@ export function useIpcSubscriptions(
                 ...current.semantic,
                 currentTurn: null,
               },
+              // Hard lifecycle boundary: a dead process cannot own live provider
+              // prompts. Clear the condition snapshot, slash picker, and the
+              // legacy pending* mirrors together so no stale approval/trust/
+              // permission/resume/compaction overlay survives the exit and so the
+              // pane is not held in Hybrid display purely by a non-null snapshot.
+              // (conditions audit Finding 2 / roadmap E7)
+              ...clearConditionRuntimeState(),
             },
             {
               layer: 'STATE',
@@ -1075,16 +1086,18 @@ export function useIpcSubscriptions(
         const current = prev[sessionId] ?? emptyRuntime()
         const next = applyConditionSnapshot(current, snapshot)
         const conditionCount = Object.keys(snapshot.conditions).length
-        const hadAttention =
-          current.pendingApproval !== null ||
-          current.pendingTrustDialog !== null ||
-          current.pendingResumePrompt !== null ||
-          current.pendingPermissionPrompt !== null
-        const hasAttention =
-          next.pendingApproval !== null ||
-          next.pendingTrustDialog !== null ||
-          next.pendingResumePrompt !== null ||
-          next.pendingPermissionPrompt !== null
+        // WHY this reads the condition snapshot, not the legacy pending* mirrors
+        // (conditions audit Finding 5 + Additional B): the mirror-based check
+        // silently EXCLUDED AskUserQuestion, so a backgrounded pane never went
+        // unread when the agent was blocked on a question — the one prompt type
+        // whose entire purpose is to collect user input. `conditionRequiresAttention`
+        // is the single attention policy (visibility-aware, so it matches the old
+        // mirror behavior for trust/resume/permission AND adds AUQ + codex
+        // approval/trust). `current.conditions` is the pre-update snapshot and
+        // `next.conditions` is the new one, so this still detects the no-attention
+        // → attention transition the unread badge keys on.
+        const hadAttention = conditionRequiresAttention(current.conditions)
+        const hasAttention = conditionRequiresAttention(next.conditions)
         const logged = appendFeedDebugLog(
           next,
           {
@@ -1241,6 +1254,13 @@ export function useIpcSubscriptions(
         // top-level reference below so React re-renders.
         const toolUseIndex = current.toolUseIndex
         const toolResultIndex = current.toolResultIndex
+        // Accumulates whether any tool_use/tool_result key was inserted or
+        // re-pointed during this burst. Drives the `toolIndexVersion` bump
+        // below so Feed's tool-index context invalidates memoized rows whose
+        // paired result/use just changed in a different entry (feed audit
+        // Finding 1). The maps mutate in place, so this flag is the only
+        // signal React gets that a cross-entry pairing moved.
+        let toolIndexChanged = false
 
         // Rolling Codex turn id. `turn_context` was the first source we
         // used, but it is too sparse for live rendering: the authoritative
@@ -1360,7 +1380,9 @@ export function useIpcSubscriptions(
                 seen.add(u)
               }
               appended.push(e)
-              indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)
+              if (indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)) {
+                toolIndexChanged = true
+              }
             }
             const eventType = codexEventType(raw)
             if (
@@ -1430,7 +1452,9 @@ export function useIpcSubscriptions(
           }
           if (isCompactSummaryEntry(feedEntry)) pendingCompaction = null
           appended.push(feedEntry)
-          indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)
+          if (indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)) {
+            toolIndexChanged = true
+          }
         }
 
         const baseEntries = reconciledOptimisticText !== null
@@ -1523,7 +1547,12 @@ export function useIpcSubscriptions(
           workContext === current.workContext &&
           workActivity === current.workActivity &&
           !ghostsChanged &&
-          !lastJsonlChanged
+          !lastJsonlChanged &&
+          // A tool-index mutation with no other change must still force a
+          // runtime update so the version bump below reaches Feed's context.
+          // (In practice toolIndexChanged implies an appended entry, but this
+          // keeps the guard honest if that ever stops holding.)
+          !toolIndexChanged
         if (noChange) {
           closeSpan({
             sessionId,
@@ -1569,6 +1598,11 @@ export function useIpcSubscriptions(
               workActivity,
               toolUseIndex,
               toolResultIndex,
+              // Bump only on a real map change so bootstrap bursts of
+              // already-seen entries don't needlessly invalidate context.
+              toolIndexVersion: toolIndexChanged
+                ? current.toolIndexVersion + 1
+                : current.toolIndexVersion,
               ghosts: nextGhosts,
               lastJsonlEntryAt,
             },

@@ -34,6 +34,17 @@
 // be gitignored. The per-file banner is the guardrail against someone editing
 // the copy instead of the source.
 
+// WHY a --check mode (conditions audit Finding 10)
+// ------------------------------------------------
+// Vendored shared code silently drifting is exactly the failure that creates
+// app↔package contract mismatches: a developer edits src/shared/conditions-core
+// and forgets to re-run this sync, and the headless packages keep building an
+// OLDER contract while the app typechecks green. There was no in-tree guard for
+// that. `--check` recomputes what each target file WOULD contain and exits
+// non-zero (without writing) when any vendored copy differs from source, so it
+// can run in CI / a precommit as a drift tripwire. The banner is byte-stable on
+// purpose (no timestamps) so an in-sync tree produces an exact match.
+
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -93,21 +104,62 @@ const TARGETS = [
   },
 ]
 
+// Compute the exact bytes a vendored copy of `file` should contain.
+async function stampedContentFor(file) {
+  const src = path.join(SOURCE_DIR, file)
+  const raw = await readFile(src, 'utf8')
+  // Prepend the banner. The source file's own header comment follows it, so the
+  // generated file reads: banner, blank line, original WHY comment, code.
+  return `${BANNER}\n${raw}`
+}
+
 async function syncTarget(target) {
   await mkdir(target.dest, { recursive: true })
   for (const file of HEADLESS_SLICE) {
-    const src = path.join(SOURCE_DIR, file)
-    const raw = await readFile(src, 'utf8')
-    // Prepend the banner. The source file's own header comment follows it, so the
-    // generated file reads: banner, blank line, original WHY comment, code.
-    const stamped = `${BANNER}\n${raw}`
+    const stamped = await stampedContentFor(file)
     const out = path.join(target.dest, file)
     await writeFile(out, stamped)
     console.error(`  wrote ${path.relative(REPO_ROOT, out)}`)
   }
 }
 
+// Returns the list of drifted target files (empty == in sync). Never writes.
+async function checkTarget(target) {
+  const drift = []
+  for (const file of HEADLESS_SLICE) {
+    const expected = await stampedContentFor(file)
+    const out = path.join(target.dest, file)
+    let actual = null
+    try {
+      actual = await readFile(out, 'utf8')
+    } catch {
+      // Missing vendored copy counts as drift (it must exist and match).
+      drift.push(`${path.relative(REPO_ROOT, out)} (missing)`)
+      continue
+    }
+    if (actual !== expected) drift.push(path.relative(REPO_ROOT, out))
+  }
+  return drift
+}
+
 async function main() {
+  const check = process.argv.includes('--check')
+  if (check) {
+    let drifted = []
+    for (const target of TARGETS) {
+      if (!target.sync) continue
+      drifted = drifted.concat(await checkTarget(target))
+    }
+    if (drifted.length > 0) {
+      console.error('conditions-core vendored copies are OUT OF SYNC:')
+      for (const f of drifted) console.error(`  ${f}`)
+      console.error('Run `npm run conditions-core:sync` to regenerate.')
+      process.exit(1)
+    }
+    console.error('conditions-core: in sync.')
+    return
+  }
+
   for (const target of TARGETS) {
     if (!target.sync) {
       console.error(`skip ${target.name} (sync: false — wired for a later PR)`)

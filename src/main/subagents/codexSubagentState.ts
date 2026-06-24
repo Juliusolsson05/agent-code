@@ -124,6 +124,37 @@ function parseJsonObject(text: string | null): Record<string, unknown> | null {
   }
 }
 
+// Flatten a Codex function_call_output `output` field down to plain text.
+//
+// WHY this needs to handle THREE shapes (feed audit Finding 11): the ATP type
+// contract (`CodexFunctionCallOutputPayload.output`) permits a plain string, a
+// `{ text }` object, OR a structured content array like
+// `[{ type: 'text', text: '…' }, …]`. `extractCodexSpawnOutput` used to read only
+// the first two, so when `spawn_agent` returned ARRAY output the join key
+// (`agent_id`) could not be parsed, the parent↔child correlation silently failed,
+// and the committed TaskSubagentRow showed no live child state even though the
+// spawn succeeded. ATP already normalizes array output elsewhere; this is the
+// main-process twin so the subagent path makes the same decision.
+//
+// The output here is a JOIN KEY, not user-visible transcript content, so we are
+// deliberately conservative: only pull `text` from each array item (concatenated
+// with newlines, matching how a single multi-chunk JSON string would arrive),
+// and never blindly `JSON.stringify` an unknown object — that could fabricate an
+// `agent_id` parse from unrelated payload. Array items without a string `text`
+// contribute nothing; an array with no text at all returns null.
+export function textFromCodexOutput(output: unknown): string | null {
+  if (typeof output === 'string') return output
+  if (Array.isArray(output)) {
+    const parts = output.flatMap(item => {
+      const rec = asRecord(item)
+      return typeof rec?.text === 'string' ? [rec.text] : []
+    })
+    return parts.length > 0 ? parts.join('\n') : null
+  }
+  const rec = asRecord(output)
+  return typeof rec?.text === 'string' ? rec.text : null
+}
+
 export function isCodexRolloutEntry(entry: JsonlEntry): boolean {
   // Match the renderer's rollout discriminator. Some Codex side-channel
   // records, notably turn_context/compacted variants, do not need a
@@ -172,12 +203,10 @@ export function extractCodexSpawnOutput(entry: JsonlEntry): SpawnOutput | null {
   if (payload?.type !== 'function_call_output' || typeof payload.call_id !== 'string') {
     return null
   }
-  const outputText =
-    typeof payload.output === 'string'
-      ? payload.output
-      : typeof asRecord(payload.output)?.text === 'string'
-        ? String(asRecord(payload.output)?.text)
-        : null
+  // Handles string, { text }, AND structured `[{ text }]` array output so a
+  // spawn_agent result delivered as a content array still yields its agent_id
+  // join key (feed audit Finding 11).
+  const outputText = textFromCodexOutput(payload.output)
   const output = parseJsonObject(outputText)
   const agentId = stringField(output, 'agent_id')
   if (!agentId) return null
@@ -214,7 +243,12 @@ export function extractCodexChildMeta(entry: JsonlEntry): ChildMeta | null {
   const payload = asRecord(entry.payload)
   const id = stringField(payload, 'id')
   if (!id) return null
-  const source = asRecord(payload.source)
+  // `payload?.source`: payload is provably non-null here at runtime (a null
+  // payload yields a null `id` and returns above), but the `stringField` result
+  // does not narrow `payload` for the type checker. Optional-chain so this is
+  // tsc-clean under a typecheck gate without changing behavior (cross-app audit
+  // V2 — these latent narrowing gaps only ever compiled because nothing ran tsc).
+  const source = asRecord(payload?.source)
   const subagent = asRecord(source?.subagent)
   const threadSpawn = asRecord(subagent?.thread_spawn)
   return {

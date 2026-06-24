@@ -38,9 +38,14 @@ type Props = {
 }
 
 export function ConditionOutlet({ snapshot, registry, dispatch }: Props): ReactElement | null {
-  // Preserve iteration order of Object.values so blocking modals stack in the
-  // same order they did under the old outlets. Object key order in the snapshot
-  // map is insertion order from the headless emitter; we do NOT reorder it.
+  // Render order is INCIDENTAL, not a contract (conditions audit Finding 9;
+  // docs/design/conditions-system.md is the source of truth). We iterate
+  // Object.values in the snapshot map's insertion order from the headless
+  // emitter and do not reorder it — but the design doc is explicit that this
+  // order is not guaranteed to match prompt/priority order. Today providers emit
+  // at most one visible overlay at a time, so stacking order is not observable;
+  // if simultaneous overlays ever matter, add an explicit `priority` field to
+  // the condition view metadata rather than relying on this iteration order.
   const rendered: ReactElement[] = []
 
   for (const condition of Object.values(snapshot.conditions)) {

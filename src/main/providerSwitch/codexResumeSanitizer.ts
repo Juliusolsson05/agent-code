@@ -1,10 +1,12 @@
 import type { CodexRolloutLine } from 'agent-transcript-parser'
-// Shared unknown-JSON guard. The previous LOCAL copy used
-// `typeof value === 'object' && value !== null`, which treats ARRAYS as
-// records — a drift from the canonical helper that excludes arrays. Codex
-// `response_item.payload` is always a JSON object, so accepting arrays here
-// could have let an array slip through `isCodexToolCallPayload`/field reads as
-// a bogus record. Using the shared helper fixes that. See @shared/lib/asRecord.
+// WHY the shared helper and not a local one (cross-app audit Finding 10):
+// resume sanitization decides whether a rollout has unresolved tool calls by
+// probing object fields like `payload.type` / `payload.call_id`. An ARRAY is a
+// JS object but never a valid Codex payload record, and the shared helper
+// rejects arrays whereas the old local copy accepted them. Using one canonical
+// helper keeps this sanitizer's "is this a record" decision identical to ATP's
+// rewind path — both prepare resume-safe transcripts and must agree on malformed
+// input, or provider-switch and rewind could make different safety calls.
 import { asRecord } from '@shared/lib/asRecord.js'
 
 export function sanitizeCodexRolloutForResume(
