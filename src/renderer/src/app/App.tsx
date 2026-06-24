@@ -697,7 +697,7 @@ export default function App() {
                     open={placementOverlayOpen}
                     workspace={workspace}
                     onClose={closePlacementOverlay}
-                    attachDetachedSessionId={dispatchAttachIntent}
+                    attachIntent={dispatchAttachIntent}
                     linkedAgentParentId={linkedAgentParentId}
                   />
                 </div>
@@ -716,7 +716,7 @@ export default function App() {
                     open={placementOverlayOpen}
                     workspace={workspace}
                     onClose={closePlacementOverlay}
-                    attachDetachedSessionId={dispatchAttachIntent}
+                    attachIntent={dispatchAttachIntent}
                     linkedAgentParentId={linkedAgentParentId}
                   />
                 </div>

@@ -7,6 +7,7 @@ import {
   buildVisibleDispatchRows,
   selectVisibleDispatchRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
@@ -799,8 +800,7 @@ function moveTiledLaneSelection(workspace: Workspace, delta: number) {
   // Step one row in `delta` direction, wrapping. Duplicates are allowed, so
   // we do NOT skip rows shown in other lanes — landing on one just mirrors
   // that agent into this lane too.
-  const len = rows.length
-  const probe = (((currentIndex + delta) % len) + len) % len
+  const probe = nextTiledRowIndex(currentIndex, delta, rows.length)
   const row = rows[probe]
   if (row) workspace.setTiledLaneSession(laneIndex, row.sessionId)
 }

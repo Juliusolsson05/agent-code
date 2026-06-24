@@ -21,7 +21,6 @@
     "test:integration": "NODE_ENV=test vitest run --project integration",
     "test:renderer": "NODE_ENV=test vitest run --project renderer",
     "test:coverage": "NODE_ENV=test vitest run --coverage",
-    "proxy-demo": "npm --prefix packages/claude-code-headless run build && electron experiments/claude-proxy-stream-app/main.mjs",
     "runtime:fetch:mitmproxy": "node scripts/runtime-tools/fetch-mitmproxy.mjs",
     "runtime:verify:mitmproxy": "node scripts/runtime-tools/verify-mitmproxy.mjs",
     "runtime:fetch:tmux": "node scripts/runtime-tools/fetch-tmux.mjs",

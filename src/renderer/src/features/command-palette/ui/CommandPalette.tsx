@@ -7,7 +7,7 @@ import {
   loadRecentHistory,
   recordCommandUse,
 } from '@renderer/features/command-palette/lib/recentCommandHistory'
-import { rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
+import { fuzzyMatch, rankCommands } from '@renderer/features/command-palette/lib/rankCommands'
 import type { CommandContext, ResolvedCommand } from '@renderer/features/command-palette/types'
 import {
   allPromptTemplates,
@@ -20,6 +20,7 @@ import {
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
+import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 import {
   SessionPreviewPane,
   type PreviewTarget,
@@ -99,7 +100,7 @@ type Props = {
   enterGlobalDispatch: () => Promise<void> | void
   exitDispatchMode: () => void
   openTiledDispatchPrompt: () => void
-  openDispatchAttach: (sessionId: string) => void
+  openDispatchAttach: (intent: DispatchAttachIntent) => void
   openLinkedAgent: (sessionId: string) => void
   openPinAgents: () => void
   toggleCustomRendering: () => void
@@ -137,16 +138,6 @@ type Props = {
   globalDispatchEnabled: boolean
   setDangerousAgentsEnabled: (enabled: boolean) => void
   setAggressiveDebugPersistence: (enabled: boolean) => void
-}
-
-function fuzzyMatch(text: string, query: string): boolean {
-  const lower = text.toLowerCase()
-  const q = query.toLowerCase()
-  let j = 0
-  for (let i = 0; i < lower.length && j < q.length; i++) {
-    if (lower[i] === q[j]) j++
-  }
-  return j === q.length
 }
 
 export function CommandPalette({
@@ -822,7 +813,7 @@ export function CommandPalette({
           mode === 'ai-workspace-create' ||
           mode === 'ai-workspace-clear'
         ) {
-          setMode(mode === 'save-prompt-template' ? 'commands' : 'commands')
+          setMode('commands')
           setPromptTemplateForm({ id: null, title: '', body: '' })
           setQuery('')
           setSelectedIndex(0)

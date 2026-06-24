@@ -707,7 +707,7 @@ function extractCodexResponseItem(
 }
 
 function extractClaudeToolUse(
-  block: JsonRecord | undefined,
+  block: JsonRecord | null | undefined,
   timestamp: number | undefined,
 ): AgentTranscriptItem | null {
   if (!block || block.type !== 'tool_use') return null
@@ -718,7 +718,7 @@ function extractClaudeToolUse(
 
 function classifyToolCall(
   name: string,
-  input: JsonRecord | undefined,
+  input: JsonRecord | null | undefined,
   timestamp: number | undefined,
 ): AgentTranscriptItem {
   const target = toolTarget(input)
@@ -768,7 +768,7 @@ function isWriteTool(name: string): boolean {
   )
 }
 
-function toolTarget(input: JsonRecord | undefined): string | undefined {
+function toolTarget(input: JsonRecord | null | undefined): string | undefined {
   if (!input) return undefined
   for (const key of ['path', 'file_path', 'filename', 'workdir', 'cwd', 'query', 'pattern']) {
     const value = stringField(input, key)

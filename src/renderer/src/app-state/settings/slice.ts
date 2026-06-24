@@ -1,11 +1,19 @@
 import type { StateCreator } from 'zustand'
 
-import { loadInitialSettings } from '@renderer/app-state/settings/persistence'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 import type { AppStore, SettingsSlice } from '@renderer/app-state/types'
 
-const initialSettings = loadInitialSettings()
+// WHY this is seeded with defaults instead of reading a separate
+// localStorage `:settings` key:
+// Zustand persist is the real settings source of truth (`store.ts` persists
+// the settings slice under `APP_STORE_STORAGE_KEY` and coerces it during
+// merge/migrate). The old direct reader path read a pre-persist key
+// that nothing writes anymore, which made boot look like it had two settings
+// authorities. Module load now applies the deliberate default theme; App.tsx's
+// settings effect re-applies the persisted/coerced settings once hydration
+// lands. The old direct pre-persist reader is intentionally gone.
+const initialSettings = DEFAULT_SETTINGS
 applyTheme(initialSettings)
 
 export const createSettingsSlice: StateCreator<
