@@ -2,6 +2,15 @@
   "name": "agent-code",
   "version": "0.0.2-beta.1",
   "description": "Agent Code desktop app",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Juliusolsson05/agent-code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Juliusolsson05/agent-code/issues"
+  },
+  "homepage": "https://github.com/Juliusolsson05/agent-code#readme",
   "main": "out/main/index.js",
   "type": "module",
   "scripts": {
