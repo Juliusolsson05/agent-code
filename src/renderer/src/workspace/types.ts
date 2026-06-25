@@ -2,7 +2,7 @@ import type { BuiltInMcpDomain } from '@mcp/shared/types'
 // Local binding for in-file uses (SessionMeta.kind, etc.). The
 // `export type { SessionKind }` re-export below does not bind the name
 // locally, so this import is also required.
-import type { SessionKind } from '@shared/types/providerKind'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind'
 
 // Tile tree data model.
 //
@@ -372,6 +372,58 @@ export type WorkspaceState = {
    * of its candidate row list.
    */
   pinnedSessionIds: SessionId[]
+  /**
+   * The most recent bulk provider switch, remembered so the user can send
+   * that exact batch back to its origin provider from the Switch Agents modal
+   * (e.g. "I parked 20 agents on Claude when Codex was rate-limited; bring them
+   * back now that the limit reset"). Only ONE batch is kept — a newer bulk
+   * switch replaces it, and returning the batch clears it. Null when there is
+   * nothing to return.
+   *
+   * WHY this is in-memory workspace state and deliberately NOT in
+   * PersistedWorkspace: the `agents[].sessionId` values are current-launch
+   * cc-shell SessionIds. On reload every session is re-spawned and its
+   * SessionId is remapped (see rehydrate.ts), so a persisted batch would point
+   * at dead placeholder ids unless it rode the same remap. Threading a remap
+   * for a convenience "undo the last batch" record is not worth the complexity
+   * for v1; the batch lives for the working session, which covers the "switch
+   * out, bring back an hour later" workflow. If cross-restart durability is
+   * wanted later, key the record by the durable provider session id instead of
+   * the local SessionId — this comment is where that decision should be made.
+   */
+  lastProviderSwitchBatch?: ProviderSwitchBatch | null
+}
+
+/**
+ * One agent's membership in a remembered bulk provider switch. Captured AFTER
+ * the forward switch completes, because `replaceSession` mints a new SessionId
+ * on every switch — `sessionId` here is the post-switch id, which is what
+ * "return" must act on.
+ */
+export type ProviderSwitchBatchAgent = {
+  sessionId: SessionId
+  cwd: string
+  /** Where the agent came from — the provider "return" sends it back to. */
+  originalKind: AgentProviderKind
+  /**
+   * Where the agent is now (the forward switch's target). Return only acts on
+   * agents whose CURRENT kind still equals this, so an agent the user has
+   * since manually switched back (or closed) is skipped instead of being
+   * yanked off whatever provider they intentionally moved it to.
+   */
+  switchedToKind: AgentProviderKind
+  /** For the return summary / labels only. */
+  title?: string
+}
+
+/** The single remembered bulk provider switch. See WorkspaceState.lastProviderSwitchBatch. */
+export type ProviderSwitchBatch = {
+  id: string
+  switchedAt: number
+  /** Batch-level direction, for the banner text ("Codex → Claude"). */
+  sourceKind: AgentProviderKind
+  targetKind: AgentProviderKind
+  agents: ProviderSwitchBatchAgent[]
 }
 
 export const RATIO_MIN = 0.1

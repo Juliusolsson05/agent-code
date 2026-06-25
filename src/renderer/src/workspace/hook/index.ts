@@ -17,6 +17,7 @@ import { useSessionActions } from '@renderer/workspace/hook/actions/session'
 import { useTabActions } from '@renderer/workspace/hook/actions/tab'
 import { usePaneActions } from '@renderer/workspace/hook/actions/pane'
 import { useProviderActions } from '@renderer/workspace/hook/actions/provider'
+import { useBulkProviderSwitchActions } from '@renderer/workspace/hook/actions/bulkProviderSwitch'
 import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
@@ -414,6 +415,13 @@ export function useWorkspace(
   const { switchFocusedProvider, reloadFocusedAgent, rewindFocusedToPrompt, undoLastRewind } =
     useProviderActions(refs, setRuntimes, showPaneToast, sessionActions)
 
+  // Bulk provider switch (Switch Agents modal) + remembered-batch return. Uses
+  // the same single-agent core as switchFocusedProvider, but reports through the
+  // global toast (the operation spans many panes, so a pane-scoped toast would
+  // be arbitrary) and records the batch on workspace state.
+  const { switchAgentsToProvider, returnLastProviderSwitchBatch } =
+    useBulkProviderSwitchActions(refs, setState, setRuntimes, showToast, sessionActions)
+
   const { loadOlderHistory } = useHistoryActions(setRuntimes, refs, updateRuntime)
 
   const { undoClose, undoCloseCount } = useUndoCloseAction(
@@ -538,6 +546,8 @@ export function useWorkspace(
     reloadFocusedAgent,
     softReloadAgentView,
     switchFocusedProvider,
+    switchAgentsToProvider,
+    returnLastProviderSwitchBatch,
     rewindFocusedToPrompt,
     undoLastRewind,
     reloadAgentSessions,

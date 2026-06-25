@@ -203,6 +203,42 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Switch Agents — bulk provider switch for usage-limit escapes.
+    //
+    // WHY app-surface (not session): like Close Old Agents, the user is acting
+    // on a batch across the workspace, not on the focused pane. The modal picks
+    // its own direction and scope and previews the affected agents, so it must
+    // open even when nothing is focused.
+    //
+    // This is the ONLY entry point for the feature — both the forward switch
+    // and the "return last batch" affordance live inside the modal. There is
+    // deliberately no command for the return and no keybind: it's a low-
+    // frequency operation, and a second command/keybind would be clutter.
+    id: 'switch-agents-provider',
+    surface: 'app',
+    title: 'Switch Agents to Another Provider…',
+    description: '**What it does:** Opens a modal to move a batch of **Claude/Codex agents** to the other provider at once, and to return the most recent batch.\n\n**Use when:** You hit a usage limit on one provider and want to move agents to the other (then back later).\n\n**Notes:** History is translated; the most recent batch is remembered so you can send it back from the same modal.',
+    keywords: [
+      'switch',
+      'provider',
+      'bulk',
+      'batch',
+      'claude',
+      'codex',
+      'migrate',
+      'move',
+      'limit',
+      'usage',
+      'rate',
+      'return',
+      'all',
+    ],
+    run: ({ ui }) => {
+      ui.openBulkProviderSwitch()
+      ui.closePalette()
+    },
+  },
+  {
     // Cross-session prompt search — session names are useless for
     // finding a conversation, so this command opens a modal that
     // ranks every session on disk by its user-prompt text instead.
