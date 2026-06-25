@@ -142,3 +142,7 @@ Build:
 ```bash
 npm run build
 ```
+
+## License
+
+Agent Code is open source under the [MIT License](LICENSE).
