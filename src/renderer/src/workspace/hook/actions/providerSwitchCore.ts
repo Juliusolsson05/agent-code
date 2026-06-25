@@ -77,6 +77,15 @@ export async function switchAgentProvider(params: {
       const newSessionId = await sessionActions.replaceSession(meta.cwd, {
         kind: targetKind,
         builtInMcpDomains: meta.builtInMcpDomains,
+        // Pin the replacement to THIS agent. Without it, replaceSession falls
+        // back to the current command target (the focused pane) — fine when the
+        // caller IS the focused agent, but fatal for the bulk loop, which
+        // switches agents that are not focused and would otherwise replace the
+        // focused pane N times. Pinning also closes a latent race in the
+        // single-pane caller: focus can change during the translate await
+        // below, and we want to replace the pane we validated, not whatever is
+        // focused when the await resolves. (Same reason rewind pins its target.)
+        targetSessionId: sessionId,
       })
       if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
 
@@ -113,6 +122,10 @@ export async function switchAgentProvider(params: {
       kind: result.targetKind,
       resumeSessionId: result.targetProviderSessionId,
       builtInMcpDomains: meta.builtInMcpDomains,
+      // See the empty-pane branch above: pin to this agent so the bulk loop
+      // replaces the right pane (not the focused one) and the single-pane
+      // caller is immune to focus changing during the translate await.
+      targetSessionId: sessionId,
     })
     if (!newSessionId) return { status: 'failed', message: 'Replacement failed' }
 

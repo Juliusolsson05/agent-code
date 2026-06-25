@@ -200,14 +200,25 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     }
   }, [busy, workspace])
 
+  // Block every close path (Escape, backdrop, Esc button) while a switch/return
+  // loop is in flight. The loop's re-entrancy guard is the local `busy` flag,
+  // which resets to false on remount — so if the modal could close and reopen
+  // mid-loop, a second bulk operation could start concurrently against the same
+  // replaceSession mutation paths. Refusing to close while busy keeps `busy` the
+  // authoritative single-flight guard without lifting it into workspace state.
+  const requestClose = useCallback(() => {
+    if (busy) return
+    onClose()
+  }, [busy, onClose])
+
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
-        onClose()
+        requestClose()
       }
     },
-    [onClose],
+    [requestClose],
   )
 
   if (!open) return null
@@ -219,7 +230,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
       aria-label="Switch Agents to Another Provider"
       className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/30"
       onMouseDown={e => {
-        if (e.target === e.currentTarget) onClose()
+        if (e.target === e.currentTarget) requestClose()
       }}
       onKeyDown={onKeyDown}
     >
@@ -235,8 +246,9 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             </div>
             <button
               type="button"
-              onClick={onClose}
-              className="px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
+              onClick={requestClose}
+              disabled={busy}
+              className="px-2 py-1 text-[10px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
               Esc
             </button>
@@ -446,7 +458,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={requestClose}
               disabled={busy}
               className="px-3 py-1.5 text-[11px] border border-border text-ink-dim hover:text-ink hover:border-border-hi disabled:opacity-50"
             >
