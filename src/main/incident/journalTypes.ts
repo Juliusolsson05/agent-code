@@ -59,6 +59,7 @@ export type AppRunJournalManifest = {
 export type AppRunIncidentSeverity = 'warn' | 'error' | 'fatal'
 
 export type AppRunIncidentKind =
+  | 'app.prior_unclean_shutdown'
   | 'main.uncaught_exception'
   | 'main.unhandled_rejection'
   | 'main.warning'

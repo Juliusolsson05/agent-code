@@ -43,6 +43,7 @@ import { buildAppMenu } from '@main/menu/appMenu.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { installProcessCrashHooks } from '@main/incident/installCrashHooks.js'
 import { installWindowIncidentHooks } from '@main/incident/installWindowIncidentHooks.js'
+import { classifyPreviousRun } from '@main/incident/previousRunClassifier.js'
 
 // Main process — thin Electron host.
 //
@@ -205,6 +206,38 @@ async function startApp(): Promise<void> {
     appRunJournal.record({ area: 'incident.crashreporter', name: 'crashreporter.started' })
   } catch (err) {
     appRunJournal.recordError('crashreporter.start.error', err)
+  }
+
+  // Classify how the PREVIOUS run ended, now that this run's journal exists to
+  // record the verdict. A missing clean-shutdown marker on the last run becomes
+  // an app.prior_unclean_shutdown incident here — the crash that had no living
+  // process to report it gets attributed on the next launch instead.
+  try {
+    const priorRun = classifyPreviousRun(appRunJournal.appRunId)
+    if (priorRun && priorRun.classification !== 'clean') {
+      const crashLike =
+        priorRun.classification === 'main_crash_suspected' ||
+        priorRun.classification === 'renderer_crash_suspected'
+      appRunJournal.recordIncident({
+        kind: 'app.prior_unclean_shutdown',
+        severity: crashLike ? 'error' : 'warn',
+        reason: priorRun.classification,
+        context: {
+          priorRunId: priorRun.priorRunId,
+          priorRunDir: priorRun.priorRunDir,
+          ...priorRun.evidence,
+        },
+      })
+    } else if (priorRun) {
+      appRunJournal.record({
+        area: 'incident.prior_run',
+        name: 'prior_run.clean',
+        data: { priorRunId: priorRun.priorRunId },
+      })
+    }
+  } catch (err) {
+    // Classification is best-effort forensics — never let it block startup.
+    appRunJournal.recordError('prior_run.classify.error', err)
   }
 
   void performanceService.start().catch(err => {
