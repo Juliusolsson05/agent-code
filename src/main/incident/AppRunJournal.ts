@@ -10,9 +10,11 @@ import { BrowserWindow } from 'electron'
 import { INCIDENT_RUNS_DIR, STATE_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
-import { createAppRunId } from '@main/incident/appRunIds.js'
+import { createAppRunId, createIncidentId } from '@main/incident/appRunIds.js'
 import type {
   AppRunHeartbeat,
+  AppRunIncident,
+  AppRunIncidentInput,
   AppRunJournalEvent,
   AppRunJournalEventInput,
   AppRunJournalManifest,
@@ -37,12 +39,14 @@ export class AppRunJournal {
 
   private readonly manifest: AppRunJournalManifest
   private readonly eventsPath: string
+  private readonly incidentsPath: string
   private readonly heartbeatPath: string
   private readonly cleanShutdownPath: string
   private readonly eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
   private pending: AppRunJournalEvent[] = []
   private droppedPendingEvents = 0
   private nextEventSeq = 1
+  private nextIncidentSeq = 1
   private heartbeatSeq = 1
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -55,6 +59,7 @@ export class AppRunJournal {
     this.appRunId = createAppRunId(startedAt, pid)
     this.runDir = join(INCIDENT_RUNS_DIR, this.appRunId)
     this.eventsPath = join(this.runDir, 'events.jsonl')
+    this.incidentsPath = join(this.runDir, 'incidents.jsonl')
     this.heartbeatPath = join(this.runDir, 'heartbeat.json')
     this.cleanShutdownPath = join(this.runDir, 'clean-shutdown')
     this.manifest = {
@@ -119,16 +124,65 @@ export class AppRunJournal {
   }
 
   recordError(name: string, error: unknown, data?: Record<string, unknown>): void {
-    const normalizedError = error instanceof Error
-      ? { name: error.name, message: error.message, stack: error.stack }
-      : { message: String(error) }
     this.record({
       area: areaFromName(name),
       name,
       severity: 'error',
       data: {
         ...data,
-        error: normalizedError,
+        error: normalizeError(error),
+      },
+    })
+  }
+
+  /**
+   * Record a higher-level failure fact to incidents.jsonl. Incidents are rare
+   * and almost always crash-adjacent, so this writes SYNCHRONOUSLY and first
+   * flushSync()s the pending event buffer — that way the breadcrumb timeline
+   * leading up to the incident is durable even if the process dies milliseconds
+   * later (the 1s async flush would otherwise lose the final ~second of events,
+   * which is exactly the window before a crash). This is the always-on stand-in
+   * for a "flush the in-memory ring on incident" dump.
+   *
+   * The incident is also mirrored as a normal event so a single events.jsonl
+   * scan shows it inline with lifecycle context; incidents.jsonl is the
+   * triage-friendly index of just the failures.
+   */
+  recordIncident(input: AppRunIncidentInput): void {
+    if (!this.started) return
+    this.flushSync()
+    const ts = Date.now()
+    const incident: AppRunIncident = {
+      schemaVersion: 1,
+      incidentId: createIncidentId(new Date(ts)),
+      appRunId: this.appRunId,
+      seq: this.nextIncidentSeq++,
+      ts,
+      tsIso: new Date(ts).toISOString(),
+      kind: input.kind,
+      severity: input.severity,
+      process: input.process,
+      reason: input.reason,
+      exitCode: input.exitCode,
+      error: normalizeError(input.error),
+      context: sanitizePerformanceData(input.context, { verbose: false }) as
+        | Record<string, unknown>
+        | undefined,
+    }
+    try {
+      mkdirSync(this.runDir, { recursive: true })
+      appendFileSync(this.incidentsPath, `${JSON.stringify(incident)}\n`, 'utf8')
+    } catch (err) {
+      console.warn('[incident-journal] incident append failed:', err)
+    }
+    this.record({
+      area: 'incident',
+      name: input.kind,
+      severity: input.severity,
+      data: {
+        incidentId: incident.incidentId,
+        reason: input.reason,
+        exitCode: input.exitCode,
       },
     })
   }
@@ -318,6 +372,16 @@ export class AppRunJournal {
 function areaFromName(name: string): string {
   const parts = name.split('.')
   return parts.length >= 2 ? `${parts[0]}.${parts[1]}` : 'app'
+}
+
+function normalizeError(
+  error: unknown,
+): { name?: string; message: string; stack?: string } | undefined {
+  if (error === undefined || error === null) return undefined
+  if (error instanceof Error) {
+    return { name: error.name, message: error.message, stack: error.stack }
+  }
+  return { message: String(error) }
 }
 
 function nsToMs(value: number): number {

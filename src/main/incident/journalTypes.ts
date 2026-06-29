@@ -52,6 +52,50 @@ export type AppRunJournalManifest = {
   }
 }
 
+// Incidents are higher-level failure facts (vs. events, which are routine
+// lifecycle breadcrumbs). An incident is something expected to matter AFTER a
+// restart: a crash, a freeze, a child-process death. They live in their own
+// incidents.jsonl so a triage scan never has to wade through the event stream.
+export type AppRunIncidentSeverity = 'warn' | 'error' | 'fatal'
+
+export type AppRunIncidentKind =
+  | 'main.uncaught_exception'
+  | 'main.unhandled_rejection'
+  | 'main.warning'
+  | 'window.render_process_gone'
+  | 'window.unresponsive'
+  | 'window.responsive'
+  | 'window.preload_error'
+  | 'window.did_fail_load'
+  | 'electron.child_process_gone'
+
+export type AppRunIncidentInput = {
+  kind: AppRunIncidentKind
+  severity: AppRunIncidentSeverity
+  process?: 'main' | 'renderer' | 'gpu' | 'utility' | 'child'
+  reason?: string
+  exitCode?: number
+  // Raw error from a hook; normalized to {name,message,stack} before persistence.
+  error?: unknown
+  context?: Record<string, unknown>
+}
+
+export type AppRunIncident = {
+  schemaVersion: 1
+  incidentId: string
+  appRunId: string
+  seq: number
+  ts: number
+  tsIso: string
+  kind: AppRunIncidentKind
+  severity: AppRunIncidentSeverity
+  process?: 'main' | 'renderer' | 'gpu' | 'utility' | 'child'
+  reason?: string
+  exitCode?: number
+  error?: { name?: string; message: string; stack?: string }
+  context?: Record<string, unknown>
+}
+
 export type AppRunHeartbeat = {
   schemaVersion: 1
   appRunId: string

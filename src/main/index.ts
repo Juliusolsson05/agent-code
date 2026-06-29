@@ -4,7 +4,7 @@
 // `./loadEnv.ts` for the rationale.
 import '@main/loadEnv.js'
 
-import { app, BrowserWindow, dialog, Menu } from 'electron'
+import { app, BrowserWindow, crashReporter, dialog, Menu } from 'electron'
 import { readFile } from 'fs/promises'
 import { performance } from 'perf_hooks'
 
@@ -41,6 +41,8 @@ import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import { installProcessCrashHooks } from '@main/incident/installCrashHooks.js'
+import { installWindowIncidentHooks } from '@main/incident/installWindowIncidentHooks.js'
 
 // Main process — thin Electron host.
 //
@@ -181,6 +183,29 @@ async function startApp(): Promise<void> {
     name: 'state_lock.acquired',
     data: { path: lock.path },
   })
+
+  // Always-on crash/freeze capture, installed as early as possible so a fault
+  // anywhere in the rest of startup is still recorded. The process hooks get a
+  // synchronous lock release so a fatal main crash (which exits immediately,
+  // bypassing before-quit/will-quit) doesn't strand the lock and block relaunch.
+  installProcessCrashHooks({
+    journal: appRunJournal,
+    releaseLockSync: () => {
+      stateProcessLock?.releaseSync()
+      stateProcessLock = null
+    },
+  })
+  installWindowIncidentHooks(appRunJournal)
+  try {
+    // Native crashes (V8 aborts, SIGSEGV in native addons, GPU-process death)
+    // never reach JS, so the JSONL hooks above cannot see them. Crashpad writes
+    // local minidumps for those. uploadToServer:false keeps everything local
+    // and privacy-preserving — this is diagnostics, not telemetry.
+    crashReporter.start({ uploadToServer: false })
+    appRunJournal.record({ area: 'incident.crashreporter', name: 'crashreporter.started' })
+  } catch (err) {
+    appRunJournal.recordError('crashreporter.start.error', err)
+  }
 
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
