@@ -40,6 +40,7 @@ import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
+import { AppRunJournal } from '@main/incident/AppRunJournal.js'
 
 // Main process — thin Electron host.
 //
@@ -97,6 +98,7 @@ const caffeinateController = new CaffeinateController()
 let manager: SessionManager | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
+let appRunJournal: AppRunJournal | null = null
 
 // WHY Agent Code is intentionally single-primary-process:
 //
@@ -125,7 +127,25 @@ if (!hasSingleInstanceLock) {
     focusMainWindow()
   })
 
-  void app.whenReady().then(startApp)
+  void app.whenReady().then(startApp).catch((err) => {
+    // A throw out of startApp (toolchain or MCP-host init failure, or a disk
+    // error while the journal itself starts) would otherwise become an
+    // unhandledRejection: the process keeps running with no window and never
+    // quits, so `will-quit` never fires and the state-process lock is leaked
+    // while THIS pid stays alive. That makes the NEXT launch refuse to start —
+    // acquireStateProcessLock sees a live owner and shows "Agent Code is already
+    // running" until the zombie is force-killed. Convert a fatal startup error
+    // into a clean exit: journal it, flush + release the lock, and quit so a
+    // relaunch can proceed. We intentionally do NOT write the clean-shutdown
+    // marker — this run WAS unclean, and a future prior-run classifier should
+    // see it that way.
+    console.error('[app] fatal startup error — releasing lock and quitting:', err)
+    appRunJournal?.recordError('startup.fatal', err)
+    appRunJournal?.stop()
+    stateProcessLock?.releaseSync()
+    stateProcessLock = null
+    app.quit()
+  })
 }
 
 // ---------- App lifecycle ----------
@@ -150,9 +170,21 @@ async function startApp(): Promise<void> {
     return
   }
   stateProcessLock = lock
+  appRunJournal = new AppRunJournal({
+    appVersion: app.getVersion(),
+    perfEnabled: performanceService.getConfig().enabled,
+    lock,
+  })
+  await appRunJournal.start()
+  appRunJournal.record({
+    area: 'state.lock',
+    name: 'state_lock.acquired',
+    data: { path: lock.path },
+  })
 
   void performanceService.start().catch(err => {
     console.warn('[performance] failed to start:', err)
+    appRunJournal?.recordError('performance.start.error', err)
   })
   performanceService.mark('app.main.whenReady.start')
   // Heap watchdog and debug-storage retention run as early as possible:
@@ -182,10 +214,18 @@ async function startApp(): Promise<void> {
     console.warn('[ghostJournal] startup compact failed (non-fatal):', err)
   })
   scheduleDebugStoragePrune('startup')
-  await initializeToolchain()
+  appRunJournal.record({ area: 'setup.toolchain', name: 'toolchain.start' })
+  try {
+    await initializeToolchain()
+    appRunJournal.record({ area: 'setup.toolchain', name: 'toolchain.end' })
+  } catch (err) {
+    appRunJournal.recordError('toolchain.error', err)
+    throw err
+  }
   await cleanupClaudeImageCacheDir().catch(err => {
     console.warn('[images] failed to clean Claude image cache:', err)
     performanceService.error('app.main.imageCache.cleanup.error', err)
+    appRunJournal?.recordError('image_cache.cleanup.error', err)
   })
   // Tmux availability is checked once at startup. The cost is a
   // child-process roundtrip on `tmux -V` — cheap enough to await
@@ -208,7 +248,20 @@ async function startApp(): Promise<void> {
   const bundledTmux = await resolveBundledTool('tmux')
   tmuxRegistry = new TmuxRegistry({ tmuxBinary: bundledTmux ?? undefined })
   const tmuxDetectStarted = performance.now()
+  appRunJournal.record({
+    area: 'app.tmux',
+    name: 'tmux.detect.start',
+    data: { bundled: bundledTmux !== null },
+  })
   const tmuxAvailable = await tmuxRegistry.detectAvailability()
+  appRunJournal.record({
+    area: 'app.tmux',
+    name: 'tmux.detect.end',
+    data: {
+      available: tmuxAvailable,
+      durationMs: performance.now() - tmuxDetectStarted,
+    },
+  })
   performanceService.record({
     kind: 'span_end',
     process: 'main',
@@ -230,6 +283,7 @@ async function startApp(): Promise<void> {
   // via workspace:load IPC, but we need the tmuxName values earlier.
   if (tmuxAvailable) {
     try {
+      appRunJournal.record({ area: 'app.tmux', name: 'tmux.recovery.start' })
       const raw = await readFile(STATE_FILE, 'utf8')
       // workspace.json is wrapped: { workspace: { sessions: {...} } }.
       // The renderer's saveWorkspace() writes { workspace: workspaceState }
@@ -253,6 +307,15 @@ async function startApp(): Promise<void> {
         lost: recoveryReport.lost.length,
         orphans: recoveryReport.orphans.length,
       })
+      appRunJournal.record({
+        area: 'app.tmux',
+        name: 'tmux.recovery.end',
+        data: {
+          recoverable: recoveryReport.recoverable.length,
+          lost: recoveryReport.lost.length,
+          orphans: recoveryReport.orphans.length,
+        },
+      })
       console.log(
         `[tmux] recovery: ${recoveryReport.recoverable.length} recoverable, ${recoveryReport.lost.length} lost, ${recoveryReport.orphans.length} orphans cleaned`,
       )
@@ -262,11 +325,19 @@ async function startApp(): Promise<void> {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
         console.warn('[tmux] recovery failed (treating all sessions as fresh):', err)
         performanceService.error('app.tmux.recovery.error', err)
+        appRunJournal?.recordError('tmux.recovery.error', err)
       }
     }
   }
 
-  await builtInMcpHost.start()
+  appRunJournal.record({ area: 'mcp.host', name: 'mcp_host.start' })
+  try {
+    await builtInMcpHost.start()
+    appRunJournal.record({ area: 'mcp.host', name: 'mcp_host.end' })
+  } catch (err) {
+    appRunJournal.recordError('mcp_host.error', err)
+    throw err
+  }
   manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost)
   builtInMcpHost.setDependencies({
     orchestrationBridge,
@@ -299,7 +370,13 @@ async function startApp(): Promise<void> {
     caffeinateController,
   })
   performanceService.mark('app.main.ipc.registered')
+  appRunJournal.record({ area: 'window.main', name: 'window.create.start' })
   createMainWindow()
+  appRunJournal.record({
+    area: 'window.main',
+    name: 'window.create.end',
+    data: { windowCount: BrowserWindow.getAllWindows().length },
+  })
   // Install the application menu right after the window exists — the File
   // items dispatch command ids to THIS window's renderer (issue #148).
   Menu.setApplicationMenu(buildAppMenu())
@@ -325,6 +402,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')
   void manager?.killAll()
   void builtInMcpHost.stop()
@@ -344,6 +422,12 @@ app.on('before-quit', () => {
   void dictationDebugJournals.flushAll()
   void pasteDebugJournals.flushAll()
   performanceService.stop()
+})
+
+app.on('will-quit', () => {
+  appRunJournal?.record({ area: 'app.lifecycle', name: 'app.will_quit' })
+  appRunJournal?.markCleanShutdown('will-quit')
+  appRunJournal?.stop()
   stateProcessLock?.releaseSync()
   stateProcessLock = null
 })

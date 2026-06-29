@@ -6,6 +6,7 @@ import {
   DEBUG_BUNDLE_DIR,
   FEED_DEBUG_DIR,
   HEAP_SNAPSHOT_DIR,
+  INCIDENT_RUNS_DIR,
   MANUAL_DEBUG_BUNDLE_DIR,
   PERFORMANCE_RUNS_DIR,
   PROXY_EVENTS_DIR,
@@ -33,6 +34,7 @@ export type DebugStorageBucket =
   | 'debug-bundles-legacy'
   | 'proxy'
   | 'performance'
+  | 'incidents'
   | 'heap-snapshots'
   | 'ghost-logs'
 
@@ -42,6 +44,7 @@ type Artifact = {
   mtimeMs: number
   kind: 'file' | 'dir'
   bucket: DebugStorageBucket
+  protected?: boolean
 }
 
 export type DebugStoragePruneResult = {
@@ -154,6 +157,13 @@ export async function pruneDebugStorage(reason: string): Promise<DebugStoragePru
     let bucketBytes = sumBytes(bucketArtifacts)
     for (const artifact of bucketArtifacts) {
       if (bucketBytes <= caps[bucket]) break
+      // Honor protection in the per-bucket cap pass too. The TTL pass and the
+      // global-budget pass both skip protected artifacts; without this line the
+      // 4% incidents cap could still evict a "protected" recent incident run,
+      // silently breaking the "keep the 50 newest runs regardless" guarantee
+      // that collectIncidentRunDirs() establishes. (Manual debug bundles get
+      // the same protection via the `continue` at the top of this loop.)
+      if (isProtectedFromDebugPrune(artifact)) continue
       if (artifact.mtimeMs > activeCutoff) continue
       const freed = await removeArtifact(artifact)
       if (freed === 0) continue
@@ -200,6 +210,11 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
     'debug-bundles-legacy': Math.floor(totalBudget * 0.04),
     proxy: Math.floor(totalBudget * 0.28),
     performance: Math.floor(totalBudget * 0.10),
+    // Incident runs are intentionally small: manifests, heartbeat, compact
+    // lifecycle JSONL, and pointers to heavy artifacts. They still need an
+    // explicit budget lane so the new always-on journal cannot become another
+    // "small files forever" directory after months of development restarts.
+    incidents: Math.floor(totalBudget * 0.04),
     // Heap snapshots are intentionally rare, but each one can be gigabytes.
     // They are not protected like manual bundles because the user-visible
     // action is "capture a diagnostic", not "archive an incident forever".
@@ -216,13 +231,14 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
 
 async function collectArtifacts(): Promise<Artifact[]> {
   const manualLegacyBundlePaths = await loadManualLegacyBundlePaths()
-  const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, heapSnapshots, ghostLogs] = await Promise.all([
+  const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, incidents, heapSnapshots, ghostLogs] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
     collectImmediateDirs(MANUAL_DEBUG_BUNDLE_DIR, 'debug-bundles-manual'),
     collectImmediateDirs(AUTOSAVE_DEBUG_BUNDLE_DIR, 'debug-bundles-autosave'),
     collectLegacyDebugBundleDirs(DEBUG_BUNDLE_DIR, manualLegacyBundlePaths),
     collectProxyRunDirs(PROXY_EVENTS_DIR),
     collectImmediateDirs(PERFORMANCE_RUNS_DIR, 'performance'),
+    collectIncidentRunDirs(),
     collectFiles(HEAP_SNAPSHOT_DIR, 'heap-snapshots', name => name.endsWith('.heapsnapshot')),
     collectFiles(ghostLogDir(), 'ghost-logs', name => name.endsWith('.ghost.jsonl')),
   ])
@@ -233,6 +249,7 @@ async function collectArtifacts(): Promise<Artifact[]> {
     ...legacyBundles,
     ...proxy,
     ...performance,
+    ...incidents,
     ...heapSnapshots,
     ...ghostLogs,
   ]
@@ -276,6 +293,22 @@ async function collectImmediateDirs(
   }
 }
 
+async function collectIncidentRunDirs(): Promise<Artifact[]> {
+  const runs = await collectImmediateDirs(INCIDENT_RUNS_DIR, 'incidents')
+  const sorted = [...runs].sort((a, b) => b.mtimeMs - a.mtimeMs)
+  // WHY protect a count instead of making incident runs immortal:
+  //
+  // A tiny clean-run journal is useful after restart, but dev machines can
+  // launch the app hundreds of times. Keeping the most recent runs preserves
+  // the crash window people actually investigate while still letting the
+  // global disk budget clear out stale journals once they age out of the
+  // recent set. Heavy artifacts remain in their existing capped buckets.
+  return sorted.map((artifact, index) => ({
+    ...artifact,
+    protected: index < 50,
+  }))
+}
+
 async function collectLegacyDebugBundleDirs(
   dir: string,
   manualLegacyBundlePaths: Set<string>,
@@ -317,7 +350,9 @@ export function legacyDebugBundleBucketForPath(
 }
 
 function isProtectedFromDebugPrune(artifact: Artifact): boolean {
-  return artifact.bucket === 'ghost-logs' || artifact.bucket === 'debug-bundles-manual'
+  return artifact.protected === true ||
+    artifact.bucket === 'ghost-logs' ||
+    artifact.bucket === 'debug-bundles-manual'
 }
 
 async function loadManualLegacyBundlePaths(): Promise<Set<string>> {
