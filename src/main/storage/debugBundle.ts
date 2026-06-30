@@ -1,4 +1,4 @@
-import { mkdir, rename, rm, writeFile } from 'fs/promises'
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'fs/promises'
 import { dirname, join, normalize } from 'path'
 
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
@@ -7,6 +7,8 @@ import {
   debugBundleRootForReason,
   isAutosaveDebugBundleReason,
 } from '@main/storage/debugBundleLog.js'
+import { getAppRunId } from '@main/incident/appRunIds.js'
+import { INCIDENT_RUNS_DIR } from '@main/storage/paths.js'
 // Filename-safe session-id token — shared with feedDebugLog so the two
 // session-keyed storage layouts can't diverge on their escape rule. See
 // @shared/runtime/projectDir sanitizeFilenameToken.
@@ -173,6 +175,12 @@ export async function saveDebugBundle(
   // ledger — they are user-intentional captures, not a high-frequency cache.
   await writeBundleFiles(bundlePath, params.files)
 
+  // Phase 7: correlate this manual bundle with the always-on incident journal,
+  // so a bundle is self-contained for triage without timestamp-matching against
+  // the incidents dir. Manual-only (autosave already returned above — it's a
+  // high-frequency cache that shouldn't pay this cost).
+  await enrichBundleWithIncidentJournal(bundlePath)
+
   try {
     await appendDebugBundleSaved({
       bundlePath,
@@ -210,5 +218,74 @@ async function writeBundleFiles(bundlePath: string, files: DebugBundleFile[]): P
     const target = join(bundlePath, file.name)
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, file.content, 'utf8')
+  }
+}
+
+// Phase 7: stamp the bundle manifest with the canonical appRunId, and copy a
+// bounded tail of this run's journal (events.jsonl + heartbeat.json +
+// incidents.jsonl) into the bundle. Entirely best-effort: the timestamped
+// bundle the user asked for is the durable artifact, so NOTHING here may throw
+// out of the save path.
+async function enrichBundleWithIncidentJournal(bundlePath: string): Promise<void> {
+  const appRunId = getAppRunId()
+
+  // (a) The renderer builds manifest.json without an appRunId (it doesn't own
+  // the canonical id); stamp it here so the bundle correlates by one key.
+  try {
+    const manifestPath = join(bundlePath, 'manifest.json')
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
+    manifest.appRunId = appRunId
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  } catch (err) {
+    console.warn('[debug-bundle] failed to stamp appRunId into manifest', err)
+  }
+
+  // (b) Copy the journal tail so the bundle is triage-complete on its own.
+  const runDir = join(INCIDENT_RUNS_DIR, appRunId)
+  const copies: Array<[src: string, dest: string, maxBytes: number]> = [
+    [join(runDir, 'events.jsonl'), 'incident-events.jsonl', 128 * 1024],
+    [join(runDir, 'incidents.jsonl'), 'incident-incidents.jsonl', 64 * 1024],
+  ]
+  for (const [src, dest, maxBytes] of copies) {
+    try {
+      const tail = await readJsonlTailBytes(src, maxBytes)
+      if (tail) await writeFile(join(bundlePath, dest), tail, 'utf8')
+    } catch (err) {
+      console.warn(`[debug-bundle] failed to copy ${dest}`, err)
+    }
+  }
+  // heartbeat.json is tiny and overwrite-only — copy it whole if present.
+  try {
+    const heartbeat = await readFile(join(runDir, 'heartbeat.json'), 'utf8')
+    await writeFile(join(bundlePath, 'incident-heartbeat.json'), heartbeat, 'utf8')
+  } catch {
+    // No heartbeat yet (very early crash) is fine.
+  }
+}
+
+// Read the trailing `maxBytes` of a possibly-large JSONL file, dropping the
+// first partial line so the result is valid JSONL. Returns null on error/empty.
+// Keeps bundle assembly cheap even if events.jsonl has grown over a long run.
+async function readJsonlTailBytes(path: string, maxBytes: number): Promise<string | null> {
+  let size: number
+  try {
+    size = (await stat(path)).size
+  } catch {
+    return null
+  }
+  if (size === 0) return null
+  if (size <= maxBytes) {
+    const full = await readFile(path, 'utf8')
+    return full.length > 0 ? full : null
+  }
+  const handle = await open(path, 'r')
+  try {
+    const buf = Buffer.alloc(maxBytes)
+    await handle.read(buf, 0, maxBytes, size - maxBytes)
+    const text = buf.toString('utf8')
+    const firstNewline = text.indexOf('\n')
+    return firstNewline >= 0 ? text.slice(firstNewline + 1) : text
+  } finally {
+    await handle.close()
   }
 }
