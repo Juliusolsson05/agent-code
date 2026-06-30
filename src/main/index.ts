@@ -197,6 +197,7 @@ async function startApp(): Promise<void> {
     },
   })
   installWindowIncidentHooks(appRunJournal)
+  orchestrationBridge.setJournal(appRunJournal)
   try {
     // Native crashes (V8 aborts, SIGSEGV in native addons, GPU-process death)
     // never reach JS, so the JSONL hooks above cannot see them. Crashpad writes
@@ -424,6 +425,7 @@ async function startApp(): Promise<void> {
       sendToMainWindow('ai-workspace:open-request', { workspaceId })
     },
     sessionManager: manager,
+    appRunJournal,
   })
   performanceService.mark('app.main.sessionManager.created')
 

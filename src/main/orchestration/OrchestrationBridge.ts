@@ -10,6 +10,7 @@ import type {
   OrchestrationRendererResponse,
 } from '@mcp/shared/orchestrationTypes.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 
 type PendingRequest = {
   resolve: (response: OrchestrationRendererResponse) => void
@@ -48,6 +49,13 @@ export class OrchestrationBridge {
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
   private lastPrunedAt = 0
+  // Always-on incident journal, injected post-construction in startApp — the
+  // bridge is created at module-eval, before the journal exists.
+  private journal: AppRunJournal | null = null
+
+  setJournal(journal: AppRunJournal): void {
+    this.journal = journal
+  }
 
   async createAgent(params: {
     parentSessionId: string
@@ -305,6 +313,15 @@ export class OrchestrationBridge {
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(request.requestId)
+        // The renderer never answered an orchestration request — JS thread
+        // blocked, dead, or crashing mid-handler. Durable evidence of a hang
+        // that the renderer itself can't report.
+        this.journal?.recordIncident({
+          kind: 'orchestration.request_timeout',
+          severity: 'error',
+          reason: 'renderer_no_response',
+          context: { requestId: request.requestId, waitedMs: 30_000 },
+        })
         reject(new Error('Timed out waiting for renderer orchestration response'))
       }, 30_000)
       this.pending.set(request.requestId, { resolve, reject, timer })

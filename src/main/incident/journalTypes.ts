@@ -73,6 +73,9 @@ export type AppRunIncidentKind =
   | 'renderer.error'
   | 'renderer.unhandledrejection'
   | 'session.input_write_failed'
+  | 'orchestration.request_timeout'
+  | 'orchestration.prompt_delivery_failed'
+  | 'mcp.host_start_failed'
 
 export type AppRunIncidentInput = {
   kind: AppRunIncidentKind
