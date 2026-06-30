@@ -461,6 +461,12 @@ function registerOrchestrationTools(
         })
         const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, prompt)
         if (!delivery.ok) {
+          dependencies.appRunJournal?.recordIncident({
+            kind: 'orchestration.prompt_delivery_failed',
+            severity: 'error',
+            reason: 'create_agent_bootstrap',
+            context: { sessionId: agent.sessionId, message: delivery.message },
+          })
           return toolText({
             ok: false,
             error: 'prompt_delivery_failed',
@@ -581,6 +587,12 @@ function registerOrchestrationTools(
         : args.prompt.trim()
       const delivery = await submitPrompt(manager, args.sessionId, kind, prompt)
       if (!delivery.ok) {
+        dependencies.appRunJournal?.recordIncident({
+          kind: 'orchestration.prompt_delivery_failed',
+          severity: 'error',
+          reason: 'send_prompt',
+          context: { sessionId: args.sessionId, message: delivery.message },
+        })
         return toolText({
           ok: false,
           error: 'prompt_delivery_failed',

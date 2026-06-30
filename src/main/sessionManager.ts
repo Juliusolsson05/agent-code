@@ -17,6 +17,7 @@ import type {
 import type { SessionKind } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type {
   SessionSpawnOptions,
   SessionSpawnResult,
@@ -239,6 +240,16 @@ export class SessionManager extends EventEmitter {
   private readonly spawningSessionIds = new Set<string>()
   private readonly lastActivityAt = new Map<string, number>()
   private readonly sessionSizes = new Map<string, PtySize>()
+  // Coalesce "input write to a session main doesn't own" incidents — the
+  // restored-agents-null bug can make a renderer spam writes against a stale id,
+  // so we journal the FIRST miss per session id and then stay quiet.
+  private readonly inputWriteFailedReported = new Set<string>()
+  // Every session id main has EVER owned (bounded FIFO). Used to tell the
+  // restored-agents-null bug (a write to an id we never owned) apart from the
+  // benign, documented race (a late write arriving after a session we DID own
+  // exited). Only the former is a real incident — without this, normal agent
+  // teardown with an in-flight keystroke would cry wolf with an error incident.
+  private readonly everKnownSessionIds = new Set<string>()
 
   // Optional tmux backing for terminal sessions. Constructed by the
   // app entrypoint AFTER detectAvailability() has resolved — we only
@@ -248,6 +259,9 @@ export class SessionManager extends EventEmitter {
   constructor(
     private readonly tmuxRegistry: TmuxRegistry | null = null,
     private readonly builtInMcpHost: BuiltInMcpHttpHost | null = null,
+    // Always-on incident journal. Optional so tests / non-journaled callers
+    // still construct cleanly; null-guarded at every use.
+    private readonly journal: AppRunJournal | null = null,
   ) {
     super()
   }
@@ -510,6 +524,7 @@ export class SessionManager extends EventEmitter {
       })
 
       this.sessions.set(sessionId, { kind, session })
+      this.rememberSessionId(sessionId)
       try {
         const startStartedAt = performance.now()
         await session.start()
@@ -666,6 +681,7 @@ export class SessionManager extends EventEmitter {
     })
 
     this.sessions.set(sessionId, { kind: 'terminal', session, tmuxName: tmuxSessionName })
+    this.rememberSessionId(sessionId)
     try {
       const terminalStartStartedAt = performance.now()
       await session.start()
@@ -833,6 +849,27 @@ export class SessionManager extends EventEmitter {
       // clears, the feed may show an optimistic user row, and nothing ever
       // reaches the PTY. Surface the miss to callers so they can log/retain
       // the draft instead of pretending the send succeeded.
+      //
+      // This is also the durable signal for the "restored agents are null until
+      // reload" bug (plan Phase 5): a renderer pane writing to a session id main
+      // has no backend for. Journal the FIRST miss per id (coalesced) — but ONLY
+      // when the id was NEVER owned. A miss on a once-owned id is the benign race
+      // the docstring above describes (session exited between queue and write),
+      // not the bug, so we stay silent for it to avoid crying wolf.
+      if (
+        this.journal &&
+        !this.everKnownSessionIds.has(sessionId) &&
+        !this.inputWriteFailedReported.has(sessionId)
+      ) {
+        this.inputWriteFailedReported.add(sessionId)
+        if (this.inputWriteFailedReported.size > 256) this.inputWriteFailedReported.clear()
+        this.journal.recordIncident({
+          kind: 'session.input_write_failed',
+          severity: 'error',
+          reason: 'backend_session_not_found',
+          context: { sessionId, dataLength: data.length },
+        })
+      }
       return false
     }
     entry.session.write(data)
@@ -841,6 +878,17 @@ export class SessionManager extends EventEmitter {
 
   getSessionKind(sessionId: string): SessionKind | null {
     return this.sessions.get(sessionId)?.kind ?? null
+  }
+
+  // Record that main owned this session id, for input_write_failed disambiguation.
+  private rememberSessionId(sessionId: string): void {
+    this.everKnownSessionIds.add(sessionId)
+    if (this.everKnownSessionIds.size > 8192) {
+      // Bound memory: evict the oldest id (Set preserves insertion order). Evicted
+      // ids are long-dead sessions; a late write to one is vanishingly unlikely.
+      const oldest = this.everKnownSessionIds.values().next().value
+      if (oldest !== undefined) this.everKnownSessionIds.delete(oldest)
+    }
   }
 
   /**

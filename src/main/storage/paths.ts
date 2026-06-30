@@ -52,6 +52,13 @@ export const PROXY_EVENTS_DIR = join(STATE_DIR, 'proxy')
 // written only when AGENT_CODE_PERF=1.
 export const PERFORMANCE_RUNS_DIR = join(STATE_DIR, 'performance', 'runs')
 
+// Always-on app-run incident journals. Unlike performance traces, this root is
+// not gated by AGENT_CODE_PERF: it holds the small manifest/heartbeat/event
+// spine that explains crashes and restarts in normal user runs. Large forensic
+// artifacts stay in their own roots and are referenced from journal records so
+// this directory remains cheap to retain.
+export const INCIDENT_RUNS_DIR = join(STATE_DIR, 'incidents', 'runs')
+
 // Heap snapshots are among the largest forensic artifacts the app can create.
 // Keeping the directory as a named storage root prevents the capture paths from
 // quietly drifting away from debug retention again; if a writer stores a

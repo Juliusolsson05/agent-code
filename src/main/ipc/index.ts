@@ -29,6 +29,8 @@ import { registerCaffeinateIpc } from '@main/ipc/caffeinate.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import type { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import { registerIncidentIpc } from '@main/ipc/incident.js'
 
 // IPC registration aggregator.
 //
@@ -49,6 +51,7 @@ export type IpcDeps = {
   orchestrationBridge: OrchestrationBridge
   aiWorkspaceRegistry: AiWorkspaceRegistry
   caffeinateController: CaffeinateController
+  appRunJournal: AppRunJournal
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -73,4 +76,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
   registerRenderedContentIpc()
   registerCaffeinateIpc(deps.caffeinateController)
+  registerIncidentIpc(deps.appRunJournal)
 }

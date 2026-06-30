@@ -10,15 +10,68 @@ import 'monaco-editor/min/vs/editor/editor.main.css'
 // rows and explicit cell widths, none of which work without this file.
 import '@xterm/xterm/css/xterm.css'
 import { initializePerformance, mark } from '@renderer/performance/client'
+import { AppErrorBoundary } from '@renderer/app/AppErrorBoundary'
 
 void initializePerformance().then(() => {
   mark('app.renderer.reactRenderCalled')
 })
 
+// Renderer incident breadcrumbs -> main journal. Attached BEFORE React mounts so
+// even an early mount error is reported. Rate-limited (coalesce by message over a
+// 5s window) and redacted (truncated message + short stack) here at the boundary
+// so a render-loop error storm can't flood the journal or the IPC channel.
+{
+  const recent = new Map<string, number>()
+  const WINDOW_MS = 5000
+  const send = (
+    kind: 'renderer.error' | 'renderer.unhandledrejection',
+    message: string,
+    extra: { source?: string; line?: number; column?: number; stack?: string },
+  ): void => {
+    const now = Date.now()
+    const last = recent.get(message)
+    if (last !== undefined && now - last < WINDOW_MS) return
+    recent.set(message, now)
+    // Bound the dedup map by evicting EXPIRED entries — NOT clearing everything.
+    // A >100-distinct-message storm (messages embedding a counter/timestamp) would
+    // otherwise reset the whole window and re-admit everything each cycle. Main
+    // also rate-limits server-side, so this is defense-in-depth.
+    if (recent.size > 200) {
+      for (const [k, ts] of recent) if (now - ts >= WINDOW_MS) recent.delete(k)
+    }
+    window.api?.reportIncident?.({
+      kind,
+      message: message.slice(0, 200),
+      source: extra.source,
+      line: extra.line,
+      column: extra.column,
+      stack: extra.stack?.split('\n').slice(0, 6).join('\n'),
+    })
+  }
+  window.addEventListener('error', (evt) => {
+    send('renderer.error', evt.message || String(evt.error), {
+      source: evt.filename,
+      line: evt.lineno,
+      column: evt.colno,
+      stack: evt.error?.stack,
+    })
+  })
+  window.addEventListener('unhandledrejection', (evt) => {
+    const reason = evt.reason
+    send(
+      'renderer.unhandledrejection',
+      reason instanceof Error ? reason.message : String(reason),
+      { stack: reason instanceof Error ? reason.stack : undefined },
+    )
+  })
+}
+
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <GlobalToastProvider>
-      <App />
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>
     </GlobalToastProvider>
   </React.StrictMode>
 )

@@ -8,6 +8,7 @@ import { createBuiltInMcpServer } from '@mcp/runtime/createBuiltInMcpServer.js'
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { SessionManager } from '@main/sessionManager.js'
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import {
   normalizeBuiltInMcpDomains,
   type BuiltInMcpDomain,
@@ -31,6 +32,7 @@ export type BuiltInMcpDependencies = {
   aiWorkspaceRegistry?: AiWorkspaceRegistry
   openAiWorkspace?: (workspaceId: string) => void
   sessionManager?: SessionManager
+  appRunJournal?: AppRunJournal
 }
 
 function envFlag(name: string): boolean {
@@ -44,8 +46,16 @@ export class BuiltInMcpHttpHost {
   private readonly registrations = new Map<string, SessionRegistration>()
   private readonly tokensBySession = new Map<string, string>()
   private dependencies: BuiltInMcpDependencies = {}
+  // Journal injected via setJournal() BEFORE start(), separately from
+  // setDependencies() (which carries `manager` and therefore can only run after
+  // start()). Without this split, a bind-failure incident would be dead code.
+  private journal: AppRunJournal | null = null
 
   constructor(private readonly createServerForScope: BuiltInMcpServerFactory = createBuiltInMcpServer) {}
+
+  setJournal(journal: AppRunJournal): void {
+    this.journal = journal
+  }
 
   setDependencies(dependencies: BuiltInMcpDependencies): void {
     if (this.registrations.size > 0) {
@@ -80,13 +90,28 @@ export class BuiltInMcpHttpHost {
     await new Promise<void>((resolve, reject) => {
       const onError = (err: Error) => {
         this.server?.off('listening', onListening)
+        // The built-in MCP host is how providers reach app services; if it can't
+        // bind, orchestration/tools are dead for the whole run — a fatal incident.
+        this.journal?.recordIncident({
+          kind: 'mcp.host_start_failed',
+          severity: 'fatal',
+          reason: 'server_error',
+          error: err,
+        })
         reject(err)
       }
       const onListening = () => {
         this.server?.off('error', onError)
         const address = this.server?.address()
         if (!address || typeof address === 'string') {
-          reject(new Error('Built-in MCP host did not bind to a TCP port'))
+          const err = new Error('Built-in MCP host did not bind to a TCP port')
+          this.journal?.recordIncident({
+            kind: 'mcp.host_start_failed',
+            severity: 'fatal',
+            reason: 'invalid_bind_address',
+            error: err,
+          })
+          reject(err)
           return
         }
         this.port = address.port

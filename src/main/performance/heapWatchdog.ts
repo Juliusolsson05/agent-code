@@ -32,6 +32,7 @@ import { join } from 'node:path'
 import { app } from 'electron'
 
 import { HEAP_SNAPSHOT_DIR } from '@main/storage/paths.js'
+import { getAppRunId } from '@main/incident/appRunIds.js'
 
 // Threshold rationale: use the lower of 3 GiB and 75% of the ACTUAL
 // V8 heap limit for this Electron process. The original watchdog used
@@ -47,11 +48,27 @@ const HEAP_LIMIT_TRIP_RATIO = 0.75
 // finer sampling buys nothing and just wakes the event loop more.
 const SAMPLE_INTERVAL_MS = 30_000
 
+// Forensic callback, fired once when the watchdog trips and a snapshot is
+// written. It lets the always-on incident journal record a heap.pressure
+// incident (with the snapshot path) WITHOUT coupling the watchdog to the journal
+// type — the watchdog stays a self-contained, independently-testable module.
+export type HeapPressureInfo = {
+  heapUsed: number
+  heapLimit: number
+  rss: number
+  uptimeMs: number
+  snapshotPath: string
+}
+
 let watchdogTimer: NodeJS.Timeout | null = null
 let snapshotWritten = false
+let onHeapPressure: ((info: HeapPressureInfo) => void) | null = null
 
-export function startMainHeapWatchdog(): void {
+export function startMainHeapWatchdog(opts?: {
+  onHeapPressure?: (info: HeapPressureInfo) => void
+}): void {
   if (watchdogTimer) return
+  onHeapPressure = opts?.onHeapPressure ?? null
   watchdogTimer = setInterval(() => {
     void sampleAndMaybeSnapshot()
   }, SAMPLE_INTERVAL_MS).unref()
@@ -86,10 +103,11 @@ async function sampleAndMaybeSnapshot(): Promise<void> {
     // eslint-disable-next-line no-console
     console.warn('[heap-watchdog] mkdir failed', err)
   }
-  const file = join(
-    dir,
-    `main-${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}.heapsnapshot`,
-  )
+  // Stamp the snapshot with the canonical appRunId so it correlates with the
+  // heap.pressure incident and the rest of this run's diagnostics by one key.
+  // (Single-shot per run, so one snapshot per id; retention only keys off the
+  // .heapsnapshot suffix, so the name shape is free to change.)
+  const file = join(dir, `main-${getAppRunId()}.heapsnapshot`)
   // eslint-disable-next-line no-console
   console.warn(
     `[heap-watchdog] heapUsed=${heapUsed} limit=${limit} tripAt=${Math.round(tripAt)} → writing snapshot to ${file}`,
@@ -98,6 +116,22 @@ async function sampleAndMaybeSnapshot(): Promise<void> {
     writeHeapSnapshot(file)
     // eslint-disable-next-line no-console
     console.warn(`[heap-watchdog] snapshot written: ${file}`)
+    // Turn the silent snapshot into a durable incident: tell the journal (if
+    // wired) that we crossed the heap-pressure threshold and where the snapshot
+    // landed. Defensive — recording an incident must never destabilize the
+    // capture path, which by definition runs near-OOM.
+    try {
+      const memory = process.memoryUsage()
+      onHeapPressure?.({
+        heapUsed,
+        heapLimit: limit,
+        rss: memory.rss,
+        uptimeMs: Math.round(process.uptime() * 1000),
+        snapshotPath: file,
+      })
+    } catch {
+      // best-effort
+    }
     // Auto-summarize the snapshot we just wrote (#288). Best-effort, fully
     // defensive: a failure here must NEVER propagate into or block the
     // watchdog/capture path, which runs under memory pressure.
