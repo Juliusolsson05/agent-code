@@ -408,7 +408,7 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('mcp_host.error', err)
     throw err
   }
-  manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost)
+  manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost, appRunJournal)
   builtInMcpHost.setDependencies({
     orchestrationBridge,
     aiWorkspaceRegistry,

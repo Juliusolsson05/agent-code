@@ -72,6 +72,7 @@ export type AppRunIncidentKind =
   | 'heap.pressure'
   | 'renderer.error'
   | 'renderer.unhandledrejection'
+  | 'session.input_write_failed'
 
 export type AppRunIncidentInput = {
   kind: AppRunIncidentKind
