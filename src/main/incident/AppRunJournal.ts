@@ -24,6 +24,17 @@ import { sanitizePerformanceData } from '@shared/performance/serialization.js'
 const HEARTBEAT_INTERVAL_MS = 5_000
 const FLUSH_INTERVAL_MS = 1_000
 const MAX_PENDING_EVENTS = 2_000
+// Hard per-run ceiling on total bytes appended to events.jsonl + incidents.jsonl.
+// WHY: the historical "logging ate 500 GB" incident came from append-only logs
+// with no per-file ceiling. heartbeat.json here is overwrite-only (constant
+// size), but events/incidents are append-only — so a pathological record() loop
+// in one long-lived run could still grow them without bound, AND that run is
+// protected from retention (it's always the newest 50). This ceiling makes EACH
+// run's journal provably bounded; with the incidents retention bucket on top,
+// the whole tree cannot run away. 50 MiB is ~10000x a normal run (~5 KB), so it
+// only ever trips on a genuine fault — at which point dropping further records
+// is the right call (the journal must never be the thing that fills the disk).
+const MAX_RUN_JOURNAL_BYTES = 50 * 1024 * 1024
 
 type AcquiredStateProcessLock = Extract<StateProcessLock, { acquired: true }>
 
@@ -48,6 +59,11 @@ export class AppRunJournal {
   private nextEventSeq = 1
   private nextIncidentSeq = 1
   private heartbeatSeq = 1
+  // Running total of bytes appended to events.jsonl + incidents.jsonl this run,
+  // and a one-shot flag so we log the cap being hit exactly once. heartbeat.json
+  // is excluded (overwrite-only — it can't grow).
+  private journalBytesWritten = 0
+  private journalCapped = false
   private flushTimer: ReturnType<typeof setInterval> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private writeQueue: Promise<void> = Promise.resolve()
@@ -172,11 +188,14 @@ export class AppRunJournal {
         | Record<string, unknown>
         | undefined,
     }
-    try {
-      mkdirSync(this.runDir, { recursive: true })
-      appendFileSync(this.incidentsPath, `${JSON.stringify(incident)}\n`, 'utf8')
-    } catch (err) {
-      console.warn('[incident-journal] incident append failed:', err)
+    const incidentLine = `${JSON.stringify(incident)}\n`
+    if (this.reserveJournalBytes(incidentLine.length)) {
+      try {
+        mkdirSync(this.runDir, { recursive: true })
+        appendFileSync(this.incidentsPath, incidentLine, 'utf8')
+      } catch (err) {
+        console.warn('[incident-journal] incident append failed:', err)
+      }
     }
     this.record({
       area: 'incident',
@@ -190,11 +209,30 @@ export class AppRunJournal {
     })
   }
 
+  // Returns true if `len` more bytes may be appended to the run's journal files,
+  // accounting for them; false once the per-run ceiling is reached (and logs the
+  // cap once). This is the hard backstop against a runaway run filling the disk.
+  private reserveJournalBytes(len: number): boolean {
+    if (this.journalBytesWritten >= MAX_RUN_JOURNAL_BYTES) {
+      if (!this.journalCapped) {
+        this.journalCapped = true
+        console.warn(
+          `[incident-journal] per-run journal cap (${MAX_RUN_JOURNAL_BYTES} bytes) reached; ` +
+          'dropping further events/incidents for this run to bound disk usage',
+        )
+      }
+      return false
+    }
+    this.journalBytesWritten += len
+    return true
+  }
+
   async flush(): Promise<void> {
     if (!this.started) return
     const batch = this.takePendingBatch()
     if (batch.length === 0) return
     const lines = batch.map(event => JSON.stringify(event)).join('\n') + '\n'
+    if (!this.reserveJournalBytes(lines.length)) return
     this.writeQueue = this.writeQueue
       .catch(() => {})
       .then(async () => {
@@ -234,6 +272,7 @@ export class AppRunJournal {
     const batch = this.takePendingBatch()
     if (batch.length === 0) return
     const lines = batch.map(event => JSON.stringify(event)).join('\n') + '\n'
+    if (!this.reserveJournalBytes(lines.length)) return
     try {
       mkdirSync(this.runDir, { recursive: true })
       appendFileSync(this.eventsPath, lines, 'utf8')
