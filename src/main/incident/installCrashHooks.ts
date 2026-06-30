@@ -77,8 +77,18 @@ export function installProcessCrashHooks({ journal, releaseLockSync }: CrashHook
   })
 
   // process warnings (deprecations, MaxListenersExceeded, etc.) are low-severity
-  // but occasionally the first sign of a leak. Cheap to record; they're rare.
+  // but occasionally the first sign of a leak. Coalesce exactly like rejections:
+  // recordIncident() is SYNCHRONOUS (flushSync + appendFileSync), so an uncapped
+  // warning storm (a repeating MaxListenersExceededWarning, say) would drive one
+  // blocking disk write per warning on the main thread — the journal adding the
+  // very pressure it exists to observe. Journal the first occurrence of each
+  // distinct name+message, capped.
+  const journaledWarnings = new Set<string>()
   process.on('warning', (warning) => {
+    const key = `${warning.name}: ${warning.message}`
+    if (journaledWarnings.has(key)) return
+    if (journaledWarnings.size >= MAX_DISTINCT_REJECTIONS) return
+    journaledWarnings.add(key)
     journal.recordIncident({
       kind: 'main.warning',
       severity: 'warn',

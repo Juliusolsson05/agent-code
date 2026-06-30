@@ -32,7 +32,13 @@ void initializePerformance().then(() => {
     const last = recent.get(message)
     if (last !== undefined && now - last < WINDOW_MS) return
     recent.set(message, now)
-    if (recent.size > 100) recent.clear() // bound the dedup map
+    // Bound the dedup map by evicting EXPIRED entries — NOT clearing everything.
+    // A >100-distinct-message storm (messages embedding a counter/timestamp) would
+    // otherwise reset the whole window and re-admit everything each cycle. Main
+    // also rate-limits server-side, so this is defense-in-depth.
+    if (recent.size > 200) {
+      for (const [k, ts] of recent) if (now - ts >= WINDOW_MS) recent.delete(k)
+    }
     window.api?.reportIncident?.({
       kind,
       message: message.slice(0, 200),

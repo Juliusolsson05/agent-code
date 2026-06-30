@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { INCIDENT_RUNS_DIR } from '@main/storage/paths.js'
@@ -88,10 +88,37 @@ export function classifyPreviousRun(currentAppRunId: string): PreviousRunReport 
   }
 }
 
+const MAX_TAIL_BYTES = 256 * 1024
+
 function readJsonlTail(path: string, maxLines: number): Array<Record<string, unknown>> {
+  // Read only the trailing bytes, never the whole file. incidents.jsonl is capped
+  // at 50 MiB per run, and this runs SYNCHRONOUSLY on the startup hot path — a
+  // 50 MiB readFileSync + split here would block the next launch. The tail is all
+  // the classifier needs (it slices the last maxLines anyway).
+  let size: number
+  try {
+    size = statSync(path).size
+  } catch {
+    return []
+  }
+  if (size === 0) return []
   let text: string
   try {
-    text = readFileSync(path, 'utf8')
+    if (size <= MAX_TAIL_BYTES) {
+      text = readFileSync(path, 'utf8')
+    } else {
+      const fd = openSync(path, 'r')
+      try {
+        const buf = Buffer.alloc(MAX_TAIL_BYTES)
+        readSync(fd, buf, 0, MAX_TAIL_BYTES, size - MAX_TAIL_BYTES)
+        text = buf.toString('utf8')
+        // Drop the partial leading line so the slice starts on a JSONL boundary.
+        const firstNewline = text.indexOf('\n')
+        if (firstNewline >= 0) text = text.slice(firstNewline + 1)
+      } finally {
+        closeSync(fd)
+      }
+    }
   } catch {
     return []
   }

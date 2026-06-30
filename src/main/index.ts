@@ -143,8 +143,22 @@ if (!hasSingleInstanceLock) {
     // marker — this run WAS unclean, and a future prior-run classifier should
     // see it that way.
     console.error('[app] fatal startup error — releasing lock and quitting:', err)
-    appRunJournal?.recordError('startup.fatal', err)
+    // Record as an INCIDENT (synchronous flush) so the failed boot lands in
+    // incidents.jsonl and the NEXT launch's classifier can attribute it — a plain
+    // event would only hit the async events.jsonl that never flushes before quit.
+    appRunJournal?.recordIncident({
+      kind: 'app.startup_failed',
+      severity: 'fatal',
+      process: 'main',
+      error: err,
+    })
     appRunJournal?.stop()
+    // Null the handle BEFORE app.quit(): quit fires the will-quit handler, whose
+    // markCleanShutdown() would otherwise write the clean-shutdown marker and make
+    // this CRASHED boot look CLEAN on the next launch. (The crash-hook path uses
+    // process.exit, which bypasses will-quit; this path uses app.quit, which does
+    // NOT — hence the explicit null here, mirroring stateProcessLock below.)
+    appRunJournal = null
     stateProcessLock?.releaseSync()
     stateProcessLock = null
     app.quit()
@@ -401,6 +415,11 @@ async function startApp(): Promise<void> {
     }
   }
 
+  // Give the host its journal BEFORE start() so a bind failure can record its
+  // mcp.host_start_failed incident — setDependencies() (which also carries the
+  // journal) only runs AFTER start(), because it needs `manager`, so without this
+  // the incident would be dead code.
+  builtInMcpHost.setJournal(appRunJournal)
   appRunJournal.record({ area: 'mcp.host', name: 'mcp_host.start' })
   try {
     await builtInMcpHost.start()

@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rename, writeFile } from 'node:fs/promises'
 import { arch, platform } from 'node:os'
 import { join } from 'node:path'
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks'
@@ -69,6 +69,7 @@ export class AppRunJournal {
   private writeQueue: Promise<void> = Promise.resolve()
   private started = false
   private cleanShutdownMarked = false
+  private heartbeatInFlight = false
 
   constructor(options: AppRunJournalOptions) {
     const startedAt = new Date()
@@ -106,8 +107,20 @@ export class AppRunJournal {
   async start(): Promise<void> {
     if (this.started) return
     this.started = true
-    await mkdir(this.runDir, { recursive: true })
-    await writeFile(join(this.runDir, 'manifest.json'), `${JSON.stringify(this.manifest, null, 2)}\n`, 'utf8')
+    try {
+      await mkdir(this.runDir, { recursive: true })
+      await writeFile(join(this.runDir, 'manifest.json'), `${JSON.stringify(this.manifest, null, 2)}\n`, 'utf8')
+    } catch (err) {
+      // The journal must NEVER gate app launch. A full / read-only / sandboxed
+      // ~/.config is a disk problem, not a reason the product can't start — and
+      // it would be doubly ironic for the disk-safety feature to brick boot.
+      // Degrade to a no-op: started=false makes record()/recordIncident() and the
+      // timers below inert, so the app boots cleanly without a journal. This is
+      // the same "forensics, not product state" invariant the write paths hold.
+      this.started = false
+      console.warn('[incident-journal] failed to start; running without a journal:', err)
+      return
+    }
     this.eventLoopDelay.enable()
     this.flushTimer = setInterval(() => {
       void this.flush()
@@ -188,8 +201,8 @@ export class AppRunJournal {
         | Record<string, unknown>
         | undefined,
     }
-    const incidentLine = `${JSON.stringify(incident)}\n`
-    if (this.reserveJournalBytes(incidentLine.length)) {
+    const incidentLine = `${safeStringify(incident)}\n`
+    if (this.reserveJournalBytes(Buffer.byteLength(incidentLine, 'utf8'))) {
       try {
         mkdirSync(this.runDir, { recursive: true })
         appendFileSync(this.incidentsPath, incidentLine, 'utf8')
@@ -213,7 +226,9 @@ export class AppRunJournal {
   // accounting for them; false once the per-run ceiling is reached (and logs the
   // cap once). This is the hard backstop against a runaway run filling the disk.
   private reserveJournalBytes(len: number): boolean {
-    if (this.journalBytesWritten >= MAX_RUN_JOURNAL_BYTES) {
+    // Project the total BEFORE admitting, so the file never overshoots the cap by
+    // a whole batch (a single event's nested data can itself be many KB).
+    if (this.journalBytesWritten + len > MAX_RUN_JOURNAL_BYTES) {
       if (!this.journalCapped) {
         this.journalCapped = true
         console.warn(
@@ -231,8 +246,9 @@ export class AppRunJournal {
     if (!this.started) return
     const batch = this.takePendingBatch()
     if (batch.length === 0) return
-    const lines = batch.map(event => JSON.stringify(event)).join('\n') + '\n'
-    if (!this.reserveJournalBytes(lines.length)) return
+    const lines = batch.map(safeStringify).join('\n') + '\n'
+    const bytes = Buffer.byteLength(lines, 'utf8')
+    if (!this.reserveJournalBytes(bytes)) return
     this.writeQueue = this.writeQueue
       .catch(() => {})
       .then(async () => {
@@ -245,8 +261,11 @@ export class AppRunJournal {
         // are recording why the app is already unhealthy. But silently dropping
         // this batch would discard the NEWEST events during exactly the
         // disk-trouble the journal exists to capture, so re-queue them at the
-        // front and let the next flush retry. Re-queueing is bounded: record()'s
-        // drop-oldest rule (and the trim below) keep `pending` at MAX_PENDING_EVENTS.
+        // front and let the next flush retry. Un-reserve the bytes that never
+        // reached disk so the counter tracks real on-disk size (the re-queued
+        // batch is re-counted on the next flush). Re-queueing is bounded:
+        // record()'s drop-oldest rule (and the trim below) keep `pending` at MAX.
+        this.journalBytesWritten = Math.max(0, this.journalBytesWritten - bytes)
         console.warn('[incident-journal] event append failed; re-queueing batch:', err)
         this.pending.unshift(...batch)
         while (this.pending.length > MAX_PENDING_EVENTS) {
@@ -271,8 +290,8 @@ export class AppRunJournal {
     if (!this.started) return
     const batch = this.takePendingBatch()
     if (batch.length === 0) return
-    const lines = batch.map(event => JSON.stringify(event)).join('\n') + '\n'
-    if (!this.reserveJournalBytes(lines.length)) return
+    const lines = batch.map(safeStringify).join('\n') + '\n'
+    if (!this.reserveJournalBytes(Buffer.byteLength(lines, 'utf8'))) return
     try {
       mkdirSync(this.runDir, { recursive: true })
       appendFileSync(this.eventsPath, lines, 'utf8')
@@ -363,13 +382,25 @@ export class AppRunJournal {
   }
 
   private async writeHeartbeat(): Promise<void> {
-    if (!this.started) return
+    // Single write in flight: on a slow disk a >5s write would otherwise overlap
+    // the next timer tick and interleave into a torn heartbeat.json. Skip rather
+    // than queue — heartbeats are disposable, only the latest matters.
+    if (!this.started || this.heartbeatInFlight) return
+    this.heartbeatInFlight = true
     const heartbeat = this.createHeartbeat()
+    // Atomic temp+rename: the crash-moment heartbeat (last memory/uptime before
+    // death) is the highest-value sample, and a torn/truncated file would defeat
+    // both the debug-bundle copy and any future reader. rename() is atomic on the
+    // same filesystem, so a reader always sees a complete prior version.
+    const tmpPath = `${this.heartbeatPath}.tmp`
     try {
       await mkdir(this.runDir, { recursive: true })
-      await writeFile(this.heartbeatPath, `${JSON.stringify(heartbeat, null, 2)}\n`, 'utf8')
+      await writeFile(tmpPath, `${JSON.stringify(heartbeat, null, 2)}\n`, 'utf8')
+      await rename(tmpPath, this.heartbeatPath)
     } catch (err) {
       console.warn('[incident-journal] heartbeat write failed:', err)
+    } finally {
+      this.heartbeatInFlight = false
     }
   }
 
@@ -414,6 +445,20 @@ export class AppRunJournal {
 function areaFromName(name: string): string {
   const parts = name.split('.')
   return parts.length >= 2 ? `${parts[0]}.${parts[1]}` : 'app'
+}
+
+// Stringify that can never throw. A circular reference or otherwise
+// non-serializable `data`/`context` field must NEVER throw out of the journal:
+// these run on the quit / lock-release path, so an exception there would leak the
+// state lock (the exact failure the journal exists to prevent). NOTE: callers
+// must still pass flat, pre-redacted data — sanitizePerformanceData only
+// redacts/truncates TOP-LEVEL keys, it does not recurse into nested objects.
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return JSON.stringify({ schemaVersion: 1, serializationError: true })
+  }
 }
 
 function normalizeError(

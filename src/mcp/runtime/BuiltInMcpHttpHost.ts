@@ -46,8 +46,16 @@ export class BuiltInMcpHttpHost {
   private readonly registrations = new Map<string, SessionRegistration>()
   private readonly tokensBySession = new Map<string, string>()
   private dependencies: BuiltInMcpDependencies = {}
+  // Journal injected via setJournal() BEFORE start(), separately from
+  // setDependencies() (which carries `manager` and therefore can only run after
+  // start()). Without this split, a bind-failure incident would be dead code.
+  private journal: AppRunJournal | null = null
 
   constructor(private readonly createServerForScope: BuiltInMcpServerFactory = createBuiltInMcpServer) {}
+
+  setJournal(journal: AppRunJournal): void {
+    this.journal = journal
+  }
 
   setDependencies(dependencies: BuiltInMcpDependencies): void {
     if (this.registrations.size > 0) {
@@ -84,7 +92,7 @@ export class BuiltInMcpHttpHost {
         this.server?.off('listening', onListening)
         // The built-in MCP host is how providers reach app services; if it can't
         // bind, orchestration/tools are dead for the whole run — a fatal incident.
-        this.dependencies.appRunJournal?.recordIncident({
+        this.journal?.recordIncident({
           kind: 'mcp.host_start_failed',
           severity: 'fatal',
           reason: 'server_error',
@@ -97,7 +105,7 @@ export class BuiltInMcpHttpHost {
         const address = this.server?.address()
         if (!address || typeof address === 'string') {
           const err = new Error('Built-in MCP host did not bind to a TCP port')
-          this.dependencies.appRunJournal?.recordIncident({
+          this.journal?.recordIncident({
             kind: 'mcp.host_start_failed',
             severity: 'fatal',
             reason: 'invalid_bind_address',

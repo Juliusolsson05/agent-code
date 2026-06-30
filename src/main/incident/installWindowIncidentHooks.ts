@@ -15,12 +15,17 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
   // Renderer/GPU/utility process death. This is THE renderer-crash signal —
   // main observes it even though the renderer is already gone.
   app.on('render-process-gone', (_event, _webContents, details) => {
-    // 'clean-exit' is a normal teardown (e.g. window closed); everything else
-    // (oom, crashed, killed, abnormal-exit, launch-failed) is a real fault.
-    const clean = details.reason === 'clean-exit'
+    // Skip 'clean-exit' entirely — it's routine teardown (window closed / app
+    // quitting) and recording it would fill incidents.jsonl with steady noise
+    // (plan: ignore clean-exit unless it happens in an unexpected phase).
+    if (details.reason === 'clean-exit') return
+    // 'killed' frequently occurs during macOS quit teardown, so it's a warning,
+    // not a fatal — the genuinely fatal reasons are oom / crashed / abnormal-exit
+    // / launch-failed / integrity-failure.
+    const fatal = details.reason !== 'killed'
     journal.recordIncident({
       kind: 'window.render_process_gone',
-      severity: clean ? 'warn' : 'fatal',
+      severity: fatal ? 'fatal' : 'warn',
       process: 'renderer',
       reason: details.reason,
       exitCode: details.exitCode,

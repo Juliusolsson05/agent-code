@@ -311,6 +311,7 @@ export class OrchestrationBridge {
     request: OrchestrationRendererRequest,
   ): Promise<OrchestrationRendererResponse> {
     return await new Promise<OrchestrationRendererResponse>((resolve, reject) => {
+      const TIMEOUT_MS = 30_000
       const timer = setTimeout(() => {
         this.pending.delete(request.requestId)
         // The renderer never answered an orchestration request — JS thread
@@ -320,10 +321,10 @@ export class OrchestrationBridge {
           kind: 'orchestration.request_timeout',
           severity: 'error',
           reason: 'renderer_no_response',
-          context: { requestId: request.requestId, waitedMs: 30_000 },
+          context: { requestId: request.requestId, waitedMs: TIMEOUT_MS },
         })
         reject(new Error('Timed out waiting for renderer orchestration response'))
-      }, 30_000)
+      }, TIMEOUT_MS)
       this.pending.set(request.requestId, { resolve, reject, timer })
       // WHY main serializes renderer-backed orchestration requests:
       // every request crosses into the renderer's workspace model, and some of
