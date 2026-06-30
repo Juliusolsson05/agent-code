@@ -20,6 +20,7 @@ import {
   type PerformanceLogFile,
 } from '@main/storage/performanceLog.js'
 import { LocalJsonlSpanExporter } from '@main/performance/LocalJsonlSpanExporter.js'
+import { getAppRunId } from '@main/incident/appRunIds.js'
 import { APP_SLUG } from '@shared/appIdentity.js'
 // Privacy-sensitive sanitizer + error/area helpers are shared with the renderer
 // client so the redaction rule is single-sourced. See
@@ -72,7 +73,12 @@ export class PerformanceService {
   private readonly enabled = envFlag('AGENT_CODE_PERF')
   private readonly verbose = envFlag('AGENT_CODE_PERF_VERBOSE')
   private readonly slowSpanMs = envNumber('AGENT_CODE_PERF_SLOW_MS', DEFAULT_SLOW_SPAN_MS)
-  private readonly runId = this.enabled ? `${Date.now()}-${pid}` : null
+  // Share the canonical app run id (getAppRunId) instead of minting a second,
+  // unrelated one. When perf is enabled this is the SAME id AppRunJournal
+  // records, so perf runs, incidents, and (later) heap snapshots / debug bundles
+  // all correlate by one key. Still null when disabled, so every gate that keys
+  // off `runId === null` behaves exactly as before this change.
+  private readonly runId = this.enabled ? getAppRunId() : null
   private runDir: string | null = null
   private tracerProvider: NodeTracerProvider | null = null
   private tracer = trace.getTracer(`${APP_SLUG}-main`)
@@ -345,6 +351,15 @@ export class PerformanceService {
     this.flushTimer.unref?.()
   }
 
+  // NOTE on the deliberate overlap with AppRunJournal's heartbeat: both this
+  // probe loop and the journal's heartbeat sample the event loop + memory every
+  // 5s. That overlap exists ONLY when AGENT_CODE_PERF is enabled — in normal
+  // always-on runs the perf service never starts, so only the journal samples.
+  // The two feed different sinks (OTel metrics here vs. the always-on
+  // heartbeat.json there), so we keep both rather than coupling the heavy OTel
+  // pipeline to the always-on spine for the sake of one extra timer in dev/perf
+  // sessions. Run identity is already unified (see runId); the sampler dedup is
+  // intentionally NOT done here.
   private startProbes(): void {
     this.eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
     this.eventLoopDelay.enable()

@@ -10,7 +10,7 @@ import { BrowserWindow } from 'electron'
 import { INCIDENT_RUNS_DIR, STATE_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
-import { createAppRunId, createIncidentId } from '@main/incident/appRunIds.js'
+import { createIncidentId, getAppRunId } from '@main/incident/appRunIds.js'
 import type {
   AppRunHeartbeat,
   AppRunIncident,
@@ -56,7 +56,10 @@ export class AppRunJournal {
 
   constructor(options: AppRunJournalOptions) {
     const startedAt = new Date()
-    this.appRunId = createAppRunId(startedAt, pid)
+    // Canonical, shared run id (see getAppRunId) — NOT a journal-private id.
+    // PerformanceService stamps the same value, so incidents and perf runs
+    // correlate by one key.
+    this.appRunId = getAppRunId()
     this.runDir = join(INCIDENT_RUNS_DIR, this.appRunId)
     this.eventsPath = join(this.runDir, 'events.jsonl')
     this.incidentsPath = join(this.runDir, 'incidents.jsonl')
