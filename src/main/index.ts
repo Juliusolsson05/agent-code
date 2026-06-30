@@ -251,7 +251,19 @@ async function startApp(): Promise<void> {
   // fresh writers start appending. Retention is deliberately fire-and-forget:
   // losing a prune race is acceptable; blocking app boot on a large cache
   // traversal would make the diagnostic system harm the product again.
-  startMainHeapWatchdog()
+  startMainHeapWatchdog({
+    onHeapPressure: (info) => {
+      // Near-OOM is exactly the kind of incident users need to diagnose later.
+      // The watchdog already writes the heap snapshot; this records the durable
+      // incident that points at it.
+      appRunJournal?.recordIncident({
+        kind: 'heap.pressure',
+        severity: 'error',
+        process: 'main',
+        context: info,
+      })
+    },
+  })
   // Dictation debug logs grow per-press. The pruner trims files older
   // than 14 days at startup; fire-and-forget — a slow or failing
   // prune must NOT delay window creation. See dictationJournal.ts.

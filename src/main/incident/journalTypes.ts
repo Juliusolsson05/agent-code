@@ -69,6 +69,7 @@ export type AppRunIncidentKind =
   | 'window.preload_error'
   | 'window.did_fail_load'
   | 'electron.child_process_gone'
+  | 'heap.pressure'
 
 export type AppRunIncidentInput = {
   kind: AppRunIncidentKind
