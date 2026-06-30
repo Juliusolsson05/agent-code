@@ -20,6 +20,7 @@ import { aiWorkspaceApi } from '@preload/api/aiWorkspace.js'
 import { renderedContentApi } from '@preload/api/renderedContent.js'
 import { caffeinateApi } from '@preload/api/caffeinate.js'
 import { menuApi } from '@preload/api/menu.js'
+import { incidentApi } from '@preload/api/incident.js'
 
 // Composed preload API surface.
 //
@@ -59,6 +60,7 @@ export const api = {
   ...renderedContentApi,
   ...caffeinateApi,
   ...menuApi,
+  ...incidentApi,
 }
 
 export type Api = typeof api

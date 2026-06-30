@@ -438,6 +438,7 @@ async function startApp(): Promise<void> {
     orchestrationBridge,
     aiWorkspaceRegistry,
     caffeinateController,
+    appRunJournal,
   })
   performanceService.mark('app.main.ipc.registered')
   appRunJournal.record({ area: 'window.main', name: 'window.create.start' })
