@@ -228,7 +228,11 @@ async function startApp(): Promise<void> {
   // an app.prior_unclean_shutdown incident here — the crash that had no living
   // process to report it gets attributed on the next launch instead.
   try {
-    const priorRun = classifyPreviousRun(appRunJournal.appRunId)
+    const priorRun = classifyPreviousRun(appRunJournal.appRunId, {
+      // So a native crash (V8 OOM abort / SIGSEGV) that left only a Crashpad
+      // minidump — no JS incident — is classified as a crash, not a force-quit.
+      crashDumpsDir: app.getPath('crashDumps'),
+    })
     if (priorRun && priorRun.classification !== 'clean') {
       const crashLike =
         priorRun.classification === 'main_crash_suspected' ||

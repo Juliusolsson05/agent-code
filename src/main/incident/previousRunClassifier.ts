@@ -31,9 +31,19 @@ export type PreviousRunReport = {
   evidence: Record<string, unknown>
 }
 
+export type ClassifyPreviousRunOptions = {
+  // Crashpad directory (Electron app.getPath('crashDumps')). Its completed/ and
+  // pending/ subdirs hold .dmp minidumps for NATIVE crashes (V8 OOM aborts,
+  // SIGSEGV in a native addon) that never reach JS and so leave no incident.
+  crashDumpsDir?: string
+}
+
 const MAX_INCIDENT_LINES = 200
 
-export function classifyPreviousRun(currentAppRunId: string): PreviousRunReport | null {
+export function classifyPreviousRun(
+  currentAppRunId: string,
+  options: ClassifyPreviousRunOptions = {},
+): PreviousRunReport | null {
   let dirNames: string[]
   try {
     dirNames = readdirSync(INCIDENT_RUNS_DIR, { withFileTypes: true })
@@ -63,6 +73,7 @@ export function classifyPreviousRun(currentAppRunId: string): PreviousRunReport 
   const kinds = new Set(incidents.map(incident => incident?.kind).filter(Boolean))
 
   let classification: PreviousRunClassification
+  let minidumpPath: string | undefined
   if (kinds.has('main.uncaught_exception')) {
     classification = 'main_crash_suspected'
   } else if (
@@ -70,13 +81,20 @@ export function classifyPreviousRun(currentAppRunId: string): PreviousRunReport 
   ) {
     classification = 'renderer_crash_suspected'
   } else {
-    // No JS-level crash incident AND no clean marker. Either a NATIVE crash
-    // (look for a Crashpad minidump separately), a force-quit/SIGKILL, or power
-    // loss. A heartbeat proves the run was alive and writing; absent one we
-    // genuinely can't tell. We can't distinguish force-quit from power-loss from
-    // disk evidence alone, so collapse them into one honest bucket.
-    const hadHeartbeat = existsSync(join(priorRunDir, 'heartbeat.json'))
-    classification = hadHeartbeat ? 'force_quit_or_power_loss' : 'unknown'
+    // No JS-level crash incident and no clean marker. A NATIVE crash — a V8 OOM
+    // abort or a SIGSEGV in a native addon — never reaches JS, so it leaves no
+    // incident; but crashReporter/Crashpad writes a minidump. If one exists dated
+    // within this run's lifetime, THAT is the cause: a native main crash, not a
+    // force-quit. (This is the real case that motivated the change — a heap-OOM
+    // abort was mislabeled `force_quit_or_power_loss` while its .dmp sat unused on
+    // disk.) Only fall back to force-quit / power-loss when there is no minidump.
+    minidumpPath = findRecentMinidump(options.crashDumpsDir, readPriorStartedAt(priorRunDir))
+    if (minidumpPath) {
+      classification = 'main_crash_suspected'
+    } else {
+      const hadHeartbeat = existsSync(join(priorRunDir, 'heartbeat.json'))
+      classification = hadHeartbeat ? 'force_quit_or_power_loss' : 'unknown'
+    }
   }
 
   return {
@@ -84,8 +102,58 @@ export function classifyPreviousRun(currentAppRunId: string): PreviousRunReport 
     priorRunDir,
     classification,
     hadCleanMarker: false,
-    evidence: { incidentKinds: [...kinds] },
+    evidence: {
+      incidentKinds: [...kinds],
+      // Point triage straight at the dump so a native crash is symbolicatable.
+      ...(minidumpPath ? { native: true, minidumpPath } : {}),
+    },
   }
+}
+
+function readPriorStartedAt(priorRunDir: string): number {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(priorRunDir, 'manifest.json'), 'utf8'),
+    ) as { startedAt?: number }
+    if (typeof manifest.startedAt === 'number') return manifest.startedAt
+  } catch {
+    // manifest missing/corrupt — fall back to the run dir's own mtime.
+  }
+  try {
+    return statSync(priorRunDir).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+// Find the newest Crashpad .dmp written within (or just after) the prior run's
+// lifetime. Scans completed/ and pending/ (a fresh crash lands in pending until
+// Crashpad finishes it). Returns undefined if none — read-only, never throws.
+function findRecentMinidump(crashDumpsDir: string | undefined, sinceMs: number): string | undefined {
+  if (!crashDumpsDir) return undefined
+  let best: { path: string; mtimeMs: number } | undefined
+  for (const sub of ['completed', 'pending']) {
+    let names: string[]
+    try {
+      names = readdirSync(join(crashDumpsDir, sub)).filter(name => name.endsWith('.dmp'))
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      const path = join(crashDumpsDir, sub, name)
+      try {
+        const mtimeMs = statSync(path).mtimeMs
+        // 5s slop absorbs clock/mtime skew between the run's manifest timestamp
+        // and when Crashpad flushed the dump.
+        if (mtimeMs >= sinceMs - 5_000 && (!best || mtimeMs > best.mtimeMs)) {
+          best = { path, mtimeMs }
+        }
+      } catch {
+        // raced with Crashpad moving the file; skip.
+      }
+    }
+  }
+  return best?.path
 }
 
 const MAX_TAIL_BYTES = 256 * 1024

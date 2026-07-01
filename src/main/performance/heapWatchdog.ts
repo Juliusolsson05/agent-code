@@ -42,11 +42,20 @@ import { getAppRunId } from '@main/incident/appRunIds.js'
 // varies with Electron/Node flags and process mode; measuring it at
 // runtime is the only threshold that works across dev/prod launches.
 const HEAP_USED_TRIP_BYTES = 3 * 1024 * 1024 * 1024
-const HEAP_LIMIT_TRIP_RATIO = 0.75
+// Lowered from 0.75 after a real OOM aborted at ~0.67 of the limit: a large
+// allocation can fail well below the heap limit, so trip a bit earlier to give
+// the snapshot a chance. (Large single-allocation aborts are fundamentally
+// caught by the Crashpad minidump + prior-run classifier, not by polling — this
+// only widens the window for the gradual / fast-climb cases.)
+const HEAP_LIMIT_TRIP_RATIO = 0.70
 
-// Sample every 30 s. Heap pressure builds over hours, not seconds, so
-// finer sampling buys nothing and just wakes the event loop more.
+// Adaptive sampling: 30 s at rest (heap pressure usually builds over hours), but
+// drop to 2 s once we cross HALF the limit so a FAST runaway has a chance to be
+// sampled before the abort. The real crash that motivated this went ~1.1 GB →
+// ~2.7 GB in under 5 s — a 30 s poll never saw it.
 const SAMPLE_INTERVAL_MS = 30_000
+const FAST_SAMPLE_INTERVAL_MS = 2_000
+const FAST_SAMPLE_PRESSURE_RATIO = 0.5
 
 // Forensic callback, fired once when the watchdog trips and a snapshot is
 // written. It lets the always-on incident journal record a heap.pressure
@@ -61,36 +70,52 @@ export type HeapPressureInfo = {
 }
 
 let watchdogTimer: NodeJS.Timeout | null = null
+let watchdogStopped = false
 let snapshotWritten = false
 let onHeapPressure: ((info: HeapPressureInfo) => void) | null = null
 
 export function startMainHeapWatchdog(opts?: {
   onHeapPressure?: (info: HeapPressureInfo) => void
 }): void {
-  if (watchdogTimer) return
+  if (watchdogTimer || watchdogStopped) return
   onHeapPressure = opts?.onHeapPressure ?? null
-  watchdogTimer = setInterval(() => {
-    void sampleAndMaybeSnapshot()
-  }, SAMPLE_INTERVAL_MS).unref()
+  scheduleNextSample(SAMPLE_INTERVAL_MS)
+}
+
+// setTimeout recursion (not setInterval) so each sample can pick the NEXT delay
+// from the current pressure — fast under load, lazy at rest.
+function scheduleNextSample(delayMs: number): void {
+  watchdogTimer = setTimeout(() => {
+    void sampleAndMaybeSnapshot().then(pressureRatio => {
+      if (watchdogStopped) return
+      scheduleNextSample(
+        pressureRatio >= FAST_SAMPLE_PRESSURE_RATIO ? FAST_SAMPLE_INTERVAL_MS : SAMPLE_INTERVAL_MS,
+      )
+    })
+  }, delayMs)
+  watchdogTimer.unref()
 }
 
 export function stopMainHeapWatchdog(): void {
+  watchdogStopped = true
   if (watchdogTimer) {
-    clearInterval(watchdogTimer)
+    clearTimeout(watchdogTimer)
     watchdogTimer = null
   }
 }
 
-async function sampleAndMaybeSnapshot(): Promise<void> {
+async function sampleAndMaybeSnapshot(): Promise<number> {
   const stats = getHeapStatistics()
   // used_heap_size is the metric we care about: total_heap_size can
   // briefly inflate from internal fragmentation without being close to
   // the limit. used_heap_size is what the v8 fatal-error report shows.
   const heapUsed = stats.used_heap_size
   const limit = stats.heap_size_limit
+  // Ratio drives the adaptive sample cadence (see scheduleNextSample).
+  const pressureRatio = limit > 0 ? heapUsed / limit : 0
   const tripAt = Math.min(HEAP_USED_TRIP_BYTES, limit * HEAP_LIMIT_TRIP_RATIO)
-  if (heapUsed < tripAt) return
-  if (snapshotWritten) return
+  if (heapUsed < tripAt) return pressureRatio
+  if (snapshotWritten) return pressureRatio
   snapshotWritten = true
 
   const dir = HEAP_SNAPSHOT_DIR
@@ -144,6 +169,7 @@ async function sampleAndMaybeSnapshot(): Promise<void> {
     // tick — the failure most likely IS heap exhaustion.
     snapshotWritten = false
   }
+  return pressureRatio
 }
 
 // ---------------------------------------------------------------------------
