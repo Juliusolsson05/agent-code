@@ -54,6 +54,7 @@ export class OrchestrationBridge {
   private activeRendererRequests = 0
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
+  private readonly parentSessionByChildSession = new Map<string, string>()
   private readonly listAgentsCache = new Map<string, CachedValue<OrchestrationAgentRecord[]>>()
   private readonly readRunOutputsCache = new Map<string, CachedValue<OrchestrationAgentOutput[]>>()
   private lastPrunedAt = 0
@@ -88,6 +89,7 @@ export class OrchestrationBridge {
       createdAt: Date.now(),
       promptSubmissionCount: 0,
     })
+    this.parentSessionByChildSession.set(response.agent.sessionId, params.parentSessionId)
     this.closedAgents.delete(response.agent.sessionId)
     this.invalidateStatusCache(params.parentSessionId)
     return this.enrichAgent(response.agent)
@@ -164,6 +166,7 @@ export class OrchestrationBridge {
       this.noteClosed(before)
     }
     this.invalidateStatusCache(params.parentSessionId)
+    this.parentSessionByChildSession.delete(params.sessionId)
     return response.result
   }
 
@@ -191,6 +194,9 @@ export class OrchestrationBridge {
       if (closed.has(output.agent.sessionId)) this.noteClosed(output)
     }
     this.invalidateStatusCache(params.parentSessionId)
+    for (const sessionId of response.result.closedSessionIds) {
+      this.parentSessionByChildSession.delete(sessionId)
+    }
     return response.result
   }
 
@@ -265,6 +271,7 @@ export class OrchestrationBridge {
   }): Promise<OrchestrationAgentRecord[]> {
     const key = this.statusCacheKey(params)
     const now = Date.now()
+    this.pruneStatusCaches(now)
     const cached = this.listAgentsCache.get(key)
     if (cached && cached.expiresAt > now) return await cached.promise
 
@@ -312,6 +319,7 @@ export class OrchestrationBridge {
   }): Promise<OrchestrationAgentOutput[]> {
     const key = `${this.statusCacheKey(params)}::max=${params.maxMessagesPerAgent ?? 'default'}`
     const now = Date.now()
+    this.pruneStatusCaches(now)
     const cached = this.readRunOutputsCache.get(key)
     if (cached && cached.expiresAt > now) return await cached.promise
 
@@ -362,14 +370,38 @@ export class OrchestrationBridge {
     }
   }
 
-  private invalidateStatusCacheForSession(_sessionId: string): void {
-    // Prompt-submission metadata is keyed by child session id, while the status
-    // caches are keyed by parent/run. Keeping a reverse child->parent index in
-    // main would duplicate renderer-owned orchestration relationships for a
-    // 250 ms cache. Clear all aggregate caches instead; the maps are tiny, and
-    // correctness at the prompt-submitted boundary matters more than retaining a
-    // near-expired polling entry.
+  private invalidateStatusCacheForSession(sessionId: string): void {
+    const parentSessionId = this.parentSessionByChildSession.get(sessionId)
+    if (parentSessionId) {
+      this.invalidateStatusCache(parentSessionId)
+      return
+    }
+    // WHY fall back to a global clear when the child->parent hint is missing:
+    //
+    // Main learns the mapping for agents it creates during this app run, but
+    // prompt-delivery metadata is intentionally opportunistic and can be rebuilt
+    // from a late send_prompt path after old coordination state was pruned. A
+    // stale status cache at the prompt boundary is worse than losing a 250 ms
+    // optimization, so unknown children still take the conservative path.
     this.invalidateStatusCache()
+  }
+
+  private pruneStatusCaches(now: number): void {
+    // WHY prune on status reads instead of retaining expired promises until the
+    // next structural invalidation:
+    //
+    // `readRunOutputs` cache values can include transcript slices. The TTL is a
+    // freshness contract, but without deletion it would also become a retention
+    // contract: every parent/run/maxMessages key touched in a long app run could
+    // hold its last fulfilled output forever. Status reads are already the only
+    // place these caches matter, so opportunistic pruning gives bounded growth
+    // without a timer that wakes the desktop app just to clean a 250 ms cache.
+    for (const [key, cached] of this.listAgentsCache) {
+      if (cached.expiresAt <= now) this.listAgentsCache.delete(key)
+    }
+    for (const [key, cached] of this.readRunOutputsCache) {
+      if (cached.expiresAt <= now) this.readRunOutputsCache.delete(key)
+    }
   }
 
   private async request(
@@ -603,9 +635,13 @@ export class OrchestrationBridge {
       const latest = delivery.lastPromptSubmittedAt ?? delivery.createdAt
       if (now - latest > ORCHESTRATION_METADATA_TTL_MS) {
         this.promptDeliveries.delete(sessionId)
+        this.parentSessionByChildSession.delete(sessionId)
       }
     }
     trimMapToNewest(this.promptDeliveries, MAX_PROMPT_DELIVERIES)
+    for (const sessionId of this.parentSessionByChildSession.keys()) {
+      if (!this.promptDeliveries.has(sessionId)) this.parentSessionByChildSession.delete(sessionId)
+    }
 
     for (const [sessionId, record] of this.closedAgents) {
       if (now - record.closedAt > ORCHESTRATION_METADATA_TTL_MS) {

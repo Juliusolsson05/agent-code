@@ -43,6 +43,17 @@ describe('BuiltInMcpHttpHost', () => {
       expect(response.status).toBe(200)
       expect(response.headers.get('content-type')).toContain('text/event-stream')
       expect(factoryCalls).toBe(0)
+
+      const reader = response.body?.getReader()
+      expect(reader).toBeDefined()
+      const readOutcome = reader!.read().then(
+        result => ({ state: 'settled' as const, result }),
+        err => ({ state: 'rejected' as const, err }),
+      )
+      await expect(Promise.race([
+        readOutcome,
+        new Promise(resolve => setTimeout(() => resolve({ state: 'pending' }), 50)),
+      ])).resolves.toEqual({ state: 'pending' })
     } finally {
       abort.abort()
       await host.stop()
