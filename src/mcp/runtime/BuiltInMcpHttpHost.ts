@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { performance } from 'node:perf_hooks'
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -9,6 +10,7 @@ import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import { performanceService } from '@main/performance/PerformanceService.js'
 import {
   normalizeBuiltInMcpDomains,
   type BuiltInMcpDomain,
@@ -35,6 +37,9 @@ export type BuiltInMcpDependencies = {
   appRunJournal?: AppRunJournal
 }
 
+const MCP_REQUEST_SLOW_MS = 1000
+const MCP_ACTIVE_WARN_THRESHOLD = 20
+
 function envFlag(name: string): boolean {
   const value = process.env[name]
   return value === '1' || value === 'true' || value === 'yes'
@@ -46,6 +51,9 @@ export class BuiltInMcpHttpHost {
   private readonly registrations = new Map<string, SessionRegistration>()
   private readonly tokensBySession = new Map<string, string>()
   private dependencies: BuiltInMcpDependencies = {}
+  private activeRequests = 0
+  private activeStandaloneGetStreams = 0
+  private requestPressureOpen = false
   // Journal injected via setJournal() BEFORE start(), separately from
   // setDependencies() (which carries `manager` and therefore can only run after
   // start()). Without this split, a bind-failure incident would be dead code.
@@ -214,6 +222,7 @@ export class BuiltInMcpHttpHost {
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const startedAt = performance.now()
     if (!req.url) {
       this.writeJson(res, 400, { error: 'missing_url' })
       return
@@ -228,6 +237,28 @@ export class BuiltInMcpHttpHost {
     if (!registration) {
       this.writeJson(res, 401, { error: 'unauthorized' })
       return
+    }
+
+    if (req.method === 'GET') {
+      await this.handleStandaloneGetStream(req, res, registration, startedAt)
+      return
+    }
+
+    this.activeRequests += 1
+    if (this.activeRequests >= MCP_ACTIVE_WARN_THRESHOLD && !this.requestPressureOpen) {
+      this.requestPressureOpen = true
+      performanceService.record({
+        kind: 'metric',
+        process: 'main',
+        area: 'mcp.host',
+        name: 'mcp.host.request_pressure',
+        metricType: 'gauge',
+        value: this.activeRequests,
+        data: {
+          activeRequests: this.activeRequests,
+          activeStandaloneGetStreams: this.activeStandaloneGetStreams,
+        },
+      })
     }
 
     // WHY a fresh scoped server + transport PER REQUEST, and explicitly NOT a
@@ -266,7 +297,89 @@ export class BuiltInMcpHttpHost {
     } finally {
       await transport.close().catch(() => undefined)
       await server.close().catch(() => undefined)
+      this.activeRequests -= 1
+      if (this.activeRequests < MCP_ACTIVE_WARN_THRESHOLD / 2) {
+        this.requestPressureOpen = false
+      }
+      this.recordRequestTiming({
+        method: req.method ?? 'UNKNOWN',
+        scope: registration.scope,
+        startedAt,
+        lightweightGet: false,
+      })
     }
+  }
+
+  private async handleStandaloneGetStream(
+    req: IncomingMessage,
+    res: ServerResponse,
+    registration: SessionRegistration,
+    startedAt: number,
+  ): Promise<void> {
+    // WHY GET is handled without createBuiltInMcpServer():
+    //
+    // Streamable HTTP clients commonly open a long-lived GET SSE stream for
+    // server-initiated notifications. Agent Code's built-in MCP tools do not
+    // send server notifications, resource updates, progress, or elicitation
+    // requests today; every useful result is returned on the POST request's own
+    // response stream. The old per-request workaround still built the complete
+    // McpServer + Zod tool graph for these idle GET streams, then kept that
+    // object graph alive for the lifetime of every agent. With 20 orchestrated
+    // agents this multiplied the heaviest part of the MCP bridge by a channel
+    // we do not use.
+    //
+    // A bare stateless StreamableHTTPServerTransport can satisfy the GET stream
+    // contract by holding an SSE connection open. Because no `server.connect()`
+    // happens, no tool handlers exist on this connection and nothing can be
+    // invoked through it; POST requests still build a scoped server per exchange
+    // below, preserving the earlier fix for "long-lived GET wedged tools/list".
+    const transport = new StreamableHTTPServerTransport({
+      sessionIdGenerator: undefined,
+    })
+    this.activeStandaloneGetStreams += 1
+    try {
+      await transport.handleRequest(req, res)
+    } catch (err) {
+      if (!res.headersSent) {
+        const message = err instanceof Error ? err.message : String(err)
+        this.writeJson(res, 500, { error: 'mcp_get_stream_failed', message })
+      }
+    } finally {
+      await transport.close().catch(() => undefined)
+      this.activeStandaloneGetStreams -= 1
+      this.recordRequestTiming({
+        method: 'GET',
+        scope: registration.scope,
+        startedAt,
+        lightweightGet: true,
+      })
+    }
+  }
+
+  private recordRequestTiming(params: {
+    method: string
+    scope: McpSessionScope
+    startedAt: number
+    lightweightGet: boolean
+  }): void {
+    const durationMs = performance.now() - params.startedAt
+    if (durationMs < MCP_REQUEST_SLOW_MS) return
+    performanceService.record({
+      kind: 'span_end',
+      process: 'main',
+      area: 'mcp.host',
+      name: 'mcp.host.request',
+      durationMs,
+      sessionId: params.scope.sessionId,
+      count: params.scope.domains.length,
+      data: {
+        method: params.method,
+        domains: params.scope.domains,
+        lightweightGet: params.lightweightGet,
+        activeRequests: this.activeRequests,
+        activeStandaloneGetStreams: this.activeStandaloneGetStreams,
+      },
+    })
   }
 
   private registrationForRequest(
