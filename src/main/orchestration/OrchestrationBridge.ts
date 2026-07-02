@@ -35,12 +35,18 @@ type ClosedAgentRecord = {
   closedAt: number
 }
 
+type CachedValue<T> = {
+  expiresAt: number
+  promise: Promise<T>
+}
+
 const MAX_PROMPT_DELIVERIES = 1000
 const MAX_CLOSED_AGENTS = 500
 const MAX_CLOSED_AGENT_MESSAGES = 100
 const ORCHESTRATION_METADATA_TTL_MS = 24 * 60 * 60 * 1000
 const PRUNE_INTERVAL_MS = 5 * 60 * 1000
 const MAX_ACTIVE_RENDERER_REQUESTS = 1
+const STATUS_CACHE_TTL_MS = 250
 
 export class OrchestrationBridge {
   private readonly pending = new Map<string, PendingRequest>()
@@ -48,6 +54,9 @@ export class OrchestrationBridge {
   private activeRendererRequests = 0
   private readonly promptDeliveries = new Map<string, PromptDeliveryMetadata>()
   private readonly closedAgents = new Map<string, ClosedAgentRecord>()
+  private readonly parentSessionByChildSession = new Map<string, string>()
+  private readonly listAgentsCache = new Map<string, CachedValue<OrchestrationAgentRecord[]>>()
+  private readonly readRunOutputsCache = new Map<string, CachedValue<OrchestrationAgentOutput[]>>()
   private lastPrunedAt = 0
   // Always-on incident journal, injected post-construction in startApp — the
   // bridge is created at module-eval, before the journal exists.
@@ -80,7 +89,9 @@ export class OrchestrationBridge {
       createdAt: Date.now(),
       promptSubmissionCount: 0,
     })
+    this.parentSessionByChildSession.set(response.agent.sessionId, params.parentSessionId)
     this.closedAgents.delete(response.agent.sessionId)
+    this.invalidateStatusCache(params.parentSessionId)
     return this.enrichAgent(response.agent)
   }
 
@@ -89,20 +100,7 @@ export class OrchestrationBridge {
     runId?: string
   }): Promise<OrchestrationAgentRecord[]> {
     this.pruneCoordinationMetadata()
-    const response = await this.request({
-      requestId: randomUUID(),
-      type: 'list-agents',
-      ...params,
-    })
-    if (!response.ok) throw new Error(response.message)
-    if (response.type !== 'list-agents') {
-      throw new Error(`Unexpected orchestration response: ${response.type}`)
-    }
-    return this.mergeClosedAgents({
-      parentSessionId: params.parentSessionId,
-      runId: params.runId,
-      liveAgents: response.agents.map(agent => this.enrichAgent(agent)),
-    })
+    return await this.cachedListAgents(params)
   }
 
   async readAgent(params: {
@@ -142,21 +140,7 @@ export class OrchestrationBridge {
     maxMessagesPerAgent?: number
   }): Promise<OrchestrationAgentOutput[]> {
     this.pruneCoordinationMetadata()
-    const response = await this.request({
-      requestId: randomUUID(),
-      type: 'read-run-outputs',
-      ...params,
-    })
-    if (!response.ok) throw new Error(response.message)
-    if (response.type !== 'read-run-outputs') {
-      throw new Error(`Unexpected orchestration response: ${response.type}`)
-    }
-    return this.mergeClosedOutputs({
-      parentSessionId: params.parentSessionId,
-      runId: params.runId,
-      liveOutputs: response.outputs.map(output => this.enrichOutput(output)),
-      maxMessagesPerAgent: params.maxMessagesPerAgent,
-    })
+    return await this.cachedReadRunOutputs(params)
   }
 
   async closeAgent(params: {
@@ -181,6 +165,8 @@ export class OrchestrationBridge {
     if (before && response.result.closedSessionIds.includes(params.sessionId)) {
       this.noteClosed(before)
     }
+    this.invalidateStatusCache(params.parentSessionId)
+    this.parentSessionByChildSession.delete(params.sessionId)
     return response.result
   }
 
@@ -207,6 +193,10 @@ export class OrchestrationBridge {
     for (const output of before) {
       if (closed.has(output.agent.sessionId)) this.noteClosed(output)
     }
+    this.invalidateStatusCache(params.parentSessionId)
+    for (const sessionId of response.result.closedSessionIds) {
+      this.parentSessionByChildSession.delete(sessionId)
+    }
     return response.result
   }
 
@@ -224,6 +214,7 @@ export class OrchestrationBridge {
     }
     this.promptDeliveries.delete(sessionId)
     this.promptDeliveries.set(sessionId, next)
+    this.invalidateStatusCacheForSession(sessionId)
   }
 
   promptSubmissionCount(sessionId: string): number {
@@ -244,6 +235,7 @@ export class OrchestrationBridge {
     if (response.type !== 'mark-bootstrap-prompt-delivered') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
     }
+    this.invalidateStatusCache(params.parentSessionId)
     return this.enrichAgent(response.agent)
   }
 
@@ -261,6 +253,7 @@ export class OrchestrationBridge {
     if (response.type !== 'ensure-agent-live') {
       throw new Error(`Unexpected orchestration response: ${response.type}`)
     }
+    this.invalidateStatusCache(params.parentSessionId)
     return this.enrichAgent(response.agent)
   }
 
@@ -270,6 +263,145 @@ export class OrchestrationBridge {
     clearTimeout(pending.timer)
     this.pending.delete(response.requestId)
     pending.resolve(response)
+  }
+
+  private async cachedListAgents(params: {
+    parentSessionId: string
+    runId?: string
+  }): Promise<OrchestrationAgentRecord[]> {
+    const key = this.statusCacheKey(params)
+    const now = Date.now()
+    this.pruneStatusCaches(now)
+    const cached = this.listAgentsCache.get(key)
+    if (cached && cached.expiresAt > now) return await cached.promise
+
+    // WHY cache renderer-backed status reads at all:
+    //
+    // `orchestration_wait_agents` is intentionally implemented as a polling MCP
+    // tool so the parent agent can wait without busy-looping in the model. With
+    // 20 orchestrated children, it is common for several wait/list calls to poll
+    // the same parent/run during the same quarter-second. Every uncached poll
+    // crosses MCP -> main -> renderer -> main -> MCP, and the bridge is
+    // deliberately serialized to protect the renderer workspace store. Joining
+    // identical short-window reads preserves freshness for human-visible status
+    // while preventing a thundering herd of equivalent renderer round-trips.
+    const promise = this.request({
+      requestId: randomUUID(),
+      type: 'list-agents',
+      ...params,
+    }).then(response => {
+      if (!response.ok) throw new Error(response.message)
+      if (response.type !== 'list-agents') {
+        throw new Error(`Unexpected orchestration response: ${response.type}`)
+      }
+      return this.mergeClosedAgents({
+        parentSessionId: params.parentSessionId,
+        runId: params.runId,
+        liveAgents: response.agents.map(agent => this.enrichAgent(agent)),
+      })
+    }).catch(err => {
+      if (this.listAgentsCache.get(key)?.promise === promise) {
+        this.listAgentsCache.delete(key)
+      }
+      throw err
+    })
+    this.listAgentsCache.set(key, {
+      expiresAt: now + STATUS_CACHE_TTL_MS,
+      promise,
+    })
+    return await promise
+  }
+
+  private async cachedReadRunOutputs(params: {
+    parentSessionId: string
+    runId?: string
+    maxMessagesPerAgent?: number
+  }): Promise<OrchestrationAgentOutput[]> {
+    const key = `${this.statusCacheKey(params)}::max=${params.maxMessagesPerAgent ?? 'default'}`
+    const now = Date.now()
+    this.pruneStatusCaches(now)
+    const cached = this.readRunOutputsCache.get(key)
+    if (cached && cached.expiresAt > now) return await cached.promise
+
+    const promise = this.request({
+      requestId: randomUUID(),
+      type: 'read-run-outputs',
+      ...params,
+    }).then(response => {
+      if (!response.ok) throw new Error(response.message)
+      if (response.type !== 'read-run-outputs') {
+        throw new Error(`Unexpected orchestration response: ${response.type}`)
+      }
+      return this.mergeClosedOutputs({
+        parentSessionId: params.parentSessionId,
+        runId: params.runId,
+        liveOutputs: response.outputs.map(output => this.enrichOutput(output)),
+        maxMessagesPerAgent: params.maxMessagesPerAgent,
+      })
+    }).catch(err => {
+      if (this.readRunOutputsCache.get(key)?.promise === promise) {
+        this.readRunOutputsCache.delete(key)
+      }
+      throw err
+    })
+    this.readRunOutputsCache.set(key, {
+      expiresAt: now + STATUS_CACHE_TTL_MS,
+      promise,
+    })
+    return await promise
+  }
+
+  private statusCacheKey(params: { parentSessionId: string; runId?: string }): string {
+    return `${params.parentSessionId}::${params.runId ?? ''}`
+  }
+
+  private invalidateStatusCache(parentSessionId?: string): void {
+    if (!parentSessionId) {
+      this.listAgentsCache.clear()
+      this.readRunOutputsCache.clear()
+      return
+    }
+    const prefix = `${parentSessionId}::`
+    for (const key of this.listAgentsCache.keys()) {
+      if (key.startsWith(prefix)) this.listAgentsCache.delete(key)
+    }
+    for (const key of this.readRunOutputsCache.keys()) {
+      if (key.startsWith(prefix)) this.readRunOutputsCache.delete(key)
+    }
+  }
+
+  private invalidateStatusCacheForSession(sessionId: string): void {
+    const parentSessionId = this.parentSessionByChildSession.get(sessionId)
+    if (parentSessionId) {
+      this.invalidateStatusCache(parentSessionId)
+      return
+    }
+    // WHY fall back to a global clear when the child->parent hint is missing:
+    //
+    // Main learns the mapping for agents it creates during this app run, but
+    // prompt-delivery metadata is intentionally opportunistic and can be rebuilt
+    // from a late send_prompt path after old coordination state was pruned. A
+    // stale status cache at the prompt boundary is worse than losing a 250 ms
+    // optimization, so unknown children still take the conservative path.
+    this.invalidateStatusCache()
+  }
+
+  private pruneStatusCaches(now: number): void {
+    // WHY prune on status reads instead of retaining expired promises until the
+    // next structural invalidation:
+    //
+    // `readRunOutputs` cache values can include transcript slices. The TTL is a
+    // freshness contract, but without deletion it would also become a retention
+    // contract: every parent/run/maxMessages key touched in a long app run could
+    // hold its last fulfilled output forever. Status reads are already the only
+    // place these caches matter, so opportunistic pruning gives bounded growth
+    // without a timer that wakes the desktop app just to clean a 250 ms cache.
+    for (const [key, cached] of this.listAgentsCache) {
+      if (cached.expiresAt <= now) this.listAgentsCache.delete(key)
+    }
+    for (const [key, cached] of this.readRunOutputsCache) {
+      if (cached.expiresAt <= now) this.readRunOutputsCache.delete(key)
+    }
   }
 
   private async request(
@@ -503,9 +635,13 @@ export class OrchestrationBridge {
       const latest = delivery.lastPromptSubmittedAt ?? delivery.createdAt
       if (now - latest > ORCHESTRATION_METADATA_TTL_MS) {
         this.promptDeliveries.delete(sessionId)
+        this.parentSessionByChildSession.delete(sessionId)
       }
     }
     trimMapToNewest(this.promptDeliveries, MAX_PROMPT_DELIVERIES)
+    for (const sessionId of this.parentSessionByChildSession.keys()) {
+      if (!this.promptDeliveries.has(sessionId)) this.parentSessionByChildSession.delete(sessionId)
+    }
 
     for (const [sessionId, record] of this.closedAgents) {
       if (now - record.closedAt > ORCHESTRATION_METADATA_TTL_MS) {
