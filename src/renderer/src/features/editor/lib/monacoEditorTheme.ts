@@ -1,5 +1,11 @@
 import type * as Monaco from 'monaco-editor'
 
+import { THEME_CHANGED_EVENT } from '@renderer/app-state/settings/theme'
+import {
+  normalizeMonacoThemeColor,
+  normalizeMonacoThemeColorAlpha,
+} from '@renderer/lib/code/monacoThemeColors'
+
 // Dedicated Monaco theme for the editor mode.
 //
 // WHY this is separate from `monacoRuntime.ts`:
@@ -7,7 +13,7 @@ import type * as Monaco from 'monaco-editor'
 //   which is darker than the canvas — that contrast is what makes inline
 //   code in transcripts read as a "slab". In editor mode the Monaco
 //   instance IS the canvas; using the code-slab background made the file
-//   editor feel sunk into the page. The editor theme below copies cc-shell
+//   editor feel sunk into the page. The editor theme below copies Agent Code
 //   colours but pulls `editor.background` from `--theme-canvas` so the
 //   editor visually continues the workbench surface.
 //
@@ -19,8 +25,8 @@ import type * as Monaco from 'monaco-editor'
 //   is preferable to keeping the file editor as a darker pit. On exit the
 //   caller must restore the previous global theme via `setTheme(previous)`.
 
-const EDITOR_THEME_BASE_DARK = 'cc-shell-editor-dark'
-const EDITOR_THEME_BASE_LIGHT = 'cc-shell-editor-light'
+const EDITOR_THEME_BASE_DARK = 'agent-code-editor-dark'
+const EDITOR_THEME_BASE_LIGHT = 'agent-code-editor-light'
 
 function readToken(name: string, fallback: string): string {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
@@ -32,20 +38,25 @@ function currentModeIsLight(): boolean {
 }
 
 function defineEditorThemes(monaco: typeof Monaco): void {
-  const bg = readToken('--theme-canvas', '#0a0a0a')
-  const fg = readToken('--theme-ink', '#e8e8e6')
-  const muted = readToken('--theme-muted', '#5a5a56')
-  const border = readToken('--theme-border', '#1a1a1c')
-  const borderHi = readToken('--theme-border-hi', '#272729')
-  const accent = readToken('--theme-accent', '#7dd3a0')
+  const bg = normalizeMonacoThemeColor(readToken('--theme-canvas', '#0a0a0a'), '#0a0a0a')
+  const fg = normalizeMonacoThemeColor(readToken('--theme-ink', '#e8e8e6'), '#e8e8e6')
+  const muted = normalizeMonacoThemeColor(readToken('--theme-muted', '#5a5a56'), '#5a5a56')
+  const border = normalizeMonacoThemeColor(readToken('--theme-border', '#1a1a1c'), '#1a1a1c')
+  const borderHi = normalizeMonacoThemeColor(readToken('--theme-border-hi', '#272729'), '#272729')
+  const accent = normalizeMonacoThemeColor(readToken('--theme-accent', '#7dd3a0'), '#7dd3a0')
+  const selection = normalizeMonacoThemeColorAlpha(accent, '33', '#7dd3a0')
+  const inactiveSelection = normalizeMonacoThemeColorAlpha(accent, '22', '#7dd3a0')
+  const scrollbarBackground = normalizeMonacoThemeColorAlpha(muted, '55', '#5a5a56')
+  const scrollbarHover = normalizeMonacoThemeColorAlpha(muted, '88', '#5a5a56')
+  const scrollbarActive = normalizeMonacoThemeColorAlpha(accent, 'aa', '#7dd3a0')
 
   const sharedColors = {
     'editor.background': bg,
     'editor.foreground': fg,
     'editorLineNumber.foreground': muted,
     'editorLineNumber.activeForeground': fg,
-    'editor.selectionBackground': `${accent}33`,
-    'editor.inactiveSelectionBackground': `${accent}22`,
+    'editor.selectionBackground': selection,
+    'editor.inactiveSelectionBackground': inactiveSelection,
     'editorCursor.foreground': accent,
     'editor.lineHighlightBackground': borderHi,
     'editor.lineHighlightBorder': border,
@@ -57,9 +68,9 @@ function defineEditorThemes(monaco: typeof Monaco): void {
     'editorHoverWidget.border': borderHi,
     'editorGutter.background': bg,
     'scrollbar.shadow': '#00000000',
-    'scrollbarSlider.background': `${muted}55`,
-    'scrollbarSlider.hoverBackground': `${muted}88`,
-    'scrollbarSlider.activeBackground': `${accent}aa`,
+    'scrollbarSlider.background': scrollbarBackground,
+    'scrollbarSlider.hoverBackground': scrollbarHover,
+    'scrollbarSlider.activeBackground': scrollbarActive,
   }
 
   monaco.editor.defineTheme(EDITOR_THEME_BASE_DARK, {
@@ -79,10 +90,11 @@ function defineEditorThemes(monaco: typeof Monaco): void {
 
 // Module-level guard: defineTheme is idempotent for Monaco but cheap to
 // avoid hitting on every editor mount. We also listen once for the
-// `cc-shell:theme-changed` event the rest of the app fires when the user
+// Agent Code theme-changed event the rest of the app fires when the user
 // switches mode/accent, redefining the theme so the editor follows along.
 let initialized = false
 let themeListenerAttached = false
+let activeEditorThemeUsers = 0
 
 export function ensureEditorThemes(monaco: typeof Monaco): void {
   if (!initialized) {
@@ -91,12 +103,36 @@ export function ensureEditorThemes(monaco: typeof Monaco): void {
   }
   if (!themeListenerAttached) {
     themeListenerAttached = true
-    window.addEventListener('cc-shell:theme-changed', () => {
+    window.addEventListener(THEME_CHANGED_EVENT, () => {
       defineEditorThemes(monaco)
-      // Re-applying the same theme name nudges Monaco to repaint all live
-      // editors with the freshly resolved colour tokens.
-      monaco.editor.setTheme(currentEditorThemeName())
+      if (activeEditorThemeUsers > 0) {
+        // Re-applying the same theme name nudges Monaco to repaint all live
+        // editors with the freshly resolved colour tokens. Monaco themes are
+        // global, so this must only happen while editor mode is actively using
+        // the editor theme; otherwise a normal app theme change after closing
+        // the file editor would force CodeBlock instances back onto the editor
+        // canvas theme and override monacoRuntime's default theme listener.
+        monaco.editor.setTheme(currentEditorThemeName())
+      }
     })
+  }
+}
+
+export function activateEditorTheme(monaco: typeof Monaco): void {
+  // WHY keep a reference count instead of a boolean: Monaco's theme is global,
+  // but React editor mounts are not guaranteed to be singletons forever. A
+  // future split-editor view can mount multiple MonacoFileEditor instances; the
+  // first one should switch the global theme to the editor palette, and the last
+  // one should restore the default CodeBlock/runtime palette.
+  activeEditorThemeUsers += 1
+  ensureEditorThemes(monaco)
+  monaco.editor.setTheme(currentEditorThemeName())
+}
+
+export function deactivateEditorTheme(monaco: typeof Monaco): void {
+  activeEditorThemeUsers = Math.max(0, activeEditorThemeUsers - 1)
+  if (activeEditorThemeUsers === 0) {
+    monaco.editor.setTheme(defaultAgentCodeThemeName())
   }
 }
 
@@ -108,12 +144,12 @@ export function currentEditorThemeName(): string {
 // the editor feature can restore the global Monaco theme when editor mode
 // exits without depending on a private export from the runtime module. If
 // that helper is ever exported we can collapse this.
-export function defaultCcShellThemeName(): string {
+export function defaultAgentCodeThemeName(): string {
   const root = document.documentElement
   if (root.dataset.contrast === 'high') {
     return root.dataset.mode?.startsWith('light')
-      ? 'cc-shell-high-contrast-light'
-      : 'cc-shell-high-contrast-dark'
+      ? 'agent-code-high-contrast-light'
+      : 'agent-code-high-contrast-dark'
   }
-  return root.dataset.mode?.startsWith('light') ? 'cc-shell-light' : 'cc-shell-dark'
+  return root.dataset.mode?.startsWith('light') ? 'agent-code-light' : 'agent-code-dark'
 }

@@ -3,8 +3,8 @@ import type * as Monaco from 'monaco-editor'
 
 import { getMonaco } from '@renderer/lib/code/monacoRuntime'
 import {
-  currentEditorThemeName,
-  ensureEditorThemes,
+  activateEditorTheme,
+  deactivateEditorTheme,
 } from '@renderer/features/editor/lib/monacoEditorTheme'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 
@@ -34,16 +34,19 @@ export function MonacoFileEditor({
     let model: Monaco.editor.ITextModel | null = null
     let changeDisposable: Monaco.IDisposable | null = null
     let saveCommandId: string | null = null
+    let editorThemeActive = false
+    let monacoRuntime: typeof Monaco | null = null
 
     void (async () => {
       const monaco = await getMonaco()
       if (disposed) return
+      monacoRuntime = monaco
       // Register and switch to the editor-mode theme before creating the
       // instance so the first paint already uses the canvas background
       // instead of flashing the darker code-slab theme. See
       // monacoEditorTheme.ts for the global-theme trade-off.
-      ensureEditorThemes(monaco)
-      monaco.editor.setTheme(currentEditorThemeName())
+      activateEditorTheme(monaco)
+      editorThemeActive = true
       const uri = monaco.Uri.file(file.absolutePath)
       const existing = monaco.editor.getModel(uri)
       model = existing ?? monaco.editor.createModel(file.currentText, file.language, uri)
@@ -95,6 +98,10 @@ export function MonacoFileEditor({
       changeDisposable?.dispose()
       void saveCommandId
       editor?.dispose()
+      if (editorThemeActive && monacoRuntime) {
+        deactivateEditorTheme(monacoRuntime)
+        editorThemeActive = false
+      }
       // WHY the model is kept alive only when another editor already owned it:
       // Monaco models are global by URI. The first editor slice recreates a
       // single editor per active file, so disposing models on tab switch is

@@ -5,6 +5,10 @@ import {
   supportsLsp,
 } from '@shared/code/language'
 import { APP_SLUG } from '@shared/appIdentity'
+import {
+  normalizeMonacoThemeColor,
+  normalizeMonacoThemeColorAlpha,
+} from './monacoThemeColors'
 
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
@@ -34,12 +38,19 @@ function currentThemeName(): string {
 
 function defineThemes(monaco: typeof Monaco): void {
   const styles = getComputedStyle(document.documentElement)
-  const bg = styles.getPropertyValue('--theme-code-bg').trim() || '#12120f'
-  const fg = styles.getPropertyValue('--theme-code-ink').trim() || '#e8e8e6'
-  const muted =
-    styles.getPropertyValue('--theme-code-ink-dim').trim() || '#a8a8a4'
-  const border = styles.getPropertyValue('--theme-code-border').trim() || '#262622'
-  const accent = styles.getPropertyValue('--theme-accent').trim() || '#7dd3a0'
+  const bg = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-code-bg'), '#12120f')
+  const fg = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-code-ink'), '#e8e8e6')
+  const muted = normalizeMonacoThemeColor(
+    styles.getPropertyValue('--theme-code-ink-dim'),
+    '#a8a8a4',
+  )
+  const border = normalizeMonacoThemeColor(
+    styles.getPropertyValue('--theme-code-border'),
+    '#262622',
+  )
+  const accent = normalizeMonacoThemeColor(styles.getPropertyValue('--theme-accent'), '#7dd3a0')
+  const selection = normalizeMonacoThemeColorAlpha(accent, '33', '#7dd3a0')
+  const inactiveSelection = normalizeMonacoThemeColorAlpha(accent, '22', '#7dd3a0')
 
   monaco.editor.defineTheme('agent-code-dark', {
     base: 'vs-dark',
@@ -50,8 +61,8 @@ function defineThemes(monaco: typeof Monaco): void {
       'editor.foreground': fg,
       'editorLineNumber.foreground': muted,
       'editorLineNumber.activeForeground': fg,
-      'editor.selectionBackground': `${accent}33`,
-      'editor.inactiveSelectionBackground': `${accent}22`,
+      'editor.selectionBackground': selection,
+      'editor.inactiveSelectionBackground': inactiveSelection,
       'editorCursor.foreground': accent,
       'editor.lineHighlightBorder': border,
       'editorIndentGuide.background1': border,
@@ -68,8 +79,8 @@ function defineThemes(monaco: typeof Monaco): void {
       'editor.foreground': fg,
       'editorLineNumber.foreground': muted,
       'editorLineNumber.activeForeground': fg,
-      'editor.selectionBackground': `${accent}33`,
-      'editor.inactiveSelectionBackground': `${accent}22`,
+      'editor.selectionBackground': selection,
+      'editor.inactiveSelectionBackground': inactiveSelection,
       'editorCursor.foreground': accent,
       'editor.lineHighlightBorder': border,
       'editorIndentGuide.background1': border,
