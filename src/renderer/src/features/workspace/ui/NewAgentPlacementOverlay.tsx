@@ -117,12 +117,21 @@ export function NewAgentPlacementOverlay({
       return
     }
     if (dispatchMode) {
-      if (kind !== 'claude' && kind !== 'codex') return
       if (committingRef.current) return
       committingRef.current = true
-      // Dispatch Mode creates detached agents on the active tab; there
-      // is intentionally no placement step. createDetachedDispatchAgent
-      // owns its own overlay close.
+      if (kind === 'terminal') {
+        // Terminals are the one Dispatch creation kind that still becomes a
+        // grid leaf: shell lifecycle/persistence is leaf-based, while
+        // Claude/Codex Dispatch agents are detached rows. splitFocused owns the
+        // Dispatch-aware target resolution for terminals (#366), including the
+        // focused tiled lane / global row project context and overlay close.
+        void workspace.splitFocused('vertical', 'terminal')
+        return
+      }
+      if (kind !== 'claude' && kind !== 'codex') return
+      // Dispatch Mode creates detached Claude/Codex agents on the focused
+      // Dispatch project; there is intentionally no placement step.
+      // createDetachedDispatchAgent owns its own overlay close.
       void workspace.createDetachedDispatchAgent(kind)
       return
     }

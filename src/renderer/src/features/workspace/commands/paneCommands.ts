@@ -25,7 +25,7 @@ export const paneCommands: CommandDef[] = [
     // are surface-gated out of Dispatch.
     surface: 'app',
     title: 'New Agent…',
-    description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, or shell pane.\n\n**Notes:** In **Dispatch**, this creates a detached agent instead of changing the grid.',
+    description: '**What it does:** Starts a **new agent or terminal**.\n\n**Use when:** You want another Claude, Codex, or shell pane.\n\n**Notes:** In **Dispatch**, Claude/Codex become detached agents; terminals attach to the focused project grid.',
     keywords: ['new', 'agent', 'placement', 'claude', 'codex', 'terminal'],
     when: ({ workspace }) => Boolean(workspace.activeTab && !workspace.tileTabs),
     run: ({ workspace }) => workspace.startNewAgentPlacement(),
@@ -249,13 +249,15 @@ export const paneCommands: CommandDef[] = [
   {
     id: 'terminal-horizontal',
     // `grid`: unlike split-vertical, a terminal split DOES still insert
-    // into the grid tree from Dispatch (splitFocused exempts terminals).
-    // But the result lands in a grid the Dispatch user cannot see, and
-    // the "Right" label still points at nothing visible — so the
-    // palette row is hidden in Dispatch all the same.
+    // into a grid tree from Dispatch, but splitFocused now resolves the target
+    // from the focused Dispatch row/lane before inserting (#366). The result
+    // still lands in a grid the Dispatch user cannot see immediately, and the
+    // "Right" label still points at nothing visible — so the palette row is
+    // hidden in Dispatch all the same. Power-user keybinds and New Agent…
+    // Terminal still work because they route through splitFocused.
     surface: 'grid',
     title: 'New Terminal Right',
-    description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** Terminals always attach to the grid, even from **Dispatch**.',
+    description: '**What it does:** Opens a **terminal on the right**.\n\n**Use when:** You need a shell beside the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
     shortcut: '⌥T',
     run: ({ workspace }) => void workspace.splitFocused('vertical', 'terminal'),
   },
@@ -263,7 +265,7 @@ export const paneCommands: CommandDef[] = [
     id: 'terminal-vertical',
     surface: 'grid',
     title: 'New Terminal Below',
-    description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** Terminals always attach to the grid, even from **Dispatch**.',
+    description: '**What it does:** Opens a **terminal below**.\n\n**Use when:** You need a shell under the current pane.\n\n**Notes:** From **Dispatch**, the terminal attaches to the focused row or lane’s project grid.',
     shortcut: '⌥⇧T',
     run: ({ workspace }) => void workspace.splitFocused('horizontal', 'terminal'),
   },
