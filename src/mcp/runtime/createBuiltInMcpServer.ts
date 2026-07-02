@@ -461,17 +461,50 @@ function registerOrchestrationTools(
         })
         const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, prompt)
         if (!delivery.ok) {
+          let cleanupAttempted = false
+          let agentClosed = false
+          let cleanupError: string | undefined
+          try {
+            cleanupAttempted = true
+            const cleanup = await bridge.closeAgent({
+              parentSessionId: scope.sessionId,
+              sessionId: agent.sessionId,
+            })
+            agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
+          } catch (err) {
+            cleanupError = err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Unknown orchestration cleanup failure.'
+          }
           dependencies.appRunJournal?.recordIncident({
             kind: 'orchestration.prompt_delivery_failed',
             severity: 'error',
             reason: 'create_agent_bootstrap',
-            context: { sessionId: agent.sessionId, message: delivery.message },
+            context: {
+              sessionId: agent.sessionId,
+              message: delivery.message,
+              cleanupAttempted,
+              agentClosed,
+              cleanupError,
+            },
           })
           return toolText({
             ok: false,
             error: 'prompt_delivery_failed',
             message: delivery.message,
-            agent,
+            // WHY omit the live agent object on bootstrap failure:
+            // `create_agent` is a two-step operation. By this point the
+            // renderer has already created a real provider session with PTY,
+            // proxy, JSONL watchers, and scoped MCP registration, but the
+            // caller receives an error and usually abandons the handle. Returning
+            // the full agent here made that half-created child look usable while
+            // leaving cleanup to memory and luck. The failure result now reports
+            // the session id plus cleanup outcome, and the child is best-effort
+            // closed before the error crosses the MCP boundary.
+            sessionId: agent.sessionId,
+            cleanupAttempted,
+            agentClosed,
+            cleanupError,
             promptSubmitted: false,
           })
         }
