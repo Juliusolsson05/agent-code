@@ -28,6 +28,7 @@ import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 import {
   buildVisibleDispatchRows,
   detachedDispatchSessionIdsForTab,
+  resolveDispatchTerminalSplitTarget,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
@@ -219,6 +220,81 @@ export function usePaneActions(
             dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
           }
         })
+        closeNewAgentPlacement()
+        return
+      }
+
+      if (dispatchSnapshot.dispatchMode && kind === 'terminal') {
+        const target = resolveDispatchTerminalSplitTarget(dispatchSnapshot)
+        const tab = dispatchSnapshot.tabs.find(t => t.id === target.tabId)
+        if (!tab) return
+
+        const cwd =
+          (target.cwdSessionId ? dispatchSnapshot.sessions[target.cwdSessionId]?.cwd : null) ??
+          (target.splitAnchorSessionId
+            ? dispatchSnapshot.sessions[target.splitAnchorSessionId]?.cwd
+            : null)
+        if (!cwd || !target.splitAnchorSessionId) {
+          showToast('Could not create dispatch terminal: no project directory found')
+          return
+        }
+
+        let sessionId: SessionId
+        try {
+          sessionId = await sessionActions.spawn(cwd, { kind })
+        } catch (err) {
+          showToast(
+            err instanceof Error && err.message.length > 0
+              ? err.message
+              : 'Failed to create dispatch terminal',
+          )
+          return
+        }
+
+        let inserted = false
+        setState(prev => {
+          const latestTab = prev.tabs.find(t => t.id === tab.id)
+          if (!latestTab) return prev
+          const latestLeafIds = collectLeaves(latestTab.root)
+          const splitAnchor =
+            target.splitAnchorSessionId && latestLeafIds.includes(target.splitAnchorSessionId)
+              ? target.splitAnchorSessionId
+              : latestLeafIds.includes(latestTab.focusedSessionId)
+                ? latestTab.focusedSessionId
+                : latestLeafIds[0]
+          if (!splitAnchor) return prev
+          inserted = true
+
+          // WHY terminals still enter the grid from Dispatch:
+          // Unlike Claude/Codex Dispatch agents, a plain shell has no detached
+          // provider transcript model to render from. Its durable shape is a
+          // normal terminal leaf (tmux name, resize lifecycle, undo/close
+          // history, persistence). The Dispatch-specific part is only target
+          // selection: resolveDispatchTerminalSplitTarget already chose the
+          // project/cwd from the focused row or tiled lane, so here we insert
+          // into that resolved tab and then focus the new terminal in Dispatch.
+          return {
+            ...prev,
+            activeTabId: latestTab.id,
+            tabs: prev.tabs.map(currentTab => {
+              if (currentTab.id !== latestTab.id) return currentTab
+              return {
+                ...currentTab,
+                root: splitLeaf(currentTab.root, splitAnchor, direction, sessionId),
+                focusedSessionId: sessionId,
+              }
+            }),
+            dispatchMode: applyDispatchSpawnFocus(prev.dispatchMode, sessionId, target.laneIndex),
+          }
+        })
+
+        if (!inserted) {
+          // spawn() already registered a live PTY. If the resolved tab vanished
+          // before insertion, kill it immediately instead of leaking an
+          // unreachable terminal session in renderer/main state.
+          await sessionActions.killSession(sessionId)
+          return
+        }
         closeNewAgentPlacement()
         return
       }

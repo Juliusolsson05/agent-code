@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   dispatchSessionIdsForTab,
+  resolveDispatchTerminalSplitTarget,
   resolveDispatchSpawnTarget,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveDispatchAttachTarget } from '@renderer/workspace/dispatch/dispatchTarget'
@@ -73,6 +74,53 @@ describe('resolveDispatchSpawnTarget', () => {
   it('no Dispatch mode: targets the active tab', () => {
     const target = resolveDispatchSpawnTarget(makeState(null))
     expect(target).toEqual({ tabId: 'tabA', cwdSessionId: null, laneIndex: null })
+  })
+})
+
+describe('resolveDispatchTerminalSplitTarget', () => {
+  it('Tiled Dispatch: uses the focused lane project for terminal cwd and grid insertion (#366)', () => {
+    const state = makeState({
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b1' }],
+      },
+    })
+
+    expect(resolveDispatchTerminalSplitTarget(state)).toEqual({
+      tabId: 'tabB',
+      cwdSessionId: 'b1',
+      laneIndex: 1,
+      splitAnchorSessionId: 'b1',
+    })
+  })
+
+  it('Tiled Dispatch: detached focused lane keeps cwd but splits a real leaf in the same tab', () => {
+    const state = makeState({
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 1,
+        lanes: [{ selectedSessionId: 'a1' }, { selectedSessionId: 'b2' }],
+      },
+    })
+    state.sessions.b2 = { cwd: '/work/project-b/subtask', kind: 'codex' }
+    state.detachedSessions.b2 = {
+      sessionId: 'b2',
+      surface: 'dispatch',
+      projectTabId: 'tabB',
+      projectTabTitle: 'project-b',
+      projectTabIndex: 1,
+      detachedAt: 10,
+    }
+
+    expect(resolveDispatchTerminalSplitTarget(state)).toEqual({
+      tabId: 'tabB',
+      cwdSessionId: 'b2',
+      laneIndex: 1,
+      splitAnchorSessionId: 'b1',
+    })
   })
 })
 
