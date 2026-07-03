@@ -124,6 +124,10 @@ npm run runtime:prepare:mac
 npm run dist:mac
 ```
 
+`dist:mac` is shaky in this early beta stage — packaging edge cases around
+bundled binaries and code signing are still being ironed out. For day-to-day
+use, run Agent Code with `npm run dev` instead.
+
 ## Companion packages
 
 - [`claude-code-headless`](https://github.com/Juliusolsson05/claude-code-headless)
