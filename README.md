@@ -19,42 +19,44 @@
 
 ---
 
-Agent Code is an open-source Electron-based AI-native IDE built around the real
-Claude Code and Codex CLIs.
+Agent Code is an **open-source Electron-based AI-native IDE** built around the
+real Claude Code and Codex CLIs.
 
-The point is not to replace Claude Code or Codex. The point is to keep their
+The point is **not** to replace Claude Code or Codex. The point is to keep their
 native runtimes while moving the surrounding workspace into an environment that
-developers can actually control: custom rendering, tiled sessions, provider
+developers can actually control: _custom rendering, tiled sessions, provider
 switching, orchestration, persistent terminals, transcript tooling, command
-workflows, and local diagnostics.
+workflows, and local diagnostics_.
 
 Claude Code is an excellent agent runtime, but Anthropic is increasingly locking
 OAuth usage into its own product ecosystem. That ecosystem is not especially
 suited to developers who want deep customization or serious parallelization
 unless they drop back to raw terminal management. Agent Code exists because the
-real runtime is worth keeping, but the workspace around it should be programmable.
+**real runtime is worth keeping**, but the workspace around it should be
+programmable.
 
 ## The Core Mechanism
 
 When you launch Claude in Agent Code, the app starts a headless Claude Code
 runtime.
 
-That runtime is not the Claude SDK, and it is not a reduced clone of Claude Code.
-It is a standalone open-source package we built, `claude-code-headless`, which
-launches the real Claude Code CLI in a PTY and wraps it in an API.
+That runtime is <ins>not the Claude SDK</ins>, and it is <ins>not a reduced
+clone of Claude Code</ins>. It is a standalone open-source package we built,
+`claude-code-headless`, which launches the real Claude Code CLI in a PTY and
+wraps it in an API.
 
 The same pattern exists for Codex through `codex-headless`.
 
-Those headless packages are the important architectural layer. They are separate
-from Agent Code on purpose: easier to maintain, easier to test, easier for
-open-source contributors to understand, and useful in other projects that need
-programmatic access to the real Claude Code or Codex CLIs.
+Those headless packages are the **important architectural layer**. They are
+separate from Agent Code on purpose: easier to maintain, easier to test, easier
+for open-source contributors to understand, and useful in other projects that
+need programmatic access to the real Claude Code or Codex CLIs.
 
 Agent Code sits on top of them.
 
-The headless package exposes the runtime state Agent Code needs: transcript
+The headless package exposes the runtime state Agent Code needs: **transcript
 updates, screen state, permission prompts, compaction, trust dialogs, semantic
-output, process state, terminal bytes, and provider conditions. Agent Code
+output, process state, terminal bytes, and provider conditions**. Agent Code
 consumes that API and turns it into a desktop IDE.
 
 Because the headless runtime owns the process it launches, it can use strategies
@@ -62,12 +64,12 @@ normal wrappers cannot. It can run the real CLI in a controlled PTY, attach loca
 proxy/streaming adapters where supported, read durable JSONL transcripts, and
 fall back to screen parsing for states that only exist in the terminal UI.
 
-That is how Agent Code can reimplement Claude Code's rendering in React without
-throwing away Claude Code itself.
+That is how Agent Code can reimplement Claude Code's rendering in React
+<ins>without throwing away Claude Code itself</ins>.
 
-The goal is 1:1 native behavior first: same runtime, same auth, same tool loop,
-same permissions, same session behavior. Then Agent Code goes further: custom
-rendering, tiled layouts, persistent terminals, provider switching,
+The goal is **1:1 native behavior first**: _same runtime, same auth, same tool
+loop, same permissions, same session behavior_. Then Agent Code goes further:
+custom rendering, tiled layouts, persistent terminals, provider switching,
 orchestration, transcript tools, and full control over how the workspace behaves.
 
 The motivation is practical. OpenCode and similar alternatives have already been
@@ -75,10 +77,10 @@ blocked from using Anthropic OAuth properly. The official Claude Code ecosystem
 works, but it is not built for deep customization or serious parallelization
 unless you manage everything manually in terminals.
 
-Agent Code does not ask for Anthropic OAuth tokens. It does not replay
-credentials. The headless runtime launches the already-authenticated Claude Code
-CLI the user has installed, and Agent Code builds a better IDE around that real
-process.
+Agent Code <ins>does not ask for Anthropic OAuth tokens</ins>. It does not
+replay credentials. The headless runtime launches the already-authenticated
+Claude Code CLI the user has installed, and Agent Code builds a better IDE
+around that real process.
 
 Because we control the runtime and the transcripts, Agent Code can also do
 things like translate a Claude Code session into a Codex session, or Codex back
@@ -86,10 +88,10 @@ into Claude, letting you switch providers mid-task without starting over.
 
 ## Why This Exists
 
-The strongest coding agents today live inside product-specific CLIs. Claude Code
-and Codex are not just model endpoints: they include permission flows, tool
-loops, compaction, resume behavior, slash commands, terminal UI state, transcript
-formats, and provider-specific decisions that are constantly evolving.
+The strongest coding agents today live inside **product-specific CLIs**. Claude
+Code and Codex are not just model endpoints: they include permission flows, tool
+loops, compaction, resume behavior, slash commands, terminal UI state,
+transcript formats, and provider-specific decisions that are constantly evolving.
 
 Most wrappers throw that away. They call a thinner API, reuse brittle token
 paths, or rebuild a small chat surface around a model response. That may look
@@ -101,14 +103,14 @@ limits, transcripts, worktrees, context handoffs, and background agents by hand.
 
 Agent Code tries to avoid that tradeoff:
 
-- run the real Claude Code and Codex CLIs
-- preserve their native behavior
-- expose their state programmatically
-- build the missing IDE around them
+- **run** the real Claude Code and Codex CLIs
+- **preserve** their native behavior
+- **expose** their state programmatically
+- **build** the missing IDE around them
 
 ## What Agent Code Does Differently
 
-Agent Code treats Claude Code and Codex as runtimes, not as chat backends.
+Agent Code treats Claude Code and Codex as **runtimes**, not as chat backends.
 
 When you start an agent, Agent Code launches the real CLI inside a pseudo-terminal
 and drives it through local headless control layers. The app observes semantic
@@ -117,10 +119,10 @@ updates, then renders that into a stronger workspace shell.
 
 That means:
 
-- Claude Code still behaves like Claude Code.
-- Codex still behaves like Codex.
-- New provider functionality remains available when it lands in the CLI.
-- Agent Code can add higher-level workflows without replacing the underlying
+- **Claude Code** still behaves like Claude Code.
+- **Codex** still behaves like Codex.
+- **New provider functionality** remains available when it lands in the CLI.
+- **Agent Code workflows** can be layered on without replacing the underlying
   agent loop.
 
 ## Key Functionality
@@ -132,24 +134,24 @@ Agent Code runs the actual `claude` and `codex` binaries in PTYs through:
 - [`claude-code-headless`](https://github.com/Juliusolsson05/claude-code-headless)
 - [`codex-headless`](https://github.com/Juliusolsson05/codex-headless)
 
-These packages expose the terminal programs as structured event sources while
+These packages expose the terminal programs as **structured event sources** while
 keeping the real CLI flows intact. They track semantic output, screen overlays,
 conditions, process state, and committed transcript updates.
 
 ### Tiled Workspace
 
-The workspace is built for running multiple live sessions in a real development
-layout. You can split panes, open Claude, Codex, and terminal sessions side by
-side, move focus directionally, normalize layouts, rotate layouts, and keep
-different projects in tabs.
+The workspace is built for running **multiple live sessions** in a real
+development layout. You can split panes, open Claude, Codex, and terminal
+sessions side by side, move focus directionally, normalize layouts, rotate
+layouts, and keep different projects in tabs.
 
 This is the basic difference from a single-agent product surface: Agent Code
-assumes that serious work often spans multiple agents, terminals, worktrees, and
-review loops at the same time.
+assumes that serious work often spans _multiple agents, terminals, worktrees,
+and review loops_ at the same time.
 
 ### Dispatch
 
-Dispatch is a workspace mode for managing agents outside the fixed pane grid.
+Dispatch is a workspace mode for managing agents **outside the fixed pane grid**.
 Agents can be detached, pinned, attached back into the grid, or viewed through
 global and tiled dispatch surfaces.
 
@@ -164,8 +166,8 @@ underlying transcript.
 This is powered by
 [`agent-transcript-parser`](https://github.com/Juliusolsson05/agent-transcript-parser),
 which converts Claude JSONL and Codex rollout JSONL between provider formats.
-The source transcript is not destroyed; Agent Code writes a translated session
-and resumes the target provider from there.
+The source transcript is **not destroyed**; Agent Code writes a translated
+session and resumes the target provider from there.
 
 Provider switching is available for individual agents and for batches of agents,
 which matters when a provider limit makes a whole set of sessions unusable.
@@ -181,8 +183,8 @@ state into a structured feed. This makes it easier to inspect what an agent did:
 commands it ran, code it changed, tools it used, prompts it answered, and where
 its current state came from.
 
-The raw terminal is still available. Custom rendering adds control; it does not
-remove the underlying process.
+The raw terminal is still available. **Custom rendering adds control; it does not
+remove the underlying process.**
 
 ### Persistent Terminals
 
@@ -211,8 +213,8 @@ Through the orchestration MCP tools, one agent can launch other Claude or Codex
 agents, assign roles, send prompts, wait for completion, read outputs, and close
 the run.
 
-The children are not invisible subprocesses. They are real Agent Code sessions
-with placement, status, transcripts, and UI visibility.
+The children are <ins>not invisible subprocesses</ins>. They are real Agent Code
+sessions with placement, status, transcripts, and UI visibility.
 
 ### Prompt and Transcript Workflows
 
@@ -241,8 +243,8 @@ Agent Code includes supporting development surfaces around the agents:
 - Monaco editor
 - AI workspaces for collecting files and review artifacts
 
-The editor is not the center of the product. The agent runtime is. But the
-editor surfaces are there when they improve the agent workflow.
+The editor is **not** the center of the product. **The agent runtime is.** But
+the editor surfaces are there when they improve the agent workflow.
 
 ### Voice Dictation
 
@@ -260,10 +262,10 @@ includes status and debug surfaces for agent processes, transcripts, rendering,
 proxy streams, performance, heap pressure, debug bundles, and incident
 investigation.
 
-This is not decoration. Long-running agent sessions fail in complicated ways:
-provider exits, transcript drift, rendering disagreements, frozen UI paths,
-missing sessions after reload, or native process memory issues. Agent Code keeps
-local evidence so those problems can be debugged.
+This is **not decoration**. Long-running agent sessions fail in complicated
+ways: provider exits, transcript drift, rendering disagreements, frozen UI
+paths, missing sessions after reload, or native process memory issues. Agent
+Code keeps local evidence so those problems can be debugged.
 
 ## Architecture
 
@@ -295,7 +297,7 @@ Agent Code depends on several packages that are useful outside this app:
 - [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation)
   — dictation primitives for agent composer UIs
 
-Agent Code is the desktop shell where those pieces come together.
+Agent Code is the **desktop shell** where those pieces come together.
 
 ## What This Is Not
 
@@ -307,7 +309,7 @@ Agent Code is not:
 - a reimplementation of Claude Code or Codex
 - an editor where agents are a side feature
 
-It is an IDE around the real agent runtimes.
+It is an IDE around the **real agent runtimes**.
 
 ## Development
 
@@ -358,13 +360,13 @@ vendor/         Read-only upstream source references
 
 ## Status
 
-Agent Code is active beta software. It already supports Claude Code sessions,
-Codex sessions, terminal sessions, tiled layouts, Dispatch, provider switching,
-transcript workflows, built-in MCP orchestration, tmux-backed terminals, custom
-rendering, voice dictation, and diagnostics.
+Agent Code is **active beta software**. It already supports Claude Code
+sessions, Codex sessions, terminal sessions, tiled layouts, Dispatch, provider
+switching, transcript workflows, built-in MCP orchestration, tmux-backed
+terminals, custom rendering, voice dictation, and diagnostics.
 
 The upstream CLIs move quickly, so this project moves quickly too. The goal is
-not to hide that complexity. The goal is to preserve the real runtimes while
+not to hide that complexity. The goal is to **preserve the real runtimes** while
 building the developer-controlled workspace around them.
 
 ## License
