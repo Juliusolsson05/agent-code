@@ -1,5 +1,3 @@
-This is a duplicate of the post on juliusolsson.com/agent-code.
-
 Agent Code is an open-source Electron-based AI-native IDE built by me. This post is about showcasing it.
 
 ## Why build this?
