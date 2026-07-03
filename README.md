@@ -22,6 +22,10 @@
 Agent Code is an open-source Electron IDE for driving the real Claude Code and
 Codex CLIs from a workspace built for multi-agent development.
 
+<p align="center">
+  <img src="docs/screenshots/tiled-workspace.png" alt="Agent Code tiled workspace with multiple Claude and Codex sessions running side by side across project tabs" />
+</p>
+
 ## Why it exists
 
 Claude Code and Codex are strong runtimes: real permission flows, tool loops,
@@ -68,6 +72,11 @@ a running session can move mid-task from Claude Code to Codex or back.
 - **Persistent terminals** — tmux-backed shells that survive UI reloads.
 - **Built-in MCP + orchestration** — a parent agent can create real Agent Code
   child agents, prompt them, wait for them, and read their outputs.
+
+  <p align="center">
+    <img src="docs/screenshots/orchestration.png" alt="Agent Code Dispatch sidebar with orchestration MCP tool calls (send_prompt, wait_agents, read_agent, close_run) running in a live session" />
+  </p>
+
 - **Prompt and transcript tools** — search, rewind, duplicate, resume-command
   copy, prompt templates.
 - **Voice dictation** — via
