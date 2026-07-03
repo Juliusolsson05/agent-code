@@ -100,14 +100,33 @@ a running session can move mid-task from Claude Code to Codex or back.
 
 ## Getting started
 
-Requires Node 22, plus `claude` and `codex` on `PATH`.
+Requires Node 22, plus `claude` and `codex` on `PATH`. The headless runtimes
+live as git submodules, so clone with them included:
 
 ```bash
+git clone --recurse-submodules https://github.com/Juliusolsson05/agent-code.git
+cd agent-code
 npm install
 npm run dev
 ```
 
-Build a distributable macOS app with `npm run dist:mac`.
+If you already cloned without `--recurse-submodules`, initialize them once:
+
+```bash
+git submodule update --init --recursive
+```
+
+To build a distributable macOS app, first fetch the bundled runtime artifacts
+(tmux, mitmproxy), then package:
+
+```bash
+npm run runtime:prepare:mac
+npm run dist:mac
+```
+
+`dist:mac` is shaky in this early beta stage — packaging edge cases around
+bundled binaries and code signing are still being ironed out. For day-to-day
+use, run Agent Code with `npm run dev` instead.
 
 ## Companion packages
 
