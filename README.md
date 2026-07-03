@@ -64,7 +64,14 @@ a running session can move mid-task from Claude Code to Codex or back.
 ## What you can do with it
 
 - **Tiled workspace** — many agent and terminal sessions in a real pane layout.
-- **Dispatch** — manage detached agents outside the fixed grid.
+- **Dispatch** — manage detached agents outside the fixed grid. Bulk actions
+  cover the fleet cases: closing agents that have been inactive across every
+  project, pinning agents to Dispatch, or reattaching them to the grid.
+
+  <p align="center">
+    <img src="docs/screenshots/close-old-agents.png" alt="Agent Code Close Old Agents modal — inactive-hours threshold, per-project scope, and a preview of the Claude and Codex agents that will be closed" />
+  </p>
+
 - **Provider switching** — move any session between Claude and Codex,
   individually or in bulk, without losing state.
 - **Custom rendering** — React feed built from committed transcripts, semantic
@@ -78,7 +85,13 @@ a running session can move mid-task from Claude Code to Codex or back.
   </p>
 
 - **Prompt and transcript tools** — search, rewind, duplicate, resume-command
-  copy, prompt templates.
+  copy, prompt templates. Reader Mode gives a paginated, distraction-free view
+  of long sessions for reviewing what an agent actually did.
+
+  <p align="center">
+    <img src="docs/screenshots/reader-mode.png" alt="Agent Code Reader Mode — paginated distraction-free view of a long agent session with Older/Newer navigation across project tabs" />
+  </p>
+
 - **Voice dictation** — via
   [`agent-voice-dictation`](https://github.com/Juliusolsson05/agent-voice-dictation).
 - **Diagnostics** — durable local evidence for provider exits, transcript
