@@ -64,9 +64,10 @@ a running session can move mid-task from Claude Code to Codex or back.
 ## What you can do with it
 
 - **Tiled workspace** — many agent and terminal sessions in a real pane layout.
-- **Dispatch** — manage detached agents outside the fixed grid. Bulk actions
-  cover the fleet cases: closing agents that have been inactive across every
-  project, pinning agents to Dispatch, or reattaching them to the grid.
+- **Fleet management** — manage detached agents outside the fixed grid. Bulk
+  actions cover the multi-project cases: closing agents that have been inactive
+  across every project, pinning them for quick access, or reattaching them to
+  the grid.
 
   <p align="center">
     <img src="docs/screenshots/close-old-agents.png" alt="Agent Code Close Old Agents modal — inactive-hours threshold, per-project scope, and a preview of the Claude and Codex agents that will be closed" />
