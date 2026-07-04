@@ -416,7 +416,26 @@ export class SessionManager extends EventEmitter {
         binary: getToolPath(kind, kind),
         cols: initialSize.cols,
         rows: initialSize.rows,
-        snapshotIntervalMs: 16,
+        // 100ms (~10Hz), NOT the old 16ms (~60Hz). The 'screen'
+        // snapshot pipeline is a parsing/monitoring surface, not a
+        // display path — the visible terminal renders from raw
+        // pty-data. At 16ms every live session built four buffer
+        // serializations per tick (two of them per-cell markdown
+        // walks over ~200 rows), ran all screen parsers, and shipped
+        // four strings over IPC; with ~10 concurrent sessions that
+        // allocated hundreds of MB/s of garbage in main and the V8
+        // major-GC storm pinned ~80% CPU with heapUsed oscillating
+        // 46MB↔1.2GB (#390 has the full trace-driven diagnosis).
+        //
+        // Kept EXPLICIT (not omitted) deliberately: the pinned
+        // headless submodule commits still default to 16 internally
+        // until the pointer bumps for claude-code-headless#32 /
+        // codex-headless#24 land, and an explicit value here keeps
+        // the app-side cadence independent of which submodule
+        // revision is checked out. Those PRs also add a change gate
+        // that skips identical frames entirely — the two fixes
+        // compose.
+        snapshotIntervalMs: 100,
         resumeSessionId: options.resumeSessionId,
         dangerousMode: options.dangerousMode,
         shellSessionId: sessionId,

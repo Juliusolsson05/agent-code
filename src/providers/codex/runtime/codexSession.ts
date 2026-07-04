@@ -181,7 +181,11 @@ export class CodexSession extends EventEmitter {
     this.shellSessionId = options.shellSessionId ?? null
     this.useProxy = options.useProxy === true
     this.builtInMcpServers = options.builtInMcpServers ?? []
-    this.snapshotIntervalMs = options.snapshotIntervalMs ?? 16
+    // Fallback matches sessionManager's explicit 100ms (~10Hz) — see
+    // the WHY comment there (#390). Keeping this default in sync
+    // matters because a `?? 16` here would silently restore the 60Hz
+    // GC-storm cadence for any future caller that omits the option.
+    this.snapshotIntervalMs = options.snapshotIntervalMs ?? 100
 
     // Build env: start from process.env so PATH, HOME, API keys
     // propagate. Force TERM + COLORTERM for proper color output.
