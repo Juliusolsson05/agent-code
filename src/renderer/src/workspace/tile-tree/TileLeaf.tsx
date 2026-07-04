@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -133,7 +134,7 @@ export function TileLeaf({
     acknowledgeWorkspaceSession(sessionId)
   }, [acknowledgeWorkspaceSession, sessionId])
   const setDraftImages = workspace.setDraftImages
-  const provider: 'claude' | 'codex' =
+  const provider: AgentProviderKind =
     workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
 
   // Auto-grow the composer textarea to fit its content — hook lives

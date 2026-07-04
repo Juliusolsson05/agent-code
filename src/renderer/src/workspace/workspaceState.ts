@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type {
   SessionId,
   SplitDirection,
@@ -49,7 +50,7 @@ export type ClaudeDraftImage = {
 
 export type PendingRewindUndo = {
   createdAt: number
-  provider: 'claude' | 'codex'
+  provider: AgentProviderKind
   cwd: string
   previousProviderSessionId: string
   rewoundProviderSessionId: string

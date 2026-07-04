@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useCallback, useState } from 'react'
 
 import type {
@@ -80,7 +81,7 @@ export function useUndoCloseAction(
       let newSessionId: SessionId
       try {
         newSessionId = await sessionActions.spawn(meta.cwd, {
-          kind: meta.kind ?? 'claude',
+          kind: meta.kind ?? DEFAULT_PROVIDER,
           resumeSessionId: resumableProviderSessionId(meta),
           recoverTmuxName: meta.kind === 'terminal' ? meta.tmuxName : undefined,
         })
@@ -147,7 +148,7 @@ export function useUndoCloseAction(
           return 'stale'
         }
         try {
-          const kind: SessionKind = meta.kind ?? 'claude'
+          const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
           // Same per-kind recover hint as the pane-undo branch
           // above: tmuxName for terminals, providerSessionId for
           // agents.
@@ -204,7 +205,7 @@ export function useUndoCloseAction(
       const restoredDetached: Record<SessionId, DetachedSessionRecord> = {}
       for (const detached of entry.detachedEntries ?? []) {
         try {
-          const kind: SessionKind = detached.meta.kind ?? 'claude'
+          const kind: SessionKind = detached.meta.kind ?? DEFAULT_PROVIDER
           // Detached agents are never terminals in the current model
           // (createDetachedDispatchAgent rejects 'terminal'), but we
           // still gate the recover hint on kind for symmetry with the

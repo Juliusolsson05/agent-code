@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
@@ -43,13 +44,13 @@ export const copyCodeBlockCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
       // WHY terminal rows are excluded:
       // code-block picking walks rendered feed DOM nodes with
       // data-code-block-id. Terminal output is painted by xterm, not the feed
       // renderer, so there is no stable code-block identity to enumerate or
       // highlight.
-      return kind === 'claude' || kind === 'codex'
+      return isAgentProviderKind(kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)

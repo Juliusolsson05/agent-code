@@ -22,7 +22,7 @@ import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 //     never persists these markers across sessions.
 
 export type HistoryChunkRequest = {
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   cwd: string
   providerSessionId: string
   beforeMarker: string

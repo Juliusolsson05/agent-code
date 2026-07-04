@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 import type { WorktreeActivityIndexStatus, WorktreeActivitySummary } from '@preload/index'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { matchWorktree } from '@shared/work-context/matching'
@@ -7,7 +8,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 export type WorktreeLiveAgent = {
   sessionId: SessionId
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   tabTitle: string
   live: boolean
   focused: boolean
@@ -114,7 +115,7 @@ export function collectLiveAgentsByWorktree(
   workspace.state.tabs.forEach((tab: Tab) => {
     for (const sessionId of resolveTabSessions(workspace.state, tab.id)) {
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       if (kind !== 'claude' && kind !== 'codex') continue
       const runtime = workspace.runtimes[sessionId]
       const contextPath = runtime?.workContext?.worktreePath ?? meta?.cwd

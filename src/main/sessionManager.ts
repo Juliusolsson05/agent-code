@@ -14,7 +14,12 @@ import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
-import type { SessionKind } from '@shared/types/providerKind.js'
+import {
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+  type AgentProviderKind,
+  type SessionKind,
+} from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -184,7 +189,7 @@ interface AgentSessionLike {
 // (claude, codex) are created via the provider registry; terminal
 // sessions are handled directly.
 type RegistryEntry =
-  | { kind: 'claude' | 'codex'; session: AgentSessionLike }
+  | { kind: AgentProviderKind; session: AgentSessionLike }
   | { kind: 'terminal'; session: TerminalSession; tmuxName: string | null }
 
 // Rolling buffer cap for terminal replay. 256 KB is enough to hold
@@ -357,7 +362,7 @@ export class SessionManager extends EventEmitter {
    * terminal sessions it's just the PTY spawn.
    */
   async spawn(options: SessionSpawnOptions): Promise<SessionSpawnResult> {
-    const kind: SessionKind = options.kind ?? 'claude'
+    const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
     const sessionId = options.preferredSessionId ?? randomUUID()
     if (this.sessions.has(sessionId) || this.spawningSessionIds.has(sessionId)) {
       throw new Error(`Session ${sessionId} is already live`)
@@ -386,7 +391,11 @@ export class SessionManager extends EventEmitter {
     // identical. The registry handles which concrete session class to
     // instantiate. This eliminates the if/else duplication that caused
     // cross-provider breakage when editing one provider's spawn logic.
-    if (kind === 'claude' || kind === 'codex') {
+    // isAgentProviderKind, not a literal pair: this is the agent-vs-
+    // terminal spawn dispatch. With the literal pair, a registered
+    // third provider silently fell through and spawned a PLAIN SHELL
+    // (#394 §4.1 — the worst of the silent failure modes).
+    if (isAgentProviderKind(kind)) {
       const initialSize = {
         cols: options.cols ?? 120,
         rows: options.rows ?? 40,
@@ -816,7 +825,7 @@ export class SessionManager extends EventEmitter {
   attachAgentPty(sessionId: string): string {
     const entry = this.sessions.get(sessionId)
     if (!entry) return ''
-    if (entry.kind !== 'claude' && entry.kind !== 'codex') {
+    if (!isAgentProviderKind(entry.kind)) {
       console.warn(
         `[SessionManager] attachAgentPty called on non-agent session`,
         { sessionId, kind: entry.kind },
@@ -850,7 +859,7 @@ export class SessionManager extends EventEmitter {
     this.agentPtyAttachCounts.delete(sessionId)
     const restoreSize = this.agentPtyRestoreSizes.get(sessionId)
     this.agentPtyRestoreSizes.delete(sessionId)
-    if (!entry || (entry.kind !== 'claude' && entry.kind !== 'codex')) return
+    if (!entry || !isAgentProviderKind(entry.kind)) return
     if (!restoreSize) return
     entry.session.resize(restoreSize.cols, restoreSize.rows)
     this.sessionSizes.set(sessionId, restoreSize)

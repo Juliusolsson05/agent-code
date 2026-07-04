@@ -1,10 +1,11 @@
 import { existsSync } from 'fs'
 
 import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export type TranscriptPathRequest = {
   sessionId: string
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   cwd: string
   providerSessionId: string
 }

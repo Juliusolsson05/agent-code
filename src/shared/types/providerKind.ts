@@ -65,3 +65,23 @@ export function isAgentProviderKind(value: unknown): value is AgentProviderKind 
 export function isSessionKind(value: unknown): value is SessionKind {
   return typeof value === 'string' && (SESSION_KINDS as readonly string[]).includes(value)
 }
+
+/**
+ * The provider used when a spawn/restore site has no explicit kind.
+ *
+ * WHY this exists as a named constant: before the provider plug-and-play
+ * refactor (#394) the codebase had ~40 scattered `?? 'claude'` fallbacks —
+ * in rehydrate, spawn actions, pane splits, undo-close, tile mounting and
+ * more. Each was an invisible policy decision ("absent kind means Claude")
+ * that no one could find, reconsider, or change in one place. They now all
+ * route through this constant.
+ *
+ * Two DIFFERENT situations funnel here, and only one is really "default":
+ *   1. Persisted workspace blobs from before `SessionMeta.kind` existed —
+ *      those sessions genuinely were Claude, so this is back-compat truth.
+ *   2. Convenience defaults for new spawns when the caller didn't say —
+ *      this is product policy and may become a user setting later.
+ * If those ever need to diverge, split this into two constants; do NOT
+ * re-scatter inline literals.
+ */
+export const DEFAULT_PROVIDER: AgentProviderKind = 'claude'

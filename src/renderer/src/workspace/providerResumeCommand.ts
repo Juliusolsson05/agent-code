@@ -1,4 +1,10 @@
-export type ResumableProviderKind = 'claude' | 'codex'
+import type { AgentProviderKind } from '@shared/types/providerKind'
+
+// Alias of the single provider source of truth (#394 phase 1). The
+// command construction below is still a hand-written two-provider
+// ternary — a `resumeCommand` registry capability replaces it in
+// phase 2/4.
+export type ResumableProviderKind = AgentProviderKind
 
 function shellQuote(value: string): string {
   if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) return value

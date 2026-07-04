@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
 import {
   isCompactBoundaryEntry,
@@ -101,7 +102,7 @@ export async function loadInitialHistoryForSession({
   meta?: SessionMeta
 }): Promise<void> {
   const meta = metaOverride ?? refs.stateRef.current.sessions[sessionId]
-  const kind = meta?.kind ?? 'claude'
+  const kind = meta?.kind ?? DEFAULT_PROVIDER
   if (!meta || (kind !== 'claude' && kind !== 'codex')) return
 
   if (!hasDurableProviderSession(meta)) {

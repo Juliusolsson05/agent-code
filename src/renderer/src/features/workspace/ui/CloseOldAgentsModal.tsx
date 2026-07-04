@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { relativeTime } from '@renderer/lib/relativeTime'
@@ -21,7 +22,7 @@ type AgentRow = {
   tabId: string
   tabTitle: string
   tabIndex: number
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   cwd: string
   cwdBase: string
   isLive: boolean
@@ -133,7 +134,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
 
         const meta = workspace.state.sessions[sessionId]
         if (!meta) continue
-        const kind = meta.kind ?? 'claude'
+        const kind = meta.kind ?? DEFAULT_PROVIDER
         if (kind !== 'claude' && kind !== 'codex') continue
 
         const runtime = workspace.runtimes[sessionId]

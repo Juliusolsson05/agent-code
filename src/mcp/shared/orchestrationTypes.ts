@@ -1,6 +1,11 @@
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
-export type OrchestrationAgentKind = 'claude' | 'codex'
+// Alias, not a re-declared union: orchestration can drive any registered
+// agent provider. Keeping the local name preserves this module's public
+// surface while the definition now derives from the single source of
+// truth (#394 phase 1 — union sprawl).
+export type OrchestrationAgentKind = AgentProviderKind
 
 export type OrchestrationCreateAgentRequest = {
   requestId: string

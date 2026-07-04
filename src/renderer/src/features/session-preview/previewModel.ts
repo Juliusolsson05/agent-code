@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type {
   Entry,
   ToolResultBlock,
@@ -58,7 +59,7 @@ export type PreviewModel = {
  */
 export function buildPreviewModel(
   rawEntries: Record<string, unknown>[],
-  kind: 'claude' | 'codex',
+  kind: AgentProviderKind,
 ): PreviewModel {
   const entries: Entry[] = []
   const toolUseIndex = new Map<string, ToolUseBlock>()

@@ -1,3 +1,4 @@
+import { isAgentProviderKind } from '@shared/types/providerKind'
 import { useEffect, useMemo, useState } from 'react'
 
 import type { SessionRuntime } from '@renderer/workspace/workspaceStore'
@@ -40,7 +41,7 @@ export function DebugPanel({
   // the tiny debug rail and the full pane fight over dimensions and make the
   // provider TUI repaint between two sizes. The raw screen text remains useful
   // diagnostics, so only the interactive inline terminal path is suppressed.
-  const canOpenRawTerminal = (kind === 'claude' || kind === 'codex') && !inlineRawTerminalDisabled
+  const canOpenRawTerminal = isAgentProviderKind(kind) && !inlineRawTerminalDisabled
 
   useEffect(() => {
     setRawTerminalOpen(false)

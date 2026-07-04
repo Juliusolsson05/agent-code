@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { WorktreeDump, WorktreeDumpRow } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { relativeTime } from '@renderer/lib/relativeTime'
 
@@ -116,7 +117,7 @@ export function labelFor(category: string): string {
   return 'Review'
 }
 
-export function providerLabel(kind: 'claude' | 'codex'): string {
+export function providerLabel(kind: AgentProviderKind): string {
   return kind === 'codex' ? 'Codex' : 'Claude'
 }
 

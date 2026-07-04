@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import {
@@ -28,7 +29,7 @@ import { PreviewTranscript } from '@renderer/features/session-preview/ui/Preview
 // Which session to preview. Exactly the fields loadInitialHistory
 // needs — the picker maps its own row shape onto this.
 export type PreviewTarget = {
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   // Absolute cwd. For Claude this selects the project transcript dir;
   // for Codex the rollout store is global so an empty string still
   // resolves. Also handed to CodeRenderContext as the workspace root.
@@ -179,7 +180,7 @@ function PaneHeader({
   kind,
 }: {
   state: PaneState
-  kind: 'claude' | 'codex' | null
+  kind: AgentProviderKind | null
 }) {
   const turns =
     state.status === 'ready' ? countUserTurns(state.model.entries) : null

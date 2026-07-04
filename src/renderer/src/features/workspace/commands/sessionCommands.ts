@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -43,8 +44,8 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'claude' || kind === 'codex'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -88,9 +89,9 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       return (
-        (kind === 'claude' || kind === 'codex') &&
+        isAgentProviderKind(kind) &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -129,9 +130,9 @@ export const sessionCommands: CommandDef[] = [
       const meta = workspace.state.sessions[sessionId]
       const runtime = workspace.getRuntime(sessionId)
       const pending = runtime.pendingRewindUndo
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       return (
-        (kind === 'claude' || kind === 'codex') &&
+        isAgentProviderKind(kind) &&
         Boolean(pending) &&
         meta?.providerSessionId === pending?.rewoundProviderSessionId &&
         !runtime.processActive &&
@@ -280,15 +281,15 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'claude' || kind === 'codex'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
     },
     getState: ctx => builtInMcpDomainState(ctx, 'ping'),
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       if ((kind !== 'claude' && kind !== 'codex') || !meta) return
 
       ui.closePalette()
@@ -326,15 +327,15 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'claude' || kind === 'codex'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
     },
     getState: ctx => builtInMcpDomainState(ctx, 'ai_workspace'),
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       if ((kind !== 'claude' && kind !== 'codex') || !meta) return
 
       ui.closePalette()
@@ -372,15 +373,15 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'claude' || kind === 'codex'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
     },
     getState: ctx => builtInMcpDomainState(ctx, 'orchestration'),
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       if ((kind !== 'claude' && kind !== 'codex') || !meta) return
 
       ui.closePalette()
@@ -418,15 +419,15 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'claude' || kind === 'codex'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
     },
     getState: ctx => builtInMcpDomainState(ctx, 'agent_transcripts'),
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       if ((kind !== 'claude' && kind !== 'codex') || !meta) return
 
       ui.closePalette()
@@ -463,7 +464,7 @@ export const sessionCommands: CommandDef[] = [
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       return {
         label: kind === 'codex' ? 'Codex' : 'Claude',
         tone: 'neutral',
@@ -473,8 +474,8 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind) && Boolean(meta?.providerSessionId)
     },
     run: ({ workspace }) => void workspace.reloadFocusedAgent(),
   },
@@ -500,7 +501,7 @@ export const sessionCommands: CommandDef[] = [
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       return {
         label: kind === 'codex' ? 'Codex' : 'Claude',
         tone: 'neutral',
@@ -510,8 +511,8 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'claude' || kind === 'codex'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
     },
     run: async ({ workspace, ui }) => {
       ui.closePalette()
@@ -528,7 +529,7 @@ export const sessionCommands: CommandDef[] = [
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       return {
         label: kind === 'codex' ? 'Codex' : 'Claude',
         tone: 'neutral',
@@ -538,14 +539,14 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return (kind === 'claude' || kind === 'codex') && Boolean(meta?.providerSessionId)
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind) && Boolean(meta?.providerSessionId)
     },
     run: async ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) return
 
       const command = buildProviderResumeCommand(kind, meta.cwd, meta.providerSessionId)
@@ -571,9 +572,9 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       return (
-        (kind === 'claude' || kind === 'codex') &&
+        isAgentProviderKind(kind) &&
         Boolean(meta?.providerSessionId)
       )
     },
@@ -581,7 +582,7 @@ export const sessionCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       if (kind !== 'claude' && kind !== 'codex') return
       if (!meta?.providerSessionId) return
       try {
@@ -613,7 +614,7 @@ export const sessionCommands: CommandDef[] = [
     getState: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
-      const kind = meta?.kind ?? 'claude'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
       return {
         label: kind === 'codex' ? 'Codex' : 'Claude',
         tone: 'neutral',
@@ -624,8 +625,8 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return false
       const meta = workspace.state.sessions[sessionId]
       if (!meta) return false
-      const kind = meta?.kind ?? 'claude'
-      return kind === 'claude' || kind === 'codex'
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
     },
     run: ({ workspace }) => void workspace.switchFocusedProvider(),
   },

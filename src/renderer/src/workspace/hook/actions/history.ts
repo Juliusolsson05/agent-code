@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
@@ -57,7 +58,7 @@ export function useHistoryActions(
         return
       }
 
-      const kind = meta.kind ?? 'claude'
+      const kind = meta.kind ?? DEFAULT_PROVIDER
       if ((kind !== 'claude' && kind !== 'codex') || !meta.providerSessionId) {
         span.end({ skipped: 'unsupported-or-missing-provider-session', kind })
         return

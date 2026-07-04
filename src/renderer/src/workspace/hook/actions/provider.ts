@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -43,7 +44,7 @@ export function useProviderActions(
     const meta = current.sessions[sourceSessionId]
     if (!meta) return
 
-    const sourceKind = meta.kind ?? 'claude'
+    const sourceKind = meta.kind ?? DEFAULT_PROVIDER
     if (sourceKind !== 'claude' && sourceKind !== 'codex') {
       showPaneToast(sourceSessionId, 'Only Claude and Codex panes can switch provider')
       return
@@ -81,7 +82,7 @@ export function useProviderActions(
     const meta = current.sessions[sourceSessionId]
     if (!meta) return
 
-    const kind = meta.kind ?? 'claude'
+    const kind = meta.kind ?? DEFAULT_PROVIDER
     if (kind !== 'claude' && kind !== 'codex') {
       showPaneToast(sourceSessionId, 'Only Claude and Codex panes can reload')
       return
@@ -145,7 +146,7 @@ export function useProviderActions(
       const meta = current.sessions[sourceSessionId]
       if (!meta) return
 
-      const kind = meta.kind ?? 'claude'
+      const kind = meta.kind ?? DEFAULT_PROVIDER
       if (kind !== 'claude' && kind !== 'codex') {
         showPaneToast(sourceSessionId, 'Only Claude and Codex panes support rewind')
         return
@@ -278,7 +279,7 @@ export function useProviderActions(
       return
     }
 
-    const kind = meta.kind ?? 'claude'
+    const kind = meta.kind ?? DEFAULT_PROVIDER
     if (kind !== pending.provider) {
       showPaneToast(sourceSessionId, 'Rewind undo no longer matches this pane')
       return

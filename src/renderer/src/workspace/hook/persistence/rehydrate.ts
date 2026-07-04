@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isSessionKind } from '@shared/types/providerKind'
 import { emptyRuntime, type SessionRuntime, type TileTabsState } from '@renderer/workspace/workspaceState'
 import type {
   BuriedPaneRecord,
@@ -455,12 +456,39 @@ export async function rehydrateWorkspace(
       .map(async ([oldId, meta]) => {
         const restoreSpan = perf.span('workspace.rehydrate.session', {
           oldId,
-          kind: meta.kind ?? 'claude',
+          kind: meta.kind ?? DEFAULT_PROVIDER,
           hasProviderSessionId: Boolean(meta.providerSessionId),
           hasTmuxName: Boolean(meta.tmuxName),
         })
         try {
-          const kind: SessionKind = meta.kind ?? 'claude'
+          // Persisted-kind validation (#394 phase 1). workspace.json is
+          // parsed with no schema gate, so `meta.kind` can hold a string
+          // this build has never heard of — most plausibly a session
+          // written by a NEWER app version with an additional provider.
+          // Before this guard, the unknown kind flowed into spawnSession,
+          // main's getMainProvider threw, the catch below logged a
+          // generic warn, and the pane silently vanished — worse, its
+          // metadata was dropped from the next save, so downgrading the
+          // app permanently destroyed the session (#394 §4.3).
+          //
+          // Policy: keep the metadata verbatim under its old id (the
+          // pane shows as a dead leaf the user can close; a future build
+          // that knows the kind restores it fully) and skip the spawn
+          // loudly. Only `undefined` kind gets the DEFAULT_PROVIDER
+          // back-compat treatment — that means "written before kind
+          // existed", which really was Claude.
+          if (meta.kind !== undefined && !isSessionKind(meta.kind)) {
+            freshSessions[oldId] = meta
+            // eslint-disable-next-line no-console
+            console.error(
+              `[workspace] session ${oldId} has unknown provider kind ` +
+              `${JSON.stringify(meta.kind)} — preserving metadata, not spawning. ` +
+              `Was this workspace written by a newer Agent Code version?`,
+            )
+            restoreSpan.end({ skipped: 'unknown-provider-kind' })
+            return
+          }
+          const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
           const builtInMcpDomains =
             kind !== 'terminal'
               ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)

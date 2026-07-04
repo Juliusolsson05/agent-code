@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useCallback, useRef } from 'react'
 
 import type {
@@ -1073,7 +1074,7 @@ export function usePaneActions(
       // Pane-level close — show the kind+cwd basename so the user
       // can recognize which pane they killed when several look
       // alike.
-      const kindLabel = sessionMeta.kind ?? 'claude'
+      const kindLabel = sessionMeta.kind ?? DEFAULT_PROVIDER
       const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
       showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
     } else if (!parentInfo && sessionMeta) {
@@ -1196,7 +1197,7 @@ export function usePaneActions(
             dispatchMode: dispatchModeAfterSessionRemoval(prev, next, targetId),
           }
         })
-        const kindLabel = sessionMeta?.kind ?? 'claude'
+        const kindLabel = sessionMeta?.kind ?? DEFAULT_PROVIDER
         const cwdBase = sessionMeta?.cwd.split('/').filter(Boolean).pop() ?? sessionMeta?.cwd ?? 'session'
         showToast(`Closed detached ${kindLabel} session (${cwdBase})`)
         return
@@ -1218,7 +1219,7 @@ export function usePaneActions(
           side: parentInfo.side,
           siblingLeafId: parentInfo.siblingLeafId,
         })
-        const kindLabel = sessionMeta.kind ?? 'claude'
+        const kindLabel = sessionMeta.kind ?? DEFAULT_PROVIDER
         const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
         showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
       } else if (!parentInfo && sessionMeta) {
@@ -1382,7 +1383,7 @@ export function usePaneActions(
         note: note?.trim() ? note.trim() : undefined,
       }
 
-      const kindLabel = sessionMeta.kind ?? 'claude'
+      const kindLabel = sessionMeta.kind ?? DEFAULT_PROVIDER
       const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
       showToast(`Buried ${kindLabel} pane (${cwdBase})`)
 
@@ -1483,7 +1484,7 @@ export function usePaneActions(
               const meta = current.sessions[leafId]
               if (!meta) continue
               if (meta.cwd === entry.sessionMeta.cwd) score += 15
-              if ((meta.kind ?? 'claude') === (entry.sessionMeta.kind ?? 'claude')) score += 5
+              if ((meta.kind ?? DEFAULT_PROVIDER) === (entry.sessionMeta.kind ?? DEFAULT_PROVIDER)) score += 5
             }
             return { tab, score }
           })
@@ -1629,7 +1630,7 @@ export function usePaneActions(
         }
       })
 
-      const kindLabel = entry.sessionMeta.kind ?? 'claude'
+      const kindLabel = entry.sessionMeta.kind ?? DEFAULT_PROVIDER
       const cwdBase = entry.sessionMeta.cwd.split('/').filter(Boolean).pop() ?? entry.sessionMeta.cwd
       showToast(`Killed buried ${kindLabel} pane (${cwdBase})`)
     },

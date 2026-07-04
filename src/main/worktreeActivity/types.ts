@@ -1,6 +1,10 @@
 import type { WorktreeActivityKind } from '@shared/work-context/types.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
-export type WorktreeActivityProvider = 'claude' | 'codex'
+// Alias of the single provider source of truth (#394 phase 1). The
+// discovery walk in transcriptDiscovery.ts is still a hardcoded pair —
+// generalizing discovery is phase-2 registry work.
+export type WorktreeActivityProvider = AgentProviderKind
 
 export type WorktreeActivityCounts = {
   reads: number

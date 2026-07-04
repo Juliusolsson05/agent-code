@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { randomUUID } from 'node:crypto'
 
 import { cloneClaudeTranscript, toClaude, toCodex } from 'agent-transcript-parser'
@@ -16,7 +17,7 @@ import {
 } from '@main/providerSwitch/shared.js'
 
 export type SwitchProviderRequest = {
-  sourceKind: 'claude' | 'codex'
+  sourceKind: AgentProviderKind
   sourceProviderSessionId: string
   cwd: string
   sourceCwd?: string
@@ -24,7 +25,7 @@ export type SwitchProviderRequest = {
 }
 
 export type SwitchProviderResult = {
-  targetKind: 'claude' | 'codex'
+  targetKind: AgentProviderKind
   targetProviderSessionId: string
   targetFilePath: string
 }

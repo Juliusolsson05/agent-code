@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
@@ -422,7 +423,7 @@ export default function App() {
   )
 
   const onPathPickerAccept = useCallback(
-    async (cwd: string, provider?: 'claude' | 'codex') => {
+    async (cwd: string, provider?: AgentProviderKind) => {
       await workspace.newTab(cwd, undefined, provider)
       closePathPicker()
     },
@@ -430,7 +431,7 @@ export default function App() {
   )
 
   const onPathPickerResume = useCallback(
-    async (cwd: string, sessionId: string, provider: 'claude' | 'codex') => {
+    async (cwd: string, sessionId: string, provider: AgentProviderKind) => {
       // Resume reuses newTab's plumbing — same workspace entry, same
       // tile tree shape — but passes the resume id through to the
       // spawn call so main spawns the selected provider with its
@@ -774,10 +775,10 @@ export default function App() {
           <DebugPanel
             sessionId={commandTargetId}
             runtime={workspace.getRuntime(commandTargetId)}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
             inlineRawTerminalDisabled={
               getEffectiveAgentSurface({
-                kind: workspace.state.sessions[commandTargetId]?.kind ?? 'claude',
+                kind: workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER,
                 mode: settings.agentViewMode,
                 runtime: workspace.getRuntime(commandTargetId),
               }) === 'terminal'
@@ -790,7 +791,7 @@ export default function App() {
           <FeedDebugPanel
             sessionId={commandTargetId}
             runtime={workspace.getRuntime(commandTargetId)}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
             onClose={toggleFeedDebugPanel}
           />
         )}
@@ -798,7 +799,7 @@ export default function App() {
         {proxyDebugPanelOpen && commandTargetId && (
           <ProxyDebugPanel
             sessionId={commandTargetId}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
             onClose={toggleProxyDebugPanel}
           />
         )}
@@ -806,7 +807,7 @@ export default function App() {
         {htmlDebugPanelOpen && commandTargetId && (
           <HtmlDebugPanel
             sessionId={commandTargetId}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
             onClose={toggleHtmlDebugPanel}
           />
         )}
@@ -815,7 +816,7 @@ export default function App() {
           <DevDebugPanel
             sessionId={commandTargetId}
             runtime={workspace.getRuntime(commandTargetId)}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? 'claude'}
+            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
             workspace={workspace}
             onClose={toggleDevDebugPanel}
           />
@@ -970,7 +971,7 @@ export default function App() {
         open={buryPromptSessionId !== null && buriedPromptMeta !== null}
         title={
           buriedPromptMeta
-            ? `${buriedPromptMeta.kind ?? 'claude'} · ${buriedPromptMeta.cwd.split('/').filter(Boolean).pop() ?? buriedPromptMeta.cwd}`
+            ? `${buriedPromptMeta.kind ?? DEFAULT_PROVIDER} · ${buriedPromptMeta.cwd.split('/').filter(Boolean).pop() ?? buriedPromptMeta.cwd}`
             : ''
         }
         description={buriedPromptMeta?.cwd ?? ''}

@@ -1,3 +1,5 @@
+import type { SessionKind } from '@shared/types/providerKind.js'
+
 export type PerformanceProcess = 'main' | 'renderer' | 'preload'
 
 export type PerformanceRecordKind =
@@ -55,7 +57,7 @@ export type PerformanceSnapshot = {
 
 export type PanePerformanceStats = {
   sessionId: string
-  kind: 'claude' | 'codex' | 'terminal'
+  kind: SessionKind
   status: 'running' | 'idle' | 'exited' | 'unknown'
   rootPid: number | null
   cpuPercent: number | null

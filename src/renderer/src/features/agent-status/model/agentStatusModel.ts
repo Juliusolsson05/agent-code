@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import {
   buildVisibleDispatchRows,
@@ -13,7 +14,7 @@ import type {
 } from '@renderer/workspace/types'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 
-export type AgentStatusKind = Extract<SessionKind, 'claude' | 'codex'>
+export type AgentStatusKind = AgentProviderKind
 
 export type AgentStatusModel = {
   sessionId: SessionId
@@ -63,7 +64,7 @@ export function buildAgentStatusModel(
 ): AgentStatusModel | null {
   const meta = state.sessions[sessionId]
   if (!meta) return null
-  const kind = meta.kind ?? 'claude'
+  const kind = meta.kind ?? DEFAULT_PROVIDER
   if (!isAgentKind(kind)) return null
 
   const placement = derivePlacement(state, sessionId)
@@ -206,7 +207,7 @@ function findGridOwner(
 }
 
 function isAgentKind(kind: SessionKind): kind is AgentStatusKind {
-  return kind === 'claude' || kind === 'codex'
+  return isAgentProviderKind(kind)
 }
 
 function normalizeOptionalString(value: string | null | undefined): string | null {

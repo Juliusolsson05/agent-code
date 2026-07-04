@@ -271,7 +271,7 @@ export type SessionIndexPrompt = {
 
 export type SessionIndexEntry = {
   providerSessionId: string
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   cwd: string
   lastModified: number
   summary: string
@@ -291,7 +291,7 @@ export type SessionHistoryChunk = {
 
 export type TranscriptPathRequest = {
   sessionId: string
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   cwd: string
   providerSessionId: string
 }
@@ -475,7 +475,7 @@ export type WorktreeActivitySummary = {
   worktreePath: string
   branch: string | null
   lastActivityAt: number
-  lastProvider: 'claude' | 'codex'
+  lastProvider: AgentProviderKind
   lastProviderSessionId: string
   lastTranscriptFile: string
   lastSource: string

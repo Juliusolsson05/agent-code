@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
 
 // Provider-level session transforms on the bridge.
@@ -19,13 +20,13 @@ export const providerApi = {
    * so the pane stays in place while the backend swaps from Claude<->Codex.
    */
   switchProvider: (params: {
-    sourceKind: 'claude' | 'codex'
+    sourceKind: AgentProviderKind
     sourceProviderSessionId: string
     cwd: string
     sourceCwd?: string
     targetCwd?: string
   }): Promise<{
-    targetKind: 'claude' | 'codex'
+    targetKind: AgentProviderKind
     targetProviderSessionId: string
     targetFilePath: string
   }> => ipcRenderer.invoke('session:switch-provider', params),
@@ -43,13 +44,13 @@ export const providerApi = {
    * snapshot (later appends to the live source do not land in it).
    */
   duplicateSession: (params: {
-    provider: 'claude' | 'codex'
+    provider: AgentProviderKind
     sourceProviderSessionId: string
     cwd: string
     sourceCwd?: string
     targetCwd?: string
   }): Promise<{
-    provider: 'claude' | 'codex'
+    provider: AgentProviderKind
     newProviderSessionId: string
     newFilePath: string
   }> => ipcRenderer.invoke('session:duplicate', params),
@@ -72,14 +73,14 @@ export const providerApi = {
    * a zero-based index among user-role Codex message response_items.
    */
   rewindToPrompt: (params: {
-    provider: 'claude' | 'codex'
+    provider: AgentProviderKind
     sourceProviderSessionId: string
     cwd: string
     anchor:
       | { kind: 'claude'; uuid: string }
       | { kind: 'codex'; userMessageIndex: number }
   }): Promise<{
-    provider: 'claude' | 'codex'
+    provider: AgentProviderKind
     newProviderSessionId: string
     newFilePath: string
     /** Unwrapped prompt text — `<bash-input>` / `<command-name>/args>`

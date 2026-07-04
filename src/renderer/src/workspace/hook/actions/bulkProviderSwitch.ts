@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 
 import type { ProviderSwitchBatchAgent, SessionId } from '@renderer/workspace/types'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes, WorkspaceSetState } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
@@ -60,7 +60,7 @@ export function useBulkProviderSwitchActions(
         // because afterward this id is dead (replaceSession mints a new one).
         const meta = refs.stateRef.current.sessions[sessionId]
         const originalKind =
-          meta?.kind === 'codex' || meta?.kind === 'claude' ? meta.kind : null
+          isAgentProviderKind(meta?.kind) ? meta.kind : null
 
         const result = await switchAgentProvider({
           sessionId,
@@ -127,7 +127,7 @@ export function useBulkProviderSwitchActions(
         skipped += 1
         continue
       }
-      const currentKind = meta.kind ?? 'claude'
+      const currentKind = meta.kind ?? DEFAULT_PROVIDER
       if (currentKind !== agent.switchedToKind) {
         skipped += 1
         continue

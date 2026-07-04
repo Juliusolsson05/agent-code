@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import {
@@ -88,7 +89,7 @@ export const paneCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
       const kind = workspace.state.sessions[sessionId]?.kind
-      return kind === 'claude' || kind === 'codex'
+      return isAgentProviderKind(kind)
     },
     run: ({ workspace, ui }) => {
       const sessionId = commandTargetSessionId(workspace)
@@ -397,7 +398,7 @@ export const paneCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
       return kind !== 'terminal'
     },
     run: ({ workspace }) => {
@@ -422,7 +423,7 @@ export const paneCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const runtime = workspace.getRuntime(sessionId)
-      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
       const text = extractLastAssistantText(runtime.entries, kind)
       if (text) {
         void navigator.clipboard.writeText(text)

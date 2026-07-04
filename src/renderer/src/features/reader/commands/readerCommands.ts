@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
@@ -15,13 +16,13 @@ export const readerCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
       // WHY Reader Mode is agent-only:
       // Reader renders assistant transcript messages. A terminal row renders
       // raw PTY scrollback through xterm.js and has no assistant-message
       // model, so allowing Reader from a terminal would either show an empty
       // surface or pretend terminal output is provider prose.
-      return kind === 'claude' || kind === 'codex'
+      return isAgentProviderKind(kind)
     },
     run: ({ workspace }) => workspace.toggleReaderMode(),
   },

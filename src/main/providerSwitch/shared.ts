@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 // Shared fs + transcript helpers used by both switchProvider and
 // duplicateSession.
 //
@@ -95,7 +96,7 @@ export async function findCodexRolloutPathBySessionId(
 }
 
 export async function resolveProviderTranscriptPath(params: {
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   cwd: string
   providerSessionId: string
 }): Promise<string | null> {

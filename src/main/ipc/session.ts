@@ -7,6 +7,11 @@ import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
 import {
+  AGENT_PROVIDER_KINDS,
+  DEFAULT_PROVIDER,
+  type AgentProviderKind,
+} from '@shared/types/providerKind.js'
+import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,
 } from '@main/sessions/historyLoader.js'
@@ -158,7 +163,7 @@ export function registerSessionIpc(
       _evt,
       cwd: string,
       limit?: number,
-      provider: 'claude' | 'codex' = 'claude',
+      provider: AgentProviderKind = DEFAULT_PROVIDER,
     ) => {
       try {
         const providerConfig = getMainProvider(provider)
@@ -181,7 +186,10 @@ export function registerSessionIpc(
     async (_evt, limit?: number) => {
       const cap = typeof limit === 'number' && limit > 0 ? limit : 200
       try {
-        const providers = ['claude', 'codex'] as const
+        // Derived list: a newly registered provider is automatically
+        // included in the global inventory (#394 phase 1 — this was a
+        // hand-rolled pair that would silently omit a third provider).
+        const providers = AGENT_PROVIDER_KINDS
         const listed = await Promise.all(providers.map(async provider => {
           const providerConfig = getMainProvider(provider)
           if (!providerConfig.listAllSessions) return []
@@ -204,7 +212,7 @@ export function registerSessionIpc(
     async (
       _evt,
       params: {
-        kind: 'claude' | 'codex'
+        kind: AgentProviderKind
         cwd: string
         providerSessionId: string
         beforeMarker: string
@@ -223,7 +231,7 @@ export function registerSessionIpc(
     async (
       _evt,
       params: {
-        kind: 'claude' | 'codex'
+        kind: AgentProviderKind
         cwd: string
         providerSessionId: string
         limit?: number
@@ -242,7 +250,7 @@ export function registerSessionIpc(
       _evt,
       requests: Array<{
         sessionId: string
-        kind: 'claude' | 'codex'
+        kind: AgentProviderKind
         cwd: string
         providerSessionId: string
       }>,
