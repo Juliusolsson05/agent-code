@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'fs/promises'
+import { mkdir, stat, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { FEED_DEBUG_DIR } from '@main/storage/paths.js'
@@ -6,6 +6,54 @@ import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 // Shared filename-safe token helper — same escape rule the debug-bundle folder
 // suffix uses. See @shared/runtime/projectDir sanitizeFilenameToken.
 import { sanitizeFilenameToken } from '@shared/runtime/projectDir.js'
+
+// Per-file cap for a single session's feed-debug JSONL.
+//
+// WHY 128 MiB: forensics from the 2026-07-04 crash (issue #388) showed
+// individual session files reaching 60–300 MiB, and the IPC pipeline that
+// delivered those bytes to main dominated the last 30 spans before a
+// mark-compact abort. debugRetention already caps the WHOLE feed-debug bucket
+// at ~3 GiB (22% of ~13.8 GiB), but that's a global figure — a single
+// pathological session could still eat the entire bucket by itself.
+//
+// 128 MiB per file is roughly:
+//   - 4 hours of dense debug output from one very chatty session,
+//   - large enough to be useful in a debug bundle (still holds hours of
+//     context around a bug),
+//   - small enough that a single unbounded file cannot dominate the
+//     bucket, and that on-disk work per append stays proportional to what
+//     the renderer is actually doing.
+//
+// WHY a hard drop instead of rotation: rotation to `.1.jsonl`, `.2.jsonl`
+// etc. would need the debug-bundle collector to glob all shards, and would
+// silently keep letting one session grow forever across many files. A hard
+// drop with a tombstone line is the opposite: forensics readers see a clear
+// "we stopped writing at this point and dropped N further entries", the
+// underlying cause (renderer sending too much) is not hidden by rotation.
+// The renderer already retains its in-memory debug window; the disk trail
+// is a bonus, not the source of truth, so bounding it is safe.
+const MAX_FEED_DEBUG_FILE_BYTES = 128 * 1024 * 1024
+
+// Tombstone line: exactly ONE JSONL row is appended the first time a
+// session's file crosses the cap, then further appends short-circuit. This
+// gives a clean end-of-file marker for readers without producing an
+// unbounded stream of "capped" markers.
+type FeedDebugCapState = {
+  bytesWritten: number
+  tombstoneWritten: boolean
+  droppedEntries: number
+}
+const feedDebugCapState = new Map<string, FeedDebugCapState>()
+
+async function loadInitialFileBytes(filePath: string): Promise<number> {
+  try {
+    const s = await stat(filePath)
+    return Number.isFinite(s.size) ? s.size : 0
+  } catch {
+    // ENOENT is expected for the first-write case.
+    return 0
+  }
+}
 
 // Per-session feed-debug log writer.
 //
@@ -70,10 +118,92 @@ export function queueFeedDebugAppend(
       if (freshEntries.length === 0) return
       await mkdir(FEED_DEBUG_DIR, { recursive: true })
       const filePath = join(FEED_DEBUG_DIR, `${sanitizeSessionIdForPath(sessionId)}.jsonl`)
+
+      // Per-file cap bookkeeping. The counter is process-local: the on-disk
+      // file might already contain bytes from a previous run (feed-debug lives
+      // across restarts), so we stat once and prime the counter from the true
+      // file size before deciding whether to write.
+      //
+      // We advance the counter cursor to the CURRENT lastWritten position on
+      // fetch so that if the counter got out-of-sync between runs (e.g. we
+      // restarted mid-cap), the tombstone check still keys off real disk size.
+      let capState = feedDebugCapState.get(sessionId)
+      if (!capState) {
+        const startingBytes = await loadInitialFileBytes(filePath)
+        capState = {
+          bytesWritten: startingBytes,
+          tombstoneWritten: startingBytes >= MAX_FEED_DEBUG_FILE_BYTES,
+          droppedEntries: 0,
+        }
+        feedDebugCapState.set(sessionId, capState)
+      }
+
+      // Already capped in a prior batch — count and drop. A stale process-local
+      // cursor across runs doesn't matter: bookkeeping stays proportional to
+      // actual disk state, so a genuinely uncapped file will re-open on the
+      // next process; a truly-over-cap file stays capped whichever way we came
+      // in.
+      if (capState.tombstoneWritten) {
+        capState.droppedEntries += freshEntries.length
+        lastWrittenFeedDebugId.set(
+          sessionId,
+          Math.max(lastWritten, ...freshEntries.map(entry => entry.id)),
+        )
+        return
+      }
+
       const text = freshEntries
         .map(entry => JSON.stringify({ sessionId, ...entry }))
         .join('\n') + '\n'
+      const textBytes = Buffer.byteLength(text, 'utf8')
+
+      // If admitting this batch would cross the cap, write ONE final tombstone
+      // line instead. The tombstone records how many entries we dropped in this
+      // batch — future batches append their drop counts to droppedEntries but
+      // do NOT re-write the tombstone. The batch itself is discarded; we
+      // deliberately do not truncate to fit, because a half-written batch would
+      // interleave with the tombstone in a way readers can't cleanly parse.
+      if (capState.bytesWritten + textBytes > MAX_FEED_DEBUG_FILE_BYTES) {
+        capState.droppedEntries += freshEntries.length
+        const tombstone = {
+          sessionId,
+          __feedDebugCapped: true,
+          reason: 'per-file-cap',
+          capBytes: MAX_FEED_DEBUG_FILE_BYTES,
+          fileBytesAtCap: capState.bytesWritten,
+          droppedEntriesSoFar: capState.droppedEntries,
+          ts: Date.now(),
+        }
+        const tombLine = JSON.stringify(tombstone) + '\n'
+        try {
+          await writeFile(filePath, tombLine, { encoding: 'utf8', flag: 'a' })
+        } catch {
+          // Best-effort — capping ourselves is the safety behavior; failing to
+          // write the tombstone still means we stop writing entries for this
+          // session, which is the load-bearing invariant.
+        }
+        capState.tombstoneWritten = true
+        capState.bytesWritten += Buffer.byteLength(tombLine, 'utf8')
+        lastWrittenFeedDebugId.set(
+          sessionId,
+          Math.max(lastWritten, ...freshEntries.map(entry => entry.id)),
+        )
+        // Prune sooner rather than later: reaching the per-file cap is exactly
+        // the signal that this session may already have contributed most of the
+        // bucket. The bucket-cap pass in debugRetention.pruneDebugStorage will
+        // start freeing older feed-debug files.
+        scheduleDebugStoragePrune('feed-debug-per-file-cap')
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[feed-debug] session ${sessionId} reached per-file cap ` +
+          `(${capState.bytesWritten} bytes ≥ ${MAX_FEED_DEBUG_FILE_BYTES}); ` +
+          `wrote tombstone and dropping further appends this run`,
+        )
+        return
+      }
+
       await writeFile(filePath, text, { encoding: 'utf8', flag: 'a' })
+      capState.bytesWritten += textBytes
       lastWrittenFeedDebugId.set(
         sessionId,
         Math.max(lastWritten, ...freshEntries.map(entry => entry.id)),
@@ -111,4 +241,9 @@ export function forgetFeedDebugSession(sessionId: string): void {
   // The settle-time reaper in queueFeedDebugAppend handles the queue
   // entry; what we own here is the cursor.
   lastWrittenFeedDebugId.delete(sessionId)
+  // Drop the cap-state entry too. If the same sessionId is re-registered later
+  // in this process, we'll re-stat the on-disk file and prime a fresh counter;
+  // never carrying stale cap state across "session forgotten" boundaries keeps
+  // the map from growing unbounded across long-lived main processes.
+  feedDebugCapState.delete(sessionId)
 }

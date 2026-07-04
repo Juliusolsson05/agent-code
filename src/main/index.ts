@@ -23,7 +23,10 @@ import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
 import { STATE_FILE } from '@main/storage/paths.js'
-import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
+import {
+  scheduleDebugStoragePrune,
+  setDebugRetentionJournal,
+} from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
 import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
@@ -212,6 +215,13 @@ async function startApp(): Promise<void> {
   })
   installWindowIncidentHooks(appRunJournal)
   orchestrationBridge.setJournal(appRunJournal)
+  // Give debug-retention a handle to the journal so its pruning actions land in
+  // events.jsonl instead of only console.warn. Wired here — right after the
+  // journal starts and before the first scheduleDebugStoragePrune('startup')
+  // call below — so the very first prune is journal-visible. See #388: the
+  // July 2026 crash forensics lost the retention breadcrumb entirely because it
+  // was console-only.
+  setDebugRetentionJournal(appRunJournal)
   try {
     // Native crashes (V8 aborts, SIGSEGV in native addons, GPU-process death)
     // never reach JS, so the JSONL hooks above cannot see them. Crashpad writes
@@ -236,7 +246,13 @@ async function startApp(): Promise<void> {
     if (priorRun && priorRun.classification !== 'clean') {
       const crashLike =
         priorRun.classification === 'main_crash_suspected' ||
-        priorRun.classification === 'renderer_crash_suspected'
+        priorRun.classification === 'renderer_crash_suspected' ||
+        // V8 OOM aborts and other fatal errors are crashes: the process was
+        // killed by V8 before JS could react. Route them through the same
+        // error-severity branch as JS crashes so triage tools don't have to
+        // special-case a third bucket. Prior-run detection lives in
+        // previousRunClassifier.findNodeDiagnosticReport (issue #388).
+        priorRun.classification === 'main_oom_suspected'
       appRunJournal.recordIncident({
         kind: 'app.prior_unclean_shutdown',
         severity: crashLike ? 'error' : 'warn',
