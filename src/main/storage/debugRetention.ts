@@ -59,6 +59,35 @@ export type DebugStoragePruneResult = {
 let pruneInFlight: Promise<DebugStoragePruneResult> | null = null
 let lastPruneStartedAt = 0
 
+// Journal handle for debug-retention actions.
+//
+// WHY a module-level singleton, not a per-call parameter: scheduleDebugStoragePrune
+// is called from many places (feed-debug appends, incident starts, boot, workspace
+// autosaves). Threading a journal reference through every caller would touch a
+// dozen files for a signal that is genuinely a global side-effect. Retention
+// itself is a singleton scheduler already (see pruneInFlight above), so pinning
+// the sink at that same level is consistent.
+//
+// WHY at all: before this hook the ONLY trace of a prune was a `console.info` or
+// `console.warn` line. Those lines were the July 2026 crash forensics' single
+// surviving hint that retention had done work (see issue #388) — but they never
+// reached events.jsonl, so a forensic reader following the always-on incident
+// spine could not see when retention had freed bytes or what buckets were pruned.
+// The journal turns that opaque background sweep into a first-class breadcrumb.
+type RetentionJournalSink = {
+  record(input: {
+    area: string
+    name: string
+    severity?: 'debug' | 'info' | 'warn' | 'error' | 'fatal'
+    data?: Record<string, unknown>
+  }): void
+}
+let retentionJournal: RetentionJournalSink | null = null
+
+export function setDebugRetentionJournal(journal: RetentionJournalSink | null): void {
+  retentionJournal = journal
+}
+
 function envNumber(name: string, fallback: number): number {
   const raw = process.env[name]?.trim()
   if (!raw) return fallback
@@ -105,11 +134,51 @@ export function scheduleDebugStoragePrune(reason: string): void {
           `(${(result.bytesFreed / 1024 / 1024).toFixed(1)} MiB) ` +
           `reason=${result.reason} budget=${(result.budgetBytes / GIB).toFixed(1)}GiB`,
         )
+        // Mirror the successful prune into the always-on journal so an offline
+        // reader following events.jsonl can see when retention freed bytes and
+        // why (reason= is the origin trigger, e.g. "feed-debug-append",
+        // "incident-run-start", "startup"). Zero-removed prunes are intentionally
+        // NOT journaled — retention runs on a 5-minute cooldown from many hot
+        // paths, and a no-op event per trigger would drown the journal.
+        try {
+          retentionJournal?.record({
+            area: 'storage.retention',
+            name: 'debug_retention.prune',
+            severity: 'info',
+            data: {
+              reason: result.reason,
+              removed: result.removed,
+              bytesFreed: result.bytesFreed,
+              budgetBytes: result.budgetBytes,
+              scannedBytes: result.scannedBytes,
+              ttlHours: result.ttlHours,
+            },
+          })
+        } catch {
+          // Journal failures must never destabilize retention — the journal is
+          // forensics, not product state, and the prune already ran.
+        }
       }
       return result
     })
     .catch(err => {
       console.warn('[debug-retention] prune failed (non-fatal):', err)
+      try {
+        // Also mirror failed prunes: a broken sweep is exactly the case where the
+        // console.warn easily gets lost in a busy log, and a forensic reader
+        // needs a first-class breadcrumb explaining why disk usage crept up.
+        retentionJournal?.record({
+          area: 'storage.retention',
+          name: 'debug_retention.prune_failed',
+          severity: 'warn',
+          data: {
+            reason,
+            error: err instanceof Error ? err.message : String(err),
+          },
+        })
+      } catch {
+        // See above — never destabilize the retention scheduler.
+      }
       return {
         reason,
         budgetBytes: 0,

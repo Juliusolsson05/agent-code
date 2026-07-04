@@ -34,28 +34,62 @@ import { app } from 'electron'
 import { HEAP_SNAPSHOT_DIR } from '@main/storage/paths.js'
 import { getAppRunId } from '@main/incident/appRunIds.js'
 
-// Threshold rationale: use the lower of 3 GiB and 75% of the ACTUAL
-// V8 heap limit for this Electron process. The original watchdog used
-// a fixed 3 GiB threshold because the first observed crash had a ~4 GiB
-// main-process heap cap. A later crash on 2026-05-11 died around
-// 1.2 GiB old-space, so the fixed threshold never fired. The heap cap
-// varies with Electron/Node flags and process mode; measuring it at
-// runtime is the only threshold that works across dev/prod launches.
-const HEAP_USED_TRIP_BYTES = 3 * 1024 * 1024 * 1024
-// Lowered from 0.75 after a real OOM aborted at ~0.67 of the limit: a large
-// allocation can fail well below the heap limit, so trip a bit earlier to give
-// the snapshot a chance. (Large single-allocation aborts are fundamentally
-// caught by the Crashpad minidump + prior-run classifier, not by polling — this
-// only widens the window for the gradual / fast-climb cases.)
+// Threshold rationale: use the lower of 1.5 GiB and 70% of the ACTUAL
+// V8 heap limit for this Electron process.
+//
+// History:
+//   1. Original watchdog: fixed 3 GiB. The 2026-05-11 crash died at
+//      ~1.2 GiB old-space, so the fixed threshold never fired.
+//   2. Lowered ratio to 0.75, then 0.70, and kept the 3 GiB ceiling.
+//      This caught OOMs that aborted near the heap limit.
+//   3. 2026-07-04 crash (see issue #388): the main heap went from
+//      ~40 MB → ~2.55 GB in ~15 seconds and V8 aborted at that peak,
+//      still WELL below the 3 GiB ceiling. Watchdog wrote no snapshot.
+//
+// Current 1.5 GiB ceiling: verified from the crashed run's own
+// PerformanceService trajectory — 34 hours of samples oscillated in the
+// 30–400 MB band even under heavy multi-agent load. 1.5 GiB is ~3x that
+// steady-state ceiling, so under normal use it stays quiet, but it now
+// covers BOTH failure modes above:
+//   - the 1.2 GB gradual-climb OOM (was already covered by the ratio),
+//   - the 2.5 GB burst OOM (previously missed because it never reached
+//     the fixed ceiling).
+//
+// Snapshot writes remain single-shot per run (see snapshotWritten
+// below), so lowering the ceiling doesn't create repeated snapshot
+// writes on a steady-high heap — one snapshot per run, at the moment we
+// first crossed the danger line, is what forensics actually needs.
+//
+// The ratio guard stays because heap_size_limit varies with Electron/
+// Node flags and process mode; a smaller-cap process needs a
+// proportionally smaller trip so we don't fire directly against the
+// wall.
+const HEAP_USED_TRIP_BYTES = 1.5 * 1024 * 1024 * 1024
 const HEAP_LIMIT_TRIP_RATIO = 0.70
 
-// Adaptive sampling: 30 s at rest (heap pressure usually builds over hours), but
-// drop to 2 s once we cross HALF the limit so a FAST runaway has a chance to be
-// sampled before the abort. The real crash that motivated this went ~1.1 GB →
-// ~2.7 GB in under 5 s — a 30 s poll never saw it.
-const SAMPLE_INTERVAL_MS = 30_000
+// Adaptive sampling: 5 s at rest, 2 s once heap climbs past a quarter of the
+// v8 limit.
+//
+// History:
+//   - 30 s at rest was the original assumption ("heap pressure builds over
+//     hours"). That held for gradual leaks. The 2026-07-04 crash (#388) was a
+//     15 s burst from ~40 MB to a mark-compact abort at ~2.55 GB — the 30 s
+//     tick would have landed AFTER the process was gone. The old fast-sample
+//     trigger at 0.5 of the heap limit was ABOVE the current 1.5 GiB trip on
+//     this box (0.5 × 4.29 GiB = 2.14 GiB), so fast-mode would have kicked in
+//     only after we'd already tripped.
+//   - 5 s at rest guarantees we sample AT LEAST once during a ≥10 s burst
+//     window, so the trip has a chance to fire while the process is still
+//     running. getHeapStatistics() is a cheap native call, so at 5 s the
+//     watchdog is still effectively invisible in steady state (~12 wakes/min).
+//   - FAST_SAMPLE_PRESSURE_RATIO lowered to 0.25 so 2 s cadence engages
+//     BEFORE the 1.5 GiB trip line (on this box, 25% of the limit ≈ 1.07 GiB,
+//     which lands under the trip). That gives us a couple of extra pre-trip
+//     samples on a climb, and — once tripped — dense post-trip context if
+//     future work adds any (currently we only take one snapshot per run).
+const SAMPLE_INTERVAL_MS = 5_000
 const FAST_SAMPLE_INTERVAL_MS = 2_000
-const FAST_SAMPLE_PRESSURE_RATIO = 0.5
+const FAST_SAMPLE_PRESSURE_RATIO = 0.25
 
 // Forensic callback, fired once when the watchdog trips and a snapshot is
 // written. It lets the always-on incident journal record a heap.pressure

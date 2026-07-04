@@ -20,6 +20,12 @@ export type PreviousRunClassification =
   | 'unclean_shutdown'
   | 'main_crash_suspected'
   | 'renderer_crash_suspected'
+  // Prior run died from a V8 fatal error (OOM abort, ineffective mark-compact,
+  // "FATAL ERROR: Allocation failed"). Node.js writes a diagnostic report JSON
+  // in the run directory when process.report.reportOnFatalError is enabled;
+  // seeing that file promoted the crash from the generic force_quit_or_power_loss
+  // fallback to a specific attribution. Motivation: 2026-07-04 crash (#388).
+  | 'main_oom_suspected'
   | 'force_quit_or_power_loss'
   | 'unknown'
 
@@ -74,7 +80,18 @@ export function classifyPreviousRun(
 
   let classification: PreviousRunClassification
   let minidumpPath: string | undefined
-  if (kinds.has('main.uncaught_exception')) {
+  // Look for a Node.js diagnostic report first: process.report.reportOnFatalError
+  // (enabled in AppRunJournal.start) writes report.<ts>.<pid>.<seq>.json into the
+  // run directory when V8 aborts on a fatal error, and the "trigger" field
+  // distinguishes OOM aborts from other fatal errors. That is more specific than
+  // any downstream signal (JS incidents, minidumps), so it wins.
+  const nodeReport = findNodeDiagnosticReport(priorRunDir)
+  if (nodeReport?.trigger === 'OOMError' || nodeReport?.trigger === 'FatalError') {
+    // Both triggers map to the same class in our vocabulary: the process was
+    // terminated by V8 before JS could react. OOM is by far the common case; a
+    // future observed non-OOM FatalError can be split out here if needed.
+    classification = 'main_oom_suspected'
+  } else if (kinds.has('main.uncaught_exception')) {
     classification = 'main_crash_suspected'
   } else if (
     incidents.some(i => i?.kind === 'window.render_process_gone' && i?.severity === 'fatal')
@@ -88,6 +105,11 @@ export function classifyPreviousRun(
     // force-quit. (This is the real case that motivated the change — a heap-OOM
     // abort was mislabeled `force_quit_or_power_loss` while its .dmp sat unused on
     // disk.) Only fall back to force-quit / power-loss when there is no minidump.
+    //
+    // Note: the Node diagnostic-report branch above is preferred, but on prior
+    // runs from BEFORE the reportOnFatalError flag existed — or when V8 aborts
+    // before Node writes the report — the minidump-only path still surfaces the
+    // native crash so we don't regress.
     minidumpPath = findRecentMinidump(options.crashDumpsDir, readPriorStartedAt(priorRunDir))
     if (minidumpPath) {
       classification = 'main_crash_suspected'
@@ -106,8 +128,78 @@ export function classifyPreviousRun(
       incidentKinds: [...kinds],
       // Point triage straight at the dump so a native crash is symbolicatable.
       ...(minidumpPath ? { native: true, minidumpPath } : {}),
+      // Node diagnostic report path + trigger, when found — the JSON alongside
+      // it holds heap statistics, native/JS stacks, and env info at the moment
+      // of the abort. Callers surface these as evidence on the
+      // app.prior_unclean_shutdown incident so triage can jump straight to it.
+      ...(nodeReport
+        ? { nodeReportPath: nodeReport.path, nodeReportTrigger: nodeReport.trigger }
+        : {}),
     },
   }
+}
+
+// Locate the newest Node.js diagnostic report in the prior run's directory and
+// return its path plus V8's classification of what triggered the abort.
+//
+// WHY only in the run directory (not a global scan): process.report.directory is
+// set per-run in AppRunJournal.start(), so a fatal-error report is guaranteed to
+// land alongside events.jsonl for THAT run. Restricting the search to the
+// specific priorRunDir removes any risk of misattributing a report from a
+// different run (or from a background utility process) to this classification.
+//
+// WHY only reads the `trigger` field: the report can be tens of megabytes of
+// heap statistics + stacks. Parsing it fully during a synchronous startup scan
+// would defeat the "cheap classifier" invariant. The trigger is a top-level
+// string; JSON.parse on a bounded prefix is enough to read it. The full report
+// stays on disk for triage tools to read at leisure.
+function findNodeDiagnosticReport(
+  priorRunDir: string,
+): { path: string; trigger: string | undefined } | undefined {
+  let candidates: string[]
+  try {
+    candidates = readdirSync(priorRunDir)
+      .filter(name => name.startsWith('report.') && name.endsWith('.json'))
+  } catch {
+    return undefined
+  }
+  if (candidates.length === 0) return undefined
+  // Report names contain an ISO-like timestamp so lexical sort ~= chronological.
+  candidates.sort()
+  const reportPath = join(priorRunDir, candidates[candidates.length - 1])
+  return { path: reportPath, trigger: readNodeReportTrigger(reportPath) }
+}
+
+const MAX_REPORT_PREFIX_BYTES = 32 * 1024
+
+function readNodeReportTrigger(reportPath: string): string | undefined {
+  // Bounded prefix read — see findNodeDiagnosticReport comment above.
+  let size: number
+  try {
+    size = statSync(reportPath).size
+  } catch {
+    return undefined
+  }
+  if (size === 0) return undefined
+  const readBytes = Math.min(size, MAX_REPORT_PREFIX_BYTES)
+  let text: string
+  try {
+    const fd = openSync(reportPath, 'r')
+    try {
+      const buf = Buffer.alloc(readBytes)
+      readSync(fd, buf, 0, readBytes, 0)
+      text = buf.toString('utf8')
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return undefined
+  }
+  // Node writes trigger as a top-level string field: `"trigger": "OOMError"` etc.
+  // A quick regex is safer than trying to close a truncated JSON object with a
+  // real parser; if the prefix is malformed, we just return undefined.
+  const match = /"trigger"\s*:\s*"([^"\\]+)"/.exec(text)
+  return match?.[1]
 }
 
 function readPriorStartedAt(priorRunDir: string): number {

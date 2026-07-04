@@ -121,6 +121,30 @@ export class AppRunJournal {
       console.warn('[incident-journal] failed to start; running without a journal:', err)
       return
     }
+    // Enable Node.js diagnostic reports for V8 fatal aborts (out-of-memory,
+    // FATAL ERROR, ineffective mark-compacts, etc.) and point them at THIS
+    // run's directory.
+    //
+    // WHY here (right after the runDir exists): report.reportOnFatalError is a
+    // runtime-mutable flag on process.report. Once set, if V8 aborts, the Node
+    // runtime writes a `report.<ts>.<pid>.<seq>.json` file directly to
+    // process.report.directory. That file contains heap statistics, memory
+    // usage, native/JS stacks, and environment info as of the abort — exactly
+    // the forensic evidence we lost on the 2026-07-04 crash (issue #388), where
+    // the classifier could only fall back to `force_quit_or_power_loss`.
+    //
+    // WHY defensive: process.report is on all supported Node versions but its
+    // properties are sometimes gated behind sandboxing/policies. A throw here
+    // would abort journal start; the whole subsystem is optional forensics, so
+    // we swallow and continue instead.
+    try {
+      if (typeof process.report === 'object' && process.report !== null) {
+        process.report.reportOnFatalError = true
+        process.report.directory = this.runDir
+      }
+    } catch (err) {
+      console.warn('[incident-journal] could not enable process.report:', err)
+    }
     this.eventLoopDelay.enable()
     this.flushTimer = setInterval(() => {
       void this.flush()
