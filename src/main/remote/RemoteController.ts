@@ -10,6 +10,7 @@ import { loadOrCreateRemoteSecret, REMOTE_STATE_DIR } from '@main/remote/auth/se
 import { RemoteServer } from '@main/remote/RemoteServer.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import { LanTransport } from '@main/remote/transport/LanTransport.js'
+import { CloudflaredTunnel } from '@main/remote/transport/CloudflaredTunnel.js'
 import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
 
 // RemoteController — the one object the desktop drives.
@@ -31,9 +32,17 @@ import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
 //     manager subscriptions and NO sockets, so its steady-state cost when
 //     off is zero. That property is why this is safe to ship default-off.
 
+export type RemoteTransportMode = 'lan' | 'tunnel'
+
 export type RemoteStatus = {
   enabled: boolean
   url: string | null
+  /** Which transport the live server is on; null while disabled. */
+  transport: RemoteTransportMode | null
+  /** Whether the tunnel option can work on this install (cloudflared binary
+   *  resolvable). LAN is ALWAYS available — the feature never depends on
+   *  cloudflared for local use. */
+  tunnelAvailable: boolean
   devices: PairedDevice[]
   connectedDeviceIds: string[]
 }
@@ -46,7 +55,13 @@ export type RemoteControllerDeps = {
   stateDir?: string
   /** Built remote-client bundle dir; resolved by main at construction. */
   clientDistDir?: string | null
-  /** Transport factory — phase 2 swaps in the cloudflared tunnel here. */
+  /** Resolve the bundled cloudflared binary. Injected from main (which owns
+   *  Electron-aware path resolution — see setup/runtimeTools.ts) so this
+   *  controller stays testable without Electron. Absent/null-returning →
+   *  tunnel mode reports unavailable and enable('tunnel') fails with a
+   *  clear message while LAN keeps working. */
+  resolveTunnelBinary?: () => Promise<string | null>
+  /** Transport factory override for tests. When set it wins over mode. */
   createTransport?: () => RemoteTransport
 }
 
@@ -57,6 +72,8 @@ export class RemoteController extends EventEmitter {
   private feedSource: SessionFeedSource | null = null
   private server: RemoteServer | null = null
   private url: string | null = null
+  private transport: RemoteTransportMode | null = null
+  private tunnelBinary: string | null | undefined = undefined
   private enabling: Promise<RemoteStatus> | null = null
 
   constructor(private readonly deps: RemoteControllerDeps) {
@@ -68,24 +85,37 @@ export class RemoteController extends EventEmitter {
     return {
       enabled: this.server !== null && this.url !== null,
       url: this.url,
+      transport: this.server !== null && this.url !== null ? this.transport : null,
+      // `undefined` = not probed yet. Report optimistically until the first
+      // tunnel-enable attempt resolves the binary; the panel only needs an
+      // accurate value after a failed attempt, which is exactly when this
+      // becomes a concrete false.
+      tunnelAvailable: this.tunnelBinary !== null,
       devices: this.registry?.list() ?? [],
       connectedDeviceIds: this.server?.connectedDeviceIds() ?? [],
     }
   }
 
-  async enable(): Promise<RemoteStatus> {
+  async enable(mode: RemoteTransportMode = 'lan'): Promise<RemoteStatus> {
     // Coalesce concurrent enables (double-click on the toggle): the second
     // caller awaits the first's work instead of racing a second server.
     if (this.enabling) return this.enabling
-    if (this.server && this.url) return this.getStatus()
+    if (this.server && this.url) {
+      // Same mode: idempotent no-op. Different mode: clean switch — every
+      // socket is dropped (URL and reachability change anyway; phones
+      // reconnect via their feed's backoff, and paired tokens survive
+      // because pairing is durable state).
+      if (this.transport === mode) return this.getStatus()
+      await this.disable()
+    }
 
-    this.enabling = this.doEnable().finally(() => {
+    this.enabling = this.doEnable(mode).finally(() => {
       this.enabling = null
     })
     return this.enabling
   }
 
-  private async doEnable(): Promise<RemoteStatus> {
+  private async doEnable(mode: RemoteTransportMode): Promise<RemoteStatus> {
     const secret = await loadOrCreateRemoteSecret(this.stateDir)
     if (!this.registry) {
       this.registry = new DeviceRegistry(join(this.stateDir, 'devices.json'))
@@ -98,10 +128,11 @@ export class RemoteController extends EventEmitter {
       feedSource: this.feedSource,
       pairing: this.pairing,
       registry: this.registry,
-      transport: this.deps.createTransport?.() ?? new LanTransport(),
+      transport: this.deps.createTransport?.() ?? (await this.buildTransport(mode)),
       clientDistDir: this.deps.clientDistDir ?? null,
       journal: this.deps.journal ?? null,
     })
+    this.transport = mode
     this.server.on('clients-changed', () => this.emitStatus())
 
     try {
@@ -157,10 +188,30 @@ export class RemoteController extends EventEmitter {
     this.removeAllListeners()
   }
 
+  /** Build the transport for a mode. LAN needs nothing; tunnel resolves the
+   *  bundled cloudflared and fails LOUDLY (not silently falling back to LAN
+   *  — the user asked for internet reachability; giving them a LAN URL
+   *  instead would misrepresent what the QR exposes). */
+  private async buildTransport(mode: RemoteTransportMode): Promise<RemoteTransport> {
+    if (mode === 'lan') return new LanTransport()
+    if (this.tunnelBinary === undefined) {
+      this.tunnelBinary = (await this.deps.resolveTunnelBinary?.()) ?? null
+    }
+    if (!this.tunnelBinary) {
+      throw new Error(
+        'Internet tunnel unavailable: the bundled cloudflared binary was not ' +
+          'found. Run `npm run runtime:fetch:cloudflared` (dev) or reinstall ' +
+          'the packaged app. LAN mode works without it.',
+      )
+    }
+    return new CloudflaredTunnel({ binaryPath: this.tunnelBinary })
+  }
+
   private async teardownLive(): Promise<void> {
     const server = this.server
     this.server = null
     this.url = null
+    this.transport = null
     this.pairing = null
     if (server) await server.stop()
     this.feedSource?.dispose()

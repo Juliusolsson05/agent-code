@@ -17,9 +17,13 @@ export type RemotePairedDevice = {
   revoked: boolean
 }
 
+export type RemoteTransportMode = 'lan' | 'tunnel'
+
 export type RemoteStatus = {
   enabled: boolean
   url: string | null
+  transport: RemoteTransportMode | null
+  tunnelAvailable: boolean
   devices: RemotePairedDevice[]
   connectedDeviceIds: string[]
 }
@@ -32,7 +36,8 @@ export type RemotePairingIssue = {
 
 export const remoteApi = {
   remoteGetStatus: (): Promise<RemoteStatus> => ipcRenderer.invoke('remote:get-status'),
-  remoteEnable: (): Promise<RemoteStatus> => ipcRenderer.invoke('remote:enable'),
+  remoteEnable: (mode: RemoteTransportMode = 'lan'): Promise<RemoteStatus> =>
+    ipcRenderer.invoke('remote:enable', mode),
   remoteDisable: (): Promise<RemoteStatus> => ipcRenderer.invoke('remote:disable'),
   remoteIssuePairingCode: (): Promise<RemotePairingIssue> =>
     ipcRenderer.invoke('remote:issue-pairing-code'),

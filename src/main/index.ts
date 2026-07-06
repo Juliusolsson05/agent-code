@@ -37,7 +37,7 @@ import { registerAllIpc } from '@main/ipc/index.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
-import { resolveBundledTool } from '@main/setup/runtimeTools.js'
+import { getPlatformKey, resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
@@ -473,6 +473,22 @@ async function startApp(): Promise<void> {
     manager,
     journal: appRunJournal,
     clientDistDir: existsSync(remoteClientDist) ? remoteClientDist : null,
+    // Tunnel binary resolution — bundled artifact first (packaged app),
+    // then the third_party dev cache (populated by `npm run
+    // runtime:fetch:cloudflared`; copy-packaged-resources only runs on
+    // build, so dev mode never has out/main/runtime). NO PATH fallback,
+    // same policy as tmux: a drifting system cloudflared would bypass the
+    // manifest's hash pinning. LAN mode never calls this.
+    resolveTunnelBinary: async () => {
+      const bundled = await resolveBundledTool('cloudflared')
+      if (bundled) return bundled
+      const platformKey = getPlatformKey()
+      if (!platformKey) return null
+      const devCache = join(
+        app.getAppPath(), 'third_party', 'cloudflared', 'cache', platformKey, 'cloudflared',
+      )
+      return existsSync(devCache) ? devCache : null
+    },
   })
   builtInMcpHost.setDependencies({
     orchestrationBridge,

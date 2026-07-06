@@ -93,6 +93,19 @@ describe('pairing through the controller', () => {
     expect(() => controller.issuePairingCode()).toThrowError(/not enabled/)
   })
 
+  it('tunnel mode fails loudly when cloudflared is unresolvable — and LAN still works', async () => {
+    // The user-facing guarantee (spec + user request): the feature works
+    // locally WITHOUT cloudflared. A missing binary must fail the tunnel
+    // attempt with a clear message, leave the controller cleanly disabled,
+    // and not poison the LAN path.
+    await expect(controller.enable('tunnel')).rejects.toThrow(/LAN mode works without it/)
+    expect(controller.getStatus()).toMatchObject({ enabled: false, tunnelAvailable: false })
+
+    const lan = await controller.enable('lan')
+    expect(lan.enabled).toBe(true)
+    expect(lan.transport).toBe('lan')
+  })
+
   it('remembers paired devices across enable cycles (registry is durable)', async () => {
     await controller.enable()
     const issued = controller.issuePairingCode()

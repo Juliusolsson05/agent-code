@@ -74,10 +74,23 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
         setPairing(null)
         setStatus(await window.api.remoteDisable())
       } else {
-        setStatus(await window.api.remoteEnable())
+        setStatus(await window.api.remoteEnable('lan'))
       }
     })
   }, [status?.enabled, withBusy])
+
+  const switchTransport = useCallback(
+    (mode: 'lan' | 'tunnel') => {
+      void withBusy(async () => {
+        // Switching drops the old URL (and every connected phone — they
+        // reconnect via feed backoff), so any visible pairing QR is stale
+        // the moment this resolves. Clear it rather than show a dead code.
+        setPairing(null)
+        setStatus(await window.api.remoteEnable(mode))
+      })
+    },
+    [withBusy],
+  )
 
   const startPairing = useCallback(() => {
     void withBusy(async () => {
@@ -149,6 +162,46 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
           </div>
 
           {error && <div className="text-red-400">{error}</div>}
+
+          {/* Transport: LAN (default, zero dependencies) vs internet tunnel */}
+          {status?.enabled && (
+            <div className="border-t border-border pt-3 flex flex-col gap-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium">Reach</div>
+                  <div className="text-ink-dim">
+                    {status.transport === 'tunnel'
+                      ? 'Internet tunnel — works anywhere; URL changes each enable.'
+                      : 'Same Wi-Fi only. Switch to reach it from anywhere.'}
+                  </div>
+                </div>
+                <div className="flex flex-shrink-0">
+                  <button
+                    className={`border px-3 py-1.5 ${
+                      status.transport === 'lan'
+                        ? 'border-border bg-surface-hi text-ink'
+                        : 'border-border text-ink-dim hover:text-ink'
+                    }`}
+                    disabled={busy || status.transport === 'lan'}
+                    onClick={() => switchTransport('lan')}
+                  >
+                    LAN
+                  </button>
+                  <button
+                    className={`border border-l-0 px-3 py-1.5 ${
+                      status.transport === 'tunnel'
+                        ? 'border-border bg-surface-hi text-ink'
+                        : 'border-border text-ink-dim hover:text-ink'
+                    }`}
+                    disabled={busy || status.transport === 'tunnel'}
+                    onClick={() => switchTransport('tunnel')}
+                  >
+                    Tunnel
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Pairing */}
           {status?.enabled && (

@@ -16,7 +16,9 @@ import { sendToMainWindow } from '@main/window/mainWindow.js'
 
 export function registerRemoteIpc(controller: RemoteController): void {
   ipcMain.handle('remote:get-status', () => controller.getStatus())
-  ipcMain.handle('remote:enable', () => controller.enable())
+  ipcMain.handle('remote:enable', (_evt, mode?: 'lan' | 'tunnel') =>
+    controller.enable(mode ?? 'lan'),
+  )
   ipcMain.handle('remote:disable', () => controller.disable())
   ipcMain.handle('remote:issue-pairing-code', () => controller.issuePairingCode())
   ipcMain.handle('remote:revoke-device', (_evt, deviceId: string) =>
