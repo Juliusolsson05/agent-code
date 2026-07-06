@@ -4,6 +4,8 @@ import { FitAddon } from '@xterm/addon-fit'
 
 import type { SessionId } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import {
   THEME_CHANGED_EVENT,
   getActiveAppFontFamily,
@@ -59,6 +61,27 @@ export function TerminalLeaf({
   onFocusRequest,
   workspace,
 }: Props) {
+  // Dictation target registration (issue #421). Plain terminal panes were the
+  // ONE leaf kind that never called useComposerDictation, so a focused
+  // terminal left the dictation-hotkey registry with zero focused targets and
+  // pickTarget() fell back to the most-recently-focused AGENT composer — the
+  // user pressed Fn over a terminal and the transcript landed in some other
+  // tile. There is nothing terminal-hostile about dictation: the
+  // `sink: 'terminal'` path (already proven by AgentTerminalLeaf) shows the
+  // floating overlay and writes the final transcript to the PTY as plain
+  // input bytes — no auto-submit, the user reviews and presses Enter.
+  const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
+  const dictationProvider = useAppStore(state => state.settings.dictationProvider)
+  const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
+  useComposerDictation({
+    enabled: dictationEnabled,
+    focused,
+    provider: dictationProvider,
+    shortcut: dictationShortcut,
+    sink: { kind: 'terminal', sessionId },
+    onMessage: message => workspace.showPaneToast(sessionId, message),
+  })
+
   const acknowledgeSession = workspace.acknowledgeSession
   // WHY this is a ref instead of an effect dependency: the effect below owns
   // the xterm instance and its PTY subscriptions. Re-running it for a helper
