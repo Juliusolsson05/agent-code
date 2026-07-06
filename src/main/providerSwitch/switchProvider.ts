@@ -1,7 +1,13 @@
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { randomUUID } from 'node:crypto'
 
-import { cloneClaudeTranscript, toClaude, toCodex } from 'agent-transcript-parser'
+import {
+  ClaudeCodec,
+  CodexCodec,
+  cloneClaudeTranscript,
+  translateToClaude,
+  translateToCodex,
+} from 'agent-transcript-parser'
 import type { ClaudeEntry, CodexRolloutLine } from 'agent-transcript-parser'
 import { isRecord } from '@shared/lib/asRecord.js'
 
@@ -97,12 +103,33 @@ async function switchClaudeToCodex(
   //
   // Round-trip fidelity isn't a goal on provider-switch — the user has
   // already committed to living inside Codex from here on.
-  const translated = toCodex(sanitizeClaudeEntriesForResume(sourceEntries), {
-    lossy: false,
-    dropClaudeBootstrap: true,
-    sanitizeForResume: true,
-    targetSessionId: randomUUID(),
-  })
+  // Translate over the neutral hub (#394 phase 5b). This routes through
+  // the codec seam (encode(target, decode(source, x))) instead of calling
+  // toCodex directly. It is BYTE-IDENTICAL to the old direct call:
+  // ClaudeCodec.decode wraps every source entry in the passthrough region
+  // losslessly, translateToCodex reconstructs that exact source array and
+  // runs the same legacy toCodex over it with the same options — the
+  // equivalence is pinned by atp's testing/translate-equivalence.ts
+  // (ClaudeCodec.encode(CodexCodec.decode(x)) ≡ toClaude(x) and the
+  // symmetric case). WHY do this if it's byte-identical: switchProvider
+  // becomes the first PRODUCTION consumer of the neutral hub, so when the
+  // atp engine migrates to true per-entry neutral translation (later
+  // slice), provider switching inherits it with no further edits — and a
+  // third provider's codec makes its switch pairs work here for free.
+  //
+  // The resume sanitizers (sanitizeClaudeEntriesForResume here,
+  // sanitizeCodexRolloutForResume below) and id/file-layout policy stay
+  // app-side for now; absorbing them into the codecs is the separate,
+  // more delicate slice this one deliberately isolates.
+  const translated = translateToCodex(
+    ClaudeCodec.decode(sanitizeClaudeEntriesForResume(sourceEntries)),
+    {
+      lossy: false,
+      dropClaudeBootstrap: true,
+      sanitizeForResume: true,
+      targetSessionId: randomUUID(),
+    },
+  ).lines
   const targetProviderSessionId = getCodexSessionId(translated)
   const targetFilePath = await writeCodexRolloutFile(
     sanitizeCodexRolloutForResume(translated),
@@ -128,7 +155,11 @@ async function switchCodexToClaude(
   }
 
   const sourceLines = await readJsonlFile<CodexRolloutLine>(sourceFilePath)
-  const translated = toClaude(sourceLines, { lossy: false })
+  // Neutral-hub routed, byte-identical to toClaude(sourceLines, {lossy:false})
+  // — see the WHY block in switchClaudeToCodex above.
+  const translated = translateToClaude(CodexCodec.decode(sourceLines), {
+    lossy: false,
+  }).lines
   // WHY retarget after translation instead of teaching `toClaude` to always
   // allocate a new id:
   // `toClaude` is also the byte-fidelity export/round-trip converter, where
