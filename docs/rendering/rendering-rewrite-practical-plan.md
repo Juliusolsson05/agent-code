@@ -2,6 +2,14 @@
 
 Date: 2026-05-22
 
+> **SUPERSEDED (2026-07-06).** The canonical plan is now
+> `rendering-rewrite-plan-2026-07.md`, which absorbs this document's
+> architecture (observations → ledger → view model), resolves its open
+> questions with evidence (queue = lane; block-level granularity; fixture
+> corpus named from real bundles), and corrects claims that drifted
+> (three providers; fold policy already shipped; Claude conditions fixed).
+> Kept for history — do not execute from this file.
+
 This is the practical architecture plan for rewriting Agent Code's rendering system. It intentionally uses the best findings from the rendering knowledge dump and the architecture research agents, but it does not copy their most elaborate shapes. The goal is not to build a framework. The goal is to make the feed understandable, testable, and hard to break.
 
 The short version:
