@@ -1,3 +1,5 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+
 // External tools whose presence the setup gate inspects. Bundled
 // helpers like mitmdump (#119) and tmux (#120) are deliberately NOT
 // listed here — they ship inside Agent Code as runtime artifacts and
@@ -8,12 +10,17 @@
 // implementation kept it visible as "Bundled" for one release while
 // we proved the resolver works. Once that follow-up lands the union
 // shrinks further.
+// Provider tools derive from AGENT_PROVIDER_KINDS (#394 phase 2c-3):
+// this union previously re-enumerated 'claude' | 'codex' by hand — a
+// second provider list that had to be extended in lockstep with the
+// real one. Registering a provider now automatically makes it a
+// setup-gate tool; its metadata comes from
+// @providers/registry.setup.ts.
 export type SetupToolId =
   | 'brew'
-  | 'claude'
-  | 'codex'
   | 'git'
   | 'mitmdump'
+  | AgentProviderKind
 
 /**
  * Where a found tool comes from. 'bundled' = Agent Code ships this

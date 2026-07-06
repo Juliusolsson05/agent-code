@@ -1,4 +1,5 @@
 import {
+  AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
   isAgentProviderKind,
   type AgentProviderKind,
@@ -23,7 +24,6 @@ import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/app
 import { summarizeSemanticEventForDebug } from '@renderer/workspace/semantic/summarize'
 import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
 import {
-  extractCodexProviderSessionId,
   isCodexRolloutEntry,
   isOptimisticCodexUserEntry,
 } from '@providers/codex/renderer/transcript/entries'
@@ -1161,25 +1161,30 @@ export function useIpcSubscriptions(
       // without doing N setState calls during a 200-entry burst.
 
       // ---- Pass A: workspace-state captures ----
-      let capturedClaudeId: string | null = null
-      let capturedCodexId: string | null = null
+      // EVERY registered provider's extractor runs on every line ON
+      // PURPOSE — deliberately NOT routed by session kind (#394 phase
+      // 2c-3). This pass feeds the #290 foreign-transcript
+      // quarantine, which must OBSERVE a conflicting provider id even
+      // when the line belongs to a different provider than this pane;
+      // kind-routing here would blind the conflict detector to
+      // exactly the misattach it exists to catch. The extractors are
+      // mutually exclusive by wire shape (claude: entry-level
+      // sessionId; codex: session_meta payload.id), so cross-matches
+      // can't happen; observed-id precedence follows
+      // AGENT_PROVIDER_KINDS order, preserving the historical
+      // claude-then-codex behavior.
+      const capturedIdByKind = new Map<AgentProviderKind, string>()
       for (const { entry: raw } of entries) {
-        if (isCodexRolloutEntry(raw)) {
-          if (!capturedCodexId) {
-            const id = extractCodexProviderSessionId(raw)
-            if (id) capturedCodexId = id
-          }
-          continue
-        }
-        if (!capturedClaudeId) {
-          const ccId = (raw as { sessionId?: string }).sessionId
-          if (typeof ccId === 'string' && ccId.length > 0) {
-            capturedClaudeId = ccId
-          }
+        if (capturedIdByKind.size === AGENT_PROVIDER_KINDS.length) break
+        for (const k of AGENT_PROVIDER_KINDS) {
+          if (capturedIdByKind.has(k)) continue
+          const id = getRendererProviderCapabilities(k).extractProviderSessionId(raw)
+          if (id) capturedIdByKind.set(k, id)
         }
       }
       const metaForProviderGate = refs.stateRef.current.sessions[sessionId] ?? null
-      const observedProviderSessionId = capturedClaudeId ?? capturedCodexId
+      const observedProviderSessionId =
+        AGENT_PROVIDER_KINDS.map(k => capturedIdByKind.get(k)).find(Boolean) ?? null
       const providerDecision = decideJsonlProviderBurst({
         previous: jsonlProviderStreamBySession.get(sessionId),
         expectedProviderSessionId: resumableProviderSessionId(metaForProviderGate),
@@ -1244,11 +1249,11 @@ export function useIpcSubscriptions(
       const sessionCwd = metaForProviderGate?.cwd
       refreshWorktrees(sessionCwd)
 
-      if (capturedClaudeId || capturedCodexId) {
+      if (observedProviderSessionId) {
         setState(prev => {
           const meta = prev.sessions[sessionId]
           if (!meta) return prev
-          const id = capturedClaudeId ?? capturedCodexId
+          const id = observedProviderSessionId
           if (!id) return prev
           const resolution = applyJsonlProviderSessionId(meta, id)
           if (resolution.status === 'unchanged') {

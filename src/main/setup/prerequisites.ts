@@ -9,6 +9,8 @@ import {
   type BundledToolId,
 } from '@main/setup/runtimeTools.js'
 import { loadSetupState, updateToolPaths } from '@main/setup/setupState.js'
+import { listProviderSetupDescriptors } from '@providers/registry.setup.js'
+import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind.js'
 import { refreshToolchainFromState } from '@main/setup/toolchain.js'
 
 // WHY this map exists: not every SetupToolId has a bundled artifact,
@@ -20,7 +22,26 @@ const BUNDLED_TOOL_IDS: ReadonlySet<SetupToolId> = new Set<SetupToolId>([
   'mitmdump',
 ])
 
+// Provider SetupGate rows derived from the plain-data setup registry
+// (cycle-safe — see registry.setup.ts's header for why it isn't
+// registry.main.ts). `installable: false` for all providers today:
+// the CLIs have their own install/sign-in stories the gate can't
+// automate.
+const PROVIDER_TOOL_META = Object.fromEntries(
+  listProviderSetupDescriptors().map(([kind, d]) => [
+    kind,
+    {
+      id: kind,
+      label: d.label,
+      required: d.required,
+      installable: false,
+      detail: d.detail,
+    },
+  ]),
+) as Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>>
+
 const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = {
+  ...PROVIDER_TOOL_META,
   // WHY brew is NOT required:
   //   Packaged Agent Code ships its own mitmdump (see issue #119)
   //   and will ship its own tmux (see #120), so a packaged user
@@ -36,20 +57,6 @@ const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = 
     required: false,
     installable: false,
     detail: 'Used in dev to install optional tools. Not required to launch.',
-  },
-  claude: {
-    id: 'claude',
-    label: 'Claude Code',
-    required: true,
-    installable: false,
-    detail: 'Install and sign in to Claude Code before using Claude panes.',
-  },
-  codex: {
-    id: 'codex',
-    label: 'Codex',
-    required: true,
-    installable: false,
-    detail: 'Install and sign in to Codex before using Codex panes.',
   },
   git: {
     id: 'git',
@@ -73,7 +80,9 @@ const TOOL_META: Record<SetupToolId, Omit<SetupToolStatus, 'found' | 'path'>> = 
   },
 }
 
-const CHECK_ORDER: SetupToolId[] = ['brew', 'claude', 'codex', 'git', 'mitmdump']
+// Display/check order: brew first (it unlocks installs), then every
+// registered provider in AGENT_PROVIDER_KINDS order, then the rest.
+const CHECK_ORDER: SetupToolId[] = ['brew', ...AGENT_PROVIDER_KINDS, 'git', 'mitmdump']
 
 export async function checkPrerequisites(): Promise<SetupCheckResult> {
   const state = await loadSetupState()
