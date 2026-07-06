@@ -31,6 +31,7 @@ import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useC
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
+import { useRenderShadow } from '@renderer/rendering/shadow/useRenderShadow'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -262,6 +263,14 @@ export function TileLeaf({
   const appendRenderDebug = useCallback((entry: Parameters<typeof workspace.appendFeedDebug>[1]) => {
     workspace.appendFeedDebug(sessionId, entry)
   }, [sessionId, workspace.appendFeedDebug])
+
+  // Rendering-rewrite Stage 2 shadow: runs the new ownership-ledger
+  // pipeline beside the legacy renderer and records divergences. A no-op
+  // unless AGENT_CODE_RENDER_SHADOW=1 (probed once, app-wide). Mounted
+  // HERE because TileLeaf is the one component holding the full runtime —
+  // the shadow needs the RAW planes (entries, ghosts map, semantic state),
+  // not the ghost-folded mergedEntries below.
+  useRenderShadow(runtime, provider, sessionId)
 
   const mergedEntries = useMemo(
     () => selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null),
