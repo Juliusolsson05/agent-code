@@ -36,6 +36,8 @@ export type CommittedOwnership = {
   toolUseIds: ReadonlySet<string>
   toolResultIds: ReadonlySet<string>
   itemIds: ReadonlySet<string>
+  /** Normalized committed USER text — optimistic reconciliation only. */
+  userTextKeys: ReadonlySet<string>
 }
 
 /**
@@ -69,7 +71,11 @@ export function buildCommittedOwnership(
   const toolUseIds = new Set<string>()
   const toolResultIds = new Set<string>()
   const itemIds = new Set<string>()
+  const userTextKeys = new Set<string>()
   for (const c of committed) {
+    if (c.contentKind === 'user-text' && c.normalizedTextKey) {
+      userTextKeys.add(c.normalizedTextKey)
+    }
     if (c.contentKind === 'assistant-text') {
       if (c.messageId) wholeTurnOwnerIds.add(c.messageId)
       if (c.textKey) exactText.add(c.textKey)
@@ -85,7 +91,7 @@ export function buildCommittedOwnership(
       if (c.callId) toolResultIds.add(c.callId)
     }
   }
-  return { wholeTurnOwnerIds, exactText, normalizedText, toolUseIds, toolResultIds, itemIds }
+  return { wholeTurnOwnerIds, exactText, normalizedText, toolUseIds, toolResultIds, itemIds, userTextKeys }
 }
 
 /**
@@ -99,6 +105,26 @@ export function decideLiveCandidate(
   policy: SuppressionPolicy,
 ): OwnershipDecision {
   const evidence: string[] = []
+
+  // Optimistic prompt reconciliation (plan D1 handoff): the committed user
+  // row owns its optimistic stand-in by normalized text. Bias is toward the
+  // optimistic row SURVIVING when no owner is provable — surviving too long
+  // is visible and diagnosable; vanishing early is the silent #339 class.
+  if (candidate.owner === 'optimistic-submit') {
+    if (
+      candidate.normalizedTextKey &&
+      ownership.userTextKeys.has(candidate.normalizedTextKey)
+    ) {
+      evidence.push('committed user row with matching normalized text')
+      return {
+        candidateId: candidate.id,
+        selected: false,
+        reason: 'optimistic-owned-by-committed',
+        evidence,
+      }
+    }
+    return { candidateId: candidate.id, selected: true, reason: 'selected', evidence }
+  }
 
   // Whole-turn suppression: policy-gated, only for history bridges (a LIVE
   // current turn matching a committed id means committed caught up while
