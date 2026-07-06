@@ -10,4 +10,9 @@ export const CODEX_IDENTITY = {
    *  appended AFTER any config flags in real spawns; for the copyable
    *  command there are no flags, so the plain form is correct. */
   resumeCommand: (quotedSessionId: string) => `codex resume ${quotedSessionId}`,
+  /** Alt-<key> chord for "split with this provider" (uppercase
+   *  KeyboardEvent.code letter). The DEFAULT_PROVIDER uses the generic
+   *  split chords instead; additional providers without a key get
+   *  palette-only split commands. */
+  splitShortcutKey: 'C',
 } as const

@@ -1,3 +1,8 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import {
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+} from '@shared/types/providerKind'
 import { memo, useCallback, useLayoutEffect, useMemo, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 
@@ -374,8 +379,12 @@ function dispatchAttentionLabel(runtime: {
 // In the narrow dispatch row we want the shorter "Claude" so the
 // badge doesn't crowd the worktree pill on row 2.
 function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
+  // Registry-derived (#394 phase 4); terminal keeps its literal,
+  // undefined kind = pre-kind back-compat (Claude).
   const label =
-    kind === 'codex' ? 'Codex' : kind === 'terminal' ? 'Terminal' : 'Claude'
+    kind === 'terminal'
+      ? 'Terminal'
+      : getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel
   const classes = kind === 'terminal'
     ? 'border-cyan-400/50 bg-cyan-400/10 text-cyan-200'
     : 'border-border bg-surface-hi text-muted'

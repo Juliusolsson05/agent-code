@@ -42,6 +42,14 @@ export type RendererProviderCapabilities = {
   shortLabel: string
   spawnDescription: string
   resumeCommand: (quotedSessionId: string) => string
+  /**
+   * Alt-<key> chord letter for "split with this provider" (#394 phase
+   * 4). Optional: the DEFAULT_PROVIDER is covered by the generic
+   * split-vertical/-horizontal commands, and a provider without a
+   * declared key still gets palette-only split commands — chords are
+   * a scarce resource, palette entries aren't.
+   */
+  splitShortcutKey?: string
   conditionViews: Record<string, ConditionView>
   renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
   renderToolResult?: (

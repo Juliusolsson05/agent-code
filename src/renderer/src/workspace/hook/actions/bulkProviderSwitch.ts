@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useCallback } from 'react'
 
 import type { ProviderSwitchBatchAgent, SessionId } from '@renderer/workspace/types'
@@ -21,7 +22,8 @@ import { switchAgentProvider } from '@renderer/workspace/hook/actions/providerSw
 // would silently drop every turn done after the switch.
 
 function providerLabel(kind: AgentProviderKind): string {
-  return kind === 'codex' ? 'Codex' : 'Claude'
+  // Registry-derived (#394 phase 4).
+  return getRendererProviderCapabilities(kind).shortLabel
 }
 
 function pluralAgents(n: number): string {

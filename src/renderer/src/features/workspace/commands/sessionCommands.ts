@@ -1,4 +1,5 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -466,7 +467,7 @@ export const sessionCommands: CommandDef[] = [
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       return {
-        label: kind === 'codex' ? 'Codex' : 'Claude',
+        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
         tone: 'neutral',
       }
     },
@@ -503,7 +504,7 @@ export const sessionCommands: CommandDef[] = [
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       return {
-        label: kind === 'codex' ? 'Codex' : 'Claude',
+        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
         tone: 'neutral',
       }
     },
@@ -531,7 +532,7 @@ export const sessionCommands: CommandDef[] = [
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       return {
-        label: kind === 'codex' ? 'Codex' : 'Claude',
+        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
         tone: 'neutral',
       }
     },
@@ -616,7 +617,7 @@ export const sessionCommands: CommandDef[] = [
       const meta = sessionId ? workspace.state.sessions[sessionId] : null
       const kind = meta?.kind ?? DEFAULT_PROVIDER
       return {
-        label: kind === 'codex' ? 'Codex' : 'Claude',
+        label: getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel,
         tone: 'neutral',
       }
     },
