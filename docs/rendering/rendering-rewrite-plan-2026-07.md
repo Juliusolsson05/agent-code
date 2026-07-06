@@ -11,6 +11,22 @@ wins; where this one is silent, the dump's Non-Negotiable Rules apply.
 
 Read this first. Then read `research-2026-07/` for the receipts.
 
+## Stage 1 progress (updated 2026-07-06, integration branch)
+
+Landed (slices 1-8, PRs #424-#433 into `integration/rendering-pipeline`):
+ledger core (types / ordering law / ownership / identity stability), committed
+collector with the #338 synthetic-user filter, ghost five-rule predicate with
+the 10-case matrix and failed-fix regressions, semantic collector with the
+#345 compaction kill, local collectors + optimistic→committed handoff,
+unknown-behavior registry with structural redaction, and four end-to-end
+fixtures: buried-prompt-239, dead-committed-channel-159,
+opencode-interleave-87f0eeef, plus the ghost matrix. Suite: 50 pipeline tests;
+full unit project 209/209 on the branch.
+
+Remaining before Stage 2: sidecar-tail e2e variant (unit-covered already),
+unknowns wired into the live ledger pass, fold-policy yield-hatch absorption,
+queue-handoff race e2e, and the runtime→collector adapter (the shadow seam).
+
 ---
 
 ## 0. Why this plan exists and what it refuses to be
