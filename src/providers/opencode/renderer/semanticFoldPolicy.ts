@@ -28,12 +28,22 @@ export const OPENCODE_SEMANTIC_FOLD_POLICY: SemanticFoldPolicy = {
   // the tool row renders instead of vanishing.
   softOpenTurnFromBlockSources: ['opencode-sse'],
   canReplaceTurnFromBlock: true,
-  // Server-authoritative single stream: replacement allowed when the
-  // current turn has ended (sequential handoff, same as every provider)
-  // OR the event comes from the SSE stream itself — which is every
-  // opencode event, making this effectively "the server's newest turn
-  // wins". allowReplaceOfLiveTurn:true is what encodes that; the
-  // displaced turn is still archived into semantic history, not lost.
+  // 'opencode-sse' stays trusted so the ended-turn handoff and (future)
+  // yield hatches key off the real stream; with allowReplaceOfLiveTurn
+  // false below, trust alone no longer displaces a LIVE turn.
   trustedReplaceSources: ['opencode-sse'],
-  allowReplaceOfLiveTurn: true,
+  // FALSE (2026-07-06, second bundle 87f0eeef): the original `true` was
+  // justified as "single server-authoritative stream has no racing
+  // producer" — disproven live. OpenCode interleaves MULTIPLE concurrent
+  // assistant messages on one SSE stream (parallel steps, reasoning
+  // message + text message, agent-tool children before the headless
+  // session filter landed). With live replacement on, interleaved events
+  // ping-ponged the single live-turn slot — 30 turn_starteds across 4
+  // alternating messageIDs, a 27↔29 visible-row render spasm. Strict
+  // ownership (like codex) holds the slot until the current turn ends;
+  // a concurrent message's deltas are dropped from the LIVE view but its
+  // content still lands via the assembled committed entry, and it can
+  // soft-open the slot the moment the current turn completes (ended-turn
+  // handoff in canReplaceMismatchedTurn is universal).
+  allowReplaceOfLiveTurn: false,
 }
