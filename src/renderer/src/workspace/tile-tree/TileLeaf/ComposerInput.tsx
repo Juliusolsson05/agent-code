@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { MutableRefObject } from 'react'
 
@@ -108,7 +109,7 @@ export function ComposerInput({
           of the box instead of vertically-centered because a
           10-line prompt looks odd with a chevron floating in the
           middle of nowhere. */}
-      {provider === 'claude' && draftImages.length > 0 && (
+      {getRendererProviderCapabilities(provider).supportsImageAttachments && draftImages.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {draftImages.map(image => (
             <div

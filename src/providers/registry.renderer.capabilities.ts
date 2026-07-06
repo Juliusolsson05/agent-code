@@ -14,6 +14,8 @@ import {
 } from '@providers/codex/renderer/rows/dispatch'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
+import { claudeComposerSubmit } from '@providers/claude/renderer/composerSubmit'
+import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
   createClaudeTranscriptEntryMapper,
@@ -59,6 +61,44 @@ export type RendererProviderCapabilities = {
    * Codex: session_meta `payload.id`.
    */
   extractProviderSessionId: (raw: Record<string, unknown>) => string | null
+  /**
+   * Composer submit protocol (#394 phase 2c-4). Owns the provider's
+   * paste/submit discipline (Codex: one atomic bracketed-paste+Enter;
+   * Claude: three routes with paste-commit race guards — see
+   * providers/claude/renderer/composerSubmit.ts). The call site keeps
+   * the kind-agnostic machinery: pasteId minting, streaming-baseline
+   * capture, composer clearing, draft preservation on throw.
+   */
+  composerSubmit: (io: ComposerSubmitIo) => Promise<void>
+  /**
+   * Whether this provider's composer accepts inline image
+   * attachments. Gates draft-image accumulation (paste handler), the
+   * pill strip, and post-submit draft clearing. Claude-only today.
+   */
+  supportsImageAttachments: boolean
+  /**
+   * Whether the feed seeds an optimistic local user entry at submit
+   * time. Codex needs it (no reliable structured user message at
+   * submit; the rollout row arrives late and reconciles). Claude gets
+   * its user entry from the transcript synchronously enough not to.
+   * The STORE calls stay at the call site — this flag only decides
+   * whether they fire, keeping providers decoupled from the
+   * workspace store.
+   */
+  usesOptimisticUserEcho: boolean
+}
+
+/** IO bag for composerSubmit. Draft images are structural (not the
+ *  workspace-store type) so provider impls and this registry never
+ *  import workspaceState — the same cycle-avoidance rule as the rest
+ *  of this file. */
+export type ComposerSubmitIo = {
+  sessionId: string
+  input: string
+  draftImages: Array<{ base64Data: string; mediaType: string; filename?: string }>
+  send: (data: string, pasteId?: string) => Promise<void>
+  pasteId: string
+  getScreen: () => string | undefined
 }
 
 const claudeCapabilities: RendererProviderCapabilities = {
@@ -70,6 +110,9 @@ const claudeCapabilities: RendererProviderCapabilities = {
   renderToolResult: renderClaudeToolResult,
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
+  composerSubmit: claudeComposerSubmit,
+  supportsImageAttachments: true,
+  usesOptimisticUserEcho: false,
 }
 
 const codexCapabilities: RendererProviderCapabilities = {
@@ -82,6 +125,9 @@ const codexCapabilities: RendererProviderCapabilities = {
   createTranscriptEntryMapper: (initialTurnCursor) =>
     createCodexTranscriptEntryMapper(initialTurnCursor ?? null),
   extractProviderSessionId: extractCodexProviderSessionId,
+  composerSubmit: codexComposerSubmit,
+  supportsImageAttachments: false,
+  usesOptimisticUserEcho: true,
 }
 
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {

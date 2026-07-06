@@ -1,4 +1,4 @@
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -134,8 +134,14 @@ export function TileLeaf({
     acknowledgeWorkspaceSession(sessionId)
   }, [acknowledgeWorkspaceSession, sessionId])
   const setDraftImages = workspace.setDraftImages
-  const provider: AgentProviderKind =
-    workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
+  // Agent kinds route through the registry; undefined kind is the
+  // pre-kind-persistence back-compat case (#394 phase 2c-4 — the old
+  // `=== 'codex' ? codex : claude` ternary silently coerced any
+  // future provider to claude).
+  const sessionKindForProvider = workspace.state.sessions[sessionId]?.kind
+  const provider: AgentProviderKind = isAgentProviderKind(sessionKindForProvider)
+    ? sessionKindForProvider
+    : DEFAULT_PROVIDER
 
   // Auto-grow the composer textarea to fit its content — hook lives
   // in ./TileLeaf/useComposerAutoGrow.ts, see there for the
