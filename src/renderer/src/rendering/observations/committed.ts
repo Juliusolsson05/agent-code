@@ -156,7 +156,12 @@ export function collectCommittedCandidates(
       timestampMs: entryTimestampMs(e),
       sequence: index,
       textKey: e.type === 'assistant' && text ? text : undefined,
-      normalizedTextKey: e.type === 'assistant' && text ? normalizeTextKey(text) : undefined,
+      // Assistant rows: both keys, for live-text suppression. User rows:
+      // normalized only — NOT for suppression (ownership sets are built from
+      // assistant-text candidates exclusively) but for optimistic-prompt
+      // reconciliation: the committed user row owns its optimistic stand-in
+      // by normalized text (marker+text, never tail position).
+      normalizedTextKey: text ? normalizeTextKey(text) : undefined,
     })
     decisions.push({ candidateId: id, selected: true, reason: 'selected', evidence: [] })
   })
