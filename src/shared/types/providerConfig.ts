@@ -14,7 +14,7 @@
 // RendererProviderConfig, and nothing re-joins them.
 
 import type { ComponentType, ReactNode } from 'react'
-import type { SessionOptions, SessionInfo } from '@shared/types/session.js'
+import type { SessionOptions, SessionInfo, AgentSession } from '@shared/types/session.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
 
@@ -116,8 +116,25 @@ export type MainProviderConfig = {
   /** Provider identity — see RendererProviderConfig.id. */
   id: AgentProviderKind
   name: string
-  /** Factory: create a new session instance for this provider. */
-  createSession: (opts: SessionOptions) => unknown
+  /**
+   * Factory: create a new session instance for this provider.
+   *
+   * WHY the return is typed AgentSession (and not `unknown` as
+   * before): the previous shape made every provider silently
+   * responsible for matching an unwritten event/method contract.
+   * sessionManager.spawn then cast to a structural AgentSessionLike
+   * that only checked "can subscribe" — a provider that dropped
+   * `screen`, misspelled `semantic-event`, or shipped a different
+   * payload for `jsonl-entry` compiled fine and failed silently at
+   * runtime as "the feature is just missing" (a top failure mode in
+   * #394 §4).
+   *
+   * See @shared/types/session.ts for the AgentSession contract
+   * (typed event map + optional capability methods). Widening for a
+   * third provider now surfaces as a compile error inside the
+   * provider, exactly where it can be fixed.
+   */
+  createSession: (opts: SessionOptions) => AgentSession
   /** List resumable sessions for a cwd. */
   listSessions: (cwd: string, limit: number) => Promise<SessionInfo[]>
   /**
