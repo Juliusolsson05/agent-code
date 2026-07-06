@@ -21,6 +21,10 @@ export const providerApi = {
    */
   switchProvider: (params: {
     sourceKind: AgentProviderKind
+    /** Explicit target (#394 phase 5a). Optional for back-compat; new
+     *  callers must pass it — the two-provider negation default dies
+     *  when a third provider registers. */
+    targetKind?: AgentProviderKind
     sourceProviderSessionId: string
     cwd: string
     sourceCwd?: string

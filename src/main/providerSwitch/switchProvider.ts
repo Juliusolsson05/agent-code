@@ -18,6 +18,15 @@ import {
 
 export type SwitchProviderRequest = {
   sourceKind: AgentProviderKind
+  /**
+   * EXPLICIT switch target (#394 phase 5a). Optional for exactly one
+   * release's worth of back-compat with renderer callers that predate
+   * the field; when omitted, the target is the historical "the other
+   * of the two" negation. New callers MUST pass it — the negation
+   * default dies when a third provider registers (it would be
+   * ambiguous), and the request will then hard-require the field.
+   */
+  targetKind?: AgentProviderKind
   sourceProviderSessionId: string
   cwd: string
   sourceCwd?: string
@@ -33,10 +42,33 @@ export type SwitchProviderResult = {
 export async function switchProvider(
   request: SwitchProviderRequest,
 ): Promise<SwitchProviderResult> {
-  if (request.sourceKind === 'claude') {
+  // Explicit-target dispatch (#394 phase 5a): the old code switched by
+  // NEGATION (`sourceKind === 'claude' ? claudeToCodex : codexToClaude`)
+  // with no target parameter at all — the entire feature was
+  // structurally binary. The dispatch is now keyed on the
+  // (source, target) pair; today's two implementations cover the two
+  // shipped pairs, and an unknown pair fails LOUDLY instead of
+  // silently translating to the wrong provider. The generic N-way
+  // implementation lands with the neutral-hub engine migration
+  // (agent-transcript-parser#5) — the hub API
+  // (encode(target, decode(source, x))) is already merged and proven
+  // equivalent, but these flows also own file layout, sanitizers, and
+  // id policy, which move in their own slice.
+  const targetKind = request.targetKind ?? (request.sourceKind === 'claude' ? 'codex' : 'claude')
+  if (targetKind === request.sourceKind) {
+    throw new Error(
+      `switchProvider: target kind ${targetKind} equals source kind — nothing to switch`,
+    )
+  }
+  if (request.sourceKind === 'claude' && targetKind === 'codex') {
     return switchClaudeToCodex(request)
   }
-  return switchCodexToClaude(request)
+  if (request.sourceKind === 'codex' && targetKind === 'claude') {
+    return switchCodexToClaude(request)
+  }
+  throw new Error(
+    `switchProvider: no translation path for ${request.sourceKind} → ${targetKind} yet (see agent-transcript-parser#5)`,
+  )
 }
 
 async function switchClaudeToCodex(

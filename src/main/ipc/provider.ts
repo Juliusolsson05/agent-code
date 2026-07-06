@@ -28,6 +28,7 @@ export function registerProviderIpc(): void {
       _evt,
       params: {
         sourceKind: AgentProviderKind
+        targetKind?: AgentProviderKind
         sourceProviderSessionId: string
         cwd: string
         sourceCwd?: string
