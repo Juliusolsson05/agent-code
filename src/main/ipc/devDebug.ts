@@ -4,6 +4,13 @@ import { readRecentPasteSessions } from '../pasteDebugJournal.js'
 
 export type DevDebugConfig = {
   enabled: boolean
+  /** AGENT_CODE_RENDER_SHADOW=1 — Stage 2 of the rendering rewrite: run
+   *  the new ownership-ledger pipeline beside the legacy renderer and
+   *  record divergences (src/renderer/src/rendering/shadow/). Rides the
+   *  dev-debug config channel instead of minting its own because this
+   *  flag is exactly as temporary as the shadow itself — both are
+   *  DELETE-fated at Stage 3 cutover. */
+  renderShadowEnabled: boolean
 }
 
 function envFlag(name: string): boolean {
@@ -25,6 +32,7 @@ export function registerDevDebugIpc(): void {
       // runtime switch that works in Electron dev without requiring a
       // Vite-prefixed renderer variable or rebuild-time config.
       enabled: isDevDebugEnabled(),
+      renderShadowEnabled: envFlag('AGENT_CODE_RENDER_SHADOW'),
     }
   })
 

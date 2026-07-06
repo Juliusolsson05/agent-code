@@ -28,6 +28,9 @@ export type Unsub = () => void
 
 export type DevDebugConfig = {
   enabled: boolean
+  /** AGENT_CODE_RENDER_SHADOW=1 — rendering-rewrite Stage 2 shadow mode.
+   *  Mirrors src/main/ipc/devDebug.ts (the source of truth). */
+  renderShadowEnabled: boolean
 }
 
 // Caffeinate payloads now live in @shared/types/caffeinate so main can own
