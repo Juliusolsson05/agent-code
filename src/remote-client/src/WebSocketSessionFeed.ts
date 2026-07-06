@@ -15,6 +15,7 @@ import type {
 
 import type {
   FeedChannel,
+  HistoryChunkResult,
   InboundFrame,
   InboundMessage,
   OutboundFrame,
@@ -201,6 +202,24 @@ export class WebSocketSessionFeed implements SessionFeed {
     return reply.ok
       ? { ok: true, state: reply.result }
       : { ok: false, reason: 'aborted', failedAtStep: reply.error }
+  }
+
+  /** Transcript backfill (client-specific, beyond SessionFeed — the desktop
+   *  loads history through its own IPC path). beforeMarker absent = initial
+   *  newest-N chunk; present = the page immediately before it. */
+  async getHistory(
+    sessionId: string,
+    opts: { beforeMarker?: string; limit?: number } = {},
+  ): Promise<{ ok: true; chunk: HistoryChunkResult } | { ok: false; error: string }> {
+    const reply = await this.request({
+      type: 'get-history',
+      sessionId,
+      beforeMarker: opts.beforeMarker,
+      limit: opts.limit,
+    })
+    return reply.ok
+      ? { ok: true, chunk: reply.result as HistoryChunkResult }
+      : { ok: false, error: reply.error ?? 'history unavailable' }
   }
 
   /** pty actions ride the same permission-reply message; exposed for the

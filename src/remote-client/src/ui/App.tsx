@@ -4,6 +4,7 @@ import {
   WebSocketSessionFeed,
   type ConnectionState,
 } from '../WebSocketSessionFeed'
+import { TranscriptStore } from '../transcript/store'
 import {
   clearToken,
   defaultDeviceName,
@@ -61,15 +62,20 @@ export function App(): React.JSX.Element {
     () => (token ? new WebSocketSessionFeed({ url: wsUrlForPage(), token }) : null),
     [token],
   )
+  // One transcript store per feed lifetime: it owns the per-session
+  // ingest state (seen-uuid sets, stateful codex mapper cursors) that must
+  // survive navigation between the list and session screens.
+  const store = useMemo(() => (feed ? new TranscriptStore(feed) : null), [feed])
 
   useEffect(() => {
     if (!feed) return
     const off = feed.onConnectionState(setConnection)
     return () => {
       off()
+      store?.dispose()
       feed.dispose()
     }
-  }, [feed])
+  }, [feed, store])
 
   const unpair = (): void => {
     // Local unpair only — the durable revocation lives on the desktop's
@@ -79,7 +85,10 @@ export function App(): React.JSX.Element {
     setToken(null)
   }
 
-  if (!token || !feed) {
+  // store is non-null exactly when feed is (same memo condition); the
+  // single guard keeps the narrowing in one place instead of a dead
+  // second PairScreen further down (review finding).
+  if (!token || !feed || !store) {
     return (
       <PairScreen
         busy={autoPairing}
@@ -111,6 +120,7 @@ export function App(): React.JSX.Element {
   return (
     <SessionView
       feed={feed}
+      store={store}
       connection={connection}
       sessionId={selectedSessionId}
       onBack={() => setSelectedSessionId(null)}

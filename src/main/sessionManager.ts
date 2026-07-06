@@ -246,6 +246,22 @@ export class SessionManager extends EventEmitter {
   // in cleanupSessionState.
   private readonly lastScreenSnapshot = new Map<string, AgentScreenSnapshot>()
   private readonly lastConditionsSnapshot = new Map<string, ProviderConditionSnapshot>()
+  // Durable transcript path per session, cached from the jsonl-entry relay.
+  // This is the one main-side key that unlocks history reads for a LIVE
+  // session: cwd is provider-constructor-private and the provider session id
+  // exists only inside the jsonl lines, but every entry event carries the
+  // file it was appended to. Consumed by the remote companion's get-history
+  // (see main/remote/RemoteServer.ts); same lifetime as the snapshot caches.
+  //
+  // KNOWN STALENESS WINDOW: when the provider rolls to a new transcript
+  // (claude /clear, or a resume that mints a new provider session id → new
+  // jsonl path), this cache points at the PREVIOUS conversation's file until
+  // the new conversation writes its first durable line. Main has no earlier
+  // roll signal than that first entry. Consumers must therefore treat the
+  // served file as advisory: RemoteServer returns the file identity with
+  // every history chunk, and the phone's TranscriptStore discards a chunk
+  // whose file disagrees with the file its live frames carry.
+  private readonly lastTranscriptFile = new Map<string, string>()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the
   // restored-agents-null bug can make a renderer spam writes against a stale id,
@@ -342,6 +358,7 @@ export class SessionManager extends EventEmitter {
     // live (the exact stale-state bug the remote late-joiner replay had).
     this.lastScreenSnapshot.delete(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
+    this.lastTranscriptFile.delete(sessionId)
     // Keep lastActivityAt after removal. Process telemetry can be asked about a
     // pane the renderer still knows but whose PTY already exited; deleting this
     // tiny timestamp made those recently-exited panes look like they had never
@@ -501,6 +518,7 @@ export class SessionManager extends EventEmitter {
       })
       session.on('jsonl-entry', (entry: AgentTranscriptEntry, file: string) => {
         this.markActivity(sessionId)
+        this.lastTranscriptFile.set(sessionId, file)
         this.emit('jsonl-entry', { sessionId, entry, file })
       })
       session.on('jsonl-error', (error: Error) => {
@@ -1165,6 +1183,12 @@ export class SessionManager extends EventEmitter {
    *  getScreenSnapshot. */
   getConditionsSnapshot(sessionId: string): ProviderConditionSnapshot | null {
     return this.lastConditionsSnapshot.get(sessionId) ?? null
+  }
+
+  /** Durable transcript file for a live session, or null before the first
+   *  jsonl entry has been observed. See the cache field's WHY. */
+  getTranscriptFile(sessionId: string): string | null {
+    return this.lastTranscriptFile.get(sessionId) ?? null
   }
 
   /** Kill every live session. Called on app quit. */

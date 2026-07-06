@@ -198,43 +198,78 @@ async function readOlderTranscriptWindow(
 export async function loadOlderHistoryChunk(
   params: HistoryChunkRequest,
 ): Promise<HistoryChunk> {
+  // Thin resolver wrapper — the streaming work, span bookkeeping, and
+  // return shaping all live in the FromFile variant so the two entrypoints
+  // cannot drift (review finding: the first extraction duplicated the span
+  // + catch scaffolding in both).
+  const filePath = await resolveHistoryTranscriptPath(params)
+  if (!filePath) {
+    performanceService
+      .span('historyLoader.loadOlderChunk', { kind: params.kind, limit: params.limit })
+      .end({ result: 'missing-file' })
+    return { entries: [], hasMore: false }
+  }
+  return loadOlderHistoryChunkFromFile(filePath, params)
+}
+
+/**
+ * Path-based variant for callers that already hold the transcript file —
+ * the remote mobile companion's get-history serves live sessions whose
+ * {cwd, providerSessionId} main cannot reconstruct (cwd is provider-
+ * constructor-private; the provider session id exists only inside the
+ * jsonl), but whose FILE path rides every jsonl-entry event and is cached
+ * on SessionManager. Splitting here rather than teaching remote to fake a
+ * resolver input keeps one streaming/ring-buffer implementation for both
+ * entrypoints.
+ */
+export async function loadOlderHistoryChunkFromFile(
+  filePath: string,
+  params: { kind: AgentProviderKind; beforeMarker: string; limit: number },
+): Promise<HistoryChunk> {
   const span = performanceService.span('historyLoader.loadOlderChunk', {
     kind: params.kind,
     limit: params.limit,
     hasBeforeMarker: params.beforeMarker.length > 0,
   })
-
   try {
-    const filePath = await resolveHistoryTranscriptPath(params)
-
-    if (!filePath) {
-      span.end({ result: 'missing-file' })
-      return { entries: [], hasMore: false }
-    }
-
-    const parsed = await readOlderTranscriptWindow(filePath, params)
-    if (parsed.entries.length === 0) {
-      span.end({ result: 'empty-or-read-failed', filePath })
-      return { entries: [], hasMore: false }
-    }
-
-    span.end({
-      result: 'loaded',
-      bytes: parsed.bytes,
-      parsed: parsed.parsed,
-      parseErrors: parsed.parseErrors,
-      foundMarker: parsed.foundMarker,
-      returned: parsed.entries.length,
-      hasMore: parsed.hasMore,
+    const parsed = await readOlderTranscriptWindow(filePath, {
+      // readOlderTranscriptWindow only consumes kind/beforeMarker/limit;
+      // cwd/providerSessionId exist on the type for the resolver path.
+      kind: params.kind,
+      beforeMarker: params.beforeMarker,
+      limit: params.limit,
+      cwd: '',
+      providerSessionId: '',
     })
-    return {
-      entries: parsed.entries,
-      hasMore: parsed.hasMore,
-    }
+    return finishOlderChunk(span, parsed, filePath)
   } catch (err) {
     span.fail(err)
     throw err
   }
+}
+
+function finishOlderChunk(
+  span: ReturnType<typeof performanceService.span>,
+  parsed: Awaited<ReturnType<typeof readOlderTranscriptWindow>>,
+  filePath: string,
+): HistoryChunk {
+  if (parsed.entries.length === 0) {
+    // filePath in the failure record — losing the file identity is what
+    // made past transcript-path bugs (double-applied project dirs, wrong
+    // rollout picked) invisible in the perf journal.
+    span.end({ result: 'empty-or-read-failed', filePath })
+    return { entries: [], hasMore: false }
+  }
+  span.end({
+    result: 'loaded',
+    bytes: parsed.bytes,
+    parsed: parsed.parsed,
+    parseErrors: parsed.parseErrors,
+    foundMarker: parsed.foundMarker,
+    returned: parsed.entries.length,
+    hasMore: parsed.hasMore,
+  })
+  return { entries: parsed.entries, hasMore: parsed.hasMore }
 }
 
 /**
@@ -258,27 +293,53 @@ export async function loadInitialHistoryChunk(
       span.end({ result: 'missing-file' })
       return { entries: [], hasMore: false, totalEntries: 0 }
     }
-    const parsed = await readInitialTranscriptTail(filePath, params.limit)
-    if (parsed.entries.length === 0) {
-      span.end({ result: 'empty-or-read-failed', filePath })
-      return { entries: [], hasMore: false, totalEntries: 0 }
-    }
-
-    span.end({
-      result: 'loaded',
-      bytes: parsed.bytes,
-      parsed: parsed.parsed,
-      parseErrors: parsed.parseErrors,
-      returned: parsed.entries.length,
-      hasMore: parsed.parsed > params.limit,
-    })
-    return {
-      entries: parsed.entries,
-      hasMore: parsed.parsed > params.limit,
-      totalEntries: parsed.parsed,
-    }
+    span.end({ result: 'delegated', filePath })
+    return await loadInitialHistoryChunkFromFile(filePath, params.limit)
   } catch (err) {
     span.fail(err)
     throw err
+  }
+}
+
+/** Path-based variant — same rationale as loadOlderHistoryChunkFromFile. */
+export async function loadInitialHistoryChunkFromFile(
+  filePath: string,
+  limit: number,
+): Promise<HistoryChunk> {
+  const span = performanceService.span('historyLoader.loadInitialChunk', {
+    limit,
+    fromFile: true,
+  })
+  try {
+    const parsed = await readInitialTranscriptTail(filePath, limit)
+    return finishInitialChunk(span, parsed, limit, filePath)
+  } catch (err) {
+    span.fail(err)
+    throw err
+  }
+}
+
+function finishInitialChunk(
+  span: ReturnType<typeof performanceService.span>,
+  parsed: Awaited<ReturnType<typeof readInitialTranscriptTail>>,
+  limit: number,
+  filePath: string,
+): HistoryChunk {
+  if (parsed.entries.length === 0) {
+    span.end({ result: 'empty-or-read-failed', filePath })
+    return { entries: [], hasMore: false, totalEntries: 0 }
+  }
+  span.end({
+    result: 'loaded',
+    bytes: parsed.bytes,
+    parsed: parsed.parsed,
+    parseErrors: parsed.parseErrors,
+    returned: parsed.entries.length,
+    hasMore: parsed.parsed > limit,
+  })
+  return {
+    entries: parsed.entries,
+    hasMore: parsed.parsed > limit,
+    totalEntries: parsed.parsed,
   }
 }

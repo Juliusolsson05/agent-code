@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { randomBytes } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket as NodeWebSocket } from 'ws'
@@ -13,6 +13,7 @@ import { LanTransport } from '@main/remote/transport/LanTransport.js'
 import { RemoteServer, type RemoteSessionControl } from '@main/remote/RemoteServer.js'
 
 import { WebSocketSessionFeed, type WebSocketLike } from './WebSocketSessionFeed'
+import { TranscriptStore } from './transcript/store'
 
 // The drift-catcher: real WebSocketSessionFeed against real RemoteServer over
 // real sockets. wire.ts re-declares the protocol types instead of importing
@@ -26,6 +27,7 @@ function makeManager(): FakeManager {
   emitter.list = vi.fn(() => [])
   emitter.getScreenSnapshot = vi.fn(() => null)
   emitter.getConditionsSnapshot = vi.fn(() => null)
+  emitter.getTranscriptFile = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const, state: { done: true } }))
   emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
@@ -171,6 +173,77 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     f.onConnectionState(s => states.push(s))
     await vi.waitFor(() => expect(states).toContain('closed'))
     expect(states).not.toContain('open')
+  })
+
+  it('TranscriptStore folds live jsonl + semantic + backfill into a feed-ready snapshot', async () => {
+    // The full phone pipeline over real sockets: raw jsonl frames map
+    // through the desktop's own provider mapper, semantic deltas fold
+    // through the desktop's foldSemanticEvent, and history prepends behind
+    // live entries with the shared seen-set deduping the overlap.
+    const transcript = join(dir, 'live.jsonl')
+    const disk = [
+      { type: 'user', uuid: 'u-old', message: { role: 'user', content: 'earlier prompt' } },
+      { type: 'assistant', uuid: 'a-old', message: { role: 'assistant', content: [{ type: 'text', text: 'earlier answer' }] } },
+      // Deliberately ALSO delivered live below — the seen-set must dedupe.
+      { type: 'user', uuid: 'u-live', message: { role: 'user', content: 'do the thing' } },
+    ]
+    await writeFile(transcript, disk.map(d => JSON.stringify(d)).join('\n') + '\n', 'utf8')
+    ;(manager.getTranscriptFile as ReturnType<typeof vi.fn>).mockReturnValue(transcript)
+
+    const f = makeFeed()
+    const store = new TranscriptStore(f)
+    await waitForOpen(f)
+
+    manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+    // Live entry arrives FIRST (before backfill) — the desktop-order case.
+    manager.emit('jsonl-entry', {
+      sessionId: 's1',
+      entry: { type: 'user', uuid: 'u-live', message: { role: 'user', content: 'do the thing' } },
+      file: transcript,
+    })
+    await vi.waitFor(() =>
+      expect(store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual(['u-live']),
+    )
+
+    // Backfill prepends the older records and skips the duplicate.
+    await store.loadInitialHistory('s1')
+    await vi.waitFor(() =>
+      expect(store.getSnapshot('s1').entries.map(e => e.uuid)).toEqual([
+        'u-old', 'a-old', 'u-live',
+      ]),
+    )
+    expect(store.getSnapshot('s1').hasOlderHistory).toBe(false)
+
+    // Semantic stream: a live turn builds via the desktop fold. The phase
+    // advances on stream_phase (what Claude/Codex adapters actually emit) —
+    // the shared reducer deliberately does NOT bridge turn_started from
+    // 'idle' (desktop-exact semantics; the desktop's bridge only fills the
+    // optimistic submitting/requesting gap, which the phone doesn't set).
+    manager.emit('semantic-event', {
+      sessionId: 's1',
+      event: { type: 'turn_started', turnId: 'turn-1' },
+    })
+    manager.emit('semantic-event', {
+      sessionId: 's1',
+      event: { type: 'stream_phase', phase: 'responding', turnId: 'turn-1' },
+    })
+    manager.emit('semantic-event', {
+      sessionId: 's1',
+      event: {
+        type: 'block_started', turnId: 'turn-1', blockId: 'b1', blockType: 'text',
+      },
+    })
+    manager.emit('semantic-event', {
+      sessionId: 's1',
+      event: { type: 'text_delta', turnId: 'turn-1', blockId: 'b1', text: 'streaming…' },
+    })
+    await vi.waitFor(() => {
+      const snap = store.getSnapshot('s1')
+      expect(snap.semanticTurn).not.toBeNull()
+      expect(snap.phase.streamPhase).toBe('responding')
+    })
+
+    store.dispose()
   })
 
   it('commands fail cleanly while disconnected', async () => {

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { randomBytes } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
@@ -24,6 +24,7 @@ function makeManager(): FakeManager {
   emitter.list = vi.fn(() => [])
   emitter.getScreenSnapshot = vi.fn(() => null)
   emitter.getConditionsSnapshot = vi.fn(() => null)
+  emitter.getTranscriptFile = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const }))
   emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
@@ -315,6 +316,65 @@ describe('inbound scope enforcement on a live socket', () => {
     expect(framesOfType(frames, 'reply')[0]?.ok).toBe(false)
     expect(manager.write).not.toHaveBeenCalled()
     expect(manager.resolveCondition).not.toHaveBeenCalled()
+    ws.close()
+  })
+
+  it('get-history serves the newest chunk from the cached transcript file', async () => {
+    // Write a real jsonl transcript and point the manager's file cache at
+    // it — the exact shape RemoteServer reads for a live session.
+    const transcript = join(dir, 'session.jsonl')
+    const lines = Array.from({ length: 5 }, (_, i) =>
+      JSON.stringify({
+        type: 'user',
+        uuid: `u-${i}`,
+        message: { role: 'user', content: `prompt ${i}` },
+      }),
+    )
+    await writeFile(transcript, lines.join('\n') + '\n', 'utf8')
+    ;(manager.getTranscriptFile as ReturnType<typeof vi.fn>).mockReturnValue(transcript)
+
+    const { ws, frames, token } = await openAuthed()
+    ws.send(JSON.stringify({
+      token, id: 'h1',
+      message: { type: 'get-history', sessionId: 's1', limit: 3 },
+    }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
+    const reply = framesOfType(frames, 'reply')[0] as {
+      ok: boolean
+      result: { entries: Array<{ uuid: string }>; hasMore: boolean; totalEntries: number }
+    }
+    expect(reply.ok).toBe(true)
+    // Newest `limit` records, in file order.
+    expect(reply.result.entries.map(e => e.uuid)).toEqual(['u-2', 'u-3', 'u-4'])
+    expect(reply.result.hasMore).toBe(true)
+    expect(reply.result.totalEntries).toBe(5)
+
+    // Older page anchored on the first entry of the previous chunk.
+    ws.send(JSON.stringify({
+      token, id: 'h2',
+      message: { type: 'get-history', sessionId: 's1', beforeMarker: 'u-2', limit: 3 },
+    }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
+    const older = framesOfType(frames, 'reply')[1] as {
+      ok: boolean
+      result: { entries: Array<{ uuid: string }>; hasMore: boolean }
+    }
+    expect(older.ok).toBe(true)
+    expect(older.result.entries.map(e => e.uuid)).toEqual(['u-0', 'u-1'])
+    expect(older.result.hasMore).toBe(false)
+    ws.close()
+  })
+
+  it('get-history fails cleanly before any transcript exists', async () => {
+    const { ws, frames, token } = await openAuthed()
+    ws.send(JSON.stringify({
+      token, id: 'h1',
+      message: { type: 'get-history', sessionId: 's1' },
+    }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
+    expect(framesOfType(frames, 'reply')[0]).toMatchObject({
+      ok: false, error: expect.stringContaining('no transcript'),
+    })
     ws.close()
   })
 

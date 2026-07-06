@@ -41,6 +41,7 @@ export type InboundMessage =
   | { type: 'send-prompt'; sessionId: string; text: string }
   | { type: 'submit'; sessionId: string }
   | { type: 'interrupt'; sessionId: string }
+  | { type: 'get-history'; sessionId: string; beforeMarker?: string; limit?: number }
   | {
       type: 'permission-reply'
       sessionId: string
@@ -48,6 +49,18 @@ export type InboundMessage =
         | { kind: 'pty'; id: string; label: string; data: string }
         | { kind: 'custom'; id: string; label: string; name: string; payload?: unknown }
     }
+
+/** Reply payload for get-history: raw transcript records in the same shape
+ *  as live jsonl frames' `entry` halves — one mapper path serves both. */
+export type HistoryChunkResult = {
+  entries: Array<Record<string, unknown>>
+  hasMore: boolean
+  totalEntries?: number
+  /** Which transcript file the server read. The client compares this
+   *  against the file its live frames carry to detect a stale serve from
+   *  the post-/clear cache window — see TranscriptStore.chunkFileConflicts. */
+  file?: string
+}
 
 export type InboundFrame = {
   token: string

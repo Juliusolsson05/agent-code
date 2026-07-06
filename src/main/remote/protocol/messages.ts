@@ -79,6 +79,22 @@ export const conditionActionSchema = z.union([
   }),
 ])
 
+/**
+ * Read-only transcript backfill. The phone connects mid-session and needs
+ * scrollback; live jsonl frames only cover what happened after connect.
+ * beforeMarker absent → the newest `limit` records (initial chunk);
+ * present → the `limit` records immediately before it (older page). This
+ * widens the v1 scope with a READ — it exposes transcript content the
+ * feed channels already stream, adds no new write capability, and its
+ * acceptance is pinned in scope.test.ts like every other message.
+ */
+export const getHistoryMessageSchema = z.object({
+  type: z.literal('get-history'),
+  sessionId: z.string().min(1),
+  beforeMarker: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(500).optional(),
+})
+
 export const permissionReplyMessageSchema = z.object({
   type: z.literal('permission-reply'),
   sessionId: z.string().min(1),
@@ -91,6 +107,7 @@ export const inboundMessageSchema = z.discriminatedUnion('type', [
   submitMessageSchema,
   interruptMessageSchema,
   permissionReplyMessageSchema,
+  getHistoryMessageSchema,
 ])
 
 /**

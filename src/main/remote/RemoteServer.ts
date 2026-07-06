@@ -16,6 +16,10 @@ import type { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
 import { parseInboundFrame } from '@main/remote/protocol/scope.js'
 import type { InboundFrame, OutboundFrame } from '@main/remote/protocol/messages.js'
 import type { FeedChannel, SessionFeedSource } from '@main/remote/SessionFeedSource.js'
+import {
+  loadInitialHistoryChunkFromFile,
+  loadOlderHistoryChunkFromFile,
+} from '@main/sessions/historyLoader.js'
 import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
 
 // RemoteServer — the HTTP+WS host that makes Agent Code controllable from a
@@ -54,6 +58,7 @@ export type RemoteSessionControl = {
   list(): string[]
   getScreenSnapshot(sessionId: string): unknown
   getConditionsSnapshot(sessionId: string): unknown
+  getTranscriptFile(sessionId: string): string | null
   write(sessionId: string, data: string): boolean
   resolveCondition(
     sessionId: string,
@@ -417,7 +422,17 @@ export class RemoteServer extends EventEmitter {
     }
     void this.deps.registry.touch(verdict.deviceId)
 
-    const result = await this.apply(frame)
+    // apply() reaches disk (get-history) and provider runtimes; a thrown
+    // error must become a structured reply, not an unhandled rejection that
+    // leaves the phone's request waiting out its 10s timeout (review
+    // finding). Never echo raw error internals to an untrusted socket.
+    let result: { ok: boolean; error?: string; result?: unknown }
+    try {
+      result = await this.apply(frame)
+    } catch (err) {
+      this.deps.journal?.recordError('remote_apply.error', err)
+      result = { ok: false, error: 'internal error applying message' }
+    }
     this.send(ws, { type: 'reply', id: frame.id, ...result })
   }
 
@@ -453,6 +468,38 @@ export class RemoteServer extends EventEmitter {
 
       case 'permission-reply':
         return this.applyPermissionReply(msg.sessionId, msg.action)
+
+      case 'get-history': {
+        // Read-only backfill. The transcript file is the one key main can
+        // actually resolve for a live session (cached off the jsonl-entry
+        // relay — see SessionManager.getTranscriptFile). No file yet means
+        // the session has not written a durable line this run; the phone
+        // shows live-only and may retry after the first entry lands.
+        const file = this.deps.manager.getTranscriptFile(msg.sessionId)
+        if (!file) {
+          return { ok: false, error: 'no transcript on disk yet for this session' }
+        }
+        const kind = this.deps.manager.getSessionKind(msg.sessionId)
+        if (!kind || kind === 'terminal') {
+          return { ok: false, error: 'not an agent session' }
+        }
+        const chunk = msg.beforeMarker
+          ? await loadOlderHistoryChunkFromFile(file, {
+              kind,
+              beforeMarker: msg.beforeMarker,
+              limit: msg.limit ?? 200,
+            })
+          : await loadInitialHistoryChunkFromFile(file, msg.limit ?? 120)
+        // Raw records, same shape as the live jsonl frames' `entry` halves,
+        // so the phone runs ONE mapper path for backfill and live. `file`
+        // rides along so the client can detect a transcript ROLL: after
+        // /clear (or a resume that starts a new provider session) the
+        // manager's file cache is stale until the new conversation's first
+        // durable line, and a backfill served from the OLD file must be
+        // discardable client-side by comparing against the file the live
+        // frames carry.
+        return { ok: true, result: { ...chunk, file } }
+      }
     }
   }
 
