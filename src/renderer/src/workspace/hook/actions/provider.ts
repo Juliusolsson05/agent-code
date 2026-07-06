@@ -47,13 +47,35 @@ export function useProviderActions(
 
     const sourceKind = meta.kind ?? DEFAULT_PROVIDER
     if (!isAgentProviderKind(sourceKind)) {
-      showPaneToast(sourceSessionId, 'Only Claude and Codex panes can switch provider')
+      // Non-agent (terminal) pane — nothing to switch.
+      showPaneToast(sourceSessionId, 'Only agent panes can switch provider')
       return
     }
     // Focused command policy: toggle to "the other provider". The translate /
     // replace / empty-pane mechanics live in switchAgentProvider so the bulk
     // modal can reuse them; this command owns only the target choice and the
     // pane-scoped toast.
+    //
+    // Only the claude↔codex pair has a transcript translation path today:
+    // main-side switchProvider throws for any other pair, and atp ships only
+    // Claude/Codex codecs. OpenCode is a registered AgentProviderKind (so it
+    // passes the guard above) but has NO transcript codec yet (the atp
+    // opencode-codec follow-up, #406 step 7). Without this check an opencode
+    // pane would compute targetKind='claude' via the negation below, attempt
+    // opencode→claude, and hit switchProvider's "no translation path" throw —
+    // surfacing as a confusing failure toast. Refuse cleanly instead.
+    //
+    // WHY the switchable pair is spelled out rather than registry-derived: it
+    // mirrors the two file-transcript providers that actually have codecs.
+    // When a third provider gains a codec + file layout this becomes a
+    // capability lookup and the binary negation dies (#394 phase 5b, §6).
+    if (sourceKind !== 'claude' && sourceKind !== 'codex') {
+      showPaneToast(
+        sourceSessionId,
+        `${getRendererProviderCapabilities(sourceKind).shortLabel} panes can't switch provider yet`,
+      )
+      return
+    }
     const targetKind = sourceKind === 'claude' ? 'codex' : 'claude'
 
     const result = await switchAgentProvider({
