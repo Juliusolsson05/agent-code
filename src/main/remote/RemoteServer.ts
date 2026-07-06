@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createReadStream, existsSync } from 'node:fs'
-import { extname, join, normalize } from 'node:path'
+import { extname, join, normalize, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
 
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -294,7 +294,10 @@ export class RemoteServer extends EventEmitter {
     // is negligible next to serving the files themselves, and it makes
     // "build, then just reload the phone page" work with zero restarts.
     if (!dist || !existsSync(join(dist, 'index.html'))) {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-cache',
+      })
       res.end(
         '<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">' +
           '<title>Agent Code Remote</title>' +
@@ -318,15 +321,29 @@ export class RemoteServer extends EventEmitter {
       // survive a reload on the phone.
       const index = join(dist, 'index.html')
       if (existsSync(index)) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-cache',
+        })
         createReadStream(index).pipe(res)
       } else {
         res.writeHead(404).end()
       }
       return
     }
+    // Cache discipline (learned the hard way — a phone kept serving a
+    // stale page through a rebuild AND a server restart because we sent no
+    // headers, and mobile browsers cache heuristically-forever without
+    // them): the HTML entry must revalidate on every load (`no-cache` =
+    // cached but always conditional), while Vite's content-hashed assets
+    // are immutable by construction and can cache for a year — a new build
+    // changes the hash, and the fresh index.html points at it.
+    const isHashedAsset = filePath.includes(`${sep}assets${sep}`)
     res.writeHead(200, {
       'content-type': STATIC_CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream',
+      'cache-control': isHashedAsset
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache',
     })
     createReadStream(filePath).pipe(res)
   }

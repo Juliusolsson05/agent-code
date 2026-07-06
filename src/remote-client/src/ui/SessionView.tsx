@@ -160,6 +160,12 @@ export function SessionView({
         !transcript.semanticTurn &&
         transcript.screenText ? (
           <div className="screen">
+            {transcript.historyError && (
+              <div className="working" style={{ color: 'var(--danger)' }}>
+                Rich transcript unavailable ({transcript.historyError}) — showing
+                raw terminal. The desktop app may need an update/restart.
+              </div>
+            )}
             <pre className="terminal">{transcript.screenText}</pre>
           </div>
         ) : (
