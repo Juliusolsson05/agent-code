@@ -13,6 +13,10 @@ import type {
   Unsub,
 } from '@shared/sessionFeed/types.js'
 
+// Convenience re-export: implementations import the contract and its return
+// type from one module (types.ts stays the declaration home).
+export type { Unsub } from '@shared/sessionFeed/types.js'
+
 // SessionFeed — THE seam between "the UI wants live session I/O" and "where
 // that data physically comes from".
 //

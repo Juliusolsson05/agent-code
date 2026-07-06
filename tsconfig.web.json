@@ -44,6 +44,14 @@
   },
   "include": [
     "src/renderer/**/*",
+    // The phone client is browser code type-checked here (react-jsx, DOM
+    // lib) even though it builds through its own plain-Vite config — the
+    // tsc gate must cover it or client drift ships silently.
+    "src/remote-client/**/*",
+    // sessionFeed is the shared contract between renderer, remote client,
+    // and (via re-exports) preload; listed explicitly like the other shared
+    // subtrees so it is always in a checked file list.
+    "src/shared/sessionFeed/**/*",
     "src/preload/index.d.ts",
     "src/shared/code/**/*",
     "src/shared/types/**/*",

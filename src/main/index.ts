@@ -5,7 +5,9 @@
 import '@main/loadEnv.js'
 
 import { app, BrowserWindow, crashReporter, dialog, Menu } from 'electron'
+import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
+import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
@@ -462,11 +464,15 @@ async function startApp(): Promise<void> {
   // construction hole; see docs/superpowers/specs/2026-07-06-remote-mobile-
   // companion-design.md) but OFF until the user enables it from the Remote
   // panel: construction allocates no sockets, no manager subscriptions, no
-  // secret I/O. clientDistDir stays null until the phone client bundle ships
-  // in the packaged app; the server serves a placeholder page meanwhile.
+  // secret I/O. The phone bundle comes from `npm run client:build`
+  // (out/remote-client, sibling of electron-vite's out/main); when it isn't
+  // built the server serves a placeholder page and the WS API still works,
+  // so a dev install degrades visibly instead of failing.
+  const remoteClientDist = join(app.getAppPath(), 'out', 'remote-client')
   remoteController = new RemoteController({
     manager,
     journal: appRunJournal,
+    clientDistDir: existsSync(remoteClientDist) ? remoteClientDist : null,
   })
   builtInMcpHost.setDependencies({
     orchestrationBridge,
