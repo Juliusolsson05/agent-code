@@ -108,6 +108,7 @@ export type CommandContext = {
     closeAgentStatusPanel: () => void
     toggleAgentStatusPanel: () => void
     togglePerformancePanel: () => void
+    toggleRemotePanel: () => void
     toggleCaffeinate: () => Promise<void> | void
     toggleGlobalEditor: () => void
     /** Toggle visibility of the Global Editor's in-editor file tree.

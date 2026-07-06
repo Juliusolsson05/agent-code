@@ -26,9 +26,11 @@ import { registerOrchestrationIpc } from '@main/ipc/orchestration.js'
 import { registerAiWorkspaceIpc } from '@main/ipc/aiWorkspace.js'
 import { registerRenderedContentIpc } from '@main/ipc/renderedContent.js'
 import { registerCaffeinateIpc } from '@main/ipc/caffeinate.js'
+import { registerRemoteIpc } from '@main/ipc/remote.js'
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
 import type { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
+import type { RemoteController } from '@main/remote/RemoteController.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { registerIncidentIpc } from '@main/ipc/incident.js'
 
@@ -51,6 +53,7 @@ export type IpcDeps = {
   orchestrationBridge: OrchestrationBridge
   aiWorkspaceRegistry: AiWorkspaceRegistry
   caffeinateController: CaffeinateController
+  remoteController: RemoteController
   appRunJournal: AppRunJournal
 }
 
@@ -76,5 +79,6 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
   registerRenderedContentIpc()
   registerCaffeinateIpc(deps.caffeinateController)
+  registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
 }

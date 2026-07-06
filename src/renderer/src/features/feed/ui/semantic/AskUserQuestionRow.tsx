@@ -7,6 +7,7 @@ import {
   AskUserQuestionConditionContext,
   CodeRenderContext,
 } from '@renderer/features/feed/context'
+import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
 import { asRecord } from '@shared/lib/asRecord'
@@ -134,6 +135,10 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   // the empty default.
   const { sessionId } = useContext(CodeRenderContext)
   const liveAskUserQuestion = useContext(AskUserQuestionConditionContext)
+  // Session input goes through the injected SessionFeed (not window.api):
+  // this row is shared with the remote client, where the preload bridge
+  // does not exist. See src/shared/sessionFeed/SessionFeed.ts.
+  const feed = useSessionFeed()
 
   // Local "answering" latch. Once the user submits an answer we disable every
   // control, both to give feedback ("Answering…") and to guard against
@@ -209,7 +214,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
     submittedRef.current = true
     setAnswering(true)
     setResolveError(null)
-    void window.api
+    void feed
       .resolveCondition(sessionId, action)
       .then(result => {
         if (!result.ok) {
@@ -357,7 +362,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
     if (!seq) return
     event.preventDefault()
     event.stopPropagation()
-    void window.api.sendInput(sessionId, seq)
+    void feed.sendInput(sessionId, seq)
   }
 
   return (

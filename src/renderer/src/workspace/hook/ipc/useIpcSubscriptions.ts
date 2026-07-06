@@ -7,6 +7,7 @@ import {
 import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
+import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 import { isCompactSummaryEntry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
@@ -284,7 +285,19 @@ function applyConditionSnapshot(
 
 // -----------------------------------------------------------------------------
 // useIpcSubscriptions — the one big side-effect that wires every
-// window.api.onSession* listener.
+// session-event listener.
+//
+// Session events arrive through the injected SessionFeed (phase 0 of the
+// remote mobile companion — see docs/superpowers/specs/2026-07-06-remote-
+// mobile-companion-design.md), NOT through window.api directly. The desktop
+// passes IpcSessionFeed (a pure pass-through to the preload bridge), tests
+// pass FakeSessionFeed, and the remote client will pass its WebSocket feed.
+// Do NOT reintroduce a direct `window.api.onSession*` call for a feed-covered
+// event — that would silently exclude non-IPC transports from that event.
+// Desktop-only side channels (ghostAppend, gitWorktrees, feed-debug, perf)
+// intentionally STAY on window.api below: they are not session I/O, the
+// remote client must never need them, and abstracting them would widen the
+// SessionFeed contract for no consumer.
 //
 // One listener per event type. The callback looks up the session by
 // sessionId from the payload and patches the corresponding runtime.
@@ -301,6 +314,14 @@ function applyConditionSnapshot(
 // -----------------------------------------------------------------------------
 
 export function useIpcSubscriptions(
+  // WHY feed identity matters: `feed` sits in the effect's dep array, so an
+  // unstable reference would tear down + re-attach every subscription each
+  // render — the exact pathology the memoized refs factory exists to prevent
+  // (see useWorkspaceRefs). ipcSessionFeed is a module const and the context
+  // value passes it through untouched, so identity is stable by construction.
+  // If a future transport constructs its feed per-render, memoize it at the
+  // construction site, not here.
+  feed: SessionFeed,
   refs: WorkspaceRefs,
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
@@ -522,7 +543,7 @@ export function useIpcSubscriptions(
       }
     }
 
-    const offStarted = window.api.onSessionStarted(({ sessionId, projectDir }) => {
+    const offStarted = feed.onSessionStarted(({ sessionId, projectDir }) => {
       updateRuntime(sessionId, {
         projectDir,
         processStatus: 'started',
@@ -539,7 +560,7 @@ export function useIpcSubscriptions(
       })
     })
 
-    const offScreen = window.api.onSessionScreen(
+    const offScreen = feed.onSessionScreen(
       ({ sessionId, plain, markdown, recent, recentMarkdown, picker }) => {
         const startedAt = performance.now()
         // latestScreenRef is the synchronous source of truth for
@@ -686,7 +707,7 @@ export function useIpcSubscriptions(
     // it through the bulk channel as a 1-element burst. Do NOT add
     // a second IPC channel that races the bulk one.
 
-    const offErr = window.api.onSessionJsonlError(({ sessionId, message }) => {
+    const offErr = feed.onSessionJsonlError(({ sessionId, message }) => {
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
       updateRuntime(sessionId, {
@@ -695,7 +716,7 @@ export function useIpcSubscriptions(
       })
     })
 
-    const offExit = window.api.onSessionExit(({ sessionId, exitCode }) => {
+    const offExit = feed.onSessionExit(({ sessionId, exitCode }) => {
       recentWorkContextRawBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       jsonlProviderStreamBySession.delete(sessionId)
@@ -758,7 +779,7 @@ export function useIpcSubscriptions(
     // for Codex (the parser is Claude-specific). On idle
     // transitions, status is undefined and we clear activityStatus
     // too.
-    const offProcessState = window.api.onSessionProcessState(
+    const offProcessState = feed.onSessionProcessState(
       ({ sessionId, active, status }) => {
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
@@ -807,7 +828,7 @@ export function useIpcSubscriptions(
       },
     )
 
-    const offSemantic = window.api.onSessionSemanticEvent(({ sessionId, event }) => {
+    const offSemantic = feed.onSessionSemanticEvent(({ sessionId, event }) => {
       const span = perf.span('workspace.ipc.semantic.fold', { sessionId })
       let spanClosed = false
       const closeSpan = (data: Record<string, unknown>) => {
@@ -1160,7 +1181,7 @@ export function useIpcSubscriptions(
       })
     })
 
-    const offConditions = window.api.onSessionConditions(({ sessionId, snapshot }) => {
+    const offConditions = feed.onSessionConditions(({ sessionId, snapshot }) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const next = applyConditionSnapshot(current, snapshot)
@@ -1199,7 +1220,7 @@ export function useIpcSubscriptions(
     // change (it's small — agentType/description + a capped tool-call
     // timeline), so we just replace the field wholesale. Reference-equal bail
     // keeps Feed from re-rendering when an unrelated session updates.
-    const offSubAgents = window.api.onSessionSubAgents(({ sessionId, subAgents }) => {
+    const offSubAgents = feed.onSessionSubAgents(({ sessionId, subAgents }) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         if (current.subAgents === subAgents) return prev
@@ -1224,7 +1245,7 @@ export function useIpcSubscriptions(
     //   4. Claude providerSessionId capture (from any entry's sessionId).
     //   5. pendingCompaction clearing on compact summary entries.
     //   6. Optimistic-Codex-user reconciliation against the head row.
-    const offEntries = window.api.onSessionJsonlEntries(({ sessionId, entries }) => {
+    const offEntries = feed.onSessionJsonlEntries(({ sessionId, entries }) => {
       if (!entries || entries.length === 0) return
       const span = perf.span('workspace.ipc.jsonl.bulk', {
         sessionId,
@@ -2043,5 +2064,5 @@ export function useIpcSubscriptions(
       for (const t of refs.bootstrapTimersRef.current.values()) clearTimeout(t)
       refs.bootstrapTimersRef.current.clear()
     }
-  }, [appendFeedDebug, refs, setRuntimes, setState, updateRuntime])
+  }, [appendFeedDebug, feed, refs, setRuntimes, setState, updateRuntime])
 }

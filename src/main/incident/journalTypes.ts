@@ -77,6 +77,11 @@ export type AppRunIncidentKind =
   | 'orchestration.request_timeout'
   | 'orchestration.prompt_delivery_failed'
   | 'mcp.host_start_failed'
+  // Remote mobile companion (src/main/remote/) — declared here because this
+  // union is the app-wide incident vocabulary; the remote subsystem imports
+  // core, never the reverse (see the 2026-07-06 remote-companion spec's
+  // isolation section).
+  | 'remote.server_start_failed'
 
 export type AppRunIncidentInput = {
   kind: AppRunIncidentKind

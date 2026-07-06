@@ -5,7 +5,9 @@
 import '@main/loadEnv.js'
 
 import { app, BrowserWindow, crashReporter, dialog, Menu } from 'electron'
+import { existsSync } from 'fs'
 import { readFile } from 'fs/promises'
+import { join } from 'path'
 import { performance } from 'perf_hooks'
 
 import { SessionManager } from '@main/sessionManager.js'
@@ -35,12 +37,13 @@ import { registerAllIpc } from '@main/ipc/index.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
-import { resolveBundledTool } from '@main/setup/runtimeTools.js'
+import { getPlatformKey, resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { initializeToolchain } from '@main/setup/toolchain.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
+import { RemoteController } from '@main/remote/RemoteController.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -102,6 +105,7 @@ const caffeinateController = new CaffeinateController()
 // load-bearing: every other module-scope reference is inside
 // callbacks that fire after the assignment.
 let manager: SessionManager | null = null
+let remoteController: RemoteController | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
@@ -456,6 +460,36 @@ async function startApp(): Promise<void> {
     throw err
   }
   manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost, appRunJournal)
+  // Remote mobile companion — constructed here (the isolation boundary's ONE
+  // construction hole; see docs/superpowers/specs/2026-07-06-remote-mobile-
+  // companion-design.md) but OFF until the user enables it from the Remote
+  // panel: construction allocates no sockets, no manager subscriptions, no
+  // secret I/O. The phone bundle comes from `npm run client:build`
+  // (out/remote-client, sibling of electron-vite's out/main); when it isn't
+  // built the server serves a placeholder page and the WS API still works,
+  // so a dev install degrades visibly instead of failing.
+  const remoteClientDist = join(app.getAppPath(), 'out', 'remote-client')
+  remoteController = new RemoteController({
+    manager,
+    journal: appRunJournal,
+    clientDistDir: existsSync(remoteClientDist) ? remoteClientDist : null,
+    // Tunnel binary resolution — bundled artifact first (packaged app),
+    // then the third_party dev cache (populated by `npm run
+    // runtime:fetch:cloudflared`; copy-packaged-resources only runs on
+    // build, so dev mode never has out/main/runtime). NO PATH fallback,
+    // same policy as tmux: a drifting system cloudflared would bypass the
+    // manifest's hash pinning. LAN mode never calls this.
+    resolveTunnelBinary: async () => {
+      const bundled = await resolveBundledTool('cloudflared')
+      if (bundled) return bundled
+      const platformKey = getPlatformKey()
+      if (!platformKey) return null
+      const devCache = join(
+        app.getAppPath(), 'third_party', 'cloudflared', 'cache', platformKey, 'cloudflared',
+      )
+      return existsSync(devCache) ? devCache : null
+    },
+  })
   builtInMcpHost.setDependencies({
     orchestrationBridge,
     aiWorkspaceRegistry,
@@ -478,6 +512,7 @@ async function startApp(): Promise<void> {
   wireSessionForwarder(manager, lspManager)
   registerAllIpc({
     manager,
+    remoteController,
     lspManager,
     ghostJournals,
     dictationDebugJournals,
@@ -509,6 +544,7 @@ async function startApp(): Promise<void> {
 app.on('window-all-closed', () => {
   void manager?.killAll()
   void builtInMcpHost.stop()
+  void remoteController?.dispose()
   void lspManager.dispose()
   // WHY we release caffeinate here even though macOS keeps the app process
   // alive after the last window closes:
@@ -525,6 +561,7 @@ app.on('before-quit', () => {
   performanceService.mark('app.main.beforeQuit')
   void manager?.killAll()
   void builtInMcpHost.stop()
+  void remoteController?.dispose()
   void lspManager.dispose()
   caffeinateController.dispose()
   cleanupDictationIpcResources()
