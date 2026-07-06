@@ -32,7 +32,7 @@ import {
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
-import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
+import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
 import {
   closeOrchestrationAgent,
@@ -443,13 +443,13 @@ export function useWorkspace(
   )
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
-  // The desktop feed is passed as a direct module import (not via
-  // useSessionFeed()) ON PURPOSE for now: useWorkspace is mounted above the
-  // SessionFeedProvider today, and phase 0 keeps behaviour byte-identical.
-  // When the provider moves to the app root (task 6 of the phase-0 plan),
-  // this becomes the context read. Module-const identity is stable, which
-  // the effect's dep array requires — see the WHY on useIpcSubscriptions.
-  useIpcSubscriptions(ipcSessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
+  // Session events arrive through whichever SessionFeed the app root mounted
+  // (desktop: ipcSessionFeed in app/main.tsx; remote client: its WebSocket
+  // feed; tests: FakeSessionFeed). The provider value is a module const, so
+  // identity is stable — which the subscription effect's dep array requires;
+  // see the WHY on useIpcSubscriptions.
+  const sessionFeed = useSessionFeed()
+  useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   useAutoSave(state, draftVersion, refs, bootstrapComplete)
   useBootstrap(
     refs,

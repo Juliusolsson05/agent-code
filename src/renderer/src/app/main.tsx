@@ -2,6 +2,8 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from '@renderer/app/App'
 import { GlobalToastProvider } from '@renderer/ui/GlobalToast'
+import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
+import { ipcSessionFeed } from '@renderer/features/sessionFeed/IpcSessionFeed'
 import '@renderer/styles.css'
 import 'highlight.js/styles/github-dark.css'
 import 'monaco-editor/min/vs/editor/editor.main.css'
@@ -68,10 +70,17 @@ void initializePerformance().then(() => {
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <GlobalToastProvider>
-      <AppErrorBoundary>
-        <App />
-      </AppErrorBoundary>
-    </GlobalToastProvider>
+    {/* The desktop's feed-selection point (see the remote-mobile-companion
+        spec's isolation section): this is the ONE place where "desktop =
+        IPC transport" is decided. The remote client's entry point mounts
+        the same provider with its WebSocket feed; nothing below the
+        provider knows which transport it is on. */}
+    <SessionFeedProvider value={ipcSessionFeed}>
+      <GlobalToastProvider>
+        <AppErrorBoundary>
+          <App />
+        </AppErrorBoundary>
+      </GlobalToastProvider>
+    </SessionFeedProvider>
   </React.StrictMode>
 )
