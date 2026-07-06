@@ -15,6 +15,8 @@ const headlessAlias = [
   { find: 'claude-code-headless', replacement: resolve(__dirname, 'packages/claude-code-headless/src/index.ts') },
   { find: /^codex-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/codex-headless/src')}/$1` },
   { find: 'codex-headless', replacement: resolve(__dirname, 'packages/codex-headless/src/index.ts') },
+  { find: /^opencode-headless\/(.+)$/, replacement: `${resolve(__dirname, 'packages/opencode-headless/src')}/$1` },
+  { find: 'opencode-headless', replacement: resolve(__dirname, 'packages/opencode-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(__dirname, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(__dirname, 'packages/agent-transcript-parser/src/index.ts') },
   // `agent-voice-dictation` is a git submodule like the other local packages,
@@ -39,7 +41,7 @@ const projectAlias = {
   '@mcp': resolve(__dirname, 'src/mcp'),
 }
 
-const headlessExclude = ['claude-code-headless', 'codex-headless', 'agent-transcript-parser', 'agent-voice-dictation']
+const headlessExclude = ['claude-code-headless', 'codex-headless', 'opencode-headless', 'agent-transcript-parser', 'agent-voice-dictation']
 
 function copyMainRuntimeResourcesPlugin(): Plugin {
   const resources = [

@@ -13,6 +13,8 @@ import { deliverClaudePrompt } from '@providers/claude/runtime/promptDelivery'
 import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
 import { CodexSession } from '@providers/codex/runtime/codexSession'
 import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
+import { OpencodeSession } from '@providers/opencode/runtime/opencodeSession'
+import { deliverOpencodePrompt } from '@providers/opencode/runtime/promptDelivery'
 import { listCodexSessions, getCodexSessionsDir } from 'codex-headless'
 
 const CODEX_ROLLOUT_RE =
@@ -117,6 +119,30 @@ const codexMain: MainProviderConfig = {
   deliverPrompt: deliverCodexPrompt,
 }
 
+// STATUS (#406, wiring step 2 of 7): compile-green stub config. The
+// stub session fails loudly on start(); listSessions/resolveTranscript
+// degradations are the documented smallest-viable resolutions from the
+// gap analysis. Steps 3–6 make the pane real before this branch merges.
+const opencodeMain: MainProviderConfig = {
+  id: 'opencode',
+  name: 'OpenCode',
+  createSession: (opts) => new OpencodeSession(opts),
+  // No offline session listing yet: opencode stores sessions in
+  // SQLite behind a server API (#406 blocker 1). Empty list = resume
+  // picker shows nothing; fresh spawns unaffected. The ephemeral-
+  // server lister is a step-7 follow-up.
+  listSessions: async () => [],
+  // Opencode has no per-cwd project dir concept; the storage root is
+  // server-owned. Returning cwd keeps consumers (which only display
+  // it) harmless.
+  getProjectDir: async (cwd) => cwd,
+  // No durable transcript FILE exists (#406 blocker 2): initial
+  // history arrives via the start-time committed replay, not the
+  // file loader. Every consumer types string|null and degrades.
+  resolveTranscriptPath: async () => null,
+  deliverPrompt: deliverOpencodePrompt,
+}
+
 // Typed as Record<AgentProviderKind, …> (not Record<string, …>) so that
 // adding a kind to AGENT_PROVIDER_KINDS without registering a config here
 // is a COMPILE error, not a runtime "Unknown provider" surprise. That is
@@ -124,6 +150,7 @@ const codexMain: MainProviderConfig = {
 const mainProviders: Record<AgentProviderKind, MainProviderConfig> = {
   claude: claudeMain,
   codex: codexMain,
+  opencode: opencodeMain,
 }
 
 // Accepts a bare string (callers pass IPC args / persisted `kind` values)

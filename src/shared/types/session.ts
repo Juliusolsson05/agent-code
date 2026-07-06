@@ -290,6 +290,15 @@ export interface AgentSession extends AgentSessionEmitter {
     | { kind: 'timeout' }
     | { kind: 'no-headless' }
   >
+
+  /** Optional (opencode today): deliver a user prompt over the
+   *  provider's own transport rather than as PTY keystrokes. Providers
+   *  with no terminal (opencode's HTTP server) implement this; the
+   *  provider's deliverPrompt protocol calls it instead of io.write.
+   *  Claude/Codex leave it undefined and receive prompts as bracketed-
+   *  paste PTY writes. Throws on transport failure so the delivery
+   *  protocol can report ok:false and the composer keeps the draft. */
+  deliverPromptText?(text: string): Promise<void>
 }
 
 

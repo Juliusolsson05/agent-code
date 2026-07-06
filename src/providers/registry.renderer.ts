@@ -26,9 +26,18 @@ const codexRenderer: RendererProviderConfig = {
 // Exhaustive Record<AgentProviderKind, …> — same compile-time checklist as
 // the main registry. A new provider kind cannot be added to the shared
 // source of truth without also giving it a renderer config here.
+const opencodeRenderer: RendererProviderConfig = {
+  ...getRendererProviderCapabilities('opencode'),
+  // The shared TileLeaf works for opencode: feed + composer render
+  // normally; the raw-terminal toggle shows an empty xterm until the
+  // AgentTerminalLeaf capability gate lands (#406 follow-up).
+  TileLeaf: TileLeaf as ComponentType<TileLeafProps>,
+}
+
 const rendererProviders: Record<AgentProviderKind, RendererProviderConfig> = {
   claude: claudeRenderer,
   codex: codexRenderer,
+  opencode: opencodeRenderer,
 }
 
 export function getRendererProvider(id: string): RendererProviderConfig {

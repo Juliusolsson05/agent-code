@@ -124,6 +124,20 @@ export function registerSessionIpc(
     },
   )
 
+  // Prompt delivery for API-transport agents (opencode) that have no PTY
+  // to receive `session:input` keystrokes. Routes through the
+  // provider-agnostic SessionManager.deliverPromptToAgent → registry
+  // deliverPrompt → the provider's HTTP prompt(). Kept separate from
+  // session:input because the two carry fundamentally different payloads
+  // (raw terminal bytes vs a finished user prompt string) and the
+  // composer chooses between them per provider capability, not per keypress.
+  ipcMain.handle(
+    'session:deliver-prompt',
+    async (_evt, sessionId: string, prompt: string) => {
+      return await manager.deliverPromptToAgent(sessionId, prompt)
+    },
+  )
+
   ipcMain.handle(
     'session:resize',
     (_evt, sessionId: string, cols: number, rows: number) => {
