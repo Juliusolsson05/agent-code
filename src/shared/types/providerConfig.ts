@@ -68,6 +68,53 @@ export type TileLeafProps = {
  */
 export type RendererConditionViewRegistry = Record<string, unknown>
 
+// ---------------------------------------------------------------------------
+// Transcript-entry mapping capability (#394 phase 2b)
+// ---------------------------------------------------------------------------
+
+/**
+ * Result of mapping ONE raw transcript line (Claude JSONL entry or
+ * Codex rollout line) into feed entries.
+ *
+ * `entries` may be empty (Claude lines filtered by the conversation/
+ * compact gate; Codex event_msg lines with no feed representation) or
+ * carry multiple entries (Codex response_items that fan out).
+ *
+ * `historyMarker` is the provider's pagination marker for this line —
+ * Claude: stable uuid (null for non-conversation lines); Codex:
+ * synthesized timestamp:id marker (always present). Call sites own the
+ * policy for WHEN to record it (bootstrap records the first, older-
+ * pagination replaces conditionally).
+ */
+export type MappedTranscriptEntry = {
+  entries: import('@shared/types/transcript.js').Entry[]
+  historyMarker: string | null
+}
+
+/**
+ * Provider-owned transcript-line mapper. Created fresh per ingestion
+ * stream (one per live session, one per history chunk, one per
+ * preview build).
+ *
+ * WHY an interface with a factory instead of a pure function: Codex's
+ * mapping is stateful — a rolling turn cursor stamps entries with the
+ * turn they belong to, updated/cleared by lines the mapper itself
+ * sees. Claude's mapper is stateless and implements the cursor
+ * methods as no-ops. The live-ingest site persists the cursor across
+ * bursts via get/setTurnCursor; chunk-scoped sites just discard the
+ * mapper.
+ *
+ * This capability is what killed the quadruplicated per-provider
+ * mapping loops (live ingest / initial history / older history /
+ * preview — see #394 §4.5, §9). A third provider implements ONE
+ * mapper and every ingestion path picks it up from the registry.
+ */
+export type TranscriptEntryMapper = {
+  map(raw: Record<string, unknown>): MappedTranscriptEntry
+  getTurnCursor(): string | null
+  setTurnCursor(id: string | null): void
+}
+
 /**
  * Renderer-side config: only browser-safe imports.
  * Imported by TileTree, workspaceStore, etc.

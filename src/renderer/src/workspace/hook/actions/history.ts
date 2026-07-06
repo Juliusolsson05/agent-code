@@ -1,24 +1,10 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
-import {
-  isCompactBoundaryEntry,
-  isCompactSummaryEntry,
-  isConversationEntry,
-} from '@shared/types/transcript'
-import {
-  codexHistoryMarker,
-  codexTurnIdFromRollout,
-  mapCodexRolloutToFeedEntries,
-  stampCodexTurnId,
-} from '@renderer/workspace/codex/rollout'
-import {
-  claudeHistoryMarker,
-  extractEmbeddedClaudeProgressEntry,
-} from '@renderer/workspace/claude/history'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   deriveAgentWorkContext,
   ingestWorktreeRawEvent,
@@ -27,10 +13,6 @@ import {
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
-import {
-  codexEventType,
-  codexTurnIdFromEventPayload,
-} from '@renderer/workspace/codex/eventCursor'
 
 // Older history loader — called by Feed's scroll handler when the
 // user scrolls near the top.
@@ -59,7 +41,7 @@ export function useHistoryActions(
       }
 
       const kind = meta.kind ?? DEFAULT_PROVIDER
-      if ((kind !== 'claude' && kind !== 'codex') || !meta.providerSessionId) {
+      if (!isAgentProviderKind(kind) || !meta.providerSessionId) {
         span.end({ skipped: 'unsupported-or-missing-provider-session', kind })
         return
       }
@@ -94,14 +76,16 @@ export function useHistoryActions(
         let workActivity = runtime.workActivity
         let workContext = runtime.workContext
         let oldestMarker: string | null = runtime.historyOldestMarker
-        // Same rolling Codex turn id as the live JSONL ingest path.
-        // Pagination chunks can start after the original `turn_context`
-        // marker, so `payload.turn_id` is not just a convenience: it is the
-        // only durable source in many chunks. Without stamping these older
-        // response items the live feed and paged history disagree about
-        // which committed messages belong to the Codex task, and duplicate
-        // suppression becomes dependent on where the scroll boundary landed.
-        let codexPaginationTurnId: string | null = null
+        // Registry-owned mapper (#394 phase 2b). Chunk-scoped: starts
+        // with a null turn cursor, which for Codex means pagination
+        // chunks that begin mid-turn rely on `payload.turn_id` — the
+        // only durable source in many chunks (see the mapper's cursor
+        // sequencing docs). Without stamping these older response
+        // items, the live feed and paged history disagree about which
+        // committed messages belong to the Codex task, and duplicate
+        // suppression becomes dependent on where the scroll boundary
+        // landed.
+        const mapper = getRendererProviderCapabilities(kind).createTranscriptEntryMapper()
 
         for (const rawEntry of chunk.entries) {
           // Older-history pagination walks records that predate the current
@@ -117,52 +101,19 @@ export function useHistoryActions(
             workContext = deriveAgentWorkContext(workActivity)
           }
 
-          if (kind === 'codex') {
-            const marker = codexHistoryMarker(rawEntry)
-            const turnContextId = codexTurnIdFromRollout(rawEntry)
-            if (turnContextId !== null) codexPaginationTurnId = turnContextId
-            const payloadTurnId = codexTurnIdFromEventPayload(rawEntry)
-            if (payloadTurnId !== null) codexPaginationTurnId = payloadTurnId
-            const mappedRaw = mapCodexRolloutToFeedEntries(rawEntry)
-            const mapped = mappedRaw.map(e => stampCodexTurnId(e, codexPaginationTurnId))
-            if (mapped.length > 0 && oldestMarker === runtime.historyOldestMarker) {
-              oldestMarker = marker
-            }
-            for (const entry of mapped) {
-              const uuid = (entry as { uuid?: string }).uuid
-              if (uuid && seen.has(uuid)) continue
-              if (uuid) seen.add(uuid)
-              prepend.push(entry)
-            }
-            const eventType = codexEventType(rawEntry)
-            if (
-              eventType === 'task_complete' ||
-              eventType === 'turn_complete' ||
-              eventType === 'turn_aborted'
-            ) {
-              codexPaginationTurnId = null
-            }
-            continue
-          }
-
-          const feedEntry =
-            extractEmbeddedClaudeProgressEntry(rawEntry) ??
-            (rawEntry as Entry)
-          const marker = claudeHistoryMarker(rawEntry)
-          if (!(
-            isConversationEntry(feedEntry) ||
-            isCompactBoundaryEntry(feedEntry) ||
-            isCompactSummaryEntry(feedEntry)
-          )) {
-            continue
-          }
-          if (marker && oldestMarker === runtime.historyOldestMarker) {
+          const { entries: mapped, historyMarker: marker } = mapper.map(rawEntry)
+          // Marker policy (site-owned): only the FIRST kept line of the
+          // chunk replaces the pagination cursor — `oldestMarker` must
+          // stay pinned to where the NEXT older page should start.
+          if (mapped.length > 0 && marker && oldestMarker === runtime.historyOldestMarker) {
             oldestMarker = marker
           }
-          const uuid = (feedEntry as { uuid?: string }).uuid
-          if (uuid && seen.has(uuid)) continue
-          if (uuid) seen.add(uuid)
-          prepend.push(feedEntry)
+          for (const entry of mapped) {
+            const uuid = (entry as { uuid?: string }).uuid
+            if (uuid && seen.has(uuid)) continue
+            if (uuid) seen.add(uuid)
+            prepend.push(entry)
+          }
         }
 
         setRuntimes(prev => {

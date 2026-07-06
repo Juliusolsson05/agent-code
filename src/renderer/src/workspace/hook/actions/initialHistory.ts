@@ -1,23 +1,8 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
-import {
-  isCompactBoundaryEntry,
-  isCompactSummaryEntry,
-  isConversationEntry,
-} from '@shared/types/transcript'
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
-import { isCodexRolloutEntry } from '@renderer/workspace/codex/entries'
-import {
-  codexHistoryMarker,
-  codexTurnIdFromRollout,
-  mapCodexRolloutToFeedEntries,
-  stampCodexTurnId,
-} from '@renderer/workspace/codex/rollout'
-import {
-  claudeHistoryMarker,
-  extractEmbeddedClaudeProgressEntry,
-} from '@renderer/workspace/claude/history'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
 import { appendFeedDebugLog } from '@renderer/workspace/runtime/feedDebug'
 import {
@@ -33,10 +18,6 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import * as perf from '@renderer/performance/client'
 import { hasDurableProviderSession } from '@renderer/workspace/providerSessionIdentity'
-import {
-  codexEventType,
-  codexTurnIdFromEventPayload,
-} from '@renderer/workspace/codex/eventCursor'
 
 const INITIAL_HISTORY_CONCURRENCY = 2
 let activeInitialHistoryLoads = 0
@@ -103,7 +84,7 @@ export async function loadInitialHistoryForSession({
 }): Promise<void> {
   const meta = metaOverride ?? refs.stateRef.current.sessions[sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
-  if (!meta || (kind !== 'claude' && kind !== 'codex')) return
+  if (!meta || !isAgentProviderKind(kind)) return
 
   if (!hasDurableProviderSession(meta)) {
     setRuntimes(prev => {
@@ -169,7 +150,10 @@ export async function loadInitialHistoryForSession({
       let initialOldestMarker: string | null = null
       let workActivity = current.workActivity
       let workContext = current.workContext
-      let codexTurnId: string | null = null
+      // Registry-owned mapper (#394 phase 2b); chunk-scoped, so the
+      // Codex turn cursor starts null exactly like the old local
+      // variable did.
+      const mapper = getRendererProviderCapabilities(kind).createTranscriptEntryMapper()
       const toolUseIndex = current.toolUseIndex
       const toolResultIndex = current.toolResultIndex
       // Bump `toolIndexVersion` once if this bootstrap load actually populated
@@ -187,53 +171,21 @@ export async function loadInitialHistoryForSession({
         })
         workContext = deriveAgentWorkContext(workActivity)
 
-        if (kind === 'codex') {
-          const marker = codexHistoryMarker(raw)
-          const turnContextId = codexTurnIdFromRollout(raw)
-          if (turnContextId !== null) codexTurnId = turnContextId
-          const payloadTurnId = codexTurnIdFromEventPayload(raw)
-          if (payloadTurnId !== null) codexTurnId = payloadTurnId
-          const mappedRaw = mapCodexRolloutToFeedEntries(raw)
-          const mapped = mappedRaw.map(entry => stampCodexTurnId(entry, codexTurnId))
-          if (mapped.length > 0 && !initialOldestMarker) initialOldestMarker = marker
-          for (const entry of mapped) {
-            const uuid = (entry as { uuid?: string }).uuid
-            if (uuid && seen.has(uuid)) continue
-            if (uuid) seen.add(uuid)
-            initialEntries.push(entry)
-            if (indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)) {
-              toolIndexChanged = true
-            }
-          }
-          const eventType = codexEventType(raw)
-          if (
-            eventType === 'task_complete' ||
-            eventType === 'turn_complete' ||
-            eventType === 'turn_aborted'
-          ) {
-            codexTurnId = null
-          }
-          continue
+        const { entries: mapped, historyMarker: marker } = mapper.map(raw)
+        // Marker policy (site-owned): the FIRST kept line of the
+        // bootstrap chunk is the pagination anchor for older-history
+        // loads.
+        if (mapped.length > 0 && marker && !initialOldestMarker) {
+          initialOldestMarker = marker
         }
-
-        const feedEntry =
-          extractEmbeddedClaudeProgressEntry(raw) ??
-          (raw as Entry)
-        const marker = claudeHistoryMarker(raw)
-        if (
-          !isConversationEntry(feedEntry) &&
-          !isCompactBoundaryEntry(feedEntry) &&
-          !isCompactSummaryEntry(feedEntry)
-        ) {
-          continue
-        }
-        if (marker && !initialOldestMarker) initialOldestMarker = marker
-        const uuid = (feedEntry as { uuid?: string }).uuid
-        if (uuid && seen.has(uuid)) continue
-        if (uuid) seen.add(uuid)
-        initialEntries.push(feedEntry)
-        if (indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)) {
-          toolIndexChanged = true
+        for (const entry of mapped) {
+          const uuid = (entry as { uuid?: string }).uuid
+          if (uuid && seen.has(uuid)) continue
+          if (uuid) seen.add(uuid)
+          initialEntries.push(entry)
+          if (indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)) {
+            toolIndexChanged = true
+          }
         }
       }
 
@@ -382,7 +334,7 @@ export function reconcileStuckTranscriptLoads({
     const emptyFeed = runtime.entries.length === 0
     if (!stuckSpinner && !emptyFeed) continue
     const meta = sessions[sessionId]
-    if (!meta || (meta.kind !== 'claude' && meta.kind !== 'codex')) continue
+    if (!meta || !isAgentProviderKind(meta.kind)) continue
     // Only durable sessions have a reloadable transcript. Provisional
     // proxy-header sessions are left to the 'disconnected' path.
     if (!hasDurableProviderSession(meta)) continue

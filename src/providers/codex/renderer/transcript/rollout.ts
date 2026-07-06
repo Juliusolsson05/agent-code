@@ -9,7 +9,7 @@ import {
   isCodexExecWrapperOutput,
   parseCodexJson,
   stripCodexExecWrapper,
-} from '@renderer/workspace/codex/entries'
+} from '@providers/codex/renderer/transcript/entries'
 
 // Codex rollout → feed entry mapping.
 //

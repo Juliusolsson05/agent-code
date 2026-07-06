@@ -27,11 +27,11 @@ export {
   codexHistoryMarker,
   codexTurnIdFromRollout,
   mapCodexRolloutToFeedEntries,
-} from '@renderer/workspace/codex/rollout'
+} from '@providers/codex/renderer/transcript/rollout'
 export {
   claudeHistoryMarker,
   extractEmbeddedClaudeProgressEntry,
-} from '@renderer/workspace/claude/history'
+} from '@providers/claude/renderer/transcript/history'
 
 export { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
