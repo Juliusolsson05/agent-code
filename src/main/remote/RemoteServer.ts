@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createReadStream, existsSync } from 'node:fs'
 import { extname, join, normalize } from 'node:path'
@@ -98,7 +99,10 @@ type ClientSocket = {
   deviceId: string
 }
 
-export class RemoteServer {
+/** Events: 'clients-changed' — fired on every WS connect/disconnect so the
+ *  desktop Remote panel can live-update its "N devices connected" line
+ *  without polling. */
+export class RemoteServer extends EventEmitter {
   private server: Server | null = null
   private wss: WebSocketServer | null = null
   private url: string | null = null
@@ -116,7 +120,9 @@ export class RemoteServer {
   private readonly lastConditions = new Map<string, unknown>()
   private readonly lastProcessState = new Map<string, unknown>()
 
-  constructor(private readonly deps: RemoteServerDeps) {}
+  constructor(private readonly deps: RemoteServerDeps) {
+    super()
+  }
 
   async start(): Promise<{ url: string }> {
     if (this.server && this.url) return { url: this.url }
@@ -323,6 +329,7 @@ export class RemoteServer {
   private onConnection(ws: WebSocket, deviceId: string): void {
     const client: ClientSocket = { ws, deviceId }
     this.sockets.add(client)
+    this.emit('clients-changed')
     void this.deps.registry.touch(deviceId)
     this.deps.journal?.record({
       area: 'remote.server',
@@ -350,6 +357,7 @@ export class RemoteServer {
     })
     ws.on('close', () => {
       this.sockets.delete(client)
+      this.emit('clients-changed')
       this.deps.journal?.record({
         area: 'remote.server',
         name: 'remote_ws.disconnected',

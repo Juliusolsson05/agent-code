@@ -41,6 +41,7 @@ import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIn
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.js'
+import { RemoteController } from '@main/remote/RemoteController.js'
 import { CaffeinateController } from '@main/caffeinate/CaffeinateController.js'
 import { buildAppMenu } from '@main/menu/appMenu.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -102,6 +103,7 @@ const caffeinateController = new CaffeinateController()
 // load-bearing: every other module-scope reference is inside
 // callbacks that fire after the assignment.
 let manager: SessionManager | null = null
+let remoteController: RemoteController | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
@@ -456,6 +458,16 @@ async function startApp(): Promise<void> {
     throw err
   }
   manager = new SessionManager(tmuxAvailable ? tmuxRegistry : null, builtInMcpHost, appRunJournal)
+  // Remote mobile companion — constructed here (the isolation boundary's ONE
+  // construction hole; see docs/superpowers/specs/2026-07-06-remote-mobile-
+  // companion-design.md) but OFF until the user enables it from the Remote
+  // panel: construction allocates no sockets, no manager subscriptions, no
+  // secret I/O. clientDistDir stays null until the phone client bundle ships
+  // in the packaged app; the server serves a placeholder page meanwhile.
+  remoteController = new RemoteController({
+    manager,
+    journal: appRunJournal,
+  })
   builtInMcpHost.setDependencies({
     orchestrationBridge,
     aiWorkspaceRegistry,
@@ -478,6 +490,7 @@ async function startApp(): Promise<void> {
   wireSessionForwarder(manager, lspManager)
   registerAllIpc({
     manager,
+    remoteController,
     lspManager,
     ghostJournals,
     dictationDebugJournals,
@@ -509,6 +522,7 @@ async function startApp(): Promise<void> {
 app.on('window-all-closed', () => {
   void manager?.killAll()
   void builtInMcpHost.stop()
+  void remoteController?.dispose()
   void lspManager.dispose()
   // WHY we release caffeinate here even though macOS keeps the app process
   // alive after the last window closes:
@@ -525,6 +539,7 @@ app.on('before-quit', () => {
   performanceService.mark('app.main.beforeQuit')
   void manager?.killAll()
   void builtInMcpHost.stop()
+  void remoteController?.dispose()
   void lspManager.dispose()
   caffeinateController.dispose()
   cleanupDictationIpcResources()

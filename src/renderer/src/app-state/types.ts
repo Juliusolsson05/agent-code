@@ -63,6 +63,7 @@ export type UiShellSlice = UiShellState & {
   closeAgentStatusPanel: () => void
   toggleAgentStatusPanel: () => void
   togglePerformancePanel: () => void
+  toggleRemotePanel: () => void
   openGlobalEditor: () => void
   closeGlobalEditor: () => void
   toggleGlobalEditor: () => void

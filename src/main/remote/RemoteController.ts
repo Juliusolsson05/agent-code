@@ -1,0 +1,173 @@
+import { EventEmitter } from 'node:events'
+import { join } from 'node:path'
+
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import type { SessionManager } from '@main/sessionManager.js'
+
+import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
+import { DeviceRegistry, type PairedDevice } from '@main/remote/auth/deviceRegistry.js'
+import { loadOrCreateRemoteSecret, REMOTE_STATE_DIR } from '@main/remote/auth/secret.js'
+import { RemoteServer } from '@main/remote/RemoteServer.js'
+import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
+import { LanTransport } from '@main/remote/transport/LanTransport.js'
+import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
+
+// RemoteController — the one object the desktop drives.
+//
+// The remote subsystem has real moving parts (secret, registry, pairing,
+// feed tap, HTTP+WS server, transport), but the desktop's mental model is
+// a light switch plus a device list. This controller owns that translation:
+// remote:* IPC handlers are one-liners onto it, and the whole subsystem is
+// constructed HERE, not in main/index.ts — index.ts gets exactly one
+// `new RemoteController(...)` line (the isolation boundary's construction
+// hole) and never sees the internals.
+//
+// Lifecycle rules:
+//   - Everything durable (secret, registry) lazy-loads on first enable()
+//     and persists across disable/enable cycles — pairing survives toggling
+//     the server off overnight.
+//   - Everything live (feed tap, server, transport) is created on enable()
+//     and torn down on disable() — a disabled remote subsystem holds NO
+//     manager subscriptions and NO sockets, so its steady-state cost when
+//     off is zero. That property is why this is safe to ship default-off.
+
+export type RemoteStatus = {
+  enabled: boolean
+  url: string | null
+  devices: PairedDevice[]
+  connectedDeviceIds: string[]
+}
+
+export type RemoteControllerDeps = {
+  manager: SessionManager
+  journal?: AppRunJournal | null
+  /** Override the durable-state root (secret, devices.json). Tests point
+   *  this at a tmpdir; production uses REMOTE_STATE_DIR. */
+  stateDir?: string
+  /** Built remote-client bundle dir; resolved by main at construction. */
+  clientDistDir?: string | null
+  /** Transport factory — phase 2 swaps in the cloudflared tunnel here. */
+  createTransport?: () => RemoteTransport
+}
+
+export class RemoteController extends EventEmitter {
+  private readonly stateDir: string
+  private registry: DeviceRegistry | null = null
+  private pairing: DevicePairing | null = null
+  private feedSource: SessionFeedSource | null = null
+  private server: RemoteServer | null = null
+  private url: string | null = null
+  private enabling: Promise<RemoteStatus> | null = null
+
+  constructor(private readonly deps: RemoteControllerDeps) {
+    super()
+    this.stateDir = deps.stateDir ?? REMOTE_STATE_DIR
+  }
+
+  getStatus(): RemoteStatus {
+    return {
+      enabled: this.server !== null && this.url !== null,
+      url: this.url,
+      devices: this.registry?.list() ?? [],
+      connectedDeviceIds: this.server?.connectedDeviceIds() ?? [],
+    }
+  }
+
+  async enable(): Promise<RemoteStatus> {
+    // Coalesce concurrent enables (double-click on the toggle): the second
+    // caller awaits the first's work instead of racing a second server.
+    if (this.enabling) return this.enabling
+    if (this.server && this.url) return this.getStatus()
+
+    this.enabling = this.doEnable().finally(() => {
+      this.enabling = null
+    })
+    return this.enabling
+  }
+
+  private async doEnable(): Promise<RemoteStatus> {
+    const secret = await loadOrCreateRemoteSecret(this.stateDir)
+    if (!this.registry) {
+      this.registry = new DeviceRegistry(join(this.stateDir, 'devices.json'))
+      await this.registry.load()
+    }
+    this.pairing = new DevicePairing({ secret, registry: this.registry })
+    this.feedSource = new SessionFeedSource(this.deps.manager)
+    this.server = new RemoteServer({
+      manager: this.deps.manager,
+      feedSource: this.feedSource,
+      pairing: this.pairing,
+      registry: this.registry,
+      transport: this.deps.createTransport?.() ?? new LanTransport(),
+      clientDistDir: this.deps.clientDistDir ?? null,
+      journal: this.deps.journal ?? null,
+    })
+    this.server.on('clients-changed', () => this.emitStatus())
+
+    try {
+      const { url } = await this.server.start()
+      this.url = url
+    } catch (err) {
+      // start() already journaled the incident; leave the controller in a
+      // cleanly-disabled state so the toggle can be retried.
+      await this.teardownLive()
+      throw err
+    }
+    const status = this.getStatus()
+    this.emit('status-changed', status)
+    return status
+  }
+
+  async disable(): Promise<RemoteStatus> {
+    if (!this.server) return this.getStatus()
+    await this.teardownLive()
+    const status = this.getStatus()
+    this.emit('status-changed', status)
+    return status
+  }
+
+  /**
+   * Mint a fresh one-time pairing code and the URL to encode in the QR.
+   * The code rides the URL fragment (`#code=…`) so it never appears in
+   * server request logs — fragments are not sent over HTTP; the client JS
+   * reads it locally and POSTs it to /pair itself.
+   */
+  issuePairingCode(): { code: string; expiresAt: number; pairUrl: string } {
+    if (!this.pairing || !this.url) {
+      throw new Error('remote server is not enabled')
+    }
+    const { code, expiresAt } = this.pairing.issuePairingCode()
+    return { code, expiresAt, pairUrl: `${this.url}/#code=${code}` }
+  }
+
+  async revokeDevice(deviceId: string): Promise<boolean> {
+    if (!this.registry) {
+      // Revocation must work even before the first enable of this app run —
+      // the registry is durable state, not live state.
+      this.registry = new DeviceRegistry(join(this.stateDir, 'devices.json'))
+      await this.registry.load()
+    }
+    const revoked = await this.registry.revoke(deviceId)
+    if (revoked) this.emitStatus()
+    return revoked
+  }
+
+  async dispose(): Promise<void> {
+    await this.teardownLive()
+    this.removeAllListeners()
+  }
+
+  private async teardownLive(): Promise<void> {
+    const server = this.server
+    this.server = null
+    this.url = null
+    this.pairing = null
+    if (server) await server.stop()
+    this.feedSource?.dispose()
+    this.feedSource = null
+  }
+
+  private emitStatus(): void {
+    this.emit('status-changed', this.getStatus())
+  }
+}
