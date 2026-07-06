@@ -139,8 +139,18 @@ export class AppRunJournal {
     // we swallow and continue instead.
     try {
       if (typeof process.report === 'object' && process.report !== null) {
-        process.report.reportOnFatalError = true
+        // Directory FIRST, flag second. In the reverse order, a throw from
+        // the directory setter (sandbox profile that permits the boolean but
+        // not the string, path-validation quirk) would leave
+        // reportOnFatalError=true with Node's default directory ('' → CWD) —
+        // a real OOM would then write report.*.json somewhere the prior-run
+        // classifier never looks, silently reverting the crash to the
+        // force_quit_or_power_loss fallback. With directory first, a throw
+        // means the flag never gets set: no report anywhere beats a report
+        // in the wrong place, because the classifier's minidump path still
+        // catches the crash.
         process.report.directory = this.runDir
+        process.report.reportOnFatalError = true
       }
     } catch (err) {
       console.warn('[incident-journal] could not enable process.report:', err)
@@ -332,6 +342,16 @@ export class AppRunJournal {
     this.eventLoopDelay.disable()
     // Synchronous: the async flush() never lands during quit teardown (see flushSync).
     this.flushSync()
+    // Latch closed. Without this, record() kept accepting events after stop()
+    // — and long-lived async consumers (the debug-retention prune promise
+    // chain holds this journal as its sink for the whole process lifetime)
+    // can legitimately fire a `.then` in the residual event-loop window
+    // between will-quit returning and process teardown. Those events landed
+    // in `pending` with every drain timer already cleared: never written,
+    // pure dead weight. stop() is only called on the quit path (after
+    // markCleanShutdown) and on fatal startup failure, so there is no
+    // legitimate post-stop record() to preserve.
+    this.started = false
   }
 
   markCleanShutdown(reason: string): void {

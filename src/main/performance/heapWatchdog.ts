@@ -49,11 +49,24 @@ import { getAppRunId } from '@main/incident/appRunIds.js'
 // Current 1.5 GiB ceiling: verified from the crashed run's own
 // PerformanceService trajectory — 34 hours of samples oscillated in the
 // 30–400 MB band even under heavy multi-agent load. 1.5 GiB is ~3x that
-// steady-state ceiling, so under normal use it stays quiet, but it now
-// covers BOTH failure modes above:
-//   - the 1.2 GB gradual-climb OOM (was already covered by the ratio),
-//   - the 2.5 GB burst OOM (previously missed because it never reached
-//     the fixed ceiling).
+// steady-state ceiling, so under normal use it stays quiet, and it now
+// catches the 2.5 GB burst OOM (previously missed because it never
+// reached the 3 GiB fixed ceiling).
+//
+// HONEST COVERAGE NOTE — the ~1.2 GB abort class is still NOT caught by
+// polling. On the 2026-05-11 host (heapLimit ~4.29 GiB) the ratio arm
+// resolves to 0.70 × 4.29 ≈ 3.0 GiB and the fixed arm is 1.5 GiB, so a
+// process that aborts around 1.2 GB never crosses either. An earlier
+// revision of this comment claimed the ratio covered that case; it never
+// did (min(3 GiB, 3 GiB) = 3 GiB pre-change, min(1.5, 3) = 1.5 GiB now —
+// both above 1.2 GB). Lowering the trip under ~1 GiB to chase it would
+// fire during legitimate heavy sessions (the 34 h trace above peaked
+// ~400 MB, but bundle builds and giant history loads spike past 1 GiB
+// briefly). Those low-peak aborts are instead attributed after the fact
+// by process.report.reportOnFatalError + the prior-run classifier
+// (main_oom_suspected, PR #389): no snapshot, but a diagnostic report
+// with heap stats and stacks. Polling buys a PRE-crash snapshot only for
+// climbs that cross ~1.5 GiB.
 //
 // Snapshot writes remain single-shot per run (see snapshotWritten
 // below), so lowering the ceiling doesn't create repeated snapshot
