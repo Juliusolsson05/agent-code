@@ -15,21 +15,21 @@ import {
 
 describe('provider kind source of truth', () => {
   it('lists exactly the wired agent providers', () => {
-    expect([...AGENT_PROVIDER_KINDS]).toEqual(['claude', 'codex'])
+    expect([...AGENT_PROVIDER_KINDS]).toEqual(['claude', 'codex', 'opencode'])
   })
 
   it('SESSION_KINDS is the agent kinds plus terminal, derived (never hand-listed)', () => {
-    expect([...SESSION_KINDS]).toEqual(['claude', 'codex', 'terminal'])
+    expect([...SESSION_KINDS]).toEqual(['claude', 'codex', 'opencode', 'terminal'])
   })
 
   it('isAgentProviderKind accepts wired providers and rejects everything else', () => {
     expect(isAgentProviderKind('claude')).toBe(true)
     expect(isAgentProviderKind('codex')).toBe(true)
+    expect(isAgentProviderKind('opencode')).toBe(true)
     // terminal is a SessionKind but NOT an agent provider — it must be rejected
     // here so agent-only code paths can't be handed it.
     expect(isAgentProviderKind('terminal')).toBe(false)
-    expect(isAgentProviderKind('opencode')).toBe(false)
-    expect(isAgentProviderKind('')).toBe(false)
+        expect(isAgentProviderKind('')).toBe(false)
     expect(isAgentProviderKind(undefined)).toBe(false)
     expect(isAgentProviderKind(null)).toBe(false)
     expect(isAgentProviderKind(42)).toBe(false)
@@ -39,7 +39,7 @@ describe('provider kind source of truth', () => {
     expect(isSessionKind('claude')).toBe(true)
     expect(isSessionKind('codex')).toBe(true)
     expect(isSessionKind('terminal')).toBe(true)
-    expect(isSessionKind('opencode')).toBe(false)
+    expect(isSessionKind('opencode')).toBe(true)
     expect(isSessionKind(undefined)).toBe(false)
   })
 })
