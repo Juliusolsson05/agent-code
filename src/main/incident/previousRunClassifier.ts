@@ -91,6 +91,15 @@ export function classifyPreviousRun(
     // terminated by V8 before JS could react. OOM is by far the common case; a
     // future observed non-OOM FatalError can be split out here if needed.
     classification = 'main_oom_suspected'
+    // A V8 fatal abort raises SIGABRT, so Crashpad almost always wrote a
+    // minidump for the SAME crash the diagnostic report describes. Look it up
+    // here too: when this branch first landed it returned without touching
+    // minidumpPath, which REGRESSED evidence for the exact crash class the
+    // branch was added for — pre-report-flag code fell through to the
+    // minidump lookup below and surfaced `native`/`minidumpPath` for OOM
+    // aborts, the new branch dropped both, and downstream triage that
+    // symbolicates from context.minidumpPath got undefined.
+    minidumpPath = findRecentMinidump(options.crashDumpsDir, readPriorStartedAt(priorRunDir))
   } else if (kinds.has('main.uncaught_exception')) {
     classification = 'main_crash_suspected'
   } else if (
@@ -150,9 +159,12 @@ export function classifyPreviousRun(
 //
 // WHY only reads the `trigger` field: the report can be tens of megabytes of
 // heap statistics + stacks. Parsing it fully during a synchronous startup scan
-// would defeat the "cheap classifier" invariant. The trigger is a top-level
-// string; JSON.parse on a bounded prefix is enough to read it. The full report
-// stays on disk for triage tools to read at leisure.
+// would defeat the "cheap classifier" invariant. `trigger` lives under the
+// report's `header` object (NOT at the top level — the shape is
+// `{ "header": { "trigger": "OOMError", ... }, "javascriptStack": ..., ... }`),
+// but `header` is the FIRST key Node serializes, so the field reliably lands
+// in the first few hundred bytes of the file — far inside the 32 KB prefix.
+// The full report stays on disk for triage tools to read at leisure.
 function findNodeDiagnosticReport(
   priorRunDir: string,
 ): { path: string; trigger: string | undefined } | undefined {
@@ -195,9 +207,17 @@ function readNodeReportTrigger(reportPath: string): string | undefined {
   } catch {
     return undefined
   }
-  // Node writes trigger as a top-level string field: `"trigger": "OOMError"` etc.
-  // A quick regex is safer than trying to close a truncated JSON object with a
-  // real parser; if the prefix is malformed, we just return undefined.
+  // `trigger` is nested under `header` in a Node diagnostic report; this regex
+  // works because it is a FLAT text scan over the prefix, not a structural
+  // lookup — nesting is irrelevant to it. Do NOT "simplify" this to
+  // `JSON.parse(prefix).trigger`: that returns undefined (trigger is not
+  // top-level) and would silently kill every main_oom_suspected
+  // classification. The flat scan is also safe from false positives in
+  // practice: `header` is the first serialized object and its `trigger` comes
+  // before any user-controlled content (commandLine/env land later in the
+  // header, stacks later still), so the FIRST match in the file is always the
+  // real one. A regex also survives the truncated-JSON prefix a real parser
+  // would reject.
   const match = /"trigger"\s*:\s*"([^"\\]+)"/.exec(text)
   return match?.[1]
 }

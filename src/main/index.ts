@@ -195,6 +195,20 @@ async function startApp(): Promise<void> {
     perfEnabled: performanceService.getConfig().enabled,
     lock,
   })
+  // Wire the retention journal sink BEFORE start(): start() itself fires the
+  // run's FIRST prune (scheduleDebugStoragePrune('incident-run-start') at the
+  // end of AppRunJournal.start), and the prune's completion handler reads the
+  // module-level sink. With the sink set after `await appRunJournal.start()`,
+  // journaling that first prune was only race-free by ACCIDENT — the prune's
+  // internal statfs() I/O happened to resolve later than the synchronous
+  // continuation that set the sink, and any future `await` inserted between
+  // start() and the wiring would have silently dropped the first prune's
+  // journal entry. Setting the sink first makes the ordering structural
+  // instead of incidental. Safe to do pre-start: setDebugRetentionJournal
+  // just stores the reference, and AppRunJournal.record() no-ops until
+  // started. See #388 — the July 2026 crash forensics lost the retention
+  // breadcrumb entirely because pruning was console-only.
+  setDebugRetentionJournal(appRunJournal)
   await appRunJournal.start()
   appRunJournal.record({
     area: 'state.lock',
@@ -215,13 +229,6 @@ async function startApp(): Promise<void> {
   })
   installWindowIncidentHooks(appRunJournal)
   orchestrationBridge.setJournal(appRunJournal)
-  // Give debug-retention a handle to the journal so its pruning actions land in
-  // events.jsonl instead of only console.warn. Wired here — right after the
-  // journal starts and before the first scheduleDebugStoragePrune('startup')
-  // call below — so the very first prune is journal-visible. See #388: the
-  // July 2026 crash forensics lost the retention breadcrumb entirely because it
-  // was console-only.
-  setDebugRetentionJournal(appRunJournal)
   try {
     // Native crashes (V8 aborts, SIGSEGV in native addons, GPU-process death)
     // never reach JS, so the JSONL hooks above cannot see them. Crashpad writes
