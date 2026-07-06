@@ -74,7 +74,16 @@ export class RemoteController extends EventEmitter {
   private url: string | null = null
   private transport: RemoteTransportMode | null = null
   private tunnelBinary: string | null | undefined = undefined
-  private enabling: Promise<RemoteStatus> | null = null
+  /** Serialization chain for enable/disable. Every transition queues behind
+   *  the previous one — this is what makes rapid toggle/switch clicks safe.
+   *  The previous design coalesced onto an in-flight enable promise, which
+   *  had TWO races the review caught: a same-tick enable('tunnel') during
+   *  enable('lan') silently returned the LAN result (mode ignored), and the
+   *  mode-switch path awaited disable() BEFORE claiming the guard, letting a
+   *  double-click construct two live servers. A strict FIFO chain retires
+   *  the whole class: later calls observe the state their predecessors left
+   *  and no-op when it already matches. */
+  private chain: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly deps: RemoteControllerDeps) {
     super()
@@ -97,50 +106,53 @@ export class RemoteController extends EventEmitter {
   }
 
   async enable(mode: RemoteTransportMode = 'lan'): Promise<RemoteStatus> {
-    // Coalesce concurrent enables (double-click on the toggle): the second
-    // caller awaits the first's work instead of racing a second server.
-    if (this.enabling) return this.enabling
-    if (this.server && this.url) {
-      // Same mode: idempotent no-op. Different mode: clean switch — every
-      // socket is dropped (URL and reachability change anyway; phones
-      // reconnect via their feed's backoff, and paired tokens survive
-      // because pairing is durable state).
-      if (this.transport === mode) return this.getStatus()
-      await this.disable()
-    }
-
-    this.enabling = this.doEnable(mode).finally(() => {
-      this.enabling = null
+    return this.runExclusive(async () => {
+      // Same mode already live: idempotent no-op. Different mode: clean
+      // switch — every socket drops (URL and reachability change anyway;
+      // phones reconnect via their feed's backoff, and paired tokens
+      // survive because pairing is durable state).
+      if (this.server && this.url) {
+        if (this.transport === mode) return this.getStatus()
+        await this.teardownLive()
+        this.emit('status-changed', this.getStatus())
+      }
+      return this.doEnable(mode)
     })
-    return this.enabling
   }
 
   private async doEnable(mode: RemoteTransportMode): Promise<RemoteStatus> {
-    const secret = await loadOrCreateRemoteSecret(this.stateDir)
-    if (!this.registry) {
-      this.registry = new DeviceRegistry(join(this.stateDir, 'devices.json'))
-      await this.registry.load()
-    }
-    this.pairing = new DevicePairing({ secret, registry: this.registry })
-    this.feedSource = new SessionFeedSource(this.deps.manager)
-    this.server = new RemoteServer({
-      manager: this.deps.manager,
-      feedSource: this.feedSource,
-      pairing: this.pairing,
-      registry: this.registry,
-      transport: this.deps.createTransport?.() ?? (await this.buildTransport(mode)),
-      clientDistDir: this.deps.clientDistDir ?? null,
-      journal: this.deps.journal ?? null,
-    })
-    this.transport = mode
-    this.server.on('clients-changed', () => this.emitStatus())
-
     try {
+      // Transport FIRST: it is the most likely failure (tunnel binary
+      // missing) and allocates nothing that needs teardown, whereas
+      // SessionFeedSource subscribes to SessionManager the moment it is
+      // constructed. Building the tap before a throwing transport leaked a
+      // full set of manager listeners per failed enable attempt (review
+      // finding) — construction order IS the resource-safety argument here.
+      const transport = this.deps.createTransport?.() ?? (await this.buildTransport(mode))
+      const secret = await loadOrCreateRemoteSecret(this.stateDir)
+      if (!this.registry) {
+        this.registry = new DeviceRegistry(join(this.stateDir, 'devices.json'))
+        await this.registry.load()
+      }
+      this.pairing = new DevicePairing({ secret, registry: this.registry })
+      this.feedSource = new SessionFeedSource(this.deps.manager)
+      this.server = new RemoteServer({
+        manager: this.deps.manager,
+        feedSource: this.feedSource,
+        pairing: this.pairing,
+        registry: this.registry,
+        transport,
+        clientDistDir: this.deps.clientDistDir ?? null,
+        journal: this.deps.journal ?? null,
+      })
+      this.transport = mode
+      this.server.on('clients-changed', () => this.emitStatus())
       const { url } = await this.server.start()
       this.url = url
     } catch (err) {
-      // start() already journaled the incident; leave the controller in a
-      // cleanly-disabled state so the toggle can be retried.
+      // Whatever partially came up, tear it ALL down so a retry starts
+      // clean — teardownLive disposes the feed tap even when the server was
+      // never constructed. (start() journals its own incidents.)
       await this.teardownLive()
       throw err
     }
@@ -150,11 +162,24 @@ export class RemoteController extends EventEmitter {
   }
 
   async disable(): Promise<RemoteStatus> {
-    if (!this.server) return this.getStatus()
-    await this.teardownLive()
-    const status = this.getStatus()
-    this.emit('status-changed', status)
-    return status
+    return this.runExclusive(async () => {
+      if (!this.server) return this.getStatus()
+      await this.teardownLive()
+      const status = this.getStatus()
+      this.emit('status-changed', status)
+      return status
+    })
+  }
+
+  /** FIFO transition queue — see the `chain` field's WHY. Failures propagate
+   *  to THEIR caller but never poison the chain for the next transition. */
+  private runExclusive<T>(op: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(op, op)
+    this.chain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
   }
 
   /**

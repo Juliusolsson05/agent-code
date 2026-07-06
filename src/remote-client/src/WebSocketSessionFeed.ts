@@ -81,6 +81,10 @@ export class WebSocketSessionFeed implements SessionFeed {
     conditions: new Set(),
     'process-state': new Set(),
     exit: new Set(),
+    // 'removed' has no SessionFeed listener (the contract has no
+    // onSessionRemoved — desktop panes learn removal via workspace state);
+    // the phone consumes it internally to prune its session list below.
+    removed: new Set(),
     // The server never emits sub-agents in v1 (SessionFeedSource doesn't tap
     // it yet); the set exists so onSessionSubAgents satisfies the contract
     // and starts working the moment the server adds the channel.
@@ -299,6 +303,14 @@ export class WebSocketSessionFeed implements SessionFeed {
             s.sessionId === exited.sessionId ? { ...s, alive: false } : s,
           )
           for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
+        } else if (frame.channel === 'removed') {
+          // Covers the removed-without-exit paths (tmux detach, spawn
+          // rollback): the session is GONE, not merely dead — drop the row.
+          const removed = frame.payload as { sessionId: string }
+          this.lastSessionList = this.lastSessionList.filter(
+            s => s.sessionId !== removed.sessionId,
+          )
+          for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
         }
         return
       }
@@ -312,7 +324,6 @@ export class WebSocketSessionFeed implements SessionFeed {
         return
       }
       case 'hello':
-      case 'pong':
       case 'error':
         return
     }

@@ -95,19 +95,16 @@ export function SessionView({
     setError(null)
     void feed
       .deliverPrompt(sessionId, text)
-      .then(async result => {
+      .then(result => {
         if (!result.ok) {
           setError(result.message)
           return
         }
-        // Prompt text lands in the provider's composer via bracketed paste;
-        // the explicit submit is the Enter press. Two frames on purpose —
-        // it mirrors the desktop's paste-then-submit discipline.
-        const submitted = await feed.sendInput(sessionId, '\r')
-        if (!submitted) {
-          setError('Prompt staged but submit failed — press send again.')
-          return
-        }
+        // Delivery INCLUDES the submit: the server routes through the
+        // provider's own prompt-delivery module (paste, await absorption,
+        // Enter — see RemoteServer's send-prompt handler). Sending a second
+        // '\r' frame here raced the paste and was exactly the swallowed-
+        // Enter bug the desktop's promptDelivery modules document.
         setDraft('')
       })
       .finally(() => setSending(false))

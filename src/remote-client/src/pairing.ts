@@ -12,7 +12,6 @@
 // nothing, and an explicit read/write keeps the auth story greppable.
 
 const TOKEN_KEY = 'agent-code-remote-token'
-const DEVICE_NAME_KEY = 'agent-code-remote-device-name'
 
 export function loadToken(): string | null {
   try {
@@ -28,14 +27,6 @@ export function saveToken(token: string): void {
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY)
-}
-
-export function loadDeviceName(): string | null {
-  try {
-    return localStorage.getItem(DEVICE_NAME_KEY)
-  } catch {
-    return null
-  }
 }
 
 export function readPairingCodeFromHash(): string | null {
@@ -71,7 +62,6 @@ export async function redeemPairingCode(
     const body = (await res.json()) as { token?: string }
     if (!body.token) return { ok: false, error: 'Malformed pairing response.' }
     saveToken(body.token)
-    localStorage.setItem(DEVICE_NAME_KEY, deviceName)
     return { ok: true, token: body.token }
   } catch {
     return { ok: false, error: 'Could not reach the desktop. Same Wi-Fi?' }

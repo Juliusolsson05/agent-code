@@ -127,7 +127,6 @@ export type OutboundSessionSummary = {
 
 export type OutboundFrame =
   | { type: 'hello'; deviceId: string; deviceName: string }
-  | { type: 'pong'; id?: string }
   | { type: 'session-list'; sessions: OutboundSessionSummary[] }
   | {
       type: 'session-event'
@@ -141,6 +140,7 @@ export type OutboundFrame =
         | 'process-state'
         | 'sub-agents'
         | 'exit'
+        | 'removed'
       payload: unknown
     }
   | { type: 'reply'; id?: string; ok: boolean; error?: string; result?: unknown }

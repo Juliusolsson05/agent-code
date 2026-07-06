@@ -47,9 +47,13 @@ import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
 /**
  * The slice of SessionManager the remote subsystem consumes, stated
  * structurally so tests can drive a bare EventEmitter + spies and so this
- * file documents its true blast radius: four methods, nothing else.
+ * file documents its true blast radius: the read-side seeds (list +
+ * snapshot getters) and the four control methods, nothing else.
  */
 export type RemoteSessionControl = {
+  list(): string[]
+  getScreenSnapshot(sessionId: string): unknown
+  getConditionsSnapshot(sessionId: string): unknown
   write(sessionId: string, data: string): boolean
   resolveCondition(
     sessionId: string,
@@ -74,11 +78,6 @@ export type RemoteServerDeps = {
   journal?: AppRunJournal | null
 }
 
-// Bracketed paste — the same safe path composer dictation uses for
-// multiline text into provider TUIs (see useComposerDictation.ts): raw
-// newlines would be interpreted as Enter mid-prompt.
-const BRACKETED_PASTE_OPEN = '\x1b[200~'
-const BRACKETED_PASTE_CLOSE = '\x1b[201~'
 const SUBMIT_BYTES = '\r'
 const INTERRUPT_BYTES = '\x1b'
 
@@ -139,6 +138,27 @@ export class RemoteServer extends EventEmitter {
       this.cacheForLateJoiners(channel, payload)
       this.broadcast({ type: 'session-event', channel, payload })
     })
+
+    // Prime the late-joiner caches from the manager's own snapshot caches.
+    // The feed tap only observes events AFTER enable; without this, an agent
+    // blocked on a permission prompt raised BEFORE the user enabled remote
+    // would never render its prompt on the phone (conditions only re-emit on
+    // change), and idle sessions would be blank panes (idle TUIs redraw
+    // nothing). Payload shapes mirror the live events exactly so clients
+    // need no special bootstrap path.
+    for (const session of this.deps.feedSource.listSessions()) {
+      const screen = this.deps.manager.getScreenSnapshot(session.sessionId)
+      if (screen && typeof screen === 'object') {
+        this.lastScreen.set(session.sessionId, { sessionId: session.sessionId, ...screen })
+      }
+      const snapshot = this.deps.manager.getConditionsSnapshot(session.sessionId)
+      if (snapshot) {
+        this.lastConditions.set(session.sessionId, {
+          sessionId: session.sessionId,
+          snapshot,
+        })
+      }
+    }
 
     try {
       const { url } = await this.deps.transport.start(this.server)
@@ -408,18 +428,17 @@ export class RemoteServer extends EventEmitter {
         return { ok: true, result: 'pong' }
 
       case 'send-prompt': {
-        // API-transport providers (opencode) have no PTY to receive bytes;
-        // everything else gets the same bracketed-paste discipline the
-        // desktop composer/dictation paths use.
-        if (this.deps.manager.getSessionKind(msg.sessionId) === 'opencode') {
-          const delivered = await this.deps.manager.deliverPromptToAgent(msg.sessionId, msg.text)
-          return delivered.ok ? { ok: true } : { ok: false, error: delivered.message }
-        }
-        const wrote = this.deps.manager.write(
-          msg.sessionId,
-          `${BRACKETED_PASTE_OPEN}${msg.text}${BRACKETED_PASTE_CLOSE}`,
-        )
-        return wrote ? { ok: true } : { ok: false, error: 'session not writable' }
+        // EVERY agent kind goes through SessionManager.deliverPromptToAgent —
+        // the registry routes to the provider's own prompt-delivery module
+        // (Claude: paste, await the [Pasted text #N] placeholder, THEN Enter;
+        // Codex: readiness gate + atomic paste+Enter; opencode: HTTP prompt).
+        // A hand-rolled bare bracketed-paste write here reintroduced the
+        // exact swallowed-Enter bugs those modules exist to prevent: the
+        // paste bytes land, the reply says ok, and the prompt sits unsent in
+        // the composer. delivery INCLUDES the submit, so the phone client
+        // sends no separate '\r' frame after this (see SessionView.sendPrompt).
+        const delivered = await this.deps.manager.deliverPromptToAgent(msg.sessionId, msg.text)
+        return delivered.ok ? { ok: true } : { ok: false, error: delivered.message }
       }
 
       case 'submit': {
@@ -481,9 +500,11 @@ export class RemoteServer extends EventEmitter {
     if (channel === 'screen') this.lastScreen.set(sessionId, payload)
     else if (channel === 'conditions') this.lastConditions.set(sessionId, payload)
     else if (channel === 'process-state') this.lastProcessState.set(sessionId, payload)
-    else if (channel === 'exit') {
+    else if (channel === 'exit' || channel === 'removed') {
       // A dead session's stale screen must not greet the next connection as
-      // if it were live; the exit event itself still broadcast normally.
+      // if it were live; the event itself still broadcast normally.
+      // 'removed' covers the removed-without-exit paths (tmux detach,
+      // spawn-failure rollback) that would otherwise pin caches forever.
       this.lastScreen.delete(sessionId)
       this.lastConditions.delete(sessionId)
       this.lastProcessState.delete(sessionId)

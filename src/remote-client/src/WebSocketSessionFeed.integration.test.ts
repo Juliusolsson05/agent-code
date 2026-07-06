@@ -23,6 +23,9 @@ type FakeManager = RemoteSessionControl & EventEmitter
 
 function makeManager(): FakeManager {
   const emitter = new EventEmitter() as FakeManager
+  emitter.list = vi.fn(() => [])
+  emitter.getScreenSnapshot = vi.fn(() => null)
+  emitter.getConditionsSnapshot = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const, state: { done: true } }))
   emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
@@ -130,10 +133,10 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
 
     const result = await f.deliverPrompt('s1', 'hello from the phone')
     expect(result).toEqual({ ok: true })
-    expect(manager.write).toHaveBeenCalledWith(
-      's1',
-      '\x1b[200~hello from the phone\x1b[201~',
-    )
+    // Through the provider prompt-delivery discipline — NOT a bare paste
+    // write (see RemoteServer's send-prompt handler for the WHY).
+    expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('s1', 'hello from the phone')
+    expect(manager.write).not.toHaveBeenCalled()
   })
 
   it('sendInput translates submit/interrupt/paste and rejects raw bytes', async () => {
@@ -147,7 +150,7 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     expect(manager.write).toHaveBeenCalledWith('s1', '\x1b')
 
     expect(await f.sendInput('s1', '\x1b[200~multi\nline\x1b[201~')).toBe(true)
-    expect(manager.write).toHaveBeenCalledWith('s1', '\x1b[200~multi\nline\x1b[201~')
+    expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('s1', 'multi\nline')
 
     await expect(f.sendInput('s1', 'ls -la')).rejects.toThrow(/not part of the v1/)
   })

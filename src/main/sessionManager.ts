@@ -235,6 +235,17 @@ export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly spawningSessionIds = new Set<string>()
   private readonly lastActivityAt = new Map<string, number>()
+  // Latest per-session UI-state snapshots, cached at the emit sites below.
+  // WHY: consumers that attach mid-flight (the remote mobile companion's
+  // SessionFeedSource/RemoteServer — enabled long after sessions started —
+  // and any future late subscriber) would otherwise see nothing until the
+  // NEXT event: an idle agent redraws no screen, and a condition snapshot
+  // only re-emits on change, so a pending permission prompt raised before
+  // the subscriber existed would be invisible forever. Cost is one Map.set
+  // per event (a reference store, no clone); entries die with the session
+  // in cleanupSessionState.
+  private readonly lastScreenSnapshot = new Map<string, AgentScreenSnapshot>()
+  private readonly lastConditionsSnapshot = new Map<string, ProviderConditionSnapshot>()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the
   // restored-agents-null bug can make a renderer spam writes against a stale id,
@@ -326,6 +337,11 @@ export class SessionManager extends EventEmitter {
     // the separate `removed` event so SessionManager does not import forwarder
     // internals.
     this.sessions.delete(sessionId)
+    // UI-state snapshot caches die with the session — replaying a dead
+    // session's screen/conditions to a late subscriber would present it as
+    // live (the exact stale-state bug the remote late-joiner replay had).
+    this.lastScreenSnapshot.delete(sessionId)
+    this.lastConditionsSnapshot.delete(sessionId)
     // Keep lastActivityAt after removal. Process telemetry can be asked about a
     // pane the renderer still knows but whose PTY already exited; deleting this
     // tiny timestamp made those recently-exited panes look like they had never
@@ -480,6 +496,7 @@ export class SessionManager extends EventEmitter {
       })
       session.on('screen', (snap: AgentScreenSnapshot) => {
         this.markActivity(sessionId)
+        this.lastScreenSnapshot.set(sessionId, snap)
         this.emit('screen', { sessionId, ...snap })
       })
       session.on('jsonl-entry', (entry: AgentTranscriptEntry, file: string) => {
@@ -512,6 +529,7 @@ export class SessionManager extends EventEmitter {
       })
       session.on('conditions', (snapshot: ProviderConditionSnapshot) => {
         this.markActivity(sessionId)
+        this.lastConditionsSnapshot.set(sessionId, snapshot)
         this.emit('conditions', { sessionId, snapshot })
       })
       session.on('semantic-event', (event: unknown) => {
@@ -1133,6 +1151,20 @@ export class SessionManager extends EventEmitter {
   /** List all live session ids. Used for state save / debug. */
   list(): string[] {
     return Array.from(this.sessions.keys())
+  }
+
+  /** Latest screen snapshot observed for a live session, or null before the
+   *  first frame. See the cache fields' WHY comment — this exists for
+   *  late-attaching consumers (remote companion) to seed their state. */
+  getScreenSnapshot(sessionId: string): AgentScreenSnapshot | null {
+    return this.lastScreenSnapshot.get(sessionId) ?? null
+  }
+
+  /** Latest provider-conditions snapshot for a live session, or null if no
+   *  condition has ever been live. Same late-attach rationale as
+   *  getScreenSnapshot. */
+  getConditionsSnapshot(sessionId: string): ProviderConditionSnapshot | null {
+    return this.lastConditionsSnapshot.get(sessionId) ?? null
   }
 
   /** Kill every live session. Called on app quit. */

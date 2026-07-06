@@ -21,6 +21,9 @@ type FakeManager = RemoteSessionControl & EventEmitter
 
 function makeManager(): FakeManager {
   const emitter = new EventEmitter() as FakeManager
+  emitter.list = vi.fn(() => [])
+  emitter.getScreenSnapshot = vi.fn(() => null)
+  emitter.getConditionsSnapshot = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const }))
   emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
@@ -168,6 +171,54 @@ describe('event fan-out', () => {
     )
     late.ws.close()
   })
+
+  it('primes pre-enable state from the manager snapshot caches', async () => {
+    // The headline scenario the review caught: an agent blocked on a
+    // permission prompt BEFORE the user enabled remote. The manager's
+    // snapshot caches are the only source for that state; the server must
+    // seed its late-joiner caches from them at start().
+    await server.stop()
+    ;(manager.list as ReturnType<typeof vi.fn>).mockReturnValue(['pre'])
+    ;(manager.getScreenSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
+      plain: 'pre-enable output', markdown: '', recent: 'pre-enable output',
+      recentMarkdown: '', picker: { visible: false, items: [] },
+    })
+    ;(manager.getConditionsSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
+      provider: 'claude', ts: 1,
+      conditions: {
+        'claude.permission-prompt': {
+          kind: 'claude.permission-prompt', state: { visible: true },
+          actions: [{ kind: 'pty', id: 'yes', label: 'Yes', data: '1\r' }],
+        },
+      },
+    })
+    feedSource.dispose()
+    feedSource = new SessionFeedSource(manager as never)
+    server = new RemoteServer({
+      manager, feedSource, pairing, registry,
+      transport: new LanTransport({ port: 0 }),
+    })
+    const { url } = await server.start()
+    baseUrl = url.replace(/\/\/[\d.]+:/, '//127.0.0.1:')
+    const token = await pairDevice()
+
+    const { ws, frames } = await connect(token)
+    await waitFor(frames, f =>
+      framesOfType(f, 'session-event').some(e => e.channel === 'conditions') &&
+      framesOfType(f, 'session-event').some(e => e.channel === 'screen'),
+    )
+    // And the primed condition's pty action must be actionable.
+    ws.send(JSON.stringify({
+      token, id: 'r1',
+      message: {
+        type: 'permission-reply', sessionId: 'pre',
+        action: { kind: 'pty', id: 'yes', label: 'Yes', data: '1\r' },
+      },
+    }))
+    await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
+    expect(manager.write).toHaveBeenCalledWith('pre', '1\r')
+    ws.close()
+  })
 })
 
 describe('inbound scope enforcement on a live socket', () => {
@@ -178,28 +229,20 @@ describe('inbound scope enforcement on a live socket', () => {
     return { ws, frames, token }
   }
 
-  it('send-prompt writes bracketed paste for PTY providers', async () => {
+  it('send-prompt routes EVERY kind through the provider prompt-delivery discipline', async () => {
+    // Not a bare bracketed-paste write: deliverPromptToAgent hands the text
+    // to the provider's own delivery module (paste → await absorption →
+    // Enter), which is the desktop's swallowed-Enter protection. The reply
+    // arrives only after real delivery.
     const { ws, frames, token } = await openAuthed()
     ws.send(JSON.stringify({
       token, id: 'r1',
       message: { type: 'send-prompt', sessionId: 's1', text: 'do the thing' },
     }))
     await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
-    expect(manager.write).toHaveBeenCalledWith('s1', '\x1b[200~do the thing\x1b[201~')
-    expect(framesOfType(frames, 'reply')[0]).toMatchObject({ id: 'r1', ok: true })
-    ws.close()
-  })
-
-  it('send-prompt uses deliverPromptToAgent for API-transport providers', async () => {
-    ;(manager.getSessionKind as ReturnType<typeof vi.fn>).mockReturnValue('opencode')
-    const { ws, frames, token } = await openAuthed()
-    ws.send(JSON.stringify({
-      token, id: 'r1',
-      message: { type: 'send-prompt', sessionId: 's1', text: 'hi' },
-    }))
-    await waitFor(frames, f => framesOfType(f, 'reply').length > 0)
-    expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('s1', 'hi')
+    expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('s1', 'do the thing')
     expect(manager.write).not.toHaveBeenCalled()
+    expect(framesOfType(frames, 'reply')[0]).toMatchObject({ id: 'r1', ok: true })
     ws.close()
   })
 

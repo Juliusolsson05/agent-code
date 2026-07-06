@@ -15,6 +15,24 @@ describe('pickLanIpv4', () => {
     expect(ip).toBe('192.168.1.42')
   })
 
+  it('prefers a physical interface over an earlier-enumerated VPN tunnel', () => {
+    // networkInterfaces() order is arbitrary; a utun (VPN) address baked
+    // into the pairing QR is unreachable from a phone on the same Wi-Fi.
+    const ip = pickLanIpv4({
+      utun3: [{ family: 'IPv4', address: '10.8.0.2', internal: false }],
+      en0: [{ family: 'IPv4', address: '192.168.1.42', internal: false }],
+    } as never)
+    expect(ip).toBe('192.168.1.42')
+  })
+
+  it('avoids virtual interfaces even without a physical-looking name', () => {
+    const ip = pickLanIpv4({
+      utun3: [{ family: 'IPv4', address: '10.8.0.2', internal: false }],
+      weird0: [{ family: 'IPv4', address: '172.20.0.9', internal: false }],
+    } as never)
+    expect(ip).toBe('172.20.0.9')
+  })
+
   it('falls back to loopback when no external interface exists', () => {
     const ip = pickLanIpv4({
       lo0: [{ family: 'IPv4', address: '127.0.0.1', internal: true }],

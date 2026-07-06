@@ -100,7 +100,7 @@ async function main() {
     const versionOk = await binaryReportsVersion(binary, manifest.version)
     if (!versionOk) {
       console.error(
-        `[verify-cloudflared] ${platformKey}: \`tmux -V\` did not contain "${manifest.version}"`,
+        `[verify-cloudflared] ${platformKey}: \`cloudflared --version\` did not contain "${manifest.version}"`,
       )
       problems++
       continue

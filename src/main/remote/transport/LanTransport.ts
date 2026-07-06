@@ -7,9 +7,23 @@ import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
 // works (Wi-Fi vs Ethernet vs USB tether), but the QR URL uses one concrete
 // LAN IPv4 because a phone can't dial 0.0.0.0.
 
+// Interfaces that are almost never what a phone on the same Wi-Fi can
+// route to: VPN tunnels (utun/tun/tap/tailscale/zt), Apple's peer-to-peer
+// links (awdl/llw), and VM/container bridges (bridge/vmnet/docker/veth).
+// Enumeration order from networkInterfaces() is arbitrary, and a first-hit
+// scan regularly baked a VPN address into the pairing QR whenever a
+// corporate VPN or Docker Desktop was running (review finding) — the phone
+// then couldn't reach the URL despite being on the same network.
+const VIRTUAL_INTERFACE = /^(utun|tun|tap|tailscale|zt|awdl|llw|bridge|vmnet|docker|veth)/i
+// macOS physical NICs are enN (Wi-Fi is usually en0); Linux dev boxes use
+// eth*/wlan*. Preferring these is a ranking, not a filter — a machine with
+// only exotic interface names still gets its best non-virtual address.
+const PHYSICAL_INTERFACE = /^(en|eth|wlan)/i
+
 /**
- * Pick the address a phone on the same network can reach. First
- * non-internal IPv4 wins; interface map is injectable for tests.
+ * Pick the address a phone on the same network can reach, ranked:
+ * physical-looking interfaces first, then any non-virtual, then anything
+ * non-internal at all.
  *
  * WHY loopback fallback instead of throwing when the machine has no LAN
  * address: the remote panel should still render (showing 127.0.0.1 makes
@@ -19,12 +33,19 @@ import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
 export function pickLanIpv4(
   interfaces: ReturnType<typeof networkInterfaces> = networkInterfaces(),
 ): string {
-  for (const entries of Object.values(interfaces)) {
+  const candidates: Array<{ name: string; address: string }> = []
+  for (const [name, entries] of Object.entries(interfaces)) {
     for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) return entry.address
+      if (entry.family === 'IPv4' && !entry.internal) {
+        candidates.push({ name, address: entry.address })
+      }
     }
   }
-  return '127.0.0.1'
+  const physical = candidates.find(c => PHYSICAL_INTERFACE.test(c.name))
+  if (physical) return physical.address
+  const nonVirtual = candidates.find(c => !VIRTUAL_INTERFACE.test(c.name))
+  if (nonVirtual) return nonVirtual.address
+  return candidates[0]?.address ?? '127.0.0.1'
 }
 
 export class LanTransport implements RemoteTransport {

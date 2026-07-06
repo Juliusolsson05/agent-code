@@ -32,6 +32,8 @@ type RegistryFileShape = {
   devices: PairedDevice[]
 }
 
+const TOUCH_PERSIST_INTERVAL_MS = 60_000
+
 export class DeviceRegistry {
   private devices = new Map<string, PairedDevice>()
 
@@ -92,12 +94,19 @@ export class DeviceRegistry {
     return true
   }
 
-  /** Stamp lastSeenAt. Persisted best-effort: losing a touch on crash costs
-   *  a cosmetic timestamp, not security state. */
+  /** Stamp lastSeenAt. Persisted best-effort AND throttled: RemoteServer
+   *  touches on every verified inbound frame, and rewriting the whole
+   *  registry file per message would turn a chatty phone into a disk-write
+   *  amplifier. In-memory state updates every time; the file only follows
+   *  once a minute. Losing a touch on crash costs a cosmetic timestamp,
+   *  not security state (revocation writes go through revoke(), which
+   *  always persists). */
   async touch(deviceId: string): Promise<void> {
     const device = this.devices.get(deviceId)
     if (!device) return
+    const previous = device.lastSeenAt
     device.lastSeenAt = Date.now()
+    if (previous !== null && device.lastSeenAt - previous < TOUCH_PERSIST_INTERVAL_MS) return
     await this.persist().catch(() => {})
   }
 

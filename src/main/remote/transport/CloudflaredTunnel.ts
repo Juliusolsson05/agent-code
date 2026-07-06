@@ -134,6 +134,11 @@ export class CloudflaredTunnel implements RemoteTransport {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        // Stop accumulating output once settled — the child lives for the
+        // whole tunnel session and chatty edge logs would otherwise grow
+        // `collected` (and run the regex) for hours after start() resolved.
+        child.stderr?.off('data', onChunk)
+        child.stdout?.off('data', onChunk)
         fn()
       }
 

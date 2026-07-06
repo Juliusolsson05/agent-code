@@ -30,6 +30,11 @@ export type FeedChannel =
   | 'conditions'
   | 'process-state'
   | 'exit'
+  // The session left the manager entirely. Distinct from 'exit' because
+  // SessionManager has removed-WITHOUT-exit paths (tmux-backed terminal
+  // detach, spawn-failure rollback); a client that only watched 'exit'
+  // would keep a dead session in its list forever.
+  | 'removed'
 
 export type FeedEventListener = (channel: FeedChannel, payload: unknown) => void
 
@@ -63,6 +68,19 @@ export class SessionFeedSource {
   private disposed = false
 
   constructor(manager: SessionManager) {
+    // Seed from sessions that are ALREADY live: the remote server is
+    // typically enabled long after agents started, and 'started' events for
+    // those fired before this tap existed. Without seeding, the feature's
+    // headline flow (walk away from running agents, monitor from the phone)
+    // shows an empty list until a brand-new session spawns. cwd is unknown
+    // here — 'started' carried projectDir, the registry doesn't — so seeded
+    // rows fall back to null and the client displays the session id.
+    for (const sessionId of manager.list()) {
+      const kind = manager.getSessionKind(sessionId)
+      if (!kind || kind === 'terminal') continue
+      this.sessions.set(sessionId, { sessionId, kind, cwd: null, alive: true })
+    }
+
     const sub = <E extends Parameters<SessionManager['on']>[0]>(
       event: E,
       handler: (payload: never) => void,
@@ -72,6 +90,14 @@ export class SessionFeedSource {
     }
 
     sub('started', (payload: { sessionId: string; kind: string; projectDir?: string }) => {
+      // Terminal sessions are OUT of the remote feed on purpose: they emit
+      // only 'terminal-data' (a channel this tap never forwards — see the
+      // module comment), so listing them would show a session that can never
+      // render output while still accepting composer input — an invisible
+      // command-execution surface on the phone. The v1 scope has no
+      // terminals; when a later phase adds them, it must add the data
+      // channel and the protocol surface together.
+      if (payload.kind === 'terminal') return
       this.sessions.set(payload.sessionId, {
         sessionId: payload.sessionId,
         kind: payload.kind,
@@ -124,9 +150,15 @@ export class SessionFeedSource {
       // `removed` = the session left the manager entirely (kill or natural
       // teardown after exit). Drop it from the list AND drop its buffer so
       // dead sessions can't leak coalescer state — mirrors flushAndDropJsonl.
+      // Forwarded to listeners (unlike the renderer forwarder, which uses it
+      // only for cleanup) because remote clients have no other signal on the
+      // removed-without-exit paths; only emit for sessions we ever tracked
+      // so terminal removals don't leak through the terminal filter above.
+      const tracked = this.sessions.has(payload.sessionId)
       this.flushJsonl(payload.sessionId)
       this.pendingJsonl.delete(payload.sessionId)
       this.sessions.delete(payload.sessionId)
+      if (tracked) this.emit('removed', payload)
     })
   }
 

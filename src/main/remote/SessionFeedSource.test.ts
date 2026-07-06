@@ -10,10 +10,11 @@ import type { SessionManager } from '@main/sessionManager.js'
 // for the manager, which is honest: the source consumes nothing but `on()`
 // and `getSessionKind()`.
 
-function makeManager(): SessionManager & EventEmitter {
+function makeManager(live: string[] = []): SessionManager & EventEmitter {
   const emitter = new EventEmitter() as SessionManager & EventEmitter
-  ;(emitter as unknown as { getSessionKind: (id: string) => string | null }).getSessionKind =
-    vi.fn(() => 'claude')
+  const anyEmitter = emitter as unknown as Record<string, unknown>
+  anyEmitter.getSessionKind = vi.fn(() => 'claude')
+  anyEmitter.list = vi.fn(() => live)
   return emitter
 }
 
@@ -86,6 +87,40 @@ describe('SessionFeedSource', () => {
     // removed drops the session entirely — it left the manager.
     manager.emit('removed', { sessionId: 's2' })
     expect(source.listSessions().map(s => s.sessionId)).toEqual(['s1'])
+    source.dispose()
+  })
+
+  it('seeds already-live sessions at construction (pre-enable agents are visible)', () => {
+    const manager = makeManager(['pre-1', 'pre-2'])
+    const source = new SessionFeedSource(manager)
+    expect(source.listSessions().map(s => s.sessionId).sort()).toEqual(['pre-1', 'pre-2'])
+    source.dispose()
+  })
+
+  it('never tracks terminal sessions (seeded or started)', () => {
+    const manager = makeManager(['term-1'])
+    ;(manager.getSessionKind as ReturnType<typeof vi.fn>).mockReturnValue('terminal')
+    const source = new SessionFeedSource(manager)
+    expect(source.listSessions()).toEqual([])
+
+    manager.emit('started', { sessionId: 'term-2', kind: 'terminal' })
+    expect(source.listSessions()).toEqual([])
+    source.dispose()
+  })
+
+  it("emits 'removed' for tracked sessions (removed-without-exit paths)", () => {
+    const manager = makeManager()
+    const source = new SessionFeedSource(manager)
+    const seen: Array<{ channel: string; payload: unknown }> = []
+    source.onEvent((channel, payload) => seen.push({ channel, payload }))
+
+    manager.emit('started', { sessionId: 's1', kind: 'claude' })
+    manager.emit('removed', { sessionId: 's1' })
+    expect(seen.map(e => e.channel)).toEqual(['started', 'removed'])
+    expect(source.listSessions()).toEqual([])
+    // Untracked (e.g. terminal) removals stay silent.
+    manager.emit('removed', { sessionId: 'never-tracked' })
+    expect(seen.map(e => e.channel)).toEqual(['started', 'removed'])
     source.dispose()
   })
 

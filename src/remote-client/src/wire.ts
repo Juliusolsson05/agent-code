@@ -27,10 +27,10 @@ export type FeedChannel =
   | 'conditions'
   | 'process-state'
   | 'exit'
+  | 'removed'
 
 export type OutboundFrame =
   | { type: 'hello'; deviceId: string; deviceName: string }
-  | { type: 'pong'; id?: string }
   | { type: 'session-list'; sessions: RemoteSessionSummary[] }
   | { type: 'session-event'; channel: FeedChannel; payload: unknown }
   | { type: 'reply'; id?: string; ok: boolean; error?: string; result?: unknown }

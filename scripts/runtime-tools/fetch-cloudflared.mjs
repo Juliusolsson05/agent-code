@@ -55,7 +55,7 @@ async function main() {
     if (!platform.binarySha256) {
       throw new Error(
         `Manifest is missing binarySha256 for ${platformKey}. ` +
-          `Compute it with \`shasum -a 256 third_party/cloudflared/cache/${platformKey}/tmux\` ` +
+          `Compute it with \`shasum -a 256 third_party/cloudflared/cache/${platformKey}/cloudflared\` ` +
           `after a fresh download, then pin the value in third_party/cloudflared/manifest.json.`,
       )
     }

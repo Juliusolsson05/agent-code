@@ -17,6 +17,9 @@ type FakeManager = RemoteSessionControl & EventEmitter
 
 function makeManager(): FakeManager {
   const emitter = new EventEmitter() as FakeManager
+  emitter.list = vi.fn(() => [])
+  emitter.getScreenSnapshot = vi.fn(() => null)
+  emitter.getConditionsSnapshot = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const }))
   emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
