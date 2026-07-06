@@ -28,6 +28,10 @@ import {
   extractOpencodeProviderSessionId,
 } from '@providers/opencode/renderer/transcript/mapper'
 import { opencodeComposerSubmit } from '@providers/opencode/renderer/composerSubmit'
+import {
+  renderOpencodeToolUse,
+  renderOpencodeToolResult,
+} from '@providers/opencode/renderer/rows/dispatch'
 import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
@@ -198,6 +202,10 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   name: 'OpenCode',
   ...OPENCODE_IDENTITY,
   conditionViews: OPENCODE_VIEWS,
+  // Evidence-backed rows only (live probe 2026-07-06): todowrite renders as
+  // a real todo list; everything else falls through to the generic rows.
+  renderToolUse: renderOpencodeToolUse,
+  renderToolResult: renderOpencodeToolResult,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
   extractProviderSessionId: extractOpencodeProviderSessionId,
   composerSubmit: opencodeComposerSubmit,
