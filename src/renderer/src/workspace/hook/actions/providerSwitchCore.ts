@@ -1,5 +1,6 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionId } from '@renderer/workspace/types'
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
@@ -44,7 +45,7 @@ export async function switchAgentProvider(params: {
   if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
 
   const sourceKind = meta.kind ?? DEFAULT_PROVIDER
-  if (sourceKind !== 'claude' && sourceKind !== 'codex') {
+  if (!isAgentProviderKind(sourceKind)) {
     return { status: 'skipped', reason: 'Only Claude and Codex panes can switch provider' }
   }
   // Defensive: a no-op direction. The bulk modal only enumerates source-kind
@@ -101,7 +102,7 @@ export async function switchAgentProvider(params: {
             // worse than a visible drop: the hidden array still participates in
             // the composer "empty submit" guard, so pressing Enter on an
             // apparently empty Codex composer could submit a blank prompt.
-            draftImages: targetKind === 'claude' ? draftImages : [],
+            draftImages: getRendererProviderCapabilities(targetKind).supportsImageAttachments ? draftImages : [],
           },
         }
       })
@@ -114,6 +115,12 @@ export async function switchAgentProvider(params: {
     // dropped into a dead pane.
     const result = await window.api.switchProvider({
       sourceKind,
+      // Explicit target (#394 phase 5a). This helper always KNEW the
+      // target — its callers pass it — but historically dropped it
+      // before IPC and relied on main's two-provider negation. With
+      // the negation slated for removal, the renderer's choice is now
+      // authoritative end-to-end.
+      targetKind,
       sourceProviderSessionId,
       cwd: meta.cwd,
     })

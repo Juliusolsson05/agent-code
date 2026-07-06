@@ -1,4 +1,5 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -45,7 +46,7 @@ export function useProviderActions(
     if (!meta) return
 
     const sourceKind = meta.kind ?? DEFAULT_PROVIDER
-    if (sourceKind !== 'claude' && sourceKind !== 'codex') {
+    if (!isAgentProviderKind(sourceKind)) {
       showPaneToast(sourceSessionId, 'Only Claude and Codex panes can switch provider')
       return
     }
@@ -66,7 +67,7 @@ export function useProviderActions(
     if (result.status === 'switched') {
       showPaneToast(
         result.newSessionId,
-        result.targetKind === 'codex' ? 'Switched to Codex' : 'Switched to Claude',
+        `Switched to ${getRendererProviderCapabilities(result.targetKind).shortLabel}`,
       )
     } else if (result.status === 'failed') {
       showPaneToast(sourceSessionId, result.message)
@@ -83,7 +84,7 @@ export function useProviderActions(
     if (!meta) return
 
     const kind = meta.kind ?? DEFAULT_PROVIDER
-    if (kind !== 'claude' && kind !== 'codex') {
+    if (!isAgentProviderKind(kind)) {
       showPaneToast(sourceSessionId, 'Only Claude and Codex panes can reload')
       return
     }
@@ -102,7 +103,7 @@ export function useProviderActions(
       if (!newSessionId) return
       showPaneToast(
         newSessionId,
-        kind === 'codex' ? 'Codex reloaded' : 'Claude reloaded',
+        `${getRendererProviderCapabilities(kind).shortLabel} reloaded`,
       )
     } catch (err) {
       const message =
@@ -147,7 +148,7 @@ export function useProviderActions(
       if (!meta) return
 
       const kind = meta.kind ?? DEFAULT_PROVIDER
-      if (kind !== 'claude' && kind !== 'codex') {
+      if (!isAgentProviderKind(kind)) {
         showPaneToast(sourceSessionId, 'Only Claude and Codex panes support rewind')
         return
       }
