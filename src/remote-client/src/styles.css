@@ -56,6 +56,11 @@ code, pre, .mono {
 
 .screen { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
+/* Host for the desktop Feed component: the feed manages its own internal
+ * scroll container, so the host just claims the remaining column space. */
+.feed-host { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.feed-host > * { flex: 1; min-height: 0; }
+
 /* --- pairing --- */
 .pair {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
