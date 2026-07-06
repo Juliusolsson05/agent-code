@@ -286,15 +286,24 @@ export class RemoteServer extends EventEmitter {
 
   private serveClient(pathname: string, res: ServerResponse): void {
     const dist = this.deps.clientDistDir
-    if (!dist) {
+    // Per-REQUEST existence check, not construction-time: clientDistDir is
+    // captured when the app boots, but in dev the bundle often gets built
+    // AFTER launch (`npm run client:build`). Gating at construction meant
+    // the placeholder persisted until a full app restart — the first thing
+    // real-world testing tripped on. Reading the filesystem per page load
+    // is negligible next to serving the files themselves, and it makes
+    // "build, then just reload the phone page" work with zero restarts.
+    if (!dist || !existsSync(join(dist, 'index.html'))) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       res.end(
         '<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">' +
           '<title>Agent Code Remote</title>' +
           '<body style="font-family:system-ui;padding:2rem;background:#111;color:#eee">' +
           '<h1>Agent Code Remote</h1>' +
-          '<p>The remote client bundle is not built in this install. ' +
-          'The WebSocket API at <code>/ws</code> is live.</p>',
+          '<p>The phone client bundle is not built yet. On the desktop, run:</p>' +
+          '<pre style="background:#222;padding:1rem;border-radius:8px">npm run client:build</pre>' +
+          '<p>then reload this page — no app restart needed. ' +
+          'The WebSocket API at <code>/ws</code> is already live.</p>',
       )
       return
     }
