@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { stat } from 'fs/promises'
 
 import { performanceService } from '@main/performance/PerformanceService.js'

@@ -7,7 +7,7 @@ import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 // Local binding for in-file uses (SessionStartedEvent.kind, etc.). The
 // `export type { SessionKind }` re-export below is a separate statement that
 // does NOT bind the name locally, so this import is required too.
-import type { SessionKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 export type { SessionInfo } from '@shared/types/session.js'
