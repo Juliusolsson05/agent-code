@@ -32,7 +32,7 @@
  * will fail to compile until every kind has a config. That compile
  * error is the intended checklist.
  */
-export const AGENT_PROVIDER_KINDS = ['claude', 'codex'] as const
+export const AGENT_PROVIDER_KINDS = ['claude', 'codex', 'opencode'] as const
 
 /** A provider that runs an actual agent (has transcripts, conditions, …). */
 export type AgentProviderKind = (typeof AGENT_PROVIDER_KINDS)[number]

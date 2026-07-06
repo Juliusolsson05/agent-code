@@ -54,9 +54,21 @@ const codexSetup: ProviderSetupDescriptor = {
   detail: 'Install and sign in to Codex before using Codex panes.',
 }
 
+const opencodeSetup: ProviderSetupDescriptor = {
+  binaryName: 'opencode',
+  label: 'OpenCode',
+  // FIRST required:false provider (#406 blocker 5): opencode must not
+  // block app launch for the vast majority of installs that don't
+  // have the binary. Verify the SetupGate soft-handles this before
+  // the branch merges.
+  required: false,
+  detail: 'Install the opencode CLI to use OpenCode panes. Optional.',
+}
+
 const providerSetupDescriptors: Record<AgentProviderKind, ProviderSetupDescriptor> = {
   claude: claudeSetup,
   codex: codexSetup,
+  opencode: opencodeSetup,
 }
 
 export function getProviderSetupDescriptor(id: string): ProviderSetupDescriptor {

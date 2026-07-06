@@ -43,5 +43,9 @@ export function extractAssistantInProgress(
       return codexExtract(screen)
     case 'claude':
       return claudeExtract(screen)
+    case 'opencode':
+      // Opencode has NO terminal screen to extract from — the streaming
+      // baseline is meaningless for it and callers pass '' screens.
+      return ''
   }
 }

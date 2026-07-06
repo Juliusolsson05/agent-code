@@ -17,6 +17,13 @@ import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
 import { claudeComposerSubmit } from '@providers/claude/renderer/composerSubmit'
 import { CLAUDE_CONDITION_POLICY } from '@providers/claude/renderer/conditions/policy'
 import { CODEX_CONDITION_POLICY } from '@providers/codex/renderer/conditions/policy'
+import { OPENCODE_IDENTITY } from '@providers/opencode/renderer/identity'
+import { OPENCODE_CONDITION_POLICY } from '@providers/opencode/renderer/conditions/policy'
+import {
+  createOpencodeTranscriptEntryMapper,
+  extractOpencodeProviderSessionId,
+} from '@providers/opencode/renderer/transcript/mapper'
+import { opencodeComposerSubmit } from '@providers/opencode/renderer/composerSubmit'
 import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
@@ -170,9 +177,25 @@ const codexCapabilities: RendererProviderCapabilities = {
   conditionPolicy: CODEX_CONDITION_POLICY,
 }
 
+// STATUS (#406, wiring step 2 of 7): stub capabilities. Views land at
+// step 6; the real mapper at step 4; composerSubmit at step 5.
+const opencodeCapabilities: RendererProviderCapabilities = {
+  id: 'opencode',
+  name: 'OpenCode',
+  ...OPENCODE_IDENTITY,
+  conditionViews: {},
+  createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
+  extractProviderSessionId: extractOpencodeProviderSessionId,
+  composerSubmit: opencodeComposerSubmit,
+  supportsImageAttachments: false,
+  usesOptimisticUserEcho: true,
+  conditionPolicy: OPENCODE_CONDITION_POLICY,
+}
+
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {
   claude: claudeCapabilities,
   codex: codexCapabilities,
+  opencode: opencodeCapabilities,
 }
 
 export function getRendererProviderCapabilities(id: string): RendererProviderCapabilities {

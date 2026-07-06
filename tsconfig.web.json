@@ -30,6 +30,8 @@
       "claude-code-headless/*": ["./packages/claude-code-headless/src/*"],
       "codex-headless": ["./packages/codex-headless/src/index.ts"],
       "codex-headless/*": ["./packages/codex-headless/src/*"],
+      "opencode-headless": ["./packages/opencode-headless/src/index.ts"],
+      "opencode-headless/*": ["./packages/opencode-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
       "@main/*": ["./src/main/*"],
