@@ -937,22 +937,27 @@ export class SessionManager extends EventEmitter {
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult> {
     const entry = this.sessions.get(sessionId)
-    if (!entry || entry.kind !== 'claude') {
+    // ANY agent kind may carry a resolver now (#394 phase 3) — the
+    // old `entry.kind !== 'claude'` gate meant a provider that
+    // implemented AgentSession.resolveCondition still got a dead-end
+    // 'no-session' from the manager (#394 §5). `=== 'terminal'`
+    // rather than !isAgentProviderKind because TypeScript only
+    // discriminates the RegistryEntry union on literal comparisons.
+    // A provider without a resolver (Codex today — its approvals
+    // answer via raw keystrokes) hits the capability check below and
+    // returns 'no-resolver', which is truthful.
+    if (!entry || entry.kind === 'terminal') {
       return { ok: false, reason: 'no-session' }
     }
     if (typeof entry.session.resolveCondition !== 'function') {
       return { ok: false, reason: 'no-resolver' }
     }
-    // The AgentSession contract types `reason` as a plain string (see
-    // @shared/types/session.ts: a third provider needs freedom to
-    // define its own failure vocabulary). ResolveConditionResult
-    // narrows to Claude's known reasons for consumers; the runtime
-    // value satisfies it, but the compiler can't prove it here without
-    // the widened return type from the contract. Cast is safe because
-    // the manager only routes claude-kind sessions to this method
-    // (the entry.kind !== 'claude' guard above), and Claude's
-    // resolveCondition still returns the narrow shape. Phase 3
-    // (conditions v2) generalizes this to a per-provider reason set.
+    // The AgentSession contract types `reason` as a plain string (a
+    // provider defines its own failure vocabulary); the app-side
+    // ResolveConditionResult narrows to the known reason set for
+    // renderer/IPC consumers. The cast asserts providers keep their
+    // reasons within that set — Claude's DriveResult does; a new
+    // provider's resolver must too (documented on the contract).
     return entry.session.resolveCondition(action) as Promise<ResolveConditionResult>
   }
 

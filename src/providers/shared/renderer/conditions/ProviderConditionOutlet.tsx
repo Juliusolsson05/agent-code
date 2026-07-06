@@ -41,7 +41,16 @@ export function ProviderConditionOutlet({ conditions, onSend, onResolveCustom }:
   const { conditionViews: registry } = getRendererProviderCapabilities(conditions.provider)
   const dispatch = makeDispatchFromOnSend(onSend, onResolveCustom)
 
+  // The app-side open snapshot types its map Partial (an artifact of
+  // the per-provider mapped types it must absorb); conditions-core's
+  // ConditionSnapshot wants a dense Record. Values are never actually
+  // undefined at runtime — the evaluators emit dense maps and records
+  // are only ever inserted whole. This cast is the ONE sanctioned
+  // erasure at the outlet boundary, same role as `eraseRegistry` for
+  // views (#394 phase 3).
+  const snapshot = conditions as import('@shared/conditions-core/contract').ConditionSnapshot
+
   return (
-    <ConditionOutlet snapshot={conditions} registry={registry} dispatch={dispatch} />
+    <ConditionOutlet snapshot={snapshot} registry={registry} dispatch={dispatch} />
   )
 }

@@ -1,3 +1,7 @@
+import {
+  conditionStateByKind,
+  type ClaudeAskUserQuestionState,
+} from '@shared/types/providerConditions'
 import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
@@ -534,10 +538,15 @@ export function TileLeaf({
           toolIndexVersion={runtime.toolIndexVersion}
           subAgents={runtime.subAgents}
           askUserQuestionState={
+            // Kind-keyed lookup (#394 phase 3): globally namespaced
+            // kinds make the provider narrow redundant. undefined =
+            // "no snapshot yet", null = "snapshot without AUQ" — Feed
+            // distinguishes the two.
             runtime.conditions
-              ? runtime.conditions.provider === 'claude'
-                ? runtime.conditions.conditions['claude.ask-user-question']?.state ?? null
-                : null
+              ? conditionStateByKind<ClaudeAskUserQuestionState>(
+                  runtime.conditions,
+                  'claude.ask-user-question',
+                )
               : undefined
           }
           // Keep render-decision logging tied to mounted feeds, not

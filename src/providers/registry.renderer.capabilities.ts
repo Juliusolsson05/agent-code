@@ -15,6 +15,8 @@ import {
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
 import { claudeComposerSubmit } from '@providers/claude/renderer/composerSubmit'
+import { CLAUDE_CONDITION_POLICY } from '@providers/claude/renderer/conditions/policy'
+import { CODEX_CONDITION_POLICY } from '@providers/codex/renderer/conditions/policy'
 import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
@@ -86,6 +88,34 @@ export type RendererProviderCapabilities = {
    * workspace store.
    */
   usesOptimisticUserEcho: boolean
+  /**
+   * Condition policy (#394 phase 3): the per-provider data the
+   * generic workspace condition selectors consume (attention set,
+   * blocking-input set, priority-ordered dispatch badge rules,
+   * composer picker kind). Replaced selectors.ts's hardcoded kind
+   * lists and provider branches.
+   */
+  conditionPolicy: ProviderConditionPolicy
+}
+
+/** See providers/<kind>/renderer/conditions/policy.ts for the concrete
+ *  policies and the WHY on each field's gating semantics. */
+export type ProviderConditionPolicy = {
+  /** Kinds that mark a backgrounded pane unread (visible-gated). */
+  attentionKinds: ReadonlySet<string>
+  /** Kinds that route keystrokes to the PTY instead of the composer
+   *  (presence-gated). */
+  actionKinds: ReadonlySet<string>
+  /** Priority-ordered dispatch-badge rules; first match wins. Labels
+   *  are free-form strings (deliberately wider than conditions-core's
+   *  AttentionLevel — 'QUESTION' exists only here). */
+  attentionLabels: ReadonlyArray<{
+    kind: string
+    label: string | ((state: unknown) => string | null)
+  }>
+  /** Condition kind whose state feeds the composer's slash-command
+   *  dropdown; omitted when the provider has no picker condition. */
+  composerPickerKind?: string
 }
 
 /** IO bag for composerSubmit. Draft images are structural (not the
@@ -113,6 +143,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
   composerSubmit: claudeComposerSubmit,
   supportsImageAttachments: true,
   usesOptimisticUserEcho: false,
+  conditionPolicy: CLAUDE_CONDITION_POLICY,
 }
 
 const codexCapabilities: RendererProviderCapabilities = {
@@ -128,6 +159,7 @@ const codexCapabilities: RendererProviderCapabilities = {
   composerSubmit: codexComposerSubmit,
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,
+  conditionPolicy: CODEX_CONDITION_POLICY,
 }
 
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {

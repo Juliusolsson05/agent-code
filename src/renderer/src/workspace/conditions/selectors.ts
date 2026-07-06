@@ -1,4 +1,9 @@
-import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import {
+  conditionStateByKind,
+  type ClaudeSlashPickerState,
+  type ProviderConditionSnapshot,
+} from '@shared/types/providerConditions'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 
 // WHY this predicate exists (conditions audit Finding 2 + Additional A):
@@ -71,17 +76,16 @@ export function clearConditionRuntimeState(): Pick<
   }
 }
 
-// The condition kinds that represent a live, user-actionable prompt the user
-// must attend to. EXCLUDES claude.compaction (progress, not actionable) and
-// claude.slash-picker (a composer affordance, not an attention surface).
-const ATTENTION_CONDITION_KINDS: ReadonlySet<string> = new Set([
-  'claude.trust-dialog',
-  'claude.resume-prompt',
-  'claude.permission-prompt',
-  'claude.ask-user-question',
-  'codex.trust-dialog',
-  'codex.approval',
-])
+// WHY these selectors are now generic loops over the provider's
+// conditionPolicy (#394 phase 3): the kind lists and `provider ===
+// 'claude'` branches that lived here were the deferred seam
+// docs/design/conditions-system.md called out — hand-maintained
+// per-provider knowledge in shell code. The policy data (attention
+// set, action set, ordered label rules, picker kind) now lives with
+// each provider (providers/<kind>/renderer/conditions/policy.ts) and
+// a registered third provider participates in unread badges,
+// keystroke routing, dispatch labels, and the composer picker with
+// zero edits here.
 
 // WHY this exists (conditions audit Finding 5 + Additional B): the unread/
 // attention transition in useIpcSubscriptions used to read the legacy `pending*`
@@ -96,59 +100,50 @@ export function conditionRequiresAttention(
   snapshot: ProviderConditionSnapshot | null,
 ): boolean {
   if (!snapshot) return false
+  const policy = getRendererProviderCapabilities(snapshot.provider).conditionPolicy
   for (const [kind, condition] of Object.entries(snapshot.conditions)) {
-    if (!condition || !ATTENTION_CONDITION_KINDS.has(kind)) continue
+    if (!condition || !policy.attentionKinds.has(kind)) continue
     const state = condition.state as { visible?: boolean }
     if (typeof state.visible === 'boolean' ? state.visible : true) return true
   }
   return false
 }
 
+// Presence-gated (NOT visible-gated) on purpose — see the policy
+// docstrings. Used by keystroke routing: while a blocking condition
+// record exists, arrow keys go to the provider TUI, not the composer.
 export function hasActionCondition(
   conditions: ProviderConditionSnapshot | null,
 ): boolean {
   if (!conditions) return false
-  if (conditions.provider === 'claude') {
-    return Boolean(
-      conditions.conditions['claude.trust-dialog'] ||
-      conditions.conditions['claude.resume-prompt'] ||
-      conditions.conditions['claude.permission-prompt'] ||
-      conditions.conditions['claude.ask-user-question'],
-    )
+  const policy = getRendererProviderCapabilities(conditions.provider).conditionPolicy
+  for (const kind of policy.actionKinds) {
+    if (conditions.conditions[kind]) return true
   }
-  return Boolean(
-    conditions.conditions['codex.trust-dialog'] ||
-    conditions.conditions['codex.approval'],
-  )
+  return false
 }
 
 export function dispatchAttentionLabelFromConditions(
   conditions: ProviderConditionSnapshot | null,
 ): string | null {
   if (!conditions) return null
-  if (conditions.provider === 'claude') {
-    if (conditions.conditions['claude.permission-prompt']) return 'ACTION'
-    // A live AskUserQuestion picker means the agent is BLOCKED waiting for the
-    // user to choose — it needs attention just like a permission/trust prompt,
-    // so it surfaces a dispatch badge ('QUESTION') the same way. This is the
-    // The inline row still renders from transcript state (`!resultAt`), but this
-    // condition is now a real blocking input surface too: keybinding routing uses
-    // `hasActionCondition` so arrow keys keep reaching Claude's picker while the
-    // user decides from the terminal instead of the feed row.
-    if (conditions.conditions['claude.ask-user-question']) return 'QUESTION'
-    if (conditions.conditions['claude.trust-dialog']) return 'TRUST'
-    if (conditions.conditions['claude.resume-prompt']) return 'RESUME'
-    if (conditions.conditions['claude.compaction']?.state.phase === 'error') return 'ERROR'
-    return null
+  const policy = getRendererProviderCapabilities(conditions.provider).conditionPolicy
+  for (const rule of policy.attentionLabels) {
+    const record = conditions.conditions[rule.kind]
+    if (!record) continue
+    const label =
+      typeof rule.label === 'function' ? rule.label(record.state) : rule.label
+    if (label) return label
   }
-  if (conditions.conditions['codex.approval']) return 'ACTION'
-  if (conditions.conditions['codex.trust-dialog']) return 'TRUST'
   return null
 }
 
 export function slashPickerFromConditions(
   conditions: ProviderConditionSnapshot | null,
-) {
-  if (conditions?.provider !== 'claude') return null
-  return conditions.conditions['claude.slash-picker']?.state ?? null
+): ClaudeSlashPickerState | null {
+  if (!conditions) return null
+  const pickerKind = getRendererProviderCapabilities(conditions.provider)
+    .conditionPolicy.composerPickerKind
+  if (!pickerKind) return null
+  return conditionStateByKind<ClaudeSlashPickerState>(conditions, pickerKind)
 }

@@ -28,7 +28,11 @@ import type {
   SemanticLiveBlock,
   SemanticLiveTurn,
 } from '@renderer/workspace/workspaceState'
-import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import {
+  conditionStateByKind,
+  type ClaudeAskUserQuestionState,
+  type ProviderConditionSnapshot,
+} from '@shared/types/providerConditions'
 
 export const conditionsDebugModule: DevDebugModule = {
   id: 'conditions',
@@ -136,10 +140,10 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
   const attention = dispatchAttentionLabelFromConditions(snapshot)
   const actionCondition = hasActionCondition(snapshot)
   const slashFromConditions = slashPickerFromConditions(snapshot)
-  const auqFromConditions =
-    snapshot?.provider === 'claude'
-      ? snapshot.conditions['claude.ask-user-question']?.state ?? null
-      : null
+  const auqFromConditions = conditionStateByKind<ClaudeAskUserQuestionState>(
+    snapshot ?? null,
+    'claude.ask-user-question',
+  )
   const auqBlocks = useMemo(
     () => collectAskUserQuestionBlocks(runtime.semantic.currentTurn, runtime.semantic.history),
     [runtime.semantic.currentTurn, runtime.semantic.history],
@@ -296,10 +300,10 @@ function buildConditionsCopyText(
   const attention = dispatchAttentionLabelFromConditions(snapshot)
   const actionCondition = hasActionCondition(snapshot)
   const slashFromConditions = slashPickerFromConditions(snapshot)
-  const auqFromConditions =
-    snapshot?.provider === 'claude'
-      ? snapshot.conditions['claude.ask-user-question']?.state ?? null
-      : null
+  const auqFromConditions = conditionStateByKind<ClaudeAskUserQuestionState>(
+    snapshot ?? null,
+    'claude.ask-user-question',
+  )
   const auqBlocks = collectAskUserQuestionBlocks(runtime.semantic.currentTurn, runtime.semantic.history)
   const full = mode === 'full'
   const payload = {
