@@ -164,10 +164,21 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     })
 
     // committed entry → jsonl-entry. These are durable messages (the
-    // initial resume replay AND live turn commits). The mapper (step 4)
-    // turns each into feed entries; today the stub maps nothing, but the
-    // semantic streaming card already renders live turns off the
-    // semantic channel below, so a fresh pane is not blank.
+    // initial resume replay AND live turn commits). The renderer's
+    // opencode transcript mapper (providers/opencode/renderer/transcript/
+    // mapper.ts) fans each one into Claude-shaped feed entries —
+    // assistant/user rows plus per-tool-part tool_result rows.
+    //
+    // CONTRACT the mapper depends on: a committed entry must carry the
+    // full `{ info, parts }` message shape (what GET /session/:id/message
+    // returns). The resume replay (publishSessionMessages) satisfies it;
+    // the LIVE path is the trap — the SSE `message.updated` event carries
+    // only the bare info WITHOUT parts until the headless assembles a
+    // complete commit (fetch-on-complete; see the companion
+    // packages/opencode-headless fix). The mapper defends by dropping
+    // assistant messages that lack info.time.completed, so a parts-less
+    // mid-stream republish can't double-render what the semantic
+    // streaming card below is already painting live.
     headless.committed.on('entry', (entry: CommittedEntryEvent) => {
       this.emit('jsonl-entry', this.toTranscriptEntry(entry), transcriptSource(entry.sessionID))
     })

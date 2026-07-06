@@ -18,6 +18,9 @@ import {
 } from '@renderer/workspace/semantic/helpers'
 import { summarizeSemanticEvent } from '@renderer/workspace/semantic/summarize'
 import { asRecord } from '@shared/lib/asRecord'
+import { isAgentProviderKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import type { SemanticFoldPolicy } from '@shared/types/providerConfig'
 
 // ---------------------------------------------------------------------------
 // foldSemanticEvent — the one-session-one-reducer contract
@@ -58,21 +61,46 @@ function eventTargetsDifferentTurn(
   return typeof ev.turnId === 'string' && ev.turnId !== currentTurn.turnId
 }
 
-function codexCanReplaceEndedTurn(currentTurn: SemanticLiveTurn): boolean {
-  // WHY Codex gets this narrow escape hatch from strict turn-id
-  // ownership:
-  // the strict gate exists to stop concurrent proxy/rollout flows from
-  // thrashing the single live-turn slot while a response is still
-  // streaming. MCP and other client-executed tools have a different
-  // lifecycle: the function_call response completes, the UI keeps that
-  // turn open as "awaiting tool" so the tool row stays pending, and
-  // Codex then sends the function_call_output in the NEXT Responses
-  // turn. If we keep applying the strict mismatch rule to an already
-  // ended pending-tool turn, every valid follow-up turn is dropped and
-  // the feed looks blank except for the phase indicator. `endedAt`
-  // separates the safe sequential case from the unsafe concurrent
-  // streaming case; live, unended turns still reject mismatched ids.
-  return currentTurn.endedAt != null
+// ---------------------------------------------------------------------------
+// Per-provider fold policy (2026-07-06 opencode rendering fix)
+// ---------------------------------------------------------------------------
+//
+// Turn ownership used to be hard-gated on `sessionKind === 'codex'` /
+// `'claude'` literals at five sites in this reducer. Any third provider
+// fell into Codex's strict path by default — but every Codex recovery
+// hatch below is keyed on `ev.source === 'proxy'`, and opencode's only
+// stream is `source: 'opencode-sse'`, so NO hatch ever applied and
+// mismatched events were hard-dropped. The 2026-07-06 opencode debug
+// bundle showed the amplification: 200 semantic events → 1 committed
+// entry (tool blocks keyed on sessionID mismatched the text turn keyed
+// on messageID; the headless keying is fixed separately, but the
+// renderer must degrade gracefully, not drop wholesale).
+//
+// The literals are now a SemanticFoldPolicy on the renderer provider
+// capabilities (same pattern as conditionPolicy). Claude and Codex
+// policies are bit-identical to the old literal gates; see
+// providers/<kind>/renderer/semanticFoldPolicy.ts for each provider's
+// rationale.
+
+function resolveFoldPolicy(sessionKind: SessionKind): SemanticFoldPolicy {
+  if (isAgentProviderKind(sessionKind)) {
+    return getRendererProviderCapabilities(sessionKind).semanticFoldPolicy
+  }
+  return NON_AGENT_FOLD_POLICY
+}
+
+// 'terminal' panes never produce semantic events, so this is a
+// type-safety fallback, not a real code path. It reproduces the old
+// behavior for non-claude/non-codex kinds exactly (strict turn gates
+// with the proxy hatches, no block-level soft-open/replace) so that IF
+// a semantic event ever reached a terminal pane, folding would behave
+// as before this refactor.
+const NON_AGENT_FOLD_POLICY: SemanticFoldPolicy = {
+  autoReplaceOnTurnMismatch: false,
+  softOpenTurnFromBlockSources: [],
+  canReplaceTurnFromBlock: false,
+  trustedReplaceSources: ['proxy'],
+  allowReplaceOfLiveTurn: false,
 }
 
 function isTerminalProxyBlock(block: SemanticLiveBlock): boolean {
@@ -125,14 +153,36 @@ function isEmptyNonProxyShellTurn(currentTurn: SemanticLiveTurn): boolean {
   )
 }
 
-function codexCanReplaceTurn(
+function canReplaceMismatchedTurn(
+  policy: SemanticFoldPolicy,
   currentTurn: SemanticLiveTurn,
   ev: Record<string, unknown>,
 ): boolean {
-  if (codexCanReplaceEndedTurn(currentTurn)) return true
-  if (ev.source === 'proxy' && isCompletedProxyTurnReadyToYield(currentTurn)) {
-    return true
+  // Ended turns are replaceable for EVERY provider (formerly
+  // codexCanReplaceEndedTurn). WHY: the strict gate exists to stop
+  // concurrent producers from thrashing the single live-turn slot while
+  // a response is still streaming. MCP and other client-executed tools
+  // have a different lifecycle: the function_call response completes,
+  // the UI keeps that turn open as "awaiting tool" so the tool row
+  // stays pending, and Codex then sends the function_call_output in the
+  // NEXT Responses turn. If we keep applying the strict mismatch rule
+  // to an already ended pending-tool turn, every valid follow-up turn
+  // is dropped and the feed looks blank except for the phase indicator.
+  // `endedAt` separates the safe sequential case from the unsafe
+  // concurrent streaming case; live, unended turns still reject
+  // mismatched ids unless the source is trusted below.
+  if (currentTurn.endedAt != null) return true
+  const source = typeof ev.source === 'string' ? ev.source : null
+  if (source === null || !policy.trustedReplaceSources.includes(source)) {
+    return false
   }
+  // Trusted source, live turn. OpenCode sets allowReplaceOfLiveTurn:
+  // its single server-authoritative stream has no racing producer, so
+  // a new turnId is always a legitimate new turn.
+  if (policy.allowReplaceOfLiveTurn) return true
+  // Codex (trusted source = proxy, allowReplaceOfLiveTurn = false):
+  // only the narrow yield hatches may displace a live turn.
+  if (isCompletedProxyTurnReadyToYield(currentTurn)) return true
   // WHY proxy can replace an empty rollout/screen shell:
   // rollout can open a placeholder Codex turn immediately after
   // submit, before the proxy emits the real Responses turn carrying
@@ -140,7 +190,7 @@ function codexCanReplaceTurn(
   // every proxy block, so the feed shows no streaming. Keep the guard
   // for live content, but let proxy claim ownership while the current
   // non-proxy turn is still empty.
-  return ev.source === 'proxy' && isEmptyNonProxyShellTurn(currentTurn)
+  return isEmptyNonProxyShellTurn(currentTurn)
 }
 
 function shouldArchiveReplacedTurn(currentTurn: SemanticLiveTurn): boolean {
@@ -174,6 +224,7 @@ export function foldSemanticEvent(
   sessionKind: SessionKind,
 ): SemanticRuntimeState {
   const now = Date.now()
+  const policy = resolveFoldPolicy(sessionKind)
 
   const t = String(ev.type ?? '')
   let flows = state.flows
@@ -229,7 +280,8 @@ export function foldSemanticEvent(
     case 'turn_started': {
       const turnId = String(ev.turnId ?? '')
       if (!turnId) break
-      // Provider-gated turn ownership.
+      // Policy-gated turn ownership (see SemanticFoldPolicy and the
+      // per-provider semanticFoldPolicy.ts files for the full WHYs).
       //
       // Codex (strict while live): mismatched turnIds are DROPPED
       // while the current turn is still streaming because they come
@@ -239,9 +291,9 @@ export function foldSemanticEvent(
       // the 0/1/0/1 flicker documented in
       // docs/superpowers/plans/2026-04-17-codex-semantic-flicker-fix.md.
       //
-      // Claude (auto-replace): archive the stuck turn and open the
-      // new one. Claude legitimately keeps currentTurn alive across
-      // turn boundaries while a cross-turn tool_result is pending
+      // Claude (autoReplaceOnTurnMismatch): archive the stuck turn and
+      // open the new one. Claude legitimately keeps currentTurn alive
+      // across turn boundaries while a cross-turn tool_result is pending
       // (turn_completed below retains the turn when
       // hasPendingSemanticTools is true). The NEXT assistant turn's
       // message_start carries a fresh msg_id that mismatches the
@@ -249,6 +301,12 @@ export function foldSemanticEvent(
       // subsequent Claude turn. This restores the reducer's pre-flicker-fix
       // behavior for Claude only. See
       // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
+      //
+      // OpenCode (trusted single stream): 'opencode-sse' is the only
+      // producer, so a mismatched turnId from it is always a
+      // legitimate new turn and replaces the live one (archived, not
+      // lost). Before this policy existed, opencode inherited Codex's
+      // strict path whose proxy-keyed hatches could never fire.
       //
       // Same-turnId refresh (re-entry / source promotion) is
       // identical for both providers.
@@ -285,16 +343,19 @@ export function foldSemanticEvent(
           source: typeof ev.source === 'string' ? ev.source : currentTurn.source,
           ...(isCompactionSynthesis ? { isCompactionSynthesis: true } : {}),
         }
-      } else if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+      } else if (
+        policy.autoReplaceOnTurnMismatch ||
+        canReplaceMismatchedTurn(policy, currentTurn, ev)
+      ) {
         if (shouldArchiveReplacedTurn(currentTurn)) {
           history = appendSemanticHistory(history, currentTurn)
         }
         currentTurn = semanticTurnFromEvent(ev, now, turnId)
       }
-      // Codex: live mismatched turnId falls through — drop the event.
-      // Already-ended pending-tool turns are archived/replaced above;
-      // see codexCanReplaceTurn for the MCP/function_call_output
-      // lifecycle that requires that exception.
+      // Untrusted live mismatched turnId falls through — drop the
+      // event. Already-ended pending-tool turns are archived/replaced
+      // above; see canReplaceMismatchedTurn for the
+      // MCP/function_call_output lifecycle that requires that exception.
       break
     }
     case 'source_changed': {
@@ -312,13 +373,13 @@ export function foldSemanticEvent(
       // Soft-open allowed when there's no currentTurn (e.g. Codex's
       // rollout agent_message_delta can arrive before task_started).
       //
-      // On turnId mismatch:
+      // On turnId mismatch (policy-gated, same rules as turn_started):
       //   - Claude: archive the pinned old turn and open a new one.
-      //     Same rationale as the turn_started branch above.
       //   - Codex: drop while the current turn is still live. Racing
       //     producers must not mutate a currentTurn that doesn't
       //     belong to them (flicker defense). Ended pending-tool turns
       //     are a valid sequential handoff and are replaced.
+      //   - OpenCode: its single trusted stream replaces live turns.
       if (!currentTurn) {
         currentTurn = {
           turnId,
@@ -334,7 +395,10 @@ export function foldSemanticEvent(
           endedAt: null,
         }
       } else if (currentTurn.turnId !== turnId) {
-        if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+        if (
+          policy.autoReplaceOnTurnMismatch ||
+          canReplaceMismatchedTurn(policy, currentTurn, ev)
+        ) {
           if (shouldArchiveReplacedTurn(currentTurn)) {
             history = appendSemanticHistory(history, currentTurn)
           }
@@ -353,20 +417,40 @@ export function foldSemanticEvent(
     case 'block_started': {
       const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
       if (!currentTurn) {
-        // WHY block_started can soft-open a turn:
-        // Codex proxy blocks are the render-critical source, and the
-        // 2026-05-16 failure class proved the stricter headless
+        // WHY block_started can soft-open a turn (policy-gated by
+        // source): Codex proxy blocks are the render-critical source,
+        // and the 2026-05-16 failure class proved the stricter headless
         // lifecycle can lose a ceremonial turn opener/closer while
-        // still delivering block_started/text/tool events. Keep this
-        // recovery Codex-proxy-only. Claude and fallback producers
-        // have older late-event failure modes where opening from a
-        // stray block after currentTurn was already archived would
-        // resurrect stale semantic rows.
-        if (sessionKind !== 'codex' || ev.source !== 'proxy' || !turnId) break
+        // still delivering block_started/text/tool events. OpenCode
+        // needs the same recovery for 'opencode-sse': its headless
+        // currently keys tool blocks on sessionID while text rides
+        // messageID, so a tool block can be the first event of a turn
+        // the reducer ever sees. Claude and fallback producers stay
+        // excluded (empty source list) — they have older late-event
+        // failure modes where opening from a stray block after
+        // currentTurn was already archived would resurrect stale
+        // semantic rows.
+        const source = typeof ev.source === 'string' ? ev.source : null
+        if (
+          !turnId ||
+          source === null ||
+          !policy.softOpenTurnFromBlockSources.includes(source)
+        ) {
+          break
+        }
         currentTurn = semanticTurnFromEvent(ev, now, turnId)
       } else if (eventTargetsDifferentTurn(ev, currentTurn)) {
+        // THIS was the primary opencode block-loss site: with the old
+        // `sessionKind === 'codex'` literal, every opencode tool block
+        // that mismatched the live text turn was hard-dropped here —
+        // 200 events in, 1 entry out (2026-07-06 bundle). Now gated by
+        // policy.canReplaceTurnFromBlock + the shared replacement rule.
         const turnId = typeof ev.turnId === 'string' ? ev.turnId : null
-        if (sessionKind === 'codex' && turnId && codexCanReplaceTurn(currentTurn, ev)) {
+        if (
+          policy.canReplaceTurnFromBlock &&
+          turnId &&
+          canReplaceMismatchedTurn(policy, currentTurn, ev)
+        ) {
           if (shouldArchiveReplacedTurn(currentTurn)) {
             history = appendSemanticHistory(history, currentTurn)
           }
@@ -708,14 +792,15 @@ export function foldSemanticEvent(
         typeof ev.turnId === 'string'
           ? ev.turnId
           : currentTurn?.turnId ?? `codex-${now}`
-      // Provider-gated turn ownership (see turn_started for full
+      // Policy-gated turn ownership (see turn_started for full
       // rationale). Codex drops live mismatches (flicker defense) but
       // archives/replaces already-ended pending-tool turns; Claude
       // archives and replaces more broadly (self-heals the stuck-
-      // pending-tool case). tool_started is Codex-only in practice
-      // today, but gating by provider keeps the policy consistent with
-      // the other branches and avoids a subtle divergence for future
-      // Claude-side emitters.
+      // pending-tool case); opencode's trusted single stream replaces
+      // live turns. tool_started is Codex-only in practice today, but
+      // routing through the shared policy keeps this branch consistent
+      // with the others and avoids a subtle divergence for future
+      // emitters.
       if (!currentTurn) {
         currentTurn = {
           turnId,
@@ -731,7 +816,10 @@ export function foldSemanticEvent(
           endedAt: null,
         }
       } else if (currentTurn.turnId !== turnId) {
-        if (sessionKind === 'claude' || codexCanReplaceTurn(currentTurn, ev)) {
+        if (
+          policy.autoReplaceOnTurnMismatch ||
+          canReplaceMismatchedTurn(policy, currentTurn, ev)
+        ) {
           if (shouldArchiveReplacedTurn(currentTurn)) {
             history = appendSemanticHistory(history, currentTurn)
           }

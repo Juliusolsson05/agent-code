@@ -14,6 +14,7 @@ import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspace
 import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/workspace/runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
 import {
+  hasPendingSemanticTools,
   isSemanticTurnRunning,
   semanticHistoryRow,
   SEMANTIC_HISTORY_CAP,
@@ -43,7 +44,7 @@ import {
 import {
   codexPromptsMatchForOwnership,
 } from '@renderer/workspace/hook/actions/streaming'
-import { shouldClearIdleCodexQueuedMessages } from '@renderer/workspace/queueInvariants'
+import { shouldClearIdleQueuedMessages } from '@renderer/workspace/queueInvariants'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import {
   conditionStateByKind,
@@ -368,7 +369,9 @@ export function useIpcSubscriptions(
             }
           }
 
-          // --- Pass 2: Codex queued-message idle reconciliation (backstop) ---
+          // --- Pass 2: local queued-message idle reconciliation (backstop) ---
+          // (codex + opencode — the optimistic-echo providers; see
+          // queueInvariants.ts for the capability gate.)
           // The edge-site clears are the fast path; this is the convergence
           // backstop for when the last idle signal arrives via a channel that
           // never re-runs the invariant (see issue #241). We re-evaluate the
@@ -379,7 +382,7 @@ export function useIpcSubscriptions(
           const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
           if (
             working.queuedMessages.length > 0 &&
-            shouldClearIdleCodexQueuedMessages({
+            shouldClearIdleQueuedMessages({
               awaitingAssistant: working.awaitingAssistant,
               processActive: working.processActive,
               provider: sessionKind,
@@ -408,7 +411,7 @@ export function useIpcSubscriptions(
                   {
                     layer: 'STATE',
                     kind: 'queue_idle_reconcile',
-                    summary: 'cleared stale Codex queue after idle convergence',
+                    summary: 'cleared stale local queue after idle convergence',
                     data: { clearedQueuedMessages: working.queuedMessages.length },
                   },
                 ),
@@ -760,7 +763,7 @@ export function useIpcSubscriptions(
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
           const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
-          const shouldClearIdleCodexQueue = shouldClearIdleCodexQueuedMessages({
+          const shouldClearIdleQueue = shouldClearIdleQueuedMessages({
             awaitingAssistant: false,
             processActive: active,
             provider: sessionKind,
@@ -777,7 +780,7 @@ export function useIpcSubscriptions(
                 inputReady: current.exited === null,
                 activityStatus: active ? (status ?? null) : null,
                 awaitingAssistant: false,
-                queuedMessages: shouldClearIdleCodexQueue
+                queuedMessages: shouldClearIdleQueue
                   ? []
                   : current.queuedMessages,
               },
@@ -786,13 +789,13 @@ export function useIpcSubscriptions(
                 kind: 'process_state',
                 summary: active
                   ? `process active${status ? ` · ${status}` : ''}`
-                  : shouldClearIdleCodexQueue
-                    ? 'process idle · cleared stale Codex queue'
+                  : shouldClearIdleQueue
+                    ? 'process idle · cleared stale local queue'
                     : 'process idle',
                 data: {
                   active,
                   status: status ?? null,
-                  clearedQueuedMessages: shouldClearIdleCodexQueue
+                  clearedQueuedMessages: shouldClearIdleQueue
                     ? current.queuedMessages.length
                     : 0,
                 },
@@ -966,6 +969,62 @@ export function useIpcSubscriptions(
             streamPhasePendingToolUseId = null
             phaseChangedAt = Date.now()
           }
+        } else if (eventType === 'turn_started') {
+          // Turn-based phase bridge (2026-07-06, provider-agnostic
+          // gap-filler). WHY: the phase machine used to advance ONLY on
+          // `stream_phase` events, which opencode's headless does not
+          // emit. The 2026-07-06 opencode bundle showed the consequence:
+          // phaseChangedAt == submittedAt with 258 deltas flowing — the
+          // pane sat pinned at the optimistic 'submitting' pseudo-phase
+          // for the whole turn, and the awaitingAssistant safety net in
+          // the bootstrap-complete reconciler was ALSO deadlocked on it
+          // (its predicate requires streamPhase === 'idle' to fire, and
+          // idle could never arrive). Turn lifecycle events are the
+          // provider-neutral signal every semantic adapter already
+          // emits, so bridge from them.
+          //
+          // Claude/codex are unaffected in practice: their adapters emit
+          // real stream_phase events which continue to overwrite this
+          // bridge on the very next event. We only FILL gaps — advance
+          // out of the pre-response phases ('submitting'/'requesting');
+          // never stomp 'responding'/'awaiting-tool' state a real
+          // stream_phase event established.
+          if (streamPhase === 'submitting' || streamPhase === 'requesting') {
+            const now = Date.now()
+            streamPhase = 'responding'
+            phaseChangedAt = now
+            if (turnStartedAt === null) {
+              // Mirror the stream_phase branch: prefer the optimistic
+              // submittedAt so the elapsed counter includes the
+              // submit→first-event gap.
+              turnStartedAt = submittedAt ?? now
+            }
+          }
+        } else if (eventType === 'turn_completed') {
+          // Second half of the turn-based bridge: return to 'idle' when
+          // the turn is over and nothing is pending. Guards:
+          //   - 'awaiting-tool' is itself pending tool state at the
+          //     phase-machine level (codex MCP: turn_completed arrives
+          //     while the client tool still owes its output in the NEXT
+          //     turn) — never idle out of it here.
+          //   - hasPendingSemanticTools on the post-fold turn covers the
+          //     same lifecycle when the phase machine hasn't caught up
+          //     (fold keeps an ended pending-tool turn mounted).
+          // For claude/codex the adapter's own stream_phase 'idle'
+          // arrives around the same moment and would produce the same
+          // state, so this is a no-op for them beyond ordering.
+          const pendingTool =
+            streamPhase === 'awaiting-tool' ||
+            (nextSemantic.currentTurn !== null &&
+              hasPendingSemanticTools(nextSemantic.currentTurn))
+          if (!pendingTool && streamPhase !== 'idle') {
+            streamPhase = 'idle'
+            streamPhasePendingToolName = null
+            streamPhasePendingToolUseId = null
+            phaseChangedAt = Date.now()
+            turnStartedAt = null
+            submittedAt = null
+          }
         }
 
         // Ghost bridge — refresh the provisional ghost map from
@@ -1025,7 +1084,7 @@ export function useIpcSubscriptions(
         const nextAwaitingAssistant = clearOptimisticAwaiting
           ? false
           : current.awaitingAssistant
-        const shouldClearIdleCodexQueue = shouldClearIdleCodexQueuedMessages({
+        const shouldClearIdleQueue = shouldClearIdleQueuedMessages({
           awaitingAssistant: nextAwaitingAssistant,
           processActive: current.processActive,
           provider: sessionKind,
@@ -1037,7 +1096,7 @@ export function useIpcSubscriptions(
           phaseUnchanged &&
           ghostsUnchanged &&
           awaitingUnchanged &&
-          !shouldClearIdleCodexQueue
+          !shouldClearIdleQueue
         ) {
           closeSpan({
             sessionId,
@@ -1052,7 +1111,7 @@ export function useIpcSubscriptions(
             {
               ...current,
               awaitingAssistant: nextAwaitingAssistant,
-              queuedMessages: shouldClearIdleCodexQueue
+              queuedMessages: shouldClearIdleQueue
                 ? []
                 : current.queuedMessages,
               // A suggestion is an offer about the NEXT input; once a new
@@ -1072,10 +1131,10 @@ export function useIpcSubscriptions(
             {
               layer: 'SEM',
               kind: eventType || 'semantic',
-              summary: shouldClearIdleCodexQueue
-                ? `${summarizeSemanticEventForDebug(semanticEvent)} · cleared stale Codex queue`
+              summary: shouldClearIdleQueue
+                ? `${summarizeSemanticEventForDebug(semanticEvent)} · cleared stale local queue`
                 : summarizeSemanticEventForDebug(semanticEvent),
-              data: shouldClearIdleCodexQueue
+              data: shouldClearIdleQueue
                 ? {
                     ...semanticEvent,
                     clearedQueuedMessages: current.queuedMessages.length,
@@ -1463,7 +1522,20 @@ export function useIpcSubscriptions(
           // filtered lines, which the filter drops again.
           if (mapped.length > 0 && marker && !oldestMarker) oldestMarker = marker
 
-          if (routedKind === 'codex') {
+          // Optimistic-user reconciliation runs for every provider that
+          // SEEDS optimistic rows — gate on the capability, not on
+          // `routedKind === 'codex'` (the 2026-07-06 opencode duplicate-
+          // user-row bug: opencode has usesOptimisticUserEcho:true, so
+          // useComposerKeybinds minted the optimistic row, but the
+          // codex-literal gate here meant the committed user entry never
+          // removed it — one submit, two user rows forever). Claude is
+          // false → unchanged; codex is true → unchanged; opencode is
+          // true → fixed. The `Codex`-named helpers below are correct
+          // for opencode too: addOptimisticCodexUserEntry is the SHARED
+          // minting path for all optimistic-echo providers, and the
+          // 'optimistic-codex-user:' uuid prefix is the shared marker it
+          // stamps regardless of provider.
+          if (getRendererProviderCapabilities(routedKind).usesOptimisticUserEcho) {
 
             // Optimistic-user reconciliation.
             //
@@ -1870,10 +1942,10 @@ export function useIpcSubscriptions(
           }
 
           if (
-            shouldClearIdleCodexQueuedMessages({
+            shouldClearIdleQueuedMessages({
               // At bootstrap-complete, no live process/stream signal means
               // the optimistic submit owner has already lost its provider
-              // evidence. Let the Codex queue invariant clear the local row
+              // evidence. Let the local-queue invariant clear the local row
               // even if `awaitingAssistant` is itself one of the stale replay
               // flags left behind by the same missing rollout handoff.
               awaitingAssistant: false,
