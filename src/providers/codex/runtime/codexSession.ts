@@ -130,6 +130,19 @@ export type CodexSessionEvents = {
   // Matches the shape Claude already emits so SessionManager's
   // provider-agnostic forwarder picks it up without changes.
   'trust-dialog': [{ visible: boolean; workspace?: string }]
+  // Legacy per-condition Claude events (#394 phase 2a). Codex NEVER
+  // emits these — they belong to the deprecated per-event surface
+  // ClaudeSession still fires alongside the unified `conditions`
+  // snapshot. Declared here anyway (with the same neutral payload
+  // shape) so CodexSession's typed `on/emit` accepts the strictly-typed
+  // AgentSessionEvents keys that sessionManager subscribes to. Without
+  // this, `session.on('resume-prompt', …)` in the manager fails to
+  // compile against Codex's narrower event map. Zero runtime cost —
+  // no emit ever happens, so no listener ever fires. Phase 3 removes
+  // the legacy channel entirely and this block goes with it.
+  'resume-prompt': [import('@shared/types/session.js').AgentResumePromptState]
+  'permission-prompt': [import('@shared/types/session.js').AgentPermissionPromptState]
+  'compaction-state': [import('@shared/types/session.js').AgentCompactionState]
   exit: [{ exitCode: number; signal?: number }]
 }
 

@@ -8,6 +8,7 @@ import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 // `export type { SessionKind }` re-export below is a separate statement that
 // does NOT bind the name locally, so this import is required too.
 import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+import type { AgentTranscriptEntry } from '@shared/types/session.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 export type { SessionInfo } from '@shared/types/session.js'
@@ -64,7 +65,16 @@ export type DictationStreamTranscriptEvent = {
   source: 'final' | 'interim'
 }
 
-export type JsonlEntry = Record<string, unknown>
+/**
+ * IPC-boundary transcript entry. Runtime shape has always been an
+ * opaque bag; #394 phase 2a promoted it to `AgentTranscriptEntry` in
+ * `@shared/types/session.ts` so the neutral name is what the manager
+ * uses. This preload-side alias stays for callers reading it off the
+ * `session:jsonl-entries` payload — kept, not deleted, because the
+ * preload boundary is where renderer imports currently point; a
+ * follow-up can rename call sites.
+ */
+export type JsonlEntry = AgentTranscriptEntry
 
 export type PickerItem = {
   id: string

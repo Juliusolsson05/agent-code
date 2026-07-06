@@ -3,9 +3,26 @@ import { EventEmitter } from 'events'
 import { performance } from 'perf_hooks'
 
 import { getMainProvider } from '@providers/registry.main.js'
-import type { ScreenSnapshot } from '@providers/claude/runtime/claudeSession.js'
 import { TerminalSession } from '@shared/runtime/terminalSession.js'
-import type { JsonlEntry } from 'claude-code-headless'
+// WHY the manager no longer imports ScreenSnapshot from
+// @providers/claude/runtime/claudeSession or JsonlEntry from
+// claude-code-headless: those Claude-provider imports inverted the
+// dependency arrow — the manager (provider-neutral by contract) knew
+// Claude's types by name and dragged them into every downstream
+// consumer's type graph. Phase 2a moves the wire shapes to
+// @shared/types/session.ts as neutral homes (AgentScreenSnapshot /
+// AgentTranscriptEntry). Same runtime payloads, no import arrow into
+// a provider. See #394 phase 2a.
+import type {
+  AgentSession,
+  AgentScreenSnapshot,
+  AgentTranscriptEntry,
+  AgentTrustDialogState,
+  AgentResumePromptState,
+  AgentPermissionPromptState,
+  AgentCompactionState,
+  AgentProcessState,
+} from '@shared/types/session.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { getToolPath } from '@main/setup/toolchain.js'
@@ -69,10 +86,15 @@ type ManagerEvents = {
   /** Raw PTY bytes for an attached agent inline terminal. Emitted
    *  only after attachAgentPty() flips the per-session attach flag. */
   'agent-pty-data': [{ sessionId: string; data: string }]
-  /** Emitted only by Claude sessions — the scraped TUI snapshot. */
-  screen: [{ sessionId: string } & ScreenSnapshot]
-  /** Emitted only by Claude sessions — parsed JSONL entries. */
-  'jsonl-entry': [{ sessionId: string; entry: JsonlEntry; file: string }]
+  /** Scraped TUI snapshot from a PTY-backed provider. Claude and
+   *  Codex both fire this; a future API-only provider (opencode) won't. */
+  screen: [{ sessionId: string } & AgentScreenSnapshot]
+  /** Parsed transcript entry from a JSONL/rollout-backed provider.
+   *  Payload shape is provider-defined (`Record<string, unknown>` at
+   *  this seam); the renderer narrows by shape. See the transcript-
+   *  entry-codec plan in #394 phase 2b — this seam is what promotes
+   *  it onto the registry. */
+  'jsonl-entry': [{ sessionId: string; entry: AgentTranscriptEntry; file: string }]
   'jsonl-error': [{ sessionId: string; error: Error }]
   'process-state': [{ sessionId: string; active: boolean; status?: string }]
   'trust-dialog': [{ sessionId: string; visible: boolean; workspace?: string }]
@@ -135,53 +157,22 @@ export interface SessionManager {
   ): boolean
 }
 
-// Narrow structural contract every agent session (claude, codex)
-// must satisfy. Defined here (not imported from a provider) so the
-// manager stays provider-agnostic: any future runtime we wire up
-// through the provider registry has to expose exactly this surface.
+// The provider session contract now lives at @shared/types/session.ts
+// as `AgentSession` (with a typed event map + strictly typed
+// on/off/emit interface). The manager just references it; each
+// provider runtime DECLARES conformance where it's defined, so a
+// missing event/method surfaces as a compile error in the provider,
+// not silently at runtime here.
 //
-// WHY we don't import the full ClaudeSession / CodexSession types:
-//   - Importing concrete types couples the manager to every provider
-//     and flips the dependency arrow — the manager is supposed to
-//     orchestrate providers, not depend on their internals.
-//   - The previous code cast `session` to `EventEmitter`, which
-//     worked at runtime but left .write / .resize / .stop completely
-//     unchecked. A provider that dropped one of those methods would
-//     only fail in production. This interface closes that hole.
+// Historical shape kept in the git log: this was `AgentSessionLike`, a
+// duck-type with `on(event: string, listener: (...args: never[]) => void)`
+// — permissive to the point of enforcing nothing. See #394 phase 2a
+// for the migration rationale.
 //
-// The `on` method widens to EventEmitter's string-keyed signature on
-// purpose: the manager subscribes to a fixed set of event names
-// ('started', 'pty-data', 'screen', …) and each provider emits the
-// same set, but encoding that set here would create a second source
-// of truth next to ManagerEvents. The event shape is enforced by the
-// assertions inside the forwarder callbacks.
-interface AgentSessionLike {
-  // `never[]` is intentional: provider event payloads are validated at
-  // the provider boundary, while this manager only needs a structural
-  // "can subscribe" capability. Using `unknown[]` would force every
-  // narrow listener (`(snap: ScreenSnapshot) => void`) to widen itself;
-  // using `any[]` would leak an actual unsafe type. `never[]` keeps the
-  // subscription surface permissive for callbacks without granting
-  // arbitrary values inside this interface.
-  on(event: string, listener: (...args: never[]) => void): this
-  write(data: string): void
-  resize(cols: number, rows: number): void
-  stop(): Promise<void>
-  start(): Promise<void>
-  awaitReadyForPrompt?(
-    opts?: { timeoutMs?: number; pollIntervalMs?: number },
-  ): Promise<
-    | { kind: 'ready'; waitedMs: number }
-    | { kind: 'timeout' }
-    | { kind: 'no-headless' }
-  >
-  resolveCondition?(
-    action: ConditionCustomAction,
-  ): Promise<ResolveConditionResult>
-  getProcessPid?(): number | null
-  isExited?(): boolean
-  removeAllListeners?(event?: string): this
-}
+// Local aliases used below just narrow AgentSession for the
+// duck-typed-optional-method call sites (awaitPastePlaceholder,
+// awaitReadyForPrompt), so the callers keep reading naturally.
+type AgentSessionLike = AgentSession
 
 // Internal registry shape: we store the concrete instance plus its
 // kind so kill/write/resize can dispatch without sniffing the object.
@@ -453,7 +444,12 @@ export class SessionManager extends EventEmitter {
         // `openai_base_url`.
         useProxy: options.useProxy,
         builtInMcpServers,
-      }) as AgentSessionLike
+      })
+      // No cast: createSession's return type is now AgentSession, so
+      // any provider whose runtime drifts from the contract fails
+      // compilation inside the provider (registry.main.ts's
+      // Record<AgentProviderKind, MainProviderConfig> forces it). See
+      // #394 phase 2a.
       performanceService.record({
         kind: 'span_end',
         process: 'main',
@@ -466,12 +462,10 @@ export class SessionManager extends EventEmitter {
 
       this.sessionSizes.set(sessionId, initialSize)
       this.agentPtyBuffers.set(sessionId, '')
-      session.on('started', ({ projectDir }: { projectDir: string }) =>
-        {
-          this.markActivity(sessionId)
-          this.emit('started', { sessionId, kind, projectDir })
-        },
-      )
+      session.on('started', ({ projectDir }) => {
+        this.markActivity(sessionId)
+        this.emit('started', { sessionId, kind, projectDir })
+      })
       session.on('pty-data', (data: string) => {
         this.markActivity(sessionId)
         const prev = this.agentPtyBuffers.get(sessionId) ?? ''
@@ -484,11 +478,11 @@ export class SessionManager extends EventEmitter {
         }
         this.emit('pty-data', { sessionId, data })
       })
-      session.on('screen', (snap: ScreenSnapshot) => {
+      session.on('screen', (snap: AgentScreenSnapshot) => {
         this.markActivity(sessionId)
         this.emit('screen', { sessionId, ...snap })
       })
-      session.on('jsonl-entry', (entry: JsonlEntry, file: string) => {
+      session.on('jsonl-entry', (entry: AgentTranscriptEntry, file: string) => {
         this.markActivity(sessionId)
         this.emit('jsonl-entry', { sessionId, entry, file })
       })
@@ -496,43 +490,23 @@ export class SessionManager extends EventEmitter {
         this.markActivity(sessionId)
         this.emit('jsonl-error', { sessionId, error })
       })
-      session.on('process-state', (state: { active: boolean; status?: string }) =>
-        {
-          this.markActivity(sessionId)
-          this.emit('process-state', { sessionId, ...state })
-        },
-      )
-      session.on('trust-dialog', (state: { visible: boolean; workspace?: string }) => {
+      session.on('process-state', (state: AgentProcessState) => {
+        this.markActivity(sessionId)
+        this.emit('process-state', { sessionId, ...state })
+      })
+      session.on('trust-dialog', (state: AgentTrustDialogState) => {
         this.markActivity(sessionId)
         this.emit('trust-dialog', { sessionId, ...state })
       })
-      session.on('resume-prompt', (state: {
-        visible: boolean
-        sessionAgeText?: string
-        tokenCountText?: string
-        options?: string[]
-        selectedIndex?: number
-      }) => {
+      session.on('resume-prompt', (state: AgentResumePromptState) => {
         this.markActivity(sessionId)
         this.emit('resume-prompt', { sessionId, ...state })
       })
-      session.on('permission-prompt', (state: {
-        visible: boolean
-        title?: string
-        toolName?: string
-        command?: string
-        options?: Array<{ key: string; label: string }>
-        selectedIndex?: number
-      }) => {
+      session.on('permission-prompt', (state: AgentPermissionPromptState) => {
         this.markActivity(sessionId)
         this.emit('permission-prompt', { sessionId, ...state })
       })
-      session.on('compaction-state', (state: {
-        visible: boolean
-        phase?: 'running' | 'error' | 'done'
-        statusText?: string
-        errorText?: string
-      }) => {
+      session.on('compaction-state', (state: AgentCompactionState) => {
         this.markActivity(sessionId)
         this.emit('compaction-state', { sessionId, ...state })
       })
@@ -949,15 +923,9 @@ export class SessionManager extends EventEmitter {
     // structural duck-type so misconfigured Claude provider builds
     // (a future ClaudeSession that loses the method) surface as
     // 'no-session' rather than a TypeError.
-    const session = entry.session as AgentSessionLike & {
-      awaitPastePlaceholder?: (
-        opts?: { timeoutMs?: number; pollIntervalMs?: number },
-      ) => Promise<
-        | { kind: 'appeared'; waitedMs: number }
-        | { kind: 'timeout' }
-        | { kind: 'no-headless' }
-      >
-    }
+    // No cast: awaitPastePlaceholder is now a typed optional on
+    // AgentSession (see @shared/types/session.ts).
+    const session = entry.session
     if (typeof session.awaitPastePlaceholder !== 'function') {
       return { kind: 'no-session' }
     }
@@ -975,7 +943,17 @@ export class SessionManager extends EventEmitter {
     if (typeof entry.session.resolveCondition !== 'function') {
       return { ok: false, reason: 'no-resolver' }
     }
-    return entry.session.resolveCondition(action)
+    // The AgentSession contract types `reason` as a plain string (see
+    // @shared/types/session.ts: a third provider needs freedom to
+    // define its own failure vocabulary). ResolveConditionResult
+    // narrows to Claude's known reasons for consumers; the runtime
+    // value satisfies it, but the compiler can't prove it here without
+    // the widened return type from the contract. Cast is safe because
+    // the manager only routes claude-kind sessions to this method
+    // (the entry.kind !== 'claude' guard above), and Claude's
+    // resolveCondition still returns the narrow shape. Phase 3
+    // (conditions v2) generalizes this to a per-provider reason set.
+    return entry.session.resolveCondition(action) as Promise<ResolveConditionResult>
   }
 
   async awaitCodexReadyForPrompt(
@@ -999,7 +977,9 @@ export class SessionManager extends EventEmitter {
     // from becoming part of every future provider runtime, while still giving
     // orchestration a truthful delivery boundary before it marks a prompt as
     // submitted.
-    const session = entry.session as AgentSessionLike
+    // No cast: awaitReadyForPrompt is now a typed optional on
+    // AgentSession (see @shared/types/session.ts).
+    const session = entry.session
     if (typeof session.awaitReadyForPrompt !== 'function') {
       return { kind: 'no-headless' }
     }
@@ -1091,15 +1071,14 @@ export class SessionManager extends EventEmitter {
           lastActivityAt: this.lastActivityAt.get(sessionId) ?? null,
         }
       }
-      const maybe = entry.session as {
-        getProcessPid?: () => number | null
-        isExited?: () => boolean
-      }
+      // getProcessPid / isExited are typed optionals on AgentSession
+      // (and on TerminalSession's structural surface); no cast needed.
+      const s = entry.session
       return {
         sessionId,
         kind: entry.kind,
-        pid: maybe.getProcessPid?.() ?? null,
-        exited: maybe.isExited?.() === true,
+        pid: s.getProcessPid?.() ?? null,
+        exited: s.isExited?.() === true,
         lastActivityAt: this.lastActivityAt.get(sessionId) ?? null,
       }
     })

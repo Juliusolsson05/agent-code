@@ -1,4 +1,4 @@
-import type { JsonlEntry } from 'claude-code-headless'
+import type { AgentTranscriptEntry } from '@shared/types/session.js'
 
 import { sendToMainWindow } from '@main/window/mainWindow.js'
 import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js'
@@ -30,7 +30,7 @@ import { makeStringPool, internEntryFields } from '@main/sessions/internEntry.js
 // — imperceptible.
 
 type PendingJsonlBuffer = {
-  entries: Array<{ entry: JsonlEntry; file: string }>
+  entries: Array<{ entry: AgentTranscriptEntry; file: string }>
   flushScheduled: boolean
   // #288: per-session string pool. The coalescer is the choke point every
   // live `jsonl-entry` flows through, and the entries it forwards are the
@@ -59,7 +59,7 @@ function flushJsonlFor(sessionId: string): void {
 
 export function enqueueJsonl(
   sessionId: string,
-  entry: JsonlEntry,
+  entry: AgentTranscriptEntry,
   file: string,
 ): void {
   let pending = jsonlPending.get(sessionId)
