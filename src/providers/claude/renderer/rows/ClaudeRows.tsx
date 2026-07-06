@@ -233,14 +233,19 @@ function parseTodos(block: ToolUseBlock): TodoItem[] {
   })
 }
 
-export const TodoRow = memo(function TodoRow({ block }: { block: ToolUseBlock }) {
+// `label` exists for cross-provider reuse (2026-07-06): OpenCode's
+// `todowrite` tool emits the same `{todos:[{content,status,…}]}` input shape
+// this row already parses defensively, so its dispatch reuses TodoRow rather
+// than cloning it — but the header must name the tool the AGENT actually
+// called, not hardcode Claude's "TodoWrite".
+export const TodoRow = memo(function TodoRow({ block, label = 'TodoWrite' }: { block: ToolUseBlock; label?: string }) {
   const todos = useMemo(() => parseTodos(block), [block])
   const done = todos.filter(t => t.status === 'completed').length
   return (
     <MarkerRow marker="⏺">
       <div className="flex flex-col gap-1">
         <div className="flex items-baseline justify-between text-[13px] leading-[1.65]">
-          <span className="text-accent font-semibold">TodoWrite</span>
+          <span className="text-accent font-semibold">{label}</span>
           <span className="text-muted text-[11px] tabular-nums">
             {done} / {todos.length} done
           </span>
