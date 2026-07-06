@@ -200,11 +200,13 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
     return { ...base, sessionID: entry.sessionID }
   }
 
-  /** Deliver a text prompt over HTTP. Public so the opencode
-   *  deliverPrompt protocol (step 5) can reach opencode's prompt() call
-   *  without the registry knowing opencode's transport. Throws if the
-   *  session hasn't started (no server URL / SyncClient yet). */
-  async sendPrompt(text: string): Promise<void> {
+  /** Deliver a text prompt over HTTP. This is the AgentSession
+   *  `deliverPromptText` capability (the opposite of the PTY providers'
+   *  io.write path) — the opencode deliverPrompt protocol calls it so
+   *  the registry never learns opencode's transport. Throws if the
+   *  session hasn't started (no server URL / SyncClient yet) so the
+   *  protocol reports ok:false and the composer keeps the draft. */
+  async deliverPromptText(text: string): Promise<void> {
     if (!this.headless) {
       throw new Error('opencode session has not started — cannot deliver prompt')
     }

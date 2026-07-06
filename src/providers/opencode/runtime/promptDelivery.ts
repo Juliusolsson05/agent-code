@@ -1,10 +1,15 @@
-// Opencode prompt delivery (#406 step 5 target; stub at step 2).
+// Opencode prompt delivery (#406 step 5). The FIRST fully-acknowledged
+// delivery protocol in the app: opencode's prompt() is an HTTP POST that
+// the server accepts synchronously — no readiness gate, no bracketed-
+// paste placeholder, no PTY race (contrast Codex's readiness-gate +
+// atomic paste+Enter and Claude's paste → placeholder-confirm → Enter).
 //
-// The real implementation is the FIRST fully-acknowledged delivery
-// protocol in the app: opencode's prompt() is an HTTP call that
-// returns the server's response — no readiness gate, no paste
-// placeholder, no bracketed-paste races. Until the runtime lands,
-// fail loudly so orchestration accounting stays truthful.
+// WHY this ignores io.write entirely: io.write pushes raw bytes into a
+// PTY, and opencode has none. The prompt reaches the server through the
+// AgentSession.deliverPromptText capability (OpencodeSession.
+// deliverPromptText → OpencodeHeadless.prompt → SyncClient HTTP). A
+// throw there becomes ok:false here so the composer keeps the user's
+// draft rather than clearing it on a prompt the server never received.
 
 import type {
   PromptDeliveryIo,
@@ -14,8 +19,25 @@ import type {
 export async function deliverOpencodePrompt(
   io: PromptDeliveryIo,
 ): Promise<PromptDeliveryResult> {
-  return {
-    ok: false,
-    message: `opencode prompt delivery is not wired yet (#406) — session ${io.sessionId}`,
+  // Capability probe, not a cast: an opencode session that failed to
+  // start (no SyncClient) — or any misconfiguration that hands us a
+  // non-opencode session — lacks this method. Fail loudly instead of
+  // silently no-op'ing a prompt.
+  if (typeof io.session.deliverPromptText !== 'function') {
+    return {
+      ok: false,
+      message: `opencode session ${io.sessionId} has no HTTP prompt delivery (runtime not started?)`,
+    }
+  }
+  try {
+    await io.session.deliverPromptText(io.prompt)
+    return { ok: true }
+  } catch (err) {
+    return {
+      ok: false,
+      message: `opencode prompt delivery failed for session ${io.sessionId}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    }
   }
 }
