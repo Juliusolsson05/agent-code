@@ -9,8 +9,10 @@ import type { MainProviderConfig } from '@shared/types/providerConfig'
 import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { ClaudeSession } from '@providers/claude/runtime/claudeSession'
 import { listAllClaudeSessions } from '@providers/claude/runtime/sessionList'
+import { deliverClaudePrompt } from '@providers/claude/runtime/promptDelivery'
 import { listSessionsForCwd, getProjectDirForCwd } from 'claude-code-headless'
 import { CodexSession } from '@providers/codex/runtime/codexSession'
+import { deliverCodexPrompt } from '@providers/codex/runtime/promptDelivery'
 import { listCodexSessions, getCodexSessionsDir } from 'codex-headless'
 
 const CODEX_ROLLOUT_RE =
@@ -91,6 +93,7 @@ const claudeMain: MainProviderConfig = {
   getProjectDir: getProjectDirForCwd,
   resolveTranscriptPath: async (cwd, providerSessionId) =>
     join(await getProjectDirForCwd(cwd), `${providerSessionId}.jsonl`),
+  deliverPrompt: deliverClaudePrompt,
 }
 
 const codexMain: MainProviderConfig = {
@@ -111,6 +114,7 @@ const codexMain: MainProviderConfig = {
   getProjectDir: async () => getCodexSessionsDir(),
   resolveTranscriptPath: async (_cwd, providerSessionId) =>
     findCodexRolloutPathByThreadId(await getCodexSessionsDir(), providerSessionId),
+  deliverPrompt: deliverCodexPrompt,
 }
 
 // Typed as Record<AgentProviderKind, …> (not Record<string, …>) so that

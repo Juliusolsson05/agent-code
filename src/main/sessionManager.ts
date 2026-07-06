@@ -986,6 +986,47 @@ export class SessionManager extends EventEmitter {
     return session.awaitReadyForPrompt(opts)
   }
 
+  /**
+   * Deliver a prompt to an agent session using the PROVIDER'S OWN
+   * delivery protocol (#394 phase 2c).
+   *
+   * WHY this lives on the manager instead of MCP calling the registry
+   * directly: the provider implementations need the live AgentSession
+   * object plus a liveness-aware write, and both are manager-owned
+   * state. MCP (and any future caller — composer flows, dispatch)
+   * gets one provider-agnostic entry point; the per-provider
+   * discipline (Codex readiness-gate + atomic paste+Enter, Claude
+   * paste → placeholder confirm → Enter) lives in
+   * providers/<kind>/runtime/promptDelivery.ts.
+   *
+   * An unknown/non-agent kind is a LOUD failure — the predecessor
+   * inline branches let a third provider fall through to a
+   * protocol-free paste with no readiness gate and no confirmation
+   * (#394 §4.2).
+   */
+  async deliverPromptToAgent(
+    sessionId: string,
+    prompt: string,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const entry = this.sessions.get(sessionId)
+    // `=== 'terminal'` rather than !isAgentProviderKind: TypeScript
+    // only discriminates the RegistryEntry union on literal kind
+    // comparisons, and we need `entry.session` narrowed to
+    // AgentSession for the registry call below.
+    if (!entry || entry.kind === 'terminal') {
+      return {
+        ok: false,
+        message: `Cannot deliver prompt: ${sessionId} is not a live agent session`,
+      }
+    }
+    return getMainProvider(entry.kind).deliverPrompt({
+      session: entry.session,
+      write: data => this.write(sessionId, data),
+      sessionId,
+      prompt,
+    })
+  }
+
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */
   resize(sessionId: string, cols: number, rows: number): void {
     const entry = this.sessions.get(sessionId)

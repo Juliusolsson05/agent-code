@@ -467,7 +467,7 @@ function registerOrchestrationTools(
         const prompt = buildOrchestrationBootstrapPrompt({
           task: args.prompt,
         })
-        const delivery = await submitPrompt(manager, agent.sessionId, agent.kind, prompt)
+        const delivery = await manager.deliverPromptToAgent(agent.sessionId, prompt)
         if (!delivery.ok) {
           let cleanupAttempted = false
           let agentClosed = false
@@ -626,7 +626,7 @@ function registerOrchestrationTools(
             task: args.prompt.trim(),
           })
         : args.prompt.trim()
-      const delivery = await submitPrompt(manager, args.sessionId, kind, prompt)
+      const delivery = await manager.deliverPromptToAgent(args.sessionId, prompt)
       if (!delivery.ok) {
         dependencies.appRunJournal?.recordIncident({
           kind: 'orchestration.prompt_delivery_failed',
@@ -882,88 +882,13 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-async function submitPrompt(
-  manager: NonNullable<BuiltInMcpDependencies['sessionManager']>,
-  sessionId: string,
-  kind: AgentProviderKind,
-  prompt: string,
-): Promise<{ ok: true } | { ok: false; message: string }> {
-  // WHY the MCP tool writes bracketed paste instead of plain text:
-  //
-  // Orchestration prompts are often long, markdown-heavy bootstrap prompts.
-  // Sending them as keystrokes would let provider TUIs interpret newlines or
-  // escape sequences as interactive input. Bracketed paste is the same
-  // terminal-level contract the composer uses for large prompts.
-  //
-  // WHY Codex waits BEFORE the paste while Claude waits AFTER:
-  //
-  // Claude's known race is paste-commit ordering: the composer is present, but
-  // Enter can arrive before the paste accumulator has replaced the payload
-  // with `[Pasted text #N]`. Codex's issue #211 race is earlier: `spawn()`
-  // has resolved and the PTY exists, but the TUI may still be on startup/trust
-  // chrome. Bytes written in that window disappear and no rollout file is
-  // created. The parent agent must not see `promptSubmitted: true` for that
-  // case, so this helper treats provider readiness and write success as the
-  // delivery boundary.
-  if (kind === 'codex') {
-    const ready = await manager.awaitCodexReadyForPrompt(sessionId, {
-      timeoutMs: 15_000,
-      pollIntervalMs: 50,
-    })
-    if (ready.kind !== 'ready') {
-      return {
-        ok: false,
-        message: `Codex session ${sessionId} was not ready for prompt delivery (${ready.kind})`,
-      }
-    }
-    // WHY Codex uses one PTY write for paste + submit:
-    // the normal renderer composer treats Codex as the provider whose
-    // bracketed paste can safely include the trailing Enter in the same
-    // terminal write. The old orchestration path split these into two writes,
-    // which made delivery accounting lie in exactly the failure mode inherited
-    // orchestration cannot tolerate: CodexHeadless records submitted prompts
-    // when it sees the bracketed paste bytes, before the separate Enter write
-    // proves the prompt was actually submitted. A child resumed from the
-    // parent's transcript then keeps reading stale inherited context as if it
-    // is still the parent. Keeping Codex atomic makes "write returned true"
-    // match the one operation the TUI needs to see.
-    if (!manager.write(sessionId, `\x1b[200~${prompt}\x1b[201~\r`)) {
-      return {
-        ok: false,
-        message: `Could not submit orchestration prompt to Codex session ${sessionId}`,
-      }
-    }
-    return { ok: true }
-  }
-
-  if (!manager.write(sessionId, `\x1b[200~${prompt}\x1b[201~`)) {
-    return {
-      ok: false,
-      message: `Could not write orchestration prompt to session ${sessionId}`,
-    }
-  }
-
-  if (kind === 'claude') {
-    const placeholder = await manager.awaitClaudePastePlaceholder(sessionId, {
-      timeoutMs: 2000,
-      pollIntervalMs: 50,
-    })
-    if (placeholder.kind !== 'appeared') {
-      return {
-        ok: false,
-        message: `Claude session ${sessionId} did not confirm pasted prompt before submit (${placeholder.kind})`,
-      }
-    }
-  }
-
-  if (!manager.write(sessionId, '\r')) {
-    return {
-      ok: false,
-      message: `Could not submit orchestration prompt to session ${sessionId}`,
-    }
-  }
-  return { ok: true }
-}
+// Prompt delivery moved to the provider registry (#394 phase 2c):
+// manager.deliverPromptToAgent → getMainProvider(kind).deliverPrompt →
+// providers/<kind>/runtime/promptDelivery.ts. The per-provider WHY
+// blocks (Codex readiness-before-paste + atomic paste+Enter; Claude
+// paste → placeholder confirm → separate Enter) moved with the code.
+// The inline `if codex … if claude …` that lived here let a third
+// provider fall through to a protocol-free paste (#394 §4.2).
 
 function toolText(value: unknown): {
   content: Array<{ type: 'text'; text: string }>
