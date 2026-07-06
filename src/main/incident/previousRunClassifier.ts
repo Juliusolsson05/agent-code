@@ -170,13 +170,20 @@ function findNodeDiagnosticReport(
 ): { path: string; trigger: string | undefined } | undefined {
   let candidates: string[]
   try {
+    // Match Node's actual report name shape (report.<YYYYMMDD>.<HHMMSS>.
+    // <PID>.<TID>.<SEQ>.json) instead of a loose report.*.json prefix test.
+    // The loose test had a shadowing hazard: any future artifact named e.g.
+    // `report.summary.json` sorts lexically AFTER the digit-dated names,
+    // wins the "newest" pick below, has no trigger field — and the real
+    // fatal-error report sitting right next to it is never read, silently
+    // reverting the classification to force_quit_or_power_loss.
     candidates = readdirSync(priorRunDir)
-      .filter(name => name.startsWith('report.') && name.endsWith('.json'))
+      .filter(name => /^report\.\d{8}\.\d{6}\.\d+\.\d+\.\d+\.json$/.test(name))
   } catch {
     return undefined
   }
   if (candidates.length === 0) return undefined
-  // Report names contain an ISO-like timestamp so lexical sort ~= chronological.
+  // Report names embed date+time first, so lexical sort ~= chronological.
   candidates.sort()
   const reportPath = join(priorRunDir, candidates[candidates.length - 1])
   return { path: reportPath, trigger: readNodeReportTrigger(reportPath) }
@@ -199,8 +206,14 @@ function readNodeReportTrigger(reportPath: string): string | undefined {
     const fd = openSync(reportPath, 'r')
     try {
       const buf = Buffer.alloc(readBytes)
-      readSync(fd, buf, 0, readBytes, 0)
-      text = buf.toString('utf8')
+      // Slice to the byte count readSync ACTUALLY returned. Discarding the
+      // return value and stringifying the whole zero-initialized buffer
+      // padded a short read with NUL characters — harmless to the regex
+      // itself, but it made the scan lie about how much of the file was
+      // really inspected. Short reads on a settled regular file are rare
+      // (EINTR, racing truncation) but cost one line to handle honestly.
+      const bytesRead = readSync(fd, buf, 0, readBytes, 0)
+      text = buf.toString('utf8', 0, bytesRead)
     } finally {
       closeSync(fd)
     }
