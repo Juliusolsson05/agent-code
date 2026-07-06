@@ -80,10 +80,24 @@ export type RewindSessionResult = {
 export async function rewindSession(
   request: RewindSessionRequest,
 ): Promise<RewindSessionResult> {
+  // Explicit fail-loud dispatch — same rationale as `duplicateSession`. The
+  // rewind engine reads the source transcript in its provider-specific shape
+  // and writes a truncated clone in the same shape; running an OpenCode
+  // request through `rewindCodex` (the previous silent fallback) would
+  // treat the OpenCode server session id as a Codex rollout uuid and
+  // produce garbage output. Refuse cleanly until an OpenCode rewind
+  // implementation is written. The Rewind command's `when` predicate hides
+  // it from OpenCode panes at the UI level; this throw is the last-mile
+  // guard for programmatic callers (MCP, tests) that bypass the palette.
   if (request.provider === 'claude') {
     return rewindClaude(request)
   }
-  return rewindCodex(request)
+  if (request.provider === 'codex') {
+    return rewindCodex(request)
+  }
+  throw new Error(
+    `rewindSession: no rewind implementation for provider "${request.provider}" yet`,
+  )
 }
 
 async function rewindClaude(

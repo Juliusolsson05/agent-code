@@ -291,7 +291,12 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+      // Runtime narrow that mirrors the `when` predicate exactly (both use
+      // isAgentProviderKind). The old two-provider check silently dropped
+      // OpenCode panes even though `when` had already allowed the command to
+      // run — one of the last stale two-provider literals #394 phase 4
+      // couldn't finish (issue #394 §7).
+      if (!isAgentProviderKind(kind) || !meta) return
 
       ui.closePalette()
       try {
@@ -337,7 +342,12 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+      // Runtime narrow that mirrors the `when` predicate exactly (both use
+      // isAgentProviderKind). The old two-provider check silently dropped
+      // OpenCode panes even though `when` had already allowed the command to
+      // run — one of the last stale two-provider literals #394 phase 4
+      // couldn't finish (issue #394 §7).
+      if (!isAgentProviderKind(kind) || !meta) return
 
       ui.closePalette()
       try {
@@ -383,7 +393,12 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+      // Runtime narrow that mirrors the `when` predicate exactly (both use
+      // isAgentProviderKind). The old two-provider check silently dropped
+      // OpenCode panes even though `when` had already allowed the command to
+      // run — one of the last stale two-provider literals #394 phase 4
+      // couldn't finish (issue #394 §7).
+      if (!isAgentProviderKind(kind) || !meta) return
 
       ui.closePalette()
       try {
@@ -429,7 +444,12 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+      // Runtime narrow that mirrors the `when` predicate exactly (both use
+      // isAgentProviderKind). The old two-provider check silently dropped
+      // OpenCode panes even though `when` had already allowed the command to
+      // run — one of the last stale two-provider literals #394 phase 4
+      // couldn't finish (issue #394 §7).
+      if (!isAgentProviderKind(kind) || !meta) return
 
       ui.closePalette()
       try {
@@ -548,7 +568,12 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) return
+      // Registry-driven runtime narrow — must match the `when` predicate
+      // above so a command that visibly enabled doesn't silently no-op on
+      // OpenCode. `buildProviderResumeCommand` already accepts any
+      // AgentProviderKind and pulls the CLI shape from the registry identity
+      // descriptor (#394 phase 2c-2), so no downstream change is needed.
+      if (!isAgentProviderKind(kind) || !meta?.providerSessionId) return
 
       const command = buildProviderResumeCommand(kind, meta.cwd, meta.providerSessionId)
       ui.closePalette()
@@ -584,8 +609,13 @@ export const sessionCommands: CommandDef[] = [
       if (!sessionId) return
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if (kind !== 'claude' && kind !== 'codex') return
-      if (!meta?.providerSessionId) return
+      // Registry-driven runtime narrow — mirrors the `when` predicate. The old
+      // two-provider literal here was the exact reason "Duplicate Agent"
+      // silently no-op'd on OpenCode panes even after Phase 7 landed the
+      // provider. `duplicateSession`'s preload/main handler already takes
+      // `provider: AgentProviderKind` (src/preload/api/provider.ts:50), so the
+      // downstream path fans out through the registry — nothing else changes.
+      if (!isAgentProviderKind(kind) || !meta?.providerSessionId) return
       try {
         const { newProviderSessionId } = await window.api.duplicateSession({
           provider: kind,
@@ -601,6 +631,17 @@ export const sessionCommands: CommandDef[] = [
         // them at once.
         await workspace.splitFocused('vertical', kind, newProviderSessionId)
       } catch (err) {
+        // Surface the failure as a pane toast, not just console.warn — an
+        // OpenCode pane hitting `duplicateSession`'s fail-loud throw (see
+        // src/main/providerSwitch/duplicateSession.ts) now produces a visible
+        // "no duplicate implementation for provider 'opencode' yet" message
+        // instead of silently doing nothing. Any other transport / fs error
+        // surfaces the same way. Console line is retained for triage.
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Duplicate agent failed'
+        workspace.showPaneToast(sessionId, message)
         // eslint-disable-next-line no-console
         console.warn('[duplicate-agent] failed', err)
       }

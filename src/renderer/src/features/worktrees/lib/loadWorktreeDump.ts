@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import type { WorktreeActivityIndexStatus, WorktreeActivitySummary } from '@preload/index'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { matchWorktree } from '@shared/work-context/matching'
@@ -116,7 +116,12 @@ export function collectLiveAgentsByWorktree(
     for (const sessionId of resolveTabSessions(workspace.state, tab.id)) {
       const meta = workspace.state.sessions[sessionId]
       const kind = meta?.kind ?? DEFAULT_PROVIDER
-      if (kind !== 'claude' && kind !== 'codex') continue
+      // Registry-driven: the worktree activity view lists live agents per
+      // worktree regardless of provider — a running OpenCode session
+      // consumes the worktree just as much as a Claude or Codex one. The
+      // hardcoded pair here would silently hide OpenCode sessions from
+      // per-worktree activity even though they're on-disk in the tab.
+      if (!isAgentProviderKind(kind)) continue
       const runtime = workspace.runtimes[sessionId]
       const contextPath = runtime?.workContext?.worktreePath ?? meta?.cwd
       const matched = matchWorktree(contextPath, identities)

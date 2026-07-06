@@ -96,8 +96,11 @@ export function NewAgentPlacementOverlay({
     : activeTab
   const anchorSessionId = placementTab?.focusedSessionId ?? null
   const dispatchMode = workspace.dispatchMode !== null
-  // Both dispatch mode and linked mode are "kind only": pick Claude
-  // or Codex, no placement, no terminal option.
+  // Both dispatch mode and linked mode are "kind only": pick any registered
+  // agent provider — no placement step, no terminal option. The filter below
+  // pulls the option set from `AGENT_PROVIDER_KINDS` (not a hand-written
+  // literal) so a newly registered provider becomes selectable here without
+  // touching this file. See CLAUDE.md and issue #394 phase 4.
   const kindOnly = dispatchMode || linkedMode
   const kindOptions = useMemo(
     () => kindOnly
@@ -115,7 +118,14 @@ export function NewAgentPlacementOverlay({
   // silently did nothing in dispatch mode).
   const commitKind = (kind: SessionKind) => {
     if (linkedMode && linkedAgentParentId) {
-      if (kind !== 'claude' && kind !== 'codex') return
+      // WHY the runtime narrow: `SessionKind` includes 'terminal', which
+      // createLinkedAgent's signature refuses. The kind picker filters options
+      // in kind-only modes to `AgentProviderKind` (see kindOptions above), so
+      // in practice this branch only fires with an agent provider — but the
+      // event handler is typed against the broader union. Route through the
+      // registry predicate instead of a hand-written pair so adding a
+      // provider does not silently drop it here again (#394 phase 4).
+      if (!isAgentProviderKind(kind)) return
       if (committingRef.current) return
       committingRef.current = true
       void workspace.createLinkedAgent(kind, linkedAgentParentId)
@@ -130,14 +140,23 @@ export function NewAgentPlacementOverlay({
       if (kind === 'terminal') {
         // Terminals are the one Dispatch creation kind that still becomes a
         // grid leaf: shell lifecycle/persistence is leaf-based, while
-        // Claude/Codex Dispatch agents are detached rows. splitFocused owns the
-        // Dispatch-aware target resolution for terminals (#366), including the
-        // focused tiled lane / global row project context and overlay close.
+        // provider Dispatch agents are detached rows. splitFocused owns the
+        // Dispatch-aware target resolution for terminals (#366), including
+        // the focused tiled lane / global row project context and overlay
+        // close.
         void workspace.splitFocused('vertical', 'terminal')
         return
       }
-      if (kind !== 'claude' && kind !== 'codex') return
-      // Dispatch Mode creates detached Claude/Codex agents on the focused
+      // WHY registry-driven runtime narrow (not `kind !== 'claude' && kind !==
+      // 'codex'`): the two-provider literal here silently dropped OpenCode
+      // clicks with no toast, no spawn, no log — the classic silent-fail path
+      // #394 §4 warned about. Using the shared predicate keeps this branch
+      // aligned with the kind picker's option filter (kindOptions above) and
+      // with every downstream API that takes `AgentProviderKind`
+      // (createDetachedDispatchAgent, createLinkedAgent, buildProviderResume-
+      // Command, duplicateSession).
+      if (!isAgentProviderKind(kind)) return
+      // Dispatch Mode creates a detached provider agent on the focused
       // Dispatch project; there is intentionally no placement step.
       // createDetachedDispatchAgent owns its own overlay close.
       void workspace.createDetachedDispatchAgent(kind)

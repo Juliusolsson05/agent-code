@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import type {
   OrchestrationAgentMessage,
   OrchestrationAgentOutput,
@@ -154,7 +154,12 @@ function matchingOrchestrationSessionIds(
   return Object.entries(state.sessions)
     .filter(([, meta]) => {
       const kind = meta.kind ?? DEFAULT_PROVIDER
-      if (kind !== 'claude' && kind !== 'codex') return false
+      // Registry-driven: any registered agent provider (Claude, Codex,
+      // OpenCode, …) is a valid orchestration child. The old two-provider
+      // literal here would silently exclude OpenCode children — MCP tools
+      // like `list_agents` and `close_run` would then miss them, and
+      // `matchingOrchestrationSessionIds` would return the wrong scope.
+      if (!isAgentProviderKind(kind)) return false
       if (!isVisibleToOrchestrationParent(meta, parentSessionId)) return false
       return runId ? meta.orchestrationRunId === runId : true
     })

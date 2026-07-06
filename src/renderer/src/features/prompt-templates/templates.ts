@@ -1,5 +1,5 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -86,7 +86,12 @@ function activeTabAgentTranscriptRequests(workspace: Workspace): AgentTranscript
   return sessionIds.flatMap(sessionId => {
     const meta = workspace.state.sessions[sessionId]
     const kind = meta?.kind ?? DEFAULT_PROVIDER
-    if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) {
+    // Registry-driven: prompt templates that reference "the other agents in
+    // this tab" must include every agent provider on the tab, not just the
+    // two-provider pair. A dropped OpenCode session here would mean the
+    // template LLM never sees that agent — silently narrowing the context
+    // window in ways the user cannot detect.
+    if (!isAgentProviderKind(kind) || !meta?.providerSessionId) {
       return []
     }
     return [{

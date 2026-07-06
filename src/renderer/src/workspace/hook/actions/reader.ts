@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -37,7 +37,13 @@ export function useReaderActions(
       if (prev) return null
       if (!target) return prev
       const kind = current.sessions[target.sessionId]?.kind ?? DEFAULT_PROVIDER
-      if (kind !== 'claude' && kind !== 'codex') return prev
+      // Reader Mode reads the pane's committed transcript through the
+      // provider-registered renderer/extractor. Registry membership — not a
+      // hardcoded pair — is the correct predicate: every registered
+      // AgentProviderKind ships a transcript view (see
+      // src/providers/<kind>/renderer/), so OpenCode is just as valid a
+      // Reader target as Claude or Codex.
+      if (!isAgentProviderKind(kind)) return prev
       return {
         tabId: target.tabId,
         focusedSessionId: target.sessionId,
