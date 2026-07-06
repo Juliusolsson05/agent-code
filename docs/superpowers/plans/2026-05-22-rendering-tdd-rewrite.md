@@ -1,6 +1,11 @@
 # Rendering TDD Rewrite Plan
 
-Status: planning document, written 2026-05-22.
+Status: SUPERSEDED planning document, written 2026-05-22.
+
+> **SUPERSEDED (2026-07-06)** by `docs/rendering/rendering-rewrite-plan-2026-07.md`.
+> This 8-phase version was the first generation of the plan; the canonical plan
+> collapses it into three stages and carries its invariants forward via the
+> fixture catalog. Kept for history — do not execute from this file.
 
 ## Why This Exists
 
