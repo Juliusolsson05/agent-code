@@ -45,7 +45,17 @@ import {
 } from '@renderer/workspace/hook/actions/streaming'
 import { shouldClearIdleCodexQueuedMessages } from '@renderer/workspace/queueInvariants'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
-import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
+import {
+  conditionStateByKind,
+  type ClaudeCompactionState,
+  type ClaudePermissionPromptState,
+  type ClaudeResumePromptState,
+  type ClaudeSlashPickerState,
+  type ClaudeTrustDialogState,
+  type CodexApprovalState,
+  type CodexTrustDialogState,
+  type ProviderConditionSnapshot,
+} from '@shared/types/providerConditions'
 import {
   clearConditionRuntimeState,
   conditionRequiresAttention,
@@ -193,65 +203,81 @@ function applyConditionSnapshot(
   runtime: SessionRuntime,
   snapshot: ProviderConditionSnapshot,
 ): SessionRuntime {
-  if (snapshot.provider === 'claude') {
-    const trust = snapshot.conditions['claude.trust-dialog']?.state
-    const resume = snapshot.conditions['claude.resume-prompt']?.state
-    const permission = snapshot.conditions['claude.permission-prompt']?.state
-    const compaction = snapshot.conditions['claude.compaction']?.state
-    const slashPicker = snapshot.conditions['claude.slash-picker']?.state
-
-    return {
-      ...runtime,
-      conditions: snapshot,
-      pendingTrustDialog: trust?.visible ? { workspace: trust.workspace } : null,
-      pendingResumePrompt: resume?.visible
-        ? {
-            sessionAgeText: resume.sessionAgeText,
-            tokenCountText: resume.tokenCountText,
-            selectedIndex: resume.selectedIndex,
-          }
-        : null,
-      pendingPermissionPrompt: permission?.visible
-        ? {
-            title: permission.title,
-            toolName: permission.toolName,
-            command: permission.command,
-            options: permission.options,
-            selectedIndex: permission.selectedIndex,
-          }
-        : null,
-      pendingCompaction: compaction?.visible && compaction.phase
-        ? {
-            phase: compaction.phase,
-            statusText: compaction.statusText,
-            errorText: compaction.errorText,
-          }
-        : null,
-      // Slash picker now lives on the conditions snapshot. The old fallback kept
-      // the previous picker when a new snapshot omitted it, which was useful for
-      // the legacy per-event path but is wrong for condition semantics: absence
-      // from the map means "not live" and must clear the composer picker.
-      picker: slashPicker ?? { visible: false, items: [] },
-    }
-  }
-
-  const trust = snapshot.conditions['codex.trust-dialog']?.state
-  const approval = snapshot.conditions['codex.approval']?.state
+  // Kind-keyed derivation (#394 phase 3) — no provider fork. Condition
+  // kinds are globally namespaced, so `claude.trust-dialog` can only
+  // exist on a claude snapshot; reading every kind unconditionally is
+  // provider-safe and lets a third provider's snapshot flow through
+  // without touching this function. The `pending*` fields remain the
+  // documented COMPATIBILITY/CACHE mirrors (workspaceState.ts) —
+  // pendingCompaction (agent-status) and picker (composer dropdown)
+  // are the only live product consumers; the rest are debug-only and
+  // slated for deletion.
+  const trust =
+    conditionStateByKind<ClaudeTrustDialogState>(snapshot, 'claude.trust-dialog') ??
+    conditionStateByKind<CodexTrustDialogState>(snapshot, 'codex.trust-dialog')
+  const resume = conditionStateByKind<ClaudeResumePromptState>(
+    snapshot,
+    'claude.resume-prompt',
+  )
+  const permission = conditionStateByKind<ClaudePermissionPromptState>(
+    snapshot,
+    'claude.permission-prompt',
+  )
+  const compaction = conditionStateByKind<ClaudeCompactionState>(
+    snapshot,
+    'claude.compaction',
+  )
+  const approval = conditionStateByKind<CodexApprovalState>(snapshot, 'codex.approval')
+  // The composer picker kind is provider policy (claude.slash-picker
+  // today; codex has none). Absence from the map means "not live" and
+  // must clear the composer picker — the legacy sticky fallback was
+  // deliberately removed.
+  const pickerKind = getRendererProviderCapabilities(snapshot.provider)
+    .conditionPolicy.composerPickerKind
+  const slashPicker = pickerKind
+    ? conditionStateByKind<ClaudeSlashPickerState>(snapshot, pickerKind)
+    : null
 
   return {
     ...runtime,
     conditions: snapshot,
     pendingTrustDialog: trust?.visible ? { workspace: trust.workspace } : null,
+    pendingResumePrompt: resume?.visible
+      ? {
+          sessionAgeText: resume.sessionAgeText,
+          tokenCountText: resume.tokenCountText,
+          selectedIndex: resume.selectedIndex,
+        }
+      : null,
+    pendingPermissionPrompt: permission?.visible
+      ? {
+          title: permission.title,
+          toolName: permission.toolName,
+          command: permission.command,
+          options: permission.options,
+          selectedIndex: permission.selectedIndex,
+        }
+      : null,
+    pendingCompaction: compaction?.visible && compaction.phase
+      ? {
+          phase: compaction.phase,
+          statusText: compaction.statusText,
+          errorText: compaction.errorText,
+        }
+      : null,
     pendingApproval: approval
       ? {
           callId: approval.callId ?? null,
-          command: approval.commandParts ?? (approval.command ? approval.command.split(/\s+/) : []),
+          command:
+            approval.commandParts ??
+            (approval.command ? approval.command.split(/\s+/) : []),
           workdir: approval.workdir ?? null,
           reason: approval.reason,
           options: approval.options,
           selectedIndex: approval.selectedIndex,
         }
       : null,
+    picker: slashPicker ?? { visible: false, items: [] },
   }
 }
 

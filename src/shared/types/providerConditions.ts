@@ -13,6 +13,7 @@ import type {
   ConditionCustomAction,
   ConditionAction,
 } from '@shared/conditions-core/contract'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
 export type { ConditionPtyAction, ConditionCustomAction, ConditionAction }
 
@@ -181,6 +182,55 @@ export type CodexConditionSnapshot = {
   ts: number
 }
 
-export type ProviderConditionSnapshot =
-  | ClaudeConditionSnapshot
-  | CodexConditionSnapshot
+/**
+ * The OPEN provider condition snapshot (#394 phase 3).
+ *
+ * WHY this is no longer the closed `ClaudeConditionSnapshot |
+ * CodexConditionSnapshot` union: the closed union meant a third
+ * provider could not even TYPE a snapshot without editing this file,
+ * and every consumer that narrowed on `snapshot.provider === 'claude'`
+ * was a hand-maintained provider fork (#394 §5). Condition kinds are
+ * globally namespaced (`<provider>.<kind>`), so kind-keyed access —
+ * `snapshot.conditions['claude.compaction']` — is already
+ * provider-safe without narrowing the whole snapshot; the union bought
+ * nothing except closure.
+ *
+ * The shape mirrors conditions-core's generic `ConditionSnapshot<P>`
+ * (contract.ts:87-92) with Partial-valued map access, which is what
+ * the per-provider condition maps produce. The per-provider
+ * specializations below remain as the types the provider SESSION event
+ * maps emit — both are assignable to this open shape by construction,
+ * and the wire format is unchanged (nothing inspects the map beyond
+ * kind-keyed access; see docs/design/conditions-system.md).
+ */
+export type ProviderConditionSnapshot = {
+  provider: AgentProviderKind
+  conditions: Partial<Record<string, ProviderConditionRecord>>
+  ts: number
+}
+
+/** Generic per-kind record — the erased form of the per-provider
+ *  condition unions above. `state` is provider/kind-specific; use
+ *  `conditionStateByKind` for typed access. */
+export type ProviderConditionRecord = {
+  kind: string
+  state: unknown
+  actions: ConditionAction[]
+}
+
+/**
+ * Typed kind-keyed state lookup. The ONE sanctioned way to read a
+ * specific condition's state off the open snapshot — kinds are
+ * globally namespaced, so presence of `claude.ask-user-question`
+ * already implies the claude provider; no snapshot-level narrowing
+ * needed. The cast is the caller declaring which state shape that
+ * kind carries (the same trust the old closed-union indexing
+ * provided, made explicit).
+ */
+export function conditionStateByKind<S>(
+  snapshot: ProviderConditionSnapshot | null | undefined,
+  kind: string,
+): S | null {
+  const record = snapshot?.conditions?.[kind]
+  return record ? (record.state as S) : null
+}
