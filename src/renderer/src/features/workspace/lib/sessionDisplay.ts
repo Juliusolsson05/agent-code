@@ -1,4 +1,5 @@
-import type { SessionKind } from '@shared/types/providerKind'
+import { isAgentProviderKind, type SessionKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 // Small display helpers shared by the workspace's search and
 // activity modals (PromptSearchModal, AgentActivityModal).
 //
@@ -26,7 +27,8 @@ export function cwdBasename(cwd: string): string {
 // agent providers (PromptSearchModal) can still pass the narrower
 // 'claude' | 'codex' subset — TypeScript will accept it.
 export function providerGlyph(kind: SessionKind): string {
-  if (kind === 'claude') return '⏺'
-  if (kind === 'codex') return '›'
+  // Registry-derived for agent kinds (#394 phase 2c-2); terminal is
+  // the only non-registry pane kind and keeps its literal.
+  if (isAgentProviderKind(kind)) return getRendererProviderCapabilities(kind).glyph
   return '$'
 }

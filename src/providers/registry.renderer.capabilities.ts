@@ -13,6 +13,8 @@ import {
   renderCodexToolUse,
 } from '@providers/codex/renderer/rows/dispatch'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
+import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
+import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
   createClaudeTranscriptEntryMapper,
   extractClaudeProviderSessionId,
@@ -25,6 +27,17 @@ import {
 export type RendererProviderCapabilities = {
   id: AgentProviderKind
   name: string
+  /**
+   * Identity descriptor (#394 phase 2c-2): glyph for dense lists,
+   * short label for badges/toggles, spawn-picker description, and the
+   * provider-specific resume invocation (given an already shell-quoted
+   * session id). These replace the hand-written ternaries that made a
+   * third provider invisible across every identity surface (#394 §7).
+   */
+  glyph: string
+  shortLabel: string
+  spawnDescription: string
+  resumeCommand: (quotedSessionId: string) => string
   conditionViews: Record<string, ConditionView>
   renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
   renderToolResult?: (
@@ -51,6 +64,7 @@ export type RendererProviderCapabilities = {
 const claudeCapabilities: RendererProviderCapabilities = {
   id: 'claude',
   name: 'Claude Code',
+  ...CLAUDE_IDENTITY,
   conditionViews: CLAUDE_VIEWS,
   renderToolUse: renderClaudeToolUse,
   renderToolResult: renderClaudeToolResult,
@@ -61,6 +75,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
 const codexCapabilities: RendererProviderCapabilities = {
   id: 'codex',
   name: 'Codex',
+  ...CODEX_IDENTITY,
   conditionViews: CODEX_VIEWS,
   renderToolUse: renderCodexToolUse,
   renderToolResult: renderCodexToolResult,

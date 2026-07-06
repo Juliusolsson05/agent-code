@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,
   useEffect,
@@ -933,7 +934,7 @@ function FeedImpl({
             className="flex min-h-[240px] flex-1 items-center justify-center"
           >
             <div className="text-muted text-[12px]">
-              {item.provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'}
+              {`waiting for ${getRendererProviderCapabilities(item.provider).name}…`}
             </div>
           </div>
         )

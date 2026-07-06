@@ -1,4 +1,5 @@
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useEffect, useRef, useState } from 'react'
 
 import { PathInput } from '@renderer/ui/PathInput'
@@ -53,7 +54,7 @@ export function PathPickerModal({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // Provider toggle: Claude (default) or Codex. Resets on modal open.
-  const [provider, setProvider] = useState<AgentProvider>('claude')
+  const [provider, setProvider] = useState<AgentProvider>(DEFAULT_PROVIDER)
 
   // Resume list state. We eagerly refresh the list whenever the path
   // changes and resolves to a valid directory — gives the user live
@@ -86,7 +87,7 @@ export function PathPickerModal({
     setSessionsLoading(false)
     setResolvedPath(null)
     setPendingCreatePath(null)
-    setProvider('claude')
+    setProvider(DEFAULT_PROVIDER)
   }, [open, defaultValue])
 
   // Refresh the sessions list whenever the typed path changes. Run
@@ -228,7 +229,7 @@ export function PathPickerModal({
 
         {/* Provider toggle: Claude / Codex */}
         <div className="flex gap-2 mb-3 flex-shrink-0">
-          {(['claude', 'codex'] as const).map(p => (
+          {AGENT_PROVIDER_KINDS.map(p => (
             <button
               key={p}
               type="button"
@@ -241,7 +242,7 @@ export function PathPickerModal({
                   : 'bg-transparent text-muted border-border hover:border-border-hi hover:text-ink'}
               `}
             >
-              {p === 'claude' ? 'Claude' : 'Codex'}
+              {getRendererProviderCapabilities(p).shortLabel}
             </button>
           ))}
         </div>

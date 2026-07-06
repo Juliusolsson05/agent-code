@@ -1,3 +1,5 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionKind } from '@renderer/workspace/types'
 
 // Pane-header label helpers. Pure string transforms — split out so
@@ -20,13 +22,13 @@ export function shortenCwd(cwd: string | null): string {
  *  'Claude Code' — historically every session was Claude, so a
  *  missing kind is treated as claude for back-compat. */
 export function providerLabel(kind: SessionKind | undefined): string {
-  switch (kind) {
-    case 'codex':
-      return 'Codex'
-    case 'terminal':
-      return 'Terminal'
-    case 'claude':
-    default:
-      return 'Claude Code'
+  // Registry-derived long display name for agent kinds (#394 phase
+  // 2c-2). Terminal is the only non-registry pane kind; undefined
+  // kinds fall back to the DEFAULT_PROVIDER's name (historically
+  // every session was Claude, so a missing kind means Claude).
+  if (kind === 'terminal') return 'Terminal'
+  if (kind !== undefined && isAgentProviderKind(kind)) {
+    return getRendererProviderCapabilities(kind).name
   }
+  return getRendererProviderCapabilities(DEFAULT_PROVIDER).name
 }
