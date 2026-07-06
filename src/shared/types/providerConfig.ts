@@ -115,6 +115,81 @@ export type TranscriptEntryMapper = {
   setTurnCursor(id: string | null): void
 }
 
+// ---------------------------------------------------------------------------
+// Semantic fold policy (opencode rendering pipeline fix, 2026-07-06)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-provider turn-ownership policy for the renderer's semantic reducer
+ * (`workspace/semantic/foldEvent.ts`).
+ *
+ * WHY this exists: foldSemanticEvent used to hard-gate turn replacement and
+ * block soft-open on `sessionKind === 'codex'` / `'claude'` literals at five
+ * sites. Any third provider silently fell into Codex's STRICT path — but
+ * Codex's recovery hatches only fire for `ev.source === 'proxy'`, and
+ * opencode's single event stream is `source: 'opencode-sse'`. Net effect in
+ * the 2026-07-06 debug bundle: 200 semantic events folded into 1 committed
+ * entry — every block/turn event that mismatched the stale live turn was
+ * dropped with no recovery hatch ever applying. The literals were the bug;
+ * this policy is the provider-owned replacement (same move as
+ * `conditionPolicy` replacing hardcoded kind lists in phase 3 of #394).
+ *
+ * The type lives HERE (shared, import-light) rather than in
+ * registry.renderer.capabilities.ts so provider policy files and the fold
+ * reducer can both import it without touching the registry's React imports.
+ * It is pure data — no functions — so exact per-provider semantics stay
+ * readable at the registration site.
+ *
+ * Semantics (see foldEvent.ts `canReplaceMismatchedTurn` for the one
+ * evaluator; an ENDED current turn is replaceable for every provider —
+ * that's a sequential handoff, not a race):
+ */
+export type SemanticFoldPolicy = {
+  /**
+   * turn_started / turn_delta / tool_started carrying a DIFFERENT turnId
+   * than the live current turn: archive-and-replace unconditionally.
+   * Claude: true — its next assistant message legitimately mints a fresh
+   * msg_id while a cross-turn tool_result keeps the old turn pinned;
+   * dropping it would hide every subsequent Claude turn. Codex/opencode:
+   * false — replacement goes through the source-trust rules below.
+   */
+  autoReplaceOnTurnMismatch: boolean
+  /**
+   * Sources allowed to soft-open a brand-new turn from a stray
+   * block_started when NO current turn exists. Codex: ['proxy'] (the
+   * 2026-05-16 lost-turn-opener recovery). OpenCode: ['opencode-sse'] —
+   * headless currently keys tool blocks on sessionID while text rides
+   * messageID, so a tool block can be the first event of a turn the
+   * renderer ever sees; hard-dropping it loses the whole tool row.
+   * Claude: [] — resurrecting archived turns from late blocks is a known
+   * older failure mode there.
+   */
+  softOpenTurnFromBlockSources: readonly string[]
+  /**
+   * Whether a mismatched block_started may replace the current turn at
+   * all (subject to canReplaceMismatchedTurn). Codex/opencode: true.
+   * Claude: false — bit-preserves the old `sessionKind === 'codex'` gate
+   * where Claude always dropped mismatched blocks, even onto ended turns.
+   */
+  canReplaceTurnFromBlock: boolean
+  /**
+   * Sources trusted to claim ownership of a mismatched LIVE (unended)
+   * turn. Untrusted sources only ever replace ended turns. Codex:
+   * ['proxy'] (render-critical stream vs screen/rollout fallback).
+   * OpenCode: ['opencode-sse'] — its ONLY stream, server-authoritative.
+   */
+  trustedReplaceSources: readonly string[]
+  /**
+   * When a trusted source mismatches a live turn: true = replace outright
+   * (opencode — exactly one event stream, no PTY/proxy dual-source
+   * flicker, so a new turnId from that stream is always a legitimate new
+   * turn); false = only through the completed/empty yield hatches
+   * (codex — two racing producers make an outright replace re-create the
+   * 0/1/0/1 semantic row flicker).
+   */
+  allowReplaceOfLiveTurn: boolean
+}
+
 /**
  * Renderer-side config: only browser-safe imports.
  * Imported by TileTree, workspaceStore, etc.

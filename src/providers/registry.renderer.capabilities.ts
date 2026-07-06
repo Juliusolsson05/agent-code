@@ -12,7 +12,10 @@ import {
   renderCodexToolResult,
   renderCodexToolUse,
 } from '@providers/codex/renderer/rows/dispatch'
-import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
+import type { SemanticFoldPolicy, TranscriptEntryMapper } from '@shared/types/providerConfig'
+import { CLAUDE_SEMANTIC_FOLD_POLICY } from '@providers/claude/renderer/semanticFoldPolicy'
+import { CODEX_SEMANTIC_FOLD_POLICY } from '@providers/codex/renderer/semanticFoldPolicy'
+import { OPENCODE_SEMANTIC_FOLD_POLICY } from '@providers/opencode/renderer/semanticFoldPolicy'
 import { CLAUDE_IDENTITY } from '@providers/claude/renderer/identity'
 import { claudeComposerSubmit } from '@providers/claude/renderer/composerSubmit'
 import { CLAUDE_CONDITION_POLICY } from '@providers/claude/renderer/conditions/policy'
@@ -112,6 +115,16 @@ export type RendererProviderCapabilities = {
    * lists and provider branches.
    */
   conditionPolicy: ProviderConditionPolicy
+  /**
+   * Turn-ownership policy for the semantic reducer (2026-07-06 fix).
+   * Replaced foldEvent.ts's hardcoded `sessionKind === 'codex'/'claude'`
+   * gates, which sent every third provider down Codex's strict path with
+   * proxy-only recovery hatches that could never fire for a non-proxy
+   * source. See SemanticFoldPolicy in providerConfig.ts and the concrete
+   * providers/<kind>/renderer/semanticFoldPolicy.ts for the per-provider
+   * WHYs.
+   */
+  semanticFoldPolicy: SemanticFoldPolicy
 }
 
 /** See providers/<kind>/renderer/conditions/policy.ts for the concrete
@@ -160,6 +173,7 @@ const claudeCapabilities: RendererProviderCapabilities = {
   supportsImageAttachments: true,
   usesOptimisticUserEcho: false,
   conditionPolicy: CLAUDE_CONDITION_POLICY,
+  semanticFoldPolicy: CLAUDE_SEMANTIC_FOLD_POLICY,
 }
 
 const codexCapabilities: RendererProviderCapabilities = {
@@ -176,6 +190,7 @@ const codexCapabilities: RendererProviderCapabilities = {
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,
   conditionPolicy: CODEX_CONDITION_POLICY,
+  semanticFoldPolicy: CODEX_SEMANTIC_FOLD_POLICY,
 }
 
 const opencodeCapabilities: RendererProviderCapabilities = {
@@ -189,6 +204,7 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   supportsImageAttachments: false,
   usesOptimisticUserEcho: true,
   conditionPolicy: OPENCODE_CONDITION_POLICY,
+  semanticFoldPolicy: OPENCODE_SEMANTIC_FOLD_POLICY,
 }
 
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {
