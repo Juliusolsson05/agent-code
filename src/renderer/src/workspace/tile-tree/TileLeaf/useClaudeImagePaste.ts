@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
@@ -96,7 +97,7 @@ export function useClaudeImagePaste({
     async (e: ClipboardLike): Promise<ImagePasteResult> => {
       // Codex has no inline-image content — fall through so the
       // caller routes the clipboard's text instead.
-      if (provider !== 'claude') return { handledImages: false }
+      if (!getRendererProviderCapabilities(provider).supportsImageAttachments) return { handledImages: false }
       const clipboardData = e.clipboardData
       if (!clipboardData) return { handledImages: false }
 
