@@ -1,3 +1,8 @@
+import {
+  AGENT_PROVIDER_KINDS,
+  DEFAULT_PROVIDER,
+} from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useEffect } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -625,20 +630,23 @@ export function useKeybinds(
           void workspace.splitFocused('horizontal', 'terminal')
           return
         }
-        // --- Codex split: alt-c / alt-shift-c ---
+        // --- Per-provider splits: alt-<key> / alt-shift-<key> ---
         //
-        // Same grammar as the generic split bindings above:
-        // no shift = vertical/right, shift = horizontal/down.
-        // Uses e.code === 'KeyC' for the same macOS alt-letter reason
-        // as the others.
-        if (code === 'KeyC' && !shift) {
+        // Derived from each registered provider's identity descriptor
+        // (#394 phase 4; codex declares 'C' → ⌥C/⌥⇧C, matching the
+        // old hardcoded chord). Same grammar as the generic split
+        // bindings above: no shift = vertical/right, shift =
+        // horizontal/down. Matches on e.code (physical key) for the
+        // same macOS alt-letter reason as the others — alt+letter
+        // produces Unicode glyphs invisible to key-string matching.
+        // The DEFAULT_PROVIDER has no per-provider chord; it's what
+        // the generic ⌥D split spawns.
+        for (const providerKind of AGENT_PROVIDER_KINDS) {
+          if (providerKind === DEFAULT_PROVIDER) continue
+          const chordKey = getRendererProviderCapabilities(providerKind).splitShortcutKey
+          if (!chordKey || code !== `Key${chordKey}`) continue
           e.preventDefault()
-          void workspace.splitFocused('vertical', 'codex')
-          return
-        }
-        if (code === 'KeyC' && shift) {
-          e.preventDefault()
-          void workspace.splitFocused('horizontal', 'codex')
+          void workspace.splitFocused(shift ? 'horizontal' : 'vertical', providerKind)
           return
         }
         if (code === 'KeyW') {

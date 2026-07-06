@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { relativeTime } from '@renderer/lib/relativeTime'
@@ -48,7 +49,8 @@ type ProjectRow = {
 }
 
 function providerLabel(kind: AgentProviderKind): string {
-  return kind === 'codex' ? 'Codex' : 'Claude'
+  // Registry-derived (#394 phase 4).
+  return getRendererProviderCapabilities(kind).shortLabel
 }
 
 export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {

@@ -1,4 +1,5 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { extractLastAssistantText } from '@renderer/lib/copyAssistant'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import {
@@ -95,7 +96,7 @@ export const paneCommands: CommandDef[] = [
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return
       const kind = workspace.state.sessions[sessionId]?.kind
-      if (kind !== 'claude' && kind !== 'codex') return
+      if (!isAgentProviderKind(kind)) return
       ui.openLinkedAgent(sessionId)
     },
   },
@@ -270,22 +271,38 @@ export const paneCommands: CommandDef[] = [
     shortcut: '⌥⇧T',
     run: ({ workspace }) => void workspace.splitFocused('horizontal', 'terminal'),
   },
-  {
-    id: 'codex-vertical',
-    surface: 'grid',
-    title: 'New Codex Right',
-    description: '**What it does:** Opens a **Codex agent on the right**.\n\n**Use when:** You want Codex beside the current agent.\n\n**Notes:** In **Dispatch**, this creates a detached Codex agent instead.',
-    shortcut: '⌥C',
-    run: ({ workspace }) => void workspace.splitFocused('vertical', 'codex'),
-  },
-  {
-    id: 'codex-horizontal',
-    surface: 'grid',
-    title: 'New Codex Below',
-    description: '**What it does:** Opens a **Codex agent below**.\n\n**Use when:** You want Codex in a stacked layout.\n\n**Notes:** In **Dispatch**, this creates a detached Codex agent instead.',
-    shortcut: '⌥⇧C',
-    run: ({ workspace }) => void workspace.splitFocused('horizontal', 'codex'),
-  },
+  // Per-provider split commands, generated for every registered agent
+  // provider EXCEPT the default (#394 phase 4). The default provider
+  // is what the generic split-vertical/-horizontal commands spawn, so
+  // it doesn't need named variants; every additional provider gets
+  // "New <Provider> Right/Below" palette entries automatically, with
+  // an ⌥<key> chord when its identity descriptor declares
+  // splitShortcutKey (codex: ⌥C/⌥⇧C — the ids stay `codex-vertical`
+  // etc. so user keybinding overrides keyed on command ids survive).
+  ...AGENT_PROVIDER_KINDS.filter(kind => kind !== DEFAULT_PROVIDER).flatMap(kind => {
+    const caps = getRendererProviderCapabilities(kind)
+    const chord = caps.splitShortcutKey
+    return [
+      {
+        id: `${kind}-vertical`,
+        surface: 'grid' as const,
+        title: `New ${caps.shortLabel} Right`,
+        description: `**What it does:** Opens a **${caps.shortLabel} agent on the right**.\n\n**Use when:** You want ${caps.shortLabel} beside the current agent.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
+        ...(chord ? { shortcut: `⌥${chord}` } : {}),
+        run: ({ workspace }: CommandContext) =>
+          void workspace.splitFocused('vertical', kind),
+      },
+      {
+        id: `${kind}-horizontal`,
+        surface: 'grid' as const,
+        title: `New ${caps.shortLabel} Below`,
+        description: `**What it does:** Opens a **${caps.shortLabel} agent below**.\n\n**Use when:** You want ${caps.shortLabel} in a stacked layout.\n\n**Notes:** In **Dispatch**, this creates a detached ${caps.shortLabel} agent instead.`,
+        ...(chord ? { shortcut: `⌥⇧${chord}` } : {}),
+        run: ({ workspace }: CommandContext) =>
+          void workspace.splitFocused('horizontal', kind),
+      },
+    ]
+  }),
   {
     // `grid` surface — applies to nav-left/right/up/down below.
     //

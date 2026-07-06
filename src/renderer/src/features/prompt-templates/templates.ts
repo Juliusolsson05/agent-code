@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
@@ -126,7 +127,7 @@ function buildActiveTabTranscriptPrompt(
   }
 
   agents.forEach((agent, index) => {
-    const label = agent.kind === 'codex' ? 'Codex' : 'Claude'
+    const label = getRendererProviderCapabilities(agent.kind).shortLabel
     const transcriptPath = agent.transcriptPath ?? '(transcript path not found)'
     lines.push(
       `## ${index + 1}. ${label} agent`,
