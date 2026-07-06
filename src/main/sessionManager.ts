@@ -252,6 +252,15 @@ export class SessionManager extends EventEmitter {
   // exists only inside the jsonl lines, but every entry event carries the
   // file it was appended to. Consumed by the remote companion's get-history
   // (see main/remote/RemoteServer.ts); same lifetime as the snapshot caches.
+  //
+  // KNOWN STALENESS WINDOW: when the provider rolls to a new transcript
+  // (claude /clear, or a resume that mints a new provider session id → new
+  // jsonl path), this cache points at the PREVIOUS conversation's file until
+  // the new conversation writes its first durable line. Main has no earlier
+  // roll signal than that first entry. Consumers must therefore treat the
+  // served file as advisory: RemoteServer returns the file identity with
+  // every history chunk, and the phone's TranscriptStore discards a chunk
+  // whose file disagrees with the file its live frames carry.
   private readonly lastTranscriptFile = new Map<string, string>()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the

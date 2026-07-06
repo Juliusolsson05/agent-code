@@ -22,6 +22,7 @@ import {
   withDerivedSessionStatus,
 } from '@renderer/workspace/semantic/helpers'
 import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
+import { reduceStreamPhase } from '@renderer/workspace/semantic/streamPhaseMachine'
 import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/applyPromptSuggestionToRuntime'
 import { summarizeSemanticEventForDebug } from '@renderer/workspace/semantic/summarize'
 import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
@@ -923,130 +924,31 @@ export function useIpcSubscriptions(
           eventType === 'api_error' ||
           eventType === 'stream_error'
 
-        // stream_phase — in-feed indicator state. Overrides the
-        // optimistic `submitting` pseudo-phase once the adapter's
-        // first real event lands. Handled inline here (not inside
-        // foldSemanticEvent) because the field lives on
-        // SessionRuntime, not SemanticRuntimeState; the fold would
-        // be a layering violation.
-        let streamPhase = current.streamPhase
-        let streamPhasePendingToolName = current.streamPhasePendingToolName
-        let streamPhasePendingToolUseId = current.streamPhasePendingToolUseId
-        let turnStartedAt = current.turnStartedAt
-        let phaseChangedAt = current.phaseChangedAt
-        let submittedAt = current.submittedAt
-
-        if (eventType === 'stream_phase') {
-          const rawPhase =
-            typeof semanticEvent.phase === 'string' ? semanticEvent.phase : 'idle'
-          const nextPhase = rawPhase as StreamPhase
-          if (nextPhase !== streamPhase) {
-            const now = Date.now()
-            streamPhase = nextPhase
-            streamPhasePendingToolName =
-              stringField(semanticEvent, 'toolName')
-            streamPhasePendingToolUseId =
-              stringField(semanticEvent, 'toolUseId')
-            phaseChangedAt = now
-            if (nextPhase === 'idle') {
-              turnStartedAt = null
-              submittedAt = null
-            } else if (turnStartedAt === null) {
-              // First non-idle phase of this turn — stamp the
-              // start time. If the optimistic-submit path already
-              // stamped `submittedAt`, prefer it over `now` so the
-              // elapsed counter includes the gap between submit
-              // and first adapter event.
-              turnStartedAt = submittedAt ?? now
-            }
-          } else if (
-            // Re-assign pending tool info even on same-phase
-            // re-emit (turnId upgrade: null → real id is the
-            // classic case).
-            streamPhase !== 'idle'
-          ) {
-            streamPhasePendingToolName =
-              stringField(semanticEvent, 'toolName') ?? streamPhasePendingToolName
-            streamPhasePendingToolUseId =
-              stringField(semanticEvent, 'toolUseId') ?? streamPhasePendingToolUseId
-          }
-        } else if (eventType === 'tool_result') {
-          // Tool result arrived. If it matches the pending tool
-          // we're `awaiting-tool` on, move to a neutral
-          // 'requesting' phase so the indicator doesn't sit amber
-          // after the tool returned. The adapter's next
-          // stream_phase event (from the next assistant flow's
-          // message_start) will overwrite; this is the
-          // gap-filler.
-          const resultToolUseId =
-            stringField(semanticEvent, 'toolUseId')
-          if (
-            streamPhase === 'awaiting-tool' &&
-            resultToolUseId !== null &&
-            resultToolUseId === streamPhasePendingToolUseId
-          ) {
-            streamPhase = 'requesting'
-            streamPhasePendingToolName = null
-            streamPhasePendingToolUseId = null
-            phaseChangedAt = Date.now()
-          }
-        } else if (eventType === 'turn_started') {
-          // Turn-based phase bridge (2026-07-06, provider-agnostic
-          // gap-filler). WHY: the phase machine used to advance ONLY on
-          // `stream_phase` events, which opencode's headless does not
-          // emit. The 2026-07-06 opencode bundle showed the consequence:
-          // phaseChangedAt == submittedAt with 258 deltas flowing — the
-          // pane sat pinned at the optimistic 'submitting' pseudo-phase
-          // for the whole turn, and the awaitingAssistant safety net in
-          // the bootstrap-complete reconciler was ALSO deadlocked on it
-          // (its predicate requires streamPhase === 'idle' to fire, and
-          // idle could never arrive). Turn lifecycle events are the
-          // provider-neutral signal every semantic adapter already
-          // emits, so bridge from them.
-          //
-          // Claude/codex are unaffected in practice: their adapters emit
-          // real stream_phase events which continue to overwrite this
-          // bridge on the very next event. We only FILL gaps — advance
-          // out of the pre-response phases ('submitting'/'requesting');
-          // never stomp 'responding'/'awaiting-tool' state a real
-          // stream_phase event established.
-          if (streamPhase === 'submitting' || streamPhase === 'requesting') {
-            const now = Date.now()
-            streamPhase = 'responding'
-            phaseChangedAt = now
-            if (turnStartedAt === null) {
-              // Mirror the stream_phase branch: prefer the optimistic
-              // submittedAt so the elapsed counter includes the
-              // submit→first-event gap.
-              turnStartedAt = submittedAt ?? now
-            }
-          }
-        } else if (eventType === 'turn_completed') {
-          // Second half of the turn-based bridge: return to 'idle' when
-          // the turn is over and nothing is pending. Guards:
-          //   - 'awaiting-tool' is itself pending tool state at the
-          //     phase-machine level (codex MCP: turn_completed arrives
-          //     while the client tool still owes its output in the NEXT
-          //     turn) — never idle out of it here.
-          //   - hasPendingSemanticTools on the post-fold turn covers the
-          //     same lifecycle when the phase machine hasn't caught up
-          //     (fold keeps an ended pending-tool turn mounted).
-          // For claude/codex the adapter's own stream_phase 'idle'
-          // arrives around the same moment and would produce the same
-          // state, so this is a no-op for them beyond ordering.
-          const pendingTool =
-            streamPhase === 'awaiting-tool' ||
-            (nextSemantic.currentTurn !== null &&
-              hasPendingSemanticTools(nextSemantic.currentTurn))
-          if (!pendingTool && streamPhase !== 'idle') {
-            streamPhase = 'idle'
-            streamPhasePendingToolName = null
-            streamPhasePendingToolUseId = null
-            phaseChangedAt = Date.now()
-            turnStartedAt = null
-            submittedAt = null
-          }
-        }
+        // stream_phase — in-feed indicator state, reduced by the SHARED
+        // machine in semantic/streamPhaseMachine.ts (extracted 2026-07-06 so
+        // the remote phone client runs the identical reducer instead of a
+        // hand-copied fork — see that module's header for the full WHY and
+        // the layering rationale that used to live inline here). Runs on the
+        // POST-fold turn per the reducer's caller contract.
+        const {
+          streamPhase,
+          streamPhasePendingToolName,
+          streamPhasePendingToolUseId,
+          turnStartedAt,
+          phaseChangedAt,
+          submittedAt,
+        } = reduceStreamPhase(
+          {
+            streamPhase: current.streamPhase,
+            streamPhasePendingToolName: current.streamPhasePendingToolName,
+            streamPhasePendingToolUseId: current.streamPhasePendingToolUseId,
+            turnStartedAt: current.turnStartedAt,
+            phaseChangedAt: current.phaseChangedAt,
+            submittedAt: current.submittedAt,
+          },
+          semanticEvent,
+          nextSemantic.currentTurn,
+        )
 
         // Ghost bridge — refresh the provisional ghost map from
         // the new semantic turn. This runs on every semantic tick;

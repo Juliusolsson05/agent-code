@@ -1,12 +1,14 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
-import { hasPendingSemanticTools } from '@renderer/workspace/semantic/helpers'
+import {
+  reduceStreamPhase,
+  type StreamPhaseState,
+} from '@renderer/workspace/semantic/streamPhaseMachine'
 import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
 import {
   emptySemanticRuntime,
   type SemanticLiveTurn,
   type SemanticRuntimeState,
-  type StreamPhase,
 } from '@renderer/workspace/workspaceState'
 import { isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
@@ -21,34 +23,42 @@ import type { WebSocketSessionFeed } from '../WebSocketSessionFeed'
 // doc's "Client state model" for what is deliberately skipped and why).
 //
 // This store deliberately reuses the desktop's OWN reducers and mappers —
-// foldSemanticEvent, the registry transcript mappers, indexEntryIntoMaps —
-// so the phone's model can only diverge from the desktop's where this file
-// visibly chooses to (skipped subsystems), never silently in shared logic.
+// foldSemanticEvent, reduceStreamPhase, the registry transcript mappers,
+// indexEntryIntoMaps — so the phone's model can only diverge from the
+// desktop's where this file visibly chooses to (skipped subsystems), never
+// silently in shared logic.
 //
-// Ingest discipline (must mirror useIpcSubscriptions Pass B + the history
-// actions exactly, or entries duplicate/misorder):
+// Ingest discipline (mirrors useIpcSubscriptions Pass B + the desktop
+// history actions; every rule here traces to a desktop counterpart):
 //   - ONE seen-uuid Set per session gates BOTH backfill and live entries.
 //   - History PREPENDS, live APPENDS.
-//   - The pagination anchor is the first kept entry's historyMarker.
-//   - The codex mapper is STATEFUL (rolling turn cursor) — one mapper
-//     instance per session, kept for the session's lifetime.
-//   - `stream_phase` events are reduced OUTSIDE foldSemanticEvent, exactly
-//     as the desktop does (the phase lives beside the semantic slice, not
-//     inside it).
+//   - The pagination anchor is the first chunk-raw that yielded KEPT
+//     entries' historyMarker (desktop gates on mapped.length > 0).
+//   - LIVE entries flow through one session-lifetime mapper (the codex
+//     rolling turn cursor must survive across bursts); HISTORY chunks each
+//     get a FRESH chunk-scoped mapper (the codex mapper's documented
+//     contract — feeding old records through the live mapper stamps them
+//     with the live turn id and corrupts the cursor both directions).
+//   - A transcript ROLL (/clear, resume onto a new provider session) is
+//     detected by comparing the `file` riding live frames and history
+//     chunks; state resets so the old conversation cannot pollute the new.
 
 export type SessionTranscript = {
   entries: Entry[]
   semanticTurn: SemanticLiveTurn | null
   semanticHistory: SemanticLiveTurn[]
-  streamPhase: StreamPhase
-  streamPhasePendingToolName: string | null
-  streamPhasePendingToolUseId: string | null
-  turnStartedAt: number | null
+  phase: StreamPhaseState
   toolUseIndex: Map<string, ToolUseBlock>
   toolResultIndex: Map<string, ToolResultBlock>
   toolIndexVersion: number
   conditions: ProviderConditionSnapshot | null
   workingStatus: string | null
+  /** Latest TUI text (`recent` window). The feed does NOT render this in
+   *  normal operation — it is the fallback for pre-transcript states
+   *  (trust dialog body, login errors, provider crashes) that never reach
+   *  the jsonl/semantic channels. Dropping it entirely was a review
+   *  finding: those states rendered as a blank feed. */
+  screenText: string
   exited: boolean
   hasOlderHistory: boolean
   loadingOlderHistory: boolean
@@ -59,12 +69,33 @@ type SessionState = {
   transcript: SessionTranscript
   semantic: SemanticRuntimeState
   seen: Set<string>
-  mapper: ReturnType<
-    ReturnType<typeof getRendererProviderCapabilities>['createTranscriptEntryMapper']
-  > | null
+  /** Session-lifetime mapper for LIVE entries only (codex cursor). Created
+   *  lazily once the kind is KNOWN from the session list — memoizing a
+   *  mapper built on a fallback guess would bake the wrong provider in for
+   *  the session's lifetime (review finding). */
+  liveMapper: Mapper | null
   kind: AgentProviderKind | null
+  /** Durable transcript file identity, from live frames / history chunks.
+   *  Disagreement between the two = the provider rolled the transcript. */
+  transcriptFile: string | null
   historyOldestMarker: string | null
   historyLoaded: boolean
+  historyLoading: boolean
+}
+
+type Mapper = ReturnType<
+  ReturnType<typeof getRendererProviderCapabilities>['createTranscriptEntryMapper']
+>
+
+function emptyPhase(): StreamPhaseState {
+  return {
+    streamPhase: 'idle',
+    streamPhasePendingToolName: null,
+    streamPhasePendingToolUseId: null,
+    turnStartedAt: null,
+    phaseChangedAt: null,
+    submittedAt: null,
+  }
 }
 
 function emptyTranscript(): SessionTranscript {
@@ -72,25 +103,18 @@ function emptyTranscript(): SessionTranscript {
     entries: [],
     semanticTurn: null,
     semanticHistory: [],
-    streamPhase: 'idle',
-    streamPhasePendingToolName: null,
-    streamPhasePendingToolUseId: null,
-    turnStartedAt: null,
+    phase: emptyPhase(),
     toolUseIndex: new Map(),
     toolResultIndex: new Map(),
     toolIndexVersion: 0,
     conditions: null,
     workingStatus: null,
+    screenText: '',
     exited: false,
     hasOlderHistory: false,
     loadingOlderHistory: false,
     totalEntries: 0,
   }
-}
-
-function stringField(record: Record<string, unknown> | null, key: string): string | null {
-  const value = record?.[key]
-  return typeof value === 'string' ? value : null
 }
 
 export class TranscriptStore {
@@ -101,7 +125,7 @@ export class TranscriptStore {
   constructor(private readonly feed: WebSocketSessionFeed) {
     this.unsubs.push(
       feed.onSessionJsonlEntries(e => {
-        this.ingestRawEntries(e.sessionId, e.entries.map(x => x.entry as Record<string, unknown>), 'append')
+        this.ingestLiveEntries(e.sessionId, e.entries as Array<{ entry: unknown; file: string }>)
       }),
       feed.onSessionSemanticEvent(e => {
         this.ingestSemanticEvent(e.sessionId, e.event)
@@ -115,6 +139,11 @@ export class TranscriptStore {
           workingStatus: e.active ? (e.status ?? 'Working') : null,
         }))
       }),
+      feed.onSessionScreen(e => {
+        this.mutate(e.sessionId, t =>
+          t.screenText === e.recent ? t : { ...t, screenText: e.recent },
+        )
+      }),
       feed.onSessionExit(e => {
         // Mirror the desktop's exit boundary: dead processes own no live
         // turn, no phase, no prompts (useIpcSubscriptions offExit).
@@ -124,13 +153,33 @@ export class TranscriptStore {
           ...t,
           exited: true,
           workingStatus: null,
-          streamPhase: 'idle',
-          streamPhasePendingToolName: null,
-          streamPhasePendingToolUseId: null,
-          turnStartedAt: null,
+          phase: emptyPhase(),
           semanticTurn: null,
           conditions: null,
         }))
+      }),
+      // Eviction + backfill retry both key off the session list, which the
+      // server re-sends on every (re)connect and patches on started/exit/
+      // removed. Sessions gone from the list are GONE from the manager —
+      // holding their entries/seen-sets/mappers forever was unbounded
+      // growth (review finding).
+      feed.onSessionList(sessions => {
+        const live = new Set(sessions.map(s => s.sessionId))
+        for (const sessionId of [...this.sessions.keys()]) {
+          if (!live.has(sessionId)) {
+            this.sessions.delete(sessionId)
+            this.listeners.delete(sessionId)
+          }
+        }
+        // Reconnect/retry hook: a backfill that failed while the socket was
+        // down stays failed forever without this — SessionView only calls
+        // loadInitialHistory once per mount (review finding). The list
+        // frame doubles as the "connection is live again" signal.
+        for (const [sessionId, state] of this.sessions) {
+          if (!state.historyLoaded && !state.historyLoading && this.listeners.has(sessionId)) {
+            void this.loadInitialHistory(sessionId)
+          }
+        }
       }),
     )
   }
@@ -157,29 +206,58 @@ export class TranscriptStore {
     return this.state(sessionId).transcript
   }
 
+  /** Resolved provider kind (list-backed; 'claude' until the list lands —
+   *  the server sends the list before any session event on every connect,
+   *  so the fallback window is one frame). Exposed so SessionView doesn't
+   *  duplicate the lookup (review finding). */
+  getKind(sessionId: string): AgentProviderKind {
+    return this.kindOf(sessionId) ?? 'claude'
+  }
+
   // --- backfill ---
 
   /** Load the initial newest-N chunk once per session. Prepends behind any
    *  live entries that already arrived — the shared seen-set makes the
-   *  overlap safe, exactly like the desktop's initialHistory action. */
+   *  overlap safe, exactly like the desktop's initialHistory action.
+   *  Failure leaves the flags retryable; retries fire from the session-list
+   *  hook above and from live-entry arrival. */
   async loadInitialHistory(sessionId: string): Promise<void> {
     const state = this.state(sessionId)
-    if (state.historyLoaded) return
-    state.historyLoaded = true
+    if (state.historyLoaded || state.historyLoading) return
+    state.historyLoading = true
     this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true }))
     const result = await this.feed.getHistory(sessionId, { limit: 120 })
+    state.historyLoading = false
     if (!result.ok) {
       // "No transcript yet" is normal for a brand-new session — live frames
-      // will populate the feed; allow a later retry once entries exist.
-      state.historyLoaded = false
+      // will populate the feed and their arrival retries the backfill.
       this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false }))
       return
     }
-    this.ingestRawEntries(sessionId, result.chunk.entries, 'prepend')
+    if (this.chunkFileConflicts(state, result.chunk.file)) {
+      // The server's transcript-file cache was stale (post-/clear window):
+      // the chunk is the PREVIOUS conversation. Discard it; live frames own
+      // the file identity and a later retry will read the right file.
+      this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false }))
+      return
+    }
+    state.historyLoaded = true
+    if (state.transcriptFile === null && typeof result.chunk.file === 'string') {
+      state.transcriptFile = result.chunk.file
+    }
+    const marker = this.ingestRawEntries(
+      sessionId,
+      result.chunk.entries as Array<Record<string, unknown>>,
+      'prepend',
+    )
+    if (marker) state.historyOldestMarker = marker
     this.mutate(sessionId, t => ({
       ...t,
       loadingOlderHistory: false,
-      hasOlderHistory: result.chunk.hasMore,
+      // Desktop guard (history.ts): a chunk with more history but NO usable
+      // marker cannot be paged — advertising the affordance would render a
+      // permanently dead control.
+      hasOlderHistory: result.chunk.hasMore && state.historyOldestMarker !== null,
       totalEntries: result.chunk.totalEntries ?? t.entries.length,
     }))
   }
@@ -188,21 +266,33 @@ export class TranscriptStore {
     const state = this.state(sessionId)
     if (state.transcript.loadingOlderHistory || !state.transcript.hasOlderHistory) return
     const beforeMarker = state.historyOldestMarker
-    if (!beforeMarker) return
+    if (!beforeMarker) {
+      // Should be unreachable (hasOlderHistory implies a marker per the
+      // initial-load guard) — but if it happens, kill the affordance
+      // instead of leaving a silently dead button (review finding).
+      this.mutate(sessionId, t => ({ ...t, hasOlderHistory: false }))
+      return
+    }
     this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: true }))
     const result = await this.feed.getHistory(sessionId, { beforeMarker, limit: 200 })
-    if (!result.ok) {
+    if (!result.ok || this.chunkFileConflicts(state, result.chunk?.file)) {
       this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false }))
       return
     }
-    this.ingestRawEntries(sessionId, result.chunk.entries, 'prepend')
+    const marker = this.ingestRawEntries(
+      sessionId,
+      result.chunk.entries as Array<Record<string, unknown>>,
+      'prepend',
+    )
+    if (marker) state.historyOldestMarker = marker
     this.mutate(sessionId, t => ({
       ...t,
       loadingOlderHistory: false,
       // hasMore from the chunk is authoritative — an all-duplicate page
       // must NOT re-enable loading (same invariant as the desktop's
-      // history action documents).
-      hasOlderHistory: result.chunk.hasMore,
+      // history action documents) — but a missing next marker still kills
+      // the affordance.
+      hasOlderHistory: result.chunk.hasMore && state.historyOldestMarker !== null,
     }))
   }
 
@@ -215,17 +305,19 @@ export class TranscriptStore {
         transcript: emptyTranscript(),
         semantic: emptySemanticRuntime(),
         seen: new Set(),
-        mapper: null,
+        liveMapper: null,
         kind: null,
+        transcriptFile: null,
         historyOldestMarker: null,
         historyLoaded: false,
+        historyLoading: false,
       }
       this.sessions.set(sessionId, state)
     }
     return state
   }
 
-  private kindOf(sessionId: string): AgentProviderKind {
+  private kindOf(sessionId: string): AgentProviderKind | null {
     const state = this.state(sessionId)
     if (state.kind) return state.kind
     const listed = this.feed.getSessionList().find(s => s.sessionId === sessionId)?.kind
@@ -233,41 +325,125 @@ export class TranscriptStore {
       state.kind = listed
       return listed
     }
-    // Claude is the historical default across the app (DEFAULT_PROVIDER);
-    // a wrong guess only mis-maps until the session list lands, which the
-    // server sends before any session event on every connect.
-    return 'claude'
+    return null
   }
 
-  private mapperOf(sessionId: string): NonNullable<SessionState['mapper']> {
+  private liveMapperOf(sessionId: string): Mapper {
     const state = this.state(sessionId)
-    if (!state.mapper) {
-      // ONE mapper per session for its whole lifetime — the codex mapper's
-      // rolling turn cursor must survive across bursts (the desktop keeps
-      // it in codexCurrentTurnIdBySession for the same reason).
-      state.mapper = getRendererProviderCapabilities(this.kindOf(sessionId))
-        .createTranscriptEntryMapper()
+    if (state.liveMapper) return state.liveMapper
+    const kind = this.kindOf(sessionId)
+    if (kind) {
+      // Kind is KNOWN — safe to memoize for the session's lifetime (the
+      // codex rolling turn cursor must survive across live bursts).
+      state.liveMapper = getRendererProviderCapabilities(kind).createTranscriptEntryMapper()
+      return state.liveMapper
     }
-    return state.mapper
+    // Kind unknown (list not landed yet — one-frame window at most): use a
+    // TRANSIENT claude-default mapper and do NOT memoize, so the real kind
+    // still wins once known. The claude mapper is stateless, so a transient
+    // instance loses nothing.
+    return getRendererProviderCapabilities('claude').createTranscriptEntryMapper()
   }
 
+  /** Fresh chunk-scoped mapper — the desktop's rule for history chunks
+   *  (initialHistory.ts / history.ts both document it): the codex turn
+   *  cursor must start null per chunk so old records never get stamped
+   *  with the live turn id, and the live cursor never inherits a stale
+   *  historical one. */
+  private chunkMapper(sessionId: string): Mapper {
+    const kind = this.kindOf(sessionId) ?? 'claude'
+    return getRendererProviderCapabilities(kind).createTranscriptEntryMapper()
+  }
+
+  private chunkFileConflicts(state: SessionState, chunkFile: unknown): boolean {
+    return (
+      typeof chunkFile === 'string' &&
+      state.transcriptFile !== null &&
+      chunkFile !== state.transcriptFile
+    )
+  }
+
+  private ingestLiveEntries(
+    sessionId: string,
+    items: Array<{ entry: unknown; file: string }>,
+  ): void {
+    if (items.length === 0) return
+    const state = this.state(sessionId)
+
+    const file = items[items.length - 1]?.file
+    if (typeof file === 'string' && file.length > 0) {
+      if (state.transcriptFile !== null && state.transcriptFile !== file) {
+        // Transcript ROLL: /clear or a resume minted a new provider session
+        // and a new jsonl file. The old conversation's entries, seen-set,
+        // markers, and mapper cursor all belong to the dead transcript —
+        // reset so the new conversation starts clean, then let the backfill
+        // retry pick up the new file's history.
+        this.resetTranscript(sessionId)
+      }
+      this.state(sessionId).transcriptFile = file
+    }
+
+    this.ingestRawEntries(
+      sessionId,
+      items.map(x => x.entry as Record<string, unknown>),
+      'append',
+    )
+
+    // Live-entry arrival is also the backfill retry trigger for sessions
+    // whose initial get-history failed with "no transcript on disk yet".
+    const fresh = this.state(sessionId)
+    if (!fresh.historyLoaded && !fresh.historyLoading && this.listeners.has(sessionId)) {
+      void this.loadInitialHistory(sessionId)
+    }
+  }
+
+  private resetTranscript(sessionId: string): void {
+    const prev = this.state(sessionId)
+    this.sessions.set(sessionId, {
+      transcript: {
+        ...emptyTranscript(),
+        // Non-transcript surfaces survive the roll — the process didn't die.
+        conditions: prev.transcript.conditions,
+        workingStatus: prev.transcript.workingStatus,
+        screenText: prev.transcript.screenText,
+      },
+      semantic: prev.semantic,
+      seen: new Set(),
+      liveMapper: null,
+      kind: prev.kind,
+      transcriptFile: null,
+      historyOldestMarker: null,
+      historyLoaded: false,
+      historyLoading: false,
+    })
+    const set = this.listeners.get(sessionId)
+    if (set) for (const cb of [...set]) cb()
+  }
+
+  /** Map + dedupe + index a batch of raw records. Returns the pagination
+   *  marker for prepend chunks (first raw that yielded KEPT entries —
+   *  desktop's initialHistory.ts:178 gate). */
   private ingestRawEntries(
     sessionId: string,
     raws: Array<Record<string, unknown>>,
     mode: 'append' | 'prepend',
-  ): void {
-    if (raws.length === 0) return
+  ): string | null {
+    if (raws.length === 0) return null
     const state = this.state(sessionId)
-    const mapper = this.mapperOf(sessionId)
+    const mapper = mode === 'append' ? this.liveMapperOf(sessionId) : this.chunkMapper(sessionId)
 
     const kept: Entry[] = []
     let firstKeptMarker: string | null = null
     let toolIndexChanged = false
-    let lastTimestamp: number | null = null
 
     for (const raw of raws) {
       const mapped = mapper.map(raw)
-      if (mode === 'prepend' && firstKeptMarker === null && mapped.historyMarker) {
+      if (
+        mode === 'prepend' &&
+        firstKeptMarker === null &&
+        mapped.entries.length > 0 &&
+        mapped.historyMarker
+      ) {
         firstKeptMarker = mapped.historyMarker
       }
       for (const entry of mapped.entries) {
@@ -286,93 +462,42 @@ export class TranscriptStore {
         ) {
           toolIndexChanged = true
         }
-        const ts = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : NaN
-        if (!Number.isNaN(ts)) lastTimestamp = Math.max(lastTimestamp ?? 0, ts)
       }
     }
 
-    if (mode === 'prepend' && firstKeptMarker) {
-      state.historyOldestMarker = firstKeptMarker
-    }
-    if (kept.length === 0 && !toolIndexChanged) return
+    if (kept.length === 0 && !toolIndexChanged) return firstKeptMarker
 
     this.mutate(sessionId, t => ({
       ...t,
-      entries:
-        mode === 'append' ? [...t.entries, ...kept] : [...kept, ...t.entries],
+      entries: mode === 'append' ? [...t.entries, ...kept] : [...kept, ...t.entries],
       totalEntries: t.totalEntries + (mode === 'append' ? kept.length : 0),
       toolIndexVersion: toolIndexChanged ? t.toolIndexVersion + 1 : t.toolIndexVersion,
     }))
-    void lastTimestamp // reserved for a future stall indicator; desktop feeds it to ghost gating we skip
+    return firstKeptMarker
   }
 
   private ingestSemanticEvent(sessionId: string, event: unknown): void {
     const state = this.state(sessionId)
     const record = asRecord(event)
     if (!record) return
-    const eventType = typeof record.type === 'string' ? record.type : ''
 
-    // --- the out-of-fold stream-phase machine, mirroring
-    // useIpcSubscriptions.ts (stream_phase / tool_result gap-filler /
-    // turn_started + turn_completed provider-neutral bridge). Kept apart
-    // from foldSemanticEvent because the phase lives beside the semantic
-    // slice on the desktop too — folding it in would diverge the models.
-    const t = state.transcript
-    let streamPhase = t.streamPhase
-    let pendingToolName = t.streamPhasePendingToolName
-    let pendingToolUseId = t.streamPhasePendingToolUseId
-    let turnStartedAt = t.turnStartedAt
-
-    if (eventType === 'stream_phase') {
-      const nextPhase = (typeof record.phase === 'string' ? record.phase : 'idle') as StreamPhase
-      if (nextPhase !== streamPhase) {
-        streamPhase = nextPhase
-        pendingToolName = stringField(record, 'toolName')
-        pendingToolUseId = stringField(record, 'toolUseId')
-        if (nextPhase === 'idle') turnStartedAt = null
-        else if (turnStartedAt === null) turnStartedAt = Date.now()
-      } else if (streamPhase !== 'idle') {
-        pendingToolName = stringField(record, 'toolName') ?? pendingToolName
-        pendingToolUseId = stringField(record, 'toolUseId') ?? pendingToolUseId
-      }
-    } else if (eventType === 'tool_result') {
-      const resultToolUseId = stringField(record, 'toolUseId')
-      if (
-        streamPhase === 'awaiting-tool' &&
-        resultToolUseId !== null &&
-        resultToolUseId === pendingToolUseId
-      ) {
-        streamPhase = 'requesting'
-        pendingToolName = null
-        pendingToolUseId = null
-      }
-    } else if (eventType === 'turn_started') {
-      if (streamPhase === 'submitting' || streamPhase === 'requesting' || streamPhase === 'idle') {
-        streamPhase = 'responding'
-        if (turnStartedAt === null) turnStartedAt = Date.now()
-      }
-    }
-
-    const nextSemantic = foldSemanticEvent(state.semantic, record, this.kindOf(sessionId))
-
-    if (eventType === 'turn_completed' || eventType === 'turn_stopped') {
-      const pendingTool =
-        streamPhase === 'awaiting-tool' ||
-        (nextSemantic.currentTurn !== null && hasPendingSemanticTools(nextSemantic.currentTurn))
-      if (!pendingTool && streamPhase !== 'idle') {
-        streamPhase = 'idle'
-        pendingToolName = null
-        pendingToolUseId = null
-        turnStartedAt = null
-      }
-    }
+    // Desktop order: fold first, then the shared phase machine over the
+    // POST-fold turn (reduceStreamPhase's caller contract).
+    const kind = this.kindOf(sessionId) ?? 'claude'
+    const nextSemantic = foldSemanticEvent(state.semantic, record, kind)
+    const nextPhase = reduceStreamPhase(
+      state.transcript.phase,
+      record,
+      nextSemantic.currentTurn,
+    )
 
     const semanticChanged = nextSemantic !== state.semantic
+    const t = state.transcript
     const phaseChanged =
-      streamPhase !== t.streamPhase ||
-      pendingToolName !== t.streamPhasePendingToolName ||
-      pendingToolUseId !== t.streamPhasePendingToolUseId ||
-      turnStartedAt !== t.turnStartedAt
+      nextPhase.streamPhase !== t.phase.streamPhase ||
+      nextPhase.streamPhasePendingToolName !== t.phase.streamPhasePendingToolName ||
+      nextPhase.streamPhasePendingToolUseId !== t.phase.streamPhasePendingToolUseId ||
+      nextPhase.turnStartedAt !== t.phase.turnStartedAt
     if (!semanticChanged && !phaseChanged) return
 
     state.semantic = nextSemantic
@@ -380,10 +505,7 @@ export class TranscriptStore {
       ...prev,
       semanticTurn: nextSemantic.currentTurn,
       semanticHistory: nextSemantic.history,
-      streamPhase,
-      streamPhasePendingToolName: pendingToolName,
-      streamPhasePendingToolUseId: pendingToolUseId,
-      turnStartedAt,
+      phase: nextPhase,
     }))
   }
 

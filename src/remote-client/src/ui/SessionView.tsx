@@ -6,7 +6,6 @@ import {
   conditionStateByKind,
   type ClaudeAskUserQuestionState,
 } from '@shared/types/providerConditions'
-import { isAgentProviderKind } from '@shared/types/providerKind'
 
 import type { WebSocketSessionFeed, ConnectionState } from '../WebSocketSessionFeed'
 import type { TranscriptStore } from '../transcript/store'
@@ -65,8 +64,7 @@ export function SessionView({
     void store.loadInitialHistory(sessionId)
   }, [store, sessionId])
 
-  const listedKind = feed.getSessionList().find(s => s.sessionId === sessionId)?.kind
-  const provider = listedKind && isAgentProviderKind(listedKind) ? listedKind : 'claude'
+  const provider = store.getKind(sessionId)
 
   const askUserQuestionState = useMemo(
     () =>
@@ -79,16 +77,23 @@ export function SessionView({
     [transcript.conditions],
   )
 
-  // Non-AUQ conditions keep the phone's tap-target bar (AUQ renders inline
-  // in the feed via AskUserQuestionRow, same as desktop). The desktop
-  // shows these as modals/outlets; big buttons are the mobile equivalent.
+  // EVERY live condition renders in the tap-target bar — including
+  // AskUserQuestion, even though the feed also renders it inline via
+  // AskUserQuestionRow. WHY the redundancy is deliberate (review finding):
+  // the inline row depends on the transcript pipeline having delivered a
+  // parseable AUQ block; when the input is still streaming, malformed, or
+  // the backfill raced, the row shows a placeholder with no buttons and the
+  // agent sits blocked with no answer path. The snapshot-driven bar is the
+  // guaranteed fallback — its actions are server-verified against the live
+  // condition's own menu, so a duplicated affordance is safe; a hidden
+  // prompt is not.
   const tapConditions = useMemo<LiveCondition[]>(() => {
     const snapshot = transcript.conditions
     if (!snapshot) return []
     // Object.values over the partial Record types members as possibly
     // undefined; the flatMap narrows instead of asserting.
     return Object.values(snapshot.conditions).flatMap(record => {
-      if (!record || record.kind === 'claude.ask-user-question') return []
+      if (!record) return []
       const actions = (record.actions ?? []) as ConditionAction[]
       if (actions.length === 0) return []
       return [{ conditionKind: record.kind, actions }]
@@ -146,15 +151,27 @@ export function SessionView({
           <span className="title mono">{sessionId.slice(0, 8)}</span>
         </div>
 
+        {/* Pre-transcript fallback: states that never reach the jsonl/
+            semantic channels (trust dialog body, login prompts, provider
+            crash output) exist ONLY as TUI text. Render it until the feed
+            has real content — dropping this entirely made a fresh session's
+            trust dialog a blank page (review finding). */}
+        {transcript.entries.length === 0 &&
+        !transcript.semanticTurn &&
+        transcript.screenText ? (
+          <div className="screen">
+            <pre className="terminal">{transcript.screenText}</pre>
+          </div>
+        ) : (
         <div className="feed-host">
           <Feed
             sessionId={sessionId}
             provider={provider}
             entries={transcript.entries}
-            streamPhase={transcript.streamPhase}
-            streamPhasePendingToolName={transcript.streamPhasePendingToolName}
-            streamPhasePendingToolUseId={transcript.streamPhasePendingToolUseId}
-            turnStartedAt={transcript.turnStartedAt}
+            streamPhase={transcript.phase.streamPhase}
+            streamPhasePendingToolName={transcript.phase.streamPhasePendingToolName}
+            streamPhasePendingToolUseId={transcript.phase.streamPhasePendingToolUseId}
+            turnStartedAt={transcript.phase.turnStartedAt}
             semanticTurn={transcript.semanticTurn}
             semanticHistory={transcript.semanticHistory}
             toolUseIndex={transcript.toolUseIndex}
@@ -166,6 +183,7 @@ export function SessionView({
             onLoadOlderHistory={() => store.loadOlderHistory(sessionId)}
           />
         </div>
+        )}
 
         {working && <div className="working">● {working}</div>}
 
@@ -220,6 +238,7 @@ function titleFor(kind: string): string {
     'claude.permission-prompt': 'Permission requested',
     'claude.trust-dialog': 'Trust this folder?',
     'claude.resume-prompt': 'Resume session?',
+    'claude.ask-user-question': 'The agent has a question',
     'codex.approval': 'Approval requested',
     'codex.trust-dialog': 'Trust this folder?',
   }

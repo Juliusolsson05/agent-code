@@ -422,7 +422,17 @@ export class RemoteServer extends EventEmitter {
     }
     void this.deps.registry.touch(verdict.deviceId)
 
-    const result = await this.apply(frame)
+    // apply() reaches disk (get-history) and provider runtimes; a thrown
+    // error must become a structured reply, not an unhandled rejection that
+    // leaves the phone's request waiting out its 10s timeout (review
+    // finding). Never echo raw error internals to an untrusted socket.
+    let result: { ok: boolean; error?: string; result?: unknown }
+    try {
+      result = await this.apply(frame)
+    } catch (err) {
+      this.deps.journal?.recordError('remote_apply.error', err)
+      result = { ok: false, error: 'internal error applying message' }
+    }
     this.send(ws, { type: 'reply', id: frame.id, ...result })
   }
 
@@ -481,8 +491,14 @@ export class RemoteServer extends EventEmitter {
             })
           : await loadInitialHistoryChunkFromFile(file, msg.limit ?? 120)
         // Raw records, same shape as the live jsonl frames' `entry` halves,
-        // so the phone runs ONE mapper path for backfill and live.
-        return { ok: true, result: chunk }
+        // so the phone runs ONE mapper path for backfill and live. `file`
+        // rides along so the client can detect a transcript ROLL: after
+        // /clear (or a resume that starts a new provider session) the
+        // manager's file cache is stale until the new conversation's first
+        // durable line, and a backfill served from the OLD file must be
+        // discardable client-side by comparing against the file the live
+        // frames carry.
+        return { ok: true, result: { ...chunk, file } }
       }
     }
   }

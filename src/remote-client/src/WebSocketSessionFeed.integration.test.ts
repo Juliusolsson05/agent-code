@@ -214,10 +214,18 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     )
     expect(store.getSnapshot('s1').hasOlderHistory).toBe(false)
 
-    // Semantic stream: a live turn builds via the desktop fold.
+    // Semantic stream: a live turn builds via the desktop fold. The phase
+    // advances on stream_phase (what Claude/Codex adapters actually emit) —
+    // the shared reducer deliberately does NOT bridge turn_started from
+    // 'idle' (desktop-exact semantics; the desktop's bridge only fills the
+    // optimistic submitting/requesting gap, which the phone doesn't set).
     manager.emit('semantic-event', {
       sessionId: 's1',
       event: { type: 'turn_started', turnId: 'turn-1' },
+    })
+    manager.emit('semantic-event', {
+      sessionId: 's1',
+      event: { type: 'stream_phase', phase: 'responding', turnId: 'turn-1' },
     })
     manager.emit('semantic-event', {
       sessionId: 's1',
@@ -232,7 +240,7 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     await vi.waitFor(() => {
       const snap = store.getSnapshot('s1')
       expect(snap.semanticTurn).not.toBeNull()
-      expect(snap.streamPhase).toBe('responding')
+      expect(snap.phase.streamPhase).toBe('responding')
     })
 
     store.dispose()

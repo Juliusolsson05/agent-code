@@ -56,6 +56,10 @@ export type HistoryChunkResult = {
   entries: Array<Record<string, unknown>>
   hasMore: boolean
   totalEntries?: number
+  /** Which transcript file the server read. The client compares this
+   *  against the file its live frames carry to detect a stale serve from
+   *  the post-/clear cache window — see TranscriptStore.chunkFileConflicts. */
+  file?: string
 }
 
 export type InboundFrame = {

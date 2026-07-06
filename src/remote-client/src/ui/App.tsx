@@ -85,7 +85,10 @@ export function App(): React.JSX.Element {
     setToken(null)
   }
 
-  if (!token || !feed) {
+  // store is non-null exactly when feed is (same memo condition); the
+  // single guard keeps the narrowing in one place instead of a dead
+  // second PairScreen further down (review finding).
+  if (!token || !feed || !store) {
     return (
       <PairScreen
         busy={autoPairing}
@@ -113,8 +116,6 @@ export function App(): React.JSX.Element {
       />
     )
   }
-
-  if (!store) return <PairScreen busy={false} error={null} onSubmitCode={async () => {}} />
 
   return (
     <SessionView
