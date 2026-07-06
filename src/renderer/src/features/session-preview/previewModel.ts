@@ -5,12 +5,10 @@ import type {
   ToolUseBlock,
 } from '@shared/types/transcript'
 import {
-  isCompactBoundaryEntry,
   isCompactSummaryEntry,
   isConversationEntry,
 } from '@shared/types/transcript'
-import { mapCodexRolloutToFeedEntries } from '@renderer/workspace/codex/rollout'
-import { extractEmbeddedClaudeProgressEntry } from '@renderer/workspace/claude/history'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
 
 // previewModel — turn a raw JSONL transcript tail into the exact inputs
@@ -65,28 +63,19 @@ export function buildPreviewModel(
   const toolUseIndex = new Map<string, ToolUseBlock>()
   const toolResultIndex = new Map<string, ToolResultBlock>()
 
+  // Registry-owned mapper (#394 phase 2b): the per-provider mapping
+  // (Codex rollout fan-out + turn stamping, Claude progress-unwrap +
+  // conversation/compact filter) lives on the provider capability, so
+  // the preview and every live ingestion path agree on which lines are
+  // content by construction rather than by four hand-synced copies.
+  // The preview keeps its documented simplifications — no dedupe, no
+  // markers, no ghosts (the tail is a single contiguous chunk).
+  const mapper = getRendererProviderCapabilities(kind).createTranscriptEntryMapper()
+
   for (const raw of rawEntries) {
-    if (kind === 'codex') {
-      // One rollout line can fan out to several feed entries (a
-      // `compacted` line yields a boundary + summary + replacement
-      // history). Index each so tool pairing works.
-      for (const mapped of mapCodexRolloutToFeedEntries(raw)) {
-        entries.push(mapped)
-        indexEntryIntoMaps(mapped, toolUseIndex, toolResultIndex)
-      }
-      continue
-    }
-    // Claude: unwrap a live progress wrapper if present, else treat the
-    // raw line as an Entry. Same filter the live history loader applies
-    // so the preview and the feed agree on which lines are content.
-    const feedEntry = extractEmbeddedClaudeProgressEntry(raw) ?? (raw as Entry)
-    if (
-      isConversationEntry(feedEntry) ||
-      isCompactBoundaryEntry(feedEntry) ||
-      isCompactSummaryEntry(feedEntry)
-    ) {
-      entries.push(feedEntry)
-      indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)
+    for (const mapped of mapper.map(raw).entries) {
+      entries.push(mapped)
+      indexEntryIntoMaps(mapped, toolUseIndex, toolResultIndex)
     }
   }
 

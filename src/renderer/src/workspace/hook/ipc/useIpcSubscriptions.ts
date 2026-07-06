@@ -1,12 +1,14 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import {
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+  type AgentProviderKind,
+} from '@shared/types/providerKind'
 import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
-import {
-  isCompactBoundaryEntry,
-  isCompactSummaryEntry,
-  isConversationEntry,
-} from '@shared/types/transcript'
+import { isCompactSummaryEntry } from '@shared/types/transcript'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
 import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/workspace/runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
@@ -24,21 +26,7 @@ import {
   extractCodexProviderSessionId,
   isCodexRolloutEntry,
   isOptimisticCodexUserEntry,
-} from '@renderer/workspace/codex/entries'
-import {
-  codexHistoryMarker,
-  codexTurnIdFromRollout,
-  mapCodexRolloutToFeedEntries,
-  stampCodexTurnId,
-} from '@renderer/workspace/codex/rollout'
-import {
-  codexEventType,
-  codexTurnIdFromEventPayload,
-} from '@renderer/workspace/codex/eventCursor'
-import {
-  claudeHistoryMarker,
-  extractEmbeddedClaudeProgressEntry,
-} from '@renderer/workspace/claude/history'
+} from '@providers/codex/renderer/transcript/entries'
 import {
   entryTextContent,
   indexEntryIntoMaps,
@@ -1330,15 +1318,49 @@ export function useIpcSubscriptions(
         // signal React gets that a cross-entry pairing moved.
         let toolIndexChanged = false
 
-        // Rolling Codex turn id. `turn_context` was the first source we
-        // used, but it is too sparse for live rendering: the authoritative
-        // user message that should replace the optimistic prompt can arrive
-        // after unrelated tool-result user rows, in a separate burst, with
-        // only `payload.turn_id` tying it back to the active task. Stamping
-        // every mapped response item gives reconcileUpstream and semantic
-        // ownership a stable key instead of guessing from feed position.
-        let codexCurrentTurnId: string | null =
-          codexCurrentTurnIdBySession.get(sessionId) ?? null
+        // Registry-owned transcript mapping (#394 phase 2b).
+        //
+        // Routing is by SESSION KIND (state.sessions[id].kind), no
+        // longer by per-line shape sniffing. WHY: shape sniffing was
+        // the fourth hand-synced copy of "what does a codex line look
+        // like," and it silently misclassified a third provider's
+        // lines as Claude (#394 §4.5). The session kind is the
+        // authoritative routing key — one transcript file per session,
+        // one provider format per file.
+        //
+        // Fallback: bursts can land before the session's meta exists
+        // (restore races). In that window `mappingKind` is null and we
+        // fall back to the old per-line sniff so early codex
+        // session_meta lines aren't misrouted. Once meta exists, kind
+        // wins — and a SHADOW comparison counts lines where the sniff
+        // disagrees with the kind route. Mismatches mean either a
+        // #290-class wrong-transcript attach (foreign provider's lines
+        // in this session's stream) or discriminator drift; both are
+        // exactly what we want visible in feed-debug instead of
+        // silently rendering as someone else's conversation.
+        //
+        // The Codex mapper's rolling turn cursor (formerly the local
+        // `codexCurrentTurnId`) is seeded from and persisted back to
+        // `codexCurrentTurnIdBySession` after the loop — the cursor
+        // must survive across bursts because the authoritative user
+        // message that replaces an optimistic prompt can arrive in a
+        // later burst with only `payload.turn_id` tying it back.
+        const mappingKindRaw = metaForProviderGate?.kind ?? (metaForProviderGate ? DEFAULT_PROVIDER : null)
+        const mappingKind: AgentProviderKind | null =
+          mappingKindRaw !== null && isAgentProviderKind(mappingKindRaw) ? mappingKindRaw : null
+        const mappersByKind = new Map<AgentProviderKind, TranscriptEntryMapper>()
+        const mapperFor = (kind: AgentProviderKind): TranscriptEntryMapper => {
+          let m = mappersByKind.get(kind)
+          if (!m) {
+            m = getRendererProviderCapabilities(kind).createTranscriptEntryMapper(
+              kind === 'codex' ? codexCurrentTurnIdBySession.get(sessionId) ?? null : null,
+            )
+            mappersByKind.set(kind, m)
+          }
+          return m
+        }
+        let routeShadowMismatches = 0
+        let routeShadowSample: string | null = null
 
         for (const { entry: raw } of entries) {
           if (canIngestWorkContext(raw, hasWorktreeCache)) {
@@ -1351,16 +1373,66 @@ export function useIpcSubscriptions(
             workContext = deriveAgentWorkContext(workActivity)
           }
 
-          // ---- Codex rollout branch ----
-          if (isCodexRolloutEntry(raw)) {
-            const turnContextId = codexTurnIdFromRollout(raw)
-            if (turnContextId !== null) codexCurrentTurnId = turnContextId
-            const payloadTurnId = codexTurnIdFromEventPayload(raw)
-            if (payloadTurnId !== null) codexCurrentTurnId = payloadTurnId
-            const mappedRaw = mapCodexRolloutToFeedEntries(raw)
-            const mapped = mappedRaw.map(e => stampCodexTurnId(e, codexCurrentTurnId))
-            const marker = mapped.length > 0 ? codexHistoryMarker(raw) : null
-            if (marker && !oldestMarker) oldestMarker = marker
+          // ---- Claude queue-operation branch ----
+          // Checked BEFORE the mapper on purpose: queue-operation
+          // entries produce NO feed entries (the claude mapper filters
+          // them) but carry side effects on queuedMessages /
+          // awaitingAssistant that only exist at this live site. The
+          // raw-type check is provider-safe — codex rollout lines
+          // never carry type 'queue-operation'. See
+          // claude-code-src/utils/messageQueueManager.ts for the emit
+          // sites; 'dequeue'/'remove' collapse to "drop head" because
+          // we don't have identity info to do better.
+          const entryType = (raw as { type?: string }).type
+          if (entryType === 'queue-operation') {
+            const op = raw as {
+              operation?: 'enqueue' | 'dequeue' | 'remove'
+              content?: string
+              timestamp?: string
+            }
+            if (op.operation === 'enqueue' && typeof op.content === 'string') {
+              const ts = op.timestamp ?? String(Date.now())
+              const already = queuedMessages.some(
+                q => q.timestamp === ts && q.content === op.content,
+              )
+              if (!already) {
+                queuedMessages = [
+                  ...queuedMessages,
+                  { content: op.content, timestamp: ts },
+                ]
+              }
+            } else if (op.operation === 'dequeue' || op.operation === 'remove') {
+              queuedMessages = queuedMessages.slice(1)
+            }
+            // Force the streaming flag on whenever the queue has
+            // items so the streaming card doesn't disappear
+            // between turns while CC is draining queued work.
+            if (queuedMessages.length > 0) awaitingAssistant = true
+            continue
+          }
+
+          // ---- Unified mapper routing ----
+          const shapeSaysCodex = isCodexRolloutEntry(raw)
+          const routedKind: AgentProviderKind =
+            mappingKind ?? (shapeSaysCodex ? 'codex' : 'claude')
+          if (mappingKind !== null && shapeSaysCodex !== (mappingKind === 'codex')) {
+            routeShadowMismatches += 1
+            if (!routeShadowSample) {
+              routeShadowSample = String((raw as { type?: unknown }).type ?? 'unknown')
+            }
+          }
+          const { entries: mapped, historyMarker: marker } =
+            mapperFor(routedKind).map(raw)
+          // Marker policy: first KEPT line of the burst anchors older-
+          // history pagination. NOTE deliberate unification: the old
+          // claude live path recorded the marker before its filter
+          // (any uuid-bearing line, even filtered system lines); the
+          // bootstrap/older sites only recorded kept lines. Kept-only
+          // is now uniform — worst case pagination re-reads a few
+          // filtered lines, which the filter drops again.
+          if (mapped.length > 0 && marker && !oldestMarker) oldestMarker = marker
+
+          if (routedKind === 'codex') {
 
             // Optimistic-user reconciliation.
             //
@@ -1440,88 +1512,31 @@ export function useIpcSubscriptions(
                 reconciledOptimisticText = mappedText
               }
             }
-
-            for (const e of mapped) {
-              const u = entryUuid(e)
-              if (u) {
-                if (seen.has(u)) continue
-                seen.add(u)
-              }
-              appended.push(e)
-              if (indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)) {
-                toolIndexChanged = true
-              }
-            }
-            const eventType = codexEventType(raw)
-            if (
-              eventType === 'task_complete' ||
-              eventType === 'turn_complete' ||
-              eventType === 'turn_aborted'
-            ) {
-              codexCurrentTurnId = null
-            }
-            continue
           }
 
-          // ---- Claude queue-operation branch ----
-          // queue-operation entries are CC's internal
-          // message-queue bookkeeping (see
-          // claude-code-src/utils/messageQueueManager.ts for the
-          // emit sites). 'enqueue' / 'dequeue' / 'remove' — the
-          // latter two are collapsed into "drop head" because we
-          // don't have identity info to do better. Not pushed
-          // into `entries` (would render as feed noise).
-          const entryType = (raw as { type?: string }).type
-          if (entryType === 'queue-operation') {
-            const op = raw as {
-              operation?: 'enqueue' | 'dequeue' | 'remove'
-              content?: string
-              timestamp?: string
+          // ---- Shared append path (both providers) ----
+          // Dedupe order note: the old claude branch added uuids of
+          // FILTERED lines to `seen` too (dedupe ran before the
+          // conversation filter). The mapper filters first, so
+          // filtered lines never reach dedupe — inconsequential,
+          // because a re-arriving filtered line is filtered again.
+          //
+          // pendingCompaction clearing now applies to BOTH providers'
+          // mapped compact summaries (the old codex branch never
+          // cleared it — latent gap; for codex the flag is normally
+          // null so this is a no-op today, correct if codex ever
+          // grows a compaction condition).
+          for (const e of mapped) {
+            const u = entryUuid(e)
+            if (u) {
+              if (seen.has(u)) continue
+              seen.add(u)
             }
-            if (op.operation === 'enqueue' && typeof op.content === 'string') {
-              const ts = op.timestamp ?? String(Date.now())
-              const already = queuedMessages.some(
-                q => q.timestamp === ts && q.content === op.content,
-              )
-              if (!already) {
-                queuedMessages = [
-                  ...queuedMessages,
-                  { content: op.content, timestamp: ts },
-                ]
-              }
-            } else if (op.operation === 'dequeue' || op.operation === 'remove') {
-              queuedMessages = queuedMessages.slice(1)
+            if (isCompactSummaryEntry(e)) pendingCompaction = null
+            appended.push(e)
+            if (indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)) {
+              toolIndexChanged = true
             }
-            // Force the streaming flag on whenever the queue has
-            // items so the streaming card doesn't disappear
-            // between turns while CC is draining queued work.
-            if (queuedMessages.length > 0) awaitingAssistant = true
-            continue
-          }
-
-          // ---- Claude conversation entry branch ----
-          const rawRecord = asRecord(raw) ?? {}
-          const feedEntry =
-            extractEmbeddedClaudeProgressEntry(rawRecord) ??
-            (raw as Entry)
-          const marker = claudeHistoryMarker(rawRecord)
-          if (marker && !oldestMarker) oldestMarker = marker
-          const uuid = entryUuid(feedEntry)
-          if (uuid) {
-            if (seen.has(uuid)) continue
-            seen.add(uuid)
-          }
-          if (
-            !isConversationEntry(feedEntry) &&
-            !isCompactBoundaryEntry(feedEntry) &&
-            !isCompactSummaryEntry(feedEntry)
-          ) {
-            continue
-          }
-          if (isCompactSummaryEntry(feedEntry)) pendingCompaction = null
-          appended.push(feedEntry)
-          if (indexEntryIntoMaps(feedEntry, toolUseIndex, toolResultIndex)) {
-            toolIndexChanged = true
           }
         }
 
@@ -1590,10 +1605,18 @@ export function useIpcSubscriptions(
           window.api.ghostAppend(sessionId, ghost)
         }
 
-        if (codexCurrentTurnId === null) {
-          codexCurrentTurnIdBySession.delete(sessionId)
-        } else {
-          codexCurrentTurnIdBySession.set(sessionId, codexCurrentTurnId)
+        // Persist the codex mapper's rolling turn cursor across bursts.
+        // Only when a codex mapper was actually used this burst — a
+        // claude-kind session leaves the map untouched (equivalent to
+        // the old read-then-write-back of the same value).
+        const codexMapper = mappersByKind.get('codex')
+        if (codexMapper) {
+          const cursor = codexMapper.getTurnCursor()
+          if (cursor === null) {
+            codexCurrentTurnIdBySession.delete(sessionId)
+          } else {
+            codexCurrentTurnIdBySession.set(sessionId, cursor)
+          }
         }
 
         // Bail only when literally nothing changed. Approval,
@@ -1704,6 +1727,14 @@ export function useIpcSubscriptions(
                 workContext,
                 workActivity: summarizeWorktreeActivity(workActivity),
                 conditions: current.conditions,
+                // Shadow route comparison (#394 phase 2b): count of
+                // lines this burst where the legacy shape sniff
+                // disagreed with the session-kind route. Nonzero means
+                // a #290-class foreign-transcript attach or
+                // discriminator drift — see the routing comment at the
+                // top of this handler.
+                routeShadowMismatches,
+                routeShadowSampleType: routeShadowSample,
               },
             },
           ),

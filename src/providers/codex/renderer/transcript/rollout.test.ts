@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { mapCodexRolloutToFeedEntries } from '@renderer/workspace/codex/rollout'
+import { mapCodexRolloutToFeedEntries } from '@providers/codex/renderer/transcript/rollout'
 
 function userMessage(text: string): Record<string, unknown> {
   return {

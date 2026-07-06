@@ -12,6 +12,15 @@ import {
   renderCodexToolResult,
   renderCodexToolUse,
 } from '@providers/codex/renderer/rows/dispatch'
+import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
+import {
+  createClaudeTranscriptEntryMapper,
+  extractClaudeProviderSessionId,
+} from '@providers/claude/renderer/transcript/mapper'
+import {
+  createCodexTranscriptEntryMapper,
+  extractCodexProviderSessionId,
+} from '@providers/codex/renderer/transcript/mapper'
 
 export type RendererProviderCapabilities = {
   id: AgentProviderKind
@@ -22,6 +31,21 @@ export type RendererProviderCapabilities = {
     block: ToolResultBlock,
     context: { sourceTool?: ToolUseBlock | null },
   ) => ReactNode | undefined
+  /**
+   * Provider-owned transcript-line → feed-entry mapping (#394 phase
+   * 2b). One fresh mapper per ingestion stream; see the
+   * TranscriptEntryMapper docstring in providerConfig.ts for the
+   * stateful-cursor rationale. Replaced the quadruplicated
+   * per-provider mapping loops in useIpcSubscriptions /
+   * initialHistory / history / previewModel.
+   */
+  createTranscriptEntryMapper: (initialTurnCursor?: string | null) => TranscriptEntryMapper
+  /**
+   * Pass-A identity capture: extract the durable provider session id
+   * this raw line claims, or null. Claude: `sessionId` on any entry;
+   * Codex: session_meta `payload.id`.
+   */
+  extractProviderSessionId: (raw: Record<string, unknown>) => string | null
 }
 
 const claudeCapabilities: RendererProviderCapabilities = {
@@ -30,6 +54,8 @@ const claudeCapabilities: RendererProviderCapabilities = {
   conditionViews: CLAUDE_VIEWS,
   renderToolUse: renderClaudeToolUse,
   renderToolResult: renderClaudeToolResult,
+  createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
+  extractProviderSessionId: extractClaudeProviderSessionId,
 }
 
 const codexCapabilities: RendererProviderCapabilities = {
@@ -38,6 +64,9 @@ const codexCapabilities: RendererProviderCapabilities = {
   conditionViews: CODEX_VIEWS,
   renderToolUse: renderCodexToolUse,
   renderToolResult: renderCodexToolResult,
+  createTranscriptEntryMapper: (initialTurnCursor) =>
+    createCodexTranscriptEntryMapper(initialTurnCursor ?? null),
+  extractProviderSessionId: extractCodexProviderSessionId,
 }
 
 const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCapabilities> = {

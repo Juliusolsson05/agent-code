@@ -10,7 +10,7 @@ import { withDerivedSessionStatus } from '@renderer/workspace/semantic/helpers'
 import {
   entryTextContent,
 } from '@renderer/workspace/entries/utils'
-import { isOptimisticCodexUserEntry } from '@renderer/workspace/codex/entries'
+import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript/entries'
 import { isSemanticTurnRunning } from '@renderer/workspace/semantic/helpers'
 import {
   buildCommittedAssistantText,
