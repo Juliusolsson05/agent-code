@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useRef } from 'react'
 
 import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
@@ -226,7 +227,7 @@ export function useSessionActions(
         builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
-      const kind: SessionKind = opts?.kind ?? 'claude'
+      const kind: SessionKind = opts?.kind ?? DEFAULT_PROVIDER
       const dangerousMode =
         opts?.dangerousMode ??
         (kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined)
@@ -409,7 +410,7 @@ export function useSessionActions(
         if (!meta) {
           throw new Error(`Cannot wake ${sessionId}; no persisted session metadata exists.`)
         }
-        const kind: SessionKind = meta.kind ?? 'claude'
+        const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
 
         const liveKind = await window.api.getLiveSessionKind(sessionId)
         if (liveKind === kind) {
@@ -608,7 +609,7 @@ export function useSessionActions(
       if (!oldId) return
       const oldMeta = snapshot.sessions[oldId]
       if (!oldMeta) return
-      const nextKind = spawnOpts.kind ?? oldMeta?.kind ?? 'claude'
+      const nextKind = spawnOpts.kind ?? oldMeta?.kind ?? DEFAULT_PROVIDER
       // WHY replaceSession inherits MCP domains by default:
       //
       // Reload, provider switch, resume, and rewind all funnel through this
@@ -771,8 +772,8 @@ export function useSessionActions(
       // the wake-on-attach UI later spawns them.
       const agentEntries = Object.entries(current.sessions).filter(([id, meta]) => {
         if (!liveProcessIds.has(id)) return false
-        const kind = meta.kind ?? 'claude'
-        return kind === 'claude' || kind === 'codex'
+        const kind = meta.kind ?? DEFAULT_PROVIDER
+        return isAgentProviderKind(kind)
       })
       if (agentEntries.length === 0) return
 
@@ -793,7 +794,7 @@ export function useSessionActions(
         delete refs.latestScreenRef.current[oldId]
 
         try {
-          const kind: SessionKind = meta.kind ?? 'claude'
+          const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
           const builtInMcpDomains =
             kind !== 'terminal'
               ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains)
@@ -966,7 +967,7 @@ export function useSessionActions(
 
       const meta = snapshot.sessions[sessionId]
       if (!meta) return null
-      const kind = meta.kind ?? 'claude'
+      const kind = meta.kind ?? DEFAULT_PROVIDER
       if (kind !== 'claude' && kind !== 'codex') return null
 
       const hasProviderSession = hasDurableProviderSession(meta)

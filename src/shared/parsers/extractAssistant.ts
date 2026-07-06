@@ -12,8 +12,14 @@
 // deps so we can't import through them in browser context.
 import { extractAssistantInProgress as claudeExtract } from '@shared/parsers/claudeScreen'
 import { extractCodexAssistantInProgress as codexExtract } from '@shared/parsers/codexScreen'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
-export type AgentProvider = 'claude' | 'codex'
+// Alias of the single provider source of truth (#394 phase 1). The
+// dispatch below is still hand-written — moving the parser onto the
+// provider registry is phase-2 work — but it is now an exhaustive
+// switch, so registering a third provider makes THIS site a compile
+// error instead of silently routing to the Claude parser.
+export type AgentProvider = AgentProviderKind
 
 /**
  * Extract the most-recent assistant text block from a screen snapshot,
@@ -29,6 +35,13 @@ export function extractAssistantInProgress(
   screen: string,
   provider: AgentProvider,
 ): string {
-  if (provider === 'codex') return codexExtract(screen)
-  return claudeExtract(screen)
+  // Exhaustive on purpose — no default arm. TypeScript proves every
+  // AgentProviderKind is handled; a new provider fails compilation
+  // here rather than inheriting Claude's parser at runtime.
+  switch (provider) {
+    case 'codex':
+      return codexExtract(screen)
+    case 'claude':
+      return claudeExtract(screen)
+  }
 }

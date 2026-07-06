@@ -5,7 +5,7 @@ import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/ses
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 
 // Switch Agents modal — bulk provider switch + remembered-batch return.
 //
@@ -96,7 +96,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
 
         const meta = workspace.state.sessions[sessionId]
         if (!meta) continue
-        const kind = meta.kind ?? 'claude'
+        const kind = meta.kind ?? DEFAULT_PROVIDER
         // Only source-provider agents are switchable to the target. Terminals
         // (kind 'terminal') are excluded by this same check.
         if (kind !== source) continue

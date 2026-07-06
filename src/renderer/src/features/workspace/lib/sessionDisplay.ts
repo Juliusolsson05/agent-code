@@ -1,3 +1,4 @@
+import type { SessionKind } from '@shared/types/providerKind'
 // Small display helpers shared by the workspace's search and
 // activity modals (PromptSearchModal, AgentActivityModal).
 //
@@ -24,7 +25,7 @@ export function cwdBasename(cwd: string): string {
 // to special-case its row renderer. Callers that only deal with
 // agent providers (PromptSearchModal) can still pass the narrower
 // 'claude' | 'codex' subset — TypeScript will accept it.
-export function providerGlyph(kind: 'claude' | 'codex' | 'terminal'): string {
+export function providerGlyph(kind: SessionKind): string {
   if (kind === 'claude') return '⏺'
   if (kind === 'codex') return '›'
   return '$'

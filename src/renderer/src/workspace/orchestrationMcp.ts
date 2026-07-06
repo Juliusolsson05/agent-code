@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 import type {
   OrchestrationAgentMessage,
   OrchestrationAgentOutput,
@@ -152,7 +153,7 @@ function matchingOrchestrationSessionIds(
 ): SessionId[] {
   return Object.entries(state.sessions)
     .filter(([, meta]) => {
-      const kind = meta.kind ?? 'claude'
+      const kind = meta.kind ?? DEFAULT_PROVIDER
       if (kind !== 'claude' && kind !== 'codex') return false
       if (!isVisibleToOrchestrationParent(meta, parentSessionId)) return false
       return runId ? meta.orchestrationRunId === runId : true
@@ -236,7 +237,7 @@ function buildAgentRecord(params: {
   const activityAt = lastActivityAt(params.runtime, messages)
   return {
     sessionId: params.sessionId,
-    kind: (params.meta.kind ?? 'claude') as 'claude' | 'codex',
+    kind: (params.meta.kind ?? DEFAULT_PROVIDER) as AgentProviderKind,
     cwd: params.meta.cwd,
     ...(params.meta.title ? { title: params.meta.title } : {}),
     orchestrationParentId: params.meta.orchestrationParentId ?? params.parentSessionId,

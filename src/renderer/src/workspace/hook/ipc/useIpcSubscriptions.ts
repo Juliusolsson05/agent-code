@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
@@ -852,14 +853,14 @@ export function useIpcSubscriptions(
       }
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
-        // WHY `?? 'claude'` default: Claude is the pre-fix
+        // WHY `?? DEFAULT_PROVIDER` default: Claude is the pre-fix
         // behavior (auto-replace / self-heal on turnId mismatch).
         // Falling back to the looser behavior during a
         // teardown-race where the session meta is momentarily
         // absent avoids silently dropping events we'd actually
         // want to keep. See
         // docs/superpowers/plans/2026-04-17-claude-semantic-provider-gating.md.
-        const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind ?? 'claude'
+        const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
 
         // prompt_suggestion is an ephemeral next-prompt hint, NOT a turn. It
         // must never enter foldSemanticEvent / semantic history (that is the

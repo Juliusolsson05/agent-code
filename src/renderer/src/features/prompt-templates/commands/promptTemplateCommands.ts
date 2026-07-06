@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
@@ -5,7 +6,7 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 function focusedAgentSessionId(workspace: Workspace): string | null {
   const sessionId = commandTargetSessionId(workspace)
   if (!sessionId) return null
-  const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+  const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
   return kind === 'terminal' ? null : sessionId
 }
 

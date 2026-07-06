@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -93,8 +94,8 @@ export function NewAgentPlacementOverlay({
   const kindOnly = dispatchMode || linkedMode
   const kindOptions = useMemo(
     () => kindOnly
-      ? KIND_OPTIONS.filter((option): option is Extract<typeof KIND_OPTIONS[number], { kind: 'claude' | 'codex' }> =>
-          option.kind === 'claude' || option.kind === 'codex',
+      ? KIND_OPTIONS.filter((option): option is Extract<typeof KIND_OPTIONS[number], { kind: AgentProviderKind }> =>
+          isAgentProviderKind(option.kind),
         )
       : KIND_OPTIONS,
     [kindOnly],
@@ -149,7 +150,7 @@ export function NewAgentPlacementOverlay({
     // attachDetachedToGrid which doesn't take a kind argument.
     if (attachMode) {
       const kind = attachIntent
-        ? workspace.state.sessions[attachIntent.sessionId]?.kind ?? 'claude'
+        ? workspace.state.sessions[attachIntent.sessionId]?.kind ?? DEFAULT_PROVIDER
         : 'claude'
       setSelectedKind(kind)
     } else {

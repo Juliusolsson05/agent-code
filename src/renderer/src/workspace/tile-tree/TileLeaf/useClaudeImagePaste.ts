@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -68,7 +69,7 @@ export function useClaudeImagePaste({
   setDraftImages,
   showToast,
 }: {
-  provider: 'claude' | 'codex'
+  provider: AgentProviderKind
   sessionId: SessionId
   setDraftImages: (
     sessionId: SessionId,

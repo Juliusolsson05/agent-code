@@ -1,8 +1,9 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
 
 /** Which agent provider this Feed is rendering for. Determines
  *  which row renderers are used for tool_use blocks. */
-export type AgentProvider = 'claude' | 'codex'
+export type AgentProvider = AgentProviderKind
 
 /** Scroll info pushed from Feed to its parent on every scroll tick.
  *  Used by TileLeaf to render the scroll position indicator. */

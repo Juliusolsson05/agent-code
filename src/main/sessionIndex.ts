@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { readdir, readFile, stat } from 'fs/promises'
 import { join } from 'path'
 
@@ -50,7 +51,7 @@ export type SessionIndexEntry = {
   /** Provider-side uuid (Claude) or rollout uuid (Codex). Stable;
    *  used as the resume argument. */
   providerSessionId: string
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   /** Cwd the session was recorded in (from session_meta for Codex;
    *  from the first entry's cwd field for Claude). Falls back to
    *  empty string if not discoverable. */
@@ -111,7 +112,7 @@ type CacheEntry = {
  *  across providers in practice, but we prefix to be safe. */
 const promptCache = new Map<string, CacheEntry>()
 
-function cacheKey(kind: 'claude' | 'codex', id: string): string {
+function cacheKey(kind: AgentProviderKind, id: string): string {
   return `${kind}:${id}`
 }
 
@@ -265,7 +266,7 @@ async function discoverCodexSessions(): Promise<
  *  detection). A proper reverse reader is future work if the full read
  *  starts to hurt. */
 async function extractPromptsFromFile(
-  kind: 'claude' | 'codex',
+  kind: AgentProviderKind,
   sessionId: string,
   file: string,
 ): Promise<{ prompts: SessionIndexPrompt[]; cwd: string }> {
@@ -553,7 +554,7 @@ export async function listRecentSessionsWithPrompts(
 
   // Unify into one discovery list with provider tagged.
   const candidates: Array<{
-    kind: 'claude' | 'codex'
+    kind: AgentProviderKind
     providerSessionId: string
     file: string
     lastModified: number
@@ -653,7 +654,7 @@ export async function searchSessionPrompts(
     const claude = await discoverClaudeSessions(cwd)
     const codex = await discoverCodexSessions()
   const candidates: Array<{
-    kind: 'claude' | 'codex'
+    kind: AgentProviderKind
     providerSessionId: string
     file: string
     lastModified: number

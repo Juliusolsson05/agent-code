@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useEffect, useRef, useState } from 'react'
 
 import { PathInput } from '@renderer/ui/PathInput'
@@ -24,7 +25,7 @@ import type { SessionInfo } from '@shared/types/session'
 // the modal chrome, session list fetching, and the submit → validate
 // → spawn wiring.
 
-export type AgentProvider = 'claude' | 'codex'
+export type AgentProvider = AgentProviderKind
 
 type Props = {
   open: boolean

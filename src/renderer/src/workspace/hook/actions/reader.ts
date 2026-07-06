@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
@@ -35,7 +36,7 @@ export function useReaderActions(
     setReaderMode(prev => {
       if (prev) return null
       if (!target) return prev
-      const kind = current.sessions[target.sessionId]?.kind ?? 'claude'
+      const kind = current.sessions[target.sessionId]?.kind ?? DEFAULT_PROVIDER
       if (kind !== 'claude' && kind !== 'codex') return prev
       return {
         tabId: target.tabId,

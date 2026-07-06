@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
@@ -21,13 +22,13 @@ export const copyAssistantCommands: CommandDef[] = [
     when: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)
       if (!sessionId) return false
-      const kind = workspace.state.sessions[sessionId]?.kind ?? 'claude'
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
       // WHY this stays provider-only:
       // the picker indexes assistant transcript entries, not arbitrary pane
       // text. Terminal sessions only expose PTY bytes to xterm, so enabling
       // this on a terminal row would create an empty picker that cannot ever
       // find a valid assistant message.
-      return kind === 'claude' || kind === 'codex'
+      return isAgentProviderKind(kind)
     },
     run: ({ workspace }) => {
       const sessionId = commandTargetSessionId(workspace)

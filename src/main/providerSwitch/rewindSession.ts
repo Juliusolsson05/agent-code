@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 // Rewind a live session on disk to "just before" a selected user prompt.
 //
 // Reads the source provider transcript, calls the parser-layer
@@ -38,7 +39,7 @@ export type RewindSessionAnchor =
   | ({ kind: 'codex' } & RewindCodexAnchor)
 
 export type RewindSessionRequest = {
-  provider: 'claude' | 'codex'
+  provider: AgentProviderKind
   sourceProviderSessionId: string
   /** Required for Claude — session files are scoped to a cwd.
    *  Ignored for Codex since rollouts are discovered globally. */
@@ -55,7 +56,7 @@ export type RewindSessionImage = {
 }
 
 export type RewindSessionResult = {
-  provider: 'claude' | 'codex'
+  provider: AgentProviderKind
   newProviderSessionId: string
   /** Absolute path to the truncated transcript on disk. */
   newFilePath: string

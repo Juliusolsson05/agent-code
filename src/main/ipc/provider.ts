@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcMain } from 'electron'
 
 import { switchProvider } from '@main/providerSwitch/switchProvider.js'
@@ -26,7 +27,7 @@ export function registerProviderIpc(): void {
     async (
       _evt,
       params: {
-        sourceKind: 'claude' | 'codex'
+        sourceKind: AgentProviderKind
         sourceProviderSessionId: string
         cwd: string
         sourceCwd?: string
@@ -42,7 +43,7 @@ export function registerProviderIpc(): void {
     async (
       _evt,
       params: {
-        provider: 'claude' | 'codex'
+        provider: AgentProviderKind
         sourceProviderSessionId: string
         cwd: string
         sourceCwd?: string

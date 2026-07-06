@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { MutableRefObject } from 'react'
 
 import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
@@ -51,7 +52,7 @@ export function ComposerInput({
   input: string
   focused: boolean
   slashMode: boolean
-  provider: 'claude' | 'codex'
+  provider: AgentProviderKind
   draftImages: ClaudeDraftImage[]
   pickerState: SlashPickerState | null
   historyIndex: number | null

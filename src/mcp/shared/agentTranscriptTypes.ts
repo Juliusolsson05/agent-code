@@ -1,4 +1,9 @@
-export type AgentTranscriptProvider = 'claude' | 'codex'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
+
+// Alias of the single provider source of truth (#394 phase 1). 'auto'
+// stays a transcript-tool concept (content-sniff the provider), not a
+// provider kind.
+export type AgentTranscriptProvider = AgentProviderKind
 export type AgentTranscriptProviderInput = AgentTranscriptProvider | 'auto'
 
 export type AgentTranscriptProjection =

@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 import { formatWorktreeDumpPrompt } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -27,7 +28,7 @@ const CUSTOM_TEMPLATES_KEY = PROMPT_TEMPLATES_STORAGE_KEY
 
 type AgentTranscriptRequest = {
   sessionId: string
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   cwd: string
   providerSessionId: string
 }
@@ -83,7 +84,7 @@ function activeTabAgentTranscriptRequests(workspace: Workspace): AgentTranscript
   const sessionIds = resolveTabSessions(workspace.state, tab.id)
   return sessionIds.flatMap(sessionId => {
     const meta = workspace.state.sessions[sessionId]
-    const kind = meta?.kind ?? 'claude'
+    const kind = meta?.kind ?? DEFAULT_PROVIDER
     if ((kind !== 'claude' && kind !== 'codex') || !meta?.providerSessionId) {
       return []
     }

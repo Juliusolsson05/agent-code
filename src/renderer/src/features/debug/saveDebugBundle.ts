@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import { useAppStore } from '@renderer/app-state/store'
@@ -576,8 +577,8 @@ export async function autosaveActiveAgentDebugBundles(
   const candidates = Object.entries(workspace.runtimes)
     .filter(([sessionId, runtime]) => {
       const meta = workspace.state.sessions[sessionId]
-      const kind = meta?.kind ?? 'claude'
-      return (kind === 'claude' || kind === 'codex') && runtime.exited === null
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind) && runtime.exited === null
     })
 
   const saved: AutoDebugBundleResult['saved'] = []
@@ -585,7 +586,7 @@ export async function autosaveActiveAgentDebugBundles(
 
   const saveOne = async ([sessionId, runtime]: [string, SessionRuntime]) => {
     const meta = workspace.state.sessions[sessionId]
-    const kind = meta?.kind ?? 'claude'
+    const kind = meta?.kind ?? DEFAULT_PROVIDER
     try {
       const { bundlePath } = await assembleAndSaveDebugBundle({
         sessionId,
@@ -645,7 +646,7 @@ export async function runSaveDebugBundleCommand(workspace: Workspace): Promise<v
   if (!sessionId) return
   const meta = workspace.state.sessions[sessionId]
   const runtime = workspace.getRuntime(sessionId)
-  const kind = meta?.kind ?? 'claude'
+  const kind = meta?.kind ?? DEFAULT_PROVIDER
 
   try {
     const { bundlePath } = await assembleAndSaveDebugBundle({

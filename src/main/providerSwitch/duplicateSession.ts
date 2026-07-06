@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 // Duplicate an on-disk session into an independent, resumable copy.
 //
 // Produces a second transcript file that is a byte-for-byte clone
@@ -38,7 +39,7 @@ import {
 } from '@main/providerSwitch/shared.js'
 
 export type DuplicateSessionRequest = {
-  provider: 'claude' | 'codex'
+  provider: AgentProviderKind
   sourceProviderSessionId: string
   /** Required for Claude (session files are scoped to a cwd).
    *  Ignored for Codex — rollout files are discovered globally
@@ -53,7 +54,7 @@ export type DuplicateSessionRequest = {
 }
 
 export type DuplicateSessionResult = {
-  provider: 'claude' | 'codex'
+  provider: AgentProviderKind
   newProviderSessionId: string
   /** Absolute path to the newly-written transcript file. */
   newFilePath: string

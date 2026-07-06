@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useState } from 'react'
 
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
@@ -39,7 +40,7 @@ import { hasActionCondition } from '@renderer/workspace/conditions/selectors'
 
 export type UseComposerKeybindsArgs = {
   sessionId: SessionId
-  provider: 'claude' | 'codex'
+  provider: AgentProviderKind
   runtime: SessionRuntime
   workspace: Workspace
   input: string
@@ -140,7 +141,7 @@ export function useComposerKeybinds({
     // synchronously on every IPC screen event so this is always
     // current.
     const screen = workspace.latestScreenRef.current[sessionId] ?? ''
-    const submitProvider: 'claude' | 'codex' =
+    const submitProvider: AgentProviderKind =
       workspace.state.sessions[sessionId]?.kind === 'codex' ? 'codex' : 'claude'
     const baseline = extractAssistantInProgress(screen, submitProvider)
     workspace.setStreamingBaseline(sessionId, baseline)

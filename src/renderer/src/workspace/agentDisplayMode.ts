@@ -1,5 +1,9 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { SessionKind } from '@renderer/workspace/types'
+import {
+  isAgentProviderKind,
+  type AgentProviderKind,
+} from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
   SessionRuntime,
@@ -14,8 +18,11 @@ export type RenderedViewPolicy =
   | { kind: 'opens-rendered-feed' }
   | { kind: 'leases-rendered-feed'; feature: RenderedViewLeaseFeature }
 
-export function isAgentKind(kind: SessionKind | undefined): kind is 'claude' | 'codex' {
-  return kind === 'claude' || kind === 'codex'
+// Delegates to the shared guard so a registered third provider is an
+// agent here automatically instead of being misclassified as a
+// terminal pane (#394 phase 1).
+export function isAgentKind(kind: SessionKind | undefined): kind is AgentProviderKind {
+  return isAgentProviderKind(kind)
 }
 
 export function renderedViewLeaseCount(runtime: SessionRuntime): number {

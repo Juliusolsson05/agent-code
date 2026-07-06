@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useCallback, useRef } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
@@ -108,7 +109,7 @@ export function renderWorkspaceLeaf(
     : sessionId
   const renderedSessionId = workspace.state.sessions[selectedSessionId] ? selectedSessionId : sessionId
   const meta = workspace.state.sessions[renderedSessionId]
-  const kind = meta?.kind ?? 'claude'
+  const kind = meta?.kind ?? DEFAULT_PROVIDER
   const paneLabel = paneLabelForSession(workspace.state, tabId, sessionId)
 
   if (kind === 'terminal') {

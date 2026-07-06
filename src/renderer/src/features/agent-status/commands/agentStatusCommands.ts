@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
@@ -6,8 +7,8 @@ function focusedAgentSessionId(ctx: CommandContext): string | null {
   if (!sessionId) return null
   const meta = ctx.workspace.state.sessions[sessionId]
   if (!meta) return null
-  const kind = meta.kind ?? 'claude'
-  return kind === 'claude' || kind === 'codex' ? sessionId : null
+  const kind = meta.kind ?? DEFAULT_PROVIDER
+  return isAgentProviderKind(kind) ? sessionId : null
 }
 
 export const agentStatusCommands: CommandDef[] = [

@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
 
 import { subscribe } from '@preload/api/ipc.js'
@@ -114,7 +115,7 @@ export const sessionApi = {
   listSessionsForCwd: (
     cwd: string,
     limit?: number,
-    provider: 'claude' | 'codex' = 'claude',
+    provider: AgentProviderKind = DEFAULT_PROVIDER,
   ): Promise<SessionInfo[]> =>
     ipcRenderer.invoke('session:list-for-cwd', cwd, limit, provider),
 
@@ -123,11 +124,11 @@ export const sessionApi = {
    *  by lastModified desc. */
   listAllSessions: (
     limit?: number,
-  ): Promise<Array<SessionInfo & { provider: 'claude' | 'codex' }>> =>
+  ): Promise<Array<SessionInfo & { provider: AgentProviderKind }>> =>
     ipcRenderer.invoke('session:list-all', limit),
 
   loadOlderHistory: (params: {
-    kind: 'claude' | 'codex'
+    kind: AgentProviderKind
     cwd: string
     providerSessionId: string
     beforeMarker: string
@@ -136,7 +137,7 @@ export const sessionApi = {
     ipcRenderer.invoke('session:load-older-history', params),
 
   loadInitialHistory: (params: {
-    kind: 'claude' | 'codex'
+    kind: AgentProviderKind
     cwd: string
     providerSessionId: string
     limit?: number

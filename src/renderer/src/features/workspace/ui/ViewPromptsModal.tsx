@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useEffect, useMemo, useRef } from 'react'
 
 import { extractLatestUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
@@ -79,7 +80,7 @@ export function ViewPromptsModal({
         <div className="border-b border-border px-4 py-3">
           <div className="text-[13px] text-ink">Latest User Prompts</div>
           <div className="mt-1 text-[11px] text-muted">
-            {meta.kind ?? 'claude'} · {cwdBase}
+            {meta.kind ?? DEFAULT_PROVIDER} · {cwdBase}
           </div>
           <div className="mt-0.5 text-[10px] text-muted truncate">{meta.cwd}</div>
         </div>

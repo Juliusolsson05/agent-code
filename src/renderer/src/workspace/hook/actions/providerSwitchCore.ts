@@ -1,5 +1,5 @@
 import type { SessionId } from '@renderer/workspace/types'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 import type { SessionActions } from '@renderer/workspace/hook/actions/session'
@@ -43,7 +43,7 @@ export async function switchAgentProvider(params: {
   const meta = refs.stateRef.current.sessions[sessionId]
   if (!meta) return { status: 'skipped', reason: 'Session no longer exists' }
 
-  const sourceKind = meta.kind ?? 'claude'
+  const sourceKind = meta.kind ?? DEFAULT_PROVIDER
   if (sourceKind !== 'claude' && sourceKind !== 'codex') {
     return { status: 'skipped', reason: 'Only Claude and Codex panes can switch provider' }
   }

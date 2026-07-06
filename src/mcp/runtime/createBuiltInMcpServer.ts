@@ -18,6 +18,12 @@ import { buildOrchestrationBootstrapPrompt } from '@mcp/shared/orchestrationProm
 import type { BuiltInMcpDependencies } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { BuiltInMcpDomain, McpSessionScope } from '@mcp/shared/types.js'
 import type { SessionKind } from '@main/sessionManager.js'
+import {
+  AGENT_PROVIDER_KINDS,
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+  type AgentProviderKind,
+} from '@shared/types/providerKind.js'
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
@@ -80,7 +86,9 @@ export function createBuiltInMcpServer(
 }
 
 function registerAgentTranscriptTools(server: McpServer): void {
-  const providerSchema = z.enum(['claude', 'codex', 'auto']).default('auto')
+  // Derived from AGENT_PROVIDER_KINDS so a newly registered provider is
+  // automatically accepted by the transcript tools (#394 phase 1).
+  const providerSchema = z.enum([...AGENT_PROVIDER_KINDS, 'auto'] as const).default('auto')
   const projectionSchema = z.enum(AGENT_TRANSCRIPT_PROJECTIONS)
   const itemKindSchema = z.enum(AGENT_TRANSCRIPT_ITEM_KINDS)
   const includeSchema = z.object({
@@ -413,7 +421,7 @@ function registerOrchestrationTools(
           'The child currently starts from a clean provider conversation; include any necessary parent context directly in the prompt.',
         ].join(' '),
       inputSchema: {
-        kind: z.enum(['claude', 'codex']).default('claude'),
+        kind: z.enum(AGENT_PROVIDER_KINDS).default(DEFAULT_PROVIDER),
         prompt: z.string().optional(),
         cwd: z.string().optional(),
         title: z.string().optional(),
@@ -604,7 +612,7 @@ function registerOrchestrationTools(
         })
       }
       const kind = manager.getSessionKind(args.sessionId)
-      if (kind !== 'claude' && kind !== 'codex') {
+      if (!isAgentProviderKind(kind)) {
         return toolText({
           ok: false,
           error: 'not_agent_session',
@@ -877,7 +885,7 @@ function sleep(ms: number): Promise<void> {
 async function submitPrompt(
   manager: NonNullable<BuiltInMcpDependencies['sessionManager']>,
   sessionId: string,
-  kind: Extract<SessionKind, 'claude' | 'codex'>,
+  kind: AgentProviderKind,
   prompt: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   // WHY the MCP tool writes bracketed paste instead of plain text:

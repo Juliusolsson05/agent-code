@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
@@ -228,7 +229,7 @@ export function CommandPalette({
     ? workspace.state.sessions[focusedSessionId]
     : null
   const focusedCwd = focusedMeta?.cwd ?? null
-  const focusedProvider = focusedMeta?.kind ?? 'claude'
+  const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
 
   const enterResumeMode = useCallback(async () => {
     if (!focusedCwd) return
@@ -268,7 +269,7 @@ export function CommandPalette({
         .filter(entry => entry.sourceTabId === activeTabId)
         .sort((a, b) => b.buriedAt - a.buriedAt)
         .map(entry => {
-          const kind = entry.sessionMeta.kind ?? 'claude'
+          const kind = entry.sessionMeta.kind ?? DEFAULT_PROVIDER
           const cwd = entry.sessionMeta.cwd
           const cwdBase = cwd.split('/').filter(Boolean).pop() ?? cwd
           return {

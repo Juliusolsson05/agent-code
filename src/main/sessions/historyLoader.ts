@@ -1,3 +1,4 @@
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { stat } from 'fs/promises'
 
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -22,7 +23,7 @@ import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 //     never persists these markers across sessions.
 
 export type HistoryChunkRequest = {
-  kind: 'claude' | 'codex'
+  kind: AgentProviderKind
   cwd: string
   providerSessionId: string
   beforeMarker: string

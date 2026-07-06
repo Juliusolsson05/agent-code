@@ -1,3 +1,5 @@
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import type { SessionKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
@@ -43,7 +45,7 @@ type Row = {
   tabId: string
   tabTitle: string
   tabIndex: number
-  kind: 'claude' | 'codex' | 'terminal'
+  kind: SessionKind
   cwd: string
   cwdBase: string
   isFocused: boolean
@@ -120,7 +122,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
       for (const sessionId of leaves) {
         const meta = workspace.state.sessions[sessionId]
         if (!meta) continue
-        const kind = (meta.kind ?? 'claude') as 'claude' | 'codex' | 'terminal'
+        const kind = (meta.kind ?? DEFAULT_PROVIDER) as SessionKind
         const runtime = workspace.runtimes[sessionId]
 
         let lastActiveAt: number | null = null
