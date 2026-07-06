@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
@@ -230,6 +230,18 @@ export function CommandPalette({
     : null
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
+  // The provider whose sessions the resume picker lists and resumes into.
+  // Use the focused pane's ACTUAL provider so an opencode pane resumes
+  // opencode, a codex pane codex, etc. The three call sites below used to
+  // read `focusedProvider === 'codex' ? 'codex' : 'claude'`, which silently
+  // collapsed EVERY non-codex kind — including opencode (a registered
+  // provider since phase 7) — to Claude. That made an opencode-focused
+  // resume picker list Claude sessions and spawn a Claude pane, even though
+  // the picker header already displayed "resume opencode". Terminal / unknown
+  // kinds have no resume story, so fall back to the default provider.
+  const resumeProvider: AgentProviderKind = isAgentProviderKind(focusedProvider)
+    ? focusedProvider
+    : DEFAULT_PROVIDER
 
   const enterResumeMode = useCallback(async () => {
     if (!focusedCwd) return
@@ -241,7 +253,7 @@ export function CommandPalette({
       const list = await window.api.listSessionsForCwd(
         focusedCwd,
         20,
-        focusedProvider === 'codex' ? 'codex' : 'claude',
+        resumeProvider,
       )
       setSessions(list)
     } catch {
@@ -686,7 +698,7 @@ export function CommandPalette({
       if (!focusedCwd) return
       void workspace.replaceSession(focusedCwd, {
         resumeSessionId: session.sessionId,
-        kind: focusedProvider === 'codex' ? 'codex' : 'claude',
+        kind: resumeProvider,
       })
     },
     [onClose, focusedCwd, focusedProvider, workspace],
@@ -916,7 +928,7 @@ export function CommandPalette({
     const cwd = session.cwd ?? focusedCwd
     if (!cwd) return null
     return {
-      kind: focusedProvider === 'codex' ? 'codex' : 'claude',
+      kind: resumeProvider,
       cwd,
       providerSessionId: session.sessionId,
     }
