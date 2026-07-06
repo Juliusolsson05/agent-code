@@ -65,6 +65,7 @@ export class SessionFeedSource {
    *  from the renderer's needs later anyway. */
   private readonly pendingJsonl = new Map<string, PendingBurst>()
   private readonly unsubscribes: Unsubscribe[] = []
+  private readonly manager: SessionManager
   private disposed = false
 
   constructor(manager: SessionManager) {
@@ -78,8 +79,14 @@ export class SessionFeedSource {
     for (const sessionId of manager.list()) {
       const kind = manager.getSessionKind(sessionId)
       if (!kind || kind === 'terminal') continue
-      this.sessions.set(sessionId, { sessionId, kind, cwd: null, alive: true })
+      this.sessions.set(sessionId, {
+        sessionId,
+        kind,
+        cwd: manager.getSpawnCwd(sessionId),
+        alive: true,
+      })
     }
+    this.manager = manager
 
     const sub = <E extends Parameters<SessionManager['on']>[0]>(
       event: E,
@@ -101,7 +108,10 @@ export class SessionFeedSource {
       this.sessions.set(payload.sessionId, {
         sessionId: payload.sessionId,
         kind: payload.kind,
-        cwd: payload.projectDir ?? null,
+        // Spawn cwd over the event's projectDir: for Claude, projectDir is
+        // the TRANSCRIPT directory (~/.claude/projects/...), not the
+        // workspace — useless as a picker label.
+        cwd: this.manager.getSpawnCwd(payload.sessionId) ?? payload.projectDir ?? null,
         alive: true,
       })
       this.emit('started', payload)
@@ -168,7 +178,14 @@ export class SessionFeedSource {
   }
 
   listSessions(): OutboundSessionSummary[] {
-    return [...this.sessions.values()].map(s => ({ ...s }))
+    // lastActivityAt is read FRESH per call rather than tracked in the map:
+    // the manager already maintains it for every relayed event, and the list
+    // is only materialized on connect/state changes — no reason to duplicate
+    // a hot-path counter here.
+    return [...this.sessions.values()].map(s => ({
+      ...s,
+      lastActivityAt: this.manager.getLastActivityAt(s.sessionId),
+    }))
   }
 
   dispose(): void {

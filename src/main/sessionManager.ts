@@ -3,6 +3,7 @@ import { EventEmitter } from 'events'
 import { performance } from 'perf_hooks'
 
 import { getMainProvider } from '@providers/registry.main.js'
+import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 import { TerminalSession } from '@shared/runtime/terminalSession.js'
 // WHY the manager no longer imports ScreenSnapshot from
 // @providers/claude/runtime/claudeSession or JsonlEntry from
@@ -262,6 +263,20 @@ export class SessionManager extends EventEmitter {
   // every history chunk, and the phone's TranscriptStore discards a chunk
   // whose file disagrees with the file its live frames carry.
   private readonly lastTranscriptFile = new Map<string, string>()
+  // Spawn-time identity captured for LATE resolution. The transcript-file
+  // cache above starts empty every app run, but RESUMED sessions have a
+  // durable transcript on disk from the moment they spawn — main just needs
+  // {cwd, resumeSessionId} to re-derive its path via the provider resolver.
+  // Without this, the remote companion's history backfill returned nothing
+  // for every restored session until it wrote a NEW line (field bug: "still
+  // just dumping the raw terminal" after an app restart). cwd doubles as
+  // the human-readable workspace label for the remote session list — the
+  // 'started' event's projectDir is the TRANSCRIPT directory for Claude,
+  // not the workspace the user thinks of.
+  private readonly spawnInfo = new Map<
+    string,
+    { cwd: string; resumeSessionId: string | null }
+  >()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the
   // restored-agents-null bug can make a renderer spam writes against a stale id,
@@ -359,6 +374,7 @@ export class SessionManager extends EventEmitter {
     this.lastScreenSnapshot.delete(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
+    this.spawnInfo.delete(sessionId)
     // Keep lastActivityAt after removal. Process telemetry can be asked about a
     // pane the renderer still knows but whose PTY already exited; deleting this
     // tiny timestamp made those recently-exited panes look like they had never
@@ -400,6 +416,10 @@ export class SessionManager extends EventEmitter {
     // restart wake. This reservation makes "spawning" observable to every
     // concurrent caller without pretending the backend is ready yet.
     this.spawningSessionIds.add(sessionId)
+    this.spawnInfo.set(sessionId, {
+      cwd: options.cwd,
+      resumeSessionId: options.resumeSessionId ?? null,
+    })
     try {
     const spawnStartedAt = performance.now()
     performanceService.mark('session.spawn.start', {
@@ -1189,6 +1209,45 @@ export class SessionManager extends EventEmitter {
    *  jsonl entry has been observed. See the cache field's WHY. */
   getTranscriptFile(sessionId: string): string | null {
     return this.lastTranscriptFile.get(sessionId) ?? null
+  }
+
+  /**
+   * Transcript file with a resume-aware fallback: when no jsonl entry has
+   * been observed THIS app run (the common state for every restored session
+   * right after a restart), a resumed session's transcript is re-derived
+   * from its spawn-time {cwd, resumeSessionId} through the same provider
+   * resolver history loading uses. Fresh sessions genuinely have no
+   * transcript until their first entry — null is correct for them.
+   */
+  async resolveTranscriptFile(sessionId: string): Promise<string | null> {
+    const observed = this.lastTranscriptFile.get(sessionId)
+    if (observed) return observed
+    const info = this.spawnInfo.get(sessionId)
+    const kind = this.getSessionKind(sessionId)
+    if (!info?.resumeSessionId || !kind || kind === 'terminal') return null
+    try {
+      return await resolveProviderTranscriptPath({
+        kind,
+        cwd: info.cwd,
+        providerSessionId: info.resumeSessionId,
+      })
+    } catch {
+      // Resolution is best-effort: a missing project dir or unreadable
+      // sessions root should degrade to "no history yet", not break the
+      // caller's reply path.
+      return null
+    }
+  }
+
+  /** Workspace cwd captured at spawn — the label a session list should
+   *  show (the 'started' event's projectDir is provider-internal). */
+  getSpawnCwd(sessionId: string): string | null {
+    return this.spawnInfo.get(sessionId)?.cwd ?? null
+  }
+
+  /** Epoch ms of the last observed activity (any relayed session event). */
+  getLastActivityAt(sessionId: string): number | null {
+    return this.lastActivityAt.get(sessionId) ?? null
   }
 
   /** Kill every live session. Called on app quit. */

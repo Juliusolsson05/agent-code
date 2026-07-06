@@ -1,24 +1,33 @@
-/* Phone client styles — hand-rolled, dependency-free.
+/* Phone shell styles — the chrome AROUND the desktop feed (topbar, picker,
+ * composer, condition tap bar). The feed itself renders with the desktop's
+ * own components + @renderer/styles.css, imported before this file.
  *
- * WHY not Tailwind: the desktop renderer's Tailwind setup is wired through
- * electron-vite and the app's design-token layer; dragging that into a
- * separate phone bundle couples two build pipelines for ~150 lines of CSS.
- * The palette below hand-copies the desktop's dark-surface feel so the two
- * screens read as one product. If the client ever grows real UI surface
- * area, revisit — the crossover point is roughly "when this file stops
- * fitting on one screen per component". */
+ * THE AESTHETIC CONTRACT (same hard rules as @renderer/styles.css, which
+ * this file must never fight):
+ *   1. No border-radius anywhere. Sharp rectangles. (The connection dot is
+ *      the ONE circle, mirroring the app's radius-full streaming-dot
+ *      exception.)
+ *   2. Monospace everywhere — var(--font-code), the app's own font token.
+ *   3. No bubbles, no cards. Inline flow with ❯ markers in the accent.
+ *   4. Every color comes from the app THEME TOKENS (--theme-*), set by
+ *      applyTheme() at boot — the phone inherits the desktop's palette and
+ *      any future theme automatically. The literals below are only
+ *      last-resort fallbacks if a token is ever renamed; if you see them
+ *      taking effect, the token mapping has drifted and THAT is the bug. */
 
 :root {
-  --bg: #101014;
-  --surface: #17171c;
-  --surface-hi: #1f1f26;
-  --border: #2a2a33;
-  --ink: #e8e8ea;
-  --ink-dim: #9a9aa4;
-  --muted: #6b6b76;
-  --accent: #7aa2f7;
-  --danger: #f7768e;
-  --ok: #9ece6a;
+  --bg: var(--theme-canvas, #0a0a0a);
+  --surface: var(--theme-surface, #111113);
+  --surface-hi: var(--theme-surface-hi, #17171a);
+  --border: var(--theme-border, #1a1a1c);
+  --border-hi: var(--theme-border-hi, #272729);
+  --ink: var(--theme-ink, #e8e8e6);
+  --ink-dim: var(--theme-ink-dim, #a8a8a4);
+  --muted: var(--theme-muted, #5a5a56);
+  --accent: var(--theme-accent, #7dd3a0);
+  --accent-fg: var(--theme-accent-fg, #0a0a0a);
+  --danger: var(--theme-danger, #e06c75);
+  --ok: var(--theme-accent, #7dd3a0);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -27,14 +36,15 @@ html, body, #root {
   height: 100%;
   background: var(--bg);
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 15px;
+  font-family: var(--font-code, ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
   /* Prevent iOS Safari double-tap zoom fighting the tap targets. */
   touch-action: manipulation;
 }
 
-code, pre, .mono {
-  font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+button, input, textarea {
+  font-family: inherit;
+  border-radius: 0;
 }
 
 .app { display: flex; flex-direction: column; height: 100%; }
@@ -46,12 +56,18 @@ code, pre, .mono {
   background: var(--surface);
   flex-shrink: 0;
 }
-.topbar .title { font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.topbar button { background: none; border: none; color: var(--accent); font-size: 15px; padding: 6px; }
+.topbar .title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--ink);
+}
+.topbar button {
+  background: none; border: none; color: var(--accent); font-size: 13px; padding: 6px;
+}
 
-.conn-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+/* The one sanctioned circle — mirrors the app's streaming-dot exception. */
+.conn-dot { width: 7px; height: 7px; border-radius: 9999px; flex-shrink: 0; }
 .conn-dot.open { background: var(--ok); }
-.conn-dot.connecting { background: #e0af68; }
+.conn-dot.connecting { background: var(--ink-dim); }
 .conn-dot.closed { background: var(--danger); }
 
 .screen { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
@@ -66,53 +82,69 @@ code, pre, .mono {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 100%; gap: 14px; padding: 24px; text-align: center;
 }
-.pair h1 { font-size: 20px; }
-.pair p { color: var(--ink-dim); max-width: 320px; }
+.pair h1 { font-size: 16px; font-weight: 600; }
+.pair p { color: var(--ink-dim); max-width: 340px; line-height: 1.5; }
 .pair input {
-  background: var(--surface-hi); border: 1px solid var(--border); color: var(--ink);
+  background: var(--surface-hi); border: 1px solid var(--border-hi); color: var(--ink);
   padding: 12px; font-size: 18px; letter-spacing: 0.3em; text-align: center;
-  text-transform: uppercase; width: 240px; border-radius: 8px;
+  text-transform: uppercase; width: 240px;
 }
 .pair .error { color: var(--danger); }
 
-/* --- session list --- */
+/* --- session picker --- */
 .session-list { display: flex; flex-direction: column; }
+.section-label {
+  padding: 10px 14px 4px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--muted);
+}
 .session-row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 14px; border-bottom: 1px solid var(--border);
-  background: none; border-left: none; border-right: none; border-top: none;
-  color: var(--ink); text-align: left; width: 100%; font-size: 15px;
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px; border: none; border-bottom: 1px solid var(--border);
+  background: none; color: var(--ink); text-align: left; width: 100%; font-size: 13px;
 }
 .session-row:active { background: var(--surface-hi); }
-.session-row .kind {
-  font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em;
-  border: 1px solid var(--border); padding: 2px 6px; border-radius: 4px;
-  color: var(--ink-dim); flex-shrink: 0;
+.session-row .marker { color: var(--accent); flex-shrink: 0; }
+.session-row .marker.working { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+.session-row .meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.session-row .name {
+  display: flex; align-items: baseline; gap: 8px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.session-row .meta { flex: 1; min-width: 0; }
-.session-row .cwd { color: var(--ink-dim); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.session-row .status { font-size: 12px; flex-shrink: 0; }
-.session-row .status.active { color: var(--ok); }
+.session-row .kind {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+  color: var(--ink-dim); border: 1px solid var(--border-hi); padding: 1px 5px;
+  flex-shrink: 0;
+}
+.session-row .cwd {
+  color: var(--muted); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left; /* keep the path TAIL visible — the discriminating half */
+}
+.session-row .status { font-size: 11px; color: var(--muted); flex-shrink: 0; }
+.session-row .status.active { color: var(--accent); }
 .session-row .status.dead { color: var(--muted); }
 .empty { padding: 40px 20px; text-align: center; color: var(--ink-dim); }
 
 /* --- session view --- */
 .terminal {
   padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
-  font-size: 12px; line-height: 1.45; color: var(--ink);
+  font-size: 11px; line-height: 1.45; color: var(--ink);
 }
 .conditions {
   border-top: 1px solid var(--border); background: var(--surface);
   padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
   flex-shrink: 0;
 }
-.conditions .prompt-title { font-weight: 600; }
+.conditions .prompt-title { color: var(--ink); }
+.conditions .prompt-title::before { content: '⏺ '; color: var(--accent); }
 .conditions .actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .conditions .actions button {
-  background: var(--surface-hi); border: 1px solid var(--border); color: var(--ink);
-  padding: 10px 14px; border-radius: 8px; font-size: 14px;
+  background: var(--surface-hi); border: 1px solid var(--border-hi); color: var(--ink);
+  padding: 10px 14px; font-size: 13px;
 }
-.conditions .actions button:active { background: var(--border); }
+.conditions .actions button:active { background: var(--border-hi); }
 
 .composer {
   display: flex; gap: 8px; align-items: flex-end;
@@ -121,15 +153,15 @@ code, pre, .mono {
   flex-shrink: 0;
 }
 .composer textarea {
-  flex: 1; background: var(--surface-hi); border: 1px solid var(--border);
-  color: var(--ink); border-radius: 10px; padding: 10px 12px;
+  flex: 1; background: var(--surface-hi); border: 1px solid var(--border-hi);
+  color: var(--ink); padding: 10px 12px;
   /* 16px floor: anything smaller makes iOS Safari zoom the page on focus. */
   font-size: 16px;
   resize: none; max-height: 120px; min-height: 42px;
 }
 .composer button {
-  background: var(--accent); color: #0c0c10; border: none; border-radius: 10px;
-  padding: 10px 16px; font-size: 15px; font-weight: 600; flex-shrink: 0;
+  background: var(--accent); color: var(--accent-fg); border: none;
+  padding: 10px 16px; font-size: 13px; font-weight: 600; flex-shrink: 0;
 }
 .composer button:disabled { opacity: 0.4; }
 .composer .stop {
@@ -137,6 +169,6 @@ code, pre, .mono {
 }
 
 .working {
-  padding: 6px 14px; font-size: 12px; color: var(--accent);
+  padding: 6px 14px; font-size: 11px; color: var(--accent);
   border-top: 1px solid var(--border); flex-shrink: 0;
 }

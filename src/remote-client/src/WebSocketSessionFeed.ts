@@ -298,6 +298,16 @@ export class WebSocketSessionFeed implements SessionFeed {
         return
       }
       case 'session-event': {
+        // Keep the picker's recency live without re-requesting the list:
+        // any event for a session IS activity. Cheap (one map when the
+        // session is present) and mirrors how the server stamps the value.
+        const activeId = (frame.payload as { sessionId?: string })?.sessionId
+        if (activeId && this.lastSessionList.some(s => s.sessionId === activeId)) {
+          this.lastSessionList = this.lastSessionList.map(s =>
+            s.sessionId === activeId ? { ...s, lastActivityAt: Date.now() } : s,
+          )
+          for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)
+        }
         const set = this.listeners[frame.channel]
         if (!set) return
         for (const cb of [...set]) (cb as (e: unknown) => void)(frame.payload)
@@ -313,6 +323,7 @@ export class WebSocketSessionFeed implements SessionFeed {
               kind: started.kind,
               cwd: started.projectDir ?? null,
               alive: true,
+              lastActivityAt: Date.now(),
             },
           ]
           for (const cb of [...this.sessionListListeners]) cb(this.lastSessionList)

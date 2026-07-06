@@ -140,6 +140,10 @@ export type OutboundSessionSummary = {
   cwd: string | null
   /** Present when the provider session has started; null for spawning/dead. */
   alive: boolean
+  /** Epoch ms of the session's last observed activity — the sort key and
+   *  "active 2m ago" label for the phone's picker. Read fresh from the
+   *  manager at list time; the client bumps it locally from live events. */
+  lastActivityAt: number | null
 }
 
 export type OutboundFrame =

@@ -58,7 +58,9 @@ export type RemoteSessionControl = {
   list(): string[]
   getScreenSnapshot(sessionId: string): unknown
   getConditionsSnapshot(sessionId: string): unknown
-  getTranscriptFile(sessionId: string): string | null
+  resolveTranscriptFile(sessionId: string): Promise<string | null>
+  getSpawnCwd(sessionId: string): string | null
+  getLastActivityAt(sessionId: string): number | null
   write(sessionId: string, data: string): boolean
   resolveCondition(
     sessionId: string,
@@ -475,7 +477,10 @@ export class RemoteServer extends EventEmitter {
         // relay — see SessionManager.getTranscriptFile). No file yet means
         // the session has not written a durable line this run; the phone
         // shows live-only and may retry after the first entry lands.
-        const file = this.deps.manager.getTranscriptFile(msg.sessionId)
+        // resolveTranscriptFile is resume-aware: restored sessions have a
+        // durable transcript even before their first NEW jsonl line this app
+        // run (the restart case field testing hit).
+        const file = await this.deps.manager.resolveTranscriptFile(msg.sessionId)
         if (!file) {
           return { ok: false, error: 'no transcript on disk yet for this session' }
         }

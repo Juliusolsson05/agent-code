@@ -27,7 +27,9 @@ function makeManager(): FakeManager {
   emitter.list = vi.fn(() => [])
   emitter.getScreenSnapshot = vi.fn(() => null)
   emitter.getConditionsSnapshot = vi.fn(() => null)
-  emitter.getTranscriptFile = vi.fn(() => null)
+  emitter.resolveTranscriptFile = vi.fn(async () => null)
+  emitter.getSpawnCwd = vi.fn(() => null)
+  emitter.getLastActivityAt = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const, state: { done: true } }))
   emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
@@ -188,7 +190,7 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
       { type: 'user', uuid: 'u-live', message: { role: 'user', content: 'do the thing' } },
     ]
     await writeFile(transcript, disk.map(d => JSON.stringify(d)).join('\n') + '\n', 'utf8')
-    ;(manager.getTranscriptFile as ReturnType<typeof vi.fn>).mockReturnValue(transcript)
+    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
 
     const f = makeFeed()
     const store = new TranscriptStore(f)

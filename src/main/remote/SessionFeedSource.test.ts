@@ -15,6 +15,8 @@ function makeManager(live: string[] = []): SessionManager & EventEmitter {
   const anyEmitter = emitter as unknown as Record<string, unknown>
   anyEmitter.getSessionKind = vi.fn(() => 'claude')
   anyEmitter.list = vi.fn(() => live)
+  anyEmitter.getSpawnCwd = vi.fn(() => null)
+  anyEmitter.getLastActivityAt = vi.fn(() => null)
   return emitter
 }
 
@@ -78,8 +80,8 @@ describe('SessionFeedSource', () => {
     manager.emit('started', { sessionId: 's1', kind: 'claude', projectDir: '/repo' })
     manager.emit('started', { sessionId: 's2', kind: 'codex' })
     expect(source.listSessions()).toEqual([
-      { sessionId: 's1', kind: 'claude', cwd: '/repo', alive: true },
-      { sessionId: 's2', kind: 'codex', cwd: null, alive: true },
+      { sessionId: 's1', kind: 'claude', cwd: '/repo', alive: true, lastActivityAt: null },
+      { sessionId: 's2', kind: 'codex', cwd: null, alive: true, lastActivityAt: null },
     ])
 
     manager.emit('exit', { sessionId: 's1', exitCode: 0 })
