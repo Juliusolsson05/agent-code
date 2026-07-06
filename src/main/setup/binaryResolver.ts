@@ -3,14 +3,20 @@ import { constants as fsConstants } from 'fs'
 
 import type { SetupToolId } from '@shared/types/setup.js'
 import { runLoginShell } from '@main/setup/shell.js'
+import { listProviderSetupDescriptors } from '@providers/registry.setup.js'
 
+// Provider commands derive from the setup-descriptor registry
+// (#394 phase 2c-3) — registry.setup.ts, NOT registry.main.ts, to
+// avoid the binaryResolver → registry.main → claudeSession →
+// toolchain → binaryResolver module cycle (see that file's header).
 const TOOL_COMMAND: Record<SetupToolId, string> = {
   brew: 'brew',
-  claude: 'claude',
-  codex: 'codex',
   git: 'git',
   mitmdump: 'mitmdump',
-}
+  ...Object.fromEntries(
+    listProviderSetupDescriptors().map(([kind, d]) => [kind, d.binaryName]),
+  ),
+} as Record<SetupToolId, string>
 
 export async function isExecutable(path: string): Promise<boolean> {
   try {
