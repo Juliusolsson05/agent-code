@@ -1,9 +1,7 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
-// Alias of the single provider source of truth (#394 phase 1). The
-// command construction below is still a hand-written two-provider
-// ternary — a `resumeCommand` registry capability replaces it in
-// phase 2/4.
+// Alias of the single provider source of truth (#394 phase 1).
 export type ResumableProviderKind = AgentProviderKind
 
 function shellQuote(value: string): string {
@@ -20,11 +18,13 @@ export function buildProviderResumeCommand(
   // the duplicate call sites were not trying to build arbitrary commands; they
   // were encoding the provider resume contract shown to the user in copyable
   // prompt text. Keeping the scope narrow avoids inviting unrelated shell
-  // construction while still making the Claude `--resume` vs Codex `resume`
-  // subcommand split one source of truth.
+  // construction. The provider-specific invocation (Claude `--resume` flag vs
+  // Codex `resume` subcommand) now comes from the registry identity
+  // descriptor (#394 phase 2c-2); quoting and the `cd` prefix stay here as
+  // caller policy.
   const cd = `cd ${shellQuote(cwd)}`
-  const resume = kind === 'codex'
-    ? `codex resume ${shellQuote(providerSessionId)}`
-    : `claude --resume ${shellQuote(providerSessionId)}`
+  const resume = getRendererProviderCapabilities(kind).resumeCommand(
+    shellQuote(providerSessionId),
+  )
   return `${cd} && ${resume}`
 }

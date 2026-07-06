@@ -1,4 +1,5 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import {
@@ -39,9 +40,15 @@ type Props = {
   linkedAgentParentId: SessionId | null
 }
 
+// Registry-derived agent options (#394 phase 2c-2) + the one
+// non-registry pane kind. A newly registered provider appears in the
+// spawn overlay automatically instead of compiling but being
+// unspawnable from the UI (#394 §4.6).
 const KIND_OPTIONS: Array<{ kind: SessionKind; label: string; description: string }> = [
-  { kind: 'claude', label: 'Claude', description: 'full agent session' },
-  { kind: 'codex', label: 'Codex', description: 'OpenAI coding agent session' },
+  ...AGENT_PROVIDER_KINDS.map(kind => {
+    const caps = getRendererProviderCapabilities(kind)
+    return { kind: kind as SessionKind, label: caps.shortLabel, description: caps.spawnDescription }
+  }),
   { kind: 'terminal', label: 'Terminal', description: 'plain shell pane' },
 ]
 

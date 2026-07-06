@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { WorktreeDump, WorktreeDumpRow } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { relativeTime } from '@renderer/lib/relativeTime'
@@ -118,7 +119,8 @@ export function labelFor(category: string): string {
 }
 
 export function providerLabel(kind: AgentProviderKind): string {
-  return kind === 'codex' ? 'Codex' : 'Claude'
+  // Registry-derived (#394 phase 2c-2).
+  return getRendererProviderCapabilities(kind).shortLabel
 }
 
 function formatLiveAgent(agent: WorktreeDumpRow['liveAgents'][number]): string {

@@ -1,3 +1,4 @@
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
@@ -230,7 +231,7 @@ function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
         ? `work ${item.phase} · ${item.toolName}`
         : `work ${item.phase}`
     case 'empty':
-      return provider === 'codex' ? 'waiting for Codex…' : 'waiting for Claude Code…'
+      return `waiting for ${getRendererProviderCapabilities(provider).name}…`
   }
 }
 

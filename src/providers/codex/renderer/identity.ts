@@ -1,0 +1,13 @@
+// Codex provider identity descriptor (#394 phase 2c-2). See the
+// Claude counterpart for why this exists.
+
+export const CODEX_IDENTITY = {
+  /** Dense-list glyph. Matches Codex's composer marker. */
+  glyph: '›',
+  shortLabel: 'Codex',
+  spawnDescription: 'OpenAI coding agent session',
+  /** Codex resumes via a subcommand (not a flag) — and the id must be
+   *  appended AFTER any config flags in real spawns; for the copyable
+   *  command there are no flags, so the plain form is correct. */
+  resumeCommand: (quotedSessionId: string) => `codex resume ${quotedSessionId}`,
+} as const
