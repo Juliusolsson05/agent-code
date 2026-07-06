@@ -968,7 +968,12 @@ export function useSessionActions(
       const meta = snapshot.sessions[sessionId]
       if (!meta) return null
       const kind = meta.kind ?? DEFAULT_PROVIDER
-      if (kind !== 'claude' && kind !== 'codex') return null
+      // Soft reload is provider-neutral: it only replaces the renderer's view
+      // state for THIS session, without touching the underlying backend. The
+      // registry predicate is the right membership check — any agent provider
+      // has a renderer view to soft-reload, terminals don't. Prior two-
+      // provider literal would silently no-op on OpenCode.
+      if (!isAgentProviderKind(kind)) return null
 
       const hasProviderSession = hasDurableProviderSession(meta)
       if (!hasProviderSession) {

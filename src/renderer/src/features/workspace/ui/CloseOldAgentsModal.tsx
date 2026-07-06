@@ -1,4 +1,4 @@
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { relativeTime } from '@renderer/lib/relativeTime'
@@ -135,7 +135,12 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
         const meta = workspace.state.sessions[sessionId]
         if (!meta) continue
         const kind = meta.kind ?? DEFAULT_PROVIDER
-        if (kind !== 'claude' && kind !== 'codex') continue
+        // Registry-driven: the modal shows every agent provider so a user in
+        // a big multi-provider session can bulk-close inactive agents across
+        // Claude, Codex, and OpenCode alike. Skipping OpenCode here would
+        // silently hide those agents from the modal (and the bulk-close
+        // preview counter would report the wrong number).
+        if (!isAgentProviderKind(kind)) continue
 
         const runtime = workspace.runtimes[sessionId]
         const running = runtime?.sessionStatus === 'running'

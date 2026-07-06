@@ -63,10 +63,33 @@ export type DuplicateSessionResult = {
 export async function duplicateSession(
   request: DuplicateSessionRequest,
 ): Promise<DuplicateSessionResult> {
+  // WHY explicit fail-loud dispatch instead of `if claude else codex`:
+  //
+  // Duplication is a file-format operation — the source transcript on disk has
+  // a provider-specific shape (Claude JSONL sessions vs. Codex rollout lines)
+  // and the clone must be written using the same shape. When OpenCode was
+  // registered as a third `AgentProviderKind`, this function's original shape
+  // `if (provider === 'claude') return duplicateClaude(...); return duplicateCodex(...)`
+  // silently ran an OpenCode `Duplicate Agent` command through `duplicateCodex`
+  // — reading OpenCode's server session id as if it were a Codex rollout id,
+  // returning a nonsense "clone", and — worst-case — writing malformed data
+  // over a real Codex rollout uuid collision. Refuse cleanly instead.
+  //
+  // This mirrors `switchProvider.ts` (see its throw for unknown pairs). When
+  // OpenCode's on-disk model is understood well enough to duplicate it, add a
+  // `duplicateOpencode` implementation and its branch here; until then the
+  // Duplicate Agent command surface hides itself for OpenCode panes at the
+  // `when` predicate level, and this throw is the last-mile safety net for
+  // programmatic callers (MCP orchestration, tests) that bypass the palette.
   if (request.provider === 'claude') {
     return duplicateClaude(request)
   }
-  return duplicateCodex(request)
+  if (request.provider === 'codex') {
+    return duplicateCodex(request)
+  }
+  throw new Error(
+    `duplicateSession: no duplicate implementation for provider "${request.provider}" yet`,
+  )
 }
 
 async function duplicateClaude(

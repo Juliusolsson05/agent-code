@@ -107,7 +107,10 @@ export function useProviderActions(
 
     const kind = meta.kind ?? DEFAULT_PROVIDER
     if (!isAgentProviderKind(kind)) {
-      showPaneToast(sourceSessionId, 'Only Claude and Codex panes can reload')
+      // Toast text is registry-driven — "Only agent panes can reload" reads
+      // right for any current OR future provider set. The previous
+      // "Claude and Codex" wording rotted the moment OpenCode was registered.
+      showPaneToast(sourceSessionId, 'Only agent panes can reload')
       return
     }
     const resumeSessionId = resumableProviderSessionId(meta)
@@ -171,7 +174,10 @@ export function useProviderActions(
 
       const kind = meta.kind ?? DEFAULT_PROVIDER
       if (!isAgentProviderKind(kind)) {
-        showPaneToast(sourceSessionId, 'Only Claude and Codex panes support rewind')
+        // Registry-driven toast — see the reload-agent counterpart above.
+        // Terminal panes are the only non-agent kind today; the wording will
+        // continue to read right when future providers register.
+        showPaneToast(sourceSessionId, 'Only agent panes support rewind')
         return
       }
       const previousProviderSessionId = resumableProviderSessionId(meta)
