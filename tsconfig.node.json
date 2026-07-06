@@ -67,7 +67,8 @@
     "packages/agent-voice-dictation/src/openrouter/**/*",
     "packages/agent-voice-dictation/src/speech/**/*",
     "packages/claude-code-headless/src/**/*",
-    "packages/codex-headless/src/**/*"
+    "packages/codex-headless/src/**/*",
+    "packages/opencode-headless/src/**/*"
   ],
   "exclude": [
     // Provider renderer halves live under the node project's
