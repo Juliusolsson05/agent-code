@@ -210,7 +210,43 @@ export type MainProviderConfig = {
    * `getProjectDir`.
    */
   resolveTranscriptPath: (cwd: string, providerSessionId: string) => Promise<string | null>
+  /**
+   * Provider-owned prompt delivery protocol (#394 phase 2c).
+   *
+   * WHY this is a capability and not inline branches: prompt delivery
+   * disciplines are OPPOSITE between the two shipped providers —
+   * Codex gates on TUI readiness BEFORE pasting and sends paste+Enter
+   * as one atomic PTY write (its headless accounts the prompt as
+   * submitted on the paste bytes); Claude pastes WITHOUT Enter, waits
+   * for the `[Pasted text #N]` placeholder to prove the paste
+   * committed, then sends Enter separately. The old inline
+   * `if codex … if claude …` in MCP's submitPrompt meant a THIRD
+   * provider fell through to a protocol-free paste+Enter with no
+   * readiness gate and no confirmation (#394 §4.2) — it "worked"
+   * exactly until it didn't, silently.
+   *
+   * The io bag deliberately passes the AgentSession plus a bound
+   * write-with-liveness function rather than the SessionManager:
+   * providers must not depend on the manager (dependency arrow), and
+   * the typed optionals they need (awaitReadyForPrompt /
+   * awaitPastePlaceholder) live on AgentSession since phase 2a.
+   */
+  deliverPrompt: (io: PromptDeliveryIo) => Promise<PromptDeliveryResult>
 }
+
+export type PromptDeliveryIo = {
+  session: AgentSession
+  /** Write raw bytes to the session PTY. Returns false when the
+   *  session is gone — callers already treat that as delivery
+   *  failure, so providers just propagate it. */
+  write: (data: string) => boolean
+  sessionId: string
+  prompt: string
+}
+
+export type PromptDeliveryResult =
+  | { ok: true }
+  | { ok: false; message: string }
 
 // The combined `ProviderConfig = RendererProviderConfig & MainProviderConfig`
 // type used to live here. It was only ever used by
