@@ -25,6 +25,8 @@ import {
   OpencodeHeadless,
   type CommittedEntryEvent,
   type ScreenActivityEvent,
+  type ScreenPermissionEvent,
+  type ScreenQuestionEvent,
   type SemanticEvent,
 } from 'opencode-headless'
 import type {
@@ -33,6 +35,28 @@ import type {
   AgentTranscriptEntry,
   SessionOptions,
 } from '@shared/types/session.js'
+import type {
+  ConditionAction,
+  ConditionCustomAction,
+  OpencodePermissionState,
+  OpencodeQuestionState,
+  ProviderConditionRecord,
+  ProviderConditionSnapshot,
+} from '@shared/types/providerConditions.js'
+import { asRecord } from '@shared/lib/asRecord.js'
+
+// Custom-action names OpencodeSession both BUILDS (when folding a
+// permission/question into the snapshot) and DISPATCHES (in
+// resolveCondition). Kept as constants so the two halves can never drift
+// — a rename that touches only one side is a compile error at the other.
+const PERMISSION_REPLY = 'opencode.permission.reply'
+const QUESTION_REJECT = 'opencode.question.reject'
+
+// The three replies OpenCode's permission API accepts. Declared here so
+// resolveCondition can validate an inbound payload against it rather than
+// trusting the renderer to send a legal string.
+const PERMISSION_REPLIES = ['once', 'always', 'reject'] as const
+type PermissionReplyValue = (typeof PERMISSION_REPLIES)[number]
 
 // Synthetic "source" string for jsonl-entry's second argument. The
 // PTY providers pass a real transcript file path here (Claude's
@@ -43,6 +67,10 @@ import type {
 // keys off the entry body, not this argument.
 function transcriptSource(sessionID: string): string {
   return `opencode://session/${sessionID}`
+}
+
+function isPermissionReply(value: unknown): value is PermissionReplyValue {
+  return typeof value === 'string' && (PERMISSION_REPLIES as readonly string[]).includes(value)
 }
 
 // Interface merge: give the class typed on/off/once/emit against the
@@ -73,6 +101,16 @@ export interface OpencodeSession {
 export class OpencodeSession extends EventEmitter implements AgentSession {
   private headless: OpencodeHeadless | null = null
   private exited = false
+
+  // Live conditions keyed by kind (at most one per kind at a time), the
+  // erased-record form the wire snapshot carries. OpencodeSession OWNS
+  // this map: it folds the headless screen permission/question events in
+  // here and re-emits a full snapshot on every change. Unlike Codex —
+  // which forwards a snapshot the headless already assembled — opencode's
+  // headless exposes only raw permission/question events, so building the
+  // ProviderConditionSnapshot (kinds, actions, clearing on resolve) is
+  // this wrapper's job.
+  private readonly liveConditions = new Map<string, ProviderConditionRecord>()
 
   private readonly cwd: string
   private readonly binary: string | undefined
@@ -154,9 +192,17 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       this.emit('jsonl-error', err)
     })
 
-    // NOTE: permission/question screen events → `conditions` snapshot is
-    // step 6 (the condition views + runtime folding). Deliberately not
-    // wired here so step 3 stays "a pane spawns and streams".
+    // Permission / question screen events → `conditions` snapshot. The
+    // headless publishes visible:true when opencode asks and (on some
+    // paths) visible:false when it clears; we also clear on resolve
+    // (resolveCondition) so the modal disappears the instant the user
+    // acts, independent of whether opencode emits a clear event.
+    headless.screen.on('permission', (ev: ScreenPermissionEvent) => {
+      this.foldPermission(ev.state)
+    })
+    headless.screen.on('question', (ev: ScreenQuestionEvent) => {
+      this.foldQuestion(ev.state)
+    })
 
     try {
       await headless.start()
@@ -198,6 +244,149 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
         : { message }
     if (typeof base.sessionID === 'string' && base.sessionID.length > 0) return base
     return { ...base, sessionID: entry.sessionID }
+  }
+
+  // ── Conditions (permission / question) ────────────────────────────
+
+  private foldPermission(state: ScreenPermissionEvent['state']): void {
+    // No requestID = nothing we could reply to; treat as a clear.
+    if (!state.visible || !state.requestID) {
+      if (this.liveConditions.delete('opencode.permission')) this.emitConditionsSnapshot()
+      return
+    }
+    const requestID = state.requestID
+    const permissionState: OpencodePermissionState = {
+      visible: true,
+      requestID,
+      title: state.title,
+      metadata: state.metadata,
+    }
+    const actions: ConditionAction[] = [
+      this.permissionAction(requestID, 'once', 'Allow once'),
+      this.permissionAction(requestID, 'always', 'Allow always'),
+      this.permissionAction(requestID, 'reject', 'Reject'),
+    ]
+    this.liveConditions.set('opencode.permission', {
+      kind: 'opencode.permission',
+      state: permissionState,
+      actions,
+    })
+    this.emitConditionsSnapshot()
+  }
+
+  private permissionAction(
+    requestID: string,
+    reply: PermissionReplyValue,
+    label: string,
+  ): ConditionCustomAction {
+    return {
+      kind: 'custom',
+      id: `${requestID}:${reply}`,
+      label,
+      name: PERMISSION_REPLY,
+      payload: { requestID, reply },
+    }
+  }
+
+  private foldQuestion(state: ScreenQuestionEvent['state']): void {
+    if (!state.visible || !state.questionID) {
+      if (this.liveConditions.delete('opencode.question')) this.emitConditionsSnapshot()
+      return
+    }
+    const questionID = state.questionID
+    const questionState: OpencodeQuestionState = {
+      visible: true,
+      questionID,
+      text: state.text,
+      metadata: state.metadata,
+    }
+    // v1 is reject-only. opencode's question payload carries no parsed
+    // option list at this seam, so offering a real Reject that unblocks
+    // the turn beats guessing answer strings; structured answering
+    // (replyQuestion) is a follow-up that only touches this method and
+    // the QUESTION_* action names — the view already renders whatever
+    // actions arrive.
+    const actions: ConditionAction[] = [
+      {
+        kind: 'custom',
+        id: `${questionID}:reject`,
+        label: 'Reject',
+        name: QUESTION_REJECT,
+        payload: { questionID },
+      },
+    ]
+    this.liveConditions.set('opencode.question', {
+      kind: 'opencode.question',
+      state: questionState,
+      actions,
+    })
+    this.emitConditionsSnapshot()
+  }
+
+  private emitConditionsSnapshot(): void {
+    const conditions: Record<string, ProviderConditionRecord> = {}
+    for (const [kind, record] of this.liveConditions) conditions[kind] = record
+    const snapshot: ProviderConditionSnapshot = {
+      provider: 'opencode',
+      conditions,
+      ts: Date.now(),
+    }
+    this.emit('conditions', snapshot)
+  }
+
+  /** Resolve an opencode condition custom action over HTTP. This is the
+   *  AgentSession.resolveCondition capability — opencode routes ALL
+   *  condition actions here (no PTY keystroke arm) via
+   *  session:resolveCondition. Clears the resolved condition immediately
+   *  so the modal closes on the user's action rather than waiting for a
+   *  clear event that opencode may or may not send. */
+  async resolveCondition(
+    action: ConditionCustomAction,
+  ): Promise<
+    | { ok: true; state?: unknown }
+    | { ok: false; reason: string; lastState?: unknown; failedAtStep?: string }
+  > {
+    if (!this.headless) return { ok: false, reason: 'no-headless' }
+    const payload = asRecord(action.payload)
+
+    if (action.name === PERMISSION_REPLY) {
+      const requestID = payload && typeof payload.requestID === 'string' ? payload.requestID : null
+      const reply = payload?.reply
+      if (!requestID || !isPermissionReply(reply)) {
+        return { ok: false, reason: 'invalid-payload' }
+      }
+      try {
+        await this.headless.permissionService.reply(requestID, reply)
+      } catch (err) {
+        return {
+          ok: false,
+          reason: 'aborted',
+          failedAtStep: `permission.reply: ${err instanceof Error ? err.message : String(err)}`,
+        }
+      }
+      if (this.liveConditions.delete('opencode.permission')) this.emitConditionsSnapshot()
+      return { ok: true }
+    }
+
+    if (action.name === QUESTION_REJECT) {
+      const questionID = payload && typeof payload.questionID === 'string' ? payload.questionID : null
+      if (!questionID) return { ok: false, reason: 'invalid-payload' }
+      try {
+        await this.headless.rejectQuestion(questionID)
+      } catch (err) {
+        return {
+          ok: false,
+          reason: 'aborted',
+          failedAtStep: `question.reject: ${err instanceof Error ? err.message : String(err)}`,
+        }
+      }
+      if (this.liveConditions.delete('opencode.question')) this.emitConditionsSnapshot()
+      return { ok: true }
+    }
+
+    // Unknown action name — a renderer sent a resolver opencode doesn't
+    // own. Fail structured (never silent success), matching the contract.
+    return { ok: false, reason: 'no-resolver' }
   }
 
   /** Deliver a text prompt over HTTP. This is the AgentSession

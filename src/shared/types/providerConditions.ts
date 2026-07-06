@@ -170,6 +170,55 @@ export type CodexCondition =
       actions: ConditionAction[]
     }
 
+// ── OpenCode condition states (#406 step 6) ─────────────────────────────────
+//
+// OpenCode surfaces two interactive conditions over its HTTP/SSE bus (NOT a
+// TUI): a tool-permission request and an ask-user question. Because there is no
+// PTY, every action on these is a `custom` action resolved over HTTP
+// (OpencodeSession.resolveCondition → PermissionService.reply / rejectQuestion),
+// never a `pty` keystroke — this is why OPENCODE_CONDITION_POLICY's actionKinds
+// set is permanently empty. The state shapes mirror the headless
+// ScreenPermissionEvent / ScreenQuestionEvent payloads (channels/types.ts) that
+// OpencodeSession folds into the snapshot.
+
+export type OpencodePermissionState = {
+  visible: boolean
+  requestID?: string
+  title?: string
+  metadata?: unknown
+}
+
+export type OpencodeQuestionState = {
+  visible: boolean
+  questionID?: string
+  text?: string
+  metadata?: unknown
+}
+
+export type OpencodeCondition =
+  | {
+      kind: 'opencode.permission'
+      state: OpencodePermissionState
+      actions: ConditionAction[]
+    }
+  | {
+      kind: 'opencode.question'
+      state: OpencodeQuestionState
+      actions: ConditionAction[]
+    }
+
+export type OpencodeConditionKind = OpencodeCondition['kind']
+
+export type OpencodeConditionMap = Partial<{
+  [K in OpencodeConditionKind]: Extract<OpencodeCondition, { kind: K }>
+}>
+
+export type OpencodeConditionSnapshot = {
+  provider: 'opencode'
+  conditions: OpencodeConditionMap
+  ts: number
+}
+
 export type CodexConditionKind = CodexCondition['kind']
 
 export type CodexConditionMap = Partial<{

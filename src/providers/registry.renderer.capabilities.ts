@@ -19,6 +19,7 @@ import { CLAUDE_CONDITION_POLICY } from '@providers/claude/renderer/conditions/p
 import { CODEX_CONDITION_POLICY } from '@providers/codex/renderer/conditions/policy'
 import { OPENCODE_IDENTITY } from '@providers/opencode/renderer/identity'
 import { OPENCODE_CONDITION_POLICY } from '@providers/opencode/renderer/conditions/policy'
+import { OPENCODE_VIEWS } from '@providers/opencode/renderer/conditions/views'
 import {
   createOpencodeTranscriptEntryMapper,
   extractOpencodeProviderSessionId,
@@ -177,13 +178,11 @@ const codexCapabilities: RendererProviderCapabilities = {
   conditionPolicy: CODEX_CONDITION_POLICY,
 }
 
-// STATUS (#406, wiring step 2 of 7): stub capabilities. Views land at
-// step 6; the real mapper at step 4; composerSubmit at step 5.
 const opencodeCapabilities: RendererProviderCapabilities = {
   id: 'opencode',
   name: 'OpenCode',
   ...OPENCODE_IDENTITY,
-  conditionViews: {},
+  conditionViews: OPENCODE_VIEWS,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
   extractProviderSessionId: extractOpencodeProviderSessionId,
   composerSubmit: opencodeComposerSubmit,
