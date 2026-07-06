@@ -13,19 +13,27 @@ Read this first. Then read `research-2026-07/` for the receipts.
 
 ## Stage 1 progress (updated 2026-07-06, integration branch)
 
-Landed (slices 1-8, PRs #424-#433 into `integration/rendering-pipeline`):
+Landed (slices 1-11, PRs #424-#437 into `integration/rendering-pipeline`):
 ledger core (types / ordering law / ownership / identity stability), committed
 collector with the #338 synthetic-user filter, ghost five-rule predicate with
 the 10-case matrix and failed-fix regressions, semantic collector with the
 #345 compaction kill, local collectors + optimistic→committed handoff,
-unknown-behavior registry with structural redaction, and four end-to-end
-fixtures: buried-prompt-239, dead-committed-channel-159,
-opencode-interleave-87f0eeef, plus the ghost matrix. Suite: 50 pipeline tests;
-full unit project 209/209 on the branch.
+unknown-behavior registry with structural redaction, ghost plane wired into
+the ledger pass (#435), the runtime→collector adapter — the shadow seam —
+with ghost collector, optimistic partition, plane-level reference stability,
+and compile-time seam assertions against real runtime types (#436), the
+fold-policy yield-hatch absorption (`policy/foldPolicy.ts` — the two
+proxy-literal hatches from legacy foldEvent encoded as policy data with
+parity tests) and six end-to-end fixtures: buried-prompt-239,
+dead-committed-channel-159, opencode-interleave-87f0eeef, the ghost matrix,
+sidecar-tail-ghost, and queue-handoff-race (#437). Suite: 67 pipeline tests.
 
-Remaining before Stage 2: sidecar-tail e2e variant (unit-covered already),
-unknowns wired into the live ledger pass, fold-policy yield-hatch absorption,
-queue-handoff race e2e, and the runtime→collector adapter (the shadow seam).
+**Stage 1 is COMPLETE.** Next: Stage 2 shadow wiring — call the adapter +
+ledger beside the legacy renderer behind `AGENT_CODE_RENDER_SHADOW=1`, diff
+outputs, divergences become fixtures. (Unknowns plumbing note: the registry
+exists and `LedgerInput.unknowns` passes through; POPULATING it from real
+IPC events is inherently a Stage 2 concern — unknowns are discovered at the
+shadow seam, not in fixtures.)
 
 ---
 
