@@ -29,6 +29,11 @@ describe('allowed inbound messages', () => {
         action: { kind: 'pty', id: 'yes', label: 'Yes', data: '\r' },
       },
     ],
+    ['get-history (initial)', { type: 'get-history', sessionId: 's1' }],
+    [
+      'get-history (older page)',
+      { type: 'get-history', sessionId: 's1', beforeMarker: 'uuid-123', limit: 200 },
+    ],
     [
       'permission-reply (custom action)',
       {
@@ -70,6 +75,8 @@ describe('out-of-scope and malformed frames', () => {
       type: 'permission-reply', sessionId: 's1', action: '\x03',
     }],
     ['no type at all', { sessionId: 's1' }],
+    ['get-history without sessionId', { type: 'get-history' }],
+    ['get-history with absurd limit', { type: 'get-history', sessionId: 's1', limit: 100000 }],
   ])('%s is rejected', (_label, message) => {
     const result = parseInboundFrame(frame(message))
     expect(result.ok).toBe(false)

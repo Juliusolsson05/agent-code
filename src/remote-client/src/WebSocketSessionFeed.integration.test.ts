@@ -26,6 +26,7 @@ function makeManager(): FakeManager {
   emitter.list = vi.fn(() => [])
   emitter.getScreenSnapshot = vi.fn(() => null)
   emitter.getConditionsSnapshot = vi.fn(() => null)
+  emitter.getTranscriptFile = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const, state: { done: true } }))
   emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))

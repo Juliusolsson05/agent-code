@@ -32,6 +32,12 @@ const alias = [
   { find: 'claude-code-headless', replacement: resolve(root, 'packages/claude-code-headless/src/index.ts') },
   { find: /^codex-headless\/(.+)$/, replacement: `${resolve(root, 'packages/codex-headless/src')}/$1` },
   { find: 'codex-headless', replacement: resolve(root, 'packages/codex-headless/src/index.ts') },
+  // Drift fix: electron.vite.config.ts gained opencode-headless when the
+  // third provider landed; this map (deliberately duplicated — see the WHY
+  // above) did not. Any test whose import graph reaches
+  // providers/registry.main.ts needs it.
+  { find: /^opencode-headless\/(.+)$/, replacement: `${resolve(root, 'packages/opencode-headless/src')}/$1` },
+  { find: 'opencode-headless', replacement: resolve(root, 'packages/opencode-headless/src/index.ts') },
   { find: /^agent-transcript-parser\/(.+)$/, replacement: `${resolve(root, 'packages/agent-transcript-parser/src')}/$1` },
   { find: 'agent-transcript-parser', replacement: resolve(root, 'packages/agent-transcript-parser/src/index.ts') },
   { find: /^agent-voice-dictation\/(.+)$/, replacement: `${resolve(root, 'packages/agent-voice-dictation/src')}/$1/index.ts` },
