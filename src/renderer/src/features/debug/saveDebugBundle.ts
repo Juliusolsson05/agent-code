@@ -307,6 +307,17 @@ function buildStateSnapshot(runtime: SessionRuntime): Record<string, unknown> {
       semanticLog: runtime.semantic.log.length,
       semanticErrors: runtime.semantic.errors.length,
     },
+    // Committed-tail health at capture. The tailer unwatch bug (residue
+    // plan P0) produced bundles whose ONLY on-board symptom was a stale
+    // lastJsonlEntryAt that nobody thought to subtract from capturedAt —
+    // the 06-24 stuck-queue bundle sat at 88 minutes and it took rollout
+    // forensics to notice. Pre-computed age makes tail death readable at
+    // a glance in every future bundle.
+    _tailHealth: {
+      lastJsonlEntryAt: runtime.lastJsonlEntryAt,
+      committedTailAgeMs:
+        runtime.lastJsonlEntryAt !== null ? Date.now() - runtime.lastJsonlEntryAt : null,
+    },
   }
 }
 
