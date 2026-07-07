@@ -32,17 +32,37 @@ export function renderedViewLeaseCount(runtime: SessionRuntime): number {
   )
 }
 
+function normalizeAgentViewModeForKind(
+  kind: AgentProviderKind,
+  mode: AgentViewMode,
+): AgentViewMode {
+  if (kind !== 'opencode') return mode
+  // WHY OpenCode is pinned to Agent mode for now:
+  // Claude/Codex "Terminal" means "attach xterm to the real provider PTY."
+  // OpenCode does not have that surface in Agent Code today; its runtime is
+  // HTTP/SSE plus committed history, so mounting AgentTerminalLeaf only paints
+  // an empty terminal and makes the global setting look broken. Until
+  // opencode-headless grows a parallel native-mode path with provider-native
+  // screen/proxy/transcript interpretation, the honest behavior is to keep
+  // OpenCode on the rendered Agent surface regardless of the global default.
+  //
+  // TODO(#484): replace this hard pin with a provider capability once OpenCode
+  // has a real native surface that can satisfy Terminal/Hybrid semantics.
+  return 'agent'
+}
+
 export function getEffectiveAgentSurface(args: {
   kind: SessionKind | undefined
   mode: AgentViewMode
   runtime: SessionRuntime
 }): EffectiveAgentSurface {
   const { kind, runtime } = args
-  const mode: AgentViewMode =
+  const requestedMode: AgentViewMode =
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode
       : 'agent'
   if (!isAgentKind(kind)) return 'rendered'
+  const mode = normalizeAgentViewModeForKind(kind, requestedMode)
 
   // WHY this selector ignores leases in hard Terminal mode:
   // Terminal mode is the user's "never mount Agent Code's renderer for this
@@ -97,10 +117,11 @@ export function commandAllowedByRenderedViewPolicy(args: {
   const policy = args.policy ?? { kind: 'none' }
   if (policy.kind === 'none') return true
   if (!isAgentKind(args.kind)) return true
-  const mode: AgentViewMode =
+  const requestedMode: AgentViewMode =
     args.mode === 'terminal' || args.mode === 'hybrid' || args.mode === 'agent'
       ? args.mode
       : 'agent'
+  const mode = normalizeAgentViewModeForKind(args.kind, requestedMode)
 
   // Commands that open/promote the rendered surface are exactly what Hybrid
   // exists for: show them in Agent and Hybrid, but hide them in hard Terminal

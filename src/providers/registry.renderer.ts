@@ -28,9 +28,16 @@ const codexRenderer: RendererProviderConfig = {
 // source of truth without also giving it a renderer config here.
 const opencodeRenderer: RendererProviderConfig = {
   ...getRendererProviderCapabilities('opencode'),
-  // The shared TileLeaf works for opencode: feed + composer render
-  // normally; the raw-terminal toggle shows an empty xterm until the
-  // AgentTerminalLeaf capability gate lands (#406 follow-up).
+  // OpenCode intentionally uses only the shared Agent surface today.
+  // WHY not expose AgentTerminalLeaf here: OpenCode's runtime has no
+  // provider PTY for Agent Code to mirror, so "Terminal" cannot mean the same
+  // thing it means for Claude/Codex. The display-policy layer pins OpenCode to
+  // Agent mode until a real native OpenCode surface exists; otherwise the app
+  // would mount an empty xterm and call that "terminal mode".
+  //
+  // TODO(#484): add a provider capability for native surfaces once the
+  // opencode-headless side has a parallel native-mode path with
+  // screen/proxy/transcript interpretation.
   TileLeaf: TileLeaf as ComponentType<TileLeafProps>,
 }
 
