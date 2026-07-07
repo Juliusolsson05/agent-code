@@ -24,6 +24,7 @@ import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
 import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
+import { isAgentSpawnToolName } from '@renderer/features/feed/lib/agentSpawnTools'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 
@@ -135,12 +136,14 @@ export const Block = memo(function Block({
         }
       }
 
-      if (tu.name === 'Agent' || tu.name === 'spawn_agent') {
-        // Claude records subagent fanout as an `Agent` tool_use; Codex records
-        // the same user-visible operation as a normal `spawn_agent`
-        // function_call. Route both through the fleet row before provider
-        // dispatch so Codex does not fall back to a generic tool card while the
-        // main process is already publishing compatible SubAgentState.
+      if (isAgentSpawnToolName(tu.name)) {
+        // Claude records subagent fanout as an `Agent` tool_use; Codex as a
+        // `spawn_agent` function_call; MCP-orchestrated sessions as
+        // `[mcp__<server>__]orchestration_create_agent` (the 2026-06-21
+        // blind spot — 73 tracked subAgents, zero cards). One shared
+        // predicate routes them all through the fleet row before provider
+        // dispatch, so the main process's SubAgentState (and P2b's
+        // notification join) always has a card to land on.
         return <TaskSubagentRow block={tu} />
       }
 

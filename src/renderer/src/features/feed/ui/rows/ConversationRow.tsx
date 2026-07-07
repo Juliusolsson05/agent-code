@@ -8,6 +8,7 @@ import type {
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
+import { isAgentSpawnToolName } from '@renderer/features/feed/lib/agentSpawnTools'
 
 import { Block } from '@renderer/features/feed/ui/rows/Block'
 import { SubagentGroupHeader } from '@renderer/features/feed/ui/rows/SubagentGroupHeader'
@@ -18,10 +19,11 @@ import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 // row keeps the grouping rule tied to user-visible behavior rather than a
 // provider's wire vocabulary.
 function isAgentBlock(block: ContentBlock): block is ToolUseBlock {
+  // P2c: same shared predicate as Block.tsx's fleet-row interception —
+  // MCP orchestration spawns must group under the fleet header too.
   return (
     block.type === 'tool_use' &&
-    ((block as ToolUseBlock).name === 'Agent' ||
-      (block as ToolUseBlock).name === 'spawn_agent')
+    isAgentSpawnToolName((block as ToolUseBlock).name)
   )
 }
 
