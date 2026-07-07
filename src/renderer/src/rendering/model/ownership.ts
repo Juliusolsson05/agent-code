@@ -54,13 +54,40 @@ export type CommittedOwnership = {
  */
 export type SuppressionPolicy = {
   wholeTurnByMessageId: boolean
+  /**
+   * Collapsed-running null-paint (legacy semanticRenderUnitPaintsDom
+   * behavior; corpus new-bug 2026-06-29 1b2b5e96): hide a HISTORY tool
+   * block whose run never resolved — no result paired into the block AND
+   * no committed tool_use/tool_result trace. CLAUDE ONLY: its tool
+   * results always pair into the block (semantic reducer) or land as
+   * committed rows, so absence of both means the run truly died. Codex is
+   * excluded because its MCP lifecycle delivers function_call_output in a
+   * LATER semantic turn — block-local evidence is legitimately absent and
+   * committed reconstruction may lag; the corpus proved the rule
+   * over-fires there (15 fixtures went missing-in-next). Opencode's
+   * committed channel is assembled server truth; no dangling-chip bundle
+   * exists for it — revisit if one appears.
+   */
+  hideUnresolvedHistoryTools: boolean
 }
 
 export const SUPPRESSION_POLICY: Record<AgentProviderKind, SuppressionPolicy> = {
-  claude: { wholeTurnByMessageId: true },
-  codex: { wholeTurnByMessageId: false },
-  opencode: { wholeTurnByMessageId: false },
+  claude: { wholeTurnByMessageId: true, hideUnresolvedHistoryTools: true },
+  codex: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
+  opencode: { wholeTurnByMessageId: false, hideUnresolvedHistoryTools: false },
 }
+
+/** The legacy collapsed_activity churn set (helpers.ts
+ *  classifySemanticToolActivity): the only tools whose RUNNING history
+ *  blocks null-paint. Source of truth is that classifier until Stage 3
+ *  absorbs it; keep in sync. */
+const COLLAPSIBLE_CHURN_TOOLS: ReadonlySet<string> = new Set([
+  'Read',
+  'FileRead',
+  'Glob',
+  'Grep',
+  'Bash',
+])
 
 export function buildCommittedOwnership(
   committed: readonly RenderCandidate[],
@@ -175,6 +202,42 @@ export function decideLiveCandidate(
     if (candidate.itemId && ownership.itemIds.has(candidate.itemId)) {
       evidence.push(`committed response item ${candidate.itemId}`)
       return { candidateId: candidate.id, selected: false, reason: 'committed-tool-use-owned', evidence }
+    }
+    // Collapsed-running null-paint (corpus new-bug, 2026-06-29 1b2b5e96;
+    // legacy semanticRenderUnitPaintsDom behavior): a HISTORY tool block
+    // whose run never resolved anywhere — no result paired into the block
+    // AND no committed tool_use or tool_result trace — is a permanently-
+    // dangling chip ("Read · running" forever). Legacy deliberately
+    // withheld it; we do too, with the decision on the record. Scoped to
+    // history ONLY: the current turn's unresolved tools are legitimately
+    // awaiting results (that is what streaming looks like), and codex's
+    // MCP next-turn-output lifecycle resolves via a LATER turn — when the
+    // result eventually lands (block pairing or committed row), the
+    // candidate re-decides and paints, so this is never a permanent hide
+    // of a live run.
+    if (
+      policy.hideUnresolvedHistoryTools &&
+      candidate.owner === 'semantic-history' &&
+      candidate.resolved !== true &&
+      // Legacy parity is EXACTLY the collapsed_activity churn set
+      // (classifySemanticToolActivity): Read/Glob/Grep/Bash fold into a
+      // collapsed run that null-paints while running. Everything else —
+      // Task, Edit, AskUserQuestion, MCP tools — paints even while
+      // unresolved (a running Task chip is live subagent signal, not
+      // churn). The first, broader version of this rule hid those and the
+      // corpus caught it within one run: 6 claude fixtures went
+      // missing-in-next on legitimate running chips.
+      candidate.toolName !== undefined &&
+      COLLAPSIBLE_CHURN_TOOLS.has(candidate.toolName)
+    ) {
+      const key = candidate.toolUseId ?? candidate.callId
+      const committedTrace =
+        (key !== undefined && (ownership.toolUseIds.has(key) || ownership.toolResultIds.has(key))) ||
+        (candidate.itemId !== undefined && ownership.itemIds.has(candidate.itemId))
+      if (!committedTrace) {
+        evidence.push('churn tool, no block result, no committed tool_use/tool_result trace')
+        return { candidateId: candidate.id, selected: false, reason: 'collapsed-running', evidence }
+      }
     }
   }
 

@@ -190,3 +190,59 @@ describe('block-grain tool ownership mining (corpus new-bug fix)', () => {
     expect(d.reason).toBe('committed-tool-use-owned')
   })
 })
+
+describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)', () => {
+  const emptyOwnership = buildCommittedOwnership([])
+  const historyTool = (over: Partial<RenderCandidate>): RenderCandidate => ({
+    id: 'sem:turn_h:0',
+    owner: 'semantic-history',
+    provider: 'claude',
+    sourcePlane: 'semantic',
+    sessionId: 's1',
+    turnId: 'turn_h',
+    blockIndex: 0,
+    toolUseId: 'toolu_dangling',
+    contentKind: 'tool-use',
+    timestampMs: TS_MS,
+    sequence: 0,
+    ...over,
+  })
+
+  it('hides an unresolved untraced churn tool in claude history', () => {
+    const d = decideLiveCandidate(historyTool({ toolName: 'Read' }), emptyOwnership, SUPPRESSION_POLICY.claude)
+    expect(d.selected).toBe(false)
+    expect(d.reason).toBe('collapsed-running')
+  })
+
+  it('non-churn tools paint even while unresolved (running Task chip is live signal)', () => {
+    const d = decideLiveCandidate(historyTool({ toolName: 'Task' }), emptyOwnership, SUPPRESSION_POLICY.claude)
+    expect(d.selected).toBe(true)
+  })
+
+  it('resolved churn tools paint (block-local result evidence)', () => {
+    const d = decideLiveCandidate(
+      historyTool({ toolName: 'Bash', resolved: true }),
+      emptyOwnership,
+      SUPPRESSION_POLICY.claude,
+    )
+    expect(d.selected).toBe(true)
+  })
+
+  it('codex is exempt by policy (MCP next-turn-output lifecycle)', () => {
+    const d = decideLiveCandidate(
+      historyTool({ provider: 'codex', toolName: 'Read' }),
+      emptyOwnership,
+      SUPPRESSION_POLICY.codex,
+    )
+    expect(d.selected).toBe(true)
+  })
+
+  it('current-turn tools always paint (streaming legitimately awaits results)', () => {
+    const d = decideLiveCandidate(
+      historyTool({ owner: 'semantic-current', toolName: 'Read' }),
+      emptyOwnership,
+      SUPPRESSION_POLICY.claude,
+    )
+    expect(d.selected).toBe(true)
+  })
+})

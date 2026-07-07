@@ -34,6 +34,12 @@ export type SemanticBlockLike = {
   toolUseId?: string
   callId?: string
   itemId?: string
+  /** Tool blocks: result payload already paired into the block by the
+   *  semantic reducer (tool_result arrival). Presence of either field is
+   *  the block-local "this run resolved" evidence. */
+  resultContent?: string
+  resultAt?: number
+  resultIsError?: boolean
 }
 
 export type SemanticTurnLike = {
@@ -148,12 +154,20 @@ function collectTurn(
       itemId: b.itemId,
       toolUseId: b.toolUseId,
       callId: b.callId,
+      toolName: b.toolName,
       contentKind: kind,
       timestampMs,
       // Sequence preserves intra-turn block order under equal timestamps.
       sequence: i,
       textKey: finalizedText,
       normalizedTextKey: finalizedText ? normalizeTextKey(finalizedText) : undefined,
+      // Block-local result evidence for the ledger's collapsed-running
+      // rule: a HISTORY tool block with neither this nor any committed
+      // trace is a permanently-dangling run legacy deliberately withheld.
+      resolved:
+        kind === 'tool-use'
+          ? Boolean(b.resultContent) || typeof b.resultAt === 'number' || b.resultIsError === true
+          : undefined,
     })
     out.decisions.push({ candidateId: id, selected: true, reason: 'selected', evidence: [] })
   })
