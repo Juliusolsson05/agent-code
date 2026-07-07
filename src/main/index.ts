@@ -465,14 +465,15 @@ async function startApp(): Promise<void> {
   // companion-design.md) but OFF until the user enables it from the Remote
   // panel: construction allocates no sockets, no manager subscriptions, no
   // secret I/O. The phone bundle comes from `npm run client:build`
-  // (out/remote-client, sibling of electron-vite's out/main); when it isn't
-  // built the server serves a placeholder page and the WS API still works,
-  // so a dev install degrades visibly instead of failing.
-  const remoteClientDist = join(app.getAppPath(), 'out', 'remote-client')
+  // (out/remote-client, sibling of electron-vite's out/main). The path is
+  // passed UNCONDITIONALLY — RemoteServer existence-checks it per request —
+  // so building the bundle after launch takes effect on the next page load
+  // instead of requiring an app restart (an existsSync gate here was the
+  // first thing real-world testing tripped on).
   remoteController = new RemoteController({
     manager,
     journal: appRunJournal,
-    clientDistDir: existsSync(remoteClientDist) ? remoteClientDist : null,
+    clientDistDir: join(app.getAppPath(), 'out', 'remote-client'),
     // Tunnel binary resolution — bundled artifact first (packaged app),
     // then the third_party dev cache (populated by `npm run
     // runtime:fetch:cloudflared`; copy-packaged-resources only runs on

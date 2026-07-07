@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createReadStream, existsSync } from 'node:fs'
-import { extname, join, normalize } from 'node:path'
+import { extname, join, normalize, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
 
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -286,15 +286,27 @@ export class RemoteServer extends EventEmitter {
 
   private serveClient(pathname: string, res: ServerResponse): void {
     const dist = this.deps.clientDistDir
-    if (!dist) {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+    // Per-REQUEST existence check, not construction-time: clientDistDir is
+    // captured when the app boots, but in dev the bundle often gets built
+    // AFTER launch (`npm run client:build`). Gating at construction meant
+    // the placeholder persisted until a full app restart — the first thing
+    // real-world testing tripped on. Reading the filesystem per page load
+    // is negligible next to serving the files themselves, and it makes
+    // "build, then just reload the phone page" work with zero restarts.
+    if (!dist || !existsSync(join(dist, 'index.html'))) {
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-cache',
+      })
       res.end(
         '<!doctype html><meta name="viewport" content="width=device-width, initial-scale=1">' +
           '<title>Agent Code Remote</title>' +
           '<body style="font-family:system-ui;padding:2rem;background:#111;color:#eee">' +
           '<h1>Agent Code Remote</h1>' +
-          '<p>The remote client bundle is not built in this install. ' +
-          'The WebSocket API at <code>/ws</code> is live.</p>',
+          '<p>The phone client bundle is not built yet. On the desktop, run:</p>' +
+          '<pre style="background:#222;padding:1rem;border-radius:8px">npm run client:build</pre>' +
+          '<p>then reload this page — no app restart needed. ' +
+          'The WebSocket API at <code>/ws</code> is already live.</p>',
       )
       return
     }
@@ -309,15 +321,29 @@ export class RemoteServer extends EventEmitter {
       // survive a reload on the phone.
       const index = join(dist, 'index.html')
       if (existsSync(index)) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-cache',
+        })
         createReadStream(index).pipe(res)
       } else {
         res.writeHead(404).end()
       }
       return
     }
+    // Cache discipline (learned the hard way — a phone kept serving a
+    // stale page through a rebuild AND a server restart because we sent no
+    // headers, and mobile browsers cache heuristically-forever without
+    // them): the HTML entry must revalidate on every load (`no-cache` =
+    // cached but always conditional), while Vite's content-hashed assets
+    // are immutable by construction and can cache for a year — a new build
+    // changes the hash, and the fresh index.html points at it.
+    const isHashedAsset = filePath.includes(`${sep}assets${sep}`)
     res.writeHead(200, {
       'content-type': STATIC_CONTENT_TYPES[extname(filePath)] ?? 'application/octet-stream',
+      'cache-control': isHashedAsset
+        ? 'public, max-age=31536000, immutable'
+        : 'no-cache',
     })
     createReadStream(filePath).pipe(res)
   }
