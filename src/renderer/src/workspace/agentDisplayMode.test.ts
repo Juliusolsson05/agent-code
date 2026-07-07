@@ -55,6 +55,24 @@ describe('agent display mode policy', () => {
     ).toBe('terminal')
   })
 
+  it('keeps OpenCode on the rendered Agent surface until native mode exists', () => {
+    expect(
+      getEffectiveAgentSurface({
+        kind: 'opencode',
+        mode: 'terminal',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe('rendered')
+
+    expect(
+      getEffectiveAgentSurface({
+        kind: 'opencode',
+        mode: 'hybrid',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe('rendered')
+  })
+
   it('uses Hybrid as terminal-first, rendered only while leases are active', () => {
     expect(
       getEffectiveAgentSurface({
@@ -131,6 +149,29 @@ describe('agent display mode policy', () => {
         runtime: emptyRuntime(),
       }),
     ).toBe(false)
+  })
+
+  it('treats OpenCode rendered-feed commands as available even under global Terminal mode', () => {
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: { kind: 'requires-rendered-feed' },
+        kind: 'opencode',
+        mode: 'terminal',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(true)
+
+    expect(
+      commandAllowedByRenderedViewPolicy({
+        policy: {
+          kind: 'leases-rendered-feed',
+          feature: 'copy-assistant-message',
+        },
+        kind: 'opencode',
+        mode: 'terminal',
+        runtime: emptyRuntime(),
+      }),
+    ).toBe(true)
   })
 
   it('allows commands that open rendered state in Hybrid but not hard Terminal mode', () => {
