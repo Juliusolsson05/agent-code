@@ -37,7 +37,13 @@ export function renderOpencodeReadResult(block: ToolResultBlock): ReactNode | un
   const text = resultText(block)
   if (!text) return undefined
   const path = /<path>\s*([^<\n]+?)\s*<\/path>/.exec(text)?.[1] ?? null
-  const body = /<content>\n?([\s\S]*?)\n?<\/content>/.exec(text)?.[1] ?? null
+  // GREEDY capture ([\s\S]*, no `?`) is deliberate: file bodies routinely
+  // contain a literal "</content>" (docs, tests, this very renderer's own
+  // source), and a non-greedy capture stops at the FIRST such string —
+  // silently truncating the displayed file at the first inner tag. opencode
+  // wraps the whole document in a single outer <content>…</content>, so the
+  // real terminator is the LAST closing tag; greedy backtracks to exactly it.
+  const body = /<content>\n?([\s\S]*)\n?<\/content>/.exec(text)?.[1] ?? null
   if (!path || body === null) return undefined
 
   // Strip the "N: " line-number gutter opencode prepends — CodeBlock has

@@ -45,6 +45,17 @@ import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow
 //     generic ToolUseRow). Plus the git-widget interception.
 //   - tool_result → provider-specific result renderer, with the git
 //     widget suppression mirrored here.
+// #442 finding-21: the git-widget card renders for a shell tool_use, and the
+// paired tool_result must be suppressed so the raw output doesn't duplicate
+// below the card. The two checks drifted — the tool_use branch recognized
+// opencode's lowercase 'bash' twin but the tool_result suppression did not, so
+// an opencode git command painted BOTH the card and the raw result. Hoisting
+// the name set into one predicate used by both branches makes that drift
+// impossible: whatever the widget renders for, the result suppresses for.
+function isGitWidgetShellTool(name: string | undefined): boolean {
+  return name === 'Bash' || name === 'exec_command' || name === 'bash'
+}
+
 export const Block = memo(function Block({
   block,
   role,
@@ -128,8 +139,9 @@ export const Block = memo(function Block({
         customRendering
         // 'bash' = opencode's lowercase twin (P3): same commands, same
         // git-widget value; the case difference is provider naming, not
-        // semantics.
-        && (tu.name === 'Bash' || tu.name === 'exec_command' || tu.name === 'bash')
+        // semantics. Shared predicate keeps this in lockstep with the
+        // tool_result suppression below.
+        && isGitWidgetShellTool(tu.name)
       ) {
         const cmd = extractToolCommand(tu)
         const intent = detectGitIntent(cmd)
@@ -180,13 +192,20 @@ export const Block = memo(function Block({
         const sourceTu = toolUseIndex.get(tr.tool_use_id)
         if (
           sourceTu
-          && (sourceTu.name === 'Bash' || sourceTu.name === 'exec_command')
+          && isGitWidgetShellTool(sourceTu.name)
           && detectGitIntent(extractToolCommand(sourceTu))
         ) {
           return null
         }
       }
       const sourceTool = toolUseIndex.get(tr.tool_use_id)
+      // #442 finding-C2: an answered AskUserQuestion renders the picked answer
+      // inside AskUserQuestionAnsweredRow on the tool_use row (it reads the
+      // paired tool_result). Painting the tool_result again here shows the same
+      // answer twice — the committed plane never had the suppression the live
+      // semantic plane does. Suppress it so the answered-question card is the
+      // single surface, mirroring the git-widget suppression just above.
+      if (sourceTool?.name === 'AskUserQuestion') return null
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolResult?.(tr, {
         sourceTool,
       })

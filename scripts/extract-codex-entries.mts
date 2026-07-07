@@ -24,13 +24,32 @@ if (!rolloutPath || !cutoffArg) {
 const cutoffMs = Number(cutoffArg)
 
 const entries: unknown[] = []
-for (const line of readFileSync(rolloutPath, 'utf8').split('\n')) {
+const rolloutLines = readFileSync(rolloutPath, 'utf8').split('\n')
+// Torn-tail tolerance is ONLY for the final non-empty line (rollout read
+// mid-write). A malformed line elsewhere is real corruption: silently skipping
+// it (the old blanket `continue`) omits committed entries and shifts the
+// extracted window, so we warn loudly with file:line before dropping it — the
+// final line stays tolerated because a half-flushed tail is expected.
+let lastNonEmptyRollout = -1
+for (let i = rolloutLines.length - 1; i >= 0; i--) {
+  if (rolloutLines[i].trim()) {
+    lastNonEmptyRollout = i
+    break
+  }
+}
+for (let i = 0; i < rolloutLines.length; i++) {
+  const line = rolloutLines[i]
   if (!line.trim()) continue
   let record: Record<string, unknown>
   try {
     record = JSON.parse(line) as Record<string, unknown>
   } catch {
-    continue // torn tail line
+    if (i !== lastNonEmptyRollout) {
+      console.error(
+        `extract-codex-entries: malformed JSON at ${rolloutPath}:${i + 1} — skipping (non-tail line, possible corruption)`,
+      )
+    }
+    continue // torn tail (final line) or corrupt non-final line already reported
   }
   const ts = typeof record.timestamp === 'string' ? Date.parse(record.timestamp) : NaN
   if (!Number.isNaN(ts) && ts > cutoffMs) continue

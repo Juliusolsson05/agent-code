@@ -28,6 +28,7 @@ import { STATE_FILE } from '@main/storage/paths.js'
 import {
   scheduleDebugStoragePrune,
   setDebugRetentionJournal,
+  setLiveRecordingDirsProvider,
 } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
@@ -84,9 +85,11 @@ const lspManager = new LspManager()
 // `src/renderer/src/workspace/ghosts.ts` for the renderer side.
 const ghostJournals = new GhostJournalRegistry()
 // Session recorder — one folder per recording under session-recordings/.
-// Constructed and installed as the outbound-IPC observer ONLY when
-// AGENT_CODE_DEV_DEBUG=1 AND AGENT_CODE_SESSION_RECORD=1, so a normal build
-// pays nothing (no observer installed, sendToMainWindow's hook stays null).
+// Constructed and installed as the outbound-IPC observer whenever the
+// dev-debug CAPABILITY is on (AGENT_CODE_DEV_DEBUG=1), so a normal build with
+// dev-debug off pays nothing (no observer installed, sendToMainWindow's hook
+// stays null). AGENT_CODE_SESSION_RECORD does NOT gate construction — it only
+// flips autoRecord (below) so every session records from launch.
 // plan: docs/rendering/session-recording-plan-2026-07.md (#467).
 // Construct the recorder manager whenever the CAPABILITY is on (dev-debug),
 // so the Start Recording command works. autoRecord (the env flag) stays OFF
@@ -228,6 +231,15 @@ async function startApp(): Promise<void> {
   // started. See #388 — the July 2026 crash forensics lost the retention
   // breadcrumb entirely because pruning was console-only.
   setDebugRetentionJournal(appRunJournal)
+  // Teach retention which session-recording folders are still being written.
+  // Without this, debugRetention ages a recording by its folder mtime, and a
+  // live-but-idle recording (session went quiet) can fall past ACTIVE_GRACE_MS
+  // and get rm -rf'd out from under the open recorder. The manager derives the
+  // set from its in-memory recorders map — the authoritative liveness signal.
+  // Only wired when the recorder manager exists (dev-debug capability on);
+  // otherwise the provider stays null and retention treats every recording
+  // folder as prunable, which is correct because none can be live.
+  if (sessionRecorders) setLiveRecordingDirsProvider(() => sessionRecorders.liveRecordingDirs())
   await appRunJournal.start()
   appRunJournal.record({
     area: 'state.lock',

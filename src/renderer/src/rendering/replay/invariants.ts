@@ -2,13 +2,13 @@ import type { RenderRow, OwnershipDecision } from '@renderer/rendering/model/typ
 import type { ReplayResult, ReplayTick } from '@renderer/rendering/replay/recordedSession'
 
 // ---------------------------------------------------------------------------
-// Slice 5 — invariant replay (plan §6 Mode 2). Assert, at EVERY tick, the four
+// Slice 5 — invariant replay (plan §6 Mode 2). Assert, at EVERY tick, the five
 // properties the ledger promises by construction. No hand-authored expected
 // output: these catch whole bug CLASSES, so they can run over any recording —
 // the broadest, cheapest regression net (and the permanent successor to the
 // dev-only render shadow, which dies at Stage-3 cutover).
 //
-// The four invariants (plan §6):
+// The five invariants (plan §6):
 //   1. single-owner (dual-render): within one tick, no artifact is owned by two
 //      selected rows — no duplicate row id, no shared toolUseId, no shared
 //      (turnId, blockIndex), no shared exact textKey.
@@ -23,6 +23,11 @@ import type { ReplayResult, ReplayTick } from '@renderer/rendering/replay/record
 //      change (by reference/value) MUST yield the SAME RenderLedger object.
 //      adapter.test.ts:119-149 is the executable spec; this runs it over a real
 //      stream.
+//   5. no-unrenderable-drop: a row the ledger SELECTED that the view bridge
+//      (ledgerToFeedItems) could not turn into a FeedRenderItem — the #239
+//      "present but invisible" class. Caught ONLY by replaying the full stack;
+//      invariants 1-4 all pass while it happens because the loss is downstream
+//      of the ledger.
 //
 // `assertInvariants` returns violations rather than throwing so a test can
 // assert `toEqual([])` (clear diff on failure) and a future soak tool can
@@ -44,6 +49,7 @@ export type InvariantKind =
   | 'vanish-without-replacement'
   | 'unexplained-shrink'
   | 'd11-reference-instability'
+  | 'unrenderable-drop'
 
 export type InvariantViolation = {
   kind: InvariantKind
@@ -128,12 +134,31 @@ function rejectionByCandidateId(
 /** The set of artifact identities a tick's SELECTED rows cover. Used to decide
  *  whether a vanished row was "replaced" (its artifact still on screen under a
  *  different candidate id — e.g. a current-turn block that archived into a
- *  history row keeps the same turnId). */
+ *  history row keeps the same turnId+blockIndex).
+ *
+ *  BLOCK-GRAIN vs TURN-GRAIN (finding #26 — sibling-block masking): a semantic
+ *  STREAMING block covers only ITSELF here, keyed `sem:turnId:blockIndex`, and
+ *  deliberately does NOT contribute `turn:turnId`. Collapsing every block of a
+ *  turn to a single `turn:t` cover key let a surviving sibling (sem:t:0)
+ *  "explain" the vanish of a genuinely-lost block (sem:t:1): both minted the
+ *  same `turn:t`, so a masked #239-class disappearance passed the invariant.
+ *  Only a DURABLE whole-turn owner — a committed entry, or the blockless
+ *  turn-text semantic fallback — contributes `turn:t`. That is what vouches for
+ *  the semantic->committed handoff (see artifactsOf) WITHOUT vouching for an
+ *  unrelated live sibling block of the same turn. The current->history archival
+ *  keeps turnId+blockIndex, so it is covered by the block-grain key directly. */
 function coveredArtifacts(tick: ReplayTick): Set<string> {
   const set = new Set<string>()
   for (const row of tick.rows) {
     const c = row.candidate
-    if (c.turnId !== undefined) set.add(`turn:${c.turnId}`)
+    if (c.sourcePlane === 'semantic' && c.turnId !== undefined && c.blockIndex !== undefined) {
+      // Streaming preview block: covers ITSELF only, never the whole turn.
+      set.add(`sem:${c.turnId}:${c.blockIndex}`)
+    } else if (c.turnId !== undefined) {
+      // Committed rows and the blockless turn-text fallback own the WHOLE turn —
+      // the durable owner a streaming block hands off to when it commits.
+      set.add(`turn:${c.turnId}`)
+    }
     if (c.toolUseId) set.add(`tool:${c.toolUseId}`)
     for (const id of c.ownedToolUseIds ?? []) set.add(`tool:${id}`)
     if (c.textKey) set.add(`text:${c.textKey}`)
@@ -141,10 +166,26 @@ function coveredArtifacts(tick: ReplayTick): Set<string> {
   return set
 }
 
+/** The artifact identities a (possibly vanished) row asserts, tested against
+ *  coveredArtifacts to decide whether its content is still on screen under a
+ *  new owner. ASYMMETRIC with coveredArtifacts on purpose (finding #26): a
+ *  semantic streaming block pushes BOTH its block-grain key — so a
+ *  current->history archival that keeps turnId+blockIndex still counts as
+ *  "replaced" — AND `turn:turnId`, so a semantic->committed handoff (the block
+ *  folds into an entry-grain committed row that only exposes `turn:t`) still
+ *  counts. Pushing `turn:t` HERE does not reintroduce sibling masking, because
+ *  the COVERED set gains `turn:t` only from a committed / blockless-turn row,
+ *  never from a sibling streaming block — so a lone surviving sibling cannot
+ *  satisfy this row's `turn:t`. */
 function artifactsOf(row: RenderRow): string[] {
   const c = row.candidate
   const out: string[] = []
-  if (c.turnId !== undefined) out.push(`turn:${c.turnId}`)
+  if (c.sourcePlane === 'semantic' && c.turnId !== undefined && c.blockIndex !== undefined) {
+    out.push(`sem:${c.turnId}:${c.blockIndex}`)
+    out.push(`turn:${c.turnId}`)
+  } else if (c.turnId !== undefined) {
+    out.push(`turn:${c.turnId}`)
+  }
   if (c.toolUseId) out.push(`tool:${c.toolUseId}`)
   if (c.textKey) out.push(`text:${c.textKey}`)
   return out
@@ -167,7 +208,14 @@ function liveTurnIds(tick: ReplayTick): Set<string> {
 
 function checkVanish(prev: ReplayTick, cur: ReplayTick, out: InvariantViolation[]): void {
   const curIds = new Set(cur.rows.map(r => r.candidate.id))
-  const rejected = rejectionByCandidateId(cur.ledger.decisions)
+  // Rejections come from BOTH halves of the ledger=paint=debug promise (plan
+  // D5): the ledger's own decisions cover what reached it, and the adapter's
+  // collectorDecisions cover COLLECTION-TIME kills (hidden meta rows,
+  // compaction-synthesis, duplicate-turn drops) that never became candidates.
+  // Finding #27: replay used to drop collectorDecisions, so a row rejected at
+  // collection time read as an unexplained vanish here. Union both — this can
+  // only ADD explanations, never manufacture a violation.
+  const rejected = rejectionByCandidateId([...cur.ledger.decisions, ...cur.collectorDecisions])
   const covered = coveredArtifacts(cur)
   const curLiveTurns = liveTurnIds(cur)
 
@@ -272,6 +320,29 @@ function checkD11(prev: ReplayTick, cur: ReplayTick, out: InvariantViolation[]):
 }
 
 // ---------------------------------------------------------------------------
+// Invariant 5 — no unrenderable drop (#239 present-but-invisible)
+// ---------------------------------------------------------------------------
+
+/** The view bridge (ledgerToFeedItems) returns `dropped`: candidate ids the
+ *  ledger SELECTED as rows but the bridge could not turn into a FeedRenderItem.
+ *  That is the #239 class — content the ledger promises is present, yet the
+ *  user sees nothing. The ledger's own invariants (1-4) can all pass while this
+ *  happens, because the loss is DOWNSTREAM of the ledger; only replaying the
+ *  full stack through the view bridge catches it. Any non-empty `dropped` is a
+ *  violation — there is no legitimate reason for a selected row to be
+ *  unrenderable, which is exactly why recordedSession.test asserts dropped===[]
+ *  at every tick. */
+function checkUnrenderableDrops(tick: ReplayTick, out: InvariantViolation[]): void {
+  if (tick.dropped.length === 0) return
+  out.push({
+    kind: 'unrenderable-drop',
+    tick: tick.index,
+    message: `${tick.dropped.length} selected row(s) could not be rendered by the view bridge (#239 present-but-invisible): ${tick.dropped.join(', ')}`,
+    detail: { dropped: tick.dropped },
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -285,6 +356,7 @@ export function assertInvariants(replay: ReplayResult): InvariantViolation[] {
   let prev: ReplayTick | null = null
   for (const tick of replay.ticks) {
     checkSingleOwner(tick, violations)
+    checkUnrenderableDrops(tick, violations)
     if (prev !== null) {
       checkVanish(prev, tick, violations)
       checkD11(prev, tick, violations)

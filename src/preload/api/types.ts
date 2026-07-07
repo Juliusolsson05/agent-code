@@ -47,8 +47,10 @@ export type {
 
 export type DevDebugConfig = {
   enabled: boolean
-  /** AGENT_CODE_SESSION_RECORD=1 (+ dev-debug) — session recording active.
-   *  Mirrors src/main/ipc/devDebug.ts (the source of truth). */
+  /** The recording CAPABILITY is available (dev-debug on) — whether the
+   *  renderer should SHOW the Start/Stop/Attach-Note recording commands. NOT
+   *  "recording is active": recording is command-driven per session. Mirrors
+   *  src/main/ipc/devDebug.ts (the source of truth). */
   sessionRecordingEnabled: boolean
 }
 

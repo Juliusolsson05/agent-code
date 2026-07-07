@@ -4,6 +4,12 @@ import type {
   RenderCandidate,
   RenderContentKind,
 } from '@renderer/rendering/model/types'
+// Value import (not a type): the SAME spawn-tool predicate the fleet row uses
+// to decide which tool_use becomes a TaskSubagentRow. Reusing it here keeps
+// the join-suppression set (below) tied to the exact blocks that CONSUME a
+// notification — if the two ever diverged, we'd either suppress a standalone
+// row nobody re-renders (lost background result) or double-paint one.
+import { isAgentSpawnToolName } from '@renderer/features/feed/lib/agentSpawnTools'
 
 // ---------------------------------------------------------------------------
 // Committed candidate collector — the anti-corruption boundary between raw
@@ -169,6 +175,56 @@ function isTaskNotificationRow(e: RawCommittedEntry): boolean {
   return typeof text === 'string' && text.trimStart().startsWith(TASK_NOTIFICATION_OPEN)
 }
 
+/**
+ * Pre-scan for the P2b join-suppression: the committed tool_use ids of
+ * subagent-SPAWN blocks (claude `Agent`, codex `spawn_agent`, the MCP
+ * orchestration forms — whatever `isAgentSpawnToolName` recognizes).
+ *
+ * WHY this set exists — the row-double-render this closes: a
+ * `<task-notification>` is the spawn's OWN completion report, and
+ * TaskSubagentRow ALREADY paints it inside the parent Task card via
+ * `notifications.get(spawnBlock.id)` (see Feed's taskNotifications map,
+ * keyed by the notification's <tool-use-id>). If this collector ALSO selects
+ * the standalone notification entry as a user row, the identical background
+ * result renders twice — once joined into the Task card, once as a lone
+ * bubble. Legacy killed exactly this in the now-deleted deriveFeedRenderModel
+ * via `committedToolUseIndex.has(notification.toolUseId)`; the ledger has to
+ * reinstate it or the corruption returns at cutover.
+ *
+ * WHY filter to SPAWN tools instead of any committed tool_use (as legacy's
+ * broad index technically did): only spawn blocks route to TaskSubagentRow,
+ * the sole row that consumes a notification. Matching a non-spawn tool would
+ * suppress a notification that no card re-renders — silently losing the
+ * result. Narrowing to spawn ids makes "suppressed here" iff "joined there",
+ * which is the invariant the whole carve-out rests on. A notification whose
+ * toolUseId is absent from this set is PARENTLESS (parent Task not committed,
+ * or a cross-session/MCP child) and MUST keep rendering standalone.
+ */
+function collectSpawnToolUseIds(
+  entries: readonly RawCommittedEntry[],
+): Set<string> {
+  const ids = new Set<string>()
+  for (const e of entries) {
+    // Spawn tool_use only ever lives in an assistant entry; skipping the rest
+    // is both correct and keeps this an O(N) single pass.
+    if (e.type !== 'assistant') continue
+    const c = e.message?.content
+    if (!Array.isArray(c)) continue
+    for (const b of c) {
+      const block = b as { type?: unknown; id?: unknown; name?: unknown }
+      if (
+        block?.type === 'tool_use' &&
+        typeof block.id === 'string' &&
+        typeof block.name === 'string' &&
+        isAgentSpawnToolName(block.name)
+      ) {
+        ids.add(block.id)
+      }
+    }
+  }
+  return ids
+}
+
 function contentKindOf(e: RawCommittedEntry): RenderContentKind {
   if (e.type === 'assistant') return 'assistant-text'
   if (e.type === 'user') return 'user-text'
@@ -189,6 +245,13 @@ export function collectCommittedCandidates(
 ): CommittedCollection {
   const candidates: RenderCandidate[] = []
   const decisions: OwnershipDecision[] = []
+
+  // P2b join-suppression evidence: which committed spawn tool_use ids exist.
+  // Built ONCE up front so the per-entry notification check is a Set lookup
+  // rather than an O(N²) rescan, and so a notification that appears BEFORE
+  // its spawn entry in iteration order still suppresses correctly (the whole
+  // committed slice is scanned before any decision is emitted).
+  const spawnToolUseIds = collectSpawnToolUseIds(entries)
 
   entries.forEach((e, index) => {
     // Ingest-time stable id (plan migration hazard: keys must never fall
@@ -211,6 +274,28 @@ export function collectCommittedCandidates(
     }
     if (isTaskNotificationRow(e)) {
       const toolUseId = taskNotificationToolUseId(e)
+      // P2b join-suppression (mirrors legacy's
+      // committedToolUseIndex.has(notification.toolUseId) guard): when the
+      // spawn that produced this notification is committed, TaskSubagentRow
+      // already renders the notification INSIDE the parent Task card, so
+      // selecting the standalone entry too would double-paint the same
+      // background result. A PARENTLESS notification (no toolUseId, or a
+      // toolUseId with no committed spawn block) has no card to join and must
+      // still render standalone — hence the set-membership gate, not a blanket
+      // drop of every notification. Recorded as a rejection decision (not a
+      // silent skip) so a bundle can answer "why did this notification row
+      // vanish": it was joined, #344's structural rule.
+      if (toolUseId && spawnToolUseIds.has(toolUseId)) {
+        decisions.push({
+          candidateId: id,
+          selected: false,
+          reason: 'task-notification-joined',
+          evidence: [
+            `joined into committed spawn tool_use ${toolUseId} — renders inside its Task card, standalone row suppressed to avoid the P2b double-render`,
+          ],
+        })
+        return
+      }
       const text = textOf(e)
       candidates.push({
         id,

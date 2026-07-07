@@ -42,17 +42,53 @@ try {
 }
 
 const events: RecordingEvent[] = []
-for (const line of readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n')) {
+const eventsPath = join(dir, 'events.jsonl')
+const eventLines = readFileSync(eventsPath, 'utf8').split('\n')
+// Torn-tail tolerance is ONLY for the final non-empty line: a recording read
+// mid-write can leave a half-flushed last record, which is expected and benign.
+// A malformed line ANYWHERE ELSE is real corruption — silently dropping it (the
+// old blanket catch) splices a hole into the event stream and mints a
+// plausible-but-wrong fixture the golden corpus would then inherit, so we warn
+// loudly with file:line and continue best-effort instead of pretending the
+// stream was intact.
+let lastNonEmptyEvent = -1
+for (let i = eventLines.length - 1; i >= 0; i--) {
+  if (eventLines[i].trim()) {
+    lastNonEmptyEvent = i
+    break
+  }
+}
+for (let i = 0; i < eventLines.length; i++) {
+  const line = eventLines[i]
   if (!line.trim()) continue
   try {
     events.push(JSON.parse(line))
   } catch {
-    /* torn tail line (recording read mid-write) — skip, same as the bundle
-       extractor's readJsonl tolerance. */
+    if (i === lastNonEmptyEvent) {
+      /* torn tail line (recording read mid-write) — tolerated. */
+    } else {
+      console.error(
+        `extract-recording-core: malformed JSON at ${eventsPath}:${i + 1} — skipping (non-tail line, possible corruption)`,
+      )
+    }
   }
 }
 
 const radius = radiusArg ? Number(radiusArg) : undefined
+// Validate the window radius BEFORE it reaches extractRecordingFixture. It is
+// an event COUNT (±N events around a note tick), so the only meaningful values
+// are non-negative integers. Number() previously let 'nope' → NaN, '-5' → -5,
+// and 'Infinity' → Infinity flow straight through as windowRadius: NaN silently
+// disables windowing, negatives/Infinity produce nonsensical slices, and every
+// one of these STILL exited 0 — a silent-garbage failure the caller and the
+// golden corpus would inherit. Operator error must fail loudly here rather than
+// mint a bogus fixture.
+if (radius !== undefined && (!Number.isInteger(radius) || radius < 0)) {
+  console.error(
+    `extract-recording-core: invalid window radius ${JSON.stringify(radiusArg)} — expected a non-negative integer`,
+  )
+  process.exit(2)
+}
 // extractRecordingFixture THROWS if a SENSITIVE_KEY value survives — let it
 // propagate as a non-zero exit so the .mjs skips this recording loudly.
 const fixtures = extractRecordingFixture({ meta, events }, { mode, windowRadius: radius })

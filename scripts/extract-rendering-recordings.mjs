@@ -67,6 +67,22 @@ if (!['structure-only', 'full-text-capped'].includes(MODE)) {
   process.exit(2)
 }
 
+// Validate --window here too. The tsx core (extract-recording-core.mts) is the
+// AUTHORITATIVE gate, but flag() hands us the raw string and without this check
+// we'd spawn `npx tsx` once per recording only for each child to exit 2 — fail
+// fast with one clear message instead. --window is an event COUNT (±N events
+// around a note tick); Number('nope')→NaN, '-5', and 'Infinity' are all operator
+// error that must not silently produce nonsensical fixtures, so only
+// non-negative integers pass. WINDOW is a string here; parse then check
+// integrality.
+if (WINDOW != null) {
+  const w = Number(WINDOW)
+  if (!Number.isInteger(w) || w < 0) {
+    console.error(`invalid --window ${JSON.stringify(WINDOW)} — expected a non-negative integer`)
+    process.exit(2)
+  }
+}
+
 if (!existsSync(IN)) {
   console.log(`no recordings dir at ${IN} — nothing to extract (this is normal until a session is recorded).`)
   process.exit(0)

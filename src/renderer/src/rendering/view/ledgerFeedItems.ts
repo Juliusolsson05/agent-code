@@ -114,10 +114,19 @@ export function ledgerToFeedItems(
   const dropped: string[] = []
   let entryOrdinal = 0
   // Semantic rows arrive block-level from the ledger but the legacy row
-  // component (SemanticStreamingTurn) renders whole turns — collapse
-  // consecutive same-turn rows into one item, same normalization the
-  // shadow diff applies.
-  let lastSemanticTurnId: string | null = null
+  // component (SemanticStreamingTurn) renders whole turns — collapse a turn's
+  // blocks into ONE item.
+  //
+  // #442 finding-C6: this used to be a `lastSemanticTurnId` guard that only
+  // caught CONSECUTIVE same-turn rows. But a semantic candidate's `sequence`
+  // is just its per-turn block index, so two history turns sharing the same
+  // `timestampMs` order as A0,B0,A1,B1 — interleaved, not consecutive — and the
+  // adjacency guard then emitted turn A (and B) twice. One row per turnId is
+  // ALWAYS correct (the row renders the whole turn), so re-emission is always a
+  // bug: track every emitted turnId in a set, not just the previous one. No
+  // resets on entry/process rows are needed — a turn is emitted at most once
+  // for the whole feed.
+  const emittedTurnIds = new Set<string>()
 
   for (const row of ledger.rows) {
     const c = row.candidate
@@ -139,7 +148,6 @@ export function ledgerToFeedItems(
           entryOrdinal: entryOrdinal++,
           order: orderAt(items.length, 'content'),
         })
-        lastSemanticTurnId = null
         break
       }
       case 'semantic': {
@@ -148,13 +156,13 @@ export function ledgerToFeedItems(
           dropped.push(c.id)
           break
         }
-        if (lastSemanticTurnId === turnId) break
+        if (emittedTurnIds.has(turnId)) break
         const turn = ctx.turnsById.get(turnId)
         if (!turn) {
           dropped.push(c.id)
           break
         }
-        lastSemanticTurnId = turnId
+        emittedTurnIds.add(turnId)
         if (c.owner === 'semantic-current') {
           items.push({
             type: 'semantic-current',
@@ -190,7 +198,6 @@ export function ledgerToFeedItems(
             order: orderAt(items.length, 'empty'),
           })
         }
-        lastSemanticTurnId = null
         break
       }
       default:

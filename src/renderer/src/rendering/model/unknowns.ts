@@ -16,14 +16,21 @@ import type { RenderSourcePlane, UnknownBehavior } from '@renderer/rendering/mod
 // shape PATHS and a content HASH — never the payload. The optional preview
 // must be passed pre-redacted by the caller and is hard-capped, so a
 // mistake at a call site cannot leak a full prompt into feed-debug or a
-// bundle. Auth-looking keys are stripped from shape paths as a second
-// belt: even the KEY NAMES of secrets should not advertise their presence.
+// bundle. Auth-looking keys are redacted IN PLACE in the shape paths as a
+// second belt: the KEY NAME is retained (so a bundle reader still sees the
+// structural shape — that a secret-carrying key was present at this path),
+// but its VALUE/subtree is never walked and is replaced with a
+// `<redacted-key>` marker. Keeping the name while dropping the value is what
+// makes the path diagnostic without ever carrying the secret itself; the
+// earlier wording claimed key NAMES were stripped, which the code has never
+// done (see `shapePathsOf`).
 // ---------------------------------------------------------------------------
 
 const PREVIEW_MAX = 80
 // Exported as the SINGLE source of truth for "which object keys carry a
-// secret." `shapePathsOf` uses it to keep secret KEY NAMES out of shape
-// paths; the session-recording redactor (rendering/replay/redact.ts) uses
+// secret." `shapePathsOf` uses it to redact secret VALUES out of shape
+// paths (the key NAME stays, its subtree is dropped and marked
+// `<redacted-key>`); the session-recording redactor (rendering/replay/redact.ts) uses
 // the exact same regex to strip secret VALUES from a recording before it can
 // be checked in, and the extraction script's hard gate scans for the same.
 // One regex means a recording can never leak a key shape the unknown registry

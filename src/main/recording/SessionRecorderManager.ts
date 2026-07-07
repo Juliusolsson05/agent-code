@@ -1,6 +1,9 @@
+import { join, resolve } from 'node:path'
+
 import { app } from 'electron'
 
 import { SessionRecorder } from '@main/recording/SessionRecorder.js'
+import { SESSION_RECORDING_DIR } from '@main/storage/paths.js'
 
 // Owns one SessionRecorder per live session and routes the outbound IPC
 // stream to it. plan §2.
@@ -48,6 +51,14 @@ function extractProvider(payload: unknown): string | null {
 
 export class SessionRecorderManager {
   private readonly recorders = new Map<string, SessionRecorder>()
+  // Monotonic note counter. A noteId must be UNIQUE within a recording because
+  // fillNote targets a previously reserved marker BY ID; a millisecond-only id
+  // (`n-<mono>`) collides when two notes are reserved inside the same ~1 ms
+  // tick (a double-tap, or a scripted soak), and the second fill would then
+  // overwrite the first note's text. Appending an ever-incrementing seq makes
+  // the id unique even when Math.round(nowMono()) returns the same value twice;
+  // the timestamp is kept purely for human readability of the id.
+  private noteSeq = 0
 
   constructor(
     // Injected so tests can drive deterministic time and the recorder stays
@@ -105,15 +116,25 @@ export class SessionRecorderManager {
     let recorder = this.recorders.get(sessionId)
     if (!recorder) {
       const startedAtWall = this.nowWall()
+      // Sanitize the sessionId BEFORE it becomes a path segment. recordingId is
+      // join()-ed under SESSION_RECORDING_DIR by SessionRecorder, and sessionId
+      // crosses IPC from the renderer — an id containing '/', '\\' or '..' would
+      // let a crafted value escape the recordings directory and write (or, later,
+      // rm -rf via retention) somewhere else on disk. Real ids are uuid-like so
+      // this collapses to a no-op in practice; it exists purely as a
+      // path-traversal guard at the trust boundary. The unsanitized sessionId is
+      // still stored verbatim in meta.sessionId for correlation — only the
+      // on-disk PATH segment is constrained.
+      const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, '_')
       recorder = new SessionRecorder(
         {
           v: 1,
           kind: 'session-recording',
           redaction: 'none',
           // recordingId sorts chronologically and is filesystem-safe; the
-          // sessionId suffix keeps concurrent tiled sessions distinct and
-          // greppable. Colons stripped for Windows/paths.
-          recordingId: `${new Date(startedAtWall).toISOString().replace(/[:.]/g, '-')}-${sessionId}`,
+          // sanitized sessionId suffix keeps concurrent tiled sessions distinct
+          // and greppable. Colons stripped for Windows/paths.
+          recordingId: `${new Date(startedAtWall).toISOString().replace(/[:.]/g, '-')}-${safe}`,
           sessionId,
           provider: extractProvider(firstPayload) ?? 'unknown',
           providerSessionId: null,
@@ -134,7 +155,7 @@ export class SessionRecorderManager {
   reserveNote(sessionId: string): string | null {
     const recorder = this.recorders.get(sessionId)
     if (!recorder) return null
-    const id = `n-${Math.round(this.nowMono())}`
+    const id = `n-${Math.round(this.nowMono())}-${this.noteSeq++}`
     recorder.note({ id, status: 'reserved' })
     return id
   }
@@ -146,6 +167,27 @@ export class SessionRecorderManager {
 
   isRecording(sessionId: string): boolean {
     return this.recorders.has(sessionId)
+  }
+
+  /** The set of resolved on-disk directories for every recording still live in
+   *  memory. Consumed by debugRetention (setLiveRecordingDirsProvider) to keep
+   *  an active recording from being pruned.
+   *
+   *  WHY this and not the folder's mtime: retention ages a recording by its
+   *  folder mtime, but a quiet-but-live recording (a session gone idle) stops
+   *  bumping mtime, so the ACTIVE_GRACE_MS window can lapse while the recorder
+   *  is STILL open and will append again on the next event — pruning the folder
+   *  out from under a live writer. Liveness is authoritatively "the recorder is
+   *  in this map", not "the folder was touched recently". The path is
+   *  reconstructed exactly the way SessionRecorder builds it
+   *  (join(SESSION_RECORDING_DIR, recordingId)) and resolve()d so it matches the
+   *  resolve(artifact.path) key retention compares against. */
+  liveRecordingDirs(): Set<string> {
+    const dirs = new Set<string>()
+    for (const recorder of this.recorders.values()) {
+      dirs.add(resolve(join(SESSION_RECORDING_DIR, recorder.recordingId)))
+    }
+    return dirs
   }
 
   async stop(sessionId: string): Promise<void> {

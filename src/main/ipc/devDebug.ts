@@ -5,11 +5,13 @@ import type { SessionRecorderManager } from '@main/recording/SessionRecorderMana
 
 export type DevDebugConfig = {
   enabled: boolean
-  /** AGENT_CODE_SESSION_RECORD=1 (AND dev-debug on) — continuously record
-   *  each session's rendering-input stream to session-recordings/<id>/,
-   *  replayable in tests. plan: docs/rendering/session-recording-plan-2026-07.md,
-   *  issue #467. Debug-gated because a recording captures full conversation
-   *  input. */
+  /** The recording CAPABILITY is available — true whenever dev-debug is on
+   *  (AGENT_CODE_DEV_DEBUG=1). This does NOT mean anything is recording: it only
+   *  tells the renderer whether to SHOW the Start/Stop/Attach-Note commands,
+   *  which are command-driven per session (plan §7). AGENT_CODE_SESSION_RECORD
+   *  is a separate auto-start flag, not this field. Debug-gated because a
+   *  recording captures full conversation input.
+   *  plan: docs/rendering/session-recording-plan-2026-07.md, issue #467. */
   sessionRecordingEnabled: boolean
 }
 
@@ -41,11 +43,22 @@ export function isSessionRecordingAutoStart(): boolean {
   return isDevDebugEnabled() && envFlag('AGENT_CODE_SESSION_RECORD')
 }
 
+// Hard cap on a recording note's text at the IPC trust boundary. A note is
+// enqueued verbatim into the recording's events.jsonl (SessionRecorder.note)
+// and deliberately BYPASSES the recorder's byte-cap + drop-oldest backpressure
+// (a note must survive even in a size-capped recording), so an unbounded note
+// is a memory/disk amplification a renderer could trigger directly across IPC.
+// A recording note is a human-typed bookmark; 16 KiB dwarfs any real
+// annotation, so we reject rather than silently truncate — the renderer already
+// surfaces the thrown error as a pane toast (App.tsx fillRecordingNote).
+const MAX_RECORDING_NOTE_CHARS = 16 * 1024
+
 // `sessionRecorders` is null in a normal build (the manager is only
-// constructed when AGENT_CODE_DEV_DEBUG + AGENT_CODE_SESSION_RECORD are both
-// on — see main/index.ts). It is threaded in from the IPC deps rather than
-// imported as a singleton so the wiring stays visible at the registerAllIpc
-// call site, exactly like every other manager here.
+// constructed when the dev-debug CAPABILITY is on, AGENT_CODE_DEV_DEBUG=1 —
+// see main/index.ts; AGENT_CODE_SESSION_RECORD only controls auto-record, NOT
+// construction). It is threaded in from the IPC deps rather than imported as a
+// singleton so the wiring stays visible at the registerAllIpc call site,
+// exactly like every other manager here.
 export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | null): void {
   ipcMain.handle('dev-debug:get-config', (): DevDebugConfig => {
     return {
@@ -107,6 +120,16 @@ export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | n
     'record-session:fill-note',
     (_evt, sessionId: string, noteId: string, text: string): void => {
       if (!isSessionRecordingEnabled()) return
+      // Cap the note text here, at the IPC boundary, BEFORE it reaches the
+      // recorder — see MAX_RECORDING_NOTE_CHARS for WHY (notes bypass the
+      // recorder's own size/backpressure guards, so this is the only place an
+      // unbounded renderer-supplied note gets bounded). Reject with a clear
+      // error rather than truncate so the bookmark is never silently corrupted.
+      if (typeof text === 'string' && text.length > MAX_RECORDING_NOTE_CHARS) {
+        throw new Error(
+          `recording note too long (${text.length} chars, max ${MAX_RECORDING_NOTE_CHARS})`,
+        )
+      }
       sessionRecorders?.fillNote(sessionId, noteId, text)
     },
   )

@@ -10,6 +10,7 @@ import {
 } from '@renderer/rendering/observations/committed'
 import { collectGhostCandidates, type GhostLike } from '@renderer/rendering/observations/ghosts'
 import {
+  buildEmptyCandidate,
   collectLifecycleCandidates,
   collectOptimisticCandidates,
   type OptimisticPromptLike,
@@ -188,9 +189,19 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
   } | null = null
   let staticsCache: {
     streamPhaseIdle: boolean
-    hasContentCandidates: boolean
     provider: AgentProviderKind
     candidates: readonly RenderCandidate[]
+  } | null = null
+  // Empty-candidate cache (finding #9). The LEDGER — not this adapter —
+  // decides whether the feed is empty, because a content candidate can be
+  // rejected by ownership/ghost gates AFTER collection. We only mint the
+  // candidate here (the sessionId lives here) and hand it to the ledger to
+  // append post-decision. It is static per (provider, sessionId), so caching
+  // it keeps the D11 identity contract intact across the whole session.
+  let emptyCache: {
+    provider: AgentProviderKind
+    sessionId: string
+    candidate: RenderCandidate
   } | null = null
   // The live plane the ledger sees = semantic candidates + optimistic rows
   // (both are "live" trust tier). Memoized on BOTH source references —
@@ -336,33 +347,33 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       }
     }
 
-    // Statics key off two BOOLEANS, not references — 'work' and 'empty'
-    // candidates have no per-tick content, so any tick with the same two
-    // flags gets the previous array back and the feed's tail rows keep
-    // their identity across the whole stream.
+    // Statics key off ONE boolean now — 'work' is a pure phase chip with no
+    // per-tick content, so any tick with the same streamPhaseIdle gets the
+    // previous array back and the work row keeps its identity across the whole
+    // stream. 'empty' is NO LONGER a static (finding #9): whether the feed is
+    // empty depends on which content candidates SURVIVE ownership/ghost
+    // rejection, a verdict only the ledger can reach — so we mint the empty
+    // candidate (below) and let the ledger append it after decisions. Dropping
+    // hasContentCandidates from the key also stops a raw candidate count from
+    // busting this cache when a candidate that gets suppressed anyway appears.
     const streamPhaseIdle = slices.streamPhase === 'idle'
-    const hasContentCandidates =
-      committedCache.committed.length > 0 ||
-      committedCache.optimistic.length > 0 ||
-      liveCache.candidates.length > 0 ||
-      ghostCache.candidates.length > 0
     if (
       !staticsCache ||
       staticsCache.streamPhaseIdle !== streamPhaseIdle ||
-      staticsCache.hasContentCandidates !== hasContentCandidates ||
       staticsCache.provider !== provider
     ) {
       staticsCache = {
         streamPhaseIdle,
-        hasContentCandidates,
         provider,
         candidates: collectLifecycleCandidates({
           provider,
           sessionId,
           streamPhaseIdle,
-          hasContentCandidates,
         }),
       }
+    }
+    if (!emptyCache || emptyCache.provider !== provider || emptyCache.sessionId !== sessionId) {
+      emptyCache = { provider, sessionId, candidate: buildEmptyCandidate(provider, sessionId) }
     }
 
     if (unknownsStable.count !== unknownFreshCount) {
@@ -401,6 +412,8 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       lastBundle.input.committed === committedCache.committed &&
       lastBundle.input.live === live &&
       lastBundle.input.statics === staticsCache.candidates &&
+      lastBundle.input.emptyCandidate === emptyCache.candidate &&
+      lastBundle.input.committedTailMs === slices.lastJsonlEntryAtMs &&
       lastBundle.input.unknowns === unknownsStable.list &&
       lastBundle.input.ghosts === ghostCache.candidates &&
       lastBundle.input.ghostContext?.lastJsonlEntryAtMs === slices.lastJsonlEntryAtMs &&
@@ -414,6 +427,14 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       committed: committedCache.committed,
       live,
       statics: staticsCache.candidates,
+      // Empty is minted here but only PAINTED by the ledger if no content
+      // candidate survives its decisions (finding #9).
+      emptyCandidate: emptyCache.candidate,
+      // First-class committed tail for the collapsed-running gate, threaded
+      // INDEPENDENTLY of ghostContext so the gate survives ghost-less callers
+      // (finding #18). Desktop's ghostContext.lastJsonlEntryAtMs below reads
+      // the same slice, so the two never disagree here.
+      committedTailMs: slices.lastJsonlEntryAtMs,
       unknowns: unknownsStable.list,
       ghosts: ghostCache.candidates,
       ghostContext,

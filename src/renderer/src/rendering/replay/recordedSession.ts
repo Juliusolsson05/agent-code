@@ -7,7 +7,7 @@ import {
   type RuntimeLedgerSlices,
 } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
-import type { RenderLedger } from '@renderer/rendering/model/types'
+import type { RenderLedger, OwnershipDecision } from '@renderer/rendering/model/types'
 import {
   ledgerFeedContextFromRuntime,
   ledgerToFeedItems,
@@ -102,6 +102,13 @@ export type ReplayTick = {
   /** Candidate ids the view bridge could not resolve (the #239 "present but
    *  invisible" class). Non-empty is itself a smell the invariants can flag. */
   dropped: string[]
+  /** Rejections the ADAPTER made at collection time (hidden meta rows,
+   *  compaction-synthesis kills, duplicate-turn drops) — the half of the
+   *  ledger=paint=debug promise (plan D5) that never reaches ledger.decisions.
+   *  Kept per tick (finding #27) so the vanish invariant can explain a row that
+   *  was killed BEFORE it ever became a ledger candidate; without it such a row
+   *  read as an unexplained disappearance. Source: bundle.collectorDecisions. */
+  collectorDecisions: readonly OwnershipDecision[]
 }
 
 export type ReplayResult = {
@@ -262,6 +269,7 @@ export function replayRecording(
       rows: rl.rows,
       feedItems: items,
       dropped,
+      collectorDecisions: bundle.collectorDecisions,
     })
     index += 1
   }

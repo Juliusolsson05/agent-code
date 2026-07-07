@@ -154,6 +154,11 @@ function mkTick(index: number, ledger: RenderLedger, slices: RuntimeLedgerSlices
     rows: ledger.rows,
     feedItems: [],
     dropped: [],
+    // Finding #27: ReplayTick now carries the adapter's collection-time
+    // rejections so the vanish invariant can explain a row killed before it
+    // became a ledger candidate. The negative controls fabricate ledgers
+    // directly and exercise no collection stage, so this is empty here.
+    collectorDecisions: [],
   }
 }
 
