@@ -1,3 +1,8 @@
+import {
+  taskNotificationFromEntry,
+  type TaskNotification,
+} from '@renderer/features/feed/lib/taskNotification'
+import { TaskNotificationsContext } from '@renderer/features/feed/context'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,

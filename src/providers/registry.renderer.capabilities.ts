@@ -206,7 +206,6 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   // a real todo list; everything else falls through to the generic rows.
   renderToolUse: renderOpencodeToolUse,
   renderToolResult: renderOpencodeToolResult,
-  renderToolResult: renderOpencodeToolResult,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
   extractProviderSessionId: extractOpencodeProviderSessionId,
   composerSubmit: opencodeComposerSubmit,
