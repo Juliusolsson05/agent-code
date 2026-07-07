@@ -10,30 +10,32 @@ import type {
   StreamPhase,
 } from '@renderer/workspace/workspaceState'
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import type { RenderLedger } from '@renderer/rendering/model/types'
+import type { RenderLedger, RenderRow } from '@renderer/rendering/model/types'
+import { groupSemanticActivity } from '@renderer/features/feed/ui/semantic/renderUnits'
 
 // ---------------------------------------------------------------------------
 // The view bridge: RenderLedger rows → FeedRenderItem[].
 //
-// WHY this exists instead of new row components: the Stage 3 cutover swaps
-// the DECISION CORE (what is visible, who owns it, in what order) while
-// Feed's row rendering — LazyEntry, the memo structure, autoscroll's
-// tail-signature, TextProse/StreamingProse — survives untouched. Emitting
-// the legacy FeedRenderItem shape means `Feed.tsx` behind
-// AGENT_CODE_RENDER_PIPELINE=1 changes ONE call site. SemanticStreamingTurn
-// keeps rendering semantic items until the final cutover slice deletes it
-// together with ghost rule 3 (plan D6) — deleting it here would couple the
-// decision-core swap to a full row-component rewrite, exactly the big-bang
-// this staging exists to avoid.
+// #491 BLOCK-LEVEL UN-COLLAPSE: this bridge used to COLLAPSE every semantic
+// turn's block-rows back into ONE turn-level item (semantic-current /
+// semantic-history) so the legacy `SemanticStreamingTurn` could render it —
+// and that component then RE-DERIVED all the suppression the ledger already
+// made (buildSemanticRenderUnits). That was two decision-makers for live
+// turns. Now the bridge emits ONE item per ledger-APPROVED block: the ledger
+// (observations/semantic.ts + model/ownership.ts) is the sole decider of which
+// blocks are visible, and the bridge only applies the PRESENTATION grouping
+// (fold churn tools into a "worked: N reads" receipt via groupSemanticActivity)
+// before handing dumb rows their block.
 //
-// ORDER CONTRACT: items are emitted in LEDGER order, and the synthesized
-// `order` fields are engineered so legacy sortFeedRenderItems is a NO-OP
-// on them: phase matches the ledger's own phase partition (the two systems
-// share PHASE_RANK semantics), timeMs is null (all-equal at MAX_SAFE_INT in
-// the comparator), source is a constant (all-equal rank), sequence is the
-// emission index (the comparator's final tiebreak — strictly increasing).
-// The ledger's D4 chronological merge is thereby authoritative even though
-// the legacy sorter still runs over the result.
+// GROUP-BY-TURN, NOT BY-ADJACENCY: order.ts tiebreaks equal-timestamp turns by
+// per-turn block index, so two turns sharing a timestamp INTERLEAVE
+// (A0,B0,A1,B1). We therefore pre-group semantic rows by turnId and emit each
+// turn's blocks contiguously at its FIRST row's position — safe because a
+// committed row can never sort strictly between a turn's equal-timestamp blocks.
+//
+// ORDER CONTRACT: items are emitted in LEDGER order; the synthesized `order`
+// fields keep timeMs null + a constant source so the legacy sorter is a no-op —
+// the ledger's D4 chronological merge stays authoritative.
 // ---------------------------------------------------------------------------
 
 export type LedgerFeedContext = {
@@ -106,6 +108,87 @@ function visibleDecisionFor(entry: Entry): VisibleDecision {
   }
 }
 
+// Build the FeedRenderItems for ONE semantic turn from its ledger-approved
+// rows. The ledger already decided WHICH blocks are visible; here we only fetch
+// each block's rich payload (turn.blocks — the ledger candidate carries only
+// turnId+blockIndex, not the drawable input/result) and apply the presentation
+// grouping. Emits: `semantic-text` for a blockless text-only turn, else one
+// `semantic-block` / `semantic-collapsed-activity` per grouped unit.
+function buildSemanticTurnItems(
+  turnId: string,
+  rows: readonly RenderRow[],
+  turn: SemanticLiveTurn,
+  baseSeq: number,
+): { items: FeedRenderItem[]; dropped: string[] } {
+  const out: FeedRenderItem[] = []
+  const dropped: string[] = []
+  const owner: 'semantic-current' | 'semantic-history' =
+    rows[0]?.candidate.owner === 'semantic-current' ? 'semantic-current' : 'semantic-history'
+  const orderFor = (): FeedRenderItemOrder => orderAt(baseSeq + out.length, 'content')
+
+  // Blockless turn (Codex/opencode deliver text ONLY on turn.text with an empty
+  // block map): semantic.ts mints a single `sem:<turnId>:text` candidate with no
+  // blockIndex. Render turn.text directly — the legacy no-blocks path.
+  const textCandidate = rows.find(r => r.candidate.blockIndex === undefined)
+  if (textCandidate) {
+    if (typeof turn.text === 'string' && turn.text.length > 0) {
+      out.push({
+        type: 'semantic-text',
+        key: `semantic-text:${turnId}`,
+        turnId,
+        owner,
+        text: turn.text,
+        order: orderFor(),
+      })
+    } else {
+      dropped.push(textCandidate.candidate.id)
+    }
+    return { items: out, dropped }
+  }
+
+  // Real blocks: map each approved blockIndex to its rich block (in block order),
+  // then apply presentation grouping. A missing block is a lookup gap — surface
+  // it in `dropped`, never silently omit (#239 class).
+  const byIndex = new Map<number, SemanticLiveTurn['blocks'][number]>()
+  for (const b of Object.values(turn.blocks)) byIndex.set(b.blockIndex, b)
+  const approved: SemanticLiveTurn['blocks'][number][] = []
+  for (const r of [...rows].sort(
+    (a, b) => (a.candidate.blockIndex ?? 0) - (b.candidate.blockIndex ?? 0),
+  )) {
+    const bi = r.candidate.blockIndex
+    if (bi === undefined) continue
+    const block = byIndex.get(bi)
+    if (!block) {
+      dropped.push(r.candidate.id)
+      continue
+    }
+    approved.push(block)
+  }
+  for (const unit of groupSemanticActivity(approved, turn)) {
+    if (unit.type === 'collapsed_activity') {
+      out.push({
+        type: 'semantic-collapsed-activity',
+        key: `semantic-collapsed:${turnId}:${unit.blockIndices.join(',')}`,
+        turnId,
+        owner,
+        unit,
+        order: orderFor(),
+      })
+    } else {
+      out.push({
+        type: 'semantic-block',
+        key: `semantic-block:${turnId}:${unit.block.blockIndex}`,
+        turnId,
+        owner,
+        block: unit.block,
+        toolState: unit.toolState,
+        order: orderFor(),
+      })
+    }
+  }
+  return { items: out, dropped }
+}
+
 export function ledgerToFeedItems(
   ledger: RenderLedger,
   ctx: LedgerFeedContext,
@@ -113,19 +196,21 @@ export function ledgerToFeedItems(
   const items: FeedRenderItem[] = []
   const dropped: string[] = []
   let entryOrdinal = 0
-  // Semantic rows arrive block-level from the ledger but the legacy row
-  // component (SemanticStreamingTurn) renders whole turns — collapse a turn's
-  // blocks into ONE item.
-  //
-  // #442 finding-C6: this used to be a `lastSemanticTurnId` guard that only
-  // caught CONSECUTIVE same-turn rows. But a semantic candidate's `sequence`
-  // is just its per-turn block index, so two history turns sharing the same
-  // `timestampMs` order as A0,B0,A1,B1 — interleaved, not consecutive — and the
-  // adjacency guard then emitted turn A (and B) twice. One row per turnId is
-  // ALWAYS correct (the row renders the whole turn), so re-emission is always a
-  // bug: track every emitted turnId in a set, not just the previous one. No
-  // resets on entry/process rows are needed — a turn is emitted at most once
-  // for the whole feed.
+
+  // Pre-group every semantic row by turnId so a turn's blocks emit CONTIGUOUSLY
+  // even when order.ts interleaved two equal-timestamp turns (A0,B0,A1,B1). Each
+  // turn is then emitted once, at the position of its FIRST row in ledger order.
+  // (The old collapse used a per-turn emitted-set on a single item; block-level
+  // needs the full row list per turn, hence the map.)
+  const semanticRowsByTurn = new Map<string, RenderRow[]>()
+  for (const row of ledger.rows) {
+    if (row.candidate.sourcePlane !== 'semantic') continue
+    const t = row.candidate.turnId
+    if (!t) continue
+    const arr = semanticRowsByTurn.get(t)
+    if (arr) arr.push(row)
+    else semanticRowsByTurn.set(t, [row])
+  }
   const emittedTurnIds = new Set<string>()
 
   for (const row of ledger.rows) {
@@ -157,27 +242,20 @@ export function ledgerToFeedItems(
           break
         }
         if (emittedTurnIds.has(turnId)) break
+        emittedTurnIds.add(turnId)
         const turn = ctx.turnsById.get(turnId)
         if (!turn) {
           dropped.push(c.id)
           break
         }
-        emittedTurnIds.add(turnId)
-        if (c.owner === 'semantic-current') {
-          items.push({
-            type: 'semantic-current',
-            key: `semantic:${turnId}`,
-            turn,
-            order: orderAt(items.length, 'content'),
-          })
-        } else {
-          items.push({
-            type: 'semantic-history',
-            key: `semantic-history:${turnId}`,
-            turn,
-            order: orderAt(items.length, 'content'),
-          })
-        }
+        const built = buildSemanticTurnItems(
+          turnId,
+          semanticRowsByTurn.get(turnId) ?? [row],
+          turn,
+          items.length,
+        )
+        for (const it of built.items) items.push(it)
+        for (const d of built.dropped) dropped.push(d)
         break
       }
       case 'process': {

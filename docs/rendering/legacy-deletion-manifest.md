@@ -36,16 +36,27 @@ blocked until the phone also fed the ledger.
   `shadowParity.test.ts` CI diff. `shadow/shadowDiff.ts` KEPT (pure diff util —
   bundleCorpus/recordingCorpus still assert ledger output through it).
 
-**STILL ALIVE — the block-level un-collapse slice (next PR):** the view bridge
-still COLLAPSES the ledger's block-level semantic rows back into turn-level
-items so `SemanticStreamingTurn` can render them. Killing that component (and
-with it ghost rule 3, `selectMergedEntries` as Feed's entries source, and
-`committedClaudeMessageTurnIds`) requires the ledger to own live turns
-block-by-block through the shared registry dispatch — the hardest slice, and
-the one that needs live visual verification the turn-grain corpus can't give.
-Until then the completeness grep below still returns `SemanticStreamingTurn` /
-`selectMergedEntries` / `committedClaudeMessageTurnIds` hits BY DESIGN;
-`deriveFeedRenderModel` / `buildSemanticRenderUnits` are already clean.
+**DONE — the block-level un-collapse (#491):** the view bridge no longer
+collapses; it emits ONE `FeedRenderItem` per ledger-approved semantic block
+(`semantic-block` / `semantic-collapsed-activity` / blockless `semantic-text`),
+drawn by the dumb `SemanticLiveBlockRow` / `SemanticCollapsedActivityRow`. The
+ledger (observations/semantic.ts + model/ownership.ts) is now the SOLE decider
+of live-turn visibility; the bridge applies only the presentation grouping
+(`groupSemanticActivity`, a pure fold — no suppression). **`SemanticStreamingTurn`
+is DELETED**, and with it Feed's `deriveFeedCommittedProjection` /
+`committedClaudeMessageTurnIds`.
+
+Three of the old grep tokens SURVIVE, and after this slice they are NOT
+SemanticStreamingTurn artifacts — each has a non-render owner:
+- `buildSemanticRenderUnits` — retained for `semanticTurnHasRenderableContent`,
+  the NON-render #239 prompt-ownership predicate (streaming.ts) + debug bundles.
+  Rendering no longer calls it (that was the duplicate-decider #491 killed).
+- `selectMergedEntries` — still Feed's ghost-folded `entries` SOURCE (tool
+  indices / scroll), used by 6 non-render call sites. The manifest's "ABSORB"
+  is a separate, entangled change.
+- `ghost-semantic-owned` (ghost rule 3) — retained: it is a ghost-vs-live-turn
+  dedup (rejects a ghost whose turnId is the live turn), load-bearing regardless
+  of which component draws the turn. See its updated note in model/types.ts.
 
 ## Deleted at Stage 3 cutover (the big reviewed PR)
 

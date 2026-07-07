@@ -372,3 +372,77 @@ export function buildSemanticRenderUnits(
   flush()
   return units
 }
+
+/**
+ * Pure collapsed-activity grouping over an ALREADY-APPROVED, block-index-ordered
+ * list of semantic blocks — the grouping HALF of buildSemanticRenderUnits with
+ * the suppression half removed (#491 block-level un-collapse).
+ *
+ * WHY this exists separately from buildSemanticRenderUnits: the ownership ledger
+ * (observations/semantic.ts + model/ownership.ts) is now the sole decider of
+ * which live blocks are visible — text dedup, committed-ownership skips,
+ * empty-block and collapsed-running suppression all happen there. The view
+ * bridge must NOT re-run any of that (re-deriving suppression in the row layer
+ * was the exact duplicate-decision-maker #491 kills). It only needs to fold
+ * consecutive low-signal churn tools (Read/Grep/Glob/Bash) into one
+ * "worked: N reads" receipt — a pure PRESENTATION concern. `buildSemanticRenderUnits`
+ * still carries the suppression pass because `semanticTurnHasRenderableContent`
+ * (a NON-render #239 prompt-ownership predicate) depends on it; rendering does not.
+ *
+ * INPUT CONTRACT: `blocks` are the ledger-approved blocks for ONE turn, already
+ * in block-index order. AskUserQuestion is never folded (belt-and-suspenders
+ * over classifySemanticToolActivity's own collapsible:false).
+ */
+export function groupSemanticActivity(
+  blocks: readonly SemanticLiveTurn['blocks'][number][],
+  turn: SemanticLiveTurn,
+): SemanticRenderUnit[] {
+  const units: SemanticRenderUnit[] = []
+  let pending: Extract<SemanticRenderUnit, { type: 'collapsed_activity' }> | null = null
+  const flush = () => {
+    if (!pending) return
+    units.push(pending)
+    pending = null
+  }
+  for (const block of blocks) {
+    const toolState = block.toolUseId
+      ? turn.lookups.toolCallsById[block.toolUseId] ?? null
+      : null
+    const activity = classifySemanticToolActivity(block)
+    const isCollapsibleTool =
+      (block.kind === 'tool_use' ||
+        block.kind === 'server_tool_use' ||
+        block.kind === 'mcp_tool_use') &&
+      block.toolName !== 'AskUserQuestion' &&
+      activity.collapsible &&
+      activity.category !== null
+    if (!isCollapsibleTool) {
+      flush()
+      units.push({ type: 'block', block, toolState })
+      continue
+    }
+    if (!pending) {
+      pending = {
+        type: 'collapsed_activity',
+        count: 0,
+        searchCount: 0,
+        readCount: 0,
+        listCount: 0,
+        bashCount: 0,
+        latestHint: null,
+        blockIndices: [],
+        isRunning: false,
+      }
+    }
+    pending.count += 1
+    pending.blockIndices.push(block.blockIndex)
+    pending.latestHint = activity.hint ?? pending.latestHint
+    if (toolState?.status === 'in_progress') pending.isRunning = true
+    if (activity.category === 'search') pending.searchCount += 1
+    else if (activity.category === 'read') pending.readCount += 1
+    else if (activity.category === 'list') pending.listCount += 1
+    else if (activity.category === 'bash') pending.bashCount += 1
+  }
+  flush()
+  return units
+}

@@ -43,11 +43,15 @@ import {
   debugLabelForEntry,
 } from '@renderer/features/feed/lib/helpers'
 import {
-  deriveFeedCommittedProjection,
   feedRenderModelFromItems,
   type FeedRenderItem,
 } from '@renderer/features/feed/model/renderModel'
-import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
+import {
+  SemanticLiveBlockRow,
+  SemanticCollapsedActivityRow,
+} from '@renderer/features/feed/ui/semantic'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import { semanticTurnScrollSignal } from '@renderer/workspace/semantic/helpers'
 import {
   EAGER_TAIL,
@@ -779,14 +783,11 @@ function FeedImpl({
     return out
   }, [entries])
 
-  const committedProjection = useMemo(() => {
-    // Semantic deltas can arrive many times per second while committed
-    // JSONL entries stay unchanged. Keep all committed-entry scans behind
-    // an entries-only memo so live semantic text/tool updates do not keep
-    // rebuilding visible decisions, Claude message-id ownership, and the
-    // committed assistant text index for old rows.
-    return deriveFeedCommittedProjection(entries)
-  }, [entries])
+  // #491: `committedProjection` (deriveFeedCommittedProjection) is deleted — it
+  // existed ONLY to feed SemanticStreamingTurn's committedAssistantText for its
+  // in-component dedup. The ledger now owns that suppression, and
+  // SemanticStreamingTurn is gone, so Feed no longer derives any committed
+  // projection of its own.
 
   // Stage 3 cutover (2026-07): the ownership ledger is the SOLE decision core.
   // Feed no longer derives its own render model — both the desktop (TileLeaf)
@@ -805,20 +806,41 @@ function FeedImpl({
   const renderItems = renderModel.items
   const renderedRows = renderModel.debugRows
   const visibleEntryCount = renderItems.filter(item => item.type === 'entry').length
-  const renderedSemanticHistoryTurnIds = useMemo(
-    () =>
-      renderItems
-        .filter(item => item.type === 'semantic-history')
-        .map(item => item.turn.turnId),
-    [renderItems],
-  )
-  const renderedSemanticHistorySignature = renderedSemanticHistoryTurnIds.join('\u0000')
-  const renderedSemanticTurn = useMemo(() => {
+  // #491: semantic items are now block-level (semantic-block/-collapsed-activity/
+  // -text), each tagged with its turn's owner. Derive the same debug signals the
+  // old turn-level items exposed — unique history turnIds, and "is the current
+  // turn on screen" — from the block items' owner+turnId.
+  const renderedSemanticHistoryTurnIds = useMemo(() => {
+    const seen = new Set<string>()
+    const ids: string[] = []
     for (const item of renderItems) {
-      if (item.type === 'semantic-current') return item.turn
+      if (
+        (item.type === 'semantic-block' ||
+          item.type === 'semantic-collapsed-activity' ||
+          item.type === 'semantic-text') &&
+        item.owner === 'semantic-history' &&
+        !seen.has(item.turnId)
+      ) {
+        seen.add(item.turnId)
+        ids.push(item.turnId)
+      }
     }
-    return null
+    return ids
   }, [renderItems])
+  const renderedSemanticHistorySignature = renderedSemanticHistoryTurnIds.join('\u0000')
+  // The current live turn IS rendered iff any block item carries owner
+  // 'semantic-current'. WorkIndicator's tool-hint reads the full turn, which
+  // Feed already has as the `semanticTurn` prop — return that when present.
+  const renderedSemanticTurn = useMemo(() => {
+    const currentOnScreen = renderItems.some(
+      item =>
+        (item.type === 'semantic-block' ||
+          item.type === 'semantic-collapsed-activity' ||
+          item.type === 'semantic-text') &&
+        item.owner === 'semantic-current',
+    )
+    return currentOnScreen ? semanticTurn : null
+  }, [renderItems, semanticTurn])
 
   const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
   const previousRenderDebugSignatureRef = useRef<string | null>(null)
@@ -910,14 +932,25 @@ function FeedImpl({
           </div>
         )
       }
-      case 'semantic-history':
-      case 'semantic-current':
+      case 'semantic-block':
+        // #491: the ledger already decided this block is visible; the row is a
+        // pure drawer (no suppression). SemanticLiveBlockRow renders the exact
+        // per-kind streaming affordances it always did.
         return (
-          <SemanticStreamingTurn
+          <SemanticLiveBlockRow
             key={item.key}
-            turn={item.turn}
-            committedAssistantText={committedProjection.committedAssistantText}
+            block={item.block}
+            toolState={item.toolState}
           />
+        )
+      case 'semantic-collapsed-activity':
+        return <SemanticCollapsedActivityRow key={item.key} unit={item.unit} />
+      case 'semantic-text':
+        // Blockless Codex/opencode turn text — the legacy no-blocks path.
+        return (
+          <MarkerRow key={item.key} marker="⏺">
+            <StreamingProse text={item.text} />
+          </MarkerRow>
         )
       case 'work':
         return (

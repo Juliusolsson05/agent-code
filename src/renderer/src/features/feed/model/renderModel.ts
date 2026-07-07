@@ -1,11 +1,5 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import {
-  isCompactBoundaryEntry,
-  isCompactSummaryEntry,
-  isConversationEntry,
-  type Entry,
-} from '@shared/types/transcript'
-import { asRecord } from '@shared/lib/asRecord'
+import { type Entry } from '@shared/types/transcript'
 
 import type {
   SemanticLiveTurn,
@@ -16,31 +10,17 @@ import type {
   DebugVisibleRow,
   VisibleDecision,
 } from '@renderer/features/feed/types'
-import {
-  debugKeyForEntry,
-  debugLabelForEntry,
-} from '@renderer/features/feed/lib/helpers'
-import {
-  buildCommittedAssistantText,
-  type CommittedAssistantText,
-} from '@renderer/features/feed/ui/semantic/renderUnits'
+import { debugLabelForEntry } from '@renderer/features/feed/lib/helpers'
+import type { SemanticRenderUnit } from '@renderer/features/feed/ui/semantic/types'
 
-// NOTE (Stage 3 cutover, 2026-07): `deriveFeedRenderModel` — the legacy in-Feed
-// decision core that partitioned committed + semantic planes into an ordered
-// item list — lived here and is deleted. The ownership ledger
-// (src/renderer/src/rendering/) is now the sole decision-maker; both the
-// desktop and the phone hand Feed the ledger's pre-ordered items. What remains
-// is deliberately dumb: the FeedRenderItem contract, `feedRenderModelFromItems`
-// (attaches debug side-products to the ledger's list), and
-// `deriveFeedCommittedProjection` (still feeds SemanticStreamingTurn's committed
-// dedup until the block-level un-collapse retires that component too).
-
-export type FeedCommittedProjection = {
-  visibleDecisions: VisibleDecision[]
-  visibleEntries: Entry[]
-  committedClaudeMessageTurnIds: ReadonlySet<string>
-  committedAssistantText: CommittedAssistantText
-}
+// NOTE (Stage 3 cutover + #491 block-level un-collapse): the legacy in-Feed
+// decision core lived here and is fully deleted — `deriveFeedRenderModel` (the
+// plane partitioner) AND `deriveFeedCommittedProjection` (which only fed
+// SemanticStreamingTurn's committed dedup, now that the ledger owns that and the
+// component is gone). The ownership ledger (src/renderer/src/rendering/) is the
+// sole decision-maker; desktop and phone hand Feed the ledger's pre-ordered
+// items. What remains is deliberately dumb: the FeedRenderItem contract and
+// `feedRenderModelFromItems` (attaches debug side-products to the ledger's list).
 
 export type FeedRenderModel = {
   items: FeedRenderItem[]
@@ -64,16 +44,37 @@ export type FeedRenderItem =
       entryOrdinal: number
       order: FeedRenderItemOrder
     }
+  // #491 block-level un-collapse: the view bridge no longer hands Feed a whole
+  // turn (which SemanticStreamingTurn then re-suppressed block-by-block). The
+  // ledger already decided which blocks are visible, so the bridge emits ONE
+  // item per ledger-approved block (or a collapsed churn receipt / a blockless
+  // text row), drawn by a dumb row. `owner` is kept so Feed can still derive the
+  // history/current debug + work-hint signals it used to read off the turn item.
   | {
-      type: 'semantic-history'
+      type: 'semantic-block'
       key: string
-      turn: SemanticLiveTurn
+      turnId: string
+      owner: 'semantic-current' | 'semantic-history'
+      block: SemanticLiveTurn['blocks'][number]
+      toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
       order: FeedRenderItemOrder
     }
   | {
-      type: 'semantic-current'
+      type: 'semantic-collapsed-activity'
       key: string
-      turn: SemanticLiveTurn
+      turnId: string
+      owner: 'semantic-current' | 'semantic-history'
+      unit: Extract<SemanticRenderUnit, { type: 'collapsed_activity' }>
+      order: FeedRenderItemOrder
+    }
+  | {
+      // Blockless turn text (Codex/opencode deliver text ONLY on turn.text with
+      // an empty block map — semantic.ts mints a `sem:<turnId>:text` candidate).
+      type: 'semantic-text'
+      key: string
+      turnId: string
+      owner: 'semantic-current' | 'semantic-history'
+      text: string
       order: FeedRenderItemOrder
     }
   | {
@@ -91,67 +92,16 @@ export type FeedRenderItem =
       order: FeedRenderItemOrder
     }
 
-function committedMessageIds(entries: Entry[]): Set<string> {
-  const ids = new Set<string>()
-  for (const entry of entries) {
-    if (entry.type !== 'assistant') continue
-    const record = asRecord(entry)
-    const message = asRecord(record?.message)
-    const messageId = message?.id
-    if (typeof messageId === 'string') ids.add(messageId)
-  }
-  return ids
-}
-
-function visibleDecisionForEntry(entry: Entry, index: number): VisibleDecision {
-  if (isCompactBoundaryEntry(entry)) {
-    return {
-      key: debugKeyForEntry(entry, index),
-      entry,
-      visible: true,
-      reason: 'compact_boundary',
-    }
-  }
-  if (isCompactSummaryEntry(entry)) {
-    return {
-      key: debugKeyForEntry(entry, index),
-      entry,
-      visible: true,
-      reason: 'compact_summary',
-    }
-  }
-  if (!isConversationEntry(entry)) {
-    return {
-      key: debugKeyForEntry(entry, index),
-      entry,
-      visible: false,
-      reason: 'not_conversation',
-    }
-  }
-  if (asRecord(entry)?.isMeta === true) {
-    return {
-      key: debugKeyForEntry(entry, index),
-      entry,
-      visible: false,
-      reason: 'meta_filtered',
-    }
-  }
-  return {
-    key: debugKeyForEntry(entry, index),
-    entry,
-    visible: true,
-    reason: 'conversation',
-  }
-}
-
 function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
   switch (item.type) {
     case 'entry':
       return debugLabelForEntry(item.entry)
-    case 'semantic-history':
-      return `semantic history ${item.turn.turnId.slice(0, 12)} · ${item.turn.source ?? 'unknown'}`
-    case 'semantic-current':
-      return `semantic turn ${item.turn.turnId.slice(0, 12)} · ${item.turn.source ?? 'unknown'}`
+    case 'semantic-block':
+      return `semantic ${item.owner === 'semantic-current' ? 'current' : 'history'} ${item.turnId.slice(0, 12)}#${item.block.blockIndex} · ${item.block.kind}`
+    case 'semantic-collapsed-activity':
+      return `collapsed ${item.turnId.slice(0, 12)} · ${item.unit.count} tools${item.unit.isRunning ? ' (running)' : ''}`
+    case 'semantic-text':
+      return `semantic text ${item.owner === 'semantic-current' ? 'current' : 'history'} ${item.turnId.slice(0, 12)}`
     case 'work':
       return item.toolName && (
         item.phase === 'tool-input' ||
@@ -169,8 +119,9 @@ function slotForItem(item: FeedRenderItem): DebugVisibleRow['slot'] {
   switch (item.type) {
     case 'entry':
       return 'entry'
-    case 'semantic-history':
-    case 'semantic-current':
+    case 'semantic-block':
+    case 'semantic-collapsed-activity':
+    case 'semantic-text':
       return 'semantic'
     case 'work':
       return 'work'
@@ -210,15 +161,3 @@ export function feedRenderModelFromItems(
   return { items, visibleDecisions, debugRows: debugRowsForItems(items, provider) }
 }
 
-export function deriveFeedCommittedProjection(entries: Entry[]): FeedCommittedProjection {
-  const visibleDecisions = entries.map(visibleDecisionForEntry)
-  const visibleEntries = visibleDecisions
-    .filter(item => item.visible)
-    .map(item => item.entry)
-  return {
-    visibleDecisions,
-    visibleEntries,
-    committedClaudeMessageTurnIds: committedMessageIds(entries),
-    committedAssistantText: buildCommittedAssistantText(entries),
-  }
-}
