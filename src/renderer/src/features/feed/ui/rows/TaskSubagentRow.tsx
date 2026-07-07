@@ -1,6 +1,11 @@
 import { memo, useContext, useState } from 'react'
 
 import type { ToolUseBlock } from '@shared/types/transcript'
+import {
+  taskNotificationStatusKind,
+} from '@renderer/features/feed/lib/taskNotification'
+import { TaskNotificationsContext } from '@renderer/features/feed/context'
+import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { SubAgentsContext } from '@renderer/features/feed/context'
 import { SubagentMiniFeed } from '@renderer/features/feed/ui/rows/SubagentMiniFeed'
@@ -27,6 +32,13 @@ export const TaskSubagentRow = memo(function TaskSubagentRow({
 }) {
   const subAgents = useContext(SubAgentsContext)
   const sa = subAgents[block.id]
+  // P2b evidence priority: the task-notification is the child's OWN
+  // completion report — it outranks watcher-derived state (which can be
+  // stale/pruned) and fills status even when the watcher never tracked
+  // this child (MCP-spawned, cross-session).
+  const notifications = useContext(TaskNotificationsContext)
+  const notification = block.id ? notifications.get(block.id) ?? null : null
+  const notifKind = notification ? taskNotificationStatusKind(notification) : null
   const [open, setOpen] = useState(false)
 
   const input = block.input as Record<string, unknown> | undefined
@@ -46,9 +58,15 @@ export const TaskSubagentRow = memo(function TaskSubagentRow({
         : '')
 
   const glyph =
-    sa?.status === 'done' ? '✓' : sa?.status === 'error' ? '✗' : sa?.status === 'stale' ? '◌' : '◐'
+    notifKind === 'done'
+      ? '✓'
+      : notifKind === 'error'
+        ? '✗'
+        : sa?.status === 'done' ? '✓' : sa?.status === 'error' ? '✗' : sa?.status === 'stale' ? '◌' : '◐'
   const toolTotal = sa ? sa.toolCalls.length + sa.droppedToolCalls : 0
-  const right = !sa
+  const right = notification
+    ? `${notification.status ?? 'completed'}${notification.usage ? ` · ${notification.usage}` : ''}`
+    : !sa
     ? 'starting…'
     : sa.status === 'running'
       ? `${toolTotal} tools · ${elapsedLabel(sa.startedAt, sa.lastActivityAt)}`
@@ -78,6 +96,14 @@ export const TaskSubagentRow = memo(function TaskSubagentRow({
           <span className="text-muted shrink-0">{open ? '▾' : '▸'}</span>
         </button>
         {open && sa && <SubagentMiniFeed sa={sa} />}
+        {open && notification?.result && (
+          // The child's own report, delivered by its notification — the
+          // content that used to drown as raw XML in a queued <li>
+          // (2026-06-29 "agent output is buried" bundle).
+          <div className="mt-1 text-[12px]">
+            <TextProse text={notification.result} />
+          </div>
+        )}
       </div>
     </MarkerRow>
   )
