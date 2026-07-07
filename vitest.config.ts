@@ -55,7 +55,6 @@ const exclude = [
   '**/out/**',
   '**/.tsc-out/**',
   '**/vendor/**',
-  '**/testing/rendering/**',
   // WHY this package is excluded here:
   //
   // agent-voice-dictation already owns package-local `node --test` coverage
@@ -100,7 +99,6 @@ export default defineConfig({
           name: 'integration',
           environment: 'node',
           include: [
-            'testing/integration/**/*.integration.test.ts',
             'src/**/*.integration.test.ts',
             'packages/**/*.integration.test.ts',
           ],
@@ -114,8 +112,6 @@ export default defineConfig({
           name: 'renderer',
           environment: 'happy-dom',
           include: [
-            'testing/renderer/**/*.renderer.test.ts',
-            'testing/renderer/**/*.renderer.test.tsx',
             'src/**/*.renderer.test.ts',
             'src/**/*.renderer.test.tsx',
           ],

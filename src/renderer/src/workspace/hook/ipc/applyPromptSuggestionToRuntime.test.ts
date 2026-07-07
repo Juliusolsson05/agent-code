@@ -59,11 +59,10 @@ describe('provider session identity helpers', () => {
   it('keeps jsonl-entry and legacy provider ids resumable', () => {
     expect(hasDurableProviderSession(durableMeta)).toBe(true)
     expect(resumableProviderSessionId(durableMeta)).toBe('durable-1')
-    expect(hasDurableProviderSession({
-      cwd: '/repo',
-      kind: 'claude',
-      providerSessionId: 'legacy-1',
-    })).toBe(true)
+    // hasDurableProviderSession only reads providerSessionId / *IdSource, so
+    // pass exactly that Pick — the old {cwd,kind,…} extras were untyped noise
+    // that the web tsconfig now (rightly) rejects once this test is colocated.
+    expect(hasDurableProviderSession({ providerSessionId: 'legacy-1' })).toBe(true)
   })
 
   it('upgrades a proxy-header id when JSONL confirms the same provider session', () => {
