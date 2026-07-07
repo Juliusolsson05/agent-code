@@ -16,9 +16,12 @@ import {
 } from '@renderer/rendering/observations/local'
 import {
   collectSemanticCandidates,
+  isKnownBlockKind,
   type SemanticBlockLike,
   type SemanticTurnLike,
 } from '@renderer/rendering/observations/semantic'
+import { createUnknownRegistry } from '@renderer/rendering/model/unknowns'
+import type { UnknownBehavior } from '@renderer/rendering/model/types'
 
 // ---------------------------------------------------------------------------
 // The runtime → collector adapter — THE shadow seam.
@@ -179,6 +182,20 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
   } | null = null
   let lastBundle: { input: LedgerInput; bundle: LedgerInputBundle } | null = null
 
+  // Unknown-behavior plumbing (Stage 2 diagnostic): sightings recorded at
+  // plane-recompute time, exposed as a VERSION-GATED stable array — the
+  // registry's list() mints a fresh array per call, and handing that to
+  // the ledger every tick would bust its identity cache (D11). The list
+  // reference only moves when a NEW unknown id appears; seenCount bumps
+  // ride until the next real change (a count is telemetry, not paint).
+  const unknownRegistry = createUnknownRegistry()
+  let unknownFreshCount = 0
+  let unknownsStable: { count: number; list: readonly UnknownBehavior[] } = { count: 0, list: [] }
+  const sight = (s: Parameters<typeof unknownRegistry.record>[0]): void => {
+    const rec = unknownRegistry.record(s)
+    if (rec.seenCount === 1) unknownFreshCount++
+  }
+
   return slices => {
     const { provider, sessionId } = slices
 
@@ -207,6 +224,25 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
         }
       }
       const collected = collectCommittedCandidates(committedRows, provider, sessionId)
+      // Surface entry types the collector does not recognize. The decision
+      // trail already REJECTS them ('not-conversation'); the sighting adds
+      // the structural shape so a new provider row type shows up in debug
+      // output the first session it appears, not when someone greps.
+      const rowsById = new Map(committedRows.map((e, i) => [`entry:${e.uuid ?? `ingest-${i}`}`, e]))
+      for (const d of collected.decisions) {
+        if (d.reason !== 'not-conversation') continue
+        const raw = rowsById.get(d.candidateId)
+        if (!raw) continue
+        sight({
+          provider,
+          sourcePlane: 'committed',
+          eventType: raw.type ?? 'untyped',
+          payload: raw,
+          disposition: 'hidden_unowned',
+          evidence: d.evidence,
+          nowMs: Date.now(),
+        })
+      }
       committedCache = {
         entries: slices.entries,
         provider,
@@ -228,6 +264,29 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
         provider,
         sessionId,
       )
+      // Unknown block kinds render via the assistant-text fallback (hiding
+      // content on an unrecognized label is the worse failure) — but they
+      // must not pass SILENTLY: new provider vocabulary is exactly what
+      // the soak exists to discover.
+      const allTurns = [
+        ...(slices.semanticCurrent ? [slices.semanticCurrent] : []),
+        ...slices.semanticHistory,
+      ]
+      for (const turn of allTurns) {
+        for (const i of turn.blockOrder) {
+          const b = turn.blocks[i]
+          if (!b || isKnownBlockKind(b.kind)) continue
+          sight({
+            provider,
+            sourcePlane: 'semantic',
+            eventType: b.kind,
+            payload: b,
+            disposition: 'rendered_fallback_dev_only',
+            evidence: [`turn ${turn.turnId} block ${b.blockIndex}`],
+            nowMs: Date.now(),
+          })
+        }
+      }
       // Ghost rule 3's context set, derived here because it reads exactly
       // this plane's inputs — and cached WITH the plane so its reference
       // only moves when the semantic plane really moved (the ledger cache
@@ -284,6 +343,10 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       }
     }
 
+    if (unknownsStable.count !== unknownFreshCount) {
+      unknownsStable = { count: unknownFreshCount, list: unknownRegistry.list() }
+    }
+
     const ghostContext: GhostPredicateContext = {
       lastJsonlEntryAtMs: slices.lastJsonlEntryAtMs,
       semanticOwnedTurnIds: liveCache.ownedTurnIds,
@@ -316,6 +379,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       lastBundle.input.committed === committedCache.committed &&
       lastBundle.input.live === live &&
       lastBundle.input.statics === staticsCache.candidates &&
+      lastBundle.input.unknowns === unknownsStable.list &&
       lastBundle.input.ghosts === ghostCache.candidates &&
       lastBundle.input.ghostContext?.lastJsonlEntryAtMs === slices.lastJsonlEntryAtMs &&
       lastBundle.input.ghostContext?.semanticOwnedTurnIds === liveCache.ownedTurnIds
@@ -328,7 +392,7 @@ export function createLedgerInputAdapter(): (slices: RuntimeLedgerSlices) => Led
       committed: committedCache.committed,
       live,
       statics: staticsCache.candidates,
-      unknowns: [],
+      unknowns: unknownsStable.list,
       ghosts: ghostCache.candidates,
       ghostContext,
     }

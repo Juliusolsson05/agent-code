@@ -148,6 +148,42 @@ describe('runtime → collector adapter', () => {
     void first
   })
 
+  it('records unknown entry types and block kinds as sightings without affecting rows', () => {
+    const adapter = createLedgerInputAdapter()
+    const slices = baseSlices()
+    const weird: RuntimeLedgerSlices = {
+      ...slices,
+      entries: [
+        ...slices.entries,
+        // A row type the collector does not know — rejected AND sighted.
+        { uuid: 'x1', type: 'billing_notice', timestamp: iso(T + 800) } as never,
+      ],
+      semanticCurrent: {
+        ...semanticCurrent,
+        blocks: {
+          ...semanticCurrent.blocks,
+          // A block kind outside every known set — renders via the text
+          // fallback but must surface as an unknown sighting.
+          7: { blockIndex: 7, kind: 'hologram_call', text: 'beep', finalized: true },
+        },
+        blockOrder: [0, 2, 7],
+      },
+    }
+    const { input } = adapter(weird)
+    const types = input.unknowns.map(u => `${u.sourcePlane}:${u.eventType}`)
+    expect(types).toContain('committed:billing_notice')
+    expect(types).toContain('semantic:hologram_call')
+    // Rows unaffected: the unknown entry stays hidden, the unknown block
+    // still paints (fallback), and nothing crashes.
+    expect(input.committed.some(c => c.id === 'entry:x1')).toBe(false)
+
+    // Stability: same slices again — the unknowns ARRAY keeps identity
+    // even though the registry re-sighted (seenCount bump is telemetry,
+    // not paint).
+    const again = adapter({ ...weird })
+    expect(again.input.unknowns).toBe(input.unknowns)
+  })
+
   it('gates opencode ghosts out of the render plane entirely', () => {
     const adapter = createLedgerInputAdapter()
     const slices = baseSlices()

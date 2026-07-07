@@ -62,6 +62,21 @@ const TOOL_RESULT_KINDS = new Set([
   'tool_result', 'function_call_output', 'custom_tool_call_output', 'tool_search_output',
 ])
 const THINKING_KINDS = new Set(['thinking', 'reasoning'])
+const TEXT_KINDS = new Set(['text', 'message', 'output_text'])
+
+/** True when a semantic block kind maps to a KNOWN content kind. Unknown
+ *  kinds still render (assistant-text fallback below — hiding content on
+ *  an unrecognized label is the worse failure), but the adapter records
+ *  them as UnknownBehavior sightings so new provider vocabulary surfaces
+ *  in the ledger/debug output instead of silently passing as text. */
+export function isKnownBlockKind(kind: string): boolean {
+  return (
+    TOOL_USE_KINDS.has(kind) ||
+    TOOL_RESULT_KINDS.has(kind) ||
+    THINKING_KINDS.has(kind) ||
+    TEXT_KINDS.has(kind)
+  )
+}
 
 function blockContentKind(b: SemanticBlockLike): RenderCandidate['contentKind'] {
   if (TOOL_USE_KINDS.has(b.kind)) return 'tool-use'
