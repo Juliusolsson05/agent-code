@@ -40,6 +40,11 @@ export type SemanticBlockLike = {
   resultContent?: string
   resultAt?: number
   resultIsError?: boolean
+  /** Turn-lookup status for this tool id (adapter stamps it from
+   *  turn.lookups.toolCallsById). 'completed' is resolution evidence even
+   *  when no result was paired into the block — the 2026-07-07 soak
+   *  bundle showed completed Agent tools with empty block results. */
+  lookupStatus?: string
 }
 
 export type SemanticTurnLike = {
@@ -166,7 +171,10 @@ function collectTurn(
       // trace is a permanently-dangling run legacy deliberately withheld.
       resolved:
         kind === 'tool-use'
-          ? Boolean(b.resultContent) || typeof b.resultAt === 'number' || b.resultIsError === true
+          ? Boolean(b.resultContent) ||
+            typeof b.resultAt === 'number' ||
+            b.resultIsError === true ||
+            b.lookupStatus === 'completed'
           : undefined,
     })
     out.decisions.push({ candidateId: id, selected: true, reason: 'selected', evidence: [] })

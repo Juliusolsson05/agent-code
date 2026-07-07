@@ -102,7 +102,18 @@ function toTurnLike(turn: RuntimeSemanticTurn): SemanticTurnLike {
     isCompactionSynthesis: turn.isCompactionSynthesis,
     blocks: turn.blockOrder
       .map(i => turn.blocks[i])
-      .filter((b): b is SemanticBlockLike & { blockIndex: number } => b != null),
+      .filter((b): b is SemanticBlockLike & { blockIndex: number } => b != null)
+      .map(b => {
+        // Stamp the lookup status onto tool blocks: the reducer tracks
+        // completion in turn.lookups even when the result payload never
+        // pairs into the block (claude results ride committed rows). The
+        // collapsed-running rule needs this to tell finished from
+        // in-flight without waiting for committed catch-up.
+        const status = b.toolUseId
+          ? turn.lookups?.toolCallsById?.[b.toolUseId]?.status
+          : undefined
+        return status !== undefined ? { ...b, lookupStatus: status } : b
+      }),
   }
 }
 

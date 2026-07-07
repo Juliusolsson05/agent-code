@@ -208,10 +208,48 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     ...over,
   })
 
-  it('hides an unresolved untraced churn tool in claude history', () => {
-    const d = decideLiveCandidate(historyTool({ toolName: 'Read' }), emptyOwnership, SUPPRESSION_POLICY.claude)
-    expect(d.selected).toBe(false)
-    expect(d.reason).toBe('collapsed-running')
+  it('hides an unresolved untraced churn tool ONLY when committed truth moved past its turn', () => {
+    // Dead run: committed tail is NEWER than the turn's end, yet no trace
+    // of this tool anywhere — provably dangling (1b2b5e96 class).
+    const dead = decideLiveCandidate(
+      historyTool({ toolName: 'Read' }),
+      emptyOwnership,
+      SUPPRESSION_POLICY.claude,
+      TS_MS + 60_000,
+    )
+    expect(dead.selected).toBe(false)
+    expect(dead.reason).toBe('collapsed-running')
+  })
+
+  it('in-flight fan-out stays visible while committed lags (2026-07-07 soak catch)', () => {
+    // Committed tail BEHIND the turn: normal streaming lag, not death.
+    // The v1 rule suppressed here and live Read/Bash fan-outs vanished
+    // mid-run — "they get sent but then they just go away".
+    const lagging = decideLiveCandidate(
+      historyTool({ toolName: 'Read' }),
+      emptyOwnership,
+      SUPPRESSION_POLICY.claude,
+      TS_MS - 5_000,
+    )
+    expect(lagging.selected).toBe(true)
+    // No tail info at all (fresh session) must also paint.
+    const fresh = decideLiveCandidate(
+      historyTool({ toolName: 'Bash' }),
+      emptyOwnership,
+      SUPPRESSION_POLICY.claude,
+      null,
+    )
+    expect(fresh.selected).toBe(true)
+  })
+
+  it('lookup-completed counts as resolved even past the tail (finished, result rode committed rows)', () => {
+    const d = decideLiveCandidate(
+      historyTool({ toolName: 'Read', resolved: true }),
+      emptyOwnership,
+      SUPPRESSION_POLICY.claude,
+      TS_MS + 60_000,
+    )
+    expect(d.selected).toBe(true)
   })
 
   it('non-churn tools paint even while unresolved (running Task chip is live signal)', () => {

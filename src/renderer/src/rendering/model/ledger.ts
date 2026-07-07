@@ -81,8 +81,9 @@ function computeLedger(input: LedgerInput): RenderLedger {
     decisions.push({ candidateId: c.id, selected: true, reason: 'selected', evidence: [] })
     selected.push(c)
   }
+  const committedTailMs = input.ghostContext?.lastJsonlEntryAtMs ?? null
   for (const c of input.live) {
-    const d = decideLiveCandidate(c, ownership, policy)
+    const d = decideLiveCandidate(c, ownership, policy, committedTailMs)
     decisions.push(d)
     if (d.selected) selected.push(c)
   }

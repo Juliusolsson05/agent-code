@@ -136,6 +136,9 @@ export function decideLiveCandidate(
   candidate: RenderCandidate,
   ownership: CommittedOwnership,
   policy: SuppressionPolicy,
+  /** Newest committed entry timestamp (producer clock, null on fresh
+   *  sessions) — the collapsed-running rule's tail gate reads it. */
+  committedTailMs: number | null = null,
 ): OwnershipDecision {
   const evidence: string[] = []
 
@@ -219,6 +222,19 @@ export function decideLiveCandidate(
       policy.hideUnresolvedHistoryTools &&
       candidate.owner === 'semantic-history' &&
       candidate.resolved !== true &&
+      // TAIL GATE (2026-07-07 soak bundle 5b19529f — the first live catch,
+      // and a rule this pipeline's own law already stated: "not caught up
+      // means REORDER, never suppress"). An unresolved churn tool is only
+      // provably DEAD when committed truth has moved PAST its turn —
+      // committed entries newer than the turn's end exist, yet none of
+      // them recorded this tool. During normal streaming the committed
+      // tail lags BEHIND recent history turns (19s in the soak bundle),
+      // and in-flight Read/Bash fan-outs were vanishing mid-run under the
+      // v1 rule. Same trick as ghost rule 4, same pure inputs, no wall
+      // clock — the ledger's identity cache stays sound.
+      committedTailMs !== null &&
+      candidate.timestampMs !== null &&
+      committedTailMs > candidate.timestampMs &&
       // Legacy parity is EXACTLY the collapsed_activity churn set
       // (classifySemanticToolActivity): Read/Glob/Grep/Bash fold into a
       // collapsed run that null-paints while running. Everything else —
