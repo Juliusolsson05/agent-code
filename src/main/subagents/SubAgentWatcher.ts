@@ -5,6 +5,7 @@ import {
   accumulateSubAgentEntry,
   buildSubAgentStateFromAccumulator,
   createAccumulator,
+  SUBAGENT_PRUNE_AFTER_MS,
   type SubAgentAccumulator,
   type SubAgentMeta,
 } from './subagentState.js'
@@ -202,7 +203,7 @@ export class SubAgentWatcher {
       // accumulator → the same "header only" state the old empty-array path gave.
       const acc = this.accByAgent.get(agentId) ?? createAccumulator()
       const { done, error } = this.parentResult(toolUseId)
-      out[toolUseId] = buildSubAgentStateFromAccumulator(
+      const state = buildSubAgentStateFromAccumulator(
         acc,
         toolUseId,
         agentId,
@@ -210,6 +211,25 @@ export class SubAgentWatcher {
         done,
         error,
       )
+      // #341 pruning: terminal for longer than the prune window ⇒ the
+      // parent transcript owns the durable truth (tool_result committed);
+      // drop the fold state so resumed/long-lived sessions stop
+      // accumulating every child ever spawned (metaByAgent was previously
+      // never pruned — 73 cards, 57 stuck, in the 06-21 bundle). Terminal
+      // only — stale children stay tracked for late revival.
+      const idleMs = state.lastActivityAt !== null ? Date.now() - state.lastActivityAt : null
+      if (
+        (state.status === 'done' || state.status === 'error') &&
+        idleMs !== null &&
+        idleMs > SUBAGENT_PRUNE_AFTER_MS
+      ) {
+        this.metaByAgent.delete(agentId)
+        this.accByAgent.delete(agentId)
+        this.offsets.delete(agentId)
+        this.partialByAgent.delete(agentId)
+        continue
+      }
+      out[toolUseId] = state
     }
     this.onChange(out)
   }

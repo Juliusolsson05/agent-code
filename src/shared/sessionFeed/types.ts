@@ -121,7 +121,12 @@ export type SubAgentState = {
   agentType: string
   /** meta.description — the card headline. */
   description: string
-  status: 'running' | 'done' | 'error'
+  /** 'stale' = still nominally running but no transcript activity for the
+   *  staleness window (#341): the child died / hung without a terminal
+   *  signal. Distinct from 'done' on purpose — we don't fabricate
+   *  completion; the row shows a "gone quiet" treatment instead of an
+   *  eternal spinner. */
+  status: 'running' | 'done' | 'error' | 'stale'
   /** Epoch ms of the first transcript entry, or null if unknown. */
   startedAt: number | null
   /** Epoch ms of the last observed entry (drives elapsed + live pulse). */

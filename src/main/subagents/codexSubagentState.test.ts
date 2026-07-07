@@ -6,6 +6,8 @@ import {
   extractCodexSpawnOutput,
   extractCodexSubagentNotification,
   textFromCodexOutput,
+  extractCodexWaitStatuses,
+  isCodexWaitAgentCall,
 } from './codexSubagentState'
 
 describe('Codex subagent state', () => {
@@ -204,5 +206,45 @@ describe('Codex subagent state', () => {
     })
     expect(state.startedAt).toBe(Date.parse('2026-06-18T11:09:32.000Z'))
     expect(state.lastActivityAt).toBe(Date.parse('2026-06-18T11:09:40.000Z'))
+  })
+})
+
+describe('#341 lifecycle: wait_agent terminal inference + staleness', () => {
+  it('parses the wait_agent status output shape (verified against real rollouts)', () => {
+    const waitCall = {
+      timestamp: '2026-06-18T11:14:00.000Z',
+      type: 'response_item',
+      payload: { type: 'function_call', name: 'wait_agent', call_id: 'call_w1', arguments: '{}' },
+    }
+    expect(isCodexWaitAgentCall(waitCall)).toBe('call_w1')
+    const output = {
+      timestamp: '2026-06-18T11:14:37.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_w1',
+        output: JSON.stringify({
+          status: {
+            'agent-a': { completed: 'all done' },
+            'agent-b': { failed: 'crashed' },
+          },
+        }),
+      },
+    }
+    const statuses = extractCodexWaitStatuses(output, new Set(['call_w1']))
+    expect(statuses?.get('agent-a')).toBe('done')
+    expect(statuses?.get('agent-b')).toBe('error')
+  })
+
+  it('ignores outputs of non-wait calls', () => {
+    const output = {
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call_other',
+        output: JSON.stringify({ status: { x: { completed: 'y' } } }),
+      },
+    }
+    expect(extractCodexWaitStatuses(output, new Set(['call_w1']))).toBeNull()
   })
 })
