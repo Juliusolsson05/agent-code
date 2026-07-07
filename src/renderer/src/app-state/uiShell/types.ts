@@ -152,6 +152,14 @@ export type UiShellState = {
    * living inside the same modal. Keeping the flags separate lets either modal
    * evolve without inheriting the other's confirmation semantics. */
   bulkProviderSwitchOpen: boolean
+  /** When true, the Usage modal is open.
+   *
+   * WHY this is app chrome rather than provider/session state:
+   * `/usage` intentionally compares multiple providers at once and reads each
+   * provider's external auth source on demand. No single pane owns the modal,
+   * and persisting it in WorkspaceState would make a quota inspection look
+   * like durable workspace data. */
+  usageModalOpen: boolean
   /** Non-null when the Rewind-to-Prompt modal is open. Value is the
    *  sessionId whose transcript the modal is showing prompts for.
    *  Selecting a prompt in the modal calls

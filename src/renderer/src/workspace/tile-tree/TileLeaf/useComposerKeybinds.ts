@@ -18,6 +18,7 @@ import {
   isAgentProviderKind,
 } from '@shared/types/providerKind'
 import { hasActionCondition } from '@renderer/workspace/conditions/selectors'
+import { useAppStore } from '@renderer/app-state/hooks'
 
 // The big onKeyDown handler for the composer textarea.
 //
@@ -74,6 +75,7 @@ export function useComposerKeybinds({
   setHistoryAnchor,
   endHistoryCycle,
 }: UseComposerKeybindsArgs) {
+  const openUsageModal = useAppStore(state => state.openUsageModal)
   // True while we're forwarding keystrokes to the PTY for a slash
   // command. Controls key routing in onKeyDown and render of the
   // picker dropdown (we still render the dropdown from
@@ -83,6 +85,25 @@ export function useComposerKeybinds({
   const exitSlashMode = () => {
     setSlashMode(false)
     setInputText('')
+  }
+  const isLocalUsageCommand = () => input.trim().toLowerCase() === '/usage'
+  const openLocalUsageCommand = async (clearProviderLine: boolean) => {
+    // WHY this local slash command is intercepted LATE instead of blocking
+    // slash-mode entry:
+    //
+    // Provider-native slash pickers are useful and already wired by forwarding
+    // keystrokes directly into the PTY. If Agent Code grabbed `/` up front, it
+    // would need to reimplement every provider command menu just to reserve one
+    // app-level command. Waiting until exact `/usage` is submitted preserves the
+    // native picker for everything else. In slash mode the provider has already
+    // seen the typed bytes, so Ctrl-U clears that transient line before the app
+    // modal opens and, critically, we do NOT forward Enter.
+    if (clearProviderLine && backendReady) await send('\x15')
+    workspace.clearPendingRewindUndo(sessionId)
+    setInputText('')
+    setSlashMode(false)
+    endHistoryCycle()
+    openUsageModal()
   }
 
   const backendReady =
@@ -106,6 +127,10 @@ export function useComposerKeybinds({
     hasModifier = false,
   ) => {
     const draftImages = runtime.draftImages
+    if (draftImages.length === 0 && isLocalUsageCommand()) {
+      await openLocalUsageCommand(false)
+      return
+    }
     if (input.trim().length === 0 && draftImages.length === 0) return
     // WHY submit does not stop at the renderer readiness flag:
     //
@@ -270,6 +295,10 @@ export function useComposerKeybinds({
         return
       }
       if (e.key === 'Enter') {
+        if (isLocalUsageCommand()) {
+          await openLocalUsageCommand(true)
+          return
+        }
         // Commit whatever CC has highlighted. If there's no
         // highlight CC will just send the literal text as a
         // regular prompt.

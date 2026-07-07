@@ -33,6 +33,7 @@ import type { CaffeinateController } from '@main/caffeinate/CaffeinateController
 import type { RemoteController } from '@main/remote/RemoteController.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { registerIncidentIpc } from '@main/ipc/incident.js'
+import { registerUsageIpc } from '@main/ipc/usage.js'
 
 // IPC registration aggregator.
 //
@@ -81,4 +82,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerCaffeinateIpc(deps.caffeinateController)
   registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
+  registerUsageIpc()
 }

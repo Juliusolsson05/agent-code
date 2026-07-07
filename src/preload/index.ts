@@ -68,6 +68,15 @@ export type {
   SlashPickerState,
   TranscriptPathRequest,
   TranscriptPathResult,
+  UsageLimitRow,
+  UsageProviderError,
+  UsageProviderKind,
+  UsageProviderOk,
+  UsageProviderSnapshot,
+  UsageSeverity,
+  UsageSnapshot,
+  UsageSnapshotRequest,
+  UsageSpend,
 } from '@preload/api/types.js'
 export type {
   OrchestrationAgentRecord,
