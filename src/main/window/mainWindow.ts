@@ -70,9 +70,30 @@ export function focusMainWindow(): void {
  * This is the ONE place the rest of main/ should reach into the
  * BrowserWindow; everything else goes through here.
  */
+// Optional passive observer of the outbound IPC stream. Session recording
+// (src/main/recording/, plan §2) registers here to capture the exact
+// payloads the renderer receives, WITHOUT coupling this window helper to
+// the recorder — it just calls the hook if one is installed. Null (and
+// therefore zero cost) unless recording is gated on.
+type OutboundObserver = (channel: string, args: readonly unknown[]) => void
+let outboundObserver: OutboundObserver | null = null
+
+export function setOutboundObserver(observer: OutboundObserver | null): void {
+  outboundObserver = observer
+}
+
 export function sendToMainWindow(channel: string, ...args: unknown[]): void {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, ...args)
+  }
+  // Observe AFTER the send so recording can never delay or break delivery.
+  // The observer must not throw; it is a try/caught diagnostic sink.
+  if (outboundObserver) {
+    try {
+      outboundObserver(channel, args)
+    } catch {
+      /* recording is a diagnostic; never let it break IPC */
+    }
   }
 }
 

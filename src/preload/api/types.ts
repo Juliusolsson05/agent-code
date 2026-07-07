@@ -52,6 +52,9 @@ export type DevDebugConfig = {
   renderShadowEnabled: boolean
   /** AGENT_CODE_RENDER_PIPELINE=1 — Stage 3 cutover flag. */
   renderPipelineEnabled: boolean
+  /** AGENT_CODE_SESSION_RECORD=1 (+ dev-debug) — session recording active.
+   *  Mirrors src/main/ipc/devDebug.ts (the source of truth). */
+  sessionRecordingEnabled: boolean
 }
 
 // Caffeinate payloads now live in @shared/types/caffeinate so main can own

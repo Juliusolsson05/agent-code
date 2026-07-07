@@ -65,3 +65,14 @@ export const INCIDENT_RUNS_DIR = join(STATE_DIR, 'incidents', 'runs')
 // `.heapsnapshot` somewhere else, that writer is opting out of the disk budget
 // and should justify it in the diff.
 export const HEAP_SNAPSHOT_DIR = join(STATE_DIR, 'heap-snapshots')
+
+// Session recordings — continuous debug-gated capture of a session's
+// rendering-pipeline input stream, replayable in the test suite (see
+// docs/rendering/session-recording-plan-2026-07.md, issue #467). Written
+// ONLY when AGENT_CODE_DEV_DEBUG=1 AND AGENT_CODE_SESSION_RECORD=1. Each
+// recording is a self-contained folder (`<recordingId>/` holding meta.json
+// + events.jsonl) so a single recording can be deleted wholesale with one
+// `rm -rf` — the per-folder shape is a deliberate cleanup affordance. Like
+// every other debug root here it must register with debugRetention as a
+// budgeted bucket (a continuous recorder re-opens the #388 OOM/disk vector).
+export const SESSION_RECORDING_DIR = join(STATE_DIR, 'session-recordings')
