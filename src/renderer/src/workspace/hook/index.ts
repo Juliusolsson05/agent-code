@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import type { WorkspaceModeId } from '@renderer/app-state/settings/types'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
 
 import { useWorkspaceRefs } from '@renderer/workspace/hook/refs'
 import { usePaneToast, useWorkspaceHelpers } from '@renderer/workspace/hook/helpers'
@@ -128,6 +130,70 @@ export function useWorkspace(
       }
     })
   }, [setState])
+
+  const setSessionAgentViewModeOverride = useCallback((
+    sessionId: SessionId,
+    override: AgentViewModeOverride | null,
+  ): boolean => {
+    const snapshot = refs.stateRef.current
+    const meta = snapshot.sessions[sessionId]
+    if (!meta) return false
+    const kind = meta.kind ?? DEFAULT_PROVIDER
+    if (!isAgentProviderKind(kind)) return false
+    if (kind === 'opencode' && override === 'terminal') {
+      // WHY this repeats the render-policy guard instead of relying only on
+      // getEffectiveAgentSurface: this field is durable workspace metadata.
+      // Persisting "terminal" on an OpenCode session today would make
+      // workspace.json claim an intent the provider cannot satisfy, then force
+      // future native-mode work to distinguish "real user override" from
+      // "stale impossible override." Reject it at the write boundary; the
+      // display-policy pin remains the read-side safety net.
+      showToast('OpenCode native terminal mode is not available yet')
+      return false
+    }
+
+    setState(prev => {
+      const current = prev.sessions[sessionId]
+      if (!current) return prev
+      const sessions = { ...prev.sessions }
+      if (override === null) {
+        const { agentViewModeOverride: _removed, ...rest } = current
+        sessions[sessionId] = rest
+      } else {
+        sessions[sessionId] = {
+          ...current,
+          agentViewModeOverride: override,
+        }
+      }
+      return {
+        ...prev,
+        sessions,
+      }
+    })
+    if (override === 'terminal') {
+      setRuntimes(prev => {
+        const current = prev[sessionId]
+        if (!current) return prev
+        if (
+          !current.assistantPicker &&
+          !current.codeBlockPicker &&
+          Object.keys(current.renderedViewLeases).length === 0
+        ) {
+          return prev
+        }
+        return {
+          ...prev,
+          [sessionId]: {
+            ...current,
+            assistantPicker: null,
+            codeBlockPicker: null,
+            renderedViewLeases: {},
+          },
+        }
+      })
+    }
+    return true
+  }, [refs.stateRef, setRuntimes, setState, showToast])
 
   // ---- Runtime helpers (updateRuntime / appendFeedDebug / getRuntime / etc) ----
   const {
@@ -523,6 +589,7 @@ export function useWorkspace(
     killBuried: paneActions.killBuried,
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
+    setSessionAgentViewModeOverride,
     selectGridRelatedSession,
     navigate: paneActions.navigate,
     activateTab: tabActions.activateTab,

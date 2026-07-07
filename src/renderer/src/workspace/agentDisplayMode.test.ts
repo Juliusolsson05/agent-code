@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   commandAllowedByRenderedViewPolicy,
   getEffectiveAgentSurface,
+  resolveConfiguredAgentViewMode,
 } from '@renderer/workspace/agentDisplayMode'
 import { emptyRuntime } from '@renderer/workspace/workspaceState'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
@@ -30,6 +31,12 @@ const emptySnapshot: ProviderConditionSnapshot = {
 }
 
 describe('agent display mode policy', () => {
+  it('resolves per-session view overrides before falling back to the global mode', () => {
+    expect(resolveConfiguredAgentViewMode('hybrid', undefined)).toBe('hybrid')
+    expect(resolveConfiguredAgentViewMode('hybrid', 'agent')).toBe('agent')
+    expect(resolveConfiguredAgentViewMode('agent', 'terminal')).toBe('terminal')
+  })
+
   it('keeps Agent mode on the rendered surface even without leases', () => {
     expect(
       getEffectiveAgentSurface({

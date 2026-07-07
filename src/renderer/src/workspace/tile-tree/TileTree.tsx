@@ -3,7 +3,10 @@ import { useCallback, useRef } from 'react'
 
 import { getRendererProvider } from '@providers/registry.renderer'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
-import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
+import {
+  getEffectiveAgentSurface,
+  resolveConfiguredAgentViewMode,
+} from '@renderer/workspace/agentDisplayMode'
 import {
   buildGridRelatedAgentTabs,
   selectedGridRelatedSessionId,
@@ -126,7 +129,11 @@ export function renderWorkspaceLeaf(
 
   const provider = getRendererProvider(kind)
   const runtime = workspace.getRuntime(renderedSessionId)
-  if (getEffectiveAgentSurface({ kind, mode: agentViewMode, runtime }) === 'terminal') {
+  const configuredAgentViewMode = resolveConfiguredAgentViewMode(
+    agentViewMode,
+    meta?.agentViewModeOverride,
+  )
+  if (getEffectiveAgentSurface({ kind, mode: configuredAgentViewMode, runtime }) === 'terminal') {
     return (
       <AgentTerminalLeaf
         sessionId={renderedSessionId}

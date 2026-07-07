@@ -76,6 +76,8 @@ export type Tab = {
  */
 export type { SessionKind } from '@shared/types/providerKind'
 
+export type AgentViewModeOverride = 'agent' | 'terminal'
+
 export type SessionMeta = {
   /** cwd the session was spawned with — needed to respawn on relaunch. */
   cwd: string
@@ -87,6 +89,19 @@ export type SessionMeta = {
    * tile tree is always there, but old entries never carried kind.
    */
   kind?: SessionKind
+  /**
+   * Per-session override for the agent pane surface.
+   *
+   * WHY this is only agent|terminal, not Hybrid:
+   * Hybrid is a cooperative runtime policy: the pane rests on terminal view,
+   * then rendered-only feature state (drafts, queued prompts, pickers,
+   * conditions) temporarily wakes the React surface. Persisting Hybrid at the
+   * session level would blur "user wants this pane's steady-state surface" with
+   * "features may lease rendering while active." The durable per-session choice
+   * is intentionally narrow: force rendered Agent, force native Terminal, or
+   * leave this undefined and follow the global Agent View Mode setting.
+   */
+  agentViewModeOverride?: AgentViewModeOverride
   /**
    * Provider's own session UUID (distinct from Agent Code's SessionId which is
    * a per-launch routing key). For Claude this is either confirmed by the
