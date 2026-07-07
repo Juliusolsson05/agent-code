@@ -1,3 +1,5 @@
+> **ARCHIVED (2026-07-07).** The investigated issue is closed; kept as history.
+
 # Issues #180 and #181: Rendered Link Activation
 
 ## Issue Summaries

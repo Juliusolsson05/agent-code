@@ -1,3 +1,5 @@
+> **ARCHIVED (2026-07-07).** The investigated issue is closed; kept as history.
+
 # Issue 154: Extend Undo Close History and Retention
 
 ## Issue Summary

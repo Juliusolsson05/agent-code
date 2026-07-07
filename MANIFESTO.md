@@ -32,10 +32,6 @@ The whole app is built for efficient development. All terminals are tmux-persist
 
 ## Structure
 
-One of the principles I understood early is that getting open-source contributors on board with something like this is hard. So Agent Code is dependent on 4 separate projects that it imports as packages, all more broadly scoped, which will hopefully attract more open-source attention.
-
-## Structure
-
 One of the principles I understood early is that getting open-source contributors on board with something like this is hard. So Agent Code is dependent on 4 separate projects that it imports as packages — all more broadly scoped, which will hopefully attract more open-source attention.
 
 **1. Headless Claude Code and Codex**
