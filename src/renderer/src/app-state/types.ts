@@ -42,6 +42,12 @@ export type UiShellSlice = UiShellState & {
     description: string
   }) => void
   closeDebugBundleNotePrompt: () => void
+  openRecordingNotePrompt: (payload: {
+    sessionId: SessionId
+    noteId: string
+    title: string
+  }) => void
+  closeRecordingNotePrompt: () => void
   openViewPrompts: (sessionId: SessionId) => void
   closeViewPrompts: () => void
   openNewAgentPlacement: () => void

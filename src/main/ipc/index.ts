@@ -3,6 +3,7 @@ import type { LspManager } from '@main/lspManager.js'
 import type { GhostJournalRegistry } from '@main/ghostJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
+import type { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 
 import { registerSessionIpc } from '@main/ipc/session.js'
 import { registerProviderIpc } from '@main/ipc/provider.js'
@@ -49,6 +50,10 @@ export type IpcDeps = {
   ghostJournals: GhostJournalRegistry
   dictationDebugJournals: DictationDebugJournalRegistry
   pasteDebugJournals: PasteDebugJournalRegistry
+  // Null in a normal build — only constructed when session recording is gated
+  // on (main/index.ts). The dev-debug IPC needs it for the Attach-Recording-
+  // Note handlers (plan §7b).
+  sessionRecorders: SessionRecorderManager | null
   worktreeActivityIndex: WorktreeActivityIndex
   orchestrationBridge: OrchestrationBridge
   aiWorkspaceRegistry: AiWorkspaceRegistry
@@ -74,7 +79,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerSetupIpc()
   registerDictationIpc({ dictationDebugJournals: deps.dictationDebugJournals })
   registerPasteDebugIpc({ pasteDebugJournals: deps.pasteDebugJournals })
-  registerDevDebugIpc()
+  registerDevDebugIpc(deps.sessionRecorders)
   registerOrchestrationIpc(deps.orchestrationBridge)
   registerAiWorkspaceIpc(deps.aiWorkspaceRegistry)
   registerRenderedContentIpc()
