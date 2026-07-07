@@ -43,6 +43,11 @@ export type SemanticTurnLike = {
   endedAtMs: number | null
   isCompactionSynthesis?: boolean
   blocks: readonly SemanticBlockLike[]
+  /** Turn-level accumulated text. Some producers (opencode headless
+   *  today) deliver text ONLY here, with an empty block map — a
+   *  block-level collector that ignores it makes the whole turn
+   *  invisible (bundle-corpus catch: 2026-07-06 opencode bundles). */
+  text?: string
 }
 
 export type SemanticCollection = {
@@ -137,6 +142,45 @@ function collectTurn(
     })
     out.decisions.push({ candidateId: id, selected: true, reason: 'selected', evidence: [] })
   })
+
+  // Blockless-text fallback (bundle-corpus catch, 2026-07-06 opencode
+  // bundles): a turn whose producer never minted blocks but accumulated
+  // turn-level text must still paint — the legacy renderer showed these
+  // via SemanticStreamingTurn's turn.text path, and losing them at
+  // cutover would blank real assistant output. Only fires when the block
+  // loop produced NOTHING for this turn, so ids cannot collide with a
+  // real block. Text key rules mirror block text: only a FINISHED turn's
+  // text becomes an ownership key.
+  //
+  // DELIBERATELY narrow: fires only when the turn has NO blocks at all,
+  // not when blocks existed and were all rejected — a rejected block
+  // (empty thinking, poll noise) is a decision the ledger already
+  // explains, and resurrecting the turn via text would relitigate it.
+  // The observed production shape is blocks === {} with text set.
+  if (turn.blocks.length === 0 && typeof turn.text === 'string' && turn.text.trim().length > 0) {
+    const id = `sem:${turn.turnId}:text`
+    const finished = turn.endedAtMs != null
+    out.candidates.push({
+      id,
+      owner,
+      provider,
+      sourcePlane: 'semantic',
+      source: turn.source,
+      sessionId,
+      turnId: turn.turnId,
+      contentKind: 'assistant-text',
+      timestampMs,
+      sequence: 0,
+      textKey: finished ? turn.text : undefined,
+      normalizedTextKey: finished ? normalizeTextKey(turn.text) : undefined,
+    })
+    out.decisions.push({
+      candidateId: id,
+      selected: true,
+      reason: 'selected',
+      evidence: ['blockless turn-level text fallback'],
+    })
+  }
 }
 
 export function collectSemanticCandidates(
