@@ -47,6 +47,9 @@ export type {
 
 export type DevDebugConfig = {
   enabled: boolean
+  /** AGENT_CODE_SESSION_RECORD=1 (+ dev-debug) — session recording active.
+   *  Mirrors src/main/ipc/devDebug.ts (the source of truth). */
+  sessionRecordingEnabled: boolean
 }
 
 // Caffeinate payloads now live in @shared/types/caffeinate so main can own

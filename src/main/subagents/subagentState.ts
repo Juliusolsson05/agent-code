@@ -235,6 +235,16 @@ export function accumulateSubAgentEntry(
  * parentResult), NOT stored in the accumulator — so a late parentResult flip
  * re-renders correctly the next time emit() builds from the live accumulator.
  */
+/** No transcript activity for this long while nominally running ⇒ 'stale'.
+ *  5 minutes: an order of magnitude past the longest legitimate quiet
+ *  window observed in real transcripts (a 5000-line Read ≈ tens of
+ *  seconds), far below the hours-long zombies in the #341 bundle. */
+export const SUBAGENT_STALE_AFTER_MS = 5 * 60_000
+
+/** Terminal children older than this are pruned from the watcher (#341) —
+ *  the parent transcript's committed tool_result owns the truth by then. */
+export const SUBAGENT_PRUNE_AFTER_MS = 10 * 60_000
+
 export function buildSubAgentStateFromAccumulator(
   acc: SubAgentAccumulator,
   toolUseId: string,
@@ -242,6 +252,7 @@ export function buildSubAgentStateFromAccumulator(
   meta: SubAgentMeta,
   parentDone: boolean,
   parentError: boolean,
+  nowMs: number = Date.now(),
 ): SubAgentState {
   // The ring already holds at most SUBAGENT_RING_MAX (60) most-recent calls; the
   // renderer shows at most SUBAGENT_TOOL_CALLS_MAX (40). Slice the tail of the
@@ -260,11 +271,17 @@ export function buildSubAgentStateFromAccumulator(
   // bounded display ring. max(0, …) guards the under-cap case.
   const droppedToolCalls = Math.max(0, acc.totalToolUses - SUBAGENT_TOOL_CALLS_MAX)
 
+  // #341 staleness: a running child whose transcript has gone quiet past
+  // the window is presumed dead/hung. Terminal signals always win — this
+  // only rescues the eternal-spinner case (57/73 stuck "running" in the
+  // 2026-06-21 bundle). nowMs is a parameter so tests don't fake timers.
   const status: SubAgentState['status'] = parentError
     ? 'error'
     : parentDone
       ? 'done'
-      : 'running'
+      : acc.lastActivityAt !== null && nowMs - acc.lastActivityAt > SUBAGENT_STALE_AFTER_MS
+        ? 'stale'
+        : 'running'
 
   return {
     toolUseId,

@@ -1,3 +1,8 @@
+import {
+  taskNotificationFromEntry,
+  type TaskNotification,
+} from '@renderer/features/feed/lib/taskNotification'
+import { TaskNotificationsContext } from '@renderer/features/feed/context'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,
@@ -39,7 +44,7 @@ import {
 } from '@renderer/features/feed/lib/helpers'
 import {
   deriveFeedCommittedProjection,
-  deriveFeedRenderModel,
+  feedRenderModelFromItems,
   type FeedRenderItem,
 } from '@renderer/features/feed/model/renderModel'
 import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
@@ -117,6 +122,15 @@ type Props = {
   /** Which provider's row renderers to use. Default 'claude'. */
   provider?: AgentProvider
   entries: Entry[]
+  /**
+   * The ownership-ledger pipeline's pre-decided, pre-ordered item list — the
+   * ONLY source of Feed's rows since the Stage 3 cutover. The ledger made
+   * every visibility/ownership/order decision upstream (desktop: TileLeaf via
+   * useLedgerFeedItems; phone: remote SessionView via the same hook); Feed
+   * just paints. Kept nullable only so a caller mid-migration can pass null
+   * for an empty feed — there is no longer a legacy fallback path behind it.
+   */
+  renderItemsOverride?: FeedRenderItem[] | null
   // NOTE: the `activityStatus` prop was removed (feed audit Deletion Candidate
   // 1). It was declared and destructured but never read inside Feed — once
   // `streamPhase` took over the in-feed WorkIndicator, the spinner verb text
@@ -268,6 +282,7 @@ function FeedImpl({
   sessionId,
   provider = 'claude',
   entries,
+  renderItemsOverride = null,
   streamPhase = 'idle',
   streamPhasePendingToolName = null,
   streamPhasePendingToolUseId = null,
@@ -750,6 +765,20 @@ function FeedImpl({
     [toolResultIndexProp, toolIndexVersion, fallbackToolResultIndex],
   )
 
+  // P2b: toolUseId → parsed task-notification. Entries-only memo (same
+  // cadence as the committed projection): notifications are committed
+  // rows, so live semantic ticks never rebuild this. TaskSubagentRow
+  // treats a notification as its top status/result evidence; renderModel
+  // uses the same parse to skip joined notification entries pre-LazyEntry.
+  const taskNotifications = useMemo(() => {
+    const out = new Map<string, TaskNotification>()
+    for (const entry of entries) {
+      const n = taskNotificationFromEntry(entry)
+      if (n?.toolUseId) out.set(n.toolUseId, n)
+    }
+    return out
+  }, [entries])
+
   const committedProjection = useMemo(() => {
     // Semantic deltas can arrive many times per second while committed
     // JSONL entries stay unchanged. Keep all committed-entry scans behind
@@ -759,45 +788,18 @@ function FeedImpl({
     return deriveFeedCommittedProjection(entries)
   }, [entries])
 
-  const renderModel = useMemo(() => {
-    const startedAt = performance.now()
-    const model = deriveFeedRenderModel({
-      provider,
-      committed: committedProjection,
-      semanticHistory,
-      semanticTurn,
-      streamPhase,
-      streamPhasePendingToolName,
-      streamPhasePendingToolUseId,
-      committedToolUseIndex: toolUseIndex,
-      committedToolResultIndex: toolResultIndex,
-    })
-    const durationMs = performance.now() - startedAt
-    if (durationMs >= 10 || entries.length >= 500) {
-      perf.metric('feed.renderModel.build', durationMs, 'sample', {
-        sessionId,
-        entries: entries.length,
-        visible: model.items.filter(item => item.type === 'entry').length,
-        rows: model.debugRows.length,
-        hasSemanticStreaming: model.items.some(
-          item => item.type === 'semantic-history' || item.type === 'semantic-current',
-        ),
-      })
-    }
-    return model
-  }, [
-    entries,
-    committedProjection,
-    provider,
-    semanticHistory,
-    semanticTurn,
-    sessionId,
-    streamPhase,
-    streamPhasePendingToolName,
-    streamPhasePendingToolUseId,
-    toolResultIndex,
-    toolUseIndex,
-  ])
+  // Stage 3 cutover (2026-07): the ownership ledger is the SOLE decision core.
+  // Feed no longer derives its own render model — both the desktop (TileLeaf)
+  // and the phone (remote SessionView) hand it the ledger's pre-decided,
+  // pre-ordered items via renderItemsOverride, and `feedRenderModelFromItems`
+  // only attaches the two debug side-products. The old in-Feed
+  // deriveFeedRenderModel branch (the second decision-maker this rewrite
+  // exists to kill) and its perf metric are deleted. `?? []` is pure
+  // defense — both live callers always pass an array.
+  const renderModel = useMemo(
+    () => feedRenderModelFromItems(renderItemsOverride ?? [], provider),
+    [renderItemsOverride, provider],
+  )
 
   const visibleDecisions = renderModel.visibleDecisions
   const renderItems = renderModel.items
@@ -946,6 +948,7 @@ function FeedImpl({
     <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
     <SubAgentsContext.Provider value={subAgents}>
+    <TaskNotificationsContext.Provider value={taskNotifications}>
     <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
     <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
       <div
@@ -978,6 +981,7 @@ function FeedImpl({
       </div>
     </CodeRenderContext.Provider>
     </AskUserQuestionConditionContext.Provider>
+    </TaskNotificationsContext.Provider>
     </SubAgentsContext.Provider>
     </ToolResultIndexContext.Provider>
     </ToolUseIndexContext.Provider>

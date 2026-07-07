@@ -32,6 +32,7 @@ import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useC
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
+import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -269,6 +270,13 @@ export function TileLeaf({
     workspace.appendFeedDebug(sessionId, entry)
   }, [sessionId, workspace.appendFeedDebug])
 
+  // Stage 3 cutover: the ownership-ledger pipeline decides Feed's entire item
+  // list — unconditionally now, no flag. Feed just paints what this returns.
+  // (The Stage-2 shadow that diffed this against the legacy renderer is gone:
+  // its job — proving parity before cutover — is done, and the legacy renderer
+  // it diffed against has been deleted.)
+  const ledgerFeedItems = useLedgerFeedItems(runtime, provider, sessionId)
+
   const mergedEntries = useMemo(
     () => selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null),
     [
@@ -473,6 +481,7 @@ export function TileLeaf({
           flex cell sizing; the scroller is a child. */}
       <div className="flex-1 min-h-0">
         <Feed
+          renderItemsOverride={ledgerFeedItems}
           sessionId={sessionId}
           provider={provider}
           workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}

@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
+import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
+import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { Entry } from '@shared/types/transcript'
 import {
   conditionStateByKind,
   type ClaudeAskUserQuestionState,
@@ -9,6 +12,13 @@ import {
 
 import type { WebSocketSessionFeed, ConnectionState } from '../WebSocketSessionFeed'
 import type { TranscriptStore } from '../transcript/store'
+
+// The phone has no optimistic-echo plane: it renders committed + semantic
+// state streamed from the desktop, never a locally-minted ghost (see the
+// "deliberately skipped subsystems" note below). A single frozen empty map
+// keeps the ledger's ghost plane cache stable across renders — a fresh map
+// each render would defeat the adapter's by-reference plane memoization.
+const NO_GHOSTS: ReadonlyMap<string, Entry> = new Map()
 
 // One session, desktop-grade: this mounts the REAL desktop Feed component
 // (see the alias table in ../vite.config.ts — the phone renders the same
@@ -65,6 +75,40 @@ export function SessionView({
   }, [store, sessionId])
 
   const provider = store.getKind(sessionId)
+
+  // Stage 3 cutover: the phone paints from the SAME ownership-ledger pipeline
+  // the desktop does. It used to rely on Feed's legacy deriveFeedRenderModel
+  // path (the only remaining consumer of it after the desktop flip); that
+  // path is deleted, so the phone must produce renderItemsOverride too. The
+  // ledger reads a minimal SessionRuntime view — the seven fields
+  // useLedgerFeedItems/ledgerFeedContextFromRuntime touch — assembled from
+  // the wire transcript. Only entries + semantic + phase differ across
+  // renders; ghosts is the frozen empty map (no optimistic plane on the
+  // phone) and lastJsonlEntryAt is irrelevant with no ghosts to invalidate.
+  const runtimeView = useMemo(
+    () =>
+      ({
+        entries: transcript.entries,
+        semantic: {
+          currentTurn: transcript.semanticTurn,
+          history: transcript.semanticHistory,
+        },
+        ghosts: NO_GHOSTS,
+        streamPhase: transcript.phase.streamPhase,
+        streamPhasePendingToolName: transcript.phase.streamPhasePendingToolName,
+        streamPhasePendingToolUseId: transcript.phase.streamPhasePendingToolUseId,
+        lastJsonlEntryAt: 0,
+      }) as unknown as SessionRuntime,
+    [
+      transcript.entries,
+      transcript.semanticTurn,
+      transcript.semanticHistory,
+      transcript.phase.streamPhase,
+      transcript.phase.streamPhasePendingToolName,
+      transcript.phase.streamPhasePendingToolUseId,
+    ],
+  )
+  const ledgerFeedItems = useLedgerFeedItems(runtimeView, provider, sessionId)
 
   const askUserQuestionState = useMemo(
     () =>
@@ -173,6 +217,7 @@ export function SessionView({
           <Feed
             sessionId={sessionId}
             provider={provider}
+            renderItemsOverride={ledgerFeedItems}
             entries={transcript.entries}
             streamPhase={transcript.phase.streamPhase}
             streamPhasePendingToolName={transcript.phase.streamPhasePendingToolName}

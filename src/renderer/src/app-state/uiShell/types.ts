@@ -37,6 +37,14 @@ export type UiShellState = {
     title: string
     description: string
   } | null
+  // Non-null while the Attach-Recording-Note input modal is open (plan §7b).
+  // The `reserved` marker is already written by the time this is set; noteId
+  // is the handle the fill step updates.
+  recordingNotePrompt: {
+    sessionId: SessionId
+    noteId: string
+    title: string
+  } | null
   viewPromptsSessionId: SessionId | null
   newAgentPlacementOpen: boolean
   /**

@@ -38,12 +38,19 @@ import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 // and reconcile it away when the real rollout user message shows up
 // (see ipc/handleBulkJsonl.ts for the reconciliation side).
 
-export function shouldQueueOptimisticCodexUserEntry(
+/** Why a submit queued instead of painting an optimistic row — recorded on
+ *  the optimistic_user_queue feed-debug entry so a stuck-queue bundle says
+ *  WHICH branch parked it (residue-plan P0 observability: the 06-24 stuck
+ *  bundles required manual rollout forensics to distinguish "live turn"
+ *  from "unowned history because the committed tail is dead"). */
+export type OptimisticQueueReason = 'live-current-turn' | 'unowned-history'
+
+export function optimisticCodexQueueReason(
   current: Pick<
     SessionRuntime,
     'entries' | 'semantic' | 'streamPhase' | 'toolResultIndex' | 'toolUseIndex'
   >,
-): boolean {
+): OptimisticQueueReason | null {
   // WHY this deliberately ignores `streamPhase`:
   // TileLeaf calls setStreamingBaseline() and addOptimisticCodexUserEntry()
   // in the same submit handler. setStreamingBaseline moves streamPhase to
@@ -57,7 +64,7 @@ export function shouldQueueOptimisticCodexUserEntry(
   // work indicator, but it is polluted by the current submit and cannot
   // answer "is there older live feed content this prompt must not jump
   // above?"
-  if (isSemanticTurnRunning(current.semantic.currentTurn)) return true
+  if (isSemanticTurnRunning(current.semantic.currentTurn)) return 'live-current-turn'
 
   // WHY completed semantic history is part of this ownership test:
   // Feed renders in planes: committed/optimistic entries first, then
@@ -71,7 +78,7 @@ export function shouldQueueOptimisticCodexUserEntry(
   // Feed renderability predicate with the same committed text/tool
   // ownership inputs.
   const committedAssistantText = buildCommittedAssistantText(current.entries)
-  return current.semantic.history.some(turn =>
+  const unownedHistory = current.semantic.history.some(turn =>
     turn.turnId !== current.semantic.currentTurn?.turnId &&
     semanticTurnHasRenderableContent(
       turn,
@@ -80,6 +87,7 @@ export function shouldQueueOptimisticCodexUserEntry(
       committedAssistantText,
     ),
   )
+  return unownedHistory ? 'unowned-history' : null
 }
 
 export function codexPromptOwnershipKey(text: string | null | undefined): string {
@@ -179,8 +187,8 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
         if (isOptimisticCodexUserEntry(last) && entryTextContent(last) === trimmed) {
           return prev
         }
-        const queueForLiveSemanticTurn = shouldQueueOptimisticCodexUserEntry(current)
-        if (queueForLiveSemanticTurn) {
+        const queueReason = optimisticCodexQueueReason(current)
+        if (queueReason !== null) {
           const alreadyQueued = current.queuedMessages.some(q =>
             codexPromptsMatchForOwnership(q.content, trimmed),
           )
@@ -200,7 +208,7 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
               {
                 layer: 'STATE',
                 kind: 'optimistic_user_queue',
-                summary: `optimistic user queued during live turn · ${trimmed.slice(0, 80)}`,
+                summary: `optimistic user queued (${queueReason}) · ${trimmed.slice(0, 80)}`,
                 // WHY queue instead of appending a normal feed row:
                 // Codex lets the user submit follow-up prompts while the
                 // previous assistant/tool turn is still live. Appending a
@@ -217,8 +225,15 @@ export function useStreamingActions(setRuntimes: WorkspaceSetRuntimes): {
                   text: trimmed,
                   queueLengthBefore: current.queuedMessages.length,
                   queueLengthAfter: current.queuedMessages.length + 1,
-                  activeSemanticTurn: queueForLiveSemanticTurn,
+                  queueReason,
                   streamPhase: current.streamPhase,
+                  // Age of the committed tail at queue time. The tailer
+                  // unwatch bug (residue plan P0) made 'unowned-history'
+                  // queues with a MINUTES-old tail — this field makes the
+                  // next dead-tail incident readable straight off the
+                  // bundle instead of requiring rollout forensics.
+                  committedTailAgeMs:
+                    current.lastJsonlEntryAt !== null ? Date.now() - current.lastJsonlEntryAt : null,
                 },
               },
             ),

@@ -1,3 +1,4 @@
+import { AskUserQuestionAnsweredRow } from '@renderer/features/feed/ui/rows/AskUserQuestionAnsweredRow'
 import { memo, useContext } from 'react'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -24,6 +25,8 @@ import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
 import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
+import { isAgentSpawnToolName } from '@renderer/features/feed/lib/agentSpawnTools'
+import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 
 /* ---------- Block dispatcher ---------- */
@@ -123,7 +126,10 @@ export const Block = memo(function Block({
       // surface for this command.
       if (
         customRendering
-        && (tu.name === 'Bash' || tu.name === 'exec_command')
+        // 'bash' = opencode's lowercase twin (P3): same commands, same
+        // git-widget value; the case difference is provider naming, not
+        // semantics.
+        && (tu.name === 'Bash' || tu.name === 'exec_command' || tu.name === 'bash')
       ) {
         const cmd = extractToolCommand(tu)
         const intent = detectGitIntent(cmd)
@@ -134,17 +140,35 @@ export const Block = memo(function Block({
         }
       }
 
-      if (tu.name === 'Agent' || tu.name === 'spawn_agent') {
-        // Claude records subagent fanout as an `Agent` tool_use; Codex records
-        // the same user-visible operation as a normal `spawn_agent`
-        // function_call. Route both through the fleet row before provider
-        // dispatch so Codex does not fall back to a generic tool card while the
-        // main process is already publishing compatible SubAgentState.
+      if (isAgentSpawnToolName(tu.name)) {
+        // Claude records subagent fanout as an `Agent` tool_use; Codex as a
+        // `spawn_agent` function_call; MCP-orchestrated sessions as
+        // `[mcp__<server>__]orchestration_create_agent` (the 2026-06-21
+        // blind spot — 73 tracked subAgents, zero cards). One shared
+        // predicate routes them all through the fleet row before provider
+        // dispatch, so the main process's SubAgentState (and P2b's
+        // notification join) always has a card to land on.
         return <TaskSubagentRow block={tu} />
       }
 
+      if (tu.name === 'AskUserQuestion') {
+        // Committed-plane question rendering (P2d): questions + verbatim
+        // answer from the paired result. The LIVE picker (semantic plane)
+        // owns the interaction; this is the durable record of it.
+        return (
+          <AskUserQuestionAnsweredRow
+            block={tu}
+            result={toolResultIndex.get(tu.id) ?? null}
+          />
+        )
+      }
+
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
-      return providerRow !== undefined ? providerRow : <ToolUseRow block={tu} />
+      // Shared fallback is the generic JSON tool row (residue plan P1):
+      // it degrades to the old ToolUseRow look for headline-only inputs
+      // (Bash keeps its 2-line cap) and gives MCP/orchestration payloads
+      // a real rendering instead of a bare name over raw JSON.
+      return providerRow !== undefined ? providerRow : <JsonToolRow block={tu} />
     }
     case 'tool_result': {
       const tr = block as ToolResultBlock

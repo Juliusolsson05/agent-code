@@ -13,37 +13,29 @@ import {
 const CODEX_SUBAGENT_NOTIFICATION_OPEN = '<subagent_notification>'
 const CODEX_SUBAGENT_NOTIFICATION_CLOSE = '</subagent_notification>'
 
-// Match SubAgentWatcher's cap name/value (PR #300) on purpose: this is the
-// Codex twin of the Claude subagent retention leak that #300 fixed. Keeping the
-// constant identical means a future reader who knows one watcher's bound knows
-// the other's, and a single value to tune covers both providers.
+// This module is the Codex twin of the Claude subagent retention fix
+// (SubAgentWatcher, PR #300, root-caused in #288): a child rollout is folded
+// incrementally into a tiny accumulator and its raw lines are dropped the
+// instant they are consumed, so main-process heap never grows with transcript
+// length. The dominator-tree analysis that pinned the Claude watcher at 263 MB
+// / 88% of the heap (see SubAgentWatcher.ts) showed retained raw entries are
+// the multi-MB liability — each pins its full tool-result / Read body — which
+// is why nothing here holds a tail of raw entries. The dirty signal is the
+// child rollout byte offset, matching the Claude watcher and avoiding full-file
+// re-reads.
 //
-// REVIEW NOTE (PR #317): the original #288 fix tail-sliced the RETAINED entries
-// to this many and then fed that capped slice straight into the emit path. Both
-// reviewers (Claude + Codex) caught that this corrupts every value derived from
-// the HEAD of the rollout: `childMetaFromEntries` finds session_meta at the
-// front (so role/nickname/parentThreadId and the startedAt anchor vanish once
-// the head is dropped), `startedAt` jumps forward to the oldest *surviving*
-// entry, and `turnCount` / tool-call counts undercount because earlier turns are
-// gone. The fix below SPLITS the responsibility: the emitted tool-call timeline
-// is capped, while the SubAgentState fields that depend on the HEAD of the file
-// are derived from a running accumulator that has seen every complete line.
-//
-// #288 ROOT-CAUSE FOLLOW-UP: PR #317 also retained a bounded 500-entry TAIL of
-// raw rollout entries in `childEntriesByAgentId`, justified ONLY as a buffer for
-// a "future live mini-feed" that nothing ever read. The dominator-tree analysis
-// that pinned the Claude SubAgentWatcher as 263 MB / 88% of the heap (see
-// SubAgentWatcher.ts) showed retained raw entries are exactly the multi-MB
-// liability — each entry pins its full tool-result/Read body. Since that tail
-// was write-only dead weight here, the cleanest fix is to DROP it entirely
-// rather than add per-field truncation to bytes nothing displays. The derived
-// SubAgentState accumulator already carries everything emit() ships, so
-// removing the tail is invisible. If a mini-feed is ever built, it should
-// re-derive small previews from the on-disk rollout (the durable source), not
-// pin raw entries in main-process heap. The former
-// MAX_RETAINED_ENTRIES_PER_AGENT constant is gone with the tail it bounded; the
-// dirty signal is now the child rollout byte offset, matching the Claude watcher
-// and avoiding full-file re-reads.
+// INVARIANT (#288 / #317 root cause, stated forward): every head-of-file
+// SubAgentState field — role / nickname / parentThreadId, the startedAt anchor,
+// turnCount, and the tool-call counts — MUST derive from the running
+// accumulator that has seen every complete line, NOT from a capped tail slice.
+// Deriving any head-derived value from the slice corrupts it: session_meta
+// lives at the FRONT of the rollout (so role/nickname/parentThreadId and the
+// startedAt anchor vanish once the head is dropped), startedAt jumps forward to
+// the oldest surviving entry, and turn/tool counts undercount because earlier
+// turns are gone. The split below honors this — the emitted tool-call timeline
+// is capped for DISPLAY, while every head-derived field reads from the
+// accumulator. A prior fix tail-sliced retained entries and fed that slice
+// straight into emit, which is exactly what this invariant forbids.
 
 // Codex child sessions do not use Claude's `<parent>/subagents/agent-*.jsonl`
 // layout. They are normal rollout files whose session_meta.source says they
@@ -217,6 +209,55 @@ export function extractCodexSpawnOutput(entry: JsonlEntry): SpawnOutput | null {
   }
 }
 
+/** Parent `wait_agent` function_call tracking: outputs carry the fan-in
+ *  truth `{"status":{"<agent-uuid>":{"completed"|"failed"|"error"|
+ *  "interrupted": <result text>}}}` (shape verified against on-disk
+ *  rollouts 2026-06-18). Codex has NO subagent notification on this path —
+ *  for MCP-spawned children this output is the ONLY terminal signal the
+ *  parent ever records (#341's stuck-running root cause). */
+export function isCodexWaitAgentCall(entry: JsonlEntry): string | null {
+  const payload = asRecord(entry.payload)
+  if (!payload || entry.type !== 'response_item') return null
+  if (payload.type !== 'function_call' && payload.type !== 'custom_tool_call') return null
+  const name = stringField(payload, 'name')
+  if (name !== 'wait_agent' && name !== 'wait_agents') return null
+  return stringField(payload, 'call_id')
+}
+
+export function extractCodexWaitStatuses(
+  entry: JsonlEntry,
+  waitCallIds: ReadonlySet<string>,
+): Map<string, 'done' | 'error'> | null {
+  const payload = asRecord(entry.payload)
+  if (!payload || entry.type !== 'response_item') return null
+  if (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output') {
+    return null
+  }
+  const callId = stringField(payload, 'call_id')
+  if (!callId || !waitCallIds.has(callId)) return null
+  const text = textFromCodexOutput(payload.output) ?? (typeof payload.output === 'string' ? payload.output : null)
+  if (!text) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  const statusMap = asRecord(asRecord(parsed)?.status)
+  if (!statusMap) return null
+  const out = new Map<string, 'done' | 'error'>()
+  for (const [agentId, v] of Object.entries(statusMap)) {
+    const state = asRecord(v)
+    if (!state) continue
+    const keys = Object.keys(state)
+    if (keys.includes('completed')) out.set(agentId, 'done')
+    else if (keys.some(k => k === 'failed' || k === 'error' || k === 'interrupted')) {
+      out.set(agentId, 'error')
+    }
+  }
+  return out.size > 0 ? out : null
+}
+
 export function extractCodexSubagentNotification(entry: JsonlEntry): Notification | null {
   if (entry.type !== 'response_item') return null
   const payload = asRecord(entry.payload)
@@ -260,14 +301,6 @@ export function extractCodexChildMeta(entry: JsonlEntry): ChildMeta | null {
   }
 }
 
-function childMetaFromEntries(entries: CodexRolloutEntry[]): ChildMeta | null {
-  for (const entry of entries) {
-    const meta = extractCodexChildMeta(entry)
-    if (meta) return meta
-  }
-  return null
-}
-
 function toolInputFromPayload(payload: Record<string, unknown>): Record<string, unknown> | null {
   if (typeof payload.arguments === 'string') {
     return parseJsonObject(payload.arguments) ?? { arguments: payload.arguments }
@@ -278,131 +311,25 @@ function toolInputFromPayload(payload: Record<string, unknown>): Record<string, 
   return asRecord(payload.arguments) ?? asRecord(payload.input)
 }
 
-function buildToolCalls(entries: CodexRolloutEntry[]): {
-  calls: SubAgentToolCall[]
-  dropped: number
-  currentActivity: string | null
-} {
-  type Call = SubAgentToolCall & { id: string | null }
-  const calls: Call[] = []
-  const done = new Set<string>()
-  let currentActivity: string | null = null
+/** Mirrors SUBAGENT_STALE_AFTER_MS on the claude side (#341): a child
+ *  with no rollout activity for 5 minutes while nominally running is
+ *  presumed dead/hung — 'stale', never fabricated 'done'. */
+export const CODEX_SUBAGENT_STALE_AFTER_MS = 5 * 60_000
 
-  for (const entry of entries) {
-    const payload = asRecord(entry.payload)
-    if (!payload) continue
-    if (
-      entry.type === 'response_item' &&
-      (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
-      typeof payload.call_id === 'string'
-    ) {
-      const name = stringField(payload, 'name') ?? 'tool'
-      calls.push({
-        id: payload.call_id,
-        name,
-        headline: headlineFromInput(
-          toolInputFromPayload(payload),
-          CODEX_SUBAGENT_HEADLINE_KEYS,
-          '...',
-        ),
-        status: 'running',
-      })
-      currentActivity = `running ${name}`
-    } else if (
-      entry.type === 'response_item' &&
-      (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') &&
-      typeof payload.call_id === 'string'
-    ) {
-      done.add(payload.call_id)
-      currentActivity = null
-    } else if (entry.type === 'response_item' && payload.type === 'web_search_call') {
-      const callId = stringField(payload, 'call_id') ?? stringField(payload, 'id')
-      const action = asRecord(payload.action)
-      calls.push({
-        id: callId,
-        name: 'web_search',
-        headline: headlineFromInput(action, CODEX_SUBAGENT_HEADLINE_KEYS, '...'),
-        status: 'running',
-      })
-      currentActivity = 'running web_search'
-    } else if (entry.type === 'event_msg' && payload.type === 'agent_message') {
-      const phase = stringField(payload, 'phase')
-      currentActivity = phase === 'final_answer' ? 'finalizing' : 'responding'
-    }
-  }
+/** Terminal children older than this get pruned from the tracker (#341):
+ *  their truth is durable in the parent rollout by then. 10 minutes keeps
+ *  the completed card interactive well past reading time without letting
+ *  resumed sessions accumulate every child ever spawned. */
+export const CODEX_SUBAGENT_PRUNE_AFTER_MS = 10 * 60_000
 
-  for (const call of calls) {
-    call.status = call.id && done.has(call.id) ? 'done' : 'running'
-  }
-
-  const { kept, dropped } = capToolCalls(calls)
-  return {
-    calls: kept.map(({ name, headline, status }) => ({ name, headline, status })),
-    dropped,
-    currentActivity,
-  }
-}
-
-export function buildCodexSubAgentState(params: {
-  toolUseId: string
-  agentId: string
-  spawn: SpawnCall | null
-  output: SpawnOutput | null
-  notification: Notification | null
-  childEntries: CodexRolloutEntry[]
-}): SubAgentState {
-  const childMeta = childMetaFromEntries(params.childEntries)
-  const timestamps = params.childEntries
-    .map(entry => (typeof entry.timestamp === 'string' ? tsToMs(entry.timestamp) : null))
-    .filter((value): value is number => value !== null)
-  const startedAt =
-    tsToMs(childMeta?.timestamp) ??
-    (timestamps.length > 0 ? Math.min(...timestamps) : null)
-  const lastActivityAt = timestamps.length > 0 ? Math.max(...timestamps) : startedAt
-  const taskComplete = params.childEntries.some(entry => {
-    const payload = asRecord(entry.payload)
-    return entry.type === 'event_msg' && payload?.type === 'task_complete'
-  })
-  const status: SubAgentState['status'] =
-    params.notification?.status === 'failed' || params.notification?.status === 'error'
-      ? 'error'
-      : params.notification?.status === 'completed' || taskComplete
-        ? 'done'
-        : 'running'
-  const tools = buildToolCalls(params.childEntries)
-  const turnCount = params.childEntries.reduce((count, entry) => {
-    const payload = asRecord(entry.payload)
-    if (entry.type === 'event_msg' && payload?.type === 'agent_message') return count + 1
-    if (
-      entry.type === 'response_item' &&
-      payload?.type === 'message' &&
-      payload.role === 'assistant'
-    ) {
-      return count + 1
-    }
-    return count
-  }, 0)
-
-  return {
-    toolUseId: params.toolUseId,
-    agentId: params.agentId,
-    agentType: childMeta?.role ?? params.spawn?.agentType ?? 'agent',
-    description:
-      params.spawn?.description ??
-      childMeta?.nickname ??
-      params.output?.nickname ??
-      '',
-    status,
-    startedAt,
-    lastActivityAt,
-    turnCount,
-    toolCalls: tools.calls,
-    droppedToolCalls: tools.dropped,
-    currentActivity: status === 'running' ? tools.currentActivity : null,
-  }
-}
-
-function createCodexAccumulator(): CodexSubAgentAccumulator {
+// Exported for the unit test, which exercises the accumulator exactly the way
+// CodexSubAgentTracker.readAppendedChild does (fold each rollout line, then
+// build). These three are the live emit path — the former entries-based
+// builders (childMetaFromEntries/buildToolCalls/buildCodexSubAgentState) were
+// a parallel oracle that nothing but the test used and were deleted, mirroring
+// the claude twin's decision documented in subagentState.ts (dead parity
+// oracles are removed, not kept in sync).
+export function createCodexAccumulator(): CodexSubAgentAccumulator {
   return {
     childMeta: null,
     minTimestampMs: null,
@@ -450,7 +377,7 @@ function resolveCodexToolCall(
   }
 }
 
-function accumulateCodexSubAgentEntry(
+export function accumulateCodexSubAgentEntry(
   acc: CodexSubAgentAccumulator,
   entry: CodexRolloutEntry,
 ): void {
@@ -513,25 +440,36 @@ function accumulateCodexSubAgentEntry(
   }
 }
 
-function buildCodexSubAgentStateFromAccumulator(params: {
+export function buildCodexSubAgentStateFromAccumulator(params: {
   toolUseId: string
   agentId: string
   spawn: SpawnCall | null
   output: SpawnOutput | null
   notification: Notification | null
+  /** Terminal state from the parent's wait_agent output (#341) — for
+   *  MCP-spawned codex children this is the only terminal signal. */
+  waitTerminal?: 'done' | 'error' | null
   acc: CodexSubAgentAccumulator | null
+  nowMs?: number
 }): SubAgentState {
   const acc = params.acc ?? createCodexAccumulator()
   const childMeta = acc.childMeta
   const startedAt =
     tsToMs(childMeta?.timestamp) ??
     acc.minTimestampMs
+  const nowMs = params.nowMs ?? Date.now()
   const status: SubAgentState['status'] =
-    params.notification?.status === 'failed' || params.notification?.status === 'error'
+    params.notification?.status === 'failed' ||
+    params.notification?.status === 'error' ||
+    params.waitTerminal === 'error'
       ? 'error'
-      : params.notification?.status === 'completed' || acc.taskComplete
+      : params.notification?.status === 'completed' ||
+          acc.taskComplete ||
+          params.waitTerminal === 'done'
         ? 'done'
-        : 'running'
+        : acc.maxTimestampMs !== null && nowMs - acc.maxTimestampMs > CODEX_SUBAGENT_STALE_AFTER_MS
+          ? 'stale'
+          : 'running'
   const { kept } = capToolCalls(acc.toolCalls)
 
   return {
@@ -603,6 +541,8 @@ export class CodexSubAgentTracker {
   // mirror the Claude SubAgentWatcher lifetime: append-only bytes are folded
   // into a tiny accumulator, complete lines are dropped immediately, and emit()
   // derives from the accumulator plus the parent correlation maps.
+  private readonly waitCallIds = new Set<string>()
+  private readonly waitTerminalByAgentId = new Map<string, 'done' | 'error'>()
   private readonly childOffsetByAgentId = new Map<string, number>()
   private readonly childPartialByAgentId = new Map<string, string>()
   private readonly childAccByAgentId = new Map<string, CodexSubAgentAccumulator>()
@@ -628,6 +568,28 @@ export class CodexSubAgentTracker {
       // at the same moment, but emit() still needs to rebuild the record with the
       // parent spawn/output metadata. Mark dirty without touching the byte offset;
       // the accumulator remains the source of truth for child-derived fields.
+      this.dirty = true
+    }
+    const waitCallId = isCodexWaitAgentCall(entry)
+    if (waitCallId) this.waitCallIds.add(waitCallId)
+    const waitStatuses = extractCodexWaitStatuses(entry, this.waitCallIds)
+    if (waitStatuses) {
+      // The wait_agent output is the parent's fan-in truth (#341): for
+      // MCP-spawned children no notification ever arrives, so without this
+      // the card runs forever. done/error recorded per agent uuid.
+      for (const [agentId, terminal] of waitStatuses) {
+        this.waitTerminalByAgentId.set(agentId, terminal)
+      }
+      // Prune the consumed wait call id. A wait_agent call produces exactly ONE
+      // output, and extractCodexWaitStatuses only returns non-null once it has
+      // matched (and thus consumed) that output — so this id will never match a
+      // future entry again. Without this delete, waitCallIds grew unbounded for
+      // the tracker's whole lifetime (it was only ever cleared in stop()), the
+      // Codex twin of the retention leaks #300/#317 fixed elsewhere. The output
+      // entry's call_id IS the id we tracked at the wait call, so re-reading it
+      // here is the exact key to drop.
+      const consumedCallId = stringField(asRecord(entry.payload), 'call_id')
+      if (consumedCallId) this.waitCallIds.delete(consumedCallId)
       this.dirty = true
     }
     const notification = extractCodexSubagentNotification(entry)
@@ -663,6 +625,8 @@ export class CodexSubAgentTracker {
     // session must release its memory; the durable source stays the on-disk
     // rollout if the tracker is ever re-created for the same parent.
     this.spawnsByCallId.clear()
+    this.waitCallIds.clear()
+    this.waitTerminalByAgentId.clear()
     this.outputsByCallId.clear()
     this.callIdByAgentId.clear()
     this.notificationsByAgentId.clear()
@@ -766,15 +730,43 @@ export class CodexSubAgentTracker {
 
   private emit(): void {
     const out: Record<string, SubAgentState> = {}
+    const nowMs = Date.now()
     for (const [agentId, callId] of this.callIdByAgentId) {
-      out[callId] = buildCodexSubAgentStateFromAccumulator({
+      const state = buildCodexSubAgentStateFromAccumulator({
         toolUseId: callId,
         agentId,
         spawn: this.spawnsByCallId.get(callId) ?? null,
         output: this.outputsByCallId.get(callId) ?? null,
         notification: this.notificationsByAgentId.get(agentId) ?? null,
+        waitTerminal: this.waitTerminalByAgentId.get(agentId) ?? null,
         acc: this.childAccByAgentId.get(agentId) ?? null,
+        nowMs,
       })
+      // #341 pruning: a child terminal for longer than the prune window
+      // has its durable truth in the parent rollout (wait output /
+      // notification) — the tracker's job is done. Dropping the fold
+      // state caps long-lived resumed sessions that used to accumulate
+      // dozens of dead cards; the row keeps rendering from committed
+      // rows. Terminal-only: stale children stay tracked so a late
+      // revival can still flip them back to running.
+      const idleMs = state.lastActivityAt !== null ? nowMs - state.lastActivityAt : null
+      if (
+        (state.status === 'done' || state.status === 'error') &&
+        idleMs !== null &&
+        idleMs > CODEX_SUBAGENT_PRUNE_AFTER_MS
+      ) {
+        this.callIdByAgentId.delete(agentId)
+        this.spawnsByCallId.delete(callId)
+        this.outputsByCallId.delete(callId)
+        this.notificationsByAgentId.delete(agentId)
+        this.waitTerminalByAgentId.delete(agentId)
+        this.childPathByAgentId.delete(agentId)
+        this.childOffsetByAgentId.delete(agentId)
+        this.childPartialByAgentId.delete(agentId)
+        this.childAccByAgentId.delete(agentId)
+        continue
+      }
+      out[callId] = state
     }
     this.onChange(out)
   }

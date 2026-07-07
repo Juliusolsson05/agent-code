@@ -18,6 +18,7 @@ export const createUiShellSlice: StateCreator<
   settingsPageOpen: false,
   buryPromptSessionId: null,
   debugBundleNotePrompt: null,
+  recordingNotePrompt: null,
   viewPromptsSessionId: null,
   newAgentPlacementOpen: false,
   tiledDispatchPromptOpen: false,
@@ -95,6 +96,17 @@ export const createUiShellSlice: StateCreator<
     set({ debugBundleNotePrompt: payload }, false, 'uiShell/openDebugBundleNotePrompt'),
   closeDebugBundleNotePrompt: () =>
     set({ debugBundleNotePrompt: null }, false, 'uiShell/closeDebugBundleNotePrompt'),
+
+  // Recording-note prompt (plan §7b). Opened AFTER the reserve IPC has already
+  // written the `reserved` marker and returned the noteId — the payload just
+  // carries what the fill step needs (sessionId + noteId) plus a title for the
+  // modal chrome. Closing WITHOUT submitting is fine and intentional: the
+  // reserved marker stays in the recording as a bare "something happened here"
+  // flag even if the operator never types a description.
+  openRecordingNotePrompt: payload =>
+    set({ recordingNotePrompt: payload }, false, 'uiShell/openRecordingNotePrompt'),
+  closeRecordingNotePrompt: () =>
+    set({ recordingNotePrompt: null }, false, 'uiShell/closeRecordingNotePrompt'),
 
   openViewPrompts: sessionId =>
     set({ viewPromptsSessionId: sessionId }, false, 'uiShell/openViewPrompts'),

@@ -8,6 +8,8 @@ import { stripLineNumberPrefix } from '@renderer/features/feed/lib/helpers'
 import { CodeRenderContext, ToolUseIndexContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
+import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
+import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
@@ -167,6 +169,15 @@ export const ToolResultRow = memo(function ToolResultRow({
         />
       </MarkerRow>
     )
+  }
+
+  // JSON-shaped results (MCP envelope / plain JSON) get a collapsed
+  // pretty rendering instead of an escaped one-liner (residue plan P1).
+  // tryExtractJson returns null for anything not JSON-shaped, so this
+  // can never make a result LESS readable than the truncation below.
+  const parsedJson = tryExtractJson(trimmed)
+  if (parsedJson !== null && typeof parsedJson === 'object') {
+    return <JsonResultSlab value={parsedJson} isError={isError} />
   }
 
   // Everything else — Bash, Glob, LS, tool errors — truncates to the

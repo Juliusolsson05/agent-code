@@ -165,6 +165,11 @@ export type CommandContext = {
     proxyDebugPanelOpen: boolean
     htmlDebugPanelOpen: boolean
     devDebugEnabled: boolean
+    /** AGENT_CODE_SESSION_RECORD (AND dev-debug) — whether continuous session
+     *  recording is on. Gates the Attach-Recording-Note command (plan §7b) so
+     *  it only surfaces when there is a recording to annotate. Mirrors the
+     *  main-process DevDebugConfig.sessionRecordingEnabled value. */
+    sessionRecordingEnabled: boolean
     devDebugPanelOpen: boolean
     agentStatusPanelOpen: boolean
     performancePanelOpen: boolean

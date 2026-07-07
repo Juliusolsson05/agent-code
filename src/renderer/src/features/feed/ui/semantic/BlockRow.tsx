@@ -1,3 +1,6 @@
+import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
+import { JsonToolRow, SLAB_MAX_CHARS } from '@providers/shared/renderer/rows/JsonToolRow'
+import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { memo } from 'react'
 
 import {
@@ -44,6 +47,19 @@ function extractClosedJsonString(raw: string, key: string): string | null {
   } catch {
     return null
   }
+}
+
+// Cap any pretty-printed JSON slab on the LIVE path the same way JsonToolRow
+// caps its committed slabs. WHY: these two call sites stringify tool output /
+// parsed input straight into the DOM every render while the block streams. An
+// unbounded payload (a whole-file read result, a giant orchestration graph) is
+// the O(bytes²) highlight/paint trap on the hottest path in the feed. We reuse
+// JsonToolRow's exported SLAB_MAX_CHARS instead of a fresh magic number so the
+// live and committed previews truncate identically (they used to only be
+// capped on the committed side, so a live row could balloon).
+function cappedJson(value: unknown): string {
+  const json = JSON.stringify(value, null, 2)
+  return json.length > SLAB_MAX_CHARS ? `${json.slice(0, SLAB_MAX_CHARS)}\n…` : json
 }
 
 // [#285] Build the committed Edit/MultiEdit input object from a live semantic
@@ -258,6 +274,15 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     if (liveTool.name === 'write_stdin') {
       return <CodexWriteStdinRow block={liveTool} />
     }
+    // Parse-gated convergence with the committed fallback (residue plan
+    // P1): a fully-parsed live payload renders through the same shared
+    // JsonToolRow the committed row will use; raw/partial payloads keep
+    // CodexToolRow's degraded look until the JSON completes. THIN glue on
+    // purpose — this whole bypass dies at Stage 3.
+    const liveInput = liveTool.input as Record<string, unknown> | null
+    if (liveInput && !('raw' in liveInput)) {
+      return <JsonToolRow block={liveTool} live />
+    }
     return <CodexToolRow block={liveTool} />
   }
 
@@ -277,7 +302,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         ? raw
         : raw === undefined
           ? '(no output)'
-          : JSON.stringify(raw, null, 2)
+          : cappedJson(raw)
     return (
       <MarkerRow marker="⎿" tone="muted">
         <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 max-h-[360px] overflow-auto">
@@ -510,6 +535,26 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
                 highlight={false}
               />
             </div>
+          ) : block.parsedInput && block.inputJsonValid !== false ? (
+            // Parse-gated pretty params (residue plan P1). Partial JSON
+            // keeps the raw stream below — pretty-printing half a JSON
+            // string is worse than showing it verbatim.
+            <MarkerRow marker="⎿" tone="muted">
+              <details className="text-[12px]">
+                <summary className="cursor-pointer text-ink-dim select-none">
+                  {Object.keys(block.parsedInput).length} param
+                  {Object.keys(block.parsedInput).length === 1 ? '' : 's'}
+                </summary>
+                <div className="mt-1">
+                  <CodeBlock
+                    code={cappedJson(block.parsedInput)}
+                    language="json"
+                    codeId={`live-tool-input:${block.blockIndex}`}
+                    highlight={false}
+                  />
+                </div>
+              </details>
+            </MarkerRow>
           ) : (
             <MarkerRow marker="⎿" tone="muted">
               <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
@@ -525,17 +570,25 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
             </MarkerRow>
           ) : null}
           {hasResult ? (
-            <MarkerRow marker="⎿" tone="muted">
-              <pre
-                className={`
-                  font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-                  max-h-[360px] overflow-auto
-                  ${block.resultIsError ? 'text-danger' : 'text-ink-dim'}
-                `}
-              >
-                {block.resultContent || '(empty result)'}
-              </pre>
-            </MarkerRow>
+            (() => {
+              const parsed = block.resultContent ? tryExtractJson(block.resultContent) : null
+              if (parsed !== null && typeof parsed === 'object') {
+                return <JsonResultSlab value={parsed} isError={block.resultIsError === true} />
+              }
+              return (
+                <MarkerRow marker="⎿" tone="muted">
+                  <pre
+                    className={`
+                      font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
+                      max-h-[360px] overflow-auto
+                      ${block.resultIsError ? 'text-danger' : 'text-ink-dim'}
+                    `}
+                  >
+                    {block.resultContent || '(empty result)'}
+                  </pre>
+                </MarkerRow>
+              )
+            })()
           ) : null}
         </div>
       </MarkerRow>
