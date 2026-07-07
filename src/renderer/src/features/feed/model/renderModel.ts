@@ -259,6 +259,29 @@ function debugRowsForItems(items: FeedRenderItem[], provider: AgentProvider): De
   }))
 }
 
+/**
+ * Build a FeedRenderModel from an externally-decided item list — the
+ * AGENT_CODE_RENDER_PIPELINE=1 entry point (rendering-rewrite Stage 3).
+ * The new ownership-ledger pipeline (src/renderer/src/rendering/) decides
+ * visibility/ownership/order and hands Feed pre-ordered FeedRenderItems
+ * via the view bridge; this wrapper only derives the two side products
+ * Feed's downstream consumers read (visibleDecisions for the debug panel,
+ * debugRows for the RENDER feed-debug stream). No sorting happens here —
+ * the ledger's order IS the order (the bridge engineers item.order so the
+ * legacy sorter would be a no-op anyway, but not re-sorting keeps the
+ * invariant visible in the code).
+ */
+export function feedRenderModelFromItems(
+  items: FeedRenderItem[],
+  provider: AgentProvider,
+): FeedRenderModel {
+  const visibleDecisions: VisibleDecision[] = []
+  for (const item of items) {
+    if (item.type === 'entry') visibleDecisions.push(item.visibleDecision)
+  }
+  return { items, visibleDecisions, debugRows: debugRowsForItems(items, provider) }
+}
+
 export function deriveFeedRenderModel({
   provider,
   entries,

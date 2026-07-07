@@ -31,6 +31,8 @@ export type DevDebugConfig = {
   /** AGENT_CODE_RENDER_SHADOW=1 — rendering-rewrite Stage 2 shadow mode.
    *  Mirrors src/main/ipc/devDebug.ts (the source of truth). */
   renderShadowEnabled: boolean
+  /** AGENT_CODE_RENDER_PIPELINE=1 — Stage 3 cutover flag. */
+  renderPipelineEnabled: boolean
 }
 
 // Caffeinate payloads now live in @shared/types/caffeinate so main can own

@@ -32,6 +32,7 @@ import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileL
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { useRenderShadow } from '@renderer/rendering/shadow/useRenderShadow'
+import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to
@@ -272,6 +273,12 @@ export function TileLeaf({
   // not the ghost-folded mergedEntries below.
   useRenderShadow(runtime, provider, sessionId)
 
+  // Rendering-rewrite Stage 3 cutover: when AGENT_CODE_RENDER_PIPELINE=1,
+  // the ownership-ledger pipeline decides Feed's item list and Feed's own
+  // derivation is bypassed. Null when the flag is off — Feed then behaves
+  // byte-identically to before this prop existed.
+  const ledgerFeedItems = useLedgerFeedItems(runtime, provider, sessionId)
+
   const mergedEntries = useMemo(
     () => selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null),
     [
@@ -476,6 +483,7 @@ export function TileLeaf({
           flex cell sizing; the scroller is a child. */}
       <div className="flex-1 min-h-0">
         <Feed
+          renderItemsOverride={ledgerFeedItems}
           sessionId={sessionId}
           provider={provider}
           workspaceRoot={workspace.state.sessions[sessionId]?.cwd ?? null}

@@ -40,6 +40,7 @@ import {
 import {
   deriveFeedCommittedProjection,
   deriveFeedRenderModel,
+  feedRenderModelFromItems,
   type FeedRenderItem,
 } from '@renderer/features/feed/model/renderModel'
 import { SemanticStreamingTurn } from '@renderer/features/feed/ui/semantic'
@@ -117,6 +118,16 @@ type Props = {
   /** Which provider's row renderers to use. Default 'claude'. */
   provider?: AgentProvider
   entries: Entry[]
+  /**
+   * Rendering-rewrite Stage 3 (AGENT_CODE_RENDER_PIPELINE=1): pre-decided,
+   * pre-ordered items from the ownership-ledger pipeline's view bridge.
+   * When present, Feed's own deriveFeedRenderModel is BYPASSED — the
+   * ledger already made every visibility/ownership/order decision, and
+   * re-deriving here would reintroduce the second decision-maker the
+   * rewrite exists to kill. Null/undefined = legacy path, byte-identical
+   * behavior.
+   */
+  renderItemsOverride?: FeedRenderItem[] | null
   // NOTE: the `activityStatus` prop was removed (feed audit Deletion Candidate
   // 1). It was declared and destructured but never read inside Feed — once
   // `streamPhase` took over the in-feed WorkIndicator, the spinner verb text
@@ -268,6 +279,7 @@ function FeedImpl({
   sessionId,
   provider = 'claude',
   entries,
+  renderItemsOverride = null,
   streamPhase = 'idle',
   streamPhasePendingToolName = null,
   streamPhasePendingToolUseId = null,
@@ -761,6 +773,9 @@ function FeedImpl({
 
   const renderModel = useMemo(() => {
     const startedAt = performance.now()
+    if (renderItemsOverride) {
+      return feedRenderModelFromItems(renderItemsOverride, provider)
+    }
     const model = deriveFeedRenderModel({
       provider,
       committed: committedProjection,
@@ -789,6 +804,7 @@ function FeedImpl({
     entries,
     committedProjection,
     provider,
+    renderItemsOverride,
     semanticHistory,
     semanticTurn,
     sessionId,
