@@ -11,6 +11,11 @@ export type DevDebugConfig = {
    *  flag is exactly as temporary as the shadow itself — both are
    *  DELETE-fated at Stage 3 cutover. */
   renderShadowEnabled: boolean
+  /** AGENT_CODE_RENDER_PIPELINE=1 — Stage 3 of the rendering rewrite:
+   *  Feed paints from the ownership-ledger pipeline's view bridge instead
+   *  of deriveFeedRenderModel. Same temporary-channel rationale as the
+   *  shadow flag above; the flag dies when the pipeline becomes default. */
+  renderPipelineEnabled: boolean
 }
 
 function envFlag(name: string): boolean {
@@ -33,6 +38,7 @@ export function registerDevDebugIpc(): void {
       // Vite-prefixed renderer variable or rebuild-time config.
       enabled: isDevDebugEnabled(),
       renderShadowEnabled: envFlag('AGENT_CODE_RENDER_SHADOW'),
+      renderPipelineEnabled: envFlag('AGENT_CODE_RENDER_PIPELINE'),
     }
   })
 
