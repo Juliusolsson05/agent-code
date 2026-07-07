@@ -328,3 +328,55 @@ describe('task-notification carve-out (residue plan P0b — cutover blocker)', (
     expect(c?.toolUseId).toBeUndefined()
   })
 })
+
+describe('sidechain (subagent) entry filtering (issue #477 — feed leak)', () => {
+  // Claude interleaves a subagent's OWN turns into the PARENT transcript
+  // tagged isSidechain:true. Their activity already renders inside the Task
+  // card (watcher channel); painting them as main-feed rows is duplication.
+  // These tests encode the FIX: sidechain entries must be rejected with
+  // 'sidechain-filtered', and their inner tools must NOT be mined as
+  // committed-owned (which would suppress the parent's real live tools).
+  const sidechainAssistant = {
+    uuid: 'sc-a1',
+    type: 'assistant',
+    isSidechain: true,
+    timestamp: TS,
+    message: {
+      id: 'msg_sc',
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'Let me read the key files.' },
+        { type: 'tool_use', id: 'toolu_sc', name: 'Read', input: { file_path: '/x.ts' } },
+      ],
+    },
+  }
+
+  it('rejects a sidechain assistant turn instead of painting it in the main feed', () => {
+    const { candidates, decisions } = collectCommittedCandidates(
+      [sidechainAssistant],
+      'claude',
+      's1',
+    )
+    expect(candidates.find(c => c.id === 'entry:sc-a1')).toBeUndefined()
+    const d = decisions.find(x => x.candidateId === 'entry:sc-a1')
+    expect(d?.selected).toBe(false)
+    expect(d?.reason).toBe('sidechain-filtered')
+  })
+
+  it('does NOT mine a sidechain turn\'s inner tools as committed-owned', () => {
+    const { candidates } = collectCommittedCandidates([sidechainAssistant], 'claude', 's1')
+    const ownership = buildCommittedOwnership(candidates)
+    // toolu_sc belongs to the subagent — it must not suppress a parent live
+    // tool block that happens to share nothing, and must not be claimed here.
+    expect(ownership.toolUseIds.has('toolu_sc')).toBe(false)
+  })
+
+  it('a normal (non-sidechain) assistant turn still paints', () => {
+    const { candidates } = collectCommittedCandidates(
+      [{ ...sidechainAssistant, uuid: 'normal', isSidechain: false }],
+      'claude',
+      's1',
+    )
+    expect(candidates.find(c => c.id === 'entry:normal')).toBeDefined()
+  })
+})
