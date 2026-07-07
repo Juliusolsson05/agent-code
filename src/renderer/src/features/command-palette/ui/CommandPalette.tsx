@@ -130,6 +130,7 @@ type Props = {
   proxyDebugPanelOpen: boolean
   htmlDebugPanelOpen: boolean
   devDebugEnabled: boolean
+  sessionRecordingEnabled: boolean
   devDebugPanelOpen: boolean
   agentStatusPanelOpen: boolean
   performancePanelOpen: boolean
@@ -198,6 +199,7 @@ export function CommandPalette({
   proxyDebugPanelOpen,
   htmlDebugPanelOpen,
   devDebugEnabled,
+  sessionRecordingEnabled,
   devDebugPanelOpen,
   agentStatusPanelOpen,
   performancePanelOpen,
@@ -435,6 +437,7 @@ export function CommandPalette({
         proxyDebugPanelOpen,
         htmlDebugPanelOpen,
         devDebugEnabled,
+        sessionRecordingEnabled,
         devDebugPanelOpen,
         agentStatusPanelOpen,
         performancePanelOpen,
@@ -510,6 +513,7 @@ export function CommandPalette({
       proxyDebugPanelOpen,
       htmlDebugPanelOpen,
       devDebugEnabled,
+      sessionRecordingEnabled,
       devDebugPanelOpen,
       agentStatusPanelOpen,
       performancePanelOpen,

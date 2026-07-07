@@ -21,7 +21,14 @@ import type { RenderSourcePlane, UnknownBehavior } from '@renderer/rendering/mod
 // ---------------------------------------------------------------------------
 
 const PREVIEW_MAX = 80
-const SENSITIVE_KEY = /authorization|api[-_]?key|token|secret|cookie|password/i
+// Exported as the SINGLE source of truth for "which object keys carry a
+// secret." `shapePathsOf` uses it to keep secret KEY NAMES out of shape
+// paths; the session-recording redactor (rendering/replay/redact.ts) uses
+// the exact same regex to strip secret VALUES from a recording before it can
+// be checked in, and the extraction script's hard gate scans for the same.
+// One regex means a recording can never leak a key shape the unknown registry
+// would have hidden — the redaction surfaces stay in lockstep.
+export const SENSITIVE_KEY = /authorization|api[-_]?key|token|secret|cookie|password/i
 
 /** Deterministic, dependency-free FNV-1a — identity for dedupe/counting,
  *  NOT cryptographic. Collisions merely merge two counters. */

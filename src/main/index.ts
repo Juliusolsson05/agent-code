@@ -528,6 +528,7 @@ async function startApp(): Promise<void> {
     ghostJournals,
     dictationDebugJournals,
     pasteDebugJournals,
+    sessionRecorders,
     worktreeActivityIndex,
     orchestrationBridge,
     aiWorkspaceRegistry,

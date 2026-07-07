@@ -2,6 +2,7 @@ import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKin
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
+import { runAttachRecordingNoteCommand } from '@renderer/features/debug/attachRecordingNote'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCommand'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
@@ -753,6 +754,32 @@ export const sessionCommands: CommandDef[] = [
       // pane, not the palette) is visible right after trigger.
       ui.closePalette()
       void runSaveDebugBundleCommand(workspace)
+    },
+  },
+  {
+    // Attach Recording Note (plan §7b). The recording-era "save debug logs":
+    // drops a timestamped bookmark into the LIVE session recording so a soak
+    // operator can flag the exact tick they reacted to without stopping the
+    // session. reserve-first (in runAttachRecordingNoteCommand) pins the
+    // reaction moment before the input even opens.
+    //
+    // Gated on flags.sessionRecordingEnabled: recording is doubly gated in
+    // main (dev-debug AND AGENT_CODE_SESSION_RECORD), and this flag mirrors
+    // that config value, so the command only appears when recording is
+    // actually on. The "is a recording active for THIS pane" refinement is
+    // enforced at run time: reserveRecordingNote returns null and the command
+    // toasts "no active recording" rather than pre-computing per-session
+    // recorder state into the palette flags on every keystroke.
+    id: 'attach-recording-note',
+    surface: 'debug',
+    title: 'Attach Recording Note',
+    description: '**What it does:** Drops a **timestamped note** into the focused pane\'s live session recording.\n\n**Use when:** You see a rendering bug during a recorded soak and want to mark the exact moment.\n\n**Notes:** Reserves the tick instantly, then prompts for text. Only available when session recording is enabled.',
+    keywords: ['recording', 'note', 'mark', 'bookmark', 'annotate', 'soak', 'session', 'record', 'tick', 'debug'],
+    when: ({ flags, workspace }) =>
+      flags.sessionRecordingEnabled && Boolean(commandTargetSessionId(workspace)),
+    run: ({ workspace, ui }) => {
+      ui.closePalette()
+      void runAttachRecordingNoteCommand(workspace)
     },
   },
   {

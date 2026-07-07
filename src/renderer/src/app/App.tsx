@@ -83,6 +83,7 @@ export default function App() {
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
   const debugBundleNotePrompt = useAppStore(state => state.debugBundleNotePrompt)
+  const recordingNotePrompt = useAppStore(state => state.recordingNotePrompt)
   const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const tiledDispatchPromptOpen = useAppStore(state => state.tiledDispatchPromptOpen)
@@ -122,6 +123,7 @@ export default function App() {
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
   const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
   const closeDebugBundleNotePrompt = useAppStore(state => state.closeDebugBundleNotePrompt)
+  const closeRecordingNotePrompt = useAppStore(state => state.closeRecordingNotePrompt)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
   const closeViewPrompts = useAppStore(state => state.closeViewPrompts)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
@@ -176,6 +178,10 @@ export default function App() {
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
   const [devDebugEnabled, setDevDebugEnabled] = useState(false)
+  // Mirrors DevDebugConfig.sessionRecordingEnabled so the command registry can
+  // gate Attach-Recording-Note (plan §7b). Read once alongside the dev-debug
+  // flag below.
+  const [sessionRecordingEnabled, setSessionRecordingEnabled] = useState(false)
   const [caffeinateStatus, setCaffeinateStatus] = useState<CaffeinateStatus | null>(null)
   const [caffeinateMessage, setCaffeinateMessage] = useState<string | null>(null)
 
@@ -195,10 +201,14 @@ export default function App() {
     let cancelled = false
     void window.api.getDevDebugConfig()
       .then(config => {
-        if (!cancelled) setDevDebugEnabled(config.enabled)
+        if (cancelled) return
+        setDevDebugEnabled(config.enabled)
+        setSessionRecordingEnabled(config.sessionRecordingEnabled)
       })
       .catch(() => {
-        if (!cancelled) setDevDebugEnabled(false)
+        if (cancelled) return
+        setDevDebugEnabled(false)
+        setSessionRecordingEnabled(false)
       })
     return () => {
       cancelled = true
@@ -892,6 +902,7 @@ export default function App() {
         proxyDebugPanelOpen={proxyDebugPanelOpen}
         htmlDebugPanelOpen={htmlDebugPanelOpen}
         devDebugEnabled={devDebugEnabled}
+        sessionRecordingEnabled={sessionRecordingEnabled}
         devDebugPanelOpen={devDebugPanelOpen}
         agentStatusPanelOpen={agentStatusPanelOpen}
         performancePanelOpen={performancePanelOpen}
@@ -1008,6 +1019,36 @@ export default function App() {
             err => {
               const message = err instanceof Error ? err.message : String(err)
               workspace.showPaneToast(prompt.sessionId, `debug note failed: ${message}`, 5000)
+            },
+          )
+        }}
+      />
+
+      {/* Attach-Recording-Note input (plan §7b). Reuses the debug-bundle note
+          modal with recording-specific labels. The `reserved` marker is
+          already written by the time this opens; onConfirm fills it. Cancel
+          leaves the reserved marker in place — a bare timestamp is still a
+          useful flag, so we do NOT delete it on skip. */}
+      <DebugBundleNotePrompt
+        open={recordingNotePrompt !== null}
+        heading="Attach Recording Note"
+        fieldLabel="Note"
+        placeholder="What did you see? (marks the exact recorded tick)"
+        title={recordingNotePrompt?.title ?? ''}
+        description=""
+        bundlePath=""
+        onCancel={closeRecordingNotePrompt}
+        onConfirm={note => {
+          const prompt = recordingNotePrompt
+          if (!prompt) return
+          const trimmed = note.trim()
+          closeRecordingNotePrompt()
+          if (!trimmed) return
+          void window.api.fillRecordingNote(prompt.sessionId, prompt.noteId, trimmed).then(
+            () => workspace.showPaneToast(prompt.sessionId, 'recording note attached', 3000),
+            err => {
+              const message = err instanceof Error ? err.message : String(err)
+              workspace.showPaneToast(prompt.sessionId, `recording note failed: ${message}`, 5000)
             },
           )
         }}

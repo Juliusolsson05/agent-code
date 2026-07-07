@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 
 import { readRecentPasteSessions } from '../pasteDebugJournal.js'
+import type { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 
 export type DevDebugConfig = {
   enabled: boolean
@@ -39,7 +40,12 @@ export function isSessionRecordingEnabled(): boolean {
   return isDevDebugEnabled() && envFlag('AGENT_CODE_SESSION_RECORD')
 }
 
-export function registerDevDebugIpc(): void {
+// `sessionRecorders` is null in a normal build (the manager is only
+// constructed when AGENT_CODE_DEV_DEBUG + AGENT_CODE_SESSION_RECORD are both
+// on — see main/index.ts). It is threaded in from the IPC deps rather than
+// imported as a singleton so the wiring stays visible at the registerAllIpc
+// call site, exactly like every other manager here.
+export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | null): void {
   ipcMain.handle('dev-debug:get-config', (): DevDebugConfig => {
     return {
       // WHY this flag lives in main instead of import.meta.env:
@@ -70,4 +76,39 @@ export function registerDevDebugIpc(): void {
     if (!isDevDebugEnabled()) return []
     return readRecentPasteSessions(typeof limit === 'number' ? limit : 30)
   })
+
+  // Attach-Recording-Note (plan §7b). The recording-era equivalent of "save
+  // debug logs": drop a timestamped bookmark into the LIVE recording stream so
+  // a soak operator can flag the exact tick they reacted to without stopping
+  // the session. Two phases, on purpose:
+  //   reserve → writes the `reserved` marker INSTANTLY (before the user types)
+  //             so the timestamp pins the reaction moment, not the moment they
+  //             finished typing (several ticks later). Returns the noteId.
+  //   fill    → updates that noteId with the typed text on submit.
+  // A crash between the two still leaves the reserved line, which alone flags
+  // "something was wrong here" — the same two-phase crash-safety the ghost
+  // journal uses.
+  //
+  // Both handlers are gated by isSessionRecordingEnabled(): the flag is the
+  // trust boundary (a recording captures full session input, so a renderer
+  // with preload access must not reach the recorder unless the operator opted
+  // in), AND sessionRecorders is null unless recording was gated on at
+  // construction — so these are double-safe no-ops in a normal build. A null
+  // recorder (or a sessionId with no active recording) returns null from
+  // reserve; the renderer treats that as "nothing to annotate" and shows a
+  // toast rather than opening the note input.
+  ipcMain.handle(
+    'record-session:reserve-note',
+    (_evt, sessionId: string): string | null => {
+      if (!isSessionRecordingEnabled()) return null
+      return sessionRecorders?.reserveNote(sessionId) ?? null
+    },
+  )
+  ipcMain.handle(
+    'record-session:fill-note',
+    (_evt, sessionId: string, noteId: string, text: string): void => {
+      if (!isSessionRecordingEnabled()) return
+      sessionRecorders?.fillNote(sessionId, noteId, text)
+    },
+  )
 }
