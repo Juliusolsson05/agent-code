@@ -28,12 +28,47 @@ parity tests) and six end-to-end fixtures: buried-prompt-239,
 dead-committed-channel-159, opencode-interleave-87f0eeef, the ghost matrix,
 sidecar-tail-ghost, and queue-handoff-race (#437). Suite: 67 pipeline tests.
 
-**Stage 1 is COMPLETE.** Next: Stage 2 shadow wiring — call the adapter +
-ledger beside the legacy renderer behind `AGENT_CODE_RENDER_SHADOW=1`, diff
-outputs, divergences become fixtures. (Unknowns plumbing note: the registry
-exists and `LedgerInput.unknowns` passes through; POPULATING it from real
-IPC events is inherently a Stage 2 concern — unknowns are discovered at the
-shadow seam, not in fixtures.)
+**Stage 1 is COMPLETE.** (Unknowns plumbing note: the registry exists and
+`LedgerInput.unknowns` passes through; POPULATING it from real IPC events
+is a shadow-seam concern — unknowns are discovered live, not in fixtures.)
+
+### Stage 2/3 progress (updated 2026-07-07, through PR #447)
+
+Landed since the Stage 1 wrap (slices 12-17 + triage, PRs #439-#447):
+- **Shadow mode** (#439): `AGENT_CODE_RENDER_SHADOW=1` runs adapter+ledger
+  beside the legacy renderer in TileLeaf; `shadow/shadowDiff.ts` normalizes
+  both to comparable units (rows by id, turns by turnId); divergences land
+  on `globalThis.__agentCodeRenderShadow` (ring of 50) + one console.warn
+  per signature. Shadow parity suite (#441) runs the same diff in CI.
+- **Bundle corpus** (#444-#445, #447): 46 fixtures extracted from the
+  manual debug-bundle archive (`scripts/extract-rendering-fixtures.mjs`,
+  triage rules in `scripts/triage-rendering-fixtures.mjs`) — each is a
+  real captured rendering failure with the legacy renderer's ACTUAL
+  painted rows as ground truth. `bundleCorpus.test.ts` asserts the diff
+  matches checked-in triage exactly (bless via AGENT_CODE_CORPUS_BLESS=1).
+  State: 0 untriaged. Corpus catches so far: opencode blockless-text turns
+  invisible (fixed #444); system/compact_boundary rows dropped (fixed
+  #445); committed tool-ownership mining gap + dangling tool chip
+  (confirmed #447, fixes queued).
+- **View bridge** (#443): `view/ledgerFeedItems.ts` maps ledger rows to
+  legacy FeedRenderItems — cutover swaps the decision core, row components
+  survive. **Cutover flag** (#446): `AGENT_CODE_RENDER_PIPELINE=1` makes
+  Feed paint from the ledger via `renderItemsOverride`; flag off is
+  byte-identical legacy.
+
+**Soak instructions (the current gate):** run daily work on this branch
+with `AGENT_CODE_RENDER_PIPELINE=1 AGENT_CODE_RENDER_SHADOW=1` across all
+three providers. Watch for `[render-shadow] divergence` and
+`[render-pipeline] dropped candidates` in the console; every divergence
+class gets triaged into the corpus. Exit = a week of real use with no
+untriaged class.
+
+Remaining before the main merge: the two #447-confirmed collector fixes
+(committed tool-ownership mining; dangling tool chip), extractor v2
+(codex rollout→Entry mapping unlocks the 122 extraction-gap verdicts),
+the soak above, then the final cutover slice — SemanticStreamingTurn +
+ghost rule 3 deleted atomically, deletion-manifest grep sweep, flag
+default-on — and the reviewed integration→main PR (draft #442).
 
 ---
 
