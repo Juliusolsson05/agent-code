@@ -144,6 +144,18 @@ export const Block = memo(function Block({
         return <TaskSubagentRow block={tu} />
       }
 
+      if (tu.name === 'AskUserQuestion') {
+        // Committed-plane question rendering (P2d): questions + verbatim
+        // answer from the paired result. The LIVE picker (semantic plane)
+        // owns the interaction; this is the durable record of it.
+        return (
+          <AskUserQuestionAnsweredRow
+            block={tu}
+            result={toolResultIndex.get(tu.id) ?? null}
+          />
+        )
+      }
+
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
       // Shared fallback is the generic JSON tool row (residue plan P1):
       // it degrades to the old ToolUseRow look for headline-only inputs

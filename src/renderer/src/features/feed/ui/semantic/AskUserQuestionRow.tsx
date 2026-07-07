@@ -11,6 +11,11 @@ import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContex
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import type { ConditionCustomAction } from '@shared/types/providerConditions'
 import { asRecord } from '@shared/lib/asRecord'
+import {
+  readAskQuestions,
+  type AskOption,
+  type AskQuestion,
+} from '@renderer/features/feed/lib/askUserQuestion'
 
 // Native in-feed renderer for Claude Code's `AskUserQuestion` tool.
 //
@@ -73,58 +78,12 @@ type SemanticLiveBlock = SemanticLiveTurn['blocks'][number]
 // event has arrived yet), which must degrade to the "Question loading…"
 // placeholder rather than throw. Every field is still narrowed at read
 // time so an unexpected/malformed payload also degrades gracefully.
-type AskOption = {
-  label: string
-  description?: string
-  preview?: string
-}
-
-type AskQuestion = {
-  question: string
-  header?: string
-  multiSelect?: boolean
-  options: AskOption[]
-}
 
 function isFreeTextOption(option: AskOption): boolean {
   const label = option.label.trim().toLowerCase()
   return label === 'type something' || label === 'other'
 }
 
-// Narrow the loosely-typed `parsedInput` into the questions we know how
-// to render. Returns [] when nothing usable has streamed yet so the
-// caller can show a compact placeholder instead of an empty card.
-function readQuestions(parsedInput: Record<string, unknown> | undefined): AskQuestion[] {
-  const questionsRaw = parsedInput?.questions
-  if (!Array.isArray(questionsRaw)) return []
-
-  const questions: AskQuestion[] = []
-  for (const q of questionsRaw) {
-    const rec = asRecord(q)
-    if (!rec) continue
-    const question = typeof rec.question === 'string' ? rec.question : ''
-    const header = typeof rec.header === 'string' ? rec.header : undefined
-    const multiSelect = rec.multiSelect === true
-    const optionsRaw = Array.isArray(rec.options) ? rec.options : []
-    const options: AskOption[] = []
-    for (const o of optionsRaw) {
-      const orec = asRecord(o)
-      if (!orec) continue
-      const label = typeof orec.label === 'string' ? orec.label : ''
-      if (!label) continue
-      options.push({
-        label,
-        description: typeof orec.description === 'string' ? orec.description : undefined,
-        preview: typeof orec.preview === 'string' ? orec.preview : undefined,
-      })
-    }
-    // A question with no parsed options yet isn't answerable; skip it so
-    // we keep showing the placeholder rather than an empty option list.
-    if (!question && options.length === 0) continue
-    questions.push({ question, header, multiSelect, options })
-  }
-  return questions
-}
 
 export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   // sessionId is obtained the SAME way every other feed row gets it: via
@@ -162,7 +121,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   // `true` and bails. It is reset only for structured/rejected failures.
   const submittedRef = useRef(false)
 
-  const questions = readQuestions(block.parsedInput)
+  const questions = readAskQuestions(block.parsedInput)
   const pickerKnownGone = liveAskUserQuestion === null
 
   if (questions.length === 0) {
