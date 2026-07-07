@@ -67,6 +67,30 @@ function entryTimestampMs(e: RawCommittedEntry): number | null {
   return null
 }
 
+/** Mine block-grain tool ownership evidence from a committed entry's
+ *  content array. Claude shape (opencode's mapper emits it too): assistant
+ *  entries carry tool_use blocks with `id`; user entries carry tool_result
+ *  blocks with `tool_use_id`. Codex rollout entries mapped through the
+ *  same shape ride along for free. */
+function minedToolIds(e: RawCommittedEntry): {
+  toolUse: string[]
+  toolResult: string[]
+} {
+  const toolUse: string[] = []
+  const toolResult: string[] = []
+  const c = e.message?.content
+  if (Array.isArray(c)) {
+    for (const b of c) {
+      const block = b as { type?: unknown; id?: unknown; tool_use_id?: unknown }
+      if (block?.type === 'tool_use' && typeof block.id === 'string') toolUse.push(block.id)
+      if (block?.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+        toolResult.push(block.tool_use_id)
+      }
+    }
+  }
+  return { toolUse, toolResult }
+}
+
 function textOf(e: RawCommittedEntry): string | null {
   const c = e.message?.content
   if (typeof c === 'string') return c
@@ -155,6 +179,7 @@ export function collectCommittedCandidates(
     }
 
     const text = textOf(e)
+    const mined = minedToolIds(e)
     candidates.push({
       id,
       owner: 'committed',
@@ -173,6 +198,8 @@ export function collectCommittedCandidates(
       // reconciliation: the committed user row owns its optimistic stand-in
       // by normalized text (marker+text, never tail position).
       normalizedTextKey: text ? normalizeTextKey(text) : undefined,
+      ownedToolUseIds: mined.toolUse.length > 0 ? mined.toolUse : undefined,
+      ownedToolResultIds: mined.toolResult.length > 0 ? mined.toolResult : undefined,
     })
     decisions.push({ candidateId: id, selected: true, reason: 'selected', evidence: [] })
   })

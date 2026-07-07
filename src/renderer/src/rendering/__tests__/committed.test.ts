@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildCommittedOwnership,
+  decideLiveCandidate,
+  SUPPRESSION_POLICY,
+} from '@renderer/rendering/model/ownership'
+import type { RenderCandidate } from '@renderer/rendering/model/types'
+
+import {
   collectCommittedCandidates,
   normalizeTextKey,
   type RawCommittedEntry,
@@ -103,5 +110,83 @@ describe('committed collector: visibility (#338, meta, non-conversation)', () =>
       's1',
     )
     expect(candidates[0].id).toBe('entry:ingest-0')
+  })
+})
+
+describe('block-grain tool ownership mining (corpus new-bug fix)', () => {
+  it('mines tool_use ids from assistant entries and tool_result ids from user entries', () => {
+    const { candidates } = collectCommittedCandidates(
+      [
+        {
+          uuid: 'a-tools',
+          type: 'assistant',
+          timestamp: TS,
+          message: {
+            id: 'msg_t',
+            role: 'assistant',
+            content: [
+              { type: 'text', text: 'running two tools' },
+              { type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} },
+              { type: 'tool_use', id: 'toolu_2', name: 'Bash', input: {} },
+            ],
+          },
+        },
+        {
+          uuid: 'u-result',
+          type: 'user',
+          timestamp: TS,
+          permissionMode: 'default',
+          message: {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }],
+          },
+        },
+      ],
+      'claude',
+      's1',
+    )
+    expect(candidates.find(c => c.id === 'entry:a-tools')?.ownedToolUseIds).toEqual(['toolu_1', 'toolu_2'])
+    expect(candidates.find(c => c.id === 'entry:u-result')?.ownedToolResultIds).toEqual(['toolu_1'])
+  })
+
+  it('mined evidence populates ownership sets so live tool blocks yield (the duplicate-tool-card class)', () => {
+    const { candidates } = collectCommittedCandidates(
+      [
+        {
+          uuid: 'a-tools',
+          type: 'assistant',
+          timestamp: TS,
+          message: {
+            id: 'msg_t',
+            role: 'assistant',
+            content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }],
+          },
+        },
+      ],
+      'claude',
+      's1',
+    )
+    const ownership = buildCommittedOwnership(candidates)
+    expect(ownership.toolUseIds.has('toolu_1')).toBe(true)
+
+    // The live twin of that tool block must now be rejected — before this
+    // fix, claude committed candidates never exposed tool ids and this
+    // decision came back selected (duplicate AskUserQuestion capture).
+    const live: RenderCandidate = {
+      id: 'sem:msg_t:1',
+      owner: 'semantic-current',
+      provider: 'claude',
+      sourcePlane: 'semantic',
+      sessionId: 's1',
+      turnId: 'msg_t',
+      blockIndex: 1,
+      toolUseId: 'toolu_1',
+      contentKind: 'tool-use',
+      timestampMs: TS_MS,
+      sequence: 0,
+    }
+    const d = decideLiveCandidate(live, ownership, SUPPRESSION_POLICY.claude)
+    expect(d.selected).toBe(false)
+    expect(d.reason).toBe('committed-tool-use-owned')
   })
 })
