@@ -59,6 +59,13 @@ export type SessionTranscript = {
    *  the jsonl/semantic channels. Dropping it entirely was a review
    *  finding: those states rendered as a blank feed. */
   screenText: string
+  /** Why the last backfill attempt failed, or null. Shown by SessionView
+   *  when the TUI-text fallback is on screen — a silent fallback is
+   *  indistinguishable from the pre-semantic-rendering UI, which cost a
+   *  real debugging session ("still just dumping the raw terminal?") when
+   *  the phone was actually talking to an outdated backend. Benign
+   *  no-transcript-yet failures are not recorded. */
+  historyError: string | null
   exited: boolean
   hasOlderHistory: boolean
   loadingOlderHistory: boolean
@@ -110,6 +117,7 @@ function emptyTranscript(): SessionTranscript {
     conditions: null,
     workingStatus: null,
     screenText: '',
+    historyError: null,
     exited: false,
     hasOlderHistory: false,
     loadingOlderHistory: false,
@@ -231,7 +239,14 @@ export class TranscriptStore {
     if (!result.ok) {
       // "No transcript yet" is normal for a brand-new session — live frames
       // will populate the feed and their arrival retries the backfill.
-      this.mutate(sessionId, t => ({ ...t, loadingOlderHistory: false }))
+      // Anything ELSE (unknown message type on an old backend, disk error,
+      // timeout) is surfaced so the fallback view can explain itself.
+      const benign = /no transcript/i.test(result.error)
+      this.mutate(sessionId, t => ({
+        ...t,
+        loadingOlderHistory: false,
+        historyError: benign ? null : result.error,
+      }))
       return
     }
     if (this.chunkFileConflicts(state, result.chunk.file)) {
@@ -254,6 +269,7 @@ export class TranscriptStore {
     this.mutate(sessionId, t => ({
       ...t,
       loadingOlderHistory: false,
+      historyError: null,
       // Desktop guard (history.ts): a chunk with more history but NO usable
       // marker cannot be paged — advertising the affordance would render a
       // permanently dead control.
