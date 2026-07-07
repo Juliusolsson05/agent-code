@@ -3,6 +3,7 @@ import { EventEmitter } from 'events'
 import { performance } from 'perf_hooks'
 
 import { getMainProvider } from '@providers/registry.main.js'
+import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 import { TerminalSession } from '@shared/runtime/terminalSession.js'
 // WHY the manager no longer imports ScreenSnapshot from
 // @providers/claude/runtime/claudeSession or JsonlEntry from
@@ -235,6 +236,47 @@ export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly spawningSessionIds = new Set<string>()
   private readonly lastActivityAt = new Map<string, number>()
+  // Latest per-session UI-state snapshots, cached at the emit sites below.
+  // WHY: consumers that attach mid-flight (the remote mobile companion's
+  // SessionFeedSource/RemoteServer — enabled long after sessions started —
+  // and any future late subscriber) would otherwise see nothing until the
+  // NEXT event: an idle agent redraws no screen, and a condition snapshot
+  // only re-emits on change, so a pending permission prompt raised before
+  // the subscriber existed would be invisible forever. Cost is one Map.set
+  // per event (a reference store, no clone); entries die with the session
+  // in cleanupSessionState.
+  private readonly lastScreenSnapshot = new Map<string, AgentScreenSnapshot>()
+  private readonly lastConditionsSnapshot = new Map<string, ProviderConditionSnapshot>()
+  // Durable transcript path per session, cached from the jsonl-entry relay.
+  // This is the one main-side key that unlocks history reads for a LIVE
+  // session: cwd is provider-constructor-private and the provider session id
+  // exists only inside the jsonl lines, but every entry event carries the
+  // file it was appended to. Consumed by the remote companion's get-history
+  // (see main/remote/RemoteServer.ts); same lifetime as the snapshot caches.
+  //
+  // KNOWN STALENESS WINDOW: when the provider rolls to a new transcript
+  // (claude /clear, or a resume that mints a new provider session id → new
+  // jsonl path), this cache points at the PREVIOUS conversation's file until
+  // the new conversation writes its first durable line. Main has no earlier
+  // roll signal than that first entry. Consumers must therefore treat the
+  // served file as advisory: RemoteServer returns the file identity with
+  // every history chunk, and the phone's TranscriptStore discards a chunk
+  // whose file disagrees with the file its live frames carry.
+  private readonly lastTranscriptFile = new Map<string, string>()
+  // Spawn-time identity captured for LATE resolution. The transcript-file
+  // cache above starts empty every app run, but RESUMED sessions have a
+  // durable transcript on disk from the moment they spawn — main just needs
+  // {cwd, resumeSessionId} to re-derive its path via the provider resolver.
+  // Without this, the remote companion's history backfill returned nothing
+  // for every restored session until it wrote a NEW line (field bug: "still
+  // just dumping the raw terminal" after an app restart). cwd doubles as
+  // the human-readable workspace label for the remote session list — the
+  // 'started' event's projectDir is the TRANSCRIPT directory for Claude,
+  // not the workspace the user thinks of.
+  private readonly spawnInfo = new Map<
+    string,
+    { cwd: string; resumeSessionId: string | null }
+  >()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the
   // restored-agents-null bug can make a renderer spam writes against a stale id,
@@ -326,6 +368,13 @@ export class SessionManager extends EventEmitter {
     // the separate `removed` event so SessionManager does not import forwarder
     // internals.
     this.sessions.delete(sessionId)
+    // UI-state snapshot caches die with the session — replaying a dead
+    // session's screen/conditions to a late subscriber would present it as
+    // live (the exact stale-state bug the remote late-joiner replay had).
+    this.lastScreenSnapshot.delete(sessionId)
+    this.lastConditionsSnapshot.delete(sessionId)
+    this.lastTranscriptFile.delete(sessionId)
+    this.spawnInfo.delete(sessionId)
     // Keep lastActivityAt after removal. Process telemetry can be asked about a
     // pane the renderer still knows but whose PTY already exited; deleting this
     // tiny timestamp made those recently-exited panes look like they had never
@@ -367,6 +416,10 @@ export class SessionManager extends EventEmitter {
     // restart wake. This reservation makes "spawning" observable to every
     // concurrent caller without pretending the backend is ready yet.
     this.spawningSessionIds.add(sessionId)
+    this.spawnInfo.set(sessionId, {
+      cwd: options.cwd,
+      resumeSessionId: options.resumeSessionId ?? null,
+    })
     try {
     const spawnStartedAt = performance.now()
     performanceService.mark('session.spawn.start', {
@@ -480,10 +533,12 @@ export class SessionManager extends EventEmitter {
       })
       session.on('screen', (snap: AgentScreenSnapshot) => {
         this.markActivity(sessionId)
+        this.lastScreenSnapshot.set(sessionId, snap)
         this.emit('screen', { sessionId, ...snap })
       })
       session.on('jsonl-entry', (entry: AgentTranscriptEntry, file: string) => {
         this.markActivity(sessionId)
+        this.lastTranscriptFile.set(sessionId, file)
         this.emit('jsonl-entry', { sessionId, entry, file })
       })
       session.on('jsonl-error', (error: Error) => {
@@ -512,6 +567,7 @@ export class SessionManager extends EventEmitter {
       })
       session.on('conditions', (snapshot: ProviderConditionSnapshot) => {
         this.markActivity(sessionId)
+        this.lastConditionsSnapshot.set(sessionId, snapshot)
         this.emit('conditions', { sessionId, snapshot })
       })
       session.on('semantic-event', (event: unknown) => {
@@ -1133,6 +1189,65 @@ export class SessionManager extends EventEmitter {
   /** List all live session ids. Used for state save / debug. */
   list(): string[] {
     return Array.from(this.sessions.keys())
+  }
+
+  /** Latest screen snapshot observed for a live session, or null before the
+   *  first frame. See the cache fields' WHY comment — this exists for
+   *  late-attaching consumers (remote companion) to seed their state. */
+  getScreenSnapshot(sessionId: string): AgentScreenSnapshot | null {
+    return this.lastScreenSnapshot.get(sessionId) ?? null
+  }
+
+  /** Latest provider-conditions snapshot for a live session, or null if no
+   *  condition has ever been live. Same late-attach rationale as
+   *  getScreenSnapshot. */
+  getConditionsSnapshot(sessionId: string): ProviderConditionSnapshot | null {
+    return this.lastConditionsSnapshot.get(sessionId) ?? null
+  }
+
+  /** Durable transcript file for a live session, or null before the first
+   *  jsonl entry has been observed. See the cache field's WHY. */
+  getTranscriptFile(sessionId: string): string | null {
+    return this.lastTranscriptFile.get(sessionId) ?? null
+  }
+
+  /**
+   * Transcript file with a resume-aware fallback: when no jsonl entry has
+   * been observed THIS app run (the common state for every restored session
+   * right after a restart), a resumed session's transcript is re-derived
+   * from its spawn-time {cwd, resumeSessionId} through the same provider
+   * resolver history loading uses. Fresh sessions genuinely have no
+   * transcript until their first entry — null is correct for them.
+   */
+  async resolveTranscriptFile(sessionId: string): Promise<string | null> {
+    const observed = this.lastTranscriptFile.get(sessionId)
+    if (observed) return observed
+    const info = this.spawnInfo.get(sessionId)
+    const kind = this.getSessionKind(sessionId)
+    if (!info?.resumeSessionId || !kind || kind === 'terminal') return null
+    try {
+      return await resolveProviderTranscriptPath({
+        kind,
+        cwd: info.cwd,
+        providerSessionId: info.resumeSessionId,
+      })
+    } catch {
+      // Resolution is best-effort: a missing project dir or unreadable
+      // sessions root should degrade to "no history yet", not break the
+      // caller's reply path.
+      return null
+    }
+  }
+
+  /** Workspace cwd captured at spawn — the label a session list should
+   *  show (the 'started' event's projectDir is provider-internal). */
+  getSpawnCwd(sessionId: string): string | null {
+    return this.spawnInfo.get(sessionId)?.cwd ?? null
+  }
+
+  /** Epoch ms of the last observed activity (any relayed session event). */
+  getLastActivityAt(sessionId: string): number | null {
+    return this.lastActivityAt.get(sessionId) ?? null
   }
 
   /** Kill every live session. Called on app quit. */

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
 
 import type { DictationProviderId } from '@renderer/app-state/settings/types'
+import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { DictationStatus } from '@shared/types/dictation'
 import {
   resetDictationOverlay,
@@ -257,6 +258,11 @@ export function useComposerDictation({
   const [status, setStatus] = useState<DictationStatus>('idle')
   const [levels, setLevels] = useState<number[]>(EMPTY_LEVELS)
   const [hasTranscriptPreview, setHasTranscriptPreview] = useState(false)
+  // Terminal-sink dictation writes session input, which goes through the
+  // injected SessionFeed (not window.api) — see SessionFeed.ts for the WHY.
+  // The dictation DEBUG journal below stays on window.api on purpose: it is
+  // a desktop-only diagnostic channel, not session I/O.
+  const feed = useSessionFeed()
   const activeRef = useRef<ActiveRecording | null>(null)
   const inputRef = useRef(sink.kind === 'composer' ? sink.input : '')
   const sinkRef = useRef(sink)
@@ -319,7 +325,7 @@ export function useComposerDictation({
       // series of keystrokes. The STT wrapper contains newlines; sending it raw
       // can be interpreted as Enter by provider TUIs. Bracketed paste is the
       // existing safe path for multiline text into Claude/Codex terminals.
-      void window.api.sendInput(activeSink.sessionId, `\x1b[200~${next}\x1b[201~`)
+      void feed.sendInput(activeSink.sessionId, `\x1b[200~${next}\x1b[201~`)
     }
     // eslint-disable-next-line no-console
     console.debug('[dictation:write-input]', {
@@ -328,7 +334,10 @@ export function useComposerDictation({
       chars: next.length,
       lifecycle: statusRef.current,
     })
-  }, [])
+    // `feed` is identity-stable by construction (module const via context —
+    // see the WHY on useIpcSubscriptions), so this dep never re-creates the
+    // callback in practice; it's listed for hook-lint correctness.
+  }, [feed])
   const reportMessage = useCallback((message: string) => {
     onMessageRef.current(message)
   }, [])

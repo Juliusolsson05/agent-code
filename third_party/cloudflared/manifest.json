@@ -1,0 +1,21 @@
+{
+  "tool": "cloudflared",
+  "version": "2026.6.1",
+  "urlBase": "https://github.com/cloudflare/cloudflared/releases/download/{version}",
+  "archiveFormat": "tgz",
+  "executableInsideArchive": "cloudflared",
+  "platforms": {
+    "darwin-arm64": {
+      "filename": "cloudflared-darwin-arm64.tgz",
+      "sha256": "f6d4c439c6c782b83264951d327989ce5e23373acc5942b872411601fedb020d",
+      "bytes": 18958469,
+      "binarySha256": "ae6ee90188ae5833c687ce937c3693e28403677607c06c65a2ff2b6a022f50e4"
+    },
+    "darwin-x86_64": {
+      "filename": "cloudflared-darwin-amd64.tgz",
+      "sha256": "d7a66b525fe76820da6e5406611b61e48b40de682368ac00454d9158f085be4b",
+      "bytes": 20841218,
+      "binarySha256": "3f74d697045ecf56dd2fbeb42f59767ecdf4067c409d55f080563923e8a1bb32"
+    }
+  }
+}

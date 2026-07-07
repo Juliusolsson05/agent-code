@@ -32,6 +32,7 @@ export const createUiShellSlice: StateCreator<
   devDebugPanelOpen: false,
   agentStatusPanelOpen: false,
   performancePanelOpen: false,
+  remotePanelOpen: false,
   globalEditorOpen: false,
   promptSearchOpen: false,
   agentActivityOpen: false,
@@ -167,6 +168,12 @@ export const createUiShellSlice: StateCreator<
       state => ({ performancePanelOpen: !state.performancePanelOpen }),
       false,
       'uiShell/togglePerformancePanel',
+    ),
+  toggleRemotePanel: () =>
+    set(
+      state => ({ remotePanelOpen: !state.remotePanelOpen }),
+      false,
+      'uiShell/toggleRemotePanel',
     ),
 
   openGlobalEditor: () =>

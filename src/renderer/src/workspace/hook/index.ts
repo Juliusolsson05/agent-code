@@ -32,6 +32,7 @@ import {
   useTileTabsSanity,
 } from '@renderer/workspace/hook/invalidation/effects'
 import { useIpcSubscriptions } from '@renderer/workspace/hook/ipc/useIpcSubscriptions'
+import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { OrchestrationAgentRecord } from '@mcp/shared/orchestrationTypes'
 import {
   closeOrchestrationAgent,
@@ -442,7 +443,13 @@ export function useWorkspace(
   )
 
   // ---- Side-effects (subscriptions, persistence, invalidation) ----
-  useIpcSubscriptions(refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
+  // Session events arrive through whichever SessionFeed the app root mounted
+  // (desktop: ipcSessionFeed in app/main.tsx; remote client: its WebSocket
+  // feed; tests: FakeSessionFeed). The provider value is a module const, so
+  // identity is stable — which the subscription effect's dep array requires;
+  // see the WHY on useIpcSubscriptions.
+  const sessionFeed = useSessionFeed()
+  useIpcSubscriptions(sessionFeed, refs, setState, setRuntimes, updateRuntime, appendFeedDebug)
   useAutoSave(state, draftVersion, refs, bootstrapComplete)
   useBootstrap(
     refs,

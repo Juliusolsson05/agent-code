@@ -17,7 +17,13 @@ export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
   if (block.name === 'apply_patch') return <CodexApplyPatchRow block={block} />
   if (block.name === 'exec_command') return <CodexExecCommandRow block={block} />
   if (block.name === 'write_stdin') return <CodexWriteStdinRow block={block} />
-  return <CodexToolRow block={block} />
+  // Unknown names deliberately fall through to the SHARED fallback
+  // (JsonToolRow via Block.tsx) — the residue-plan P1 convergence. Codex
+  // used to claim everything with CodexToolRow, which is why its MCP /
+  // orchestration tools drifted into "name + one headline over a raw
+  // blob" while claude's fell to a different fallback with different
+  // gaps. One fallback, one behavior, all providers.
+  return undefined
 }
 
 export function renderCodexToolResult(

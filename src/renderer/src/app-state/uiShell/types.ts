@@ -110,6 +110,7 @@ export type UiShellState = {
    *  persisting an extra "inspected session" source of truth. */
   agentStatusPanelOpen: boolean
   performancePanelOpen: boolean
+  remotePanelOpen: boolean
   /** When true, the Global Editor overlay is mounted. Splits the
    *  workspace area: left half is a file tree + Monaco editor rooted
    *  at the focused agent's cwd, right half is the entire normal

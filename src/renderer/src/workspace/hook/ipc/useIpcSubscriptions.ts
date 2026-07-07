@@ -7,6 +7,7 @@ import {
 import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
+import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 import { isCompactSummaryEntry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
@@ -21,6 +22,7 @@ import {
   withDerivedSessionStatus,
 } from '@renderer/workspace/semantic/helpers'
 import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
+import { reduceStreamPhase } from '@renderer/workspace/semantic/streamPhaseMachine'
 import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/applyPromptSuggestionToRuntime'
 import { summarizeSemanticEventForDebug } from '@renderer/workspace/semantic/summarize'
 import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
@@ -284,7 +286,19 @@ function applyConditionSnapshot(
 
 // -----------------------------------------------------------------------------
 // useIpcSubscriptions — the one big side-effect that wires every
-// window.api.onSession* listener.
+// session-event listener.
+//
+// Session events arrive through the injected SessionFeed (phase 0 of the
+// remote mobile companion — see docs/superpowers/specs/2026-07-06-remote-
+// mobile-companion-design.md), NOT through window.api directly. The desktop
+// passes IpcSessionFeed (a pure pass-through to the preload bridge), tests
+// pass FakeSessionFeed, and the remote client will pass its WebSocket feed.
+// Do NOT reintroduce a direct `window.api.onSession*` call for a feed-covered
+// event — that would silently exclude non-IPC transports from that event.
+// Desktop-only side channels (ghostAppend, gitWorktrees, feed-debug, perf)
+// intentionally STAY on window.api below: they are not session I/O, the
+// remote client must never need them, and abstracting them would widen the
+// SessionFeed contract for no consumer.
 //
 // One listener per event type. The callback looks up the session by
 // sessionId from the payload and patches the corresponding runtime.
@@ -301,6 +315,14 @@ function applyConditionSnapshot(
 // -----------------------------------------------------------------------------
 
 export function useIpcSubscriptions(
+  // WHY feed identity matters: `feed` sits in the effect's dep array, so an
+  // unstable reference would tear down + re-attach every subscription each
+  // render — the exact pathology the memoized refs factory exists to prevent
+  // (see useWorkspaceRefs). ipcSessionFeed is a module const and the context
+  // value passes it through untouched, so identity is stable by construction.
+  // If a future transport constructs its feed per-render, memoize it at the
+  // construction site, not here.
+  feed: SessionFeed,
   refs: WorkspaceRefs,
   setState: WorkspaceSetState,
   setRuntimes: WorkspaceSetRuntimes,
@@ -522,7 +544,7 @@ export function useIpcSubscriptions(
       }
     }
 
-    const offStarted = window.api.onSessionStarted(({ sessionId, projectDir }) => {
+    const offStarted = feed.onSessionStarted(({ sessionId, projectDir }) => {
       updateRuntime(sessionId, {
         projectDir,
         processStatus: 'started',
@@ -539,7 +561,7 @@ export function useIpcSubscriptions(
       })
     })
 
-    const offScreen = window.api.onSessionScreen(
+    const offScreen = feed.onSessionScreen(
       ({ sessionId, plain, markdown, recent, recentMarkdown, picker }) => {
         const startedAt = performance.now()
         // latestScreenRef is the synchronous source of truth for
@@ -686,7 +708,7 @@ export function useIpcSubscriptions(
     // it through the bulk channel as a 1-element burst. Do NOT add
     // a second IPC channel that races the bulk one.
 
-    const offErr = window.api.onSessionJsonlError(({ sessionId, message }) => {
+    const offErr = feed.onSessionJsonlError(({ sessionId, message }) => {
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
       updateRuntime(sessionId, {
@@ -695,7 +717,7 @@ export function useIpcSubscriptions(
       })
     })
 
-    const offExit = window.api.onSessionExit(({ sessionId, exitCode }) => {
+    const offExit = feed.onSessionExit(({ sessionId, exitCode }) => {
       recentWorkContextRawBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       jsonlProviderStreamBySession.delete(sessionId)
@@ -758,7 +780,7 @@ export function useIpcSubscriptions(
     // for Codex (the parser is Claude-specific). On idle
     // transitions, status is undefined and we clear activityStatus
     // too.
-    const offProcessState = window.api.onSessionProcessState(
+    const offProcessState = feed.onSessionProcessState(
       ({ sessionId, active, status }) => {
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
@@ -807,7 +829,7 @@ export function useIpcSubscriptions(
       },
     )
 
-    const offSemantic = window.api.onSessionSemanticEvent(({ sessionId, event }) => {
+    const offSemantic = feed.onSessionSemanticEvent(({ sessionId, event }) => {
       const span = perf.span('workspace.ipc.semantic.fold', { sessionId })
       let spanClosed = false
       const closeSpan = (data: Record<string, unknown>) => {
@@ -902,130 +924,31 @@ export function useIpcSubscriptions(
           eventType === 'api_error' ||
           eventType === 'stream_error'
 
-        // stream_phase — in-feed indicator state. Overrides the
-        // optimistic `submitting` pseudo-phase once the adapter's
-        // first real event lands. Handled inline here (not inside
-        // foldSemanticEvent) because the field lives on
-        // SessionRuntime, not SemanticRuntimeState; the fold would
-        // be a layering violation.
-        let streamPhase = current.streamPhase
-        let streamPhasePendingToolName = current.streamPhasePendingToolName
-        let streamPhasePendingToolUseId = current.streamPhasePendingToolUseId
-        let turnStartedAt = current.turnStartedAt
-        let phaseChangedAt = current.phaseChangedAt
-        let submittedAt = current.submittedAt
-
-        if (eventType === 'stream_phase') {
-          const rawPhase =
-            typeof semanticEvent.phase === 'string' ? semanticEvent.phase : 'idle'
-          const nextPhase = rawPhase as StreamPhase
-          if (nextPhase !== streamPhase) {
-            const now = Date.now()
-            streamPhase = nextPhase
-            streamPhasePendingToolName =
-              stringField(semanticEvent, 'toolName')
-            streamPhasePendingToolUseId =
-              stringField(semanticEvent, 'toolUseId')
-            phaseChangedAt = now
-            if (nextPhase === 'idle') {
-              turnStartedAt = null
-              submittedAt = null
-            } else if (turnStartedAt === null) {
-              // First non-idle phase of this turn — stamp the
-              // start time. If the optimistic-submit path already
-              // stamped `submittedAt`, prefer it over `now` so the
-              // elapsed counter includes the gap between submit
-              // and first adapter event.
-              turnStartedAt = submittedAt ?? now
-            }
-          } else if (
-            // Re-assign pending tool info even on same-phase
-            // re-emit (turnId upgrade: null → real id is the
-            // classic case).
-            streamPhase !== 'idle'
-          ) {
-            streamPhasePendingToolName =
-              stringField(semanticEvent, 'toolName') ?? streamPhasePendingToolName
-            streamPhasePendingToolUseId =
-              stringField(semanticEvent, 'toolUseId') ?? streamPhasePendingToolUseId
-          }
-        } else if (eventType === 'tool_result') {
-          // Tool result arrived. If it matches the pending tool
-          // we're `awaiting-tool` on, move to a neutral
-          // 'requesting' phase so the indicator doesn't sit amber
-          // after the tool returned. The adapter's next
-          // stream_phase event (from the next assistant flow's
-          // message_start) will overwrite; this is the
-          // gap-filler.
-          const resultToolUseId =
-            stringField(semanticEvent, 'toolUseId')
-          if (
-            streamPhase === 'awaiting-tool' &&
-            resultToolUseId !== null &&
-            resultToolUseId === streamPhasePendingToolUseId
-          ) {
-            streamPhase = 'requesting'
-            streamPhasePendingToolName = null
-            streamPhasePendingToolUseId = null
-            phaseChangedAt = Date.now()
-          }
-        } else if (eventType === 'turn_started') {
-          // Turn-based phase bridge (2026-07-06, provider-agnostic
-          // gap-filler). WHY: the phase machine used to advance ONLY on
-          // `stream_phase` events, which opencode's headless does not
-          // emit. The 2026-07-06 opencode bundle showed the consequence:
-          // phaseChangedAt == submittedAt with 258 deltas flowing — the
-          // pane sat pinned at the optimistic 'submitting' pseudo-phase
-          // for the whole turn, and the awaitingAssistant safety net in
-          // the bootstrap-complete reconciler was ALSO deadlocked on it
-          // (its predicate requires streamPhase === 'idle' to fire, and
-          // idle could never arrive). Turn lifecycle events are the
-          // provider-neutral signal every semantic adapter already
-          // emits, so bridge from them.
-          //
-          // Claude/codex are unaffected in practice: their adapters emit
-          // real stream_phase events which continue to overwrite this
-          // bridge on the very next event. We only FILL gaps — advance
-          // out of the pre-response phases ('submitting'/'requesting');
-          // never stomp 'responding'/'awaiting-tool' state a real
-          // stream_phase event established.
-          if (streamPhase === 'submitting' || streamPhase === 'requesting') {
-            const now = Date.now()
-            streamPhase = 'responding'
-            phaseChangedAt = now
-            if (turnStartedAt === null) {
-              // Mirror the stream_phase branch: prefer the optimistic
-              // submittedAt so the elapsed counter includes the
-              // submit→first-event gap.
-              turnStartedAt = submittedAt ?? now
-            }
-          }
-        } else if (eventType === 'turn_completed') {
-          // Second half of the turn-based bridge: return to 'idle' when
-          // the turn is over and nothing is pending. Guards:
-          //   - 'awaiting-tool' is itself pending tool state at the
-          //     phase-machine level (codex MCP: turn_completed arrives
-          //     while the client tool still owes its output in the NEXT
-          //     turn) — never idle out of it here.
-          //   - hasPendingSemanticTools on the post-fold turn covers the
-          //     same lifecycle when the phase machine hasn't caught up
-          //     (fold keeps an ended pending-tool turn mounted).
-          // For claude/codex the adapter's own stream_phase 'idle'
-          // arrives around the same moment and would produce the same
-          // state, so this is a no-op for them beyond ordering.
-          const pendingTool =
-            streamPhase === 'awaiting-tool' ||
-            (nextSemantic.currentTurn !== null &&
-              hasPendingSemanticTools(nextSemantic.currentTurn))
-          if (!pendingTool && streamPhase !== 'idle') {
-            streamPhase = 'idle'
-            streamPhasePendingToolName = null
-            streamPhasePendingToolUseId = null
-            phaseChangedAt = Date.now()
-            turnStartedAt = null
-            submittedAt = null
-          }
-        }
+        // stream_phase — in-feed indicator state, reduced by the SHARED
+        // machine in semantic/streamPhaseMachine.ts (extracted 2026-07-06 so
+        // the remote phone client runs the identical reducer instead of a
+        // hand-copied fork — see that module's header for the full WHY and
+        // the layering rationale that used to live inline here). Runs on the
+        // POST-fold turn per the reducer's caller contract.
+        const {
+          streamPhase,
+          streamPhasePendingToolName,
+          streamPhasePendingToolUseId,
+          turnStartedAt,
+          phaseChangedAt,
+          submittedAt,
+        } = reduceStreamPhase(
+          {
+            streamPhase: current.streamPhase,
+            streamPhasePendingToolName: current.streamPhasePendingToolName,
+            streamPhasePendingToolUseId: current.streamPhasePendingToolUseId,
+            turnStartedAt: current.turnStartedAt,
+            phaseChangedAt: current.phaseChangedAt,
+            submittedAt: current.submittedAt,
+          },
+          semanticEvent,
+          nextSemantic.currentTurn,
+        )
 
         // Ghost bridge — refresh the provisional ghost map from
         // the new semantic turn. This runs on every semantic tick;
@@ -1160,7 +1083,7 @@ export function useIpcSubscriptions(
       })
     })
 
-    const offConditions = window.api.onSessionConditions(({ sessionId, snapshot }) => {
+    const offConditions = feed.onSessionConditions(({ sessionId, snapshot }) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const next = applyConditionSnapshot(current, snapshot)
@@ -1199,7 +1122,7 @@ export function useIpcSubscriptions(
     // change (it's small — agentType/description + a capped tool-call
     // timeline), so we just replace the field wholesale. Reference-equal bail
     // keeps Feed from re-rendering when an unrelated session updates.
-    const offSubAgents = window.api.onSessionSubAgents(({ sessionId, subAgents }) => {
+    const offSubAgents = feed.onSessionSubAgents(({ sessionId, subAgents }) => {
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         if (current.subAgents === subAgents) return prev
@@ -1224,7 +1147,7 @@ export function useIpcSubscriptions(
     //   4. Claude providerSessionId capture (from any entry's sessionId).
     //   5. pendingCompaction clearing on compact summary entries.
     //   6. Optimistic-Codex-user reconciliation against the head row.
-    const offEntries = window.api.onSessionJsonlEntries(({ sessionId, entries }) => {
+    const offEntries = feed.onSessionJsonlEntries(({ sessionId, entries }) => {
       if (!entries || entries.length === 0) return
       const span = perf.span('workspace.ipc.jsonl.bulk', {
         sessionId,
@@ -2043,5 +1966,5 @@ export function useIpcSubscriptions(
       for (const t of refs.bootstrapTimersRef.current.values()) clearTimeout(t)
       refs.bootstrapTimersRef.current.clear()
     }
-  }, [appendFeedDebug, refs, setRuntimes, setState, updateRuntime])
+  }, [appendFeedDebug, feed, refs, setRuntimes, setState, updateRuntime])
 }

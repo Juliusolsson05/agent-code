@@ -33,6 +33,7 @@ import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerMod
 import { VoiceDictationOverlay } from '@renderer/features/voice-dictation/ui/VoiceDictationOverlay'
 import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
+import { RemotePanel } from '@renderer/features/remote/ui/RemotePanel'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
@@ -98,6 +99,8 @@ export default function App() {
   const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
   const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
+  const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
+  const toggleRemotePanel = useAppStore(state => state.toggleRemotePanel)
   const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
@@ -771,6 +774,8 @@ export default function App() {
           />
         )}
 
+        {remotePanelOpen && <RemotePanel onClose={toggleRemotePanel} />}
+
         {debugPanelOpen && commandTargetId && (
           <DebugPanel
             sessionId={commandTargetId}
@@ -842,6 +847,7 @@ export default function App() {
         closeAgentStatusPanel={closeAgentStatusPanel}
         toggleAgentStatusPanel={toggleAgentStatusPanel}
         togglePerformancePanel={togglePerformancePanel}
+        toggleRemotePanel={toggleRemotePanel}
         toggleCaffeinate={toggleCaffeinate}
         toggleGlobalEditor={toggleGlobalEditor}
         toggleFileTreeVisible={toggleFileTreeVisible}

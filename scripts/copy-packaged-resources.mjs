@@ -66,6 +66,7 @@ for (const resource of staticResources) {
 const runtimeTools = [
   { id: 'mitmproxy', kind: 'tar.gz' },
   { id: 'tmux', kind: 'binary' },
+  { id: 'cloudflared', kind: 'binary' },
 ]
 
 for (const tool of runtimeTools) {

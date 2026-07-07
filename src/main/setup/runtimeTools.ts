@@ -58,7 +58,7 @@ import { join, sep } from 'node:path'
 
 import { app } from 'electron'
 
-export type BundledToolId = 'mitmdump' | 'tmux'
+export type BundledToolId = 'mitmdump' | 'tmux' | 'cloudflared'
 
 type MitmproxyManifest = {
   tool: 'mitmproxy'
@@ -129,6 +129,13 @@ export async function isBundledArchiveAvailable(
     if (!manifest.platforms[platformKey]) return false
     return fileExists(tmuxBinaryPath(manifest, platformKey))
   }
+  if (tool === 'cloudflared') {
+    const platformKey = getPlatformKey()
+    if (!platformKey) return false
+    const manifest = await loadCloudflaredManifest()
+    if (!manifest?.platforms[platformKey]) return false
+    return fileExists(cloudflaredBinaryPath(manifest, platformKey))
+  }
   return false
 }
 
@@ -145,6 +152,7 @@ export async function resolveBundledTool(
 ): Promise<string | null> {
   if (tool === 'mitmdump') return resolveMitmdump()
   if (tool === 'tmux') return resolveTmux()
+  if (tool === 'cloudflared') return resolveCloudflared()
   return null
 }
 
@@ -332,6 +340,75 @@ function tmuxBinaryPath(
       'main',
       'runtime',
       'tmux',
+      platformKey,
+      manifest.executableInsideArchive,
+    ),
+  )
+}
+
+// ---------------------------------------------------------------------------
+// cloudflared resolver
+//
+// Same artifact shape as tmux (single static Mach-O, no nested bundle), so
+// the resolver is the same find + chmod + return — see the tmux resolver's
+// comment block for the full rationale. Used by the remote mobile
+// companion's tunnel transport (src/main/remote/transport/
+// CloudflaredTunnel.ts); when this returns null the tunnel toggle fails
+// with a visible error while LAN mode keeps working — the remote feature
+// NEVER depends on this binary for local use.
+
+type CloudflaredManifest = {
+  tool: 'cloudflared'
+  version: string
+  urlBase: string
+  archiveFormat: 'tgz'
+  executableInsideArchive: string
+  platforms: Record<
+    string,
+    { filename: string; sha256: string; bytes?: number }
+  >
+}
+
+async function resolveCloudflared(): Promise<string | null> {
+  const platformKey = getPlatformKey()
+  if (!platformKey) return null
+  const manifest = await loadCloudflaredManifest()
+  if (!manifest?.platforms[platformKey]) return null
+
+  const binary = cloudflaredBinaryPath(manifest, platformKey)
+  if (!(await fileExists(binary))) return null
+  try {
+    await chmod(binary, 0o755)
+  } catch {
+    // Same defensive chmod as tmux; the access check below is the gate.
+  }
+  if (!(await isExecutable(binary))) return null
+  return binary
+}
+
+async function loadCloudflaredManifest(): Promise<CloudflaredManifest | null> {
+  const manifestPath = unpackAsarPath(
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'cloudflared', 'manifest.json'),
+  )
+  try {
+    const text = await readFile(manifestPath, 'utf8')
+    return JSON.parse(text) as CloudflaredManifest
+  } catch {
+    return null
+  }
+}
+
+function cloudflaredBinaryPath(
+  manifest: CloudflaredManifest,
+  platformKey: string,
+): string {
+  return unpackAsarPath(
+    join(
+      app.getAppPath(),
+      'out',
+      'main',
+      'runtime',
+      'cloudflared',
       platformKey,
       manifest.executableInsideArchive,
     ),

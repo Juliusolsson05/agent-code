@@ -24,6 +24,7 @@ import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
 import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
+import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 
 /* ---------- Block dispatcher ---------- */
@@ -144,7 +145,11 @@ export const Block = memo(function Block({
       }
 
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
-      return providerRow !== undefined ? providerRow : <ToolUseRow block={tu} />
+      // Shared fallback is the generic JSON tool row (residue plan P1):
+      // it degrades to the old ToolUseRow look for headline-only inputs
+      // (Bash keeps its 2-line cap) and gives MCP/orchestration payloads
+      // a real rendering instead of a bare name over raw JSON.
+      return providerRow !== undefined ? providerRow : <JsonToolRow block={tu} />
     }
     case 'tool_result': {
       const tr = block as ToolResultBlock

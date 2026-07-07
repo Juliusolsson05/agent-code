@@ -1,0 +1,4 @@
+# Fetched artifacts only — the manifest is the source of truth; binaries
+# are never committed (repo-wide third_party rule).
+cache/
+build/

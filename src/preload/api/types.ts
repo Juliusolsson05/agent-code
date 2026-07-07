@@ -1,7 +1,4 @@
-import type {
-  ConditionCustomAction,
-  ProviderConditionSnapshot,
-} from '@shared/types/providerConditions.js'
+import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import type { DictationProvider } from '@shared/types/dictation.js'
 import type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 // Local binding for in-file uses (SessionStartedEvent.kind, etc.). The
@@ -21,10 +18,32 @@ export type { SessionInfo } from '@shared/types/session.js'
 // their methods — keep this file for types that cross domain
 // boundaries or are referenced from the outside.
 //
-// Keeping Unsub here too: every onX subscriber returns one, and the
-// generic subscribe helper in ./ipc.ts produces them.
-
-export type Unsub = () => void
+// The session-feed event payloads (Unsub, ScreenSnapshot, SessionStartedEvent,
+// SessionScreenEvent, SessionJsonlEntriesEvent, ..., ResolveConditionResult)
+// MOVED to @shared/sessionFeed/types so the SessionFeed contract can be
+// implemented by surfaces with no Electron at all — the remote mobile client
+// speaks it over WebSocket (see docs/superpowers/specs/
+// 2026-07-06-remote-mobile-companion-design.md). Re-exported here so every
+// existing `@preload/api/types` import keeps resolving byte-for-byte — the
+// same pattern providerConditions.ts uses for conditions-core.
+export type {
+  Unsub,
+  PickerItem,
+  SlashPickerState,
+  ScreenSnapshot,
+  SessionStartedEvent,
+  SessionScreenEvent,
+  SessionJsonlEntriesEvent,
+  SessionJsonlErrorEvent,
+  SessionConditionsEvent,
+  SessionProcessStateEvent,
+  SubAgentToolCall,
+  SubAgentState,
+  SessionSubAgentsEvent,
+  SessionSemanticEvent,
+  SessionExitEvent,
+  ResolveConditionResult,
+} from '@shared/sessionFeed/types.js'
 
 export type DevDebugConfig = {
   enabled: boolean
@@ -81,36 +100,6 @@ export type DictationStreamTranscriptEvent = {
  */
 export type JsonlEntry = AgentTranscriptEntry
 
-export type PickerItem = {
-  id: string
-  label: string
-  description: string
-  selected: boolean
-}
-
-export type SlashPickerState = {
-  visible: boolean
-  items: PickerItem[]
-}
-
-export type ScreenSnapshot = {
-  /** Visible viewport text — what CC's TUI is showing right now.
-   *  Source of truth for current-state parsers (trust dialog,
-   *  slash picker, activity spinner). */
-  plain: string
-  /** Viewport with bold/italic re-emitted as markdown. */
-  markdown: string
-  /** Wider window (last ~200 rows including scrollback) used by
-   *  the streaming extractor. CC's responses can grow taller than
-   *  the viewport, scrolling the opening `⏺` marker into
-   *  scrollback; without this wider snapshot the streaming card
-   *  stays blank for long replies. */
-  recent: string
-  /** Markdown counterpart of `recent`. */
-  recentMarkdown: string
-  picker: SlashPickerState
-}
-
 // Source of truth lives in @shared/types/providerKind. Re-exported here
 // (not redeclared) so the preload bridge type and every renderer import
 // of `SessionKind` resolve to the exact same union as main/shared.
@@ -145,40 +134,8 @@ export type SessionSpawnResult = {
   tmuxName?: string
 }
 
-export type ResolveConditionResult =
-  | { ok: true; state?: unknown }
-  | {
-      ok: false
-      reason:
-        | 'timeout'
-        | 'aborted'
-        | 'invalid-payload'
-        | 'option-not-found'
-        | 'no-session'
-        | 'no-headless'
-        | 'no-resolver'
-      lastState?: unknown
-      failedAtStep?: string
-    }
-
 export type { ConditionCustomAction }
 
-export type SessionStartedEvent = {
-  sessionId: string
-  kind: SessionKind
-  /** Undefined for terminal sessions — they don't have a CC project dir. */
-  projectDir?: string
-}
-export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot
-// Bulk variant used by main during bootstrap bursts. Payload is an
-// array of {entry, file} tuples for a single session — the renderer
-// folds them in one setState instead of paying one render per entry.
-// See main/index.ts jsonl coalescer for the WHY.
-export type SessionJsonlEntriesEvent = {
-  sessionId: string
-  entries: Array<{ entry: JsonlEntry; file: string }>
-}
-export type SessionJsonlErrorEvent = { sessionId: string; message: string }
 /** Raw PTY output for a terminal session — destined for xterm.js. */
 export type SessionTerminalDataEvent = { sessionId: string; data: string }
 /** Raw PTY output for an attached Claude/Codex inline terminal. */
@@ -189,82 +146,11 @@ export type SessionAgentPtyDataEvent = { sessionId: string; data: string }
 // SessionPermissionPromptEvent, SessionCompactionStateEvent) were removed
 // alongside their preload listener methods and main-window forwarding. The
 // renderer now derives all of that state from the unified
-// `ProviderConditionSnapshot` carried by SessionConditionsEvent. The
-// equivalent shapes still exist INTERNALLY on the SessionManager event map
-// and the provider runtimes; those are owned by the conditions-framework /
+// `ProviderConditionSnapshot` carried by SessionConditionsEvent (which now
+// lives in @shared/sessionFeed/types — re-exported above). The equivalent
+// shapes still exist INTERNALLY on the SessionManager event map and the
+// provider runtimes; those are owned by the conditions-framework /
 // provider-boundary clusters and are intentionally untouched here.
-
-export type SessionConditionsEvent = {
-  sessionId: string
-  snapshot: ProviderConditionSnapshot
-}
-
-// --- Subagent fleet -----------------------------------------------------------
-//
-// Claude Code's `Agent` tool spawns a subagent whose FULL transcript is written
-// live to `<projectDir>/<providerSessionId>/subagents/agent-<id>.jsonl`, with a
-// sidecar `agent-<id>.meta.json` carrying { agentType, description, toolUseId }.
-// `toolUseId` matches the parent `Agent` tool_use block id exactly — the
-// deterministic join key that lets the feed nest a subagent's live work under
-// the card that spawned it. The main-process watcher derives these and pushes
-// the whole per-session map on every change. See
-// src/main/subagents/ and the design spec
-// docs/superpowers/specs/2026-06-14-subagent-fleet-rendering-design.md.
-
-/** One tool call in a subagent's timeline (the drill-in mini-feed). */
-export type SubAgentToolCall = {
-  /** Tool name, e.g. "Read" | "Bash" | "Grep". */
-  name: string
-  /** First meaningful arg (path/command/pattern/query), already truncated. */
-  headline: string | null
-  /** 'done' once a matching tool_result was observed; else 'running'. */
-  status: 'running' | 'done'
-}
-
-/** Live state of one subagent, keyed by its parent `Agent` tool_use id. */
-export type SubAgentState = {
-  /** Parent `Agent` tool_use block id — meta.toolUseId. The render join key. */
-  toolUseId: string
-  /** The agent-<id> filename id. */
-  agentId: string
-  /** meta.agentType, e.g. "Explore" | "general-purpose". */
-  agentType: string
-  /** meta.description — the card headline. */
-  description: string
-  status: 'running' | 'done' | 'error'
-  /** Epoch ms of the first transcript entry, or null if unknown. */
-  startedAt: number | null
-  /** Epoch ms of the last observed entry (drives elapsed + live pulse). */
-  lastActivityAt: number | null
-  /** Count of assistant turns observed. */
-  turnCount: number
-  /** Ordered tool-call timeline (capped — see SUBAGENT_TOOL_CALLS_MAX). */
-  toolCalls: SubAgentToolCall[]
-  /** Count of tool calls dropped from the front when capped (0 if none). */
-  droppedToolCalls: number
-  /** Derived activity label, e.g. "running Grep" | "thinking" | null. */
-  currentActivity: string | null
-}
-
-/** Per-session push: the full subAgents map for one session, keyed by
- *  parent `Agent` tool_use id. */
-export type SessionSubAgentsEvent = {
-  sessionId: string
-  subAgents: Record<string, SubAgentState>
-}
-
-/** Per-block semantic stream from an agent provider — currently Claude AND
- *  Codex (not Claude-only, despite earlier wording): Claude via its proxy
- *  adapter (or screen fallback when proxy is off), Codex via its rollout/proxy
- *  adapter. `event` is a provider `SemanticEvent` discriminated by `event.type`
- *  (text_delta / thinking_delta / tool_input_delta / tool_input_finalized /
- *  block_started / block_completed / turn_started / turn_stopped / turn_delta /
- *  turn_completed / usage_updated / api_error / stream_error / flow_selected /
- *  flow_ignored / source_changed / tool_result / signature). We keep `event` as
- *  `unknown` at the preload layer ON PURPOSE so this bridge stays
- *  provider-agnostic and doesn't pin a version of any one provider's semantic
- *  schema — the renderer narrows on `event.type`. */
-export type SessionSemanticEvent = { sessionId: string; event: unknown }
 
 // --- Session prompt index ---------------------------------------------------
 //
@@ -314,12 +200,6 @@ export type TranscriptPathRequest = {
 export type TranscriptPathResult = TranscriptPathRequest & {
   transcriptPath: string | null
   exists: boolean
-}
-
-export type SessionExitEvent = {
-  sessionId: string
-  exitCode: number
-  signal?: number
 }
 
 // LSP payloads now live in @shared/types/lsp (the renderer↔main contract).

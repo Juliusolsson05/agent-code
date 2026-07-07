@@ -95,6 +95,7 @@ type Props = {
   closeAgentStatusPanel: () => void
   toggleAgentStatusPanel: () => void
   togglePerformancePanel: () => void
+  toggleRemotePanel: () => void
   toggleCaffeinate: () => Promise<void> | void
   toggleGlobalEditor: () => void
   toggleFileTreeVisible: () => void
@@ -168,6 +169,7 @@ export function CommandPalette({
   closeAgentStatusPanel,
   toggleAgentStatusPanel,
   togglePerformancePanel,
+  toggleRemotePanel,
   toggleCaffeinate,
   toggleGlobalEditor,
   toggleFileTreeVisible,
@@ -394,6 +396,7 @@ export function CommandPalette({
         closeAgentStatusPanel,
         toggleAgentStatusPanel,
         togglePerformancePanel,
+        toggleRemotePanel,
         toggleCaffeinate,
         toggleGlobalEditor,
         toggleFileTreeVisible,
@@ -470,6 +473,7 @@ export function CommandPalette({
       closeAgentStatusPanel,
       toggleAgentStatusPanel,
       togglePerformancePanel,
+      toggleRemotePanel,
       toggleCaffeinate,
       toggleGlobalEditor,
       toggleFileTreeVisible,

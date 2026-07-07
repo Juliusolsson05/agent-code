@@ -24,6 +24,7 @@ import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerIn
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
 import { useComposerKeybinds } from '@renderer/workspace/tile-tree/TileLeaf/useComposerKeybinds'
 import { useComposerDictation } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
+import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { useTypeToFocus } from '@renderer/workspace/tile-tree/TileLeaf/useTypeToFocus'
 import { usePasteToFocus } from '@renderer/workspace/tile-tree/TileLeaf/usePasteToFocus'
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
@@ -104,6 +105,11 @@ export function TileLeaf({
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const { showToast } = useGlobalToast()
+  // Session input goes through the injected SessionFeed (not window.api):
+  // the send path below is the composer submit for a REAL agent session, and
+  // the remote client mounts this same component tree over a WebSocket feed.
+  // See src/shared/sessionFeed/SessionFeed.ts for the contract's WHY.
+  const feed = useSessionFeed()
   const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
   const dictationEnabled = useAppStore(state => state.settings.dictationEnabled)
   const dictationProvider = useAppStore(state => state.settings.dictationProvider)
@@ -229,11 +235,11 @@ export function TileLeaf({
         throw new Error(message)
       }
     }
-    let ok = await window.api.sendInput(sessionId, data, pasteId)
+    let ok = await feed.sendInput(sessionId, data, pasteId)
     if (!ok) {
       try {
         await workspace.ensureSessionLive(sessionId)
-        ok = await window.api.sendInput(sessionId, data, pasteId)
+        ok = await feed.sendInput(sessionId, data, pasteId)
       } catch (err) {
         workspace.showPaneToast(
           sessionId,
@@ -595,7 +601,7 @@ export function TileLeaf({
       <ProviderConditionOutlet
         conditions={runtime.conditions}
         onSend={send}
-        onResolveCustom={(action) => window.api.resolveCondition(sessionId, action)}
+        onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
       />
 
       <PaneToast message={runtime.paneToast} />
