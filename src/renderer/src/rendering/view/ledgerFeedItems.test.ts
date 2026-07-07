@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { Entry } from '@shared/types/transcript'
-import { deriveFeedRenderModel, type FeedRenderItem } from '@renderer/features/feed/model/renderModel'
-import { selectMergedEntries } from '@renderer/workspace/mergedEntries'
+import { type FeedRenderItem } from '@renderer/features/feed/model/renderModel'
 import {
   emptyRuntime,
   type SemanticLiveTurn,
@@ -19,10 +18,14 @@ import {
 } from '@renderer/rendering/view/ledgerFeedItems'
 
 // ---------------------------------------------------------------------------
-// View bridge: the ledger must be able to drive Feed's EXISTING row
-// components. These tests run full runtime scenarios through BOTH paths —
-// legacy deriveFeedRenderModel and adapter→ledger→bridge — and compare the
-// resulting item lists structurally (type + identity + payload object).
+// View bridge: the ledger must drive Feed's EXISTING row components. These
+// tests run full runtime scenarios through adapter→ledger→bridge and assert
+// the resulting item list structurally (type + order) plus payload identity.
+//
+// (Before the Stage 3 cutover these compared against the legacy
+// deriveFeedRenderModel as an oracle; that renderer is deleted, so the
+// expected lists are now spelled out explicitly. The exhaustive
+// scenario/fixture coverage lives in bundleCorpus/recordingCorpus.)
 //
 // The payload identity assertions matter as much as the order ones: the
 // bridge must hand Feed the SAME Entry / SemanticLiveTurn object references
@@ -81,19 +84,6 @@ function bridgeItems(runtime: SessionRuntime): ReturnType<typeof ledgerToFeedIte
   return ledgerToFeedItems(ledger, ledgerFeedContextFromRuntime(runtime, 'claude'))
 }
 
-function legacyItems(runtime: SessionRuntime): FeedRenderItem[] {
-  const merged = selectMergedEntries(runtime, runtime.semantic.currentTurn?.turnId ?? null)
-  return deriveFeedRenderModel({
-    provider: 'claude',
-    entries: merged,
-    semanticHistory: runtime.semantic.history,
-    semanticTurn: runtime.semantic.currentTurn,
-    streamPhase: runtime.streamPhase,
-    streamPhasePendingToolName: runtime.streamPhasePendingToolName,
-    streamPhasePendingToolUseId: runtime.streamPhasePendingToolUseId,
-  }).items
-}
-
 const shape = (i: FeedRenderItem): string => {
   switch (i.type) {
     case 'entry':
@@ -118,7 +108,12 @@ describe('view bridge: ledger rows drive legacy FeedRenderItems', () => {
 
     const { items, dropped } = bridgeItems(rt)
     expect(dropped).toEqual([])
-    expect(items.map(shape)).toEqual(legacyItems(rt).map(shape))
+    expect(items.map(shape)).toEqual([
+      'entry:u1',
+      'entry:a1',
+      'semantic-current:turn_live',
+      'work',
+    ])
 
     // Payload identity: the bridge hands back the RUNTIME's objects.
     const entryItem = items.find(i => i.type === 'entry')
@@ -148,7 +143,6 @@ describe('view bridge: ledger rows drive legacy FeedRenderItems', () => {
     ])
     const { items, dropped } = bridgeItems(rt)
     expect(dropped).toEqual([])
-    expect(items.map(shape)).toEqual(legacyItems(rt).map(shape))
     expect(items.map(shape)).toEqual(['entry:u1', 'entry:a1', 'entry:g-turn_g-0'])
   })
 

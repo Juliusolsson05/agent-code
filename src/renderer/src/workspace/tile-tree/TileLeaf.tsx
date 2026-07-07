@@ -32,7 +32,6 @@ import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useC
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import { useRenderShadow } from '@renderer/rendering/shadow/useRenderShadow'
 import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
 
 // Claude paste-state-machine constants + helpers moved to
@@ -271,18 +270,11 @@ export function TileLeaf({
     workspace.appendFeedDebug(sessionId, entry)
   }, [sessionId, workspace.appendFeedDebug])
 
-  // Rendering-rewrite Stage 2 shadow: runs the new ownership-ledger
-  // pipeline beside the legacy renderer and records divergences. A no-op
-  // unless AGENT_CODE_RENDER_SHADOW=1 (probed once, app-wide). Mounted
-  // HERE because TileLeaf is the one component holding the full runtime —
-  // the shadow needs the RAW planes (entries, ghosts map, semantic state),
-  // not the ghost-folded mergedEntries below.
-  useRenderShadow(runtime, provider, sessionId)
-
-  // Rendering-rewrite Stage 3 cutover: when AGENT_CODE_RENDER_PIPELINE=1,
-  // the ownership-ledger pipeline decides Feed's item list and Feed's own
-  // derivation is bypassed. Null when the flag is off — Feed then behaves
-  // byte-identically to before this prop existed.
+  // Stage 3 cutover: the ownership-ledger pipeline decides Feed's entire item
+  // list — unconditionally now, no flag. Feed just paints what this returns.
+  // (The Stage-2 shadow that diffed this against the legacy renderer is gone:
+  // its job — proving parity before cutover — is done, and the legacy renderer
+  // it diffed against has been deleted.)
   const ledgerFeedItems = useLedgerFeedItems(runtime, provider, sessionId)
 
   const mergedEntries = useMemo(

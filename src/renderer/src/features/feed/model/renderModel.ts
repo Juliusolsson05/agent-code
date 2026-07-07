@@ -4,11 +4,8 @@ import {
   isCompactSummaryEntry,
   isConversationEntry,
   type Entry,
-  type ToolResultBlock,
-  type ToolUseBlock,
 } from '@shared/types/transcript'
 import { asRecord } from '@shared/lib/asRecord'
-import { taskNotificationFromEntry } from '@renderer/features/feed/lib/taskNotification'
 
 import type {
   SemanticLiveTurn,
@@ -26,21 +23,17 @@ import {
 import {
   buildCommittedAssistantText,
   type CommittedAssistantText,
-  semanticTurnHasRenderableContent,
 } from '@renderer/features/feed/ui/semantic/renderUnits'
 
-export type FeedRenderModelInput = {
-  provider: AgentProvider
-  entries?: Entry[]
-  committed?: FeedCommittedProjection
-  semanticHistory: SemanticLiveTurn[]
-  semanticTurn: SemanticLiveTurn | null
-  streamPhase: StreamPhase
-  streamPhasePendingToolName: string | null
-  streamPhasePendingToolUseId: string | null
-  committedToolUseIndex?: Map<string, ToolUseBlock>
-  committedToolResultIndex?: Map<string, ToolResultBlock>
-}
+// NOTE (Stage 3 cutover, 2026-07): `deriveFeedRenderModel` — the legacy in-Feed
+// decision core that partitioned committed + semantic planes into an ordered
+// item list — lived here and is deleted. The ownership ledger
+// (src/renderer/src/rendering/) is now the sole decision-maker; both the
+// desktop and the phone hand Feed the ledger's pre-ordered items. What remains
+// is deliberately dumb: the FeedRenderItem contract, `feedRenderModelFromItems`
+// (attaches debug side-products to the ledger's list), and
+// `deriveFeedCommittedProjection` (still feeds SemanticStreamingTurn's committed
+// dedup until the block-level un-collapse retires that component too).
 
 export type FeedCommittedProjection = {
   visibleDecisions: VisibleDecision[]
@@ -151,70 +144,6 @@ function visibleDecisionForEntry(entry: Entry, index: number): VisibleDecision {
   }
 }
 
-function timestampMs(value: unknown): number | null {
-  if (typeof value !== 'string') return null
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-function entryTimestampMs(entry: Entry): number | null {
-  return timestampMs(asRecord(entry)?.timestamp)
-}
-
-function semanticTurnTimestampMs(turn: SemanticLiveTurn): number | null {
-  return typeof turn.endedAt === 'number' ? turn.endedAt : turn.startedAt
-}
-
-function phaseRank(phase: FeedRenderItemOrder['phase']): number {
-  switch (phase) {
-    case 'empty':
-      return 0
-    case 'content':
-      return 1
-    case 'work':
-      return 2
-  }
-}
-
-function contentSourceRank(source: string): number {
-  switch (source) {
-    case 'entry':
-      return 0
-    case 'semantic-history':
-      return 1
-    case 'semantic-current':
-      return 2
-    default:
-      return 3
-  }
-}
-
-function contentSortTime(order: FeedRenderItemOrder): number {
-  // WHY null timestamps sort after timestamped content instead of
-  // pretending to be "now": a missing timestamp is a lossy transcript
-  // edge, not evidence that the row happened last. Keeping the
-  // sequence fallback stable prevents one malformed committed row from
-  // pushing stale semantic history underneath a newer user prompt.
-  return order.timeMs ?? Number.MAX_SAFE_INTEGER
-}
-
-function sortFeedRenderItems(items: FeedRenderItem[]): FeedRenderItem[] {
-  return [...items].sort((a, b) => {
-    const phaseDelta = phaseRank(a.order.phase) - phaseRank(b.order.phase)
-    if (phaseDelta !== 0) return phaseDelta
-
-    if (a.order.phase === 'content' && b.order.phase === 'content') {
-      const timeDelta = contentSortTime(a.order) - contentSortTime(b.order)
-      if (timeDelta !== 0) return timeDelta
-      const sourceDelta =
-        contentSourceRank(a.order.source) - contentSourceRank(b.order.source)
-      if (sourceDelta !== 0) return sourceDelta
-    }
-
-    return a.order.sequence - b.order.sequence
-  })
-}
-
 function labelForItem(item: FeedRenderItem, provider: AgentProvider): string {
   switch (item.type) {
     case 'entry':
@@ -261,16 +190,14 @@ function debugRowsForItems(items: FeedRenderItem[], provider: AgentProvider): De
 }
 
 /**
- * Build a FeedRenderModel from an externally-decided item list — the
- * AGENT_CODE_RENDER_PIPELINE=1 entry point (rendering-rewrite Stage 3).
- * The new ownership-ledger pipeline (src/renderer/src/rendering/) decides
- * visibility/ownership/order and hands Feed pre-ordered FeedRenderItems
- * via the view bridge; this wrapper only derives the two side products
- * Feed's downstream consumers read (visibleDecisions for the debug panel,
- * debugRows for the RENDER feed-debug stream). No sorting happens here —
- * the ledger's order IS the order (the bridge engineers item.order so the
- * legacy sorter would be a no-op anyway, but not re-sorting keeps the
- * invariant visible in the code).
+ * Attach Feed's two debug side-products to the ownership ledger's pre-decided
+ * item list. The ledger (src/renderer/src/rendering/) decides
+ * visibility/ownership/order and hands Feed pre-ordered FeedRenderItems via
+ * the view bridge; this wrapper only derives what downstream consumers read
+ * off the side (visibleDecisions for the debug panel, debugRows for the RENDER
+ * feed-debug stream). No sorting happens here — the ledger's order IS the
+ * order (the bridge engineers item.order so any re-sort would be a no-op
+ * anyway, but not re-sorting keeps the invariant visible in the code).
  */
 export function feedRenderModelFromItems(
   items: FeedRenderItem[],
@@ -281,177 +208,6 @@ export function feedRenderModelFromItems(
     if (item.type === 'entry') visibleDecisions.push(item.visibleDecision)
   }
   return { items, visibleDecisions, debugRows: debugRowsForItems(items, provider) }
-}
-
-export function deriveFeedRenderModel({
-  provider,
-  entries,
-  committed,
-  semanticHistory,
-  semanticTurn,
-  streamPhase,
-  streamPhasePendingToolName,
-  streamPhasePendingToolUseId,
-  committedToolUseIndex,
-  committedToolResultIndex,
-}: FeedRenderModelInput): FeedRenderModel {
-  const projection = committed ?? deriveFeedCommittedProjection(entries ?? [])
-  const {
-    visibleDecisions,
-    committedClaudeMessageTurnIds,
-    committedAssistantText,
-  } = projection
-
-  // WHY this suppression stays turn-scoped only for Claude:
-  // Claude's durable assistant JSONL row carries `message.id` equal to
-  // the live semantic turn id, so once that committed row exists the
-  // entire archived live turn is an older copy of the same renderable
-  // assistant response. Codex rollout is not shaped that way. Codex
-  // commits response items one at a time, and a single tool item may
-  // share the broader codex turn id with later assistant text. If we
-  // used "any committed id suppresses the whole turn" for Codex, tool
-  // commit catch-up would hide still-live assistant text. Codex exact
-  // duplicate prevention therefore belongs at the semantic-block level
-  // inside SemanticStreamingTurn until committed and live share a more
-  // precise item identity.
-  const renderedSemanticHistory = semanticHistory.filter(
-    turn =>
-      turn.turnId !== semanticTurn?.turnId &&
-      !committedClaudeMessageTurnIds.has(turn.turnId) &&
-      semanticTurnHasRenderableContent(
-        turn,
-        committedToolUseIndex,
-        committedToolResultIndex,
-        committedAssistantText,
-      ),
-  )
-  const renderedSemanticTurn =
-    semanticTurn != null &&
-    semanticTurnHasRenderableContent(
-      semanticTurn,
-      committedToolUseIndex,
-      committedToolResultIndex,
-      committedAssistantText,
-    )
-      ? semanticTurn
-      : null
-  const shouldShowWorkIndicator = streamPhase !== 'idle'
-
-  const unsortedItems: FeedRenderItem[] = []
-  let contentSequence = 0
-  let entryOrdinal = 0
-  for (const item of visibleDecisions) {
-    if (!item.visible) continue
-    // P2b: a task-notification whose parent Task tool_use is IN the feed
-    // is state, not a row — its content joins the parent card via the
-    // Feed-level notification map. Skipping HERE (pre-LazyEntry) is what
-    // prevents the 48px-placeholder wall from the 2026-06-22 bundle; a
-    // parentless notification stays visible and renders as the compact
-    // TaskNotificationRow via EntryRow.
-    const notification = taskNotificationFromEntry(item.entry)
-    if (
-      notification?.toolUseId &&
-      committedToolUseIndex?.has(notification.toolUseId)
-    ) {
-      continue
-    }
-    unsortedItems.push({
-      type: 'entry',
-      key: `entry:${item.key}`,
-      entry: item.entry,
-      visibleDecision: item,
-      entryOrdinal,
-      order: {
-        phase: 'content',
-        timeMs: entryTimestampMs(item.entry),
-        sequence: contentSequence++,
-        source: 'entry',
-      },
-    })
-    entryOrdinal += 1
-  }
-  for (const turn of renderedSemanticHistory) {
-    unsortedItems.push({
-      type: 'semantic-history',
-      key: `semantic-history:${turn.turnId}`,
-      turn,
-      order: {
-        phase: 'content',
-        timeMs: semanticTurnTimestampMs(turn),
-        sequence: contentSequence++,
-        source: 'semantic-history',
-      },
-    })
-  }
-  if (renderedSemanticTurn != null) {
-    unsortedItems.push({
-      type: 'semantic-current',
-      key: `semantic:${renderedSemanticTurn.turnId}`,
-      turn: renderedSemanticTurn,
-      order: {
-        phase: 'content',
-        timeMs: semanticTurnTimestampMs(renderedSemanticTurn),
-        sequence: contentSequence++,
-        source: 'semantic-current',
-      },
-    })
-  }
-
-  const hasContentItems = unsortedItems.length > 0
-  if (!hasContentItems) {
-    unsortedItems.push({
-      type: 'empty',
-      key: 'empty',
-      provider,
-      order: {
-        phase: 'empty',
-        timeMs: null,
-        sequence: 0,
-        source: 'empty',
-      },
-    })
-  }
-
-  // WHY work is modeled independently from content rows:
-  // `streamPhase` is the agent lifecycle signal, not proof that a
-  // semantic text row exists. Fresh submits, tool waits, and mid-turn
-  // follow-up queueing can all have "agent is busy" state before or
-  // after assistant text. The previous renderer repeatedly regressed
-  // by tying the spinner to whatever row happened to be mounted. Keep
-  // the work affordance as its own surface so "busy" cannot disappear
-  // just because the semantic owner changed.
-  if (shouldShowWorkIndicator) {
-    unsortedItems.push({
-      type: 'work',
-      key: `work:${streamPhase}:${streamPhasePendingToolUseId ?? 'none'}`,
-      phase: streamPhase,
-      toolName: streamPhasePendingToolName,
-      toolUseId: streamPhasePendingToolUseId,
-      order: {
-        phase: 'work',
-        timeMs: null,
-        sequence: 0,
-        source: 'work',
-      },
-    })
-  }
-
-  // WHY the sort happens after ownership suppression rather than
-  // before: visibility ownership decides whether a semantic/archive
-  // row is allowed to exist at all. Ordering is only meaningful over
-  // surviving render owners. This is the bug boundary that kept
-  // hiding user prompts: the old renderer made correct per-plane
-  // ownership decisions, then mounted the planes in bucket order so a
-  // stale semantic history row could still appear after a newer user
-  // prompt.
-  const items = sortFeedRenderItems(unsortedItems)
-  const debugRows = debugRowsForItems(items, provider)
-
-  return {
-    items,
-    visibleDecisions,
-    debugRows,
-  }
 }
 
 export function deriveFeedCommittedProjection(entries: Entry[]): FeedCommittedProjection {
