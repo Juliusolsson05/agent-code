@@ -36,10 +36,10 @@ function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps
   )
 
   return (
-    <div className="border border-border bg-[#101010]">
+    <div className="border border-border bg-canvas">
       <div className="border-b border-border px-3 py-2 flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[10px] text-red-300 uppercase tracking-[0.12em]">
+          <div className="text-[10px] text-danger uppercase tracking-[0.12em]">
             headless snapshot probe
           </div>
           <div className="mt-0.5 text-[10px] text-muted truncate">
@@ -74,7 +74,7 @@ function HeadlessSnapshotProbe({ sessionId, runtime, kind }: DevDebugModuleProps
         </div>
 
         {!regex.ok && (
-          <div className="border border-red-500/40 bg-red-950/20 px-2 py-1 text-[11px] text-red-300">
+          <div className="border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
             {regex.message}
           </div>
         )}
@@ -116,7 +116,7 @@ function MatchCard({
     <div className="border border-border bg-canvas px-2 py-1">
       <div className="flex items-center justify-between gap-2 text-[9px] uppercase tracking-[0.12em]">
         <span className="text-muted">{title}</span>
-        <span className={matched ? 'text-green-400' : 'text-red-400'}>
+        <span className={matched ? 'text-success' : 'text-danger'}>
           {matched ? 'match' : 'no match'}
         </span>
       </div>
@@ -140,7 +140,7 @@ function Snapshot({ title, value }: { title: string; value: string }) {
           copy
         </button>
       </div>
-      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words border border-[#222] bg-[#0b0b0b] px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
+      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
         {value}
       </pre>
     </section>

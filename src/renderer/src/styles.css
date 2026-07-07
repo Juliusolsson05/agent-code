@@ -57,6 +57,30 @@
   --color-code-bg: var(--theme-code-bg);
   --color-code-border: var(--theme-code-border);
   --color-danger: var(--theme-danger);
+  --color-danger-fg: var(--theme-danger-fg);
+
+  /* Status colors are product semantics, not palette trivia. Before these
+     tokens existed, individual panels reached for Tailwind's red/green/yellow
+     ramps directly. That worked in the original dark-only UI, but it made
+     light mode a lottery: `text-yellow-300` is readable on black and nearly
+     invisible on cream, while `bg-red-950/20` leaves a dirty dark wash on
+     light surfaces. Keep these named by intent so dense operational surfaces
+     can show "healthy / warning / informational / destructive" without
+     re-solving contrast per component. */
+  --color-success: var(--theme-success);
+  --color-success-fg: var(--theme-success-fg);
+  --color-success-soft: var(--theme-success-soft);
+  --color-success-border: var(--theme-success-border);
+  --color-warning: var(--theme-warning);
+  --color-warning-fg: var(--theme-warning-fg);
+  --color-warning-soft: var(--theme-warning-soft);
+  --color-warning-border: var(--theme-warning-border);
+  --color-info: var(--theme-info);
+  --color-info-fg: var(--theme-info-fg);
+  --color-info-soft: var(--theme-info-soft);
+  --color-info-border: var(--theme-info-border);
+  --color-danger-soft: var(--theme-danger-soft);
+  --color-danger-border: var(--theme-danger-border);
 
   /* Ink colors for text that sits ON the code slab. The slab stays
      dark in BOTH modes (see --theme-code-bg) so prose ink tokens,
@@ -137,6 +161,21 @@
   --theme-code-bg: #050507;
   --theme-code-border: #16161a;
   --theme-danger: #ff6b6b;
+  --theme-danger-fg: #0a0a0a;
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 14%, transparent);
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 42%, transparent);
+  --theme-success: #4ade80;
+  --theme-success-fg: #07130b;
+  --theme-success-soft: color-mix(in srgb, var(--theme-success) 14%, transparent);
+  --theme-success-border: color-mix(in srgb, var(--theme-success) 42%, transparent);
+  --theme-warning: #facc15;
+  --theme-warning-fg: #1f1600;
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 16%, transparent);
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 45%, transparent);
+  --theme-info: #60a5fa;
+  --theme-info-fg: #06101f;
+  --theme-info-soft: color-mix(in srgb, var(--theme-info) 14%, transparent);
+  --theme-info-border: color-mix(in srgb, var(--theme-info) 42%, transparent);
 
   /* Light text for things rendered on the dark code slab. In dark
      mode these happen to match the normal ink tokens, but we keep
@@ -191,6 +230,21 @@
   --theme-code-bg: #101113;
   --theme-code-border: #24282b;
   --theme-danger: #ff7676;
+  --theme-danger-fg: #101113;
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 15%, transparent);
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 45%, transparent);
+  --theme-success: #67e08f;
+  --theme-success-fg: #07130b;
+  --theme-success-soft: color-mix(in srgb, var(--theme-success) 15%, transparent);
+  --theme-success-border: color-mix(in srgb, var(--theme-success) 44%, transparent);
+  --theme-warning: #f7d866;
+  --theme-warning-fg: #1f1600;
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 16%, transparent);
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 45%, transparent);
+  --theme-info: #7ab7ff;
+  --theme-info-fg: #06101f;
+  --theme-info-soft: color-mix(in srgb, var(--theme-info) 15%, transparent);
+  --theme-info-border: color-mix(in srgb, var(--theme-info) 44%, transparent);
   --theme-code-ink: #ece9e2;
   --theme-code-ink-dim: #b7b2aa;
   --theme-user-bg: #272a2d;
@@ -214,6 +268,21 @@
   --theme-code-bg: #16161e;
   --theme-code-border: #2b3250;
   --theme-danger: #f7768e;
+  --theme-danger-fg: #16161e;
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 16%, transparent);
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 45%, transparent);
+  --theme-success: #9ece6a;
+  --theme-success-fg: #101407;
+  --theme-success-soft: color-mix(in srgb, var(--theme-success) 16%, transparent);
+  --theme-success-border: color-mix(in srgb, var(--theme-success) 45%, transparent);
+  --theme-warning: #e0af68;
+  --theme-warning-fg: #1e1407;
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 16%, transparent);
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 45%, transparent);
+  --theme-info: #7aa2f7;
+  --theme-info-fg: #07101f;
+  --theme-info-soft: color-mix(in srgb, var(--theme-info) 16%, transparent);
+  --theme-info-border: color-mix(in srgb, var(--theme-info) 45%, transparent);
   --theme-code-ink: #c0caf5;
   --theme-code-ink-dim: #9aa5ce;
   --theme-user-bg: #2a2f48;
@@ -239,6 +308,21 @@
   --theme-code-bg: #000000;
   --theme-code-border: #5a5a5a;
   --theme-danger: #ff6b6b;
+  --theme-danger-fg: #000000;
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 22%, transparent);
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 72%, transparent);
+  --theme-success: #8cffb4;
+  --theme-success-fg: #000000;
+  --theme-success-soft: color-mix(in srgb, var(--theme-success) 22%, transparent);
+  --theme-success-border: color-mix(in srgb, var(--theme-success) 72%, transparent);
+  --theme-warning: #ffe36d;
+  --theme-warning-fg: #000000;
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 24%, transparent);
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 72%, transparent);
+  --theme-info: #8dc7ff;
+  --theme-info-fg: #000000;
+  --theme-info-soft: color-mix(in srgb, var(--theme-info) 22%, transparent);
+  --theme-info-border: color-mix(in srgb, var(--theme-info) 72%, transparent);
   --theme-code-ink: #ffffff;
   --theme-code-ink-dim: #dddddd;
   --theme-user-bg: #171717;
@@ -257,11 +341,11 @@
   --theme-surface-hi: #e8e5dc;
   --theme-ink: #19181a;
   --theme-ink-dim: #4a4a48;
-  --theme-muted: #8a8880;
+  --theme-muted: #6f6b62;
   --theme-border: #e2ddd1;
   --theme-border-hi: #c8c3b5;
 
-  --theme-accent: #6e9e80;
+  --theme-accent: #3f7656;
   --theme-accent-fg: #faf9f6;
   --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 14%, transparent);
 
@@ -270,6 +354,21 @@
   --theme-code-bg: #12120f;
   --theme-code-border: #262622;
   --theme-danger: #b03a3a;
+  --theme-danger-fg: #fbfaf7;
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 12%, transparent);
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 38%, transparent);
+  --theme-success: #247a46;
+  --theme-success-fg: #fbfaf7;
+  --theme-success-soft: color-mix(in srgb, var(--theme-success) 12%, transparent);
+  --theme-success-border: color-mix(in srgb, var(--theme-success) 34%, transparent);
+  --theme-warning: #9a6500;
+  --theme-warning-fg: #fbfaf7;
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 13%, transparent);
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 36%, transparent);
+  --theme-info: #2c6bb5;
+  --theme-info-fg: #fbfaf7;
+  --theme-info-soft: color-mix(in srgb, var(--theme-info) 12%, transparent);
+  --theme-info-border: color-mix(in srgb, var(--theme-info) 34%, transparent);
 
   /* Because the slab is dark in light mode too, the text on it must
      stay light — NOT follow the outer mode's ink. Keep these the
@@ -289,8 +388,8 @@
      so these tints live on a dark slab, not on the warm cream canvas.
      That's why the bg values are the same dark-mode ones below rather
      than a typical light-mode pastel: the surface under them IS dark. */
-  --theme-diff-add-bg: #0d2416;
-  --theme-diff-remove-bg: #2a1015;
+  --theme-diff-add-bg: #12361f;
+  --theme-diff-remove-bg: #3a151b;
   --theme-diff-add-fg: #4ade80;
   --theme-diff-remove-fg: #f87171;
 }
@@ -301,19 +400,34 @@
   --theme-surface-hi: #dfd7c7;
   --theme-ink: #23211d;
   --theme-ink-dim: #575148;
-  --theme-muted: #8c8376;
+  --theme-muted: #6f675c;
   --theme-border: #d7cdbb;
   --theme-border-hi: #bcae97;
   --theme-accent-soft: color-mix(in srgb, var(--theme-accent) 16%, transparent);
   --theme-code-bg: #161510;
   --theme-code-border: #2c2a23;
   --theme-danger: #a23a3a;
+  --theme-danger-fg: #fbfaf7;
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 12%, transparent);
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 38%, transparent);
+  --theme-success: #2d7649;
+  --theme-success-fg: #fbfaf7;
+  --theme-success-soft: color-mix(in srgb, var(--theme-success) 12%, transparent);
+  --theme-success-border: color-mix(in srgb, var(--theme-success) 34%, transparent);
+  --theme-warning: #925f08;
+  --theme-warning-fg: #fbfaf7;
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 13%, transparent);
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 36%, transparent);
+  --theme-info: #315f9e;
+  --theme-info-fg: #fbfaf7;
+  --theme-info-soft: color-mix(in srgb, var(--theme-info) 12%, transparent);
+  --theme-info-border: color-mix(in srgb, var(--theme-info) 34%, transparent);
   --theme-code-ink: #efede7;
   --theme-code-ink-dim: #bcb5a7;
   --theme-user-bg: #d4cab6;
   --theme-tool-bg: #e0d7c7;
-  --theme-diff-add-bg: #13301d;
-  --theme-diff-remove-bg: #33131a;
+  --theme-diff-add-bg: #173c25;
+  --theme-diff-remove-bg: #40171f;
   --theme-diff-add-fg: #73e59b;
   --theme-diff-remove-fg: #f07f7f;
 }
@@ -332,6 +446,21 @@
   --theme-code-bg: #0e0e0e;
   --theme-code-border: #555555;
   --theme-danger: #9f1919;
+  --theme-danger-fg: #ffffff;
+  --theme-danger-soft: color-mix(in srgb, var(--theme-danger) 14%, transparent);
+  --theme-danger-border: color-mix(in srgb, var(--theme-danger) 60%, transparent);
+  --theme-success: #0f6b32;
+  --theme-success-fg: #ffffff;
+  --theme-success-soft: color-mix(in srgb, var(--theme-success) 14%, transparent);
+  --theme-success-border: color-mix(in srgb, var(--theme-success) 55%, transparent);
+  --theme-warning: #7a4d00;
+  --theme-warning-fg: #ffffff;
+  --theme-warning-soft: color-mix(in srgb, var(--theme-warning) 15%, transparent);
+  --theme-warning-border: color-mix(in srgb, var(--theme-warning) 58%, transparent);
+  --theme-info: #064f9f;
+  --theme-info-fg: #ffffff;
+  --theme-info-soft: color-mix(in srgb, var(--theme-info) 14%, transparent);
+  --theme-info-border: color-mix(in srgb, var(--theme-info) 55%, transparent);
   --theme-code-ink: #ffffff;
   --theme-code-ink-dim: #e3e3e3;
   --theme-user-bg: #d9d9d9;
@@ -600,57 +729,6 @@ select {
  */
 .prose-theme .hljs {
   background: transparent !important;
-}
-
-[data-mode^='light'] .hljs-comment,
-[data-mode^='light'] .hljs-quote {
-  color: #6a737d;
-  font-style: italic;
-}
-[data-mode^='light'] .hljs-keyword,
-[data-mode^='light'] .hljs-selector-tag,
-[data-mode^='light'] .hljs-literal,
-[data-mode^='light'] .hljs-section,
-[data-mode^='light'] .hljs-link {
-  color: #d73a49;
-}
-[data-mode^='light'] .hljs-string,
-[data-mode^='light'] .hljs-attr,
-[data-mode^='light'] .hljs-symbol,
-[data-mode^='light'] .hljs-bullet,
-[data-mode^='light'] .hljs-addition {
-  color: #032f62;
-}
-[data-mode^='light'] .hljs-title,
-[data-mode^='light'] .hljs-title.function_,
-[data-mode^='light'] .hljs-subst {
-  color: #6f42c1;
-}
-[data-mode^='light'] .hljs-number,
-[data-mode^='light'] .hljs-regexp,
-[data-mode^='light'] .hljs-meta,
-[data-mode^='light'] .hljs-type,
-[data-mode^='light'] .hljs-built_in,
-[data-mode^='light'] .hljs-builtin-name {
-  color: #005cc5;
-}
-[data-mode^='light'] .hljs-variable,
-[data-mode^='light'] .hljs-template-variable,
-[data-mode^='light'] .hljs-selector-id,
-[data-mode^='light'] .hljs-selector-class,
-[data-mode^='light'] .hljs-selector-attr,
-[data-mode^='light'] .hljs-selector-pseudo,
-[data-mode^='light'] .hljs-tag {
-  color: #e36209;
-}
-[data-mode^='light'] .hljs-deletion {
-  color: #b31d28;
-}
-[data-mode^='light'] .hljs-emphasis {
-  font-style: italic;
-}
-[data-mode^='light'] .hljs-strong {
-  font-weight: 600;
 }
 
 /* ---------- Streaming dot pulse ---------- */

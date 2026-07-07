@@ -190,7 +190,7 @@ export function HtmlDebugPanel({ sessionId, kind, onClose }: Props) {
   return (
     <div className="
       h-full w-[540px] flex-shrink-0
-      border-l border-border bg-[#0c0c0c]
+      border-l border-border bg-surface
       flex flex-col overflow-hidden
       text-[10px] font-code
     ">
@@ -202,7 +202,7 @@ export function HtmlDebugPanel({ sessionId, kind, onClose }: Props) {
       <div className="
         flex items-center justify-between
         px-3 py-2 border-b border-border
-        text-[9px] text-red-400 uppercase tracking-wider
+        text-[9px] text-danger uppercase tracking-wider
         select-none flex-shrink-0
       ">
         <span>debug — html ({kind})</span>
@@ -279,7 +279,7 @@ export function HtmlDebugPanel({ sessionId, kind, onClose }: Props) {
         {capture.found ? (
           <pre className="
             h-full w-full m-0
-            bg-[#111] border border-[#222]
+            bg-canvas border border-border
             px-2 py-1.5
             text-[10px] leading-[1.4] text-ink-dim
             whitespace-pre-wrap break-all

@@ -71,7 +71,13 @@ function defineThemes(monaco: typeof Monaco): void {
   })
 
   monaco.editor.defineTheme('agent-code-light', {
-    base: 'vs',
+    // WHY light UI still inherits a dark Monaco token base: code-block slabs
+    // intentionally stay dark in light mode so static highlight.js output and
+    // embedded Monaco blocks share one visual model. Using Monaco's `vs` base
+    // put light-theme token colors on `--theme-code-bg`, which made strings,
+    // comments, and identifiers unreadable. The full file editor has its own
+    // theme that uses `--theme-canvas`; this runtime is only for dark slabs.
+    base: 'vs-dark',
     inherit: true,
     rules: [],
     colors: {
@@ -100,7 +106,7 @@ function defineThemes(monaco: typeof Monaco): void {
   })
 
   monaco.editor.defineTheme('agent-code-high-contrast-light', {
-    base: 'hc-light',
+    base: 'hc-black',
     inherit: true,
     rules: [],
     colors: {

@@ -33,7 +33,13 @@ export type FeedChannel =
   | 'removed'
 
 export type OutboundFrame =
-  | { type: 'hello'; deviceId: string; deviceName: string }
+  | {
+      type: 'hello'
+      deviceId: string
+      deviceName: string
+      themeSettings?: Record<string, unknown> | null
+    }
+  | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
   | { type: 'session-list'; sessions: RemoteSessionSummary[] }
   | { type: 'session-event'; channel: FeedChannel; payload: unknown }
   | { type: 'reply'; id?: string; ok: boolean; error?: string; result?: unknown }

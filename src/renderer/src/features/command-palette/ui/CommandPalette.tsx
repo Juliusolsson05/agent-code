@@ -983,7 +983,7 @@ export function CommandPalette({
             </span>
           )}
           {mode === 'kill-buried' && (
-            <span className="text-red-300 text-[11px] flex-shrink-0 select-none">
+            <span className="text-danger text-[11px] flex-shrink-0 select-none">
               kill buried &rsaquo;
             </span>
           )}
@@ -1013,7 +1013,7 @@ export function CommandPalette({
             </span>
           )}
           {mode === 'ai-workspace-clear' && (
-            <span className="text-red-300 text-[11px] flex-shrink-0 select-none">
+            <span className="text-danger text-[11px] flex-shrink-0 select-none">
               clear AI workspace &rsaquo;
             </span>
           )}
@@ -1146,7 +1146,7 @@ export function CommandPalette({
                       <span
                         className={
                           command.state.tone === 'danger'
-                            ? 'rounded border border-red-600/40 bg-red-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-red-300'
+                            ? 'rounded border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger'
                             : command.state.tone === 'accent'
                               ? 'rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
                               : 'rounded border border-border bg-surface-hi px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
@@ -1220,7 +1220,7 @@ export function CommandPalette({
                     ${
                       i === selectedIndex
                         ? mode === 'ai-workspace-clear'
-                          ? 'bg-red-500/15 text-ink'
+                          ? 'bg-danger-soft text-ink'
                           : 'bg-accent/15 text-ink'
                         : 'text-ink-dim hover:bg-surface-hi'
                     }
@@ -1320,7 +1320,7 @@ export function CommandPalette({
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-red-500/15 text-ink'
+                        ? 'bg-danger-soft text-ink'
                         : 'text-ink-dim hover:bg-surface-hi'
                     }
                   `}
@@ -1378,7 +1378,7 @@ export function CommandPalette({
                         </button>
                         <button
                           type="button"
-                          className="border border-red-600/40 bg-red-500/10 px-1.5 py-0.5 text-[10px] text-red-300 hover:text-red-200"
+                          className="border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger hover:text-danger"
                           onClick={e => {
                             e.stopPropagation()
                             deletePromptTemplate(template)
@@ -1466,7 +1466,7 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
             <span
               className={
                 command.state.tone === 'danger'
-                  ? 'border border-red-600/40 bg-red-500/10 px-1.5 py-0.5 uppercase tracking-wider text-red-300'
+                  ? 'border border-danger-border bg-danger-soft px-1.5 py-0.5 uppercase tracking-wider text-danger'
                   : command.state.tone === 'accent'
                     ? 'border border-accent/30 bg-accent/10 px-1.5 py-0.5 uppercase tracking-wider text-accent'
                     : 'border border-border bg-surface-hi px-1.5 py-0.5 uppercase tracking-wider text-muted'

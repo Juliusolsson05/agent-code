@@ -44,11 +44,11 @@ function zoneFor(used: number, limit: number): Zone {
 function textClassFor(zone: Zone): string {
   switch (zone) {
     case 'red':
-      return 'text-red-400'
+      return 'text-danger'
     case 'yellow':
-      return 'text-amber-400'
+      return 'text-warning'
     case 'green':
-      return 'text-emerald-400'
+      return 'text-success'
   }
 }
 

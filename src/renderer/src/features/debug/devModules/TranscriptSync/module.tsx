@@ -49,7 +49,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
   if (!meta) {
     return (
       <Panel title="transcript sync">
-        <div className="text-[11px] text-red-300">focused session is missing from workspace state</div>
+        <div className="text-[11px] text-danger">focused session is missing from workspace state</div>
       </Panel>
     )
   }
@@ -77,7 +77,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
       <section>
         <Header label="mismatch checks" />
         {diagnostics.length === 0 ? (
-          <div className="border border-border bg-canvas px-2 py-1 text-[11px] text-green-300">
+          <div className="border border-border bg-canvas px-2 py-1 text-[11px] text-success">
             no focused-session mismatch detected
           </div>
         ) : (
@@ -87,8 +87,8 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
                 key={item.id}
                 className={`border px-2 py-1 text-[11px] ${
                   item.severity === 'bad'
-                    ? 'border-red-500/50 bg-red-950/20 text-red-200'
-                    : 'border-yellow-500/50 bg-yellow-950/20 text-yellow-200'
+                    ? 'border-danger-border bg-danger-soft text-danger'
+                    : 'border-warning-border bg-warning-soft text-warning'
                 }`}
               >
                 <div className="text-[9px] uppercase tracking-[0.12em] opacity-70">{item.severity}</div>
@@ -108,7 +108,7 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
           <Metric label="duplicate provider ids" value={String(duplicateProviderSessions.length)} tone={duplicateProviderSessions.length > 0 ? 'bad' : 'good'} />
         </div>
         {duplicateForFocused && (
-          <pre className="mt-2 max-h-[90px] overflow-auto whitespace-pre-wrap break-words border border-red-500/40 bg-red-950/10 px-2 py-1 text-[10px] text-red-200">
+          <pre className="mt-2 max-h-[90px] overflow-auto whitespace-pre-wrap break-words border border-danger-border bg-danger-soft px-2 py-1 text-[10px] text-danger">
             {duplicateForFocused.sessionIds.join('\n')}
           </pre>
         )}
@@ -142,8 +142,8 @@ function TranscriptSync({ sessionId, runtime, kind, workspace }: DevDebugModuleP
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="border border-border bg-[#101010]">
-      <div className="border-b border-border px-3 py-2 text-[10px] text-red-300 uppercase tracking-[0.12em]">
+    <div className="border border-border bg-canvas">
+      <div className="border-b border-border px-3 py-2 text-[10px] text-danger uppercase tracking-[0.12em]">
         {title}
       </div>
       <div className="p-3 flex flex-col gap-3">{children}</div>
@@ -172,11 +172,11 @@ function Metric({
 }) {
   const toneClass =
     tone === 'good'
-      ? 'text-green-300'
+      ? 'text-success'
       : tone === 'warn'
-        ? 'text-yellow-300'
+        ? 'text-warning'
         : tone === 'bad'
-          ? 'text-red-300'
+          ? 'text-danger'
           : 'text-ink-dim'
   return (
     <div className={`border border-border bg-canvas px-2 py-1 min-w-0 ${wide ? 'col-span-2' : ''}`}>

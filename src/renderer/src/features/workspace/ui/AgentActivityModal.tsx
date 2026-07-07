@@ -405,7 +405,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
                 row.statusTone === 'active'
                   ? 'text-[11px] text-accent'
                   : row.statusTone === 'exited'
-                    ? 'text-[11px] text-red-300'
+                    ? 'text-[11px] text-danger'
                     : 'text-[11px] text-muted'
               }
             >
@@ -448,7 +448,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
           <button
             type="button"
             onClick={() => void closeRow(row)}
-            className="px-2 py-0.5 text-[10px] border border-red-600/40 text-red-300 hover:border-red-500 hover:bg-red-500/10"
+            className="px-2 py-0.5 text-[10px] border border-danger-border text-danger hover:bg-danger-soft"
             title="Close (del)"
           >
             close

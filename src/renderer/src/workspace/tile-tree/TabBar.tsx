@@ -94,9 +94,8 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
                 className={`
                   flex-shrink-0
                   text-[9px] font-code font-semibold tabular-nums
-                  text-white
                   px-1.5 py-0.5 leading-none
-                  ${allDone ? 'bg-red-500/80' : 'bg-green-500/80'}
+                  ${allDone ? 'bg-danger text-danger-fg' : 'bg-success text-success-fg'}
                 `}
               >
                 {alive}/{total}

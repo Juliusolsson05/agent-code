@@ -174,10 +174,10 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
       </div>
 
       <Section title="what this module expects">
-        <div className="overflow-auto border border-[#222] bg-[#0b0b0b]">
+        <div className="overflow-auto border border-border bg-canvas">
           <table className="w-full text-[10px]">
             <thead className="text-muted">
-              <tr className="border-b border-[#222]">
+              <tr className="border-b border-border">
                 <th className="px-2 py-1 text-left font-normal">provider</th>
                 <th className="px-2 py-1 text-left font-normal">kind</th>
                 <th className="px-2 py-1 text-left font-normal">condition signal</th>
@@ -190,13 +190,13 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
               {CONDITION_CATALOG.map(row => {
                 const present = conditionPresent(snapshot, row.kind)
                 return (
-                  <tr key={row.kind} className="border-b border-[#181818] align-top">
+                  <tr key={row.kind} className="border-b border-border align-top">
                     <td className="px-2 py-1 text-muted">{row.provider}</td>
                     <td className="px-2 py-1 text-ink-dim">{row.kind}</td>
                     <td className="px-2 py-1 text-muted">{row.signal}</td>
                     <td className="px-2 py-1 text-muted">{row.derived}</td>
                     <td className="px-2 py-1 text-muted">{row.consumer}</td>
-                    <td className={present ? 'px-2 py-1 text-green-300' : 'px-2 py-1 text-red-300'}>
+                    <td className={present ? 'px-2 py-1 text-success' : 'px-2 py-1 text-danger'}>
                       {present ? 'present' : 'absent'}
                     </td>
                   </tr>
@@ -261,7 +261,7 @@ function ConditionsDebug({ sessionId, runtime, kind }: DevDebugModuleProps) {
             <div key={row.label} className="border border-border bg-canvas px-2 py-1">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[10px] text-ink-dim">{row.label}</span>
-                <span className={row.result.matched ? 'text-green-300' : 'text-red-300'}>
+                <span className={row.result.matched ? 'text-success' : 'text-danger'}>
                   {row.result.matched ? `match @${row.result.index}` : 'no'}
                 </span>
               </div>
@@ -445,8 +445,8 @@ function formatTime(ts: number | null | undefined): string {
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="border border-border bg-[#101010]">
-      <div className="border-b border-border px-3 py-2 text-[10px] text-red-300 uppercase tracking-[0.12em]">
+    <div className="border border-border bg-canvas">
+      <div className="border-b border-border px-3 py-2 text-[10px] text-danger uppercase tracking-[0.12em]">
         {title}
       </div>
       <div className="p-3 flex flex-col gap-3">{children}</div>
@@ -484,11 +484,11 @@ function Metric({
 }) {
   const toneClass =
     tone === 'good'
-      ? 'text-green-300'
+      ? 'text-success'
       : tone === 'warn'
-        ? 'text-yellow-300'
+        ? 'text-warning'
         : tone === 'bad'
-          ? 'text-red-300'
+          ? 'text-danger'
           : 'text-ink-dim'
   return (
     <div className={`border border-border bg-canvas px-2 py-1 min-w-0 ${wide ? 'col-span-2' : ''}`}>
@@ -522,7 +522,7 @@ function JsonBlock({
           copy
         </button>
       </div>
-      <pre className={`${compact ? 'max-h-[130px]' : 'max-h-[300px]'} overflow-auto whitespace-pre-wrap break-words border border-[#222] bg-[#0b0b0b] px-2 py-1 text-[10px] leading-[1.45] text-ink-dim`}>
+      <pre className={`${compact ? 'max-h-[130px]' : 'max-h-[300px]'} overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim`}>
         {json}
       </pre>
     </div>
@@ -542,7 +542,7 @@ function Snapshot({ title, value }: { title: string; value: string }) {
           copy
         </button>
       </div>
-      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words border border-[#222] bg-[#0b0b0b] px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
+      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
         {value}
       </pre>
     </div>

@@ -53,14 +53,14 @@ export type AccentMeta = {
 }
 
 export const ACCENTS: AccentMeta[] = [
-  { id: 'lime', name: 'Lime', dark: '#7dd3a0', light: '#4b8a63', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'amber', name: 'Amber', dark: '#ff9f4a', light: '#b05d14', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'sky', name: 'Sky', dark: '#6bb6ff', light: '#2c6bb5', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'magenta', name: 'Magenta', dark: '#e66ed9', light: '#a23895', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'gold', name: 'Gold', dark: '#f5d64a', light: '#9a7c16', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'coral', name: 'Coral', dark: '#ff6b6b', light: '#b83c3c', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'sage', name: 'Sage', dark: '#a8c49a', light: '#5f7a52', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
-  { id: 'lavender', name: 'Lavender', dark: '#b5a3ff', light: '#6e57c7', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'lime', name: 'Lime', dark: '#7dd3a0', light: '#2f6f46', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'amber', name: 'Amber', dark: '#ff9f4a', light: '#8a470b', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'sky', name: 'Sky', dark: '#6bb6ff', light: '#1f5eaa', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'magenta', name: 'Magenta', dark: '#e66ed9', light: '#8b247f', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'gold', name: 'Gold', dark: '#f5d64a', light: '#735905', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'coral', name: 'Coral', dark: '#ff6b6b', light: '#9f2929', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'sage', name: 'Sage', dark: '#a8c49a', light: '#4d6a3f', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
+  { id: 'lavender', name: 'Lavender', dark: '#b5a3ff', light: '#5a43b4', fgDark: '#0a0a0a', fgLight: '#faf9f6' },
 ]
 
 // WHY a separate type: this is the user-preference choice (a label)

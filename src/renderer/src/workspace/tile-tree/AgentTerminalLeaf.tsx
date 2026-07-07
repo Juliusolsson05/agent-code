@@ -7,6 +7,7 @@ import {
   THEME_CHANGED_EVENT,
   getActiveAppFontFamily,
 } from '@renderer/app-state/settings/theme'
+import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
@@ -139,6 +140,7 @@ export function AgentTerminalLeaf({
         fontFamily: getActiveAppFontFamily(),
         fontSize: 13,
         scrollback: 2000,
+        theme: readXtermTheme(),
       })
       fit = new FitAddon()
       term.loadAddon(fit)
@@ -219,7 +221,9 @@ export function AgentTerminalLeaf({
         })
 
       onThemeChangedListener = (): void => {
-        if (term) term.options.fontFamily = getActiveAppFontFamily()
+        if (!term) return
+        term.options.fontFamily = getActiveAppFontFamily()
+        syncXtermTheme(term)
       }
       window.addEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
     } catch (err) {

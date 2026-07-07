@@ -161,7 +161,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
             </button>
           </div>
 
-          {error && <div className="text-red-400">{error}</div>}
+          {error && <div className="text-danger">{error}</div>}
 
           {/* Transport: LAN (default, zero dependencies) vs internet tunnel */}
           {status?.enabled && (
@@ -251,7 +251,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                     <div className="truncate">
                       {device.name}
                       {connected.has(device.deviceId) && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wide text-green-400">
+                        <span className="ml-2 text-[10px] uppercase tracking-wide text-success">
                           connected
                         </span>
                       )}
@@ -264,7 +264,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
                     </div>
                   </div>
                   <button
-                    className="border border-border px-2 py-1 text-ink-dim hover:text-red-400 flex-shrink-0"
+                    className="border border-border px-2 py-1 text-ink-dim hover:text-danger flex-shrink-0"
                     disabled={busy}
                     onClick={() => revoke(device.deviceId)}
                   >

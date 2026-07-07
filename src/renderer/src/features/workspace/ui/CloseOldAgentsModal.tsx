@@ -340,7 +340,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                 </select>
               </div>
               {!thresholdValid && (
-                <div className="mt-1 text-[10px] text-red-300">
+                <div className="mt-1 text-[10px] text-danger">
                   Enter a number greater than zero.
                 </div>
               )}
@@ -494,7 +494,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                     className="flex items-start gap-3 px-4 py-2.5 border-b border-border last:border-b-0"
                   >
                     <div className="flex-shrink-0 w-[72px] flex items-center gap-2">
-                      <span className={row.isLive ? 'text-red-300' : 'text-muted'}>
+                      <span className={row.isLive ? 'text-danger' : 'text-muted'}>
                         {providerGlyph(row.kind)}
                       </span>
                       <span className="text-[11px] uppercase tracking-wider text-muted">
@@ -511,7 +511,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
                     </div>
                     <div className="flex-shrink-0 w-[150px] text-right">
                       {row.isLive ? (
-                        <div className="text-[11px] text-red-300">running</div>
+                        <div className="text-[11px] text-danger">running</div>
                       ) : null}
                       {row.lastActiveAt != null && row.ageMs != null ? (
                         <>
@@ -553,7 +553,7 @@ export function CloseOldAgentsModal({ open, workspace, onClose }: Props) {
               className={`
                 px-3 py-1.5 text-[11px] border
                 ${matchingRows.length > 0 && thresholdValid
-                  ? 'border-red-500/60 bg-red-500/10 text-red-200 hover:bg-red-500/20'
+                  ? 'border-danger-border bg-danger-soft text-danger hover:bg-danger-soft/80'
                   : 'border-border text-muted opacity-60 cursor-not-allowed'}
               `}
             >

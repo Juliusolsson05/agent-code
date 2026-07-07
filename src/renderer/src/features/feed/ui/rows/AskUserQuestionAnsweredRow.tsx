@@ -55,7 +55,7 @@ export const AskUserQuestionAnsweredRow = memo(function AskUserQuestionAnsweredR
         {questions.map((q, i) => (
           <div key={i} className="mt-0.5">
             {q.header && (
-              <span className="text-[11px] text-ink-dim border border-edge rounded px-1 py-px mr-2">
+              <span className="text-[11px] text-ink-dim border border-border rounded px-1 py-px mr-2">
                 {q.header}
               </span>
             )}

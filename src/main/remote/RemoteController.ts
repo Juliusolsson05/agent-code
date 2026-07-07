@@ -74,6 +74,7 @@ export class RemoteController extends EventEmitter {
   private url: string | null = null
   private transport: RemoteTransportMode | null = null
   private tunnelBinary: string | null | undefined = undefined
+  private themeSettings: Record<string, unknown> | null = null
   /** Serialization chain for enable/disable. Every transition queues behind
    *  the previous one — this is what makes rapid toggle/switch clicks safe.
    *  The previous design coalesced onto an in-flight enable promise, which
@@ -143,6 +144,7 @@ export class RemoteController extends EventEmitter {
         registry: this.registry,
         transport,
         clientDistDir: this.deps.clientDistDir ?? null,
+        getThemeSettings: () => this.themeSettings,
         journal: this.deps.journal ?? null,
       })
       this.transport = mode
@@ -169,6 +171,16 @@ export class RemoteController extends EventEmitter {
       this.emit('status-changed', status)
       return status
     })
+  }
+
+  setThemeSettings(settings: Record<string, unknown> | null): void {
+    // WHY RemoteController stores renderer appearance as an opaque record:
+    // the authoritative Settings type lives in the renderer bundle, but the
+    // remote server is a main-process feature. Main does not interpret these
+    // fields; it only relays the snapshot to paired phones, where the remote
+    // client merges it into DEFAULT_SETTINGS and runs the normal applyTheme().
+    this.themeSettings = settings
+    this.server?.broadcastThemeSettings()
   }
 
   /** FIFO transition queue — see the `chain` field's WHY. Failures propagate

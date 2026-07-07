@@ -147,7 +147,13 @@ export type OutboundSessionSummary = {
 }
 
 export type OutboundFrame =
-  | { type: 'hello'; deviceId: string; deviceName: string }
+  | {
+      type: 'hello'
+      deviceId: string
+      deviceName: string
+      themeSettings?: Record<string, unknown> | null
+    }
+  | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
   | { type: 'session-list'; sessions: OutboundSessionSummary[] }
   | {
       type: 'session-event'

@@ -221,7 +221,7 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
               copyState === 'copied'
                 ? 'text-accent'
                 : copyState === 'failed'
-                  ? 'text-red-400'
+                  ? 'text-danger'
                   : 'text-muted hover:text-ink'
             }
             title={
@@ -328,7 +328,7 @@ function WorktreeRow({ row, cwd }: { row: WorktreeDumpRow; cwd: string | null })
         {shortenPath(row.path)}
       </div>
       <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[10px] text-muted">
-        {row.dirty && <span className="text-amber-300">dirty</span>}
+        {row.dirty && <span className="text-warning">dirty</span>}
         {row.ahead !== null && row.behind !== null && (
           <span>
             +{row.ahead} / -{row.behind}
@@ -370,12 +370,12 @@ function WorktreeRow({ row, cwd }: { row: WorktreeDumpRow; cwd: string | null })
 
 function dotClass(category: string): string {
   if (category === 'live') return 'bg-accent'
-  if (category === 'dirty') return 'bg-amber-300'
-  if (category === 'active-unmerged') return 'bg-sky-400'
-  if (category === 'stale-review') return 'bg-violet-300'
+  if (category === 'dirty') return 'bg-warning'
+  if (category === 'active-unmerged') return 'bg-info'
+  if (category === 'stale-review') return 'bg-info'
   if (category === 'patch-equivalent') return 'bg-muted'
   if (category === 'cleanup-merged') return 'bg-muted'
-  if (category === 'detached') return 'bg-red-400'
+  if (category === 'detached') return 'bg-danger'
   return 'bg-ink-dim'
 }
 

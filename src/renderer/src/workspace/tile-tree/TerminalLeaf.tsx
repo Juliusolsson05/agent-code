@@ -10,6 +10,7 @@ import {
   THEME_CHANGED_EVENT,
   getActiveAppFontFamily,
 } from '@renderer/app-state/settings/theme'
+import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
 
 // TerminalLeaf — one pane that hosts a plain shell session.
 //
@@ -180,17 +181,12 @@ export function TerminalLeaf({
     }
 
     try {
-      // Theme choice: leave xterm's default palette alone. The
-      // user's shell prompt and tools assume a reasonable ANSI
-      // baseline and we'd rather inherit that than pick values
-      // that look great with one prompt and wrong with another.
-      //
-      // We deliberately do NOT set a transparent background here.
-      // xterm.js accepts 8-char hex in theme.background only when
-      // `allowTransparency: true` is also set, and the rendering
-      // cost is non-trivial. Just let xterm use its default dark
-      // background — it's close enough to bg-canvas that the
-      // seam is invisible in practice.
+      // WHY theme xterm explicitly: xterm renders its own canvas-ish DOM tree
+      // and does not inherit the surrounding Tailwind tokens. Leaving the
+      // default terminal theme alone was acceptable while the app was dark
+      // only, but it turns every shell pane into a black island in light mode.
+      // readXtermTheme keeps the app-owned foreground/background/cursor tied
+      // to CSS variables while preserving a stable ANSI table for shell tools.
       term = new Terminal({
         cursorBlink: true,
         convertEol: true,
@@ -204,6 +200,7 @@ export function TerminalLeaf({
         // the font while the terminal is mounted.
         fontFamily: getActiveAppFontFamily(),
         fontSize: 13,
+        theme: readXtermTheme(),
       })
       fit = new FitAddon()
       term.loadAddon(fit)
@@ -358,7 +355,9 @@ export function TerminalLeaf({
       // and the existing ResizeObserver covers any container resize
       // that follows.
       const onThemeChanged = (): void => {
-        if (term) term.options.fontFamily = getActiveAppFontFamily()
+        if (!term) return
+        term.options.fontFamily = getActiveAppFontFamily()
+        syncXtermTheme(term)
       }
       window.addEventListener(THEME_CHANGED_EVENT, onThemeChanged)
       // Capture the handler reference for the cleanup return below.

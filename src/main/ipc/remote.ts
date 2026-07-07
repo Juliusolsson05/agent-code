@@ -24,6 +24,13 @@ export function registerRemoteIpc(controller: RemoteController): void {
   ipcMain.handle('remote:revoke-device', (_evt, deviceId: string) =>
     controller.revokeDevice(deviceId),
   )
+  ipcMain.handle('remote:set-theme-settings', (_evt, settings: unknown) => {
+    controller.setThemeSettings(
+      settings && typeof settings === 'object' && !Array.isArray(settings)
+        ? settings as Record<string, unknown>
+        : null,
+    )
+  })
 
   // Push status transitions (enable/disable, device paired/revoked, phone
   // connected/disconnected) so RemotePanel live-updates without polling —

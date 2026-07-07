@@ -193,6 +193,7 @@ export default function App() {
 
   useEffect(() => {
     applyTheme(settings)
+    void window.api.remoteSetThemeSettings(settings)
   }, [settings])
 
   useEffect(() => {

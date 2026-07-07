@@ -67,7 +67,7 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
   return (
     <div className="
       h-full w-[440px] flex-shrink-0
-      border-l border-border bg-[#0c0c0c]
+      border-l border-border bg-surface
       flex flex-col
       overflow-hidden
       text-[10px] font-code
@@ -80,7 +80,7 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
         flex items-center justify-between
         px-3 py-2
         border-b border-border
-        text-[9px] text-red-400 uppercase tracking-wider
+        text-[9px] text-danger uppercase tracking-wider
         select-none flex-shrink-0
       ">
         <span>proxy debug — {kind} semantic stream</span>
@@ -104,7 +104,7 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
           {sortedFlows.map(flow => (
             <div
               key={flow.flowId}
-              className="bg-[#111] border border-[#222] px-2 py-1 mb-1"
+              className="bg-canvas border border-border px-2 py-1 mb-1"
             >
               <div className="flex items-center gap-2">
                 <Flag
@@ -158,7 +158,7 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
                 // Adding toolUseId (when present) and kind gives us
                 // a stable-but-unique identity that React can reconcile.
                 key={`${block.blockIndex}:${block.kind}:${block.toolUseId ?? 'x'}`}
-                className="bg-[#111] border border-[#222] px-2 py-1 mb-1"
+                className="bg-canvas border border-border px-2 py-1 mb-1"
               >
                 <div className="flex items-center gap-2 mb-0.5 text-ink-dim">
                   <span>#{block.blockIndex}</span>
@@ -206,9 +206,9 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
             {state.errors.slice(-10).map((err, i) => (
               <div
                 key={i}
-                className="bg-[#111] border border-[#222] px-2 py-1 mb-1"
+                className="bg-canvas border border-border px-2 py-1 mb-1"
               >
-                <div className="text-[9px] uppercase text-red-400">{err.kind}</div>
+                <div className="text-[9px] uppercase text-danger">{err.kind}</div>
                 <div className="text-ink-dim">{err.message}</div>
               </div>
             ))}
@@ -221,7 +221,7 @@ export function ProxyDebugPanel({ sessionId, kind, onClose }: Props) {
             {state.history.slice(-5).reverse().map(turn => (
               <div
                 key={turn.turnId}
-                className="bg-[#111] border border-[#222] px-2 py-1 mb-1"
+                className="bg-canvas border border-border px-2 py-1 mb-1"
               >
                 <div className="text-ink-dim text-[9px]">
                   {turn.turnId.slice(0, 18)}…
@@ -269,7 +269,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Pre({ children }: { children: React.ReactNode }) {
   return (
     <pre className="
-      bg-[#111] border border-[#222] px-2 py-1
+      bg-canvas border border-border px-2 py-1
       text-[10px] leading-[1.4] text-ink-dim
       whitespace-pre-wrap break-all
       max-h-[220px] overflow-auto
@@ -289,7 +289,7 @@ function Flag({
 }: { label: string; value?: string; on?: boolean }) {
   const display = value ?? (on ? 'true' : 'false')
   const color =
-    on === true ? 'text-green-400' : on === false ? 'text-red-400' : 'text-ink-dim'
+    on === true ? 'text-success' : on === false ? 'text-danger' : 'text-ink-dim'
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-muted">{label}</span>

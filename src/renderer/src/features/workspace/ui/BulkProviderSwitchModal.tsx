@@ -424,7 +424,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                     className="flex items-start gap-3 px-4 py-2.5 border-b border-border last:border-b-0"
                   >
                     <div className="flex-shrink-0 w-[72px] flex items-center gap-2">
-                      <span className={row.isLive ? 'text-amber-300' : 'text-muted'}>
+                      <span className={row.isLive ? 'text-warning' : 'text-muted'}>
                         {providerGlyph(row.kind)}
                       </span>
                       <span className="text-[11px] uppercase tracking-wider text-muted">
@@ -439,7 +439,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
                     </div>
                     <div className="flex-shrink-0 w-[110px] text-right">
                       {row.isLive ? (
-                        <div className="text-[11px] text-amber-300">working</div>
+                        <div className="text-[11px] text-warning">working</div>
                       ) : (
                         <div className="text-[11px] text-ink-dim">idle</div>
                       )}

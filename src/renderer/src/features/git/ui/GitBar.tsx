@@ -120,9 +120,9 @@ export function GitBar({ cwd, onClose }: Props) {
               <div className="px-3 py-1.5 text-[10px] text-muted uppercase tracking-wider select-none">
                 changes
                 <span className="ml-2 normal-case tracking-normal">
-                  <span className="text-green-400">+{totalAdd}</span>
+                  <span className="text-diff-add-fg">+{totalAdd}</span>
                   {' '}
-                  <span className="text-red-400">-{totalDel}</span>
+                  <span className="text-diff-remove-fg">-{totalDel}</span>
                 </span>
               </div>
               <div className="flex flex-col">
@@ -140,11 +140,11 @@ export function GitBar({ cwd, onClose }: Props) {
                     </span>
                     <span className="flex-shrink-0 tabular-nums">
                       {f.additions > 0 && (
-                        <span className="text-green-400">+{f.additions}</span>
+                        <span className="text-diff-add-fg">+{f.additions}</span>
                       )}
                       {f.additions > 0 && f.deletions > 0 && ' '}
                       {f.deletions > 0 && (
-                        <span className="text-red-400">-{f.deletions}</span>
+                        <span className="text-diff-remove-fg">-{f.deletions}</span>
                       )}
                     </span>
                   </div>
@@ -246,9 +246,9 @@ function SubmoduleRow({ sub }: { sub: GitSubmodule }) {
           {chipText}
         </span>
         <span className="flex-shrink-0 tabular-nums">
-          {totalAdd > 0 && <span className="text-green-400">+{totalAdd}</span>}
+          {totalAdd > 0 && <span className="text-diff-add-fg">+{totalAdd}</span>}
           {totalAdd > 0 && totalDel > 0 && ' '}
-          {totalDel > 0 && <span className="text-red-400">-{totalDel}</span>}
+          {totalDel > 0 && <span className="text-diff-remove-fg">-{totalDel}</span>}
         </span>
       </button>
 
@@ -269,9 +269,9 @@ function SubmoduleRow({ sub }: { sub: GitSubmodule }) {
                 {shortenPath(f.file)}
               </span>
               <span className="flex-shrink-0 tabular-nums">
-                {f.additions > 0 && <span className="text-green-400">+{f.additions}</span>}
+                {f.additions > 0 && <span className="text-diff-add-fg">+{f.additions}</span>}
                 {f.additions > 0 && f.deletions > 0 && ' '}
-                {f.deletions > 0 && <span className="text-red-400">-{f.deletions}</span>}
+                {f.deletions > 0 && <span className="text-diff-remove-fg">-{f.deletions}</span>}
               </span>
             </div>
           ))}

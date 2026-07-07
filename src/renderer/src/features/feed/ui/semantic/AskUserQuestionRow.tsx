@@ -430,7 +430,7 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
           <div className="text-[11px] text-muted italic">Answering…</div>
         ) : null}
         {resolveError ? (
-          <div className="border border-red-500/40 bg-red-950/20 px-2 py-1 text-[11px] text-red-300">
+          <div className="border border-danger-border bg-danger-soft px-2 py-1 text-[11px] text-danger">
             Answer failed: {resolveError}
           </div>
         ) : null}
