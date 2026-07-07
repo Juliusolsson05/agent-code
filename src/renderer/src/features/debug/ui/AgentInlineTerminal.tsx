@@ -6,6 +6,7 @@ import {
   THEME_CHANGED_EVENT,
   getActiveAppFontFamily,
 } from '@renderer/app-state/settings/theme'
+import { readXtermTheme, syncXtermTheme } from '@renderer/workspace/tile-tree/xtermTheme'
 
 type Props = {
   sessionId: string
@@ -61,9 +62,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
         fontFamily: getActiveAppFontFamily(),
         fontSize: 10,
         scrollback: 2000,
-        theme: {
-          background: '#080808',
-        },
+        theme: readXtermTheme(),
       })
       fit = new FitAddon()
       term.loadAddon(fit)
@@ -120,7 +119,9 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
       // CSS variable, so re-reading via getActiveAppFontFamily here
       // always sees the new value.
       onThemeChangedListener = (): void => {
-        if (term) term.options.fontFamily = getActiveAppFontFamily()
+        if (!term) return
+        term.options.fontFamily = getActiveAppFontFamily()
+        syncXtermTheme(term)
       }
       window.addEventListener(THEME_CHANGED_EVENT, onThemeChangedListener)
     } catch (err) {
@@ -147,7 +148,7 @@ export function AgentInlineTerminal({ sessionId, active }: Props) {
     <div
       className="
         h-[260px] min-h-[180px] w-full
-        border border-[#222] bg-[#080808]
+        border border-border bg-canvas
         overflow-hidden relative
       "
       onMouseDown={() => termRef.current?.focus()}

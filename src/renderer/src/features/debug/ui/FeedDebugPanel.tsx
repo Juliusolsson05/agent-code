@@ -57,14 +57,14 @@ export function FeedDebugPanel({ sessionId, runtime, kind, onClose }: Props) {
   return (
     <div className="
       h-full w-[540px] flex-shrink-0
-      border-l border-border bg-[#0c0c0c]
+      border-l border-border bg-surface
       flex flex-col overflow-hidden
       text-[10px] font-code
     ">
       <div className="
         flex items-center justify-between
         px-3 py-2 border-b border-border
-        text-[9px] text-red-400 uppercase tracking-wider
+        text-[9px] text-danger uppercase tracking-wider
         select-none flex-shrink-0
       ">
         <span>debug logs — {kind} pane</span>
@@ -161,15 +161,15 @@ export function FeedDebugPanel({ sessionId, runtime, kind, onClose }: Props) {
 function layerText(layer: FeedDebugLayer): string {
   switch (layer) {
     case 'STATE':
-      return 'text-blue-400'
+      return 'text-info'
     case 'JSONL':
-      return 'text-emerald-400'
+      return 'text-success'
     case 'SEM':
-      return 'text-amber-400'
+      return 'text-warning'
     case 'RENDER':
-      return 'text-fuchsia-400'
+      return 'text-accent'
     case 'GHOST':
-      return 'text-violet-400'
+      return 'text-ink-dim'
   }
 }
 

@@ -77,9 +77,9 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
   const stats = useMemo(() => buildStats(rows), [rows])
 
   return (
-    <div className="border border-border bg-[#101010]">
+    <div className="border border-border bg-canvas">
       <div className="border-b border-border px-3 py-2 flex items-center justify-between gap-3">
-        <div className="text-[10px] text-red-300 uppercase tracking-[0.12em]">
+        <div className="text-[10px] text-danger uppercase tracking-[0.12em]">
           claude paste / submit detection
         </div>
         <div className="text-[10px] text-muted truncate">
@@ -102,7 +102,7 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
               {plain.length} chars · {(plain.match(/\[Pasted text #\d+/g) ?? []).length} placeholders
             </span>
           </div>
-          <pre className="max-h-[140px] overflow-auto whitespace-pre-wrap break-words border border-[#222] bg-[#0b0b0b] px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
+          <pre className="max-h-[140px] overflow-auto whitespace-pre-wrap break-words border border-border bg-canvas px-2 py-1 text-[10px] leading-[1.45] text-ink-dim">
             {plain.slice(-600) || '(screen empty)'}
           </pre>
         </section>
@@ -120,10 +120,10 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
                     {rule.label}
                   </div>
                   <div className="mt-1 flex gap-3 text-[10px]">
-                    <span className={plainHit ? 'text-green-400' : 'text-red-400'}>
+                    <span className={plainHit ? 'text-success' : 'text-danger'}>
                       plain {plainHit ? '● match' : '○'}
                     </span>
-                    <span className={mdHit ? 'text-green-400' : 'text-red-400'}>
+                    <span className={mdHit ? 'text-success' : 'text-danger'}>
                       md {mdHit ? '● match' : '○'}
                     </span>
                   </div>
@@ -139,15 +139,15 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
             <span className="text-[9px] text-muted uppercase tracking-[0.12em]">submit timeline</span>
             <span className="text-[10px] text-muted tabular-nums">
               {stats.count} submits · p50 {stats.p50Ms ?? '—'}ms · p95 {stats.p95Ms ?? '—'}ms ·{' '}
-              <span className={stats.failed > 0 ? 'text-red-400' : 'text-muted'}>
+              <span className={stats.failed > 0 ? 'text-danger' : 'text-muted'}>
                 {stats.failed} failed
               </span>
             </span>
           </div>
-          <div className="overflow-auto max-h-[260px] border border-[#222] bg-[#0b0b0b]">
+          <div className="overflow-auto max-h-[260px] border border-border bg-canvas">
             <table className="w-full text-[10px] tabular-nums">
               <thead className="text-muted">
-                <tr className="border-b border-[#222]">
+                <tr className="border-b border-border">
                   <th className="text-left px-2 py-1 font-normal">pasteId</th>
                   <th className="text-right px-2 py-1 font-normal">issued→det</th>
                   <th className="text-right px-2 py-1 font-normal">det→cr</th>
@@ -166,16 +166,16 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
                   </tr>
                 ) : (
                   rows.map(row => (
-                    <tr key={row.pasteId} className="border-b border-[#1a1a1a]">
+                    <tr key={row.pasteId} className="border-b border-border">
                       <td className="px-2 py-0.5">{row.pasteId.slice(0, 6)}</td>
                       <td className="px-2 py-0.5 text-right">{row.issuedToDetectedMs ?? '—'}</td>
                       <td className="px-2 py-0.5 text-right">{row.detectedToSubmitMs ?? '—'}</td>
                       <td
                         className={`px-2 py-0.5 ${
                           row.outcome === 'stuck' || row.outcome === 'error'
-                            ? 'text-red-400'
+                            ? 'text-danger'
                             : row.outcome === 'submitted'
-                              ? 'text-green-400'
+                              ? 'text-success'
                               : 'text-muted'
                         }`}
                       >
@@ -184,9 +184,9 @@ function ClaudePasteDetection({ sessionId, runtime, kind }: DevDebugModuleProps)
                       <td
                         className={`px-2 py-0.5 ${
                           row.via === 'inline'
-                            ? 'text-amber-400'
+                            ? 'text-warning'
                             : row.via === 'placeholder'
-                              ? 'text-green-400'
+                              ? 'text-success'
                               : 'text-muted'
                         }`}
                       >

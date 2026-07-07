@@ -81,14 +81,14 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
   return (
     <div className="
       h-full w-[620px] flex-shrink-0
-      border-l border-border bg-[#0c0c0c]
+      border-l border-border bg-surface
       flex flex-col overflow-hidden
       text-[10px] font-code
     ">
       <div className="
         flex items-center justify-between
         px-3 py-2 border-b border-border
-        text-[9px] text-red-400 uppercase tracking-wider
+        text-[9px] text-danger uppercase tracking-wider
         select-none flex-shrink-0
       ">
         <span>dev debug</span>
@@ -129,7 +129,7 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
         )}
       </div>
 
-      <div className="border-b border-border bg-[#101010] px-3 py-2">
+      <div className="border-b border-border bg-surface px-3 py-2">
         {devDebugModules.length === 0 ? (
           <div className="text-[11px] text-muted">no dev debug modules registered</div>
         ) : (
@@ -167,7 +167,7 @@ export function DevDebugPanel({ sessionId, runtime, kind, workspace, onClose }: 
 
       <div className="flex-1 min-h-0 overflow-auto p-3 flex flex-col gap-3">
         {enabledModules.length === 0 ? (
-          <div className="border border-border bg-[#101010] px-3 py-4 text-center text-[11px] text-muted">
+          <div className="border border-border bg-canvas px-3 py-4 text-center text-[11px] text-muted">
             no dev debug modules enabled
           </div>
         ) : (

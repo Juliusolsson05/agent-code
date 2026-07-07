@@ -64,7 +64,7 @@ export function DebugPanel({
   return (
     <div className="
       h-full w-[380px] flex-shrink-0
-      border-l border-border bg-[#0c0c0c]
+      border-l border-border bg-surface
       flex flex-col
       overflow-hidden
       text-[10px] font-code
@@ -74,7 +74,7 @@ export function DebugPanel({
         flex items-center justify-between
         px-3 py-2
         border-b border-border
-        text-[9px] text-red-400 uppercase tracking-wider
+        text-[9px] text-danger uppercase tracking-wider
         select-none flex-shrink-0
       ">
         <span>debug — {kind} session</span>
@@ -204,7 +204,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Pre({ children }: { children: React.ReactNode }) {
   return (
     <pre className="
-      bg-[#111] border border-[#222] px-2 py-1
+      bg-canvas border border-border px-2 py-1
       text-[10px] leading-[1.4] text-ink-dim
       whitespace-pre-wrap break-all
       max-h-[150px] overflow-auto
@@ -217,7 +217,7 @@ function Pre({ children }: { children: React.ReactNode }) {
 
 function Flag({ label, value, on }: { label: string; value?: string; on?: boolean }) {
   const display = value ?? (on ? 'true' : 'false')
-  const color = on === true ? 'text-green-400' : on === false ? 'text-red-400' : 'text-ink-dim'
+  const color = on === true ? 'text-success' : on === false ? 'text-danger' : 'text-ink-dim'
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-muted">{label}</span>

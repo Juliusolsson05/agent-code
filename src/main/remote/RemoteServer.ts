@@ -82,6 +82,7 @@ export type RemoteServerDeps = {
   /** Directory of the built remote-client bundle; null/absent serves a
    *  placeholder page so the server is testable before the client exists. */
   clientDistDir?: string | null
+  getThemeSettings?: () => Record<string, unknown> | null
   journal?: AppRunJournal | null
 }
 
@@ -213,6 +214,13 @@ export class RemoteServer extends EventEmitter {
 
   connectedDeviceIds(): string[] {
     return [...this.sockets].map(s => s.deviceId)
+  }
+
+  broadcastThemeSettings(): void {
+    this.broadcast({
+      type: 'theme-settings',
+      themeSettings: this.deps.getThemeSettings?.() ?? null,
+    })
   }
 
   // ---------- HTTP ----------
@@ -391,7 +399,12 @@ export class RemoteServer extends EventEmitter {
     })
 
     const device = this.deps.registry.get(deviceId)
-    this.send(ws, { type: 'hello', deviceId, deviceName: device?.name ?? 'unknown' })
+    this.send(ws, {
+      type: 'hello',
+      deviceId,
+      deviceName: device?.name ?? 'unknown',
+      themeSettings: this.deps.getThemeSettings?.() ?? null,
+    })
     this.send(ws, { type: 'session-list', sessions: this.deps.feedSource.listSessions() })
     // Late-joiner replay — same channel shape as live events so the client
     // needs no special bootstrap path.

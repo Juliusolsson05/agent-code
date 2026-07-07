@@ -385,8 +385,8 @@ export function NewAgentPlacementOverlay({
           className={`
             absolute pointer-events-none border-2
             ${placementTarget.scope === 'global'
-              ? 'border-amber-400 bg-amber-400/12 shadow-[0_0_0_1px_rgba(251,191,36,0.35)]'
-              : 'border-red-500 bg-red-500/12 shadow-[0_0_0_1px_rgba(239,68,68,0.35)]'
+              ? 'border-warning bg-warning-soft'
+              : 'border-danger bg-danger-soft'
             }
           `}
           style={{

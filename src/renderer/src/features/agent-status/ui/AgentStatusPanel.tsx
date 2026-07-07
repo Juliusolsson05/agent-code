@@ -99,7 +99,7 @@ function AgentStatusContent({ model }: { model: AgentStatusModel }) {
 
 function EmptyState() {
   return (
-    <div className="rounded border border-border bg-bg px-3 py-3 text-muted">
+    <div className="rounded border border-border bg-canvas px-3 py-3 text-muted">
       Focus a Claude or Codex agent to inspect its status.
     </div>
   )
@@ -107,7 +107,7 @@ function EmptyState() {
 
 function Section({ title, fields }: { title: string; fields: AgentStatusField[] }) {
   return (
-    <section className="border border-border bg-bg">
+    <section className="border border-border bg-canvas">
       <div className="
         border-b border-border px-2 py-1
         text-[10px] uppercase tracking-[0.14em] text-muted
@@ -135,8 +135,8 @@ function FieldRow({ field }: { field: AgentStatusField }) {
 }
 
 function toneClass(tone: AgentStatusField['tone']): string {
-  if (tone === 'good') return 'text-green-400'
-  if (tone === 'warn') return 'text-yellow-300'
-  if (tone === 'bad') return 'text-red-400'
+  if (tone === 'good') return 'text-success'
+  if (tone === 'warn') return 'text-warning'
+  if (tone === 'bad') return 'text-danger'
   return 'text-ink'
 }

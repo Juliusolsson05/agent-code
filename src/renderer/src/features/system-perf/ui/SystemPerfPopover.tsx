@@ -98,9 +98,9 @@ function prettySpaceName(name: string): string {
 //
 // Thresholds are heuristic; tune if user reports diverge from them.
 function eventLoopClass(ms: number): string {
-  if (ms >= 50) return 'text-red-400'
-  if (ms >= 16) return 'text-amber-400'
-  return 'text-emerald-400'
+  if (ms >= 50) return 'text-danger'
+  if (ms >= 16) return 'text-warning'
+  return 'text-success'
 }
 
 // Snapshot capture state. Local-only to the popover — no reason to
@@ -236,7 +236,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
             </span>
             <span>
               {formatBytes(peakHeap)} ·{' '}
-              <span className={heapGrowth !== null && heapGrowth > 0 ? 'text-amber-400' : ''}>
+              <span className={heapGrowth !== null && heapGrowth > 0 ? 'text-warning' : ''}>
                 {formatGrowth(heapGrowth)}
               </span>
             </span>
@@ -246,7 +246,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
             <span>{formatBytes(current.rss)}</span>
             <span>
               {formatBytes(peakRss)} ·{' '}
-              <span className={rssGrowth !== null && rssGrowth > 0 ? 'text-amber-400' : ''}>
+              <span className={rssGrowth !== null && rssGrowth > 0 ? 'text-warning' : ''}>
                 {formatGrowth(rssGrowth)}
               </span>
             </span>
@@ -266,15 +266,15 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
             <span>last {windowSeconds}s</span>
             <span className="flex items-center gap-3">
               <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 bg-emerald-400" />
+                <span className="inline-block w-2 h-2 bg-success" />
                 heap
               </span>
               <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 bg-sky-400" />
+                <span className="inline-block w-2 h-2 bg-info" />
                 rss
               </span>
               <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-px bg-red-400" />
+                <span className="inline-block w-2 h-px bg-danger" />
                 cap
               </span>
             </span>
@@ -347,7 +347,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
                     <span className="text-ink">{prettySpaceName(space.spaceName)}</span>
                     <span className="bg-surface-hi h-1.5 relative">
                       <span
-                        className="absolute left-0 top-0 bottom-0 bg-emerald-400/60"
+                        className="absolute left-0 top-0 bottom-0 bg-success/60"
                         style={{ width: `${widthPct}%` }}
                       />
                     </span>
@@ -378,8 +378,8 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
             <div
               className={
                 current.detachedContexts > 0
-                  ? 'font-semibold text-red-400'
-                  : 'text-emerald-400'
+                  ? 'font-semibold text-danger'
+                  : 'text-success'
               }
             >
               {current.detachedContexts}
@@ -387,7 +387,7 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
           </div>
           <div>
             <div className="text-[9px] uppercase text-muted">native ctx</div>
-            <div className={current.nativeContexts > 5 ? 'text-amber-400' : ''}>
+            <div className={current.nativeContexts > 5 ? 'text-warning' : ''}>
               {current.nativeContexts}
             </div>
           </div>
@@ -458,14 +458,14 @@ export function SystemPerfPopover({ open, current, buffer }: Props) {
             <button
               type="button"
               onClick={handleReveal}
-              className="px-2 py-1 text-[10px] border border-emerald-400/40 text-emerald-400 hover:bg-surface"
+              className="px-2 py-1 text-[10px] border border-success-border text-success hover:bg-surface"
               title={snapshot.path}
             >
               reveal in Finder
             </button>
           ) : null}
           {snapshot.kind === 'error' ? (
-            <span className="text-[10px] text-red-400" title={snapshot.message}>
+            <span className="text-[10px] text-danger" title={snapshot.message}>
               {snapshot.message}
             </span>
           ) : null}

@@ -43,6 +43,8 @@ export const remoteApi = {
     ipcRenderer.invoke('remote:issue-pairing-code'),
   remoteRevokeDevice: (deviceId: string): Promise<boolean> =>
     ipcRenderer.invoke('remote:revoke-device', deviceId),
+  remoteSetThemeSettings: (settings: unknown): Promise<void> =>
+    ipcRenderer.invoke('remote:set-theme-settings', settings),
   onRemoteStatusChanged: (cb: (status: RemoteStatus) => void): Unsub =>
     subscribe('remote:status-changed', cb),
 }

@@ -12,6 +12,8 @@ import type {
   SessionStartedEvent,
   SessionSubAgentsEvent,
 } from '@shared/sessionFeed/types'
+import { applyTheme } from '@renderer/app-state/settings/theme'
+import { DEFAULT_SETTINGS, type Settings } from '@renderer/app-state/settings/types'
 
 import type {
   FeedChannel,
@@ -21,6 +23,11 @@ import type {
   OutboundFrame,
   RemoteSessionSummary,
 } from './wire'
+
+function applyRemoteThemeSettings(settings: Record<string, unknown> | null | undefined): void {
+  if (!settings) return
+  applyTheme({ ...DEFAULT_SETTINGS, ...settings } as Settings)
+}
 
 // WebSocketSessionFeed — the phone's implementation of the SessionFeed
 // contract (the desktop's is IpcSessionFeed). Same interface, different
@@ -354,6 +361,11 @@ export class WebSocketSessionFeed implements SessionFeed {
         return
       }
       case 'hello':
+        applyRemoteThemeSettings(frame.themeSettings)
+        return
+      case 'theme-settings':
+        applyRemoteThemeSettings(frame.themeSettings)
+        return
       case 'error':
         return
     }

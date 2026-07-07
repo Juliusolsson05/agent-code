@@ -9,7 +9,7 @@ import type { SubAgentState } from '@renderer/workspace/workspaceState'
 // how many older calls were trimmed so the count never silently lies.
 export function SubagentMiniFeed({ sa }: { sa: SubAgentState }) {
   return (
-    <div className="ml-4 mt-1 border-l border-line/60 pl-3">
+    <div className="ml-4 mt-1 border-l border-border/60 pl-3">
       {sa.droppedToolCalls > 0 && (
         <div className="text-[11px] text-muted mb-1">
           … +{sa.droppedToolCalls} earlier{' '}

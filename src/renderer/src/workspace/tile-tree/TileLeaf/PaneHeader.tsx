@@ -78,7 +78,7 @@ export function PaneHeader({
                   'leading-none transition-colors',
                   active
                     ? 'border-accent bg-accent text-accent-fg'
-                    : 'border-border bg-canvas text-muted hover:border-accent/70 hover:text-fg',
+                    : 'border-border bg-canvas text-muted hover:border-accent/70 hover:text-ink',
                 ].join(' ')}
               >
                 <span

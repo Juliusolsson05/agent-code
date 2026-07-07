@@ -13,6 +13,21 @@ export const CUSTOM_APPEARANCE_COLOR_KEYS = [
   'codeBg',
   'codeBorder',
   'danger',
+  'dangerFg',
+  'dangerSoft',
+  'dangerBorder',
+  'success',
+  'successFg',
+  'successSoft',
+  'successBorder',
+  'warning',
+  'warningFg',
+  'warningSoft',
+  'warningBorder',
+  'info',
+  'infoFg',
+  'infoSoft',
+  'infoBorder',
   'codeInk',
   'codeInkDim',
   'userBg',
@@ -41,6 +56,21 @@ export const CUSTOM_APPEARANCE_CSS_VARS: Record<CustomAppearanceColorKey, string
   codeBg: '--theme-code-bg',
   codeBorder: '--theme-code-border',
   danger: '--theme-danger',
+  dangerFg: '--theme-danger-fg',
+  dangerSoft: '--theme-danger-soft',
+  dangerBorder: '--theme-danger-border',
+  success: '--theme-success',
+  successFg: '--theme-success-fg',
+  successSoft: '--theme-success-soft',
+  successBorder: '--theme-success-border',
+  warning: '--theme-warning',
+  warningFg: '--theme-warning-fg',
+  warningSoft: '--theme-warning-soft',
+  warningBorder: '--theme-warning-border',
+  info: '--theme-info',
+  infoFg: '--theme-info-fg',
+  infoSoft: '--theme-info-soft',
+  infoBorder: '--theme-info-border',
   codeInk: '--theme-code-ink',
   codeInkDim: '--theme-code-ink-dim',
   userBg: '--theme-user-bg',
@@ -66,6 +96,21 @@ export const DEFAULT_CUSTOM_APPEARANCE: CustomAppearanceColors = {
   codeBg: '#050507',
   codeBorder: '#16161a',
   danger: '#ff6b6b',
+  dangerFg: '#0a0a0a',
+  dangerSoft: 'color-mix(in srgb, #ff6b6b 14%, transparent)',
+  dangerBorder: 'color-mix(in srgb, #ff6b6b 42%, transparent)',
+  success: '#4ade80',
+  successFg: '#07130b',
+  successSoft: 'color-mix(in srgb, #4ade80 14%, transparent)',
+  successBorder: 'color-mix(in srgb, #4ade80 42%, transparent)',
+  warning: '#facc15',
+  warningFg: '#1f1600',
+  warningSoft: 'color-mix(in srgb, #facc15 16%, transparent)',
+  warningBorder: 'color-mix(in srgb, #facc15 45%, transparent)',
+  info: '#60a5fa',
+  infoFg: '#06101f',
+  infoSoft: 'color-mix(in srgb, #60a5fa 14%, transparent)',
+  infoBorder: 'color-mix(in srgb, #60a5fa 42%, transparent)',
   codeInk: '#e8e8e6',
   codeInkDim: '#a8a8a4',
   userBg: '#1f1f23',
@@ -130,6 +175,16 @@ export function parseCustomAppearanceJson(raw: string): CustomAppearanceColors {
   const colors = {} as CustomAppearanceColors
   for (const key of CUSTOM_APPEARANCE_COLOR_KEYS) {
     const value = record[key]
+    // WHY missing keys are backfilled instead of making the whole custom
+    // palette invalid: Custom Appearance is persisted user data, and new
+    // product tokens are added over time. Treating a missing *new* key as a
+    // fatal schema error would silently throw a user's old custom theme away
+    // during coerceSettings(). Unknown keys are still rejected above because a
+    // typo should not look like a successfully-applied color.
+    if (value === undefined) {
+      colors[key] = DEFAULT_CUSTOM_APPEARANCE[key]
+      continue
+    }
     if (typeof value !== 'string') {
       throw new Error(`Custom appearance key "${key}" must be a string.`)
     }

@@ -126,8 +126,8 @@ function formatLastActivity(
 }
 
 function statusClass(status: PanePerformanceStats['status'] | undefined): string {
-  if (status === 'running') return 'text-green-400'
-  if (status === 'idle') return 'text-yellow-300'
-  if (status === 'exited') return 'text-red-400'
+  if (status === 'running') return 'text-success'
+  if (status === 'idle') return 'text-warning'
+  if (status === 'exited') return 'text-danger'
   return 'text-muted'
 }

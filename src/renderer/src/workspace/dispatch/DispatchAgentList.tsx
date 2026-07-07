@@ -386,7 +386,7 @@ function DispatchAgentBadge({ kind }: { kind: SessionKind | undefined }) {
       ? 'Terminal'
       : getRendererProviderCapabilities(isAgentProviderKind(kind) ? kind : DEFAULT_PROVIDER).shortLabel
   const classes = kind === 'terminal'
-    ? 'border-cyan-400/50 bg-cyan-400/10 text-cyan-200'
+    ? 'border-info-border bg-info-soft text-info'
     : 'border-border bg-surface-hi text-muted'
   return (
     <span className={`flex-shrink-0 px-1.5 py-[1px] text-[9px] font-code leading-none border ${classes}`}>
@@ -406,8 +406,8 @@ function DispatchUnreadBadge({
     return (
       <span
         className="
-          flex-shrink-0 rounded-sm border border-amber-300/70 bg-amber-400/20
-          px-1.5 py-[1px] text-[9px] font-semibold leading-none text-amber-100
+          flex-shrink-0 rounded-sm border border-warning-border bg-warning-soft
+          px-1.5 py-[1px] text-[9px] font-semibold leading-none text-warning
         "
       >
         {label ?? 'ACTION'}
@@ -468,34 +468,34 @@ export function dispatchActivityClasses(
   if (activity === 'working') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-green-600 text-white',
+      index: 'bg-success text-success-fg',
       title: '',
     }
   }
   if (activity === 'running') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-blue-600 text-white',
+      index: 'bg-info text-info-fg',
       title: '',
     }
   }
   if (activity === 'starting') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-orange-500 text-black',
+      index: 'bg-warning text-warning-fg',
       title: '',
     }
   }
   if (activity === 'exited') {
     return {
       row: 'bg-surface hover:bg-surface-hi text-muted opacity-75',
-      index: 'bg-red-700 text-white',
+      index: 'bg-danger text-danger-fg',
       title: '',
     }
   }
   return {
     row: 'bg-surface hover:bg-surface-hi text-ink-dim',
-    index: 'bg-zinc-700 text-zinc-100',
+    index: 'bg-surface-hi text-muted',
     title: '',
   }
 }
@@ -505,15 +505,15 @@ export function dispatchActivityClasses(
 export function dispatchActivityDotClass(activity: DispatchAgentActivity): string {
   switch (activity) {
     case 'working':
-      return 'bg-green-500'
+      return 'bg-success'
     case 'running':
-      return 'bg-blue-500'
+      return 'bg-info'
     case 'starting':
-      return 'bg-orange-400'
+      return 'bg-warning'
     case 'exited':
-      return 'bg-red-600'
+      return 'bg-danger'
     default:
-      return 'bg-zinc-500'
+      return 'bg-muted'
   }
 }
 

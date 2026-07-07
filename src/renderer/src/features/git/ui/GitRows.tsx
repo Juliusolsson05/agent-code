@@ -72,7 +72,7 @@ function GitCardHeader({
       {flags?.map(f => (
         <span
           key={f}
-          className="font-code text-[11px] text-ink-dim bg-code-bg px-1.5 py-0.5 rounded"
+          className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded"
         >
           {f}
         </span>
@@ -336,7 +336,7 @@ export const GitCommitCard = memo(function GitCommitCard({
         badges={
           <span className="flex items-baseline gap-2">
             {result.branch && (
-              <span className="font-code text-[11px] text-ink-dim bg-code-bg px-1.5 py-0.5 rounded">
+              <span className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded">
                 {result.branch}
               </span>
             )}
@@ -391,7 +391,7 @@ export const GitStatusCard = memo(function GitStatusCard({
       <GitCardHeader
         sub="status"
         badges={r.branch && (
-          <span className="font-code text-[11px] text-ink-dim bg-code-bg px-1.5 py-0.5 rounded">
+          <span className="font-code text-[11px] text-code-ink-dim bg-code-bg px-1.5 py-0.5 rounded">
             {r.branch}
           </span>
         )}
