@@ -145,10 +145,12 @@ export type RenderCandidate = {
  * least one fixture in testing/fixtures/rendering/ proving when it fires
  * (plan §7 rule 15). If you need a new reason, write the fixture first.
  *
- * `ghost-semantic-owned` carries a death sentence: it exists only because
- * SemanticStreamingTurn still owns the live turn in the legacy renderer.
- * It is deleted at Stage 3 cutover TOGETHER with SemanticStreamingTurn
- * (plan D6 — never one without the other).
+ * `ghost-semantic-owned` was originally slated to die with SemanticStreamingTurn
+ * (plan D6), but the #491 block-level un-collapse showed it is NOT a component
+ * artifact: it rejects a GHOST whose turnId is the currently-live turn so the
+ * ghost cannot double-render against that turn's live semantic-current blocks.
+ * That ghost-vs-live dedup is load-bearing regardless of which component draws
+ * the live turn, so it is RETAINED. (SemanticStreamingTurn itself is deleted.)
  */
 export type RenderReason =
   | 'selected'
