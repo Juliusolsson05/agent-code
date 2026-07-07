@@ -46,15 +46,23 @@ export const TaskSubagentRow = memo(function TaskSubagentRow({
         : '')
 
   const glyph =
-    sa?.status === 'done' ? '✓' : sa?.status === 'error' ? '✗' : '◐'
+    sa?.status === 'done' ? '✓' : sa?.status === 'error' ? '✗' : sa?.status === 'stale' ? '◌' : '◐'
   const toolTotal = sa ? sa.toolCalls.length + sa.droppedToolCalls : 0
   const right = !sa
     ? 'starting…'
     : sa.status === 'running'
       ? `${toolTotal} tools · ${elapsedLabel(sa.startedAt, sa.lastActivityAt)}`
-      : `${toolTotal} tools · ${
-          sa.status === 'error' ? 'failed' : 'done'
-        }`
+      : sa.status === 'stale'
+        ? // #341: "gone quiet" — never an eternal spinner, never a
+          // fabricated "done". Minutes-ago anchors WHEN it went dark.
+          `${toolTotal} tools · quiet ${
+            sa.lastActivityAt !== null
+              ? `${Math.max(1, Math.round((Date.now() - sa.lastActivityAt) / 60_000))}m`
+              : ''
+          }`
+        : `${toolTotal} tools · ${
+            sa.status === 'error' ? 'failed' : 'done'
+          }`
 
   return (
     <MarkerRow marker={glyph}>

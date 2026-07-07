@@ -217,6 +217,55 @@ export function extractCodexSpawnOutput(entry: JsonlEntry): SpawnOutput | null {
   }
 }
 
+/** Parent `wait_agent` function_call tracking: outputs carry the fan-in
+ *  truth `{"status":{"<agent-uuid>":{"completed"|"failed"|"error"|
+ *  "interrupted": <result text>}}}` (shape verified against on-disk
+ *  rollouts 2026-06-18). Codex has NO subagent notification on this path —
+ *  for MCP-spawned children this output is the ONLY terminal signal the
+ *  parent ever records (#341's stuck-running root cause). */
+export function isCodexWaitAgentCall(entry: JsonlEntry): string | null {
+  const payload = asRecord(entry.payload)
+  if (!payload || entry.type !== 'response_item') return null
+  if (payload.type !== 'function_call' && payload.type !== 'custom_tool_call') return null
+  const name = stringField(payload, 'name')
+  if (name !== 'wait_agent' && name !== 'wait_agents') return null
+  return stringField(payload, 'call_id')
+}
+
+export function extractCodexWaitStatuses(
+  entry: JsonlEntry,
+  waitCallIds: ReadonlySet<string>,
+): Map<string, 'done' | 'error'> | null {
+  const payload = asRecord(entry.payload)
+  if (!payload || entry.type !== 'response_item') return null
+  if (payload.type !== 'function_call_output' && payload.type !== 'custom_tool_call_output') {
+    return null
+  }
+  const callId = stringField(payload, 'call_id')
+  if (!callId || !waitCallIds.has(callId)) return null
+  const text = textFromCodexOutput(payload.output) ?? (typeof payload.output === 'string' ? payload.output : null)
+  if (!text) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  const statusMap = asRecord(asRecord(parsed)?.status)
+  if (!statusMap) return null
+  const out = new Map<string, 'done' | 'error'>()
+  for (const [agentId, v] of Object.entries(statusMap)) {
+    const state = asRecord(v)
+    if (!state) continue
+    const keys = Object.keys(state)
+    if (keys.includes('completed')) out.set(agentId, 'done')
+    else if (keys.some(k => k === 'failed' || k === 'error' || k === 'interrupted')) {
+      out.set(agentId, 'error')
+    }
+  }
+  return out.size > 0 ? out : null
+}
+
 export function extractCodexSubagentNotification(entry: JsonlEntry): Notification | null {
   if (entry.type !== 'response_item') return null
   const payload = asRecord(entry.payload)
@@ -402,6 +451,17 @@ export function buildCodexSubAgentState(params: {
   }
 }
 
+/** Mirrors SUBAGENT_STALE_AFTER_MS on the claude side (#341): a child
+ *  with no rollout activity for 5 minutes while nominally running is
+ *  presumed dead/hung — 'stale', never fabricated 'done'. */
+export const CODEX_SUBAGENT_STALE_AFTER_MS = 5 * 60_000
+
+/** Terminal children older than this get pruned from the tracker (#341):
+ *  their truth is durable in the parent rollout by then. 10 minutes keeps
+ *  the completed card interactive well past reading time without letting
+ *  resumed sessions accumulate every child ever spawned. */
+export const CODEX_SUBAGENT_PRUNE_AFTER_MS = 10 * 60_000
+
 function createCodexAccumulator(): CodexSubAgentAccumulator {
   return {
     childMeta: null,
@@ -519,19 +579,30 @@ function buildCodexSubAgentStateFromAccumulator(params: {
   spawn: SpawnCall | null
   output: SpawnOutput | null
   notification: Notification | null
+  /** Terminal state from the parent's wait_agent output (#341) — for
+   *  MCP-spawned codex children this is the only terminal signal. */
+  waitTerminal?: 'done' | 'error' | null
   acc: CodexSubAgentAccumulator | null
+  nowMs?: number
 }): SubAgentState {
   const acc = params.acc ?? createCodexAccumulator()
   const childMeta = acc.childMeta
   const startedAt =
     tsToMs(childMeta?.timestamp) ??
     acc.minTimestampMs
+  const nowMs = params.nowMs ?? Date.now()
   const status: SubAgentState['status'] =
-    params.notification?.status === 'failed' || params.notification?.status === 'error'
+    params.notification?.status === 'failed' ||
+    params.notification?.status === 'error' ||
+    params.waitTerminal === 'error'
       ? 'error'
-      : params.notification?.status === 'completed' || acc.taskComplete
+      : params.notification?.status === 'completed' ||
+          acc.taskComplete ||
+          params.waitTerminal === 'done'
         ? 'done'
-        : 'running'
+        : acc.maxTimestampMs !== null && nowMs - acc.maxTimestampMs > CODEX_SUBAGENT_STALE_AFTER_MS
+          ? 'stale'
+          : 'running'
   const { kept } = capToolCalls(acc.toolCalls)
 
   return {
@@ -603,6 +674,8 @@ export class CodexSubAgentTracker {
   // mirror the Claude SubAgentWatcher lifetime: append-only bytes are folded
   // into a tiny accumulator, complete lines are dropped immediately, and emit()
   // derives from the accumulator plus the parent correlation maps.
+  private readonly waitCallIds = new Set<string>()
+  private readonly waitTerminalByAgentId = new Map<string, 'done' | 'error'>()
   private readonly childOffsetByAgentId = new Map<string, number>()
   private readonly childPartialByAgentId = new Map<string, string>()
   private readonly childAccByAgentId = new Map<string, CodexSubAgentAccumulator>()
@@ -628,6 +701,18 @@ export class CodexSubAgentTracker {
       // at the same moment, but emit() still needs to rebuild the record with the
       // parent spawn/output metadata. Mark dirty without touching the byte offset;
       // the accumulator remains the source of truth for child-derived fields.
+      this.dirty = true
+    }
+    const waitCallId = isCodexWaitAgentCall(entry)
+    if (waitCallId) this.waitCallIds.add(waitCallId)
+    const waitStatuses = extractCodexWaitStatuses(entry, this.waitCallIds)
+    if (waitStatuses) {
+      // The wait_agent output is the parent's fan-in truth (#341): for
+      // MCP-spawned children no notification ever arrives, so without this
+      // the card runs forever. done/error recorded per agent uuid.
+      for (const [agentId, terminal] of waitStatuses) {
+        this.waitTerminalByAgentId.set(agentId, terminal)
+      }
       this.dirty = true
     }
     const notification = extractCodexSubagentNotification(entry)
@@ -663,6 +748,8 @@ export class CodexSubAgentTracker {
     // session must release its memory; the durable source stays the on-disk
     // rollout if the tracker is ever re-created for the same parent.
     this.spawnsByCallId.clear()
+    this.waitCallIds.clear()
+    this.waitTerminalByAgentId.clear()
     this.outputsByCallId.clear()
     this.callIdByAgentId.clear()
     this.notificationsByAgentId.clear()
@@ -766,15 +853,43 @@ export class CodexSubAgentTracker {
 
   private emit(): void {
     const out: Record<string, SubAgentState> = {}
+    const nowMs = Date.now()
     for (const [agentId, callId] of this.callIdByAgentId) {
-      out[callId] = buildCodexSubAgentStateFromAccumulator({
+      const state = buildCodexSubAgentStateFromAccumulator({
         toolUseId: callId,
         agentId,
         spawn: this.spawnsByCallId.get(callId) ?? null,
         output: this.outputsByCallId.get(callId) ?? null,
         notification: this.notificationsByAgentId.get(agentId) ?? null,
+        waitTerminal: this.waitTerminalByAgentId.get(agentId) ?? null,
         acc: this.childAccByAgentId.get(agentId) ?? null,
+        nowMs,
       })
+      // #341 pruning: a child terminal for longer than the prune window
+      // has its durable truth in the parent rollout (wait output /
+      // notification) — the tracker's job is done. Dropping the fold
+      // state caps long-lived resumed sessions that used to accumulate
+      // dozens of dead cards; the row keeps rendering from committed
+      // rows. Terminal-only: stale children stay tracked so a late
+      // revival can still flip them back to running.
+      const idleMs = state.lastActivityAt !== null ? nowMs - state.lastActivityAt : null
+      if (
+        (state.status === 'done' || state.status === 'error') &&
+        idleMs !== null &&
+        idleMs > CODEX_SUBAGENT_PRUNE_AFTER_MS
+      ) {
+        this.callIdByAgentId.delete(agentId)
+        this.spawnsByCallId.delete(callId)
+        this.outputsByCallId.delete(callId)
+        this.notificationsByAgentId.delete(agentId)
+        this.waitTerminalByAgentId.delete(agentId)
+        this.childPathByAgentId.delete(agentId)
+        this.childOffsetByAgentId.delete(agentId)
+        this.childPartialByAgentId.delete(agentId)
+        this.childAccByAgentId.delete(agentId)
+        continue
+      }
+      out[callId] = state
     }
     this.onChange(out)
   }
