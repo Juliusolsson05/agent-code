@@ -52,6 +52,7 @@ import {
 export type RuntimeSemanticTurn = {
   turnId: string
   source: string | null
+  text?: string
   blocks: Record<number, SemanticBlockLike & { blockIndex: number }>
   blockOrder: number[]
   startedAt: number
@@ -92,6 +93,7 @@ function toTurnLike(turn: RuntimeSemanticTurn): SemanticTurnLike {
   return {
     turnId: turn.turnId,
     source: turn.source ?? undefined,
+    text: turn.text,
     startedAtMs: turn.startedAt,
     endedAtMs: turn.endedAt,
     isCompactionSynthesis: turn.isCompactionSynthesis,
