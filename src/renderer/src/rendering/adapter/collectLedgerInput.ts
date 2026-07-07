@@ -61,6 +61,17 @@ export type RuntimeSemanticTurn = {
   startedAt: number
   endedAt: number | null
   isCompactionSynthesis?: boolean
+  /** Runtime lookup snapshot — tool-call status by id. Optional because
+   *  hand-written fixtures omit it. `toTurnLike` reads
+   *  lookups.toolCallsById[toolUseId].status to stamp lookupStatus onto
+   *  tool blocks, which the collapsed-running rule needs to tell a
+   *  finished tool from an in-flight one when the result rode a committed
+   *  row instead of pairing into the block (tail-gate fix #465, bundle
+   *  5b19529f). The seam assertion below keeps the real SemanticLiveTurn
+   *  assignable to this shape. */
+  lookups?: {
+    toolCallsById?: Record<string, { status?: string } | undefined>
+  }
 }
 
 export type RuntimeLedgerSlices = {
