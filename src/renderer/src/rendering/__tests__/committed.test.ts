@@ -246,3 +246,47 @@ describe('collapsed-running null-paint (corpus new-bug fix, claude churn tools)'
     expect(d.selected).toBe(true)
   })
 })
+
+describe('task-notification carve-out (residue plan P0b — cutover blocker)', () => {
+  const notification = (uuid: string, body: string) => ({
+    uuid,
+    type: 'user',
+    timestamp: TS,
+    message: { role: 'user', content: body },
+  })
+
+  it('keeps task-notification rows visible despite matching the synthetic-filter shape', () => {
+    const body =
+      '<task-notification>\n<task-id>t1</task-id>\n<tool-use-id>toolu_bg1</tool-use-id>\n<status>completed</status>\n<result>done</result>\n</task-notification>'
+    const { candidates, decisions } = collectCommittedCandidates(
+      [notification('n1', body)],
+      'claude',
+      's1',
+    )
+    const c = candidates.find(x => x.id === 'entry:n1')
+    expect(c).toBeDefined()
+    expect(c?.toolUseId).toBe('toolu_bg1')
+    expect(decisions.find(d => d.candidateId === 'entry:n1')?.selected).toBe(true)
+  })
+
+  it('does not weaken the synthetic filter for actual sidecar junk', () => {
+    const { candidates, decisions } = collectCommittedCandidates(
+      [notification('junk', '<command-name>/compact</command-name>')],
+      'claude',
+      's1',
+    )
+    expect(candidates.find(x => x.id === 'entry:junk')).toBeUndefined()
+    expect(decisions.find(d => d.candidateId === 'entry:junk')?.reason).toBe('synthetic-user-filtered')
+  })
+
+  it('tolerates a notification without a tool-use-id tag', () => {
+    const { candidates } = collectCommittedCandidates(
+      [notification('n2', '<task-notification><status>completed</status></task-notification>')],
+      'claude',
+      's1',
+    )
+    const c = candidates.find(x => x.id === 'entry:n2')
+    expect(c).toBeDefined()
+    expect(c?.toolUseId).toBeUndefined()
+  })
+})

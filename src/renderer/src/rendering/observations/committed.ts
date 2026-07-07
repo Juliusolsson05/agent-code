@@ -128,6 +128,40 @@ function isSyntheticClaudeUserRow(
   return typeof text === 'string' && text.trimStart().startsWith('<')
 }
 
+/**
+ * Task-notification carve-out (residue plan P0b — the cutover blocker).
+ *
+ * `<task-notification>` entries are user-typed, start with '<', and carry
+ * no permissionMode — structurally IDENTICAL to the sidecar junk the
+ * synthetic filter exists to kill, but they are the ONLY carrier of
+ * background-task results (subagents AND background Bash; verified in
+ * real transcripts). Legacy paints them (badly, as raw-XML bubbles) but
+ * never LOSES them; the filter alone would. They must be detected BEFORE
+ * the synthetic filter and kept visible.
+ *
+ * The extracted <tool-use-id> is stamped on the candidate so the P2 row
+ * work can join the notification into its parent Task row (and later
+ * suppress the standalone row with reason 'task-notification-joined' —
+ * reserved in RenderReason now so the fixture-gated enum doesn't churn
+ * twice).
+ */
+const TASK_NOTIFICATION_OPEN = '<task-notification>'
+const TOOL_USE_ID_TAG = /<tool-use-id>\s*([^<\s]+)\s*<\/tool-use-id>/
+
+function taskNotificationToolUseId(e: RawCommittedEntry): string | null {
+  if (e.type !== 'user' || e.message?.role !== 'user') return null
+  const text = textOf(e)
+  if (typeof text !== 'string' || !text.trimStart().startsWith(TASK_NOTIFICATION_OPEN)) return null
+  const m = TOOL_USE_ID_TAG.exec(text)
+  return m?.[1] ?? null
+}
+
+function isTaskNotificationRow(e: RawCommittedEntry): boolean {
+  if (e.type !== 'user' || e.message?.role !== 'user') return false
+  const text = textOf(e)
+  return typeof text === 'string' && text.trimStart().startsWith(TASK_NOTIFICATION_OPEN)
+}
+
 function contentKindOf(e: RawCommittedEntry): RenderContentKind {
   if (e.type === 'assistant') return 'assistant-text'
   if (e.type === 'user') return 'user-text'
@@ -166,6 +200,34 @@ export function collectCommittedCandidates(
     }
     if (isConversation && e.isMeta === true) {
       decisions.push({ candidateId: id, selected: false, reason: 'meta-entry', evidence: [] })
+      return
+    }
+    if (isTaskNotificationRow(e)) {
+      const toolUseId = taskNotificationToolUseId(e)
+      const text = textOf(e)
+      candidates.push({
+        id,
+        owner: 'committed',
+        provider,
+        sourcePlane: 'committed',
+        sessionId,
+        messageId: e.message?.id,
+        turnId: e.message?.id,
+        toolUseId: toolUseId ?? undefined,
+        contentKind: 'user-text',
+        timestampMs: entryTimestampMs(e),
+        sequence: index,
+        normalizedTextKey: text ? normalizeTextKey(text) : undefined,
+      })
+      decisions.push({
+        candidateId: id,
+        selected: true,
+        reason: 'selected',
+        evidence: [
+          'task-notification carve-out: background-result carrier, exempt from synthetic filter',
+          toolUseId ? `tool-use-id ${toolUseId}` : 'no tool-use-id tag',
+        ],
+      })
       return
     }
     if (isSyntheticClaudeUserRow(e, provider)) {
