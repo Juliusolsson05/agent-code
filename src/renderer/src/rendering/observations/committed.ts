@@ -34,6 +34,13 @@ export type RawCommittedEntry = {
   }
   /** Present on real Claude user prompts; absent on synthetic scaffolding. */
   permissionMode?: string
+  /** Claude tags a SUBAGENT's own turns isSidechain:true and interleaves them
+   *  into the PARENT transcript (issue #477). Their activity already renders
+   *  inside the Task card via the watcher channel (SubAgentState), so painting
+   *  them as main-feed rows is pure duplication. The field flows through the
+   *  claude codec + history.ts; the feed just never honored it (only the
+   *  session picker did). */
+  isSidechain?: boolean
 }
 
 export type CommittedCollection = {
@@ -236,6 +243,19 @@ export function collectCommittedCandidates(
         selected: false,
         reason: 'synthetic-user-filtered',
         evidence: ['claude user row, no permissionMode, text starts with <'],
+      })
+      return
+    }
+    // Sidechain (subagent) turn (issue #477): reject BEFORE mining tools —
+    // its inner Read/Bash belong to the child, not the parent, and mining
+    // them as committed-owned would wrongly suppress parent live tools. The
+    // same activity renders inside the Task card, so nothing is lost.
+    if (e.isSidechain === true) {
+      decisions.push({
+        candidateId: id,
+        selected: false,
+        reason: 'sidechain-filtered',
+        evidence: ['subagent child turn — renders inside the Task card, not the main feed'],
       })
       return
     }

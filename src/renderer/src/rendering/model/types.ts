@@ -158,6 +158,7 @@ export type RenderReason =
   | 'claude-whole-turn-suppressed'
   | 'meta-entry'
   | 'synthetic-user-filtered'
+  | 'sidechain-filtered'
   | 'not-conversation'
   | 'ghost-not-orphaned'
   | 'ghost-superseded'
