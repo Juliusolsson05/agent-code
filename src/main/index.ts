@@ -33,6 +33,9 @@ import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
 import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
+import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
+import { setOutboundObserver } from '@main/window/mainWindow.js'
+import { isSessionRecordingEnabled } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -80,6 +83,13 @@ const lspManager = new LspManager()
 // See `./ghostJournal.ts` for the full rationale; see
 // `src/renderer/src/workspace/ghosts.ts` for the renderer side.
 const ghostJournals = new GhostJournalRegistry()
+// Session recorder — one folder per recording under session-recordings/.
+// Constructed and installed as the outbound-IPC observer ONLY when
+// AGENT_CODE_DEV_DEBUG=1 AND AGENT_CODE_SESSION_RECORD=1, so a normal build
+// pays nothing (no observer installed, sendToMainWindow's hook stays null).
+// plan: docs/rendering/session-recording-plan-2026-07.md (#467).
+const sessionRecorders = isSessionRecordingEnabled() ? new SessionRecorderManager() : null
+if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)
 // Per-dictation-session debug-dump registry. Mirrors `ghostJournals`:
 // constructed before IPC handlers register, flushed on before-quit. See
 // `src/main/dictationJournal.ts` for the on-disk shape and the
@@ -572,6 +582,9 @@ app.on('before-quit', () => {
   // worst-case; in practice drains are empty at quit time because
   // streaming is idle.
   void ghostJournals.flushAll()
+  // Same one-tick-before-teardown rationale as ghostJournals; recordings are
+  // usually mid-stream at quit, so this drain matters more than the ghost one.
+  void sessionRecorders?.flushAll()
   // Same rationale as ghostJournals — Electron gives us one tick before
   // teardown. 100 ms queue depth is the worst case; in practice the
   // dictation journal is idle at quit unless the user is pressing Fn

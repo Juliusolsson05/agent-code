@@ -16,6 +16,12 @@ export type DevDebugConfig = {
    *  of deriveFeedRenderModel. Same temporary-channel rationale as the
    *  shadow flag above; the flag dies when the pipeline becomes default. */
   renderPipelineEnabled: boolean
+  /** AGENT_CODE_SESSION_RECORD=1 (AND dev-debug on) — continuously record
+   *  each session's rendering-input stream to session-recordings/<id>/,
+   *  replayable in tests. plan: docs/rendering/session-recording-plan-2026-07.md,
+   *  issue #467. Debug-gated because a recording captures full conversation
+   *  input. */
+  sessionRecordingEnabled: boolean
 }
 
 function envFlag(name: string): boolean {
@@ -25,6 +31,12 @@ function envFlag(name: string): boolean {
 
 function isDevDebugEnabled(): boolean {
   return envFlag('AGENT_CODE_DEV_DEBUG')
+}
+
+/** Session recording is doubly gated: it is a diagnostic (dev-debug) AND
+ *  opt-in (its own flag), because it records full session input. */
+export function isSessionRecordingEnabled(): boolean {
+  return isDevDebugEnabled() && envFlag('AGENT_CODE_SESSION_RECORD')
 }
 
 export function registerDevDebugIpc(): void {
@@ -38,6 +50,7 @@ export function registerDevDebugIpc(): void {
       // Vite-prefixed renderer variable or rebuild-time config.
       enabled: isDevDebugEnabled(),
       renderShadowEnabled: envFlag('AGENT_CODE_RENDER_SHADOW'),
+      sessionRecordingEnabled: isSessionRecordingEnabled(),
       renderPipelineEnabled: envFlag('AGENT_CODE_RENDER_PIPELINE'),
     }
   })
