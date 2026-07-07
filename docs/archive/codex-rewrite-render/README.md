@@ -1,3 +1,10 @@
+> **ARCHIVED / SUPERSEDED (2026-07-07).** This was the first-principles working
+> notebook for the feed-rendering rewrite. It has been fully absorbed into the
+> canonical plan `docs/rendering/rendering-rewrite-plan-2026-07.md` and its
+> research digest `docs/rendering/research-2026-07/rewrite-notebook-extraction.md`.
+> Kept for history; reads present-tense but describes the OLD `deriveFeedRenderModel`
+> approach, which the ownership-ledger pipeline (`src/renderer/src/rendering/`) replaced.
+
 # Codex Render Rewrite Notes
 
 This directory is the working notebook for rebuilding feed rendering from first principles while keeping live streaming.

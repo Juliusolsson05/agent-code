@@ -106,14 +106,9 @@
     // JSX-free. Without this, tsc emits "Cannot use JSX unless the '--jsx' flag
     // is provided" on this one file.
     "src/shared/conditions-core/ConditionOutlet.tsx",
-    // The rendering sandbox under testing/rendering/ is its own
-    // electron-vite project (see testing/rendering/electron.vite.config.ts)
-    // — it has its own tsconfig + its own renderer subtree with JSX
-    // components. Letting our main node project walk into it emits
-    // ~420 "Cannot use JSX" errors on files that aren't ours to
-    // type-check. Exclude the whole subtree.
-    "testing/rendering/renderer/**/*",
-    "testing/rendering/out/**/*",
+    // agent-voice-dictation is its own package with its own tsconfig; its test
+    // files must not be walked by our node project (they'd emit ~420 JSX
+    // errors on files that aren't ours to type-check).
     "packages/agent-voice-dictation/src/**/*.test.ts"
   ]
 }

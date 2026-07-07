@@ -5,7 +5,7 @@ stream**, replayable deterministically through the real pipeline in the
 test suite. GitHub issue: #467.
 
 This plan is the synthesis of four research sweeps (full reports in
-`research-2026-07/rec-research-{seam,precedent,tap,priorart}.md`): the
+`research-2026-07/session-recording/rec-research-{seam,precedent,tap,priorart}.md`): the
 replay seam, the existing corpus/journal machinery to reuse, the IPC tap
 point, and prior art + the OOM constraints a continuous recorder must
 respect.
@@ -222,7 +222,7 @@ one file per session per app-run. `0o600`.
 - `ch` is one of the 9 allowlisted channels.
 - `payload` is the channel's payload **verbatim** (post-coalesce for
   jsonl-entries). Full table of the 9 channel shapes:
-  `research-2026-07/rec-research-tap.md`.
+  `research-2026-07/session-recording/rec-research-tap.md`.
 - `t` (monotonic) drives replay ordering; `wall` is injected as the fold's
   clock during replay so wall-clock-dependent fold behavior (the orphan
   sweep, `unreadSince`/phase stamps) is deterministic. The ledger itself is

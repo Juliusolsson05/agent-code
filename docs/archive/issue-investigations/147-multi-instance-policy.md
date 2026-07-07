@@ -1,3 +1,5 @@
+> **ARCHIVED (2026-07-07).** The investigated issue is closed; kept as history.
+
 # Issue #147: Multiple Agent Code Instances
 
 ## Issue Summary
