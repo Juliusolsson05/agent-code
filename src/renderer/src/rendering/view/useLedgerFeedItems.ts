@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef } from 'react'
 
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
@@ -14,15 +14,18 @@ import {
 } from '@renderer/rendering/view/ledgerFeedItems'
 
 // ---------------------------------------------------------------------------
-// Stage 3 producer hook: runtime → adapter → ledger → view bridge →
-// FeedRenderItem[] for Feed's `renderItemsOverride` prop.
+// The producer hook: runtime → adapter → ledger → view bridge →
+// FeedRenderItem[], which IS Feed's row list (passed via renderItemsOverride).
 //
-// Returns null when AGENT_CODE_RENDER_PIPELINE is off — TileLeaf passes
-// null through and Feed runs its legacy derivation, byte-identical
-// behavior. The flag is probed ONCE per app lifetime (same channel as the
-// shadow/dev-debug flags); until the probe resolves the hook returns null,
-// so a session's first paint may be legacy even with the flag on — one
-// tick of legacy paint beats blocking first paint on IPC.
+// Stage 3 cutover (2026-07): this hook is now UNCONDITIONAL — the ownership
+// ledger is the sole decision core. It used to be gated behind an async
+// probe of AGENT_CODE_RENDER_PIPELINE and return null (legacy fallback)
+// until the probe resolved; that flag, the legacy `deriveFeedRenderModel`
+// path it selected, and the shadow diff that proved the two agreed are all
+// deleted. Shadow parity was green over the incident corpus + recorded
+// sessions (see docs/rendering/legacy-deletion-manifest.md), which is the
+// evidence that made this flip safe: identical item lists ⇒ identical paint
+// through the unchanged row components.
 //
 // Adapter + ledger are per-mount refs so their last-call caches (D11) hold
 // across renders; the memo keys on the exact runtime slice references the
@@ -30,45 +33,15 @@ import {
 // Feed re-render" compose end to end.
 // ---------------------------------------------------------------------------
 
-let pipelineProbe: Promise<boolean> | null = null
-function probePipelineEnabled(): Promise<boolean> {
-  if (!pipelineProbe) {
-    pipelineProbe = (async () => {
-      try {
-        const api = (window as unknown as {
-          api?: { getDevDebugConfig?: () => Promise<{ renderPipelineEnabled?: boolean }> }
-        }).api
-        const config = await api?.getDevDebugConfig?.()
-        return config?.renderPipelineEnabled === true
-      } catch {
-        return false
-      }
-    })()
-  }
-  return pipelineProbe
-}
-
 export function useLedgerFeedItems(
   runtime: SessionRuntime,
   provider: AgentProviderKind,
   sessionId: string,
-): FeedRenderItem[] | null {
-  const [enabled, setEnabled] = useState(false)
-  useEffect(() => {
-    let alive = true
-    void probePipelineEnabled().then(v => {
-      if (alive && v) setEnabled(true)
-    })
-    return () => {
-      alive = false
-    }
-  }, [])
-
+): FeedRenderItem[] {
   const adapterRef = useRef<ReturnType<typeof createLedgerInputAdapter> | null>(null)
   const ledgerRef = useRef<ReturnType<typeof createSessionLedger> | null>(null)
 
   return useMemo(() => {
-    if (!enabled) return null
     adapterRef.current ??= createLedgerInputAdapter()
     ledgerRef.current ??= createSessionLedger()
     const slices: RuntimeLedgerSlices = {
@@ -98,7 +71,6 @@ export function useLedgerFeedItems(
     // `runtime` itself would over-fire (it changes identity on unrelated
     // fields like scroll state), defeating the identity-stability chain.
   }, [
-    enabled,
     provider,
     sessionId,
     runtime.entries,

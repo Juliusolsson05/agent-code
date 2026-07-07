@@ -12,6 +12,41 @@ Legend: **DELETE** = removed entirely · **GUT** = file stays, ownership logic
 removed (becomes dumb/plumbing) · **ABSORB** = behavior re-encoded in the
 ledger, then source deleted · **KEEP** = not ownership code, survives as-is.
 
+## Cutover status — 2026-07 (the ledger is now the sole decision core)
+
+The cutover shipped in two slices because a late discovery split it: the
+**remote phone client** (`src/remote-client/`) is a SECOND `<Feed>` consumer
+that was mounting the legacy `deriveFeedRenderModel` path. The manifest below
+was written assuming one consumer, so "delete deriveFeedRenderModel" was
+blocked until the phone also fed the ledger.
+
+**DONE (this cutover PR):**
+- The ledger producer (`useLedgerFeedItems`) is UNCONDITIONAL. The
+  `AGENT_CODE_RENDER_PIPELINE` flag + its whole probe are gone; so is
+  `AGENT_CODE_RENDER_SHADOW` and the `renderShadowEnabled`/
+  `renderPipelineEnabled` dev-debug plumbing.
+- **The phone was migrated**: `remote/ui/SessionView.tsx` builds a minimal
+  SessionRuntime view (empty ghost plane — the phone has no optimistic echo)
+  and drives the SAME `useLedgerFeedItems`, so it now passes
+  `renderItemsOverride` like the desktop.
+- `deriveFeedRenderModel` + its sort/visibility helpers + `FeedRenderModelInput`
+  **DELETED** from `renderModel.ts`. Feed's legacy branch **DELETED** — it maps
+  the ledger's items unconditionally.
+- Shadow subsystem **DELETED**: `shadow/useRenderShadow.ts` and the
+  `shadowParity.test.ts` CI diff. `shadow/shadowDiff.ts` KEPT (pure diff util —
+  bundleCorpus/recordingCorpus still assert ledger output through it).
+
+**STILL ALIVE — the block-level un-collapse slice (next PR):** the view bridge
+still COLLAPSES the ledger's block-level semantic rows back into turn-level
+items so `SemanticStreamingTurn` can render them. Killing that component (and
+with it ghost rule 3, `selectMergedEntries` as Feed's entries source, and
+`committedClaudeMessageTurnIds`) requires the ledger to own live turns
+block-by-block through the shared registry dispatch — the hardest slice, and
+the one that needs live visual verification the turn-grain corpus can't give.
+Until then the completeness grep below still returns `SemanticStreamingTurn` /
+`selectMergedEntries` / `committedClaudeMessageTurnIds` hits BY DESIGN;
+`deriveFeedRenderModel` / `buildSemanticRenderUnits` are already clean.
+
 ## Deleted at Stage 3 cutover (the big reviewed PR)
 
 | file | phys LOC | fate | notes |
@@ -46,7 +81,12 @@ ledger, then source deleted · **KEEP** = not ownership code, survives as-is.
 
 ## Verification of completeness at cutover
 
-The Stage 3 PR is not mergeable until:
+FULL completeness (the final block-level un-collapse PR) is reached when:
 `grep -rn "SemanticStreamingTurn\|selectMergedEntries\|deriveFeedRenderModel\|committedClaudeMessageTurnIds\|buildSemanticRenderUnits" src/` returns only
 hits inside `src/renderer/src/rendering/` history comments — i.e. every entry
 in the DELETE/ABSORB tables above is gone or gutted, with its fixture green.
+
+As of the 2026-07 cutover (see status section up top) `deriveFeedRenderModel`
+and `buildSemanticRenderUnits` are already clean; the remaining three tokens
+(`SemanticStreamingTurn`, `selectMergedEntries`, `committedClaudeMessageTurnIds`)
+stay until the block-level un-collapse slice retires `SemanticStreamingTurn`.

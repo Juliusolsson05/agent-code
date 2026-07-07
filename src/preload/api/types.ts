@@ -47,11 +47,6 @@ export type {
 
 export type DevDebugConfig = {
   enabled: boolean
-  /** AGENT_CODE_RENDER_SHADOW=1 — rendering-rewrite Stage 2 shadow mode.
-   *  Mirrors src/main/ipc/devDebug.ts (the source of truth). */
-  renderShadowEnabled: boolean
-  /** AGENT_CODE_RENDER_PIPELINE=1 — Stage 3 cutover flag. */
-  renderPipelineEnabled: boolean
   /** AGENT_CODE_SESSION_RECORD=1 (+ dev-debug) — session recording active.
    *  Mirrors src/main/ipc/devDebug.ts (the source of truth). */
   sessionRecordingEnabled: boolean

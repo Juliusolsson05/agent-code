@@ -5,18 +5,6 @@ import type { SessionRecorderManager } from '@main/recording/SessionRecorderMana
 
 export type DevDebugConfig = {
   enabled: boolean
-  /** AGENT_CODE_RENDER_SHADOW=1 — Stage 2 of the rendering rewrite: run
-   *  the new ownership-ledger pipeline beside the legacy renderer and
-   *  record divergences (src/renderer/src/rendering/shadow/). Rides the
-   *  dev-debug config channel instead of minting its own because this
-   *  flag is exactly as temporary as the shadow itself — both are
-   *  DELETE-fated at Stage 3 cutover. */
-  renderShadowEnabled: boolean
-  /** AGENT_CODE_RENDER_PIPELINE=1 — Stage 3 of the rendering rewrite:
-   *  Feed paints from the ownership-ledger pipeline's view bridge instead
-   *  of deriveFeedRenderModel. Same temporary-channel rationale as the
-   *  shadow flag above; the flag dies when the pipeline becomes default. */
-  renderPipelineEnabled: boolean
   /** AGENT_CODE_SESSION_RECORD=1 (AND dev-debug on) — continuously record
    *  each session's rendering-input stream to session-recordings/<id>/,
    *  replayable in tests. plan: docs/rendering/session-recording-plan-2026-07.md,
@@ -68,9 +56,7 @@ export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | n
       // runtime switch that works in Electron dev without requiring a
       // Vite-prefixed renderer variable or rebuild-time config.
       enabled: isDevDebugEnabled(),
-      renderShadowEnabled: envFlag('AGENT_CODE_RENDER_SHADOW'),
       sessionRecordingEnabled: isSessionRecordingEnabled(),
-      renderPipelineEnabled: envFlag('AGENT_CODE_RENDER_PIPELINE'),
     }
   })
 
