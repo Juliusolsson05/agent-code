@@ -151,9 +151,21 @@ function extractBundle(dir) {
   let entriesSource = 'none'
   if (tPath) {
     entriesSource = tPath
+    // Seen-uuid dedupe mirroring the runtime's ingest (seenUuidsRef,
+    // workspace/hook/refs.ts): compaction rewrites the transcript window
+    // and the same uuid can appear twice in the file; the runtime ingests
+    // each uuid once (first wins), so replaying without the dedupe lands
+    // duplicate rows the real feed never had — the 14-02-05 a8ad1ebb
+    // order-mismatch was exactly this artifact, not a renderer difference.
+    const seenUuids = new Set()
     for (const rec of readJsonl(tPath)) {
       const ts = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : rec.timestamp
-      if (typeof ts === 'number' && ts <= cutoffMs) entries.push(rec)
+      if (typeof ts !== 'number' || ts > cutoffMs) continue
+      if (typeof rec.uuid === 'string') {
+        if (seenUuids.has(rec.uuid)) continue
+        seenUuids.add(rec.uuid)
+      }
+      entries.push(rec)
     }
     entries = entries.slice(-MAX_ENTRIES).map(truncateEntry)
   }
