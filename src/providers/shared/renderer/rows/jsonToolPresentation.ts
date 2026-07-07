@@ -33,11 +33,18 @@ export function prettifyToolName(name: string): {
 const HEADLINE_KEYS = [
   'command',
   'file_path',
-  'path',
+  // opencode camelCase twin (probe-verified: read/edit pass filePath).
+  'filePath',
   'notebook_path',
   'url',
+  // pattern BEFORE path: for Glob/Grep-shaped inputs the pattern is the
+  // SUBJECT and path is the scope — the opencode glob bundle showed the
+  // cwd as headline while the pattern (what the user cares about) hid in
+  // the params slab. Tools whose subject is a path (Read/Edit) carry it
+  // as file_path/filePath, which already ranked above.
   'pattern',
   'query',
+  'path',
   'title',
   'name',
   'prompt',

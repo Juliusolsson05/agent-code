@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { TodoRow } from '@providers/claude/renderer/rows/ClaudeRows'
+import { renderOpencodeReadResult } from '@providers/opencode/renderer/rows/OpencodeReadResult'
 
 // OpenCode committed/live tool rows.
 //
@@ -31,10 +32,20 @@ export function renderOpencodeToolUse(block: ToolUseBlock): ReactNode | undefine
 }
 
 export function renderOpencodeToolResult(
-  _block: ToolResultBlock,
+  block: ToolResultBlock,
+  context: { sourceTool?: ToolUseBlock | null },
 ): ReactNode | undefined {
-  // No opencode-specific result rows yet; generic ToolResultRow presents
-  // read/glob/bash results acceptably (the read result is a tagged text
-  // document the generic row shows verbatim).
+  const source = context.sourceTool?.name
+  // todowrite results echo the JSON checklist that TodoRow ALREADY
+  // rendered from the tool_use above — painting it again is the raw-blob
+  // noise the 07-06 bundle shows. State lives in the row; drop the echo.
+  if (source === 'todowrite') return null
+  // read results are a tagged text document (<path>/<type>/<content>
+  // soup). Parse and present as a code slab with the real path; fall
+  // through to the generic row when the shape doesn't match.
+  if (source === 'read') {
+    const row = renderOpencodeReadResult(block)
+    if (row !== undefined) return row
+  }
   return undefined
 }
