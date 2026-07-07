@@ -43,8 +43,18 @@ export function QueueStrip({
                   {kind === 'error' ? '✗' : '✓'}
                 </span>
                 <span className="flex-1 min-w-0 truncate">
-                  {notification.summary ?? notification.taskId ?? 'background task'}
-                  {notification.status ? ` ${notification.status}` : ''} — delivering to agent…
+                  {/*
+                    WHY no raw `status` append (2026-07-07 bundle
+                    debug-bundles/manual/2026-07-07T13-17-20-472-5b19529f
+                    "completed agents renders as queued"): the summary already
+                    reads `Agent "X" finished`, and appending the raw <status>
+                    produced the nonsense "finished completed — delivering to
+                    agent…" the user screenshotted. The ✓/✗ glyph (driven by
+                    taskNotificationStatusKind) already carries the outcome, so
+                    the summary alone is the human-readable line.
+                  */}
+                  {notification.summary ?? notification.taskId ?? 'background task'} —
+                  delivering to agent…
                 </span>
               </li>
             )
