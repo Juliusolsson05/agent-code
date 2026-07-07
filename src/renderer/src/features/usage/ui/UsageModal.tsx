@@ -10,8 +10,8 @@ import {
   formatPercent,
   formatReset,
   providerLabel,
-  severityClass,
-  severityTextClass,
+  severityBarStyle,
+  severityTextStyle,
 } from '@renderer/features/usage/model/formatUsage'
 
 type Props = {
@@ -93,12 +93,12 @@ function UsageProviderSection({ provider }: { provider: UsageProviderSnapshot })
               <div key={row.id} className="space-y-1.5">
                 <div className="flex items-baseline justify-between gap-3 text-[11px]">
                   <div className="min-w-0 truncate text-ink">{row.label}</div>
-                  <div className={`flex-shrink-0 ${severityTextClass(row.severity)}`}>
+                  <div className="flex-shrink-0" style={severityTextStyle(row.severity)}>
                     {formatPercent(row.percent)}
                   </div>
                 </div>
                 <div className="h-2 w-full overflow-hidden bg-surface-hi">
-                  <div className={`h-full ${severityClass(row.severity)}`} style={{ width: `${width}%` }} />
+                  <div className="h-full" style={{ width: `${width}%`, ...severityBarStyle(row.severity) }} />
                 </div>
                 {(reset || row.detail) ? (
                   <div className="flex items-center justify-between gap-3 text-[10px] text-muted">
