@@ -53,6 +53,22 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith('.json'))) {
   if (triage.length === 0) continue
 
   const entsByUuid = new Map(f.input.entries.map(e => [e.uuid, e]))
+  const hasCommittedPlane = f.meta.entriesSource !== 'none' && f.input.entries.length > 0
+  // Every tool identity present in the committed plane — the codex pairing
+  // key (codex suppression is unit-level: a semantic turn vanishes when all
+  // its blocks are owned by committed tool/text rows).
+  const committedToolIds = new Set()
+  const committedTexts = new Set()
+  for (const e of f.input.entries) {
+    const c = e?.message?.content
+    if (!Array.isArray(c)) continue
+    for (const b of c) {
+      if (b?.type === 'tool_use' && typeof b.id === 'string') committedToolIds.add(b.id)
+      if (b?.type === 'tool_result' && typeof b.tool_use_id === 'string') committedToolIds.add(b.tool_use_id)
+      if (b?.type === 'text' && typeof b.text === 'string') committedTexts.add(b.text.normalize('NFKC').replace(/\s+/g, ' ').trim())
+    }
+  }
+  const turnsById = new Map(f.input.semanticHistory.map(t => [t.turnId, t]))
   const histIds = new Set(f.input.semanticHistory.map(t => t.turnId))
   const note = (f.meta.note ?? '').toLowerCase()
 
@@ -83,7 +99,11 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith('.json'))) {
     const d = t.divergence
     const unit = d.unit ?? ''
 
-    if (d.class === 'extra-in-next' && unit.startsWith('row:')) {
+    if (d.class === 'extra-in-next' && unit.startsWith('turn:') && !hasCommittedPlane) {
+      t.verdict = 'extraction-gap'
+      t.why = 'no committed plane reconstructed for this bundle (source missing or empty window); without committed ownership these turns cannot be suppressed'
+      bump(t.verdict); changed = true
+    } else if (d.class === 'extra-in-next' && unit.startsWith('row:')) {
       const uuid = unit.slice(4)
       const e = entsByUuid.get(uuid)
       if (!e) continue
@@ -105,8 +125,31 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith('.json'))) {
         t.why = 'row timestamp precedes the visible_rows moment (producer clock) but ingestion had not drained it yet; legacy could not paint what it had not seen'
         bump(t.verdict); changed = true
       }
+    } else if (d.class === 'missing-in-next' && unit.startsWith('row:optimistic-')) {
+      // Optimistic rows live only in renderer state (runtime.entries) —
+      // no transcript or rollout ever contains them, so a reconstruction
+      // from disk cannot produce them regardless of provider.
+      t.verdict = 'extraction-gap:optimistic-rows-renderer-local'
+      t.why = 'optimistic rows exist only in renderer state; no on-disk source reconstructs them'
+      bump(t.verdict); changed = true
     } else if (d.class === 'missing-in-next' && unit.startsWith('turn:')) {
       const turnId = unit.slice(5)
+      const turn = turnsById.get(turnId)
+      if (turn && hasCommittedPlane) {
+        const blocks = Object.values(turn.blocks ?? {})
+        const ids = blocks.map(b => b?.callId ?? b?.toolUseId ?? b?.itemId).filter(Boolean)
+        const owned = ids.length > 0 && ids.every(id => committedToolIds.has(id))
+        const textOwned =
+          ids.length === 0 &&
+          typeof turn.text === 'string' &&
+          committedTexts.has(turn.text.normalize('NFKC').replace(/\s+/g, ' ').trim())
+        if (owned || textOwned) {
+          t.verdict = 'equivalent-content'
+          t.why = 'unit-level suppression: every block identity (or the finalized turn text) is owned by committed rows reconstructed from the rollout — legacy painted the turn only because those rows had not been ingested at the recorded moment'
+          bump(t.verdict); changed = true
+          continue
+        }
+      }
       if (!histIds.has(turnId)) {
         t.verdict = 'extraction-gap:history-window'
         t.why = 'turn absent from the semanticHistory input — the runtime caps history at 20 turns; the recorded rows are older than the surviving window'
