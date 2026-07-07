@@ -1,3 +1,4 @@
+import { AskUserQuestionAnsweredRow } from '@renderer/features/feed/ui/rows/AskUserQuestionAnsweredRow'
 import { memo, useContext } from 'react'
 
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
