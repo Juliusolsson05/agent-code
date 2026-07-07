@@ -13,6 +13,7 @@ import { DevDebugPanel } from '@renderer/features/debug/ui/DevDebugPanel'
 import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
+import { UsageModal } from '@renderer/features/usage/ui/UsageModal'
 import { ReaderView } from '@renderer/features/reader/ui/ReaderView'
 import { TileTabsModal } from '@renderer/features/tile-tabs/ui/TileTabsModal'
 import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
@@ -172,6 +173,9 @@ export default function App() {
   const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
   const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
   const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
+  const usageModalOpen = useAppStore(state => state.usageModalOpen)
+  const openUsageModal = useAppStore(state => state.openUsageModal)
+  const closeUsageModal = useAppStore(state => state.closeUsageModal)
   const rewindPromptSessionId = useAppStore(state => state.rewindPromptSessionId)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
@@ -871,6 +875,7 @@ export default function App() {
         openCloseOldAgents={openCloseOldAgents}
         openBulkProviderSwitch={openBulkProviderSwitch}
         openRewindPrompt={openRewindPrompt}
+        openUsageModal={openUsageModal}
         toggleCustomRendering={toggleCustomRendering}
         toggleStatusMode={toggleStatusMode}
         toggleWorktreeBadges={toggleWorktreeBadges}
@@ -1049,6 +1054,11 @@ export default function App() {
         sessionId={rewindPromptSessionId}
         workspace={workspace}
         onClose={closeRewindPrompt}
+      />
+
+      <UsageModal
+        open={usageModalOpen}
+        onClose={closeUsageModal}
       />
 
     </div>

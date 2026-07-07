@@ -97,6 +97,7 @@ export type CommandContext = {
     openCloseOldAgents: () => void
     openBulkProviderSwitch: () => void
     openRewindPrompt: (sessionId: string) => void
+    openUsageModal: () => void
     toggleGitBar: () => void
     toggleWorktreesBar: () => void
     toggleDebugPanel: () => void

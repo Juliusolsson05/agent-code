@@ -76,6 +76,8 @@ export type UiShellSlice = UiShellState & {
   closeCloseOldAgents: () => void
   openBulkProviderSwitch: () => void
   closeBulkProviderSwitch: () => void
+  openUsageModal: () => void
+  closeUsageModal: () => void
   openRewindPrompt: (sessionId: SessionId) => void
   closeRewindPrompt: () => void
 }

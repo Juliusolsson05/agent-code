@@ -53,6 +53,17 @@ export type DevDebugConfig = {
 // the controller without importing from @preload. Re-exported here so
 // renderer/preload imports of these names from @preload/api/types still work.
 export type { CaffeinateStatus, CaffeinateCommandResult } from '@shared/types/caffeinate.js'
+export type {
+  UsageLimitRow,
+  UsageProviderError,
+  UsageProviderKind,
+  UsageProviderOk,
+  UsageProviderSnapshot,
+  UsageSeverity,
+  UsageSnapshot,
+  UsageSnapshotRequest,
+  UsageSpend,
+} from '@shared/types/usage.js'
 
 export type { DictationProvider }
 
