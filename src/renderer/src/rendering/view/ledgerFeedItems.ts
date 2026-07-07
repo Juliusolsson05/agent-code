@@ -166,6 +166,14 @@ function buildSemanticTurnItems(
   }
   for (const unit of groupSemanticActivity(approved, turn)) {
     if (unit.type === 'collapsed_activity') {
+      // A RUNNING collapsed run paints nothing — SemanticCollapsedActivityRow
+      // returns null while running (WorkIndicator owns the "busy" surface).
+      // Emitting an item for it would put a null-painting row in the list while
+      // the ledger counts its blocks as content — the false-ownership class the
+      // pipeline exists to kill (#492 review finding). Skip it; only the
+      // finished "worked: N reads" receipt emits. Mirrors the retired
+      // semanticRenderUnitPaintsDom.
+      if (unit.isRunning) continue
       out.push({
         type: 'semantic-collapsed-activity',
         key: `semantic-collapsed:${turnId}:${unit.blockIndices.join(',')}`,
@@ -243,17 +251,18 @@ export function ledgerToFeedItems(
         }
         if (emittedTurnIds.has(turnId)) break
         emittedTurnIds.add(turnId)
+        const turnRows = semanticRowsByTurn.get(turnId) ?? [row]
         const turn = ctx.turnsById.get(turnId)
         if (!turn) {
-          dropped.push(c.id)
+          // #492 review finding: the turn is marked emitted above, so the OTHER
+          // rows of this turn will be skipped by the emittedTurnIds guard — we
+          // must account for ALL of them in dropped here, not just this row's
+          // candidate, or a missing multi-block turn silently under-reports
+          // selected-but-invisible rows (the #239 class).
+          for (const r of turnRows) dropped.push(r.candidate.id)
           break
         }
-        const built = buildSemanticTurnItems(
-          turnId,
-          semanticRowsByTurn.get(turnId) ?? [row],
-          turn,
-          items.length,
-        )
+        const built = buildSemanticTurnItems(turnId, turnRows, turn, items.length)
         for (const it of built.items) items.push(it)
         for (const d of built.dropped) dropped.push(d)
         break

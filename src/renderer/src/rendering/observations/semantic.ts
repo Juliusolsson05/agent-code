@@ -1,4 +1,5 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
+import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 import { normalizeTextKey } from '@renderer/rendering/observations/committed'
 import type {
   OwnershipDecision,
@@ -57,6 +58,21 @@ export type SemanticBlockLike = {
    *  when no result was paired into the block — the 2026-07-07 soak
    *  bundle showed completed Agent tools with empty block results. */
   lookupStatus?: string
+  /** Block lifecycle status from the semantic reducer (foldEvent). A
+   *  text/message block can reach status:'completed' WITHOUT finalized:true
+   *  (single block_started event, no block_completed) — the retired render
+   *  layer's committed-text dedup used `finalized || status==='completed'`
+   *  (the isTerminalProxyBlock equivalence), so the ledger must too or a
+   *  completed-but-unfinalized Codex reply escapes text ownership and
+   *  double-renders (the resp_* vs rollout id split). #492 review finding 2. */
+  status?: string
+  /** Codex tool-call input payloads. For a write_stdin tool block b.text is
+   *  ALWAYS '' — the actual chars live here as {chars:"…"}. These already
+   *  flow through the adapter's {...b} spread; typing them lets the collector
+   *  read the real payload instead of the wrong field (#492 review finding 1). */
+  parsedInput?: unknown
+  argumentsJson?: string
+  inputJson?: string
 }
 
 export type SemanticTurnLike = {
@@ -120,6 +136,18 @@ function blockContentKind(b: SemanticBlockLike): RenderCandidate['contentKind'] 
   return 'assistant-text'
 }
 
+/** The non-empty `chars` payload of a Codex write_stdin tool block, or ''.
+ *  Mirrors the retired renderUnits.writeStdinChars: b.text is always '' for a
+ *  tool block, so the real chars must be read from parsedInput / argumentsJson /
+ *  inputJson (#492 review finding 1). */
+function writeStdinChars(b: SemanticBlockLike): string {
+  const parsed = asRecord(b.parsedInput)
+  if (typeof parsed?.chars === 'string') return parsed.chars
+  const raw = b.argumentsJson ?? b.inputJson ?? ''
+  const rawParsed = parseJsonRecord(raw)
+  return typeof rawParsed?.chars === 'string' ? rawParsed.chars : ''
+}
+
 function collectTurn(
   turn: SemanticTurnLike,
   owner: 'semantic-current' | 'semantic-history',
@@ -177,17 +205,33 @@ function collectTurn(
     }
     // Codex uses empty write_stdin as poll/continuation noise (dump
     // invariant 12/13): empty renders nothing, non-empty renders.
-    if (b.toolName === 'write_stdin' && !(b.text && b.text.length > 0)) {
+    //
+    // #492 review finding 1: a write_stdin TOOL block always has b.text === ''
+    // (the chars payload rides parsedInput/argumentsJson/inputJson as
+    // {chars:"…"}), so the old `!(b.text)` check suppressed EVERY write_stdin —
+    // hiding real interactive stdin from the live feed. Read the actual chars,
+    // mirroring the retired renderUnits.isInvisibleWriteStdinBlock; suppress
+    // only when they are genuinely empty.
+    if (b.toolName === 'write_stdin' && writeStdinChars(b).length === 0) {
       out.decisions.push({ candidateId: id, selected: false, reason: 'empty-write-stdin', evidence: [] })
       return
     }
 
-    // Text ownership keys ONLY on finalized text (dump: suppression applies
-    // to "finalized/completed semantic text only"). A still-streaming block
-    // that currently equals committed text may legitimately keep growing —
+    // Text ownership keys on FINALIZED/COMPLETED text (dump: suppression
+    // applies to "finalized/completed semantic text only"). A still-streaming
+    // block that currently equals committed text may legitimately keep growing —
     // suppressing it mid-stream blanked live output in production.
+    //
+    // #492 review finding 2: a Codex message block can reach status:'completed'
+    // WITHOUT finalized:true (single block_started, no block_completed). The
+    // retired renderUnits dedup keyed on `finalized || status==='completed'`
+    // (the isTerminalProxyBlock equivalence); keying on finalized alone lets a
+    // completed-but-unfinalized reply escape text ownership and double-render
+    // under the resp_*/rollout id split (wholeTurnByMessageId is false for Codex,
+    // so exact/normalized TEXT is the only defense). Mirror the old equivalence.
+    const textTerminal = b.finalized === true || b.status === 'completed'
     const finalizedText =
-      kind === 'assistant-text' && b.finalized === true && b.text ? b.text : undefined
+      kind === 'assistant-text' && textTerminal && b.text ? b.text : undefined
 
     out.candidates.push({
       id,

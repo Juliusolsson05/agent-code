@@ -177,6 +177,43 @@ describe('view bridge: ledger rows drive block-level FeedRenderItems', () => {
     expect(collapsed?.type === 'semantic-collapsed-activity' && collapsed.unit.searchCount).toBe(1)
   })
 
+  it('a RUNNING churn fan-out emits no collapsed-activity item — it would null-paint (#492 review finding)', () => {
+    const rt = emptyRuntime()
+    rt.entries = [userEntry('u1', T, 'go')]
+    rt.lastJsonlEntryAt = T
+    // Current turn with two in-progress churn tools (no results). The ledger
+    // SELECTS current-turn churn (collapsed-running is history-only), the bridge
+    // groups them into a RUNNING collapsed_activity, which CollapsedActivityRow
+    // paints as null — so the bridge must NOT emit an item for it (else a
+    // null-painting row sits in the list while the ledger counts it as content).
+    rt.semantic.currentTurn = {
+      turnId: 'turn_run',
+      text: '',
+      source: 'proxy',
+      blocks: {
+        0: { blockIndex: 0, kind: 'tool_use', toolName: 'Read', toolUseId: 'r1' },
+        1: { blockIndex: 1, kind: 'tool_use', toolName: 'Grep', toolUseId: 'g1' },
+      },
+      blockOrder: [0, 1],
+      stopReason: null,
+      usage: null,
+      task: {} as SemanticLiveTurn['task'],
+      lookups: {
+        toolCallsById: { r1: { status: 'in_progress' }, g1: { status: 'in_progress' } },
+      } as unknown as SemanticLiveTurn['lookups'],
+      startedAt: T + 10,
+      endedAt: null,
+    } as SemanticLiveTurn
+    rt.streamPhase = 'responding'
+
+    const { items, dropped } = bridgeItems(rt)
+    expect(dropped).toEqual([])
+    // No semantic-collapsed-activity item (running → null paint, skipped); the
+    // WorkIndicator ('work') carries the busy signal instead.
+    expect(items.some(i => i.type === 'semantic-collapsed-activity')).toBe(false)
+    expect(items.map(shape)).toEqual(['entry:u1', 'work'])
+  })
+
   it('renders ghost fallback rows through the entry item path (legacy fold parity)', () => {
     const rt = emptyRuntime()
     rt.entries = [userEntry('u1', T, 'prompt'), assistantEntry('a1', 'msg_1', T + 100, 'done')]

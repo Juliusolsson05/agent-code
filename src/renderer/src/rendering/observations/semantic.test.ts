@@ -72,17 +72,23 @@ describe('semantic collector', () => {
     expect(decisions.find(d => d.candidateId === 'sem:turn-1:0')?.reason).toBe('empty-thinking')
   })
 
-  it('empty write_stdin is Codex poll noise; non-empty renders (dump invariants 12/13)', () => {
+  it('empty write_stdin is Codex poll noise; non-empty renders (dump invariants 12/13, #492 finding 1)', () => {
+    // A write_stdin TOOL block ALWAYS has text: '' — the chars payload lives in
+    // parsedInput/argumentsJson/inputJson as {chars:"…"}. The old collector
+    // checked b.text and so suppressed EVERY write_stdin (hiding real stdin);
+    // these fixtures use the true shape so the non-empty one must survive.
     const { candidates } = collectSemanticCandidates(
       turn({ blocks: [
-        { blockIndex: 0, kind: 'custom_tool_call', toolName: 'write_stdin', text: '' },
-        { blockIndex: 1, kind: 'custom_tool_call', toolName: 'write_stdin', text: 'y\n' },
+        { blockIndex: 0, kind: 'custom_tool_call', toolName: 'write_stdin', text: '', parsedInput: { chars: '' } },
+        { blockIndex: 1, kind: 'custom_tool_call', toolName: 'write_stdin', text: '', parsedInput: { chars: 'y\n' } },
+        // chars via raw argumentsJson (parsedInput absent) must also survive.
+        { blockIndex: 2, kind: 'custom_tool_call', toolName: 'write_stdin', text: '', argumentsJson: '{"chars":"n\\n"}' },
       ] }),
       [],
       'codex',
       's1',
     )
-    expect(candidates.map(c => c.blockIndex)).toEqual([1])
+    expect(candidates.map(c => c.blockIndex)).toEqual([1, 2])
   })
 
   it('text keys only on FINALIZED text — streaming text must not be suppressible mid-growth', () => {
@@ -97,6 +103,25 @@ describe('semantic collector', () => {
     )
     expect(candidates.find(c => c.blockIndex === 0)?.textKey).toBeUndefined()
     expect(candidates.find(c => c.blockIndex === 1)?.textKey).toBe('done text')
+  })
+
+  it('text keys also on status:completed text (not just finalized) — #492 finding 2 resp_* vs rollout dedup', () => {
+    // A Codex message block can reach status:'completed' WITHOUT finalized:true
+    // (one block_started, no block_completed). Such text IS terminal and must
+    // get an ownership key, or its committed rollout twin double-renders (Codex
+    // has no whole-turn message-id suppression). Mirrors the retired
+    // renderUnits equivalence `finalized || status==='completed'`.
+    const { candidates } = collectSemanticCandidates(
+      turn({ blocks: [
+        { blockIndex: 0, kind: 'text', text: 'still growing', finalized: false, status: 'in_progress' },
+        { blockIndex: 1, kind: 'text', text: 'terminal reply', finalized: false, status: 'completed' },
+      ] }),
+      [],
+      'codex',
+      's1',
+    )
+    expect(candidates.find(c => c.blockIndex === 0)?.textKey).toBeUndefined()
+    expect(candidates.find(c => c.blockIndex === 1)?.textKey).toBe('terminal reply')
   })
 
   it('tool identity keys (toolUseId/callId/itemId) ride the candidate for ownership matching', () => {
