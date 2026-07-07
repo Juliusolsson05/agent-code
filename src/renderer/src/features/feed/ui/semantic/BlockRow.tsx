@@ -1,5 +1,5 @@
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
-import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
+import { JsonToolRow, SLAB_MAX_CHARS } from '@providers/shared/renderer/rows/JsonToolRow'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { memo } from 'react'
 
@@ -47,6 +47,19 @@ function extractClosedJsonString(raw: string, key: string): string | null {
   } catch {
     return null
   }
+}
+
+// Cap any pretty-printed JSON slab on the LIVE path the same way JsonToolRow
+// caps its committed slabs. WHY: these two call sites stringify tool output /
+// parsed input straight into the DOM every render while the block streams. An
+// unbounded payload (a whole-file read result, a giant orchestration graph) is
+// the O(bytes²) highlight/paint trap on the hottest path in the feed. We reuse
+// JsonToolRow's exported SLAB_MAX_CHARS instead of a fresh magic number so the
+// live and committed previews truncate identically (they used to only be
+// capped on the committed side, so a live row could balloon).
+function cappedJson(value: unknown): string {
+  const json = JSON.stringify(value, null, 2)
+  return json.length > SLAB_MAX_CHARS ? `${json.slice(0, SLAB_MAX_CHARS)}\n…` : json
 }
 
 // [#285] Build the committed Edit/MultiEdit input object from a live semantic
@@ -289,7 +302,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         ? raw
         : raw === undefined
           ? '(no output)'
-          : JSON.stringify(raw, null, 2)
+          : cappedJson(raw)
     return (
       <MarkerRow marker="⎿" tone="muted">
         <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 max-h-[360px] overflow-auto">
@@ -534,7 +547,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
                 </summary>
                 <div className="mt-1">
                   <CodeBlock
-                    code={JSON.stringify(block.parsedInput, null, 2)}
+                    code={cappedJson(block.parsedInput)}
                     language="json"
                     codeId={`live-tool-input:${block.blockIndex}`}
                     highlight={false}

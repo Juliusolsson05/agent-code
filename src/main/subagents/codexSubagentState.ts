@@ -13,37 +13,29 @@ import {
 const CODEX_SUBAGENT_NOTIFICATION_OPEN = '<subagent_notification>'
 const CODEX_SUBAGENT_NOTIFICATION_CLOSE = '</subagent_notification>'
 
-// Match SubAgentWatcher's cap name/value (PR #300) on purpose: this is the
-// Codex twin of the Claude subagent retention leak that #300 fixed. Keeping the
-// constant identical means a future reader who knows one watcher's bound knows
-// the other's, and a single value to tune covers both providers.
+// This module is the Codex twin of the Claude subagent retention fix
+// (SubAgentWatcher, PR #300, root-caused in #288): a child rollout is folded
+// incrementally into a tiny accumulator and its raw lines are dropped the
+// instant they are consumed, so main-process heap never grows with transcript
+// length. The dominator-tree analysis that pinned the Claude watcher at 263 MB
+// / 88% of the heap (see SubAgentWatcher.ts) showed retained raw entries are
+// the multi-MB liability — each pins its full tool-result / Read body — which
+// is why nothing here holds a tail of raw entries. The dirty signal is the
+// child rollout byte offset, matching the Claude watcher and avoiding full-file
+// re-reads.
 //
-// REVIEW NOTE (PR #317): the original #288 fix tail-sliced the RETAINED entries
-// to this many and then fed that capped slice straight into the emit path. Both
-// reviewers (Claude + Codex) caught that this corrupts every value derived from
-// the HEAD of the rollout: `childMetaFromEntries` finds session_meta at the
-// front (so role/nickname/parentThreadId and the startedAt anchor vanish once
-// the head is dropped), `startedAt` jumps forward to the oldest *surviving*
-// entry, and `turnCount` / tool-call counts undercount because earlier turns are
-// gone. The fix below SPLITS the responsibility: the emitted tool-call timeline
-// is capped, while the SubAgentState fields that depend on the HEAD of the file
-// are derived from a running accumulator that has seen every complete line.
-//
-// #288 ROOT-CAUSE FOLLOW-UP: PR #317 also retained a bounded 500-entry TAIL of
-// raw rollout entries in `childEntriesByAgentId`, justified ONLY as a buffer for
-// a "future live mini-feed" that nothing ever read. The dominator-tree analysis
-// that pinned the Claude SubAgentWatcher as 263 MB / 88% of the heap (see
-// SubAgentWatcher.ts) showed retained raw entries are exactly the multi-MB
-// liability — each entry pins its full tool-result/Read body. Since that tail
-// was write-only dead weight here, the cleanest fix is to DROP it entirely
-// rather than add per-field truncation to bytes nothing displays. The derived
-// SubAgentState accumulator already carries everything emit() ships, so
-// removing the tail is invisible. If a mini-feed is ever built, it should
-// re-derive small previews from the on-disk rollout (the durable source), not
-// pin raw entries in main-process heap. The former
-// MAX_RETAINED_ENTRIES_PER_AGENT constant is gone with the tail it bounded; the
-// dirty signal is now the child rollout byte offset, matching the Claude watcher
-// and avoiding full-file re-reads.
+// INVARIANT (#288 / #317 root cause, stated forward): every head-of-file
+// SubAgentState field — role / nickname / parentThreadId, the startedAt anchor,
+// turnCount, and the tool-call counts — MUST derive from the running
+// accumulator that has seen every complete line, NOT from a capped tail slice.
+// Deriving any head-derived value from the slice corrupts it: session_meta
+// lives at the FRONT of the rollout (so role/nickname/parentThreadId and the
+// startedAt anchor vanish once the head is dropped), startedAt jumps forward to
+// the oldest surviving entry, and turn/tool counts undercount because earlier
+// turns are gone. The split below honors this — the emitted tool-call timeline
+// is capped for DISPLAY, while every head-derived field reads from the
+// accumulator. A prior fix tail-sliced retained entries and fed that slice
+// straight into emit, which is exactly what this invariant forbids.
 
 // Codex child sessions do not use Claude's `<parent>/subagents/agent-*.jsonl`
 // layout. They are normal rollout files whose session_meta.source says they
@@ -309,14 +301,6 @@ export function extractCodexChildMeta(entry: JsonlEntry): ChildMeta | null {
   }
 }
 
-function childMetaFromEntries(entries: CodexRolloutEntry[]): ChildMeta | null {
-  for (const entry of entries) {
-    const meta = extractCodexChildMeta(entry)
-    if (meta) return meta
-  }
-  return null
-}
-
 function toolInputFromPayload(payload: Record<string, unknown>): Record<string, unknown> | null {
   if (typeof payload.arguments === 'string') {
     return parseJsonObject(payload.arguments) ?? { arguments: payload.arguments }
@@ -325,130 +309,6 @@ function toolInputFromPayload(payload: Record<string, unknown>): Record<string, 
     return parseJsonObject(payload.input) ?? { raw: payload.input }
   }
   return asRecord(payload.arguments) ?? asRecord(payload.input)
-}
-
-function buildToolCalls(entries: CodexRolloutEntry[]): {
-  calls: SubAgentToolCall[]
-  dropped: number
-  currentActivity: string | null
-} {
-  type Call = SubAgentToolCall & { id: string | null }
-  const calls: Call[] = []
-  const done = new Set<string>()
-  let currentActivity: string | null = null
-
-  for (const entry of entries) {
-    const payload = asRecord(entry.payload)
-    if (!payload) continue
-    if (
-      entry.type === 'response_item' &&
-      (payload.type === 'function_call' || payload.type === 'custom_tool_call') &&
-      typeof payload.call_id === 'string'
-    ) {
-      const name = stringField(payload, 'name') ?? 'tool'
-      calls.push({
-        id: payload.call_id,
-        name,
-        headline: headlineFromInput(
-          toolInputFromPayload(payload),
-          CODEX_SUBAGENT_HEADLINE_KEYS,
-          '...',
-        ),
-        status: 'running',
-      })
-      currentActivity = `running ${name}`
-    } else if (
-      entry.type === 'response_item' &&
-      (payload.type === 'function_call_output' || payload.type === 'custom_tool_call_output') &&
-      typeof payload.call_id === 'string'
-    ) {
-      done.add(payload.call_id)
-      currentActivity = null
-    } else if (entry.type === 'response_item' && payload.type === 'web_search_call') {
-      const callId = stringField(payload, 'call_id') ?? stringField(payload, 'id')
-      const action = asRecord(payload.action)
-      calls.push({
-        id: callId,
-        name: 'web_search',
-        headline: headlineFromInput(action, CODEX_SUBAGENT_HEADLINE_KEYS, '...'),
-        status: 'running',
-      })
-      currentActivity = 'running web_search'
-    } else if (entry.type === 'event_msg' && payload.type === 'agent_message') {
-      const phase = stringField(payload, 'phase')
-      currentActivity = phase === 'final_answer' ? 'finalizing' : 'responding'
-    }
-  }
-
-  for (const call of calls) {
-    call.status = call.id && done.has(call.id) ? 'done' : 'running'
-  }
-
-  const { kept, dropped } = capToolCalls(calls)
-  return {
-    calls: kept.map(({ name, headline, status }) => ({ name, headline, status })),
-    dropped,
-    currentActivity,
-  }
-}
-
-export function buildCodexSubAgentState(params: {
-  toolUseId: string
-  agentId: string
-  spawn: SpawnCall | null
-  output: SpawnOutput | null
-  notification: Notification | null
-  childEntries: CodexRolloutEntry[]
-}): SubAgentState {
-  const childMeta = childMetaFromEntries(params.childEntries)
-  const timestamps = params.childEntries
-    .map(entry => (typeof entry.timestamp === 'string' ? tsToMs(entry.timestamp) : null))
-    .filter((value): value is number => value !== null)
-  const startedAt =
-    tsToMs(childMeta?.timestamp) ??
-    (timestamps.length > 0 ? Math.min(...timestamps) : null)
-  const lastActivityAt = timestamps.length > 0 ? Math.max(...timestamps) : startedAt
-  const taskComplete = params.childEntries.some(entry => {
-    const payload = asRecord(entry.payload)
-    return entry.type === 'event_msg' && payload?.type === 'task_complete'
-  })
-  const status: SubAgentState['status'] =
-    params.notification?.status === 'failed' || params.notification?.status === 'error'
-      ? 'error'
-      : params.notification?.status === 'completed' || taskComplete
-        ? 'done'
-        : 'running'
-  const tools = buildToolCalls(params.childEntries)
-  const turnCount = params.childEntries.reduce((count, entry) => {
-    const payload = asRecord(entry.payload)
-    if (entry.type === 'event_msg' && payload?.type === 'agent_message') return count + 1
-    if (
-      entry.type === 'response_item' &&
-      payload?.type === 'message' &&
-      payload.role === 'assistant'
-    ) {
-      return count + 1
-    }
-    return count
-  }, 0)
-
-  return {
-    toolUseId: params.toolUseId,
-    agentId: params.agentId,
-    agentType: childMeta?.role ?? params.spawn?.agentType ?? 'agent',
-    description:
-      params.spawn?.description ??
-      childMeta?.nickname ??
-      params.output?.nickname ??
-      '',
-    status,
-    startedAt,
-    lastActivityAt,
-    turnCount,
-    toolCalls: tools.calls,
-    droppedToolCalls: tools.dropped,
-    currentActivity: status === 'running' ? tools.currentActivity : null,
-  }
 }
 
 /** Mirrors SUBAGENT_STALE_AFTER_MS on the claude side (#341): a child
@@ -462,7 +322,14 @@ export const CODEX_SUBAGENT_STALE_AFTER_MS = 5 * 60_000
  *  resumed sessions accumulate every child ever spawned. */
 export const CODEX_SUBAGENT_PRUNE_AFTER_MS = 10 * 60_000
 
-function createCodexAccumulator(): CodexSubAgentAccumulator {
+// Exported for the unit test, which exercises the accumulator exactly the way
+// CodexSubAgentTracker.readAppendedChild does (fold each rollout line, then
+// build). These three are the live emit path — the former entries-based
+// builders (childMetaFromEntries/buildToolCalls/buildCodexSubAgentState) were
+// a parallel oracle that nothing but the test used and were deleted, mirroring
+// the claude twin's decision documented in subagentState.ts (dead parity
+// oracles are removed, not kept in sync).
+export function createCodexAccumulator(): CodexSubAgentAccumulator {
   return {
     childMeta: null,
     minTimestampMs: null,
@@ -510,7 +377,7 @@ function resolveCodexToolCall(
   }
 }
 
-function accumulateCodexSubAgentEntry(
+export function accumulateCodexSubAgentEntry(
   acc: CodexSubAgentAccumulator,
   entry: CodexRolloutEntry,
 ): void {
@@ -573,7 +440,7 @@ function accumulateCodexSubAgentEntry(
   }
 }
 
-function buildCodexSubAgentStateFromAccumulator(params: {
+export function buildCodexSubAgentStateFromAccumulator(params: {
   toolUseId: string
   agentId: string
   spawn: SpawnCall | null
@@ -713,6 +580,16 @@ export class CodexSubAgentTracker {
       for (const [agentId, terminal] of waitStatuses) {
         this.waitTerminalByAgentId.set(agentId, terminal)
       }
+      // Prune the consumed wait call id. A wait_agent call produces exactly ONE
+      // output, and extractCodexWaitStatuses only returns non-null once it has
+      // matched (and thus consumed) that output — so this id will never match a
+      // future entry again. Without this delete, waitCallIds grew unbounded for
+      // the tracker's whole lifetime (it was only ever cleared in stop()), the
+      // Codex twin of the retention leaks #300/#317 fixed elsewhere. The output
+      // entry's call_id IS the id we tracked at the wait call, so re-reading it
+      // here is the exact key to drop.
+      const consumedCallId = stringField(asRecord(entry.payload), 'call_id')
+      if (consumedCallId) this.waitCallIds.delete(consumedCallId)
       this.dirty = true
     }
     const notification = extractCodexSubagentNotification(entry)

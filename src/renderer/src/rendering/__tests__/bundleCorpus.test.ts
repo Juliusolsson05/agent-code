@@ -30,13 +30,29 @@ import {
 // TRIAGE MODEL — this suite asserts STABILITY, not blanket parity:
 // each fixture carries a `triage` array; the diff must match it exactly.
 // A divergence can be RIGHT (the note on most bundles describes a legacy
-// bug — the new pipeline disagreeing is the fix working). So entries are
-// triaged into verdicts: 'legacy-bug' (divergence is the fix — keep,
-// forever), 'new-bug' (pipeline defect — fix it, entry disappears),
-// 'skew' (input and expected captured ticks apart — tolerated, documented),
-// 'untriaged' (recorded debt, burn down in follow-ups). ANY change in the
-// divergence set — new ones appearing or old ones vanishing — fails the
-// suite until a human re-blesses, so pipeline regressions cannot hide
+// bug — the new pipeline disagreeing is the fix working). Verdicts are the
+// live set produced by scripts/triage-rendering-fixtures.mjs (that script is
+// the source of truth; keep this list in sync with it):
+//   - 'skew-ingestion-lag' — a committed row whose producer timestamp
+//     precedes the recorded visible_rows moment but ingestion had not drained
+//     it yet; legacy could not paint what it had not seen.
+//   - 'equivalent-content' — the SAME visible content, painted by the pipeline
+//     via committed rows where legacy painted the not-yet-ingested semantic
+//     turn. Suppression is correct; the divergence is representational only.
+//   - 'extraction-gap[:variant]' — a row the pipeline cannot reconstruct
+//     because no on-disk source carries it (variants: ':history-window' — older
+//     than the 20-turn history cap; ':optimistic-rows-renderer-local' — exists
+//     only in renderer state).
+//   - 'legacy-bug[:variant]' — the divergence IS the fix, keep it forever
+//     (variants: ':scaffolding-echo' — legacy painted a <command/context> echo
+//     as a user prompt; ':prompt-not-shown' — legacy failed to paint a real
+//     user prompt).
+//   - 'untriaged' — recorded debt not yet mechanically classified; burn down
+//     in follow-ups. These deliberately carry NO `why` (the `why?` field is
+//     optional precisely so an untriaged entry can exist without one); a why is
+//     only written when the triage script can justify a real verdict.
+// ANY change in the divergence set — new ones appearing or old ones vanishing —
+// fails the suite until a human re-blesses, so pipeline regressions cannot hide
 // inside pre-existing noise.
 //
 // Bless mode: AGENT_CODE_CORPUS_BLESS=1 rewrites each fixture's triage to

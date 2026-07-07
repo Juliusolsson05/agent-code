@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  buildCodexSubAgentState,
+  accumulateCodexSubAgentEntry,
+  buildCodexSubAgentStateFromAccumulator,
+  createCodexAccumulator,
   extractCodexSpawnCall,
   extractCodexSpawnOutput,
   extractCodexSubagentNotification,
@@ -9,6 +11,7 @@ import {
   extractCodexWaitStatuses,
   isCodexWaitAgentCall,
 } from './codexSubagentState'
+import type { JsonlEntry } from '@preload/api/types.js'
 
 describe('Codex subagent state', () => {
   it('extracts the parent spawn call and output join keys', () => {
@@ -130,7 +133,59 @@ describe('Codex subagent state', () => {
   })
 
   it('builds Claude-compatible SubAgentState from a Codex child rollout', () => {
-    const state = buildCodexSubAgentState({
+    // Ported from the deleted buildCodexSubAgentState (entries-array) oracle to
+    // the live accumulator path: fold each rollout line exactly the way
+    // CodexSubAgentTracker.readAppendedChild does, then project. The former
+    // array builder was a parallel derivation nothing but this test used, so it
+    // was removed (see the header comment mirroring the claude twin's decision).
+    const childEntries: JsonlEntry[] = [
+      {
+        type: 'session_meta',
+        timestamp: '2026-06-18T11:09:32.000Z',
+        payload: {
+          type: 'session_meta',
+          id: 'child-thread',
+          source: {
+            subagent: {
+              thread_spawn: {
+                parent_thread_id: 'parent-thread',
+                agent_nickname: 'Cicero',
+                agent_role: 'explorer',
+              },
+            },
+          },
+        },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-06-18T11:09:35.000Z',
+        payload: {
+          type: 'function_call',
+          name: 'exec_command',
+          call_id: 'call_exec',
+          arguments: JSON.stringify({ command: 'rg subagent src' }),
+        },
+      },
+      {
+        type: 'response_item',
+        timestamp: '2026-06-18T11:09:36.000Z',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'call_exec',
+          output: 'src/main/subagents/index.ts',
+        },
+      },
+      {
+        type: 'event_msg',
+        timestamp: '2026-06-18T11:09:40.000Z',
+        payload: {
+          type: 'task_complete',
+        },
+      },
+    ]
+    const acc = createCodexAccumulator()
+    for (const entry of childEntries) accumulateCodexSubAgentEntry(acc, entry)
+    const state = buildCodexSubAgentStateFromAccumulator({
       toolUseId: 'call_spawn',
       agentId: 'child-thread',
       spawn: {
@@ -140,51 +195,11 @@ describe('Codex subagent state', () => {
       },
       output: { callId: 'call_spawn', agentId: 'child-thread', nickname: 'Cicero' },
       notification: { agentId: 'child-thread', status: 'completed' },
-      childEntries: [
-        {
-          type: 'session_meta',
-          timestamp: '2026-06-18T11:09:32.000Z',
-          payload: {
-            type: 'session_meta',
-            id: 'child-thread',
-            source: {
-              subagent: {
-                thread_spawn: {
-                  parent_thread_id: 'parent-thread',
-                  agent_nickname: 'Cicero',
-                  agent_role: 'explorer',
-                },
-              },
-            },
-          },
-        },
-        {
-          type: 'response_item',
-          timestamp: '2026-06-18T11:09:35.000Z',
-          payload: {
-            type: 'function_call',
-            name: 'exec_command',
-            call_id: 'call_exec',
-            arguments: JSON.stringify({ command: 'rg subagent src' }),
-          },
-        },
-        {
-          type: 'response_item',
-          timestamp: '2026-06-18T11:09:36.000Z',
-          payload: {
-            type: 'function_call_output',
-            call_id: 'call_exec',
-            output: 'src/main/subagents/index.ts',
-          },
-        },
-        {
-          type: 'event_msg',
-          timestamp: '2026-06-18T11:09:40.000Z',
-          payload: {
-            type: 'task_complete',
-          },
-        },
-      ],
+      acc,
+      // Pin nowMs so the staleness branch is deterministic; taskComplete already
+      // forces 'done' here, but an explicit clock keeps the test independent of
+      // wall time relative to the (fixed) rollout timestamps.
+      nowMs: Date.parse('2026-06-18T11:09:41.000Z'),
     })
 
     expect(state).toMatchObject({

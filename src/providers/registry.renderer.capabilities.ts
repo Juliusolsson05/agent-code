@@ -72,6 +72,22 @@ export type RendererProviderCapabilities = {
     context: { sourceTool?: ToolUseBlock | null },
   ) => ReactNode | undefined
   /**
+   * Does this tool_use name spawn a subagent the fleet row should own?
+   * Provider-owned because the spawn vocabulary is provider-specific and
+   * used to live as a hardcoded global name set in feed/lib/agentSpawnTools —
+   * exactly the kind of "which provider says what" knowledge #394 pulls into
+   * the registry. Claude records fanout as an `Agent` tool_use and (for
+   * MCP-orchestrated sessions) `mcp__<server>__orchestration_create_agent`;
+   * Codex as a `spawn_agent` function_call and the bare
+   * `orchestration_create_agent`; opencode has no spawn tool yet. The shared
+   * feed predicate (isAgentSpawnToolName) unions these so the committed and
+   * grouping planes route identically (the P2c blind spot: 73 tracked
+   * children, zero cards, because only 'Agent'/'spawn_agent' were known).
+   * wait/list/read orchestration tools are deliberately excluded — they are
+   * queries about the fleet, not spawns.
+   */
+  isSpawnTool: (name: string) => boolean
+  /**
    * Provider-owned transcript-line → feed-entry mapping (#394 phase
    * 2b). One fresh mapper per ingestion stream; see the
    * TranscriptEntryMapper docstring in providerConfig.ts for the
@@ -164,6 +180,14 @@ export type ComposerSubmitIo = {
   getScreen: () => string | undefined
 }
 
+// Does a tool name reduce to the MCP orchestration spawn verb? The built-in
+// orchestration MCP server names its spawn tool `orchestration_create_agent`;
+// claude keeps the `mcp__<server>__` prefix on the wire, so only the prefixed
+// form is claude's. `[^]*` (not `.*`) so an embedded newline in a server name
+// still matches — the same tolerance the old shared predicate used.
+const isMcpOrchestrationCreateAgent = (name: string): boolean =>
+  /^mcp__[^]*__orchestration_create_agent$/.test(name)
+
 const claudeCapabilities: RendererProviderCapabilities = {
   id: 'claude',
   name: 'Claude Code',
@@ -171,6 +195,10 @@ const claudeCapabilities: RendererProviderCapabilities = {
   conditionViews: CLAUDE_VIEWS,
   renderToolUse: renderClaudeToolUse,
   renderToolResult: renderClaudeToolResult,
+  // Claude fanout: `Agent` tool_use, plus MCP-orchestrated spawns that arrive
+  // prefixed. The bare `orchestration_create_agent` is codex's (see below), so
+  // the fleet-row union still covers it.
+  isSpawnTool: (name) => name === 'Agent' || isMcpOrchestrationCreateAgent(name),
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
   composerSubmit: claudeComposerSubmit,
@@ -187,6 +215,9 @@ const codexCapabilities: RendererProviderCapabilities = {
   conditionViews: CODEX_VIEWS,
   renderToolUse: renderCodexToolUse,
   renderToolResult: renderCodexToolResult,
+  // Codex fanout: `spawn_agent` function_call, plus the MCP orchestration spawn
+  // whose `mcp__` prefix codex strips on the wire (so it arrives bare).
+  isSpawnTool: (name) => name === 'spawn_agent' || name === 'orchestration_create_agent',
   createTranscriptEntryMapper: (initialTurnCursor) =>
     createCodexTranscriptEntryMapper(initialTurnCursor ?? null),
   extractProviderSessionId: extractCodexProviderSessionId,
@@ -206,6 +237,8 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   // a real todo list; everything else falls through to the generic rows.
   renderToolUse: renderOpencodeToolUse,
   renderToolResult: renderOpencodeToolResult,
+  // opencode has no subagent-spawn tool yet (no fleet fanout on this backend).
+  isSpawnTool: () => false,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
   extractProviderSessionId: extractOpencodeProviderSessionId,
   composerSubmit: opencodeComposerSubmit,
