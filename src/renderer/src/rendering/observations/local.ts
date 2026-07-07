@@ -91,26 +91,3 @@ export function collectLifecycleCandidates(params: {
   }
   return out
 }
-
-/**
- * Optimistic reconciliation, ledger-side: committed user rows own their
- * optimistic stand-ins by normalized text. Exported for the ledger pass.
- */
-export function committedUserTextKeys(
-  committed: readonly RenderCandidate[],
-): ReadonlySet<string> {
-  const keys = new Set<string>()
-  for (const c of committed) {
-    if (c.contentKind === 'user-text' && c.owner === 'committed') {
-      // User rows don't carry textKey (only assistant rows do, for
-      // suppression) — reconciliation needs its own key derivation, so the
-      // committed collector is extended by callers via normalizedTextKey
-      // when present, else this set stays conservative and the optimistic
-      // row survives until an exact owner appears. Surviving too long is
-      // the visible-and-diagnosable failure; vanishing early is the silent
-      // one (#339) — we bias toward visible.
-      if (c.normalizedTextKey) keys.add(c.normalizedTextKey)
-    }
-  }
-  return keys
-}

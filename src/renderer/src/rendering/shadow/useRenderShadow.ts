@@ -164,6 +164,15 @@ export function useRenderShadow(
       // to surface divergences to a human watching the console.
       console.warn('[render-shadow] divergence', report)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the
+    // exact runtime slice references the adapter's plane caches compare, the
+    // same invariant the production twin useLedgerFeedItems documents. Bare
+    // `runtime` MUST NOT be a dep here: it changes identity on every reducer
+    // pass (including unrelated fields like scroll state), so listing it would
+    // fire the shadow diff on every render and defeat the slice-level deps —
+    // the shadow would re-run constantly instead of only when a plane changed.
+    // This dep list drifted (it used to also include bare `runtime`); removed
+    // to match the twin.
   }, [
     enabled,
     provider,
@@ -178,6 +187,5 @@ export function useRenderShadow(
     runtime.streamPhasePendingToolName,
     runtime.streamPhasePendingToolUseId,
     runtime.lastJsonlEntryAt,
-    runtime,
   ])
 }

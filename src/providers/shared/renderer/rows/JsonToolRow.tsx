@@ -30,7 +30,16 @@ import {
 // rows, but per-delta re-highlighting on the live path is the O(bytes²)
 // trap documented at the Write streaming preview.
 
-const SLAB_MAX_CHARS = 16 * 1024
+// Hard cap on any pretty-printed JSON slab we hand to the DOM / highlighter.
+// WHY 16KB: a single tool payload can carry a multi-megabyte blob (a whole
+// file's contents, an orchestration graph, a base64 image). Stringifying and
+// mounting that verbatim is the O(bytes²) highlight trap and a memory spike on
+// the live path — the slab is a *preview*, not a viewer, so we truncate. The
+// exact number is a readability/safety trade, not a semantic boundary; 16KB is
+// far more context than any collapsed preview needs while staying cheap to
+// paint. Exported so the live BlockRow path caps identically instead of
+// re-deriving its own magic number (they used to drift).
+export const SLAB_MAX_CHARS = 16 * 1024
 
 function ParamValue({ value }: { value: unknown }) {
   if (typeof value === 'string') {
@@ -48,6 +57,11 @@ function ParamValue({ value }: { value: unknown }) {
         </span>
       )
     }
+    // 400-char clamp: a scalar param is a one-line hint in a collapsed slab,
+    // not a document. Some tools smuggle a whole prompt / diff into a single
+    // string param; past ~400 chars it stops being a glanceable value and
+    // starts pushing the row height (and paint cost) unboundedly. The full
+    // value is still available on the underlying entry — this is preview text.
     return <span className="break-all whitespace-pre-wrap">{value.length > 400 ? `${value.slice(0, 400)}…` : value}</span>
   }
   if (value === null || typeof value !== 'object') {

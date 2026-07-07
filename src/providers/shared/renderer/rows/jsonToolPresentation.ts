@@ -75,10 +75,19 @@ export function slabEntries(
 }
 
 export function isAbsolutePathLike(s: string): boolean {
+  // Length cap guards the classifier, not the value: a "path" longer than a
+  // real filesystem limit (~512 chars is already generous vs PATH_MAX) is
+  // almost certainly prose that merely starts with `/` or `~/`, and mis-
+  // classifying it as a path would route it through path-shortening display
+  // that mangles the text. Bounding the regex input also keeps it linear.
   return /^(~\/|\/)[^\0\n]*$/.test(s) && s.length < 512
 }
 
 export function isHttpUrl(s: string): boolean {
+  // Same guard as isAbsolutePathLike: past ~2KB a "URL" is far more likely a
+  // token/blob that happens to start with http(s):// than a real link, and we
+  // don't want to wrap 2KB of text in an <a>. 2KB matches the de-facto
+  // browser URL-length ceiling, so anything longer wouldn't navigate anyway.
   return /^https?:\/\/\S+$/.test(s) && s.length < 2048
 }
 
