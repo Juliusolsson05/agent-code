@@ -73,6 +73,12 @@ export function buildCommittedOwnership(
   const itemIds = new Set<string>()
   const userTextKeys = new Set<string>()
   for (const c of committed) {
+    // Block-grain evidence mined at collection time (see RenderCandidate
+    // .ownedToolUseIds WHY). This is the corpus-proven path for claude:
+    // tool blocks live INSIDE entry-grain rows, so the contentKind
+    // branches below never fire for them.
+    for (const id of c.ownedToolUseIds ?? []) toolUseIds.add(id)
+    for (const id of c.ownedToolResultIds ?? []) toolResultIds.add(id)
     if (c.contentKind === 'user-text' && c.normalizedTextKey) {
       userTextKeys.add(c.normalizedTextKey)
     }

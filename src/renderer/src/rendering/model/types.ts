@@ -116,6 +116,20 @@ export type RenderCandidate = {
   textKey?: string
   /** NFKC + whitespace-collapsed + trimmed. Conservative by design. */
   normalizedTextKey?: string
+  /**
+   * Block-grain ownership EVIDENCE mined from a committed entry's content
+   * array: every tool_use block id / tool_result tool_use_id inside this
+   * entry. Plural because one entry legally carries several parallel tool
+   * calls. WHY fields on the entry-grain candidate instead of separate
+   * block-grain candidates: committed rows must stay one-per-entry (the
+   * view bridge maps candidate → entry item 1:1; block-grain candidates
+   * would paint the entry once per block). Ownership sets union these; the
+   * corpus proved the gap — with these absent, committed tool ownership
+   * was empty for claude and tool cards painted twice (duplicate
+   * AskUserQuestion capture, 3 fixtures, two independent triage passes).
+   */
+  ownedToolUseIds?: readonly string[]
+  ownedToolResultIds?: readonly string[]
 }
 
 /**
