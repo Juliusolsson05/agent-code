@@ -130,6 +130,14 @@ export type RenderCandidate = {
    */
   ownedToolUseIds?: readonly string[]
   ownedToolResultIds?: readonly string[]
+  /** Tool-use candidates only: the block carries its own result evidence
+   *  (resultContent/resultAt landed in the semantic block). Distinguishes
+   *  a completed tool row from a permanently-dangling one when no
+   *  committed trace exists either (the collapsed-running rule). */
+  resolved?: boolean
+  /** Tool candidates: the provider tool name (Read, Bash, Task, …). Feeds
+   *  the collapsed-running churn-set check and future per-tool row policy. */
+  toolName?: string
 }
 
 /**
