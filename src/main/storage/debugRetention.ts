@@ -10,6 +10,7 @@ import {
   MANUAL_DEBUG_BUNDLE_DIR,
   PERFORMANCE_RUNS_DIR,
   PROXY_EVENTS_DIR,
+  SESSION_RECORDING_DIR,
   STATE_DIR,
 } from '@main/storage/paths.js'
 import { ghostLogDir } from '@main/ghostJournal.js'
@@ -37,6 +38,7 @@ export type DebugStorageBucket =
   | 'incidents'
   | 'heap-snapshots'
   | 'ghost-logs'
+  | 'session-recordings'
 
 type Artifact = {
   path: string
@@ -295,12 +297,23 @@ function bucketCaps(totalBudget: number): Record<DebugStorageBucket, number> {
     // directory outside the normal debug-retention accounting. Compaction
     // keeps live logs small; this cap handles abandoned session files.
     'ghost-logs': Math.floor(totalBudget * 0.08),
+    // Session recordings are the biggest continuous producer of the bunch: a
+    // continuous per-session input-stream capture, up to 128 MiB PER
+    // recording, one recording per session per app run. Left uncapped this is
+    // exactly the "small files forever" / uncapped-growth directory that OOM'd
+    // the app on 2026-07-04 (#388) and that #467 flagged as a must-fix before
+    // the recorder sees heavy use. 12% gives room for a soak's worth of
+    // recordings while the global budget + active-grace guards keep a live
+    // recording safe. Not protected like manual bundles: a recording is a
+    // diagnostic you replay locally, not a user-authored artifact to preserve
+    // forever — once it ages out under pressure, dropping it whole is correct.
+    'session-recordings': Math.floor(totalBudget * 0.12),
   }
 }
 
 async function collectArtifacts(): Promise<Artifact[]> {
   const manualLegacyBundlePaths = await loadManualLegacyBundlePaths()
-  const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, incidents, heapSnapshots, ghostLogs] = await Promise.all([
+  const [feed, manualBundles, autosaveBundles, legacyBundles, proxy, performance, incidents, heapSnapshots, ghostLogs, sessionRecordings] = await Promise.all([
     collectFiles(FEED_DEBUG_DIR, 'feed-debug', name => name.endsWith('.jsonl')),
     collectImmediateDirs(MANUAL_DEBUG_BUNDLE_DIR, 'debug-bundles-manual'),
     collectImmediateDirs(AUTOSAVE_DEBUG_BUNDLE_DIR, 'debug-bundles-autosave'),
@@ -310,6 +323,7 @@ async function collectArtifacts(): Promise<Artifact[]> {
     collectIncidentRunDirs(),
     collectFiles(HEAP_SNAPSHOT_DIR, 'heap-snapshots', name => name.endsWith('.heapsnapshot')),
     collectFiles(ghostLogDir(), 'ghost-logs', name => name.endsWith('.ghost.jsonl')),
+    collectSessionRecordingDirs(),
   ])
   return [
     ...feed,
@@ -321,7 +335,44 @@ async function collectArtifacts(): Promise<Artifact[]> {
     ...incidents,
     ...heapSnapshots,
     ...ghostLogs,
+    ...sessionRecordings,
   ]
+}
+
+// Collect each session-recording FOLDER as one dir-kind artifact.
+//
+// WHY a whole-folder dir artifact and NOT per-file (collectFiles):
+// a recording is `session-recordings/<recordingId>/` = { meta.json,
+// events.jsonl }. It MUST be evicted atomically — deleting events.jsonl while
+// keeping meta.json (or vice-versa) leaves a half-recording the replay harness
+// can't load and that no longer counts toward any bucket. Because we emit ONE
+// `kind:'dir'` Artifact per folder, removeArtifact() takes the `rm -rf` branch
+// and the whole folder is the unit of deletion by construction. Using
+// collectFiles here would be the bug this shape exists to prevent — it would
+// let a prune pass shed events.jsonl and orphan meta.json.
+//
+// WHY order by folder mtime (inherited from dirStats via collectImmediateDirs)
+// and NOT meta.json.startedAtWall: a CONTINUOUS recorder appends for the whole
+// life of a session, so a live recording's folder mtime is "just now" — which
+// is exactly what we want, because the active-grace guard in the prune passes
+// keys on mtimeMs and must protect a recording that is still being written.
+// Ordering by startedAtWall would make a long-lived active recording look
+// "old" and expose it to cap/budget eviction mid-write. Folder mtime ages
+// closed recordings correctly (their last write == when they ended) while
+// keeping live ones safe — the plan explicitly permits "the folder's mtime".
+//
+// `root` is a parameter (defaulting to the real dir) purely so the colocated
+// test can point this at a temp dir without mocking the paths module — the
+// prune framework's fs calls are otherwise hard-wired to STATE_DIR.
+//
+// Retention closes the #388/#467 disk-panic vector: a continuous stream
+// re-opens the exact uncapped-growth wound that OOM'd the app on 2026-07-04.
+// The per-recording 128 MiB cap bounds one file; this bucket bounds the whole
+// directory so recordings can't accrete forever across app runs.
+export function collectSessionRecordingDirs(
+  root: string = SESSION_RECORDING_DIR,
+): Promise<Artifact[]> {
+  return collectImmediateDirs(root, 'session-recordings')
 }
 
 async function collectFiles(
