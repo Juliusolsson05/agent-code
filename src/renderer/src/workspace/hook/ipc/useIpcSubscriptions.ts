@@ -46,6 +46,7 @@ import {
 import {
   codexPromptsMatchForOwnership,
 } from '@renderer/workspace/hook/actions/streaming'
+import { applyClaudeQueueDequeue } from '@renderer/workspace/claudeQueueReconstruction'
 import { shouldClearIdleQueuedMessages } from '@renderer/workspace/queueInvariants'
 import type { StreamPhase } from '@renderer/workspace/workspaceState'
 import {
@@ -1415,7 +1416,20 @@ export function useIpcSubscriptions(
                 ]
               }
             } else if (op.operation === 'dequeue' || op.operation === 'remove') {
-              queuedMessages = queuedMessages.slice(1)
+              // Mirror Claude's PRIORITY dequeue instead of dropping the head.
+              // Claude delivers a queued user prompt ('next') ahead of any
+              // completed-agent <task-notification> ('later') regardless of
+              // insertion order, so a blind slice(1) removed the wrong logical
+              // item whenever the queue mixed priorities — permanently
+              // desyncing this reconstruction from Claude's provider-owned
+              // queue (which the idle-clear invariant deliberately never
+              // touches). That drift is the shared root cause of the
+              // 2026-07-07 soak bundles: stale task-notifications stuck in the
+              // QueueStrip ("completed agents render as queued") AND the user's
+              // own queued prompt vanishing ("queued prompt did not get
+              // shown"). See claudeQueueReconstruction.ts for the priority
+              // inference; it collapses to slice(1) for a homogeneous queue.
+              queuedMessages = applyClaudeQueueDequeue(queuedMessages)
             }
             // Force the streaming flag on whenever the queue has
             // items so the streaming card doesn't disappear
