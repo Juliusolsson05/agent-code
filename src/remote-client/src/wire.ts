@@ -16,6 +16,9 @@ export type RemoteSessionSummary = {
   kind: string
   cwd: string | null
   alive: boolean
+  /** Epoch ms of last observed activity — picker sort key. Server-stamped
+   *  at list time; the client bumps it locally from live session events. */
+  lastActivityAt: number | null
 }
 
 export type FeedChannel =

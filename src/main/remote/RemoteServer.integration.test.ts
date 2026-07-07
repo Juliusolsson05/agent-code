@@ -24,7 +24,9 @@ function makeManager(): FakeManager {
   emitter.list = vi.fn(() => [])
   emitter.getScreenSnapshot = vi.fn(() => null)
   emitter.getConditionsSnapshot = vi.fn(() => null)
-  emitter.getTranscriptFile = vi.fn(() => null)
+  emitter.resolveTranscriptFile = vi.fn(async () => null)
+  emitter.getSpawnCwd = vi.fn(() => null)
+  emitter.getLastActivityAt = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const }))
   emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
@@ -331,7 +333,7 @@ describe('inbound scope enforcement on a live socket', () => {
       }),
     )
     await writeFile(transcript, lines.join('\n') + '\n', 'utf8')
-    ;(manager.getTranscriptFile as ReturnType<typeof vi.fn>).mockReturnValue(transcript)
+    ;(manager.resolveTranscriptFile as ReturnType<typeof vi.fn>).mockResolvedValue(transcript)
 
     const { ws, frames, token } = await openAuthed()
     ws.send(JSON.stringify({
