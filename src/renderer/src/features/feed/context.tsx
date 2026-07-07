@@ -1,3 +1,4 @@
+import type { TaskNotification } from '@renderer/features/feed/lib/taskNotification'
 import { createContext } from 'react'
 
 import type {
@@ -81,6 +82,14 @@ export const CodeRenderContext = createContext<{
 // session-wide subagent map that lives one level up on the runtime. Empty `{}`
 // when no subagents exist, so consumers render the plain spawn card.
 export const SubAgentsContext = createContext<Record<string, SubAgentState>>({})
+
+/** toolUseId → parsed <task-notification> (P2b). Built in Feed from
+ *  committed entries beside the tool indexes; TaskSubagentRow reads it as
+ *  its highest-priority status/result evidence (a notification is the
+ *  task's own completion report — it outranks watcher-derived state). */
+export const TaskNotificationsContext = createContext<
+  ReadonlyMap<string, TaskNotification>
+>(new Map())
 
 // Live AskUserQuestion screen state for answerability only.
 //

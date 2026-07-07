@@ -8,6 +8,7 @@ import {
   type ToolUseBlock,
 } from '@shared/types/transcript'
 import { asRecord } from '@shared/lib/asRecord'
+import { taskNotificationFromEntry } from '@renderer/features/feed/lib/taskNotification'
 
 import type {
   SemanticLiveTurn,
@@ -341,6 +342,19 @@ export function deriveFeedRenderModel({
   let entryOrdinal = 0
   for (const item of visibleDecisions) {
     if (!item.visible) continue
+    // P2b: a task-notification whose parent Task tool_use is IN the feed
+    // is state, not a row — its content joins the parent card via the
+    // Feed-level notification map. Skipping HERE (pre-LazyEntry) is what
+    // prevents the 48px-placeholder wall from the 2026-06-22 bundle; a
+    // parentless notification stays visible and renders as the compact
+    // TaskNotificationRow via EntryRow.
+    const notification = taskNotificationFromEntry(item.entry)
+    if (
+      notification?.toolUseId &&
+      committedToolUseIndex?.has(notification.toolUseId)
+    ) {
+      continue
+    }
     unsortedItems.push({
       type: 'entry',
       key: `entry:${item.key}`,

@@ -762,6 +762,20 @@ function FeedImpl({
     [toolResultIndexProp, toolIndexVersion, fallbackToolResultIndex],
   )
 
+  // P2b: toolUseId → parsed task-notification. Entries-only memo (same
+  // cadence as the committed projection): notifications are committed
+  // rows, so live semantic ticks never rebuild this. TaskSubagentRow
+  // treats a notification as its top status/result evidence; renderModel
+  // uses the same parse to skip joined notification entries pre-LazyEntry.
+  const taskNotifications = useMemo(() => {
+    const out = new Map<string, TaskNotification>()
+    for (const entry of entries) {
+      const n = taskNotificationFromEntry(entry)
+      if (n?.toolUseId) out.set(n.toolUseId, n)
+    }
+    return out
+  }, [entries])
+
   const committedProjection = useMemo(() => {
     // Semantic deltas can arrive many times per second while committed
     // JSONL entries stay unchanged. Keep all committed-entry scans behind
@@ -962,6 +976,7 @@ function FeedImpl({
     <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
     <SubAgentsContext.Provider value={subAgents}>
+    <TaskNotificationsContext.Provider value={taskNotifications}>
     <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
     <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
       <div
@@ -994,6 +1009,7 @@ function FeedImpl({
       </div>
     </CodeRenderContext.Provider>
     </AskUserQuestionConditionContext.Provider>
+    </TaskNotificationsContext.Provider>
     </SubAgentsContext.Provider>
     </ToolResultIndexContext.Provider>
     </ToolUseIndexContext.Provider>

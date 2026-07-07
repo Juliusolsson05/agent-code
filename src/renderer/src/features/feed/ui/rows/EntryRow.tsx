@@ -10,6 +10,8 @@ import {
 import { CompactBoundaryRow } from '@renderer/features/feed/ui/rows/CompactBoundaryRow'
 import { CompactSummaryRow } from '@renderer/features/feed/ui/rows/CompactSummaryRow'
 import { ConversationRow } from '@renderer/features/feed/ui/rows/ConversationRow'
+import { taskNotificationFromEntry } from '@renderer/features/feed/lib/taskNotification'
+import { TaskNotificationRow } from '@renderer/features/feed/ui/rows/TaskNotificationRow'
 import { SystemRow } from '@renderer/features/feed/ui/rows/SystemRow'
 
 // Memoized: entry objects are stable across store updates (we append,
@@ -29,6 +31,13 @@ export const EntryRow = memo(function EntryRow({ entry }: { entry: Entry }) {
     return <CompactSummaryRow entry={entry} />
   }
   if (isConversationEntry(entry)) {
+    // Task-notification carrier rows must never paint as user bubbles
+    // (P2b). Entries whose parent Task row is visible never reach here
+    // (renderModel skips them); this branch is the parentless fallback.
+    const notification = taskNotificationFromEntry(entry)
+    if (notification) {
+      return <TaskNotificationRow notification={notification} />
+    }
     return <ConversationRow entry={entry} />
   }
   return <SystemRow entry={entry} />
