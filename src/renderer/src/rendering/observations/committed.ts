@@ -44,6 +44,17 @@ export type CommittedCollection = {
 const CONVERSATION_TYPES = new Set(['user', 'assistant'])
 const COMPACT_TYPES = new Set(['compact-boundary', 'compact_boundary', 'compact-summary', 'compact_summary'])
 
+/** Claude writes the compaction marker as `type:'system'` with
+ *  `subtype:'compact_boundary'` — NOT as a first-class compact type.
+ *  Bundle-corpus catch (2026-06-22 c973322e, "did we not have custom
+ *  rendering UI for the compaction?"): the legacy renderer painted the
+ *  boundary via its VisibleDecision 'compact_boundary' branch while this
+ *  collector dropped the row as not-conversation, deleting the compaction
+ *  marker from the feed at cutover. */
+function isSystemCompactBoundary(e: RawCommittedEntry): boolean {
+  return e.type === 'system' && (e as { subtype?: string }).subtype === 'compact_boundary'
+}
+
 function entryTimestampMs(e: RawCommittedEntry): number | null {
   // Committed entry.timestamp is the TOP of the trust hierarchy (plan D4) —
   // producer wall-clock. Never substitute Date.now(): resume comparisons
@@ -96,7 +107,7 @@ function isSyntheticClaudeUserRow(
 function contentKindOf(e: RawCommittedEntry): RenderContentKind {
   if (e.type === 'assistant') return 'assistant-text'
   if (e.type === 'user') return 'user-text'
-  if (e.type?.includes('boundary')) return 'compact-boundary'
+  if (e.type?.includes('boundary') || isSystemCompactBoundary(e)) return 'compact-boundary'
   return 'compact-summary'
 }
 
@@ -123,7 +134,7 @@ export function collectCommittedCandidates(
     const id = `entry:${e.uuid ?? `ingest-${index}`}`
 
     const isConversation = CONVERSATION_TYPES.has(e.type ?? '')
-    const isCompact = COMPACT_TYPES.has(e.type ?? '')
+    const isCompact = COMPACT_TYPES.has(e.type ?? '') || isSystemCompactBoundary(e)
 
     if (!isConversation && !isCompact) {
       decisions.push({ candidateId: id, selected: false, reason: 'not-conversation', evidence: [`type=${e.type ?? 'unknown'}`] })
