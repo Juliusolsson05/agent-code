@@ -172,6 +172,7 @@ export type RenderReason =
   | 'queue-owned'
   | 'duplicate-turn-in-history'
   | 'wrong-session-lineage'
+  | 'task-notification-joined'
   | 'unknown-hidden'
   | 'unknown-queued-for-implementation'
 
