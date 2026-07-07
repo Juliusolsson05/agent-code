@@ -125,7 +125,10 @@ export const Block = memo(function Block({
       // surface for this command.
       if (
         customRendering
-        && (tu.name === 'Bash' || tu.name === 'exec_command')
+        // 'bash' = opencode's lowercase twin (P3): same commands, same
+        // git-widget value; the case difference is provider naming, not
+        // semantics.
+        && (tu.name === 'Bash' || tu.name === 'exec_command' || tu.name === 'bash')
       ) {
         const cmd = extractToolCommand(tu)
         const intent = detectGitIntent(cmd)
