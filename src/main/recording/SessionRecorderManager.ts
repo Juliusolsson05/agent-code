@@ -54,33 +54,62 @@ export class SessionRecorderManager {
     // wall-clock-honest (Date.now for `wall`, a monotonic source for `t`).
     private readonly nowWall: () => number = () => Date.now(),
     private readonly nowMono: () => number = () => performance.now(),
+    // AUTO-RECORD is opt-in and OFF by default. Plan §7: recording is
+    // command-driven per session; a user does NOT want every session of a
+    // long day silently written to disk (that is how you bury yourself in
+    // tens of GB). Only when AGENT_CODE_SESSION_RECORD=1 does the manager
+    // auto-start every session — the unattended-soak power path, never the
+    // default. Without it, NOTHING records until `startRecording` is called
+    // by the Start Recording command.
+    private readonly autoRecord: boolean = false,
   ) {}
 
-  /** The outbound observer registered on sendToMainWindow. Cheap on every
-   *  non-recorded channel (a Set lookup), so it is safe to leave installed;
-   *  the manager is only CONSTRUCTED when recording is gated on. */
+  /** The outbound observer registered on sendToMainWindow. The critical
+   *  gate: an event is only written if its session has been EXPLICITLY
+   *  started (or auto-record is on). A session the user never chose to
+   *  record produces nothing on disk — no burial. */
   observe = (channel: string, args: readonly unknown[]): void => {
     if (!RECORDED_CHANNELS.has(channel)) return
     const payload = args[0]
     const sessionId = extractSessionId(payload)
     if (!sessionId) return
-    const recorder = this.ensure(sessionId, payload)
+
+    let recorder = this.recorders.get(sessionId)
+    if (!recorder) {
+      // Not recording this session. Auto-start it ONLY under the opt-in
+      // power flag; otherwise ignore the event entirely (the default —
+      // recording waits for the Start Recording command).
+      if (!this.autoRecord) return
+      recorder = this.startRecording(sessionId, payload)
+    }
     recorder.record(channel, payload)
-    // session:exit is the renderer-facing end; finalize the recording so its
-    // meta.json gets end stats. (SessionManager 'removed' is the authoritative
-    // cleanup but is not on the outbound funnel; exit is close enough for the
-    // recording boundary, and flushAll on quit backstops any session that
-    // never emitted exit.)
+    // session:started carries the header identity (kind→provider, projectDir
+    // →cwd) a command-started recording didn't have yet — fill it in (plan
+    // §2/§3). providerSessionId is provisional (upgraded later) so it stays
+    // best-effort/null.
+    if (channel === 'session:started') {
+      const p = payload as { kind?: string; projectDir?: string }
+      recorder.refreshIdentity({ provider: p.kind, cwd: p.projectDir })
+    }
+    // session:exit finalizes the recording (end stats in meta.json).
     if (channel === 'session:exit') void this.stop(sessionId)
   }
 
-  private ensure(sessionId: string, firstPayload: unknown): SessionRecorder {
+  /**
+   * Begin recording ONE session on demand (the Start Recording command,
+   * plan §7). Idempotent — starting an already-recording session returns
+   * the live recorder. `firstPayload` is optional provider-hint metadata
+   * when the start is triggered by an incoming event (auto-record).
+   */
+  startRecording(sessionId: string, firstPayload?: unknown): SessionRecorder {
     let recorder = this.recorders.get(sessionId)
     if (!recorder) {
       const startedAtWall = this.nowWall()
       recorder = new SessionRecorder(
         {
           v: 1,
+          kind: 'session-recording',
+          redaction: 'none',
           // recordingId sorts chronologically and is filesystem-safe; the
           // sessionId suffix keeps concurrent tiled sessions distinct and
           // greppable. Colons stripped for Windows/paths.
@@ -124,6 +153,12 @@ export class SessionRecorderManager {
     if (!recorder) return
     this.recorders.delete(sessionId)
     await recorder.close()
+  }
+
+  /** Public stop for the Stop Recording command (plan §7). Alias of stop;
+   *  named to pair with startRecording at the call sites. */
+  stopRecording(sessionId: string): Promise<void> {
+    return this.stop(sessionId)
   }
 
   /** Drain + finalize every recording. Called on before-quit (mirrors

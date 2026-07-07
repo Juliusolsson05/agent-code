@@ -41,6 +41,12 @@ const MAX_BYTES = 128 * 1024 * 1024
 
 export type RecordingMeta = {
   v: 1
+  /** Discriminator so a bare meta.json is self-identifying (plan §3). */
+  kind: 'session-recording'
+  /** Redaction state of THIS on-disk recording. Live local recordings are
+   *  unredacted ('none'); the extraction script writes 'full-text-capped' /
+   *  'structure-only' into the derived fixture's meta (plan §3/§5). */
+  redaction: 'none'
   recordingId: string
   sessionId: string
   provider: string
@@ -133,11 +139,22 @@ export class SessionRecorder {
     this.queue.push(line)
     if (this.queue.length > MAX_QUEUE) {
       // Drop-oldest: shed the front so the heap can't grow unbounded when
-      // the disk can't keep up. Count it; the count lands in meta.json and
-      // as a tombstone so a replay knows the recording has a gap.
+      // the disk can't keep up. Count it (→ meta.json droppedCount) AND drop
+      // a __truncated marker at the gap position so a replay sees exactly
+      // where the stream has a hole (plan §4 — the counter must be visible in
+      // the file, not only in meta).
       const shed = this.queue.length - MAX_QUEUE
       this.queue.splice(0, shed)
       this.dropped += shed
+      this.queue.unshift(
+        JSON.stringify({
+          t: Math.round(this.nowMono() - this.startMono),
+          wall: this.nowWall(),
+          ch: '__truncated',
+          reason: 'queue-drop',
+          dropped: shed,
+        }) + '\n',
+      )
     }
     this.scheduleDrain()
   }
@@ -208,6 +225,30 @@ export class SessionRecorder {
     } catch {
       /* non-fatal: the events stream is the source of truth; meta is a convenience */
     }
+  }
+
+  /**
+   * Fill identity fields from a later event (plan §3/§2: providerSessionId /
+   * cwd / provider belong in the header, but a command-started recording
+   * begins before session:started is seen). Only fills EMPTY/unknown fields —
+   * never overwrites a known value — and rewrites meta.json when something
+   * changed. Cheap and idempotent.
+   */
+  refreshIdentity(id: { provider?: string; providerSessionId?: string; cwd?: string }): void {
+    let changed = false
+    if (id.provider && (this.meta.provider === 'unknown' || !this.meta.provider)) {
+      this.meta = { ...this.meta, provider: id.provider }
+      changed = true
+    }
+    if (id.providerSessionId && !this.meta.providerSessionId) {
+      this.meta = { ...this.meta, providerSessionId: id.providerSessionId }
+      changed = true
+    }
+    if (id.cwd && !this.meta.cwd) {
+      this.meta = { ...this.meta, cwd: id.cwd }
+      changed = true
+    }
+    if (changed) void this.writeMeta()
   }
 
   /** Force a drain and wait — used on shutdown and by tests. */

@@ -58,6 +58,52 @@ regress.** No more "save a bundle and hope we can reconstruct the tick."
 
 ---
 
+## 0b. As-built reconciliation (2026-07-07, post-audit)
+
+The sections below are the ORIGINAL design. Two intentional deviations and
+one honest limitation were found by a plan-vs-code audit after the feature
+merged (#471, #472) and the on-demand fix (#473). Recorded here so the plan
+never silently drifts from the code:
+
+- **Record shape is a FOLDER per recording, not one flat `<sid>/<ts>.jsonl`
+  (supersedes §3's file layout).** `session-recordings/<recordingId>/` holds
+  `meta.json` + `events.jsonl`. This was a deliberate change at the user's
+  request: one `rm -rf` deletes exactly one recording. `meta.json` carries the
+  full header (`kind:'session-recording'`, `redaction:'none'`, provider,
+  providerSessionId, cwd, appVersion, start/end, counters) — so §3's "header
+  line" requirement is met by `meta.json`, not a line 0 in the event stream.
+  provider/cwd are filled from `session:started`; providerSessionId stays
+  best-effort (it is provisional and upgraded later, §2).
+
+- **Recording is COMMAND-DRIVEN, not auto (this is §7 as written; the first
+  build wrongly shipped auto-only).** Nothing records until the **Toggle
+  Session Recording** command starts a specific pane. `AGENT_CODE_SESSION_
+  RECORD=1` is the OPTIONAL auto-start-everything power flag for unattended
+  soak, OFF by default. Fixed in #473.
+
+- **Replay is REDUCER-FAITHFUL, not full-React-fold (a real limitation of
+  §1/§6, not yet closed).** `replayRecording` drives the real leaf reducers
+  (`foldSemanticEvent`, `reduceStreamPhase`, ghost reducers, provider
+  mappers) via `reconstructSlices`, but NOT the React fold hook
+  (`useIpcSubscriptions`) — that hook only runs under the happy-dom `renderer`
+  vitest project, and the replay/invariant tests run under the node `unit`
+  project. So the harness catches leaf-reducer + adapter + ledger bugs, but
+  NOT the fold-glue bug class (queue-op reconstruction #469, provider-id
+  quarantine, optimistic reconciliation, orphan sweep) that §1 cited as the
+  reason to tap the SessionFeed boundary. The RECORDING captures everything
+  needed to replay those (the 9 channels are the fold's inputs); only the
+  REPLAY is currently blind to them. Closing this needs the fold extracted
+  from the React hook into a pure reducer the replay can drive — tracked as a
+  follow-up, naturally converging with the #394 fold rewrite. Until then the
+  harness is honestly labeled reducer-only in `recordedSession.ts`.
+
+Smaller open follow-ups (non-blocking): a dedicated keybinding for the note
+command (§7b); finalize on `SessionManager 'removed'` in addition to the
+`session:exit` observer (§2); `shapePathsOf` reuse in redaction envelope
+metadata (§5).
+
+---
+
 ## 1. The core decision — record at the SessionFeed boundary, replay through the real fold
 
 The single most important design choice, and the one the four sweeps
