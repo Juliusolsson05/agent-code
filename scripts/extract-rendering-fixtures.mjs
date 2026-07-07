@@ -29,6 +29,7 @@
 //
 // Usage: node scripts/extract-rendering-fixtures.mjs [--only <bundleId>] [--out <dir>]
 
+import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, basename } from 'node:path'
@@ -86,10 +87,39 @@ function transcriptPathFor(cwd, providerSessionId, kind) {
     ]
     return candidates.find(existsSync) ?? null
   }
-  // codex rollouts live under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl —
-  // resolvable, but the rollout→Entry mapping happens in-app; skip for v1
-  // (codex bundles still get semantic + ghosts + expected rows).
+  if (kind === 'codex') {
+    // Rollouts live under ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<id>.jsonl.
+    // Walk the date tree; the providerSessionId is embedded in the filename.
+    const root = join(homedir(), '.codex/sessions')
+    if (!existsSync(root)) return null
+    const stack = [root]
+    while (stack.length) {
+      const dir = stack.pop()
+      for (const name of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, name.name)
+        if (name.isDirectory()) stack.push(full)
+        else if (name.name.includes(providerSessionId) && name.name.endsWith('.jsonl')) return full
+      }
+    }
+    return null
+  }
   return null
+}
+
+/**
+ * Codex entries come from the REAL in-app mapper
+ * (mapCodexRolloutToFeedEntries) executed via tsx — reimplementing ~500
+ * lines of provider mapping in this script would mint a second mapper
+ * that drifts, and the recorded visible_rows keys use the app mapper's
+ * uuid scheme, so only the real mapper reproduces comparable ids.
+ */
+function codexEntriesFor(rolloutPath, cutoffMs) {
+  const out = execFileSync(
+    'npx',
+    ['tsx', '--tsconfig', 'tsconfig.web.json', 'scripts/extract-codex-entries.mts', rolloutPath, String(cutoffMs)],
+    { cwd: process.cwd(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  )
+  return JSON.parse(out)
 }
 
 function truncateEntry(entry) {
@@ -151,21 +181,25 @@ function extractBundle(dir) {
   let entriesSource = 'none'
   if (tPath) {
     entriesSource = tPath
-    // Seen-uuid dedupe mirroring the runtime's ingest (seenUuidsRef,
-    // workspace/hook/refs.ts): compaction rewrites the transcript window
-    // and the same uuid can appear twice in the file; the runtime ingests
-    // each uuid once (first wins), so replaying without the dedupe lands
-    // duplicate rows the real feed never had — the 14-02-05 a8ad1ebb
-    // order-mismatch was exactly this artifact, not a renderer difference.
-    const seenUuids = new Set()
-    for (const rec of readJsonl(tPath)) {
-      const ts = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : rec.timestamp
-      if (typeof ts !== 'number' || ts > cutoffMs) continue
-      if (typeof rec.uuid === 'string') {
-        if (seenUuids.has(rec.uuid)) continue
-        seenUuids.add(rec.uuid)
+    if (manifest.kind === 'codex') {
+      entries = codexEntriesFor(tPath, cutoffMs)
+    } else {
+      // Seen-uuid dedupe mirroring the runtime's ingest (seenUuidsRef,
+      // workspace/hook/refs.ts): compaction rewrites the transcript window
+      // and the same uuid can appear twice in the file; the runtime ingests
+      // each uuid once (first wins), so replaying without the dedupe lands
+      // duplicate rows the real feed never had — the 14-02-05 a8ad1ebb
+      // order-mismatch was exactly this artifact, not a renderer difference.
+      const seenUuids = new Set()
+      for (const rec of readJsonl(tPath)) {
+        const ts = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : rec.timestamp
+        if (typeof ts !== 'number' || ts > cutoffMs) continue
+        if (typeof rec.uuid === 'string') {
+          if (seenUuids.has(rec.uuid)) continue
+          seenUuids.add(rec.uuid)
+        }
+        entries.push(rec)
       }
-      entries.push(rec)
     }
     entries = entries.slice(-MAX_ENTRIES).map(truncateEntry)
   }
