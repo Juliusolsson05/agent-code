@@ -21,6 +21,7 @@ import { AgentActivityModal } from '@renderer/features/workspace/ui/AgentActivit
 import { BuryPanePrompt } from '@renderer/features/workspace/ui/BuryPanePrompt'
 import { CloseOldAgentsModal } from '@renderer/features/workspace/ui/CloseOldAgentsModal'
 import { BulkProviderSwitchModal } from '@renderer/features/workspace/ui/BulkProviderSwitchModal'
+import { AgentViewModePickerModal } from '@renderer/features/workspace/ui/AgentViewModePickerModal'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
 import { TiledDispatchCountOverlay } from '@renderer/features/workspace/ui/TiledDispatchCountOverlay'
 import { PromptSearchModal } from '@renderer/features/workspace/ui/PromptSearchModal'
@@ -188,6 +189,7 @@ export default function App() {
   const [sessionRecordingEnabled, setSessionRecordingEnabled] = useState(false)
   const [caffeinateStatus, setCaffeinateStatus] = useState<CaffeinateStatus | null>(null)
   const [caffeinateMessage, setCaffeinateMessage] = useState<string | null>(null)
+  const [agentViewModePickerSessionId, setAgentViewModePickerSessionId] = useState<SessionId | null>(null)
 
   useEffect(() => {
     applyTheme(settings)
@@ -464,6 +466,14 @@ export default function App() {
       workspace.tileTabs?.tabIds ?? (workspace.activeTab ? [workspace.activeTab.id] : []),
     )
   }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
+
+  const openAgentViewModePicker = useCallback((sessionId: string) => {
+    setAgentViewModePickerSessionId(sessionId)
+  }, [])
+
+  const closeAgentViewModePicker = useCallback(() => {
+    setAgentViewModePickerSessionId(null)
+  }, [])
 
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
@@ -885,6 +895,7 @@ export default function App() {
         openCloseOldAgents={openCloseOldAgents}
         openBulkProviderSwitch={openBulkProviderSwitch}
         openRewindPrompt={openRewindPrompt}
+        openAgentViewModePicker={openAgentViewModePicker}
         openUsageModal={openUsageModal}
         toggleCustomRendering={toggleCustomRendering}
         toggleStatusMode={toggleStatusMode}
@@ -1088,6 +1099,14 @@ export default function App() {
         open={bulkProviderSwitchOpen}
         workspace={workspace}
         onClose={closeBulkProviderSwitch}
+      />
+
+      <AgentViewModePickerModal
+        open={agentViewModePickerSessionId !== null}
+        sessionId={agentViewModePickerSessionId}
+        workspace={workspace}
+        globalMode={settings.agentViewMode}
+        onClose={closeAgentViewModePicker}
       />
 
       <RewindToPromptModal

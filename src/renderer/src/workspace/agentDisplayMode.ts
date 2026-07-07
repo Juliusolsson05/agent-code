@@ -1,5 +1,5 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
-import type { SessionKind } from '@renderer/workspace/types'
+import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
 import {
   isAgentProviderKind,
   type AgentProviderKind,
@@ -17,6 +17,13 @@ export type RenderedViewPolicy =
   | { kind: 'requires-rendered-feed' }
   | { kind: 'opens-rendered-feed' }
   | { kind: 'leases-rendered-feed'; feature: RenderedViewLeaseFeature }
+
+export function resolveConfiguredAgentViewMode(
+  globalMode: AgentViewMode,
+  override: AgentViewModeOverride | undefined,
+): AgentViewMode {
+  return override ?? globalMode
+}
 
 // Delegates to the shared guard so a registered third provider is an
 // agent here automatically instead of being misclassified as a

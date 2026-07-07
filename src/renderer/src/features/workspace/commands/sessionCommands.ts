@@ -35,6 +35,19 @@ function toggleBuiltInMcpDomain(
     : Array.from(new Set([...current, domain]))
 }
 
+function agentViewOverrideLabel(
+  override: 'agent' | 'terminal' | undefined,
+): string {
+  switch (override) {
+    case 'agent':
+      return 'Agent'
+    case 'terminal':
+      return 'Terminal'
+    case undefined:
+      return 'Default'
+  }
+}
+
 export const sessionCommands: CommandDef[] = [
   {
     id: 'view-prompts',
@@ -540,6 +553,33 @@ export const sessionCommands: CommandDef[] = [
       ui.closePalette()
       const sessionId = await workspace.softReloadAgentView()
       if (sessionId) workspace.showPaneToast(sessionId, 'Soft reloaded agent view')
+    },
+  },
+  {
+    id: 'set-agent-view-mode',
+    surface: 'session',
+    title: 'Set Agent View Mode...',
+    description: '**What it does:** Overrides the focused agent pane to use Agent rendering, Terminal rendering, or the global default.\n\n**Use when:** One session needs the raw provider terminal while the rest of the app keeps its normal view mode.\n\n**Notes:** Persists with the session. Hybrid remains a global/default setting, not a per-session override.',
+    keywords: ['agent', 'view', 'mode', 'terminal', 'rendering', 'raw', 'override', 'default'],
+    getState: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      const meta = sessionId ? workspace.state.sessions[sessionId] : null
+      return {
+        label: agentViewOverrideLabel(meta?.agentViewModeOverride),
+        tone: meta?.agentViewModeOverride ? 'accent' : 'neutral',
+      }
+    },
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
+    },
+    run: ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      ui.closePalette()
+      ui.openAgentViewModePicker(sessionId)
     },
   },
   {
