@@ -6,6 +6,9 @@ import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+
+import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
+import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { asRecord } from '@shared/lib/asRecord'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 // WHY the import switch matters here: the local copy this replaced
@@ -162,8 +165,12 @@ function headlineForTool(block: ToolUseBlock): string | null {
   }
 
   if (typeof input.command === 'string') return input.command
-  if (typeof input.description === 'string') return input.description
+  // Path BEFORE description (corpus bug, plan-json-tool-rows §1b):
+  // ai_workspace_attach_file showed its description gloss while hiding
+  // the actual file path. A path is an identifier; a description is
+  // commentary.
   if (typeof input.path === 'string') return input.path
+  if (typeof input.description === 'string') return input.description
   if (typeof input.arguments === 'string') return input.arguments.slice(0, 160)
   if (typeof input.raw === 'string' && block.name !== 'apply_patch') return input.raw.slice(0, 160)
   return null
@@ -599,6 +606,15 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   }
 
   if (!text && !isError) return null
+
+  // JSON-shaped fallthrough (wall-time wrapper / MCP envelope / plain
+  // JSON) gets the shared collapsed pretty rendering; anything else keeps
+  // the truncated text path (residue plan P1 — one result behavior across
+  // providers).
+  const parsedJson = tryExtractJson(text)
+  if (parsedJson !== null && typeof parsedJson === 'object') {
+    return <JsonResultSlab value={parsedJson} isError={isError} />
+  }
 
   return <TruncatedOutputRow content={text} isError={isError} />
 })
