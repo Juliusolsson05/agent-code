@@ -8,6 +8,7 @@ import { TaskNotificationsContext } from '@renderer/features/feed/context'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { SubAgentsContext } from '@renderer/features/feed/context'
+import { ToolResultIndexContext } from '@renderer/features/feed/context'
 import { SubagentMiniFeed } from '@renderer/features/feed/ui/rows/SubagentMiniFeed'
 
 // Renderer for an `Agent` tool_use block — the card the main agent shows when
@@ -39,6 +40,17 @@ export const TaskSubagentRow = memo(function TaskSubagentRow({
   const notifications = useContext(TaskNotificationsContext)
   const notification = block.id ? notifications.get(block.id) ?? null : null
   const notifKind = notification ? taskNotificationStatusKind(notification) : null
+  // C3: the committed tool_result for this Agent block. SubAgentsContext
+  // entries are pruned after SUBAGENT_PRUNE_AFTER_MS, and once `sa` is gone
+  // this row would otherwise fall back to the live spinner ('◐'/'starting…')
+  // even for a subagent that already FINISHED — a completed synchronous Task
+  // that never emitted a <task-notification> (so notifKind is null) would
+  // visibly regress to "running" after pruning. The committed tool_result is
+  // the durable source of truth the prune logic itself relies on ("committed
+  // tool_result owns the truth"): if it exists, the child's Agent call has
+  // returned, so we can render a terminal state without watcher state.
+  const toolResults = useContext(ToolResultIndexContext)
+  const committed = block.id ? toolResults.get(block.id) ?? null : null
   const [open, setOpen] = useState(false)
 
   const input = block.input as Record<string, unknown> | undefined
@@ -62,12 +74,43 @@ export const TaskSubagentRow = memo(function TaskSubagentRow({
       ? '✓'
       : notifKind === 'error'
         ? '✗'
-        : sa?.status === 'done' ? '✓' : sa?.status === 'error' ? '✗' : sa?.status === 'stale' ? '◌' : '◐'
+        : notifKind === 'other'
+          ? // C11: a notification is PRESENT but its status is not one we map
+            // to done/error ('other'). The child reported something terminal —
+            // rendering the live spinner '◐' beside that raw status text would
+            // falsely imply the subagent is still in flight. Show a neutral,
+            // non-spinning glyph ('◌') so an unrecognized-but-present
+            // notification can never masquerade as running.
+            '◌'
+          : sa?.status === 'done'
+            ? '✓'
+            : sa?.status === 'error'
+              ? '✗'
+              : sa?.status === 'stale'
+                ? '◌'
+                : // C3: no notification (notifKind === null) and the watcher
+                  // entry has been pruned (sa absent). If the committed
+                  // tool_result exists, the Agent call has returned — derive a
+                  // terminal glyph from it instead of flipping back to the live
+                  // spinner '◐'. is_error distinguishes a failed sync Task.
+                  !sa && committed
+                  ? committed.is_error
+                    ? '✗'
+                    : '✓'
+                  : '◐'
   const toolTotal = sa ? sa.toolCalls.length + sa.droppedToolCalls : 0
   const right = notification
     ? `${notification.status ?? 'completed'}${notification.usage ? ` · ${notification.usage}` : ''}`
     : !sa
-    ? 'starting…'
+    ? // C3: watcher entry pruned. If the committed tool_result exists the
+      // Agent call finished — label it terminally ('done'/'failed') rather
+      // than the misleading 'starting…', which would imply the subagent is
+      // just now spinning up when it has in fact already completed.
+      committed
+      ? committed.is_error
+        ? 'failed'
+        : 'done'
+      : 'starting…'
     : sa.status === 'running'
       ? `${toolTotal} tools · ${elapsedLabel(sa.startedAt, sa.lastActivityAt)}`
       : sa.status === 'stale'

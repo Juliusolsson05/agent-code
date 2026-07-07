@@ -90,6 +90,25 @@ export function setDebugRetentionJournal(journal: RetentionJournalSink | null): 
   retentionJournal = journal
 }
 
+// Provider for the set of on-disk dirs of session recordings that are STILL
+// live (recorder open in memory). Mirrors the retentionJournal singleton
+// pattern above: retention runs from many hot paths, so threading the recorder
+// manager through every caller would be noise for a genuinely global signal.
+//
+// WHY this exists (see isProtectedFromDebugPrune): a session-recording folder
+// is aged by its mtime, but a quiet-but-live recording stops bumping mtime, so
+// the ACTIVE_GRACE_MS guard can lapse and the cap/budget passes would rm -rf a
+// folder the recorder is still appending to on the next event. mtime is the
+// wrong liveness oracle for a recording that has merely gone idle; the
+// authoritative signal is "the recorder is still in the manager's map". The
+// provider is called at prune time (not cached) so it always reflects the
+// current live set even across a long-running prune.
+let liveRecordingDirsProvider: (() => Set<string>) | null = null
+
+export function setLiveRecordingDirsProvider(fn: (() => Set<string>) | null): void {
+  liveRecordingDirsProvider = fn
+}
+
 function envNumber(name: string, fallback: number): number {
   const raw = process.env[name]?.trim()
   if (!raw) return fallback
@@ -470,6 +489,15 @@ export function legacyDebugBundleBucketForPath(
 }
 
 function isProtectedFromDebugPrune(artifact: Artifact): boolean {
+  // A live session recording is protected regardless of its folder mtime — see
+  // setLiveRecordingDirsProvider for WHY mtime is the wrong liveness oracle
+  // here (an idle-but-open recording ages past ACTIVE_GRACE_MS while still being
+  // written). resolve() both sides so a relative-vs-absolute mismatch can't
+  // defeat the comparison; retention keys everything else off resolve(path) too
+  // and liveRecordingDirs() already resolve()s its entries.
+  if (artifact.bucket === 'session-recordings' && liveRecordingDirsProvider) {
+    if (liveRecordingDirsProvider().has(resolve(artifact.path))) return true
+  }
   return artifact.protected === true ||
     artifact.bucket === 'ghost-logs' ||
     artifact.bucket === 'debug-bundles-manual'

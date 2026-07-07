@@ -50,6 +50,15 @@ const HEADLINE_KEYS = [
   'prompt',
   'sessionId',
   'description',
+  // Codex fallback keys, LAST so they never outrank a real identifier.
+  // When an unknown Codex tool call can't be mapped to a structured input,
+  // the mapper degrades it to `{arguments: <raw string>}` (or `{raw: …}`).
+  // Without these two keys HEADLINE_KEYS matched nothing and the row
+  // collapsed to name-only, hiding the one string we DO have. They sit
+  // after `description` so a well-formed tool that also happens to carry an
+  // `arguments`/`raw` field still headlines on its specific key first.
+  'arguments',
+  'raw',
 ] as const
 
 export function smartHeadline(input: Record<string, unknown> | null | undefined): {

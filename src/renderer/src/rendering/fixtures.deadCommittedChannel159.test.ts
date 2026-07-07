@@ -69,7 +69,6 @@ describe('fixture: dead-committed-channel-159', () => {
       provider: 'codex',
       sessionId: 's1',
       streamPhaseIdle: true,
-      hasContentCandidates: true,
     })
     return createSessionLedger()({
       provider: 'codex',

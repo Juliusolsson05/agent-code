@@ -29,6 +29,18 @@ export type SemanticBlockLike = {
   blockIndex: number
   kind: string
   text?: string
+  /** Thinking/reasoning payload — NOT in `text`. foldEvent mints thinking
+   *  blocks with `text: ''` and stashes the actual content here: Claude in
+   *  `thinking`, Codex reasoning in `reasoningSummary`/`reasoningText` (both
+   *  can be empty when ChatGPT streams encrypted reasoning). These already
+   *  flow through the adapter unchanged (non-tool blocks pass by reference,
+   *  the tool-block `{...b}` spread preserves them) — they were just untyped,
+   *  so the collector could not read them and a thinking-only turn vanished.
+   *  Source of truth for the field names: workspace/workspaceState.ts
+   *  SemanticLiveBlock. */
+  thinking?: string
+  reasoningSummary?: string
+  reasoningText?: string
   finalized?: boolean
   toolName?: string
   toolUseId?: string
@@ -68,6 +80,18 @@ export type SemanticCollection = {
 
 const TOOL_USE_KINDS = new Set([
   'tool_use', 'server_tool_use', 'mcp_tool_use', 'function_call', 'custom_tool_call',
+  // Codex live block kinds (CodexResponsesAdapter.mapItemTypeToBlockKind).
+  // These reach the live plane with their raw ResponseItem type as `kind`;
+  // without them here blockContentKind fell through to 'assistant-text', so
+  // (1) they were NOT classified as tools and committed tool ownership could
+  // never suppress the live twin against its committed row, and (2)
+  // isKnownBlockKind was false, spamming the UnknownBehavior registry with
+  // vocabulary we already understand. Classifying them 'tool-use' is safe
+  // against over-hiding: the only unconditional suppression is an EXACT
+  // committed-id match (ownership.ts), and the collapsed-running hide is
+  // gated on COLLAPSIBLE_CHURN_TOOLS (Claude Read/Bash/Glob/Grep only), so a
+  // live Codex tool with no committed twin still paints.
+  'web_search_call', 'image_generation_call', 'local_shell_call', 'tool_search_call',
 ])
 const TOOL_RESULT_KINDS = new Set([
   'tool_result', 'function_call_output', 'custom_tool_call_output', 'tool_search_output',
@@ -129,9 +153,27 @@ function collectTurn(
     const id = `sem:${turn.turnId}:${b.blockIndex}`
     const kind = blockContentKind(b)
 
-    if (kind === 'thinking' && !(b.text && b.text.trim().length > 0)) {
-      out.decisions.push({ candidateId: id, selected: false, reason: 'empty-thinking', evidence: [] })
-      return
+    // Thinking content does NOT live in b.text — foldEvent sets text:'' for
+    // thinking blocks and carries the payload in provider-specific fields
+    // (Claude → thinking; Codex reasoning → reasoningSummary/reasoningText,
+    // both often empty when ChatGPT streams encrypted reasoning). The old
+    // guard checked only b.text, so a thinking-only turn produced ZERO
+    // candidates and disappeared from the feed. Keep the block when ANY
+    // content field has non-empty trimmed text; reject as empty-thinking only
+    // when all four are hollow (e.g. encrypted, genuinely unrenderable).
+    // Mirrors the ghost builder's content probe (workspace/ghosts.ts:
+    // thinking || reasoningSummary || reasoningText) so live and ghost agree
+    // on what counts as a paintable reasoning block.
+    if (kind === 'thinking') {
+      const hasThinkingContent =
+        (b.thinking !== undefined && b.thinking.trim().length > 0) ||
+        (b.reasoningSummary !== undefined && b.reasoningSummary.trim().length > 0) ||
+        (b.reasoningText !== undefined && b.reasoningText.trim().length > 0) ||
+        (b.text !== undefined && b.text.trim().length > 0)
+      if (!hasThinkingContent) {
+        out.decisions.push({ candidateId: id, selected: false, reason: 'empty-thinking', evidence: [] })
+        return
+      }
     }
     // Codex uses empty write_stdin as poll/continuation noise (dump
     // invariant 12/13): empty renders nothing, non-empty renders.

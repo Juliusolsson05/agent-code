@@ -68,6 +68,14 @@ export class SessionRecorder {
   private queue: string[] = []
   private timer: ReturnType<typeof setTimeout> | null = null
   private draining = false
+  // Handle to the CURRENTLY-RUNNING drain, or null when idle. This exists so
+  // that a caller who arrives while a drain is in flight can await THAT drain
+  // rather than either no-opping or racing a second one. Before this existed,
+  // drain() early-returned an already-resolved promise when this.draining was
+  // true, so a flush() overlapping an in-flight drain saw "nothing to do" and
+  // returned before the tail (session:exit, trailing notes) reached disk — the
+  // #442 lost-tail bug. Invariant: non-null iff this.draining is true.
+  private drainPromise: Promise<void> | null = null
   private ensuredDir = false
 
   private bytesWritten = 0
@@ -76,6 +84,14 @@ export class SessionRecorder {
   private capped = false
   private closed = false
   private tombstoned = false
+  // FIFO serialization for meta.json writes. Every writeMeta() snapshots
+  // this.meta synchronously and chains its actual disk write onto this promise,
+  // so writes can never reorder or overlap. Without it the constructor's and
+  // refreshIdentity's fire-and-forget writes could land AFTER close()'s final
+  // write and clobber endedAtWall/eventCount/capped — the #442 meta race.
+  // Invariant: the LAST writeMeta() call before we stop is close()'s, so its
+  // snapshot (enqueued last, FIFO) is guaranteed to be the final bytes on disk.
+  private metaChain: Promise<void> = Promise.resolve()
 
   constructor(
     private meta: RecordingMeta,
@@ -90,6 +106,14 @@ export class SessionRecorder {
     // event still leaves an identifiable recording. Fire-and-forget; the
     // events path lazily re-ensures the dir anyway.
     void this.writeMeta()
+  }
+
+  /** The recording's folder id (== the last path segment of its dir). Exposed
+   *  so SessionRecorderManager can report live recording dirs to retention
+   *  (liveRecordingDirs) without duplicating the id→path derivation. Read-only;
+   *  meta itself stays private. */
+  get recordingId(): string {
+    return this.meta.recordingId
   }
 
   /**
@@ -168,32 +192,82 @@ export class SessionRecorder {
     this.timer.unref?.()
   }
 
-  private async drain(): Promise<void> {
-    if (this.draining || this.queue.length === 0) return
+  // Thin re-entrancy gate around doDrain(). Kept separate from the async body
+  // so that a caller arriving mid-drain gets the IN-FLIGHT promise back (to
+  // await) instead of a fresh already-resolved one. The old code was a single
+  // `async drain()` whose `if (this.draining) return` handed back a resolved
+  // promise — awaiting it was a no-op, which is exactly how flush() used to
+  // skip the tail (#442). Returning this.drainPromise makes the await real.
+  private drain(): Promise<void> {
+    if (this.draining) return this.drainPromise ?? Promise.resolve()
+    if (this.queue.length === 0) return Promise.resolve()
     this.draining = true
-    try {
-      const batch = this.queue.splice(0).join('')
-      if (this.bytesWritten + batch.length > MAX_BYTES && !this.tombstoned) {
-        // Cross the cap: write a final tombstone once and stop appending
-        // events. Cap, never rotate (feedDebugLog policy).
-        this.tombstoned = true
-        this.capped = true
-        const mark =
-          JSON.stringify({
-            t: Math.round(this.nowMono() - this.startMono),
-            wall: this.nowWall(),
-            ch: '__truncated',
-            reason: 'size-cap',
-            bytes: this.bytesWritten,
-          }) + '\n'
-        await this.appendRaw(mark)
-      } else if (!this.capped) {
-        await this.appendRaw(batch)
-        this.bytesWritten += batch.length
-      }
-    } finally {
+    // Store the handle BEFORE returning so overlapping callers and flush() can
+    // observe/await it. Cleared in the .finally so this.drainPromise is null
+    // exactly when this.draining flips back to false (the field invariant).
+    this.drainPromise = this.doDrain().finally(() => {
       this.draining = false
+      this.drainPromise = null
+    })
+    return this.drainPromise
+  }
+
+  private async doDrain(): Promise<void> {
+    // Take the pending lines as an ARRAY (not a pre-joined string). We need to
+    // (a) partition notes from events and (b) know how many real event lines a
+    // capping batch drops — both impossible once the batch is one blob.
+    const pending = this.queue.splice(0)
+
+    // Partition. `__note` lines bypass the size cap entirely: a note is the
+    // whole point of a long recording (you must still be able to mark the bug
+    // in a file that has already capped), and its bytes must NOT count toward
+    // bytesWritten or they'd push a near-cap file over and suppress themselves.
+    // Real event lines remain subject to the cap. Before this split we join()'d
+    // everything and made the cap decision on the whole batch, which silently
+    // dropped any notes queued in the capping batch and mis-counted note bytes
+    // (findings 5 / C8). The `"ch":"__note"` sniff is exact because we built
+    // every line via JSON.stringify ourselves — no need to re-parse on the hot
+    // path.
+    const notes: string[] = []
+    const events: string[] = []
+    for (const line of pending) {
+      if (line.includes('"ch":"__note"')) notes.push(line)
+      else events.push(line)
     }
+
+    // Notes ALWAYS flush — cap or no cap, tombstoned or not — and never touch
+    // bytesWritten.
+    if (notes.length > 0) await this.appendRaw(notes.join(''))
+
+    const eventBatch = events.join('')
+    if (this.bytesWritten + eventBatch.length > MAX_BYTES && !this.tombstoned) {
+      // Cross the cap: write a final tombstone once and stop appending events.
+      // Cap, never rotate (feedDebugLog policy). The batch that crossed the cap
+      // still holds `events.length` real event lines we are NOT writing — record
+      // that as `dropped` in the tombstone (mirroring the queue-drop marker) and
+      // fold it into this.dropped so meta.json's droppedCount reflects the true
+      // loss. Notes in this same batch were already written above, so they are
+      // NOT counted as dropped (finding C8: only the lost EVENTS are the hole).
+      this.tombstoned = true
+      this.capped = true
+      const mark =
+        JSON.stringify({
+          t: Math.round(this.nowMono() - this.startMono),
+          wall: this.nowWall(),
+          ch: '__truncated',
+          reason: 'size-cap',
+          bytes: this.bytesWritten,
+          dropped: events.length,
+        }) + '\n'
+      await this.appendRaw(mark)
+      this.dropped += events.length
+    } else if (!this.capped) {
+      if (eventBatch.length > 0) {
+        await this.appendRaw(eventBatch)
+        this.bytesWritten += eventBatch.length
+      }
+    }
+
     if (this.queue.length > 0 && !this.timer && !this.capped) this.scheduleDrain()
   }
 
@@ -211,7 +285,22 @@ export class SessionRecorder {
     }
   }
 
-  private async writeMeta(): Promise<void> {
+  // Snapshot this.meta SYNCHRONOUSLY, then enqueue the actual write behind any
+  // in-flight ones. The snapshot is load-bearing: it freezes the state as of
+  // THIS call even though the disk write is deferred, so a later mutation (or a
+  // later call's snapshot) can't retroactively change what this call writes.
+  // Serializing through metaChain guarantees FIFO ordering — close()'s snapshot
+  // is enqueued last and therefore wins the file. Returns the chain so callers
+  // (close()) can await their write actually landing. Both disk ops in
+  // doWriteMeta swallow their errors, so the chain NEVER rejects — a rejected
+  // chain would poison every subsequent meta write.
+  private writeMeta(): Promise<void> {
+    const snapshot = this.meta
+    this.metaChain = this.metaChain.then(() => this.doWriteMeta(snapshot))
+    return this.metaChain
+  }
+
+  private async doWriteMeta(snapshot: RecordingMeta): Promise<void> {
     try {
       await mkdir(this.dir, { recursive: true, mode: 0o700 })
       this.ensuredDir = true
@@ -219,7 +308,7 @@ export class SessionRecorder {
       /* re-ensured lazily on first event append */
     }
     try {
-      await writeFile(join(this.dir, 'meta.json'), JSON.stringify(this.meta, null, 1), {
+      await writeFile(join(this.dir, 'meta.json'), JSON.stringify(snapshot, null, 1), {
         mode: 0o600,
       })
     } catch {
@@ -251,13 +340,32 @@ export class SessionRecorder {
     if (changed) void this.writeMeta()
   }
 
-  /** Force a drain and wait — used on shutdown and by tests. */
+  /**
+   * Force the writer fully quiescent and wait — used on shutdown and by tests.
+   *
+   * A single drain() is NOT enough. Two things can leave work behind after one
+   * call: (a) a drain may already be in flight, in which case a fresh drain()
+   * no-ops on the re-entrancy gate and returns before the running one finishes;
+   * and (b) doDrain() reschedules itself via a timer when the queue is refilled
+   * mid-drain. Either way the tail (session:exit, trailing notes) could land on
+   * a timer that fires AFTER close() has already written the final meta — the
+   * #442 lost-tail bug. So we loop until the queue is empty AND no drain is
+   * running, re-clearing the timer each pass so nothing we just quiesced gets
+   * re-armed behind us. `!this.capped` terminates the loop once we've stopped
+   * appending events (the queue may still hold post-cap lines we intentionally
+   * no longer write).
+   */
   async flush(): Promise<void> {
-    if (this.timer) {
-      clearTimeout(this.timer)
-      this.timer = null
+    while ((this.queue.length > 0 || this.draining) && !this.capped) {
+      if (this.timer) {
+        clearTimeout(this.timer)
+        this.timer = null
+      }
+      // Await the IN-FLIGHT drain if one is running (racing a second drain()
+      // would just no-op on the gate); otherwise kick off and await a new one.
+      if (this.draining && this.drainPromise) await this.drainPromise
+      else await this.drain()
     }
-    await this.drain()
   }
 
   /** Finalize: flush, then rewrite meta.json with end stats. Idempotent. */

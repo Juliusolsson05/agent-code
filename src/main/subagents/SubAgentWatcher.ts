@@ -65,6 +65,16 @@ export class SubAgentWatcher {
   // the live accumulator each call so a late parentResult flip still re-renders.
   private accByAgent = new Map<string, SubAgentAccumulator>()
   private metaByAgent = new Map<string, SubAgentMeta>()
+  // #442 finding-16: agentIds already pruned as terminal. emit()'s prune
+  // branch drops the heavy per-agent fold state but leaves the child's
+  // .meta.json/.jsonl on disk. Without this tombstone the next rescan() reloads
+  // that meta, re-tails the transcript FROM BYTE 0 (its offset was just
+  // deleted), re-folds the whole completed child, and emit() prunes it again —
+  // a permanent per-tick replay of every large finished child, the exact
+  // read-amplification #288 exists to prevent. Only the agentId string is kept
+  // (never the fold state), so this stays O(pruned-count) tiny. Cleared on
+  // stop() so a fresh session re-tracks everything.
+  private prunedAgents = new Set<string>()
   private dirty = false
   private stopped = false
 
@@ -92,6 +102,7 @@ export class SubAgentWatcher {
     // bounded ring, but a stopped watcher must release everything regardless).
     this.accByAgent.clear()
     this.metaByAgent.clear()
+    this.prunedAgents.clear()
   }
 
   /** Force a re-emit (e.g. the parent transcript just produced a tool_result
@@ -121,6 +132,7 @@ export class SubAgentWatcher {
     for (const f of files) {
       if (f.endsWith('.meta.json')) {
         const agentId = f.slice('agent-'.length, -'.meta.json'.length)
+        if (this.prunedAgents.has(agentId)) continue // finding-16: reclaimed
         if (this.metaByAgent.has(agentId)) continue // meta is written once
         try {
           const raw = await readFile(join(this.subagentsDir, f), 'utf8')
@@ -131,6 +143,10 @@ export class SubAgentWatcher {
         }
       } else if (f.endsWith('.jsonl') && f.startsWith('agent-')) {
         const agentId = f.slice('agent-'.length, -'.jsonl'.length)
+        // finding-16: THIS is the branch that caused the read-amplification —
+        // guarding the meta branch alone wouldn't stop the re-tail-from-0 of a
+        // pruned child's transcript, because the .jsonl scan is independent.
+        if (this.prunedAgents.has(agentId)) continue
         await this.readAppended(agentId, join(this.subagentsDir, f))
       }
     }
@@ -227,6 +243,10 @@ export class SubAgentWatcher {
         this.accByAgent.delete(agentId)
         this.offsets.delete(agentId)
         this.partialByAgent.delete(agentId)
+        // finding-16: tombstone so rescan() never reloads + re-folds this
+        // terminal child's transcript. Safe: a done/error child pruned only
+        // after the 10m window can't legitimately produce new rows.
+        this.prunedAgents.add(agentId)
         continue
       }
       out[toolUseId] = state

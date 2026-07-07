@@ -66,7 +66,6 @@ describe('fixture: buried-prompt-239 (end-to-end collectors → ledger → rows)
       provider: 'codex',
       sessionId: 's1',
       streamPhaseIdle: false,
-      hasContentCandidates: true,
     })
     return createSessionLedger()({
       provider: 'codex',

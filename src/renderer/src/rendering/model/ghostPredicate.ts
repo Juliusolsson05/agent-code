@@ -31,7 +31,15 @@ export type GhostPredicateInput = {
    *  NOT "how fast we paint" — a 5000-line Read produces a quiet window
    *  that a short TTL mis-orphaned (that is why 3s failed in production). */
   orphaned: boolean
-  /** Producer wall-clock of the ghost's last update. */
+  /**
+   * Renderer-LOCAL clock of the ghost's last update — ghosts.ts stamps
+   * Date.now() at mint/update because the ghost plane has no producer
+   * timestamp to borrow (C7). Rule 4 below compares THIS against the
+   * producer JSONL tail, so the two sides are the same clock only when the
+   * renderer is co-located with the producer; under remote/SSH the
+   * local↔producer skew makes the gate approximate (accepted degradation,
+   * not a bug — see rule 4).
+   */
   updatedAtMs: number
   /** Assistant role + exactly one text block → sidecar-shaped candidate. */
   assistantSingleTextLength: number | null
@@ -79,9 +87,12 @@ export function decideGhostCandidate(
     return { ...base, selected: false, reason: 'ghost-semantic-owned', evidence: [`turn ${ghost.turnId} live`] }
   }
   // Rule 4 — timestamp gate: render only when the ghost is NEWER than the
-  // committed tail (committed stalled past live). Strictly-greater on
-  // producer clocks; null tail (fresh session) does not gate — falls
-  // through to rule 5, never auto-renders.
+  // committed tail (committed stalled past live). MIXED clocks (C7): the
+  // ghost's updatedAtMs is renderer-LOCAL (Date.now() at mint, ghosts.ts)
+  // while lastJsonlEntryAtMs is a PRODUCER JSONL timestamp — the strictly-
+  // greater comparison is exact only when renderer and producer are co-
+  // located and degrades under remote/SSH skew. Null tail (fresh session)
+  // does not gate — falls through to rule 5, never auto-renders.
   if (ctx.lastJsonlEntryAtMs !== null && ghost.updatedAtMs <= ctx.lastJsonlEntryAtMs) {
     return {
       ...base,

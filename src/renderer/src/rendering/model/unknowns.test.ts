@@ -34,7 +34,7 @@ describe('unknown-behavior registry (plan §3, #115 redaction)', () => {
     expect(finding.shapePaths).toContain('message.content')
   })
 
-  it('auth-looking KEY NAMES are redacted from shape paths — a second belt', () => {
+  it('auth-looking key VALUES are redacted from shape paths while the key NAME is retained — a second belt', () => {
     const paths = shapePathsOf({ headers: { Authorization: 'Bearer x', 'x-api-key': 'k' }, ok: 1 })
     expect(paths).toContain('headers.Authorization=<redacted-key>')
     expect(paths).toContain('headers.x-api-key=<redacted-key>')

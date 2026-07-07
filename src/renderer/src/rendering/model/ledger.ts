@@ -47,9 +47,36 @@ export type LedgerInput = {
   provider: AgentProviderKind
   committed: readonly RenderCandidate[]
   live: readonly RenderCandidate[]
-  /** work / empty / etc. — pre-decided lifecycle candidates. */
+  /** Pure phase statics (the 'work' chip). NOT 'empty' anymore — see
+   *  emptyCandidate: emptiness is decided AFTER ownership, so it can never be
+   *  a pre-decided static (finding #9). */
   statics: readonly RenderCandidate[]
   unknowns: readonly UnknownBehavior[]
+  /**
+   * The empty-state candidate, appended by the ledger AFTER decisions when no
+   * content candidate survived (finding #9). Optional so hand fixtures that
+   * never go empty can omit it. WHY the ledger and not the collector: a
+   * content candidate can be rejected by committed ownership or the ghost
+   * gate, so "no content" is only knowable post-decision — keying 'empty' on
+   * raw candidate counts at collection time painted a blank feed whenever the
+   * sole content candidate was later suppressed.
+   */
+  emptyCandidate?: RenderCandidate
+  /**
+   * Newest committed JSONL entry timestamp (producer clock; null on a fresh
+   * session). FIRST-CLASS and independent of `ghostContext` on purpose
+   * (finding #18): the collapsed-running tail gate in ownership.ts needs it to
+   * prove an unresolved history tool is DEAD, and that gate must work for
+   * callers that have NO ghost plane at all (e.g. a phone/remote client that
+   * ships live + committed candidates but empty ghosts). The tail used to be
+   * read from ghostContext.lastJsonlEntryAtMs, which coupled the gate to the
+   * ghost plane — a ghost-less caller silently disabled it and dead history
+   * tools leaked back into the feed. Desktop feeds this from the same slice it
+   * feeds ghostContext, so desktop behavior is unchanged. Optional (with the
+   * ghostContext fallback in computeLedger) only so pre-#18 fixtures that
+   * thread the tail through ghost context stay green.
+   */
+  committedTailMs?: number | null
   /**
    * Ghost plane — OPTIONAL because most sessions never mint a ghost and the
    * claude provider is the only one whose ghost log has a supersede key
@@ -81,7 +108,18 @@ function computeLedger(input: LedgerInput): RenderLedger {
     decisions.push({ candidateId: c.id, selected: true, reason: 'selected', evidence: [] })
     selected.push(c)
   }
-  const committedTailMs = input.ghostContext?.lastJsonlEntryAtMs ?? null
+  // Tail-gate source (finding #18): the first-class committedTailMs when the
+  // caller provides it, falling back to ghostContext.lastJsonlEntryAtMs ONLY
+  // for pre-#18 fixtures that still thread the tail through ghost context.
+  // `!== undefined` (not `??`) so an explicit null — a genuine fresh session
+  // that wants the gate OFF — is honored instead of falling through to a ghost
+  // value. Decoupling from ghostContext is the whole point: the gate now fires
+  // for ghost-less callers (phone/remote) that were leaking dead unresolved
+  // history tools back into the feed.
+  const committedTailMs =
+    input.committedTailMs !== undefined
+      ? input.committedTailMs
+      : (input.ghostContext?.lastJsonlEntryAtMs ?? null)
   for (const c of input.live) {
     const d = decideLiveCandidate(c, ownership, policy, committedTailMs)
     decisions.push(d)
@@ -100,6 +138,25 @@ function computeLedger(input: LedgerInput): RenderLedger {
     const d = decideGhostCandidate(g.predicate, ghostCtx)
     decisions.push(d)
     if (d.selected) selected.push(g.candidate)
+  }
+
+  // Empty verdict (finding #9): 'empty' is NOT a collection-time fact. A
+  // content candidate can be rejected by committed ownership (live loop above)
+  // or the ghost gate, so emptiness is only knowable HERE, once survivors are
+  // final. The old pipeline keyed 'empty' on RAW candidate counts in the
+  // adapter; when the sole content candidate was later suppressed, no 'empty'
+  // was emitted and the feed rendered a blank surface. 'work' is a phase chip,
+  // not content, so it does not count toward survival — an all-suppressed-but-
+  // still-streaming tick legitimately shows empty + work (cf. ledger.test).
+  const hasContentSurvivor = selected.some(c => c.owner !== 'work')
+  if (!hasContentSurvivor && input.emptyCandidate) {
+    decisions.push({
+      candidateId: input.emptyCandidate.id,
+      selected: true,
+      reason: 'selected',
+      evidence: [],
+    })
+    selected.push(input.emptyCandidate)
   }
 
   return {
@@ -132,6 +189,11 @@ export function createSessionLedger(): (input: LedgerInput) => RenderLedger {
       last.input.committed === input.committed &&
       last.input.live === input.live &&
       last.input.statics === input.statics &&
+      // Both cached by (provider, sessionId) upstream, so reference equality
+      // holds tick-to-tick; committedTailMs is a scalar the gate reads, so a
+      // change MUST bust the cache or a dead tool would linger a frame.
+      last.input.emptyCandidate === input.emptyCandidate &&
+      last.input.committedTailMs === input.committedTailMs &&
       last.input.unknowns === input.unknowns &&
       last.input.ghosts === input.ghosts &&
       // ghostContext is compared FIELD-WISE, not by reference: the adapter

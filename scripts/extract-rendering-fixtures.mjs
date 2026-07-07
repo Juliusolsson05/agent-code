@@ -54,12 +54,33 @@ function readJson(path) {
 }
 function readJsonl(path) {
   const out = []
-  for (const line of readFileSync(path, 'utf8').split('\n')) {
+  const lines = readFileSync(path, 'utf8').split('\n')
+  // Torn-tail tolerance is ONLY for the final non-empty line: a bundle saved
+  // mid-write can leave a half-flushed last record, which is expected and
+  // benign. A malformed line ANYWHERE ELSE is real corruption — the old blanket
+  // catch silently dropped it, splicing a hole into the stream and
+  // manufacturing a plausible-but-wrong fixture, so warn loudly with file:line
+  // and continue best-effort rather than pretend the data was intact.
+  let lastNonEmpty = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim()) {
+      lastNonEmpty = i
+      break
+    }
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
     if (!line.trim()) continue
     try {
       out.push(JSON.parse(line))
     } catch {
-      /* torn tail line — bundle saved mid-write; skip */
+      if (i === lastNonEmpty) {
+        /* torn tail line — bundle saved mid-write; tolerated */
+      } else {
+        console.error(
+          `extract-rendering-fixtures: malformed JSON at ${path}:${i + 1} — skipping (non-tail line, possible corruption)`,
+        )
+      }
     }
   }
   return out
@@ -300,6 +321,21 @@ for (const dir of dirs) {
       continue
     }
     const outPath = join(OUT, `${id}.json`)
+    // SECURITY / REDACTION GAP — READ BEFORE RUNNING ON ANYTHING NON-LOCAL:
+    // Unlike the successor recordings pipeline (extract-rendering-recordings.mjs
+    // → extract-recording-core.mts → rendering/replay/redact.ts), this
+    // DEPRECATED bundle extractor performs NO redaction and has NO SENSITIVE_KEY
+    // hard gate. It only truncates bulky payloads for SIZE (truncateEntry); the
+    // fixtures it writes still contain the raw assistant/user/tool text from real
+    // transcripts — api keys, tokens, and secrets included. It exists solely as
+    // the predecessor to the recordings path and must ONLY be run over trusted
+    // LOCAL bundles whose output stays local — never on someone else's bundle,
+    // and never with intent to commit the result. A full redaction port was
+    // deliberately NOT attempted here (redact.ts's gate is shaped for the
+    // RecordingEvent stream, not this bundle/Entry shape, and the recordings
+    // pipeline is the supported successor); if this script is ever promoted back
+    // to producing checked-in fixtures, route this write through redact.ts's
+    // sensitive-key gate first.
     writeFileSync(outPath, JSON.stringify(result.fixture))
     const f = result.fixture
     summary.push({
@@ -316,5 +352,12 @@ for (const dir of dirs) {
     summary.push({ id, error: String(err).slice(0, 120) })
   }
 }
+// Surface per-bundle failures in the EXIT CODE, not just the printed summary.
+// Previously every bundle exception was swallowed into summary[].error and the
+// process still exited 0, so an automated caller (CI, a make target) saw success
+// while silently emitting zero or partial fixtures. The script stays fully
+// operator-usable — it still prints the whole table and finishes the loop — it
+// just also reports failure so callers can detect it.
+if (summary.some(s => s.error)) process.exitCode = 1
 console.table(summary)
 console.log(`wrote ${summary.filter(s => !s.skipped && !s.error).length}/${summary.length} fixtures to ${OUT}`)

@@ -72,6 +72,28 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith('.json'))) {
   const histIds = new Set(f.input.semanticHistory.map(t => t.turnId))
   const note = (f.meta.note ?? '').toLowerCase()
 
+  // Absolute wall-clock of the moment the legacy renderer's visible_rows
+  // snapshot fired. This is the load-bearing input for skew-ingestion-lag:
+  // that verdict is ONLY defensible for a committed row whose PRODUCER
+  // timestamp predates this moment (the row was already on disk, merely not
+  // yet drained from the JSONL ingest batch — benign lag). A row stamped
+  // AFTER this moment did not exist when legacy painted, so the pipeline
+  // surfacing it is a REAL divergence, not lag, and must stay untriaged as
+  // visible debt. Without this bound the verdict was handed to ANY unmatched
+  // assistant/user extra, mechanically blessing away genuine renderer bugs.
+  //
+  // Preferred source is session-start + meta.visibleRowsAtTMs (the snapshot's
+  // session-relative offset), but the fixtures carry no absolute session
+  // origin — visibleRowsAtTMs is a performance-clock offset with no stored T0
+  // to anchor it. capturedAt (the epoch the bundle was grabbed, essentially
+  // when the snapshot was taken) is the operative absolute value and upper-
+  // bounds the true moment. If it is somehow missing we leave the moment NaN
+  // so EVERY comparison below fails and rows stay untriaged — the safe
+  // direction is to under-bless, never to bless a real extra we cannot date.
+  const visibleRowsMomentMs = Number.isFinite(f.meta.capturedAt)
+    ? f.meta.capturedAt
+    : NaN
+
   const missingTurnIds = new Set(
     triage
       .filter(t => t.divergence.class === 'missing-in-next' && t.divergence.unit?.startsWith('turn:'))
@@ -121,9 +143,20 @@ for (const file of readdirSync(DIR).filter(f => f.endsWith('.json'))) {
         t.why = `real user prompt legacy failed to paint — the bundle note is the bug report: "${f.meta.note}"`
         bump(t.verdict); changed = true
       } else if (e.type === 'assistant' || e.type === 'user') {
-        t.verdict = 'skew-ingestion-lag'
-        t.why = 'row timestamp precedes the visible_rows moment (producer clock) but ingestion had not drained it yet; legacy could not paint what it had not seen'
-        bump(t.verdict); changed = true
+        // Gate skew-ingestion-lag on the documented timestamp window: the
+        // row's producer timestamp must be <= the visible_rows moment for the
+        // "existed-but-not-yet-ingested" story to hold. A row produced AFTER
+        // the snapshot is a genuine extra the pipeline surfaced later, not
+        // ingest lag — leaving it untriaged keeps it as visible debt instead
+        // of silently blessing a real renderer divergence. NaN (missing/
+        // unparseable timestamp, or missing capturedAt above) fails the
+        // comparison and correctly stays untriaged.
+        const rowMs = Date.parse(e.timestamp)
+        if (rowMs <= visibleRowsMomentMs) {
+          t.verdict = 'skew-ingestion-lag'
+          t.why = 'row timestamp precedes the visible_rows moment (producer clock) but ingestion had not drained it yet; legacy could not paint what it had not seen'
+          bump(t.verdict); changed = true
+        }
       }
     } else if (d.class === 'missing-in-next' && unit.startsWith('row:optimistic-')) {
       // Optimistic rows live only in renderer state (runtime.entries) —

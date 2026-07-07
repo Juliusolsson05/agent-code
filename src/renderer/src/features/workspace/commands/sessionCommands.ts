@@ -763,18 +763,30 @@ export const sessionCommands: CommandDef[] = [
     // silently fills tens of GB. The env flag AGENT_CODE_SESSION_RECORD is
     // only an optional auto-start power path for unattended soak.
     //
-    // getState toggles the label Start↔Stop from the focused pane's live
-    // recorder state (an async IPC read cached into command state, refreshed
-    // when the palette opens). Gated on the capability flag
-    // (sessionRecordingEnabled == dev-debug on) so it appears whenever the
-    // feature is available.
+    // The label stays a static "Toggle Session Recording": there is no per-pane
+    // active-recording signal plumbed into command state, so we deliberately do
+    // NOT implement getState here. A live Start↔Stop label would need an async
+    // IPC read (record-session:is-recording) cached into command state and
+    // refreshed on palette open — future work, not built yet. Gated on the
+    // capability flag (sessionRecordingEnabled == dev-debug on) so it appears
+    // whenever the feature is available; the agent-kind guard below keeps it off
+    // terminal panes the recorder can't capture.
     id: 'toggle-session-recording',
     surface: 'debug',
     title: 'Toggle Session Recording',
     description: '**What it does:** Starts or stops **continuous recording** of the focused pane\'s rendering-input stream (replayable in the test suite).\n\n**Use when:** Right before reproducing a rendering bug you want captured as a fixture.\n\n**Notes:** Command-driven — nothing records until you start it. Each recording is its own folder under `session-recordings/`.',
     keywords: ['recording', 'record', 'start', 'stop', 'capture', 'session', 'soak', 'fixture', 'debug'],
-    when: ({ flags, workspace }) =>
-      flags.sessionRecordingEnabled && Boolean(commandTargetSessionId(workspace)),
+    when: ({ flags, workspace }) => {
+      if (!flags.sessionRecordingEnabled) return false
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      // Agent-kind guard: the recorder only taps the `session:*` feed channels
+      // an agent pane emits (SessionRecorderManager RECORDED_CHANNELS). A
+      // terminal pane produces raw PTY bytes on other channels, so a recording
+      // started against one would capture nothing — hide the command there.
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
+    },
     run: ({ workspace, ui }) => {
       ui.closePalette()
       void runToggleSessionRecordingCommand(workspace)
@@ -798,8 +810,16 @@ export const sessionCommands: CommandDef[] = [
     title: 'Attach Recording Note',
     description: '**What it does:** Drops a **timestamped note** into the focused pane\'s live session recording.\n\n**Use when:** You see a rendering bug during a recorded soak and want to mark the exact moment.\n\n**Notes:** Reserves the tick instantly, then prompts for text. Only available when session recording is enabled.',
     keywords: ['recording', 'note', 'mark', 'bookmark', 'annotate', 'soak', 'session', 'record', 'tick', 'debug'],
-    when: ({ flags, workspace }) =>
-      flags.sessionRecordingEnabled && Boolean(commandTargetSessionId(workspace)),
+    when: ({ flags, workspace }) => {
+      if (!flags.sessionRecordingEnabled) return false
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      // Agent-kind guard, same reason as toggle-session-recording above: only
+      // agent panes feed the recorder, so annotating a terminal pane's
+      // (non-existent) recording is meaningless — keep the command off them.
+      const kind = workspace.state.sessions[sessionId]?.kind ?? DEFAULT_PROVIDER
+      return isAgentProviderKind(kind)
+    },
     run: ({ workspace, ui }) => {
       ui.closePalette()
       void runAttachRecordingNoteCommand(workspace)
