@@ -36,7 +36,20 @@ function isDevDebugEnabled(): boolean {
 
 /** Session recording is doubly gated: it is a diagnostic (dev-debug) AND
  *  opt-in (its own flag), because it records full session input. */
+// Recording CAPABILITY: the Start/Stop/Attach-Note commands and IPC are
+// available whenever dev-debug is on. This does NOT record anything by
+// itself — recording is command-driven per session (plan §7). Kept named
+// isSessionRecordingEnabled for the DevDebugConfig field the renderer reads
+// to decide whether to SHOW the commands.
 export function isSessionRecordingEnabled(): boolean {
+  return isDevDebugEnabled()
+}
+
+// AUTO-START power path (plan §7, OPTIONAL, OFF by default): only with the
+// explicit env flag does the manager auto-record every session from launch —
+// for unattended soak. The normal path records nothing until the Start
+// Recording command fires, so a day of work never silently fills disk.
+export function isSessionRecordingAutoStart(): boolean {
   return isDevDebugEnabled() && envFlag('AGENT_CODE_SESSION_RECORD')
 }
 
@@ -111,4 +124,27 @@ export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | n
       sessionRecorders?.fillNote(sessionId, noteId, text)
     },
   )
+  // Start/stop a single session's recording on demand (plan §7). This is the
+  // PRIMARY control — recording is command-driven, not auto. Returns whether
+  // the session is recording after the call so the renderer can label the
+  // toggle correctly.
+  ipcMain.handle(
+    'record-session:start',
+    (_evt, sessionId: string, provider?: string): boolean => {
+      if (!isSessionRecordingEnabled() || !sessionRecorders) return false
+      // The command knows the pane's provider (workspace meta.kind); pass it
+      // so a mid-session start still records the right provider (the
+      // session:started event that carries it has usually already fired).
+      sessionRecorders.startRecording(sessionId, provider ? { kind: provider } : undefined)
+      return true
+    },
+  )
+  ipcMain.handle('record-session:stop', (_evt, sessionId: string): Promise<boolean> | boolean => {
+    if (!isSessionRecordingEnabled() || !sessionRecorders) return false
+    return sessionRecorders.stopRecording(sessionId).then(() => false)
+  })
+  ipcMain.handle('record-session:is-recording', (_evt, sessionId: string): boolean => {
+    if (!isSessionRecordingEnabled() || !sessionRecorders) return false
+    return sessionRecorders.isRecording(sessionId)
+  })
 }

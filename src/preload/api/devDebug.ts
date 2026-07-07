@@ -21,4 +21,15 @@ export const devDebugApi = {
   // Fill the previously reserved marker with the typed text on submit.
   fillRecordingNote: (sessionId: string, noteId: string, text: string): Promise<void> =>
     ipcRenderer.invoke('record-session:fill-note', sessionId, noteId, text),
+
+  // Start/stop recording ONE session on demand (plan §7 — the primary
+  // control; recording is command-driven, not auto). start returns true
+  // (recording), stop resolves false. isSessionRecording lets the command
+  // label itself Start vs Stop for the focused pane.
+  startSessionRecording: (sessionId: string, provider?: string): Promise<boolean> =>
+    ipcRenderer.invoke('record-session:start', sessionId, provider),
+  stopSessionRecording: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('record-session:stop', sessionId),
+  isSessionRecording: (sessionId: string): Promise<boolean> =>
+    ipcRenderer.invoke('record-session:is-recording', sessionId),
 }

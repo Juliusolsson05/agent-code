@@ -2,7 +2,7 @@ import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKin
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { CommandContext, CommandDef } from '@renderer/features/command-palette/types'
 import { runSaveDebugBundleCommand } from '@renderer/features/debug/saveDebugBundle'
-import { runAttachRecordingNoteCommand } from '@renderer/features/debug/attachRecordingNote'
+import { runAttachRecordingNoteCommand, runToggleSessionRecordingCommand } from '@renderer/features/debug/attachRecordingNote'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { buildProviderResumeCommand } from '@renderer/workspace/providerResumeCommand'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
@@ -757,16 +757,39 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    // Start / Stop Session Recording (plan §7 — the PRIMARY control).
+    // Recording is command-driven per session: nothing is written to disk
+    // until the operator starts a specific pane, so a day of work never
+    // silently fills tens of GB. The env flag AGENT_CODE_SESSION_RECORD is
+    // only an optional auto-start power path for unattended soak.
+    //
+    // getState toggles the label Start↔Stop from the focused pane's live
+    // recorder state (an async IPC read cached into command state, refreshed
+    // when the palette opens). Gated on the capability flag
+    // (sessionRecordingEnabled == dev-debug on) so it appears whenever the
+    // feature is available.
+    id: 'toggle-session-recording',
+    surface: 'debug',
+    title: 'Toggle Session Recording',
+    description: '**What it does:** Starts or stops **continuous recording** of the focused pane\'s rendering-input stream (replayable in the test suite).\n\n**Use when:** Right before reproducing a rendering bug you want captured as a fixture.\n\n**Notes:** Command-driven — nothing records until you start it. Each recording is its own folder under `session-recordings/`.',
+    keywords: ['recording', 'record', 'start', 'stop', 'capture', 'session', 'soak', 'fixture', 'debug'],
+    when: ({ flags, workspace }) =>
+      flags.sessionRecordingEnabled && Boolean(commandTargetSessionId(workspace)),
+    run: ({ workspace, ui }) => {
+      ui.closePalette()
+      void runToggleSessionRecordingCommand(workspace)
+    },
+  },
+  {
     // Attach Recording Note (plan §7b). The recording-era "save debug logs":
     // drops a timestamped bookmark into the LIVE session recording so a soak
     // operator can flag the exact tick they reacted to without stopping the
     // session. reserve-first (in runAttachRecordingNoteCommand) pins the
     // reaction moment before the input even opens.
     //
-    // Gated on flags.sessionRecordingEnabled: recording is doubly gated in
-    // main (dev-debug AND AGENT_CODE_SESSION_RECORD), and this flag mirrors
-    // that config value, so the command only appears when recording is
-    // actually on. The "is a recording active for THIS pane" refinement is
+    // Gated on flags.sessionRecordingEnabled (== the recording CAPABILITY,
+    // dev-debug on): the command appears whenever the feature is available.
+    // The "is a recording active for THIS pane" refinement is
     // enforced at run time: reserveRecordingNote returns null and the command
     // toasts "no active recording" rather than pre-computing per-session
     // recorder state into the palette flags on every keystroke.

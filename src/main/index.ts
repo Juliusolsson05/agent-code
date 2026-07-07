@@ -35,7 +35,7 @@ import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/windo
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/mainWindow.js'
-import { isSessionRecordingEnabled } from '@main/ipc/devDebug.js'
+import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
 import { registerAllIpc } from '@main/ipc/index.js'
 import { cleanupDictationIpcResources } from '@main/ipc/dictation.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -88,7 +88,12 @@ const ghostJournals = new GhostJournalRegistry()
 // AGENT_CODE_DEV_DEBUG=1 AND AGENT_CODE_SESSION_RECORD=1, so a normal build
 // pays nothing (no observer installed, sendToMainWindow's hook stays null).
 // plan: docs/rendering/session-recording-plan-2026-07.md (#467).
-const sessionRecorders = isSessionRecordingEnabled() ? new SessionRecorderManager() : null
+// Construct the recorder manager whenever the CAPABILITY is on (dev-debug),
+// so the Start Recording command works. autoRecord (the env flag) stays OFF
+// by default — nothing records until the command starts a session.
+const sessionRecorders = isSessionRecordingEnabled()
+  ? new SessionRecorderManager(undefined, undefined, isSessionRecordingAutoStart())
+  : null
 if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)
 // Per-dictation-session debug-dump registry. Mirrors `ghostJournals`:
 // constructed before IPC handlers register, flushed on before-quit. See

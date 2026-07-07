@@ -55,6 +55,7 @@ afterEach(() => {
 describe('SessionRecorderManager', () => {
   it('records only allowlisted channels, keyed by sessionId, into a per-recording folder', async () => {
     const m = mgr()
+    m.startRecording('s1') // command-driven: record only after explicit start
     // Non-allowlisted channels and PTY channels are ignored.
     m.observe('lsp:diagnostics', [{ sessionId: 's1' }])
     m.observe('session:terminal-data', [{ sessionId: 's1', data: 'raw pty' }])
@@ -73,10 +74,10 @@ describe('SessionRecorderManager', () => {
 
     const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
     expect(lines.map(l => l.ch)).toEqual(['session:semantic-event', 'session:jsonl-entries'])
-    // t is relative to the FIRST recorded event (recording start): the
-    // first line is t=0, the second is 25-10=15ms later.
-    expect(lines[0].t).toBe(0)
-    expect(lines[1].t).toBe(15)
+    // t is relative to recording START (explicit startRecording at mono=0);
+    // the two events at mono 10 and 25 are t=10 and t=25.
+    expect(lines[0].t).toBe(10)
+    expect(lines[1].t).toBe(25)
     expect(lines[0].payload.event.kind).toBe('turn_started')
   })
 
@@ -88,6 +89,7 @@ describe('SessionRecorderManager', () => {
 
   it('finalizes a recording on session:exit', async () => {
     const m = mgr()
+    m.startRecording('s2', { kind: 'claude' }) // command passes provider hint
     m.observe('session:started', [{ sessionId: 's2', kind: 'claude' }])
     expect(m.isRecording('s2')).toBe(true)
     m.observe('session:exit', [{ sessionId: 's2', code: 0 }])
@@ -104,6 +106,7 @@ describe('SessionRecorderManager', () => {
 
   it('captures reserve-then-fill notes as __note lines', async () => {
     const m = mgr()
+    m.startRecording('s3')
     m.observe('session:started', [{ sessionId: 's3', kind: 'codex' }])
     mono = 5
     const noteId = m.reserveNote('s3')
@@ -133,10 +136,39 @@ describe('SessionRecorderManager', () => {
 
   it('flushAll finalizes every open recording', async () => {
     const m = mgr()
-    m.observe('session:screen', [{ sessionId: 'a' }])
-    m.observe('session:screen', [{ sessionId: 'b' }])
+    m.startRecording('a')
+    m.startRecording('b')
     await m.flushAll()
     expect(m.isRecording('a')).toBe(false)
     expect(m.isRecording('b')).toBe(false)
   })
+
+  it('does NOT record until a session is explicitly started (default: autoRecord off)', async () => {
+    const m = mgr() // autoRecord defaults false
+    m.observe('session:started', [{ sessionId: 'nope', kind: 'claude' }])
+    m.observe('session:semantic-event', [{ sessionId: 'nope', event: {} }])
+    // No recorder was created, nothing on disk for this session.
+    expect(m.isRecording('nope')).toBe(false)
+  })
+
+  it('records a session once startRecording is called, and stops on stopRecording', async () => {
+    const m = mgr()
+    m.startRecording('go')
+    expect(m.isRecording('go')).toBe(true)
+    mono = 10
+    m.observe('session:semantic-event', [{ sessionId: 'go', event: { kind: 'turn_started' } }])
+    await m.stopRecording('go')
+    expect(m.isRecording('go')).toBe(false)
+    const dir = await readRecordingDir('go')
+    const lines = readFileSync(join(dir, 'events.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l))
+    expect(lines.some(l => l.ch === 'session:semantic-event')).toBe(true)
+  })
+
+  it('auto-records every session ONLY when autoRecord is on (the power flag)', async () => {
+    const m = new SessionRecorderManager(nowWall, nowMono, true)
+    m.observe('session:started', [{ sessionId: 'auto', kind: 'codex' }])
+    expect(m.isRecording('auto')).toBe(true)
+    await m.stopRecording('auto')
+  })
+
 })
