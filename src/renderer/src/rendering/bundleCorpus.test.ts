@@ -70,7 +70,7 @@ import {
 
 const FIXTURE_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  '../../../../../testing/fixtures/rendering-bundles',
+  '../../../../testing/fixtures/rendering-bundles',
 )
 const BLESS = process.env.AGENT_CODE_CORPUS_BLESS === '1'
 

@@ -63,7 +63,7 @@ import type { RecordingEvent } from '@renderer/rendering/replay/redact'
 
 const FIXTURE_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
-  '../../../../../testing/fixtures/rendering-recordings',
+  '../../../../testing/fixtures/rendering-recordings',
 )
 const BLESS = process.env.AGENT_CODE_RECORDING_BLESS === '1'
 
