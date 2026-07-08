@@ -84,12 +84,29 @@ export type RemoteServerDeps = {
   clientDistDir?: string | null
   getThemeSettings?: () => Record<string, unknown> | null
   journal?: AppRunJournal | null
+  /**
+   * Transcribe a phone-captured audio blob to composer-ready text. OPTIONAL:
+   * absent (or a null-returning wire) makes POST /dictate answer 503 so the
+   * phone hides its mic. Wired in RemoteController to the desktop's existing
+   * Deepgram batch engine — the API key stays in the main process and never
+   * crosses to the phone, which is the whole reason transcription is a server
+   * dep and not something the client does itself. Returns { ok:false,
+   * error:'no-key' } when DEEPGRAM_API_KEY is unset. Audio is
+   * transcribe-and-discard: it is NEVER written to any debug/state root.
+   */
+  transcribeAudio?: (
+    audio: Buffer,
+    mimeType?: string,
+  ) => Promise<{ ok: true; text: string } | { ok: false; error: string }>
 }
 
 const SUBMIT_BYTES = '\r'
 const INTERRUPT_BYTES = '\x1b'
 
 const PAIR_BODY_LIMIT_BYTES = 16 * 1024
+// Generous but bounded: webm/opus voice is ~1 KB/s, so 8 MB is many minutes
+// of dictation while still stopping a hostile peer from ballooning memory.
+const DICTATE_BODY_LIMIT_BYTES = 8 * 1024 * 1024
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -236,6 +253,10 @@ export class RemoteServer extends EventEmitter {
       res.end(JSON.stringify({ ok: true }))
       return
     }
+    if (req.method === 'POST' && url.pathname === '/dictate') {
+      await this.handleDictate(req, res)
+      return
+    }
     if (req.method === 'GET') {
       this.serveClient(url.pathname, res)
       return
@@ -292,6 +313,66 @@ export class RemoteServer extends EventEmitter {
         deviceName: redeemed.device.name,
       }),
     )
+  }
+
+  // POST /dictate — phone audio -> composer text. The phone's mic button can't
+  // reach the desktop's Fn-hotkey dictation path, so it records in-browser and
+  // posts the blob here; we run it through the SAME Deepgram batch engine the
+  // desktop uses (deps.transcribeAudio) so the API key never leaves the main
+  // process. Auth is the exact /ws-upgrade gate — a valid, unrevoked device
+  // token, here on the Authorization: Bearer header (keeps the token out of
+  // any proxy access log that records URLs). Audio is transcribe-and-discard;
+  // it is never written to a debug/state root.
+  private async handleDictate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const auth = req.headers['authorization'] ?? ''
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+    const verdict = this.deps.pairing.verifyToken(token)
+    if (!verdict.ok) {
+      this.deps.journal?.record({
+        area: 'remote.server',
+        name: 'remote_dictate.rejected',
+        data: { reason: verdict.reason },
+      })
+      res.writeHead(401, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'unauthorized' }))
+      return
+    }
+    if (!this.deps.transcribeAudio) {
+      // No transcriber wired (e.g. no DEEPGRAM_API_KEY at all) — tell the phone
+      // so it hides the mic rather than offering a button that can't work.
+      res.writeHead(503, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'dictation-unavailable' }))
+      return
+    }
+    let audio: Buffer
+    try {
+      audio = await readBodyCappedBinary(req, DICTATE_BODY_LIMIT_BYTES)
+    } catch {
+      res.writeHead(413, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'audio too large' }))
+      return
+    }
+    void this.deps.registry.touch(verdict.deviceId)
+    const mimeType =
+      typeof req.headers['content-type'] === 'string' ? req.headers['content-type'] : undefined
+    const result = await this.deps.transcribeAudio(audio, mimeType)
+    if (!result.ok) {
+      // no-key is a config gap (503, works once configured); anything else is
+      // an upstream STT failure (502). Never echo raw error internals further
+      // than the short code the client needs to branch on.
+      res.writeHead(result.error === 'no-key' ? 503 : 502, {
+        'content-type': 'application/json',
+      })
+      res.end(JSON.stringify({ ok: false, error: result.error }))
+      return
+    }
+    this.deps.journal?.record({
+      area: 'remote.server',
+      name: 'remote_dictate.ok',
+      data: { deviceId: verdict.deviceId, chars: result.text.length },
+    })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, text: result.text }))
   }
 
   private serveClient(pathname: string, res: ServerResponse): void {
@@ -633,6 +714,27 @@ async function readBodyCapped(req: IncomingMessage, limit: number): Promise<stri
       chunks.push(chunk)
     })
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+// Binary sibling of readBodyCapped for the /dictate audio blob: same
+// cap-then-reject-on-overflow discipline, but resolves the raw Buffer instead
+// of decoding UTF-8 (audio bytes must not go through a string round-trip).
+async function readBodyCappedBinary(req: IncomingMessage, limit: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > limit) {
+        req.destroy()
+        reject(new Error('body too large'))
+        return
+      }
+      chunks.push(chunk)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks)))
     req.on('error', reject)
   })
 }

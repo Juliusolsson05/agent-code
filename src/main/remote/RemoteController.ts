@@ -12,6 +12,8 @@ import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import { LanTransport } from '@main/remote/transport/LanTransport.js'
 import { CloudflaredTunnel } from '@main/remote/transport/CloudflaredTunnel.js'
 import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
+import { transcribeBatch } from '@main/dictation/controller.js'
+import { wrapWithSttTag } from 'agent-voice-dictation/composer'
 
 // RemoteController — the one object the desktop drives.
 //
@@ -146,6 +148,29 @@ export class RemoteController extends EventEmitter {
         clientDistDir: this.deps.clientDistDir ?? null,
         getThemeSettings: () => this.themeSettings,
         journal: this.deps.journal ?? null,
+        transcribeAudio: async (audio, mimeType) => {
+          // The Deepgram key stays here in the main process — the phone never
+          // receives it. Mirrors ipc/dictation's env-only key resolution and
+          // the desktop's wrapWithSttTag composer wrapping so a phone-dictated
+          // prompt reads to the agent exactly like a desktop-dictated one.
+          const apiKey = process.env.DEEPGRAM_API_KEY?.trim()
+          if (!apiKey) return { ok: false, error: 'no-key' }
+          try {
+            const outcome = await transcribeBatch({
+              provider: 'deepgram',
+              apiKey,
+              audio,
+              ...(mimeType ? { mimeType } : {}),
+            })
+            // Empty transcript ('no-speech') is a normal outcome, not an error:
+            // return ok with empty text so the phone just appends nothing.
+            if (outcome.kind === 'no-speech') return { ok: true, text: '' }
+            return { ok: true, text: wrapWithSttTag(outcome.raw) }
+          } catch (err) {
+            this.deps.journal?.recordError('remote_dictate.transcribe_error', err)
+            return { ok: false, error: 'transcribe-failed' }
+          }
+        },
       })
       this.transport = mode
       this.server.on('clients-changed', () => this.emitStatus())
