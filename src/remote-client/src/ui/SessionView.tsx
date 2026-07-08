@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
+import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
+import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
+import type { ComposerDictationController } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { Entry } from '@shared/types/transcript'
 import {
@@ -24,6 +27,22 @@ import type { TranscriptStore } from '../transcript/store'
 // keeps the ledger's ghost plane cache stable across renders — a fresh map
 // each render would defeat the adapter's by-reference plane memoization.
 const NO_GHOSTS: ReadonlyMap<string, Entry> = new Map()
+
+// A ComposerDictationController that reports "off" so the real desktop
+// ComposerInput shell mounts with NO mic affordance and no dictation UI.
+// Task 6 (voice dictation) swaps this for a live controller wired to the
+// phone recorder + /dictate route. Module-const so the reference is stable
+// across renders (a fresh object each render would defeat the shell's memo).
+const DICTATION_DISABLED: ComposerDictationController = {
+  enabled: false,
+  status: 'idle',
+  label: '',
+  busy: false,
+  levels: [],
+  hasTranscriptPreview: false,
+  toggle: () => {},
+  handleShortcut: () => false,
+}
 
 // One session, desktop-grade: this mounts the REAL desktop Feed component
 // (see the alias table in ../vite.config.ts — the phone renders the same
@@ -70,6 +89,12 @@ export function SessionView({
   const [cwd, setCwd] = useState<string | null>(
     () => feed.getSessionList().find(s => s.sessionId === sessionId)?.cwd ?? null,
   )
+
+  // The composer's textarea ref, auto-grown by the desktop hook (pure DOM,
+  // reused verbatim) so the mounted ComposerInput shell reflows exactly like
+  // the desktop as the draft wraps.
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  useComposerAutoGrow(inputRef, draft)
 
   // Backfill on first view of a session — the live stream only covers
   // what happened after the phone connected.
@@ -154,6 +179,27 @@ export function SessionView({
       if (!ok) setError('Interrupt failed.')
     })
   }, [feed, sessionId])
+
+  // Phone composer key handling. Enter submits; Shift+Enter inserts a newline
+  // (native — we don't preventDefault); Esc interrupts. These are the only
+  // shapes the v1 wire accepts. Slash-command escapes and image paste are
+  // deliberately absent (out of scope — they'd need the wire to widen). This
+  // matters mainly for an external keyboard paired to a phone/tablet; the
+  // on-screen Send/Stop buttons cover pure-touch use.
+  const onComposerKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        sendPrompt()
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        interrupt()
+      }
+    },
+    [sendPrompt, interrupt],
+  )
 
   // The dispatch the generic ConditionOutlet drives. Same routing the old
   // hand-rolled tap-bar used (pty -> structured replyWithPtyAction, custom ->
@@ -267,21 +313,47 @@ export function SessionView({
 
         {error && <div className="working" style={{ color: 'var(--danger)' }}>{error}</div>}
 
+        {/* The REAL desktop composer shell — pixel-identical ❯ chevron,
+            focus-accent border, auto-grow, dictation slot. Driven by a phone
+            controller: local draft state, Enter/Shift+Enter/Esc key handling,
+            and (until Task 6) a disabled dictation controller. Slash picker and
+            image strip are inert via props (pickerState=null, draftImages=[]).
+            The Send/Stop buttons below are a touch affordance the desktop
+            (Enter-to-send) doesn't need but a phone does. */}
         <div className="composer">
-          <textarea
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            placeholder="Prompt the agent…"
-            rows={1}
+          <ComposerInput
+            inputRef={inputRef}
+            input={draft}
+            focused={true}
+            slashMode={false}
+            provider={provider}
+            draftImages={[]}
+            pickerState={null}
+            historyIndex={null}
+            history={[]}
+            setInputText={setDraft}
+            endHistoryCycle={() => {}}
+            onKeyDown={onComposerKeyDown}
+            onPaste={() => {}}
+            onFocusRequest={() => {}}
+            onUserEngagement={() => {}}
+            onHoverChange={() => {}}
+            removeDraftImage={() => {}}
+            dictation={DICTATION_DISABLED}
+            promptSuggestion={null}
+            onApplySuggestion={() => {}}
+            onDismissSuggestion={() => {}}
           />
-          {working ? (
-            <button className="stop" onClick={interrupt}>
-              Stop
+          <div className="composer-actions">
+            {working ? (
+              <button className="stop" onClick={interrupt}>
+                Stop
+              </button>
+            ) : null}
+            <button disabled={!draft.trim() || sending || transcript.exited} onClick={sendPrompt}>
+              {sending ? '…' : 'Send'}
             </button>
-          ) : null}
-          <button disabled={!draft.trim() || sending || transcript.exited} onClick={sendPrompt}>
-            {sending ? '…' : 'Send'}
-          </button>
+          </div>
         </div>
       </div>
     </SessionFeedProvider>
