@@ -986,7 +986,7 @@ function FeedImpl({
     <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
       <div
         ref={scrollerRef}
-        className="h-full overflow-auto"
+        className="h-full overflow-auto @container"
         onWheel={() => {
           onUserEngagement?.()
         }}
@@ -994,7 +994,16 @@ function FeedImpl({
           onUserEngagement?.()
         }}
       >
-        <div className="max-w-[880px] min-h-full mx-auto px-8 pt-6 pb-8 flex flex-col gap-4">
+        {/* Container-query responsive (mobile-feed-rewrite Part A). This node
+         *  is SHARED with the desktop and with narrow tiled panes, so the
+         *  WIDEST step (@min-[768px]) restores the historical desktop classes
+         *  VERBATIM — wide output must not change (regression invariant). Only
+         *  narrow widths (phone, skinny tiles) diverge: they drop the max-w cap
+         *  and shrink the gutters, instead of eating 64px of px-8 on a ~375px
+         *  screen. The scroller above carries `@container` so these variants
+         *  respond to the FEED's own width, not the viewport — which is why a
+         *  narrow desktop tile benefits identically to a phone. */}
+        <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
           {/* ONE owner rule for every visible feed surface.
            *
            * The old JSX rendered separate buckets in a fixed order:

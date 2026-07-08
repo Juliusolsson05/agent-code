@@ -1,6 +1,16 @@
 /* Scan provider and shared directories for Tailwind classes. */
 @source "../../../src/providers";
 @source "../../../src/shared";
+/* Scan the renderer too. WHY this is load-bearing (mobile-feed-rewrite): the
+ * REMOTE PHONE build compiles its Tailwind from THIS stylesheet, and without
+ * an explicit renderer source it only saw providers/shared — so classes that
+ * live ONLY on renderer components (e.g. Feed's own container `max-w-[880px]
+ * px-8` and the container-query responsive variants) were silently never
+ * emitted into the phone CSS. That was the actual root cause of the phone
+ * feed's "no padding" — not the values, but that the utilities didn't exist.
+ * Additive for the desktop (its build already auto-detects src/renderer), so
+ * this only fills the gap for the phone build. */
+@source "../../../src/renderer";
 
 /*
  * Agent Code styles — v2: "native Claude Code, but typeset"
