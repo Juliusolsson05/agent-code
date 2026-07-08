@@ -90,6 +90,15 @@ button, input, textarea {
   text-transform: uppercase; width: 240px;
 }
 .pair .error { color: var(--danger); }
+/* Replaces the old inline style on the Pair button (which set borderRadius:8,
+ * overriding the global sharp-rectangle rule — the one aesthetic-contract
+ * violation in the phone chrome). Sharp corners come from the global button
+ * reset; disabled dimming is CSS now, not a computed inline opacity. */
+.pair button {
+  background: var(--accent); color: var(--accent-fg); border: none;
+  padding: 10px 22px; font-size: 15px; font-weight: 600;
+}
+.pair button:disabled { opacity: 0.4; }
 
 /* --- session picker --- */
 .session-list { display: flex; flex-direction: column; }
@@ -132,39 +141,50 @@ button, input, textarea {
   padding: 12px 14px; white-space: pre-wrap; word-break: break-word;
   font-size: 11px; line-height: 1.45; color: var(--ink);
 }
+/* Live conditions now render via the real desktop ConditionOutlet (Tailwind-
+ * styled provider views). This wrapper only positions them as a sticky band
+ * above the composer; the old .prompt-title / .actions button rules that
+ * styled the hand-rolled tap-bar are gone with it. */
 .conditions {
   border-top: 1px solid var(--border); background: var(--surface);
-  padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
   flex-shrink: 0;
 }
-.conditions .prompt-title { color: var(--ink); }
-.conditions .prompt-title::before { content: '⏺ '; color: var(--accent); }
-.conditions .actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.conditions .actions button {
-  background: var(--surface-hi); border: 1px solid var(--border-hi); color: var(--ink);
-  padding: 10px 14px; font-size: 13px;
-}
-.conditions .actions button:active { background: var(--border-hi); }
 
+/* The composer is now the real full-width ComposerInput block stacked over an
+ * actions row (mic + stop + send). ComposerInput supplies its own top border
+ * and background via Tailwind, so this wrapper only stacks the two and
+ * reserves the home-indicator safe area. */
 .composer {
-  display: flex; gap: 8px; align-items: flex-end;
-  padding: 10px 14px calc(env(safe-area-inset-bottom, 0px) + 10px);
-  border-top: 1px solid var(--border); background: var(--surface);
+  display: flex; flex-direction: column;
+  background: var(--surface);
   flex-shrink: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
-.composer textarea {
-  flex: 1; background: var(--surface-hi); border: 1px solid var(--border-hi);
-  color: var(--ink); padding: 10px 12px;
-  /* 16px floor: anything smaller makes iOS Safari zoom the page on focus. */
-  font-size: 16px;
-  resize: none; max-height: 120px; min-height: 42px;
+/* iOS Safari zooms the page when a focused input's font-size is < 16px. The
+ * mounted desktop ComposerInput textarea is text-[12px]; this element+class
+ * selector outranks that single Tailwind class (no !important needed) and
+ * restores the 16px anti-zoom floor on the phone only — the desktop has no
+ * .composer wrapper, so its 12px is untouched. */
+.composer textarea { font-size: 16px; }
+
+.composer-actions {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
 }
-.composer button {
+.composer-actions button {
   background: var(--accent); color: var(--accent-fg); border: none;
   padding: 10px 16px; font-size: 13px; font-weight: 600; flex-shrink: 0;
 }
-.composer button:disabled { opacity: 0.4; }
-.composer .stop {
+.composer-actions button:disabled { opacity: 0.4; }
+/* Mic anchors to the left; margin-right:auto pushes stop/send to the right.
+ * The two-class selector outranks the accent base rule above without
+ * !important. */
+.composer-actions .mic {
+  background: var(--surface-hi); color: var(--ink); border: 1px solid var(--border-hi);
+  font-weight: 400; font-size: 16px; padding: 8px 12px; margin-right: auto;
+}
+.composer-actions .mic.recording { border-color: var(--danger); color: var(--danger); }
+.composer-actions .stop {
   background: none; border: 1px solid var(--danger); color: var(--danger); font-weight: 500;
 }
 
