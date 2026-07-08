@@ -2,47 +2,56 @@
 // inline `if (kind === 'claude')` branch of MCP's submitPrompt so the
 // protocol lives with the provider that owns it.
 //
-// WHY bracketed paste instead of plain keystrokes: orchestration
-// prompts are long, markdown-heavy bootstrap prompts. Raw keystrokes
-// would let the TUI interpret newlines/escapes as interactive input.
-// Bracketed paste is the same terminal-level contract the composer
-// uses for large prompts.
+// WHY bracketed paste instead of plain keystrokes: prompts can be long,
+// markdown-heavy, or multi-line. Raw keystrokes would let the TUI interpret
+// newlines/escapes as interactive input. Bracketed paste is the same
+// terminal-level contract the composer uses for large prompts.
 //
 // WHY Claude waits AFTER the paste (unlike Codex, which gates BEFORE):
-// Claude's known race is paste-commit ordering — the composer is
-// present, but Enter can arrive before the paste accumulator has
-// replaced the payload with `[Pasted text #N]`. Waiting for the
-// placeholder proves the paste committed; only then is Enter safe.
-// The delivery boundary the caller relies on: `ok: true` means the
+// Claude's known race is paste-commit ordering — the composer is present, but
+// Enter can arrive before Claude's ~100ms paste accumulator has committed the
+// payload, so the `\r` is swallowed as more paste content and the prompt just
+// sits in the composer. We send Enter only once the composer VISIBLY committed
+// the paste. The delivery boundary the caller relies on: `ok: true` means the
 // prompt was pasted, confirmed, and submitted.
+//
+// WHY the confirm is placeholder-OR-inline (this file's bug history):
+// Claude reflects a committed paste two ways and which one depends on size —
+// COLLAPSE into a `[Pasted text #N]` placeholder (only big pastes: single-line
+// >~800 chars, or multiline >=~4 lines), or INLINE as raw text with NO
+// placeholder (everything smaller). This module used to wait for the
+// placeholder ONLY (awaitPastePlaceholder). That was fine while its only
+// caller was orchestration sending long markdown bootstraps that always
+// collapse — but the remote/mobile companion routes ARBITRARY, mostly SHORT
+// prompts here, and every dictated prompt is multi-line (the <stt>…</stt>
+// wrapper adds newlines → always the paste route). Those inline with no
+// placeholder, so the old probe timed out unconfirmed ("did not confirm pasted
+// prompt before submit") and the message stuck in the composer — the
+// never-ending "remote send doesn't work" bug. We now use the SAME
+// content-match the desktop composer uses: placeholder OR inline tail, from the
+// shared detector. Characterized against a real `claude` PTY in tmp/paste-repro.
 
 import type {
   PromptDeliveryIo,
   PromptDeliveryResult,
 } from '@shared/types/providerConfig.js'
+import { isPasteLike, pollPasteAbsorbed } from '@shared/claude/pasteConfirm.js'
 
-// Same routing predicate as the desktop composer (composerSubmit.ts /
-// claudePaste.ts CLAUDE_PASTE_THRESHOLD — keep the two values in lockstep;
-// duplicated because this runtime module cannot import renderer code).
-// WHY it exists here: Claude's TUI only renders the `[Pasted text #N]`
-// placeholder for pastes big enough to collapse — a short single-line
-// paste inlines as plain text and NO placeholder ever appears. The
-// original consumer (orchestration) only sends long markdown bootstraps,
-// so the always-paste + hard-placeholder protocol below never failed —
-// until the remote companion routed arbitrary phone prompts through this
-// module and every short prompt timed out unconfirmed ("did not confirm
-// pasted prompt before submit"). Short prompts take the composer's plain
-// route instead: text + Enter in ONE write, which cannot race the paste
-// accumulator because there is no paste.
-const CLAUDE_PASTE_THRESHOLD = 100
-
-function isPasteLike(prompt: string): boolean {
-  return prompt.includes('\n') || prompt.length > CLAUDE_PASTE_THRESHOLD
-}
+// Detection bound. The inline tail / new placeholder appears in ~10–30ms
+// (measured), so this is only a safety floor for the pathological case where
+// NEITHER signal ever materializes (a future Claude UI change) — we fail
+// visibly rather than hang. snapshotScreen is a synchronous in-process read, so
+// polling is cheap.
+const CONFIRM_TIMEOUT_MS = 2000
+const CONFIRM_POLL_INTERVAL_MS = 10
 
 export async function deliverClaudePrompt(
   io: PromptDeliveryIo,
 ): Promise<PromptDeliveryResult> {
+  // Plain fast path: short single-line text can't engage Claude's paste
+  // accumulator, so text + Enter in ONE write is safe — there is no paste to
+  // race. `isPasteLike` is the shared routing predicate (was duplicated here;
+  // now one source with the desktop composer).
   if (!isPasteLike(io.prompt)) {
     if (!io.write(`${io.prompt}\r`)) {
       return {
@@ -53,37 +62,45 @@ export async function deliverClaudePrompt(
     return { ok: true }
   }
 
+  // Paste route. Capture the composer screen BEFORE the paste so the detector
+  // keys on the *transition* (a NEW placeholder / the tail NEWLY inlined) — and
+  // so a SECOND paste in the session ignores the first paste's stale
+  // `[Pasted text #1]` placeholder instead of false-confirming on it.
+  //
+  // snapshotScreen is a typed optional on AgentSession; a Claude runtime build
+  // that loses it degrades to a visible delivery failure here, not a TypeError.
+  if (typeof io.session.snapshotScreen !== 'function') {
+    return {
+      ok: false,
+      message: `Claude session ${io.sessionId} has no screen snapshot (headless unavailable?)`,
+    }
+  }
+  const baselineScreen = io.session.snapshotScreen()
+
   if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
     return {
       ok: false,
-      message: `Could not write orchestration prompt to session ${io.sessionId}`,
+      message: `Could not write paste to session ${io.sessionId}`,
     }
   }
 
-  // awaitPastePlaceholder is a typed optional on AgentSession — a
-  // Claude runtime build that loses it degrades to a visible delivery
-  // failure here, not a TypeError.
-  if (typeof io.session.awaitPastePlaceholder !== 'function') {
+  const outcome = await pollPasteAbsorbed(
+    () => io.session.snapshotScreen?.() ?? '',
+    baselineScreen,
+    io.prompt,
+    { timeoutMs: CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
+  )
+  if (outcome.kind !== 'absorbed') {
     return {
       ok: false,
-      message: `Claude session ${io.sessionId} has no paste-placeholder probe (headless unavailable?)`,
-    }
-  }
-  const placeholder = await io.session.awaitPastePlaceholder({
-    timeoutMs: 2000,
-    pollIntervalMs: 50,
-  })
-  if (placeholder.kind !== 'appeared') {
-    return {
-      ok: false,
-      message: `Claude session ${io.sessionId} did not confirm pasted prompt before submit (${placeholder.kind})`,
+      message: `Claude session ${io.sessionId} did not confirm pasted prompt before submit (${outcome.kind})`,
     }
   }
 
   if (!io.write('\r')) {
     return {
       ok: false,
-      message: `Could not submit orchestration prompt to session ${io.sessionId}`,
+      message: `Could not submit prompt to session ${io.sessionId}`,
     }
   }
   return { ok: true }

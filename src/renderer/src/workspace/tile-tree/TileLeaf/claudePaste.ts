@@ -56,8 +56,22 @@
 //     a real absorption always wins first; short enough that the rare
 //     safety-net path still feels responsive.
 
-export const CLAUDE_PASTE_THRESHOLD = 100
 import { sha8Web } from '@shared/code/sha8'
+import {
+  CLAUDE_PASTE_THRESHOLD,
+  placeholderCount,
+  pasteTailNeedle,
+  pollPasteAbsorbed,
+  type PasteAbsorbedOutcome,
+} from '@shared/claude/pasteConfirm'
+
+// The paste-commit DETECTION (placeholder-or-inline) now lives in the shared
+// module that BOTH this desktop composer and the runtime delivery path consume
+// — killing the drift that had left the runtime on a placeholder-only probe.
+// Re-exported here so existing importers keep their `@renderer/.../claudePaste`
+// import path. The battle-scarred TIMING constants below are unchanged.
+export { CLAUDE_PASTE_THRESHOLD, placeholderCount, pasteTailNeedle }
+export type { PasteAbsorbedOutcome }
 
 export const CLAUDE_PASTE_SUBMIT_DELAY_MS = 125
 export const CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS = 750
@@ -75,80 +89,10 @@ function wait(ms: number): Promise<void> {
 // probability is negligible for a single paste's chunk set).
 const sha8 = sha8Web
 
-// --- Content-match detection helpers ---------------------------------------
-
-const PASTE_PLACEHOLDER_RE = /\[Pasted text #\d+/g
-
-export function placeholderCount(screen: string): number {
-  const matches = screen.match(PASTE_PLACEHOLDER_RE)
-  return matches ? matches.length : 0
-}
-
-function normalizeWhitespace(s: string): string {
-  return s.replace(/\s+/g, ' ')
-}
-
-// A distinctive needle from the END of the paste. The paste's tail lands at
-// the composer cursor, so it's the most reliable contiguous substring to find
-// when Claude inlines a medium paste (no placeholder). Whitespace-normalized
-// so the TUI's reflow/wrapping doesn't defeat the match. Null for pastes too
-// short to fingerprint distinctively — those never reach this path (they take
-// the plain `text + \r` route).
-export function pasteTailNeedle(payload: string): string | null {
-  const norm = normalizeWhitespace(payload).trim()
-  return norm.length >= 8 ? norm.slice(-24) : null
-}
-
-export type PasteAbsorbedOutcome =
-  | { kind: 'absorbed'; waitedMs: number; via: 'placeholder' | 'inline' }
-  | { kind: 'timeout' }
-
-/**
- * Resolve when Claude's composer visibly reflects the paste — i.e. the ~100ms
- * paste-accumulator debounce has fired and `\r` can no longer be swallowed.
- *
- * `getScreen` returns the live headless screen snapshot (the renderer's
- * `latestScreenRef`, kept in sync by `onSessionScreen`). `baselineScreen` is
- * captured BEFORE the bracketed paste so we detect the *transition* (a NEW
- * placeholder / the tail NEWLY appearing) rather than a coincidental match
- * against content that was already on screen (e.g. the same text in scrollback).
- */
-export function waitForPasteAbsorbed(
-  getScreen: () => string | undefined,
-  baselineScreen: string,
-  payload: string,
-  opts: { timeoutMs: number; pollIntervalMs: number },
-): Promise<PasteAbsorbedOutcome> {
-  const tail = pasteTailNeedle(payload)
-  const baseCount = placeholderCount(baselineScreen)
-  const tailAlreadyPresent = tail
-    ? normalizeWhitespace(baselineScreen).includes(tail)
-    : false
-  const startedAt = Date.now()
-  return new Promise(resolve => {
-    const tick = (): void => {
-      const screen = getScreen() ?? ''
-      // Collapse case: a NEW `[Pasted text #N]` placeholder appeared.
-      if (placeholderCount(screen) > baseCount) {
-        resolve({ kind: 'absorbed', waitedMs: Date.now() - startedAt, via: 'placeholder' })
-        return
-      }
-      // Inline case: the paste's tail newly appears in the composer. The
-      // `!tailAlreadyPresent` guard keeps a duplicate in scrollback from
-      // false-confirming before the paste has actually landed.
-      if (tail && !tailAlreadyPresent && normalizeWhitespace(screen).includes(tail)) {
-        resolve({ kind: 'absorbed', waitedMs: Date.now() - startedAt, via: 'inline' })
-        return
-      }
-      if (Date.now() - startedAt >= opts.timeoutMs) {
-        resolve({ kind: 'timeout' })
-        return
-      }
-      setTimeout(tick, opts.pollIntervalMs)
-    }
-    tick()
-  })
-}
+// Content-match detection (placeholderCount / pasteTailNeedle /
+// pollPasteAbsorbed) moved verbatim to @shared/claude/pasteConfirm so the
+// runtime delivery path shares the exact same logic. Imported + re-exported at
+// the top of this file.
 
 export type ClaudePasteSendFn = (data: string, pasteId?: string) => Promise<void>
 
@@ -213,7 +157,7 @@ export async function sendBracketedPasteThenSubmit(
   await sendBracketedPaste(send, payload, opts)
 
   if (eventDriven?.enabled) {
-    const outcome = await waitForPasteAbsorbed(eventDriven.getScreen, baselineScreen, payload, {
+    const outcome = await pollPasteAbsorbed(eventDriven.getScreen, baselineScreen, payload, {
       timeoutMs: CLAUDE_PASTE_EVENT_DRIVEN_TIMEOUT_MS,
       pollIntervalMs: CLAUDE_PASTE_POLL_INTERVAL_MS,
     })
