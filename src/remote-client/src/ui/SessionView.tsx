@@ -6,7 +6,6 @@ import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
-import type { ComposerDictationController } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { Entry } from '@shared/types/transcript'
 import {
@@ -20,6 +19,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 
 import type { WebSocketSessionFeed, ConnectionState } from '../WebSocketSessionFeed'
 import type { TranscriptStore } from '../transcript/store'
+import { useMobileDictation } from '../dictation/mobileDictation'
 
 // The phone has no optimistic-echo plane: it renders committed + semantic
 // state streamed from the desktop, never a locally-minted ghost (see the
@@ -27,22 +27,6 @@ import type { TranscriptStore } from '../transcript/store'
 // keeps the ledger's ghost plane cache stable across renders — a fresh map
 // each render would defeat the adapter's by-reference plane memoization.
 const NO_GHOSTS: ReadonlyMap<string, Entry> = new Map()
-
-// A ComposerDictationController that reports "off" so the real desktop
-// ComposerInput shell mounts with NO mic affordance and no dictation UI.
-// Task 6 (voice dictation) swaps this for a live controller wired to the
-// phone recorder + /dictate route. Module-const so the reference is stable
-// across renders (a fresh object each render would defeat the shell's memo).
-const DICTATION_DISABLED: ComposerDictationController = {
-  enabled: false,
-  status: 'idle',
-  label: '',
-  busy: false,
-  levels: [],
-  hasTranscriptPreview: false,
-  toggle: () => {},
-  handleShortcut: () => false,
-}
 
 // One session, desktop-grade: this mounts the REAL desktop Feed component
 // (see the alias table in ../vite.config.ts — the phone renders the same
@@ -65,12 +49,15 @@ export function SessionView({
   store,
   connection,
   sessionId,
+  token,
   onBack,
 }: {
   feed: WebSocketSessionFeed
   store: TranscriptStore
   connection: ConnectionState
   sessionId: string
+  /** The device token — sent as the Authorization bearer on /dictate. */
+  token: string
   onBack: () => void
 }): React.JSX.Element {
   const subscribe = useCallback(
@@ -200,6 +187,16 @@ export function SessionView({
     },
     [sendPrompt, interrupt],
   )
+
+  // Voice dictation. Feeds the real ComposerInput shell's dictation slot (so
+  // the activity meter lights up while recording) AND the tap mic button
+  // below. The transcript comes back <stt>-wrapped from the server; append it
+  // to the draft on its own line so it reads as a distinct dictated segment.
+  const dictation = useMobileDictation({
+    token,
+    onTranscript: text => setDraft(prev => (prev ? `${prev}\n${text}` : text)),
+    onError: setError,
+  })
 
   // The dispatch the generic ConditionOutlet drives. Same routing the old
   // hand-rolled tap-bar used (pty -> structured replyWithPtyAction, custom ->
@@ -339,12 +336,31 @@ export function SessionView({
             onUserEngagement={() => {}}
             onHoverChange={() => {}}
             removeDraftImage={() => {}}
-            dictation={DICTATION_DISABLED}
+            dictation={dictation}
             promptSuggestion={null}
             onApplySuggestion={() => {}}
             onDismissSuggestion={() => {}}
           />
           <div className="composer-actions">
+            {/* Explicit tap mic button — the desktop starts dictation from the
+                Fn hotkey, which a phone has no equivalent for. Tap to record,
+                tap again to stop → transcribe → append. Disabled only during
+                the transient start/stop transitions so a double-tap can't race
+                the recorder. */}
+            <button
+              type="button"
+              className={`mic${dictation.status === 'recording' ? ' recording' : ''}`}
+              onClick={dictation.toggle}
+              disabled={dictation.status === 'starting' || dictation.status === 'stopping'}
+              aria-label={dictation.status === 'recording' ? 'Stop recording' : 'Dictate'}
+              title={dictation.label}
+            >
+              {dictation.status === 'recording'
+                ? '⏺'
+                : dictation.status === 'starting' || dictation.status === 'stopping'
+                  ? '…'
+                  : '🎤'}
+            </button>
             {working ? (
               <button className="stop" onClick={interrupt}>
                 Stop
