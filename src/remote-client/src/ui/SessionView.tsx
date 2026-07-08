@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
+import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import type { SessionRuntime } from '@renderer/workspace/workspaceState'
 import type { Entry } from '@shared/types/transcript'
 import {
@@ -62,12 +63,27 @@ export function SessionView({
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The session's cwd for the real PaneHeader title strip. Self-subscribed
+  // here rather than threaded App→SessionList so the header stays
+  // self-contained; cwd is effectively static per session, but onSessionList
+  // also covers the race where the list arrives after this view mounts.
+  const [cwd, setCwd] = useState<string | null>(
+    () => feed.getSessionList().find(s => s.sessionId === sessionId)?.cwd ?? null,
+  )
 
   // Backfill on first view of a session — the live stream only covers
   // what happened after the phone connected.
   useEffect(() => {
     void store.loadInitialHistory(sessionId)
   }, [store, sessionId])
+
+  useEffect(() => {
+    const off = feed.onSessionList(list => {
+      const summary = list.find(s => s.sessionId === sessionId)
+      if (summary) setCwd(summary.cwd ?? null)
+    })
+    return off
+  }, [feed, sessionId])
 
   const provider = store.getKind(sessionId)
 
@@ -172,8 +188,20 @@ export function SessionView({
         <div className="topbar">
           <button onClick={onBack}>‹ Back</button>
           <span className={`conn-dot ${connection}`} />
-          <span className="title mono">{sessionId.slice(0, 8)}</span>
         </div>
+        {/* The REAL desktop pane header (provider badge + shortened cwd) in
+            place of the old 8-char session id. Kept as its own bar below the
+            phone's Back/conn nav — on desktop this IS the pane's top bar.
+            statusMode off (a multi-pane-grid glance affordance, meaningless on
+            a single phone screen) and related-agent chips empty (the v1 wire
+            emits no sub-agent data). */}
+        <PaneHeader
+          paneLabel={provider}
+          projectDir={cwd}
+          statusMode={false}
+          isSessionLive={Boolean(working) || !transcript.exited}
+          relatedAgentTabs={[]}
+        />
 
         {/* Pre-transcript fallback: states that never reach the jsonl/
             semantic channels (trust dialog body, login prompts, provider
