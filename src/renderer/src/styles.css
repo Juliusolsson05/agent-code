@@ -63,9 +63,59 @@
   --color-accent: var(--theme-accent);
   --color-accent-fg: var(--theme-accent-fg);
   --color-accent-soft: var(--theme-accent-soft);
+  --color-focus-ring: var(--theme-focus-ring);
+
+  --color-panel-bg: var(--theme-panel-bg);
+  --color-panel-header-bg: var(--theme-panel-header-bg);
+  --color-panel-elevated-bg: var(--theme-panel-elevated-bg);
+  --color-panel-border: var(--theme-panel-border);
+
+  --color-row-bg: var(--theme-row-bg);
+  --color-row-hover-bg: var(--theme-row-hover-bg);
+  --color-row-selected-bg: var(--theme-row-selected-bg);
+  --color-row-selected-fg: var(--theme-row-selected-fg);
+  --color-row-danger-selected-bg: var(--theme-row-danger-selected-bg);
+
+  --color-control-bg: var(--theme-control-bg);
+  --color-control-hover-bg: var(--theme-control-hover-bg);
+  --color-control-active-bg: var(--theme-control-active-bg);
+  --color-control-border: var(--theme-control-border);
+  --color-control-border-hover: var(--theme-control-border-hover);
+  --color-control-fg: var(--theme-control-fg);
+  --color-control-active-fg: var(--theme-control-active-fg);
+
+  --color-input-bg: var(--theme-input-bg);
+  --color-input-border: var(--theme-input-border);
+  --color-input-border-focus: var(--theme-input-border-focus);
+  --color-input-placeholder: var(--theme-input-placeholder);
+
+  --color-tab-bg: var(--theme-tab-bg);
+  --color-tab-active-bg: var(--theme-tab-active-bg);
+  --color-tab-hover-bg: var(--theme-tab-hover-bg);
+  --color-tab-accent: var(--theme-tab-accent);
+
+  --color-popover-bg: var(--theme-popover-bg);
+  --color-popover-border: var(--theme-popover-border);
+  --color-overlay-scrim: var(--theme-overlay-scrim);
+  --color-overlay-scrim-strong: var(--theme-overlay-scrim-strong);
+  --color-shadow-color: var(--theme-shadow-color);
 
   --color-code-bg: var(--theme-code-bg);
   --color-code-border: var(--theme-code-border);
+  --color-code-current-line-bg: var(--theme-code-current-line-bg);
+  --color-code-selection-bg: var(--theme-code-selection-bg);
+  --color-code-selection-inactive-bg: var(--theme-code-selection-inactive-bg);
+  --color-code-scrollbar-bg: var(--theme-code-scrollbar-bg);
+  --color-code-scrollbar-hover-bg: var(--theme-code-scrollbar-hover-bg);
+  --color-code-scrollbar-active-bg: var(--theme-code-scrollbar-active-bg);
+  --color-editor-bg: var(--theme-editor-bg);
+  --color-editor-fg: var(--theme-editor-fg);
+  --color-editor-current-line-bg: var(--theme-editor-current-line-bg);
+  --color-editor-selection-bg: var(--theme-editor-selection-bg);
+  --color-editor-selection-inactive-bg: var(--theme-editor-selection-inactive-bg);
+  --color-editor-scrollbar-bg: var(--theme-editor-scrollbar-bg);
+  --color-editor-scrollbar-hover-bg: var(--theme-editor-scrollbar-hover-bg);
+  --color-editor-scrollbar-active-bg: var(--theme-editor-scrollbar-active-bg);
   --color-danger: var(--theme-danger);
   --color-danger-fg: var(--theme-danger-fg);
 
@@ -479,6 +529,77 @@
   --theme-diff-remove-bg: #3a1117;
   --theme-diff-add-fg: #84f2ad;
   --theme-diff-remove-fg: #ff9696;
+}
+
+/* ---------- Semantic Relationship Tokens ---------- */
+
+:root {
+  /* WHY these are aliases instead of another manually copied palette:
+     canvas/surface/surface-hi are the primitive "materials", but modern IDE
+     themes need to tune interaction states independently from material depth.
+     Keeping these relationships as CSS variables means built-in modes derive
+     sensible defaults from the existing palette, while Custom Appearance can
+     override any semantic role directly without forcing the user to restate
+     every primitive token. */
+  --theme-focus-ring: var(--theme-accent);
+
+  --theme-panel-bg: var(--theme-surface);
+  --theme-panel-header-bg: var(--theme-surface);
+  --theme-panel-elevated-bg: var(--theme-surface-hi);
+  --theme-panel-border: var(--theme-border);
+
+  --theme-row-bg: transparent;
+  --theme-row-hover-bg: var(--theme-surface-hi);
+  --theme-row-selected-bg: color-mix(in srgb, var(--theme-accent) 15%, transparent);
+  --theme-row-selected-fg: var(--theme-ink);
+  --theme-row-danger-selected-bg: var(--theme-danger-soft);
+
+  --theme-control-bg: transparent;
+  --theme-control-hover-bg: var(--theme-surface-hi);
+  --theme-control-active-bg: var(--theme-accent);
+  --theme-control-border: var(--theme-border);
+  --theme-control-border-hover: var(--theme-border-hi);
+  --theme-control-fg: var(--theme-ink-dim);
+  --theme-control-active-fg: var(--theme-accent-fg);
+
+  --theme-input-bg: var(--theme-canvas);
+  --theme-input-border: var(--theme-border);
+  --theme-input-border-focus: var(--theme-focus-ring);
+  --theme-input-placeholder: var(--theme-muted);
+
+  --theme-tab-bg: var(--theme-surface);
+  --theme-tab-active-bg: var(--theme-canvas);
+  --theme-tab-hover-bg: var(--theme-surface-hi);
+  --theme-tab-accent: var(--theme-accent);
+
+  --theme-popover-bg: var(--theme-surface);
+  --theme-popover-border: var(--theme-border-hi);
+  --theme-overlay-scrim: color-mix(in srgb, var(--theme-canvas) 80%, transparent);
+  --theme-overlay-scrim-strong: color-mix(in srgb, var(--theme-canvas) 88%, transparent);
+  --theme-shadow-color: color-mix(in srgb, #000000 40%, transparent);
+
+  /* Code slabs are an inset material, not the same layer as the file editor.
+     Light themes intentionally keep code slabs dark, so code selection/current
+     line/scrollbar tokens must be expressed relative to --theme-code-bg and
+     code ink rather than canvas ink. */
+  --theme-code-current-line-bg: color-mix(in srgb, var(--theme-code-ink) 6%, var(--theme-code-bg));
+  --theme-code-selection-bg: color-mix(in srgb, var(--theme-accent) 20%, transparent);
+  --theme-code-selection-inactive-bg: color-mix(in srgb, var(--theme-muted) 22%, transparent);
+  --theme-code-scrollbar-bg: color-mix(in srgb, var(--theme-muted) 34%, transparent);
+  --theme-code-scrollbar-hover-bg: color-mix(in srgb, var(--theme-muted) 54%, transparent);
+  --theme-code-scrollbar-active-bg: color-mix(in srgb, var(--theme-accent) 66%, transparent);
+
+  /* The full editor is the workbench canvas. These tokens start as aliases but
+     exist separately so a custom light theme can make the editor white while
+     keeping the app chrome warm, or vice versa, without abusing codeBg. */
+  --theme-editor-bg: var(--theme-canvas);
+  --theme-editor-fg: var(--theme-ink);
+  --theme-editor-current-line-bg: var(--theme-surface-hi);
+  --theme-editor-selection-bg: color-mix(in srgb, var(--theme-accent) 20%, transparent);
+  --theme-editor-selection-inactive-bg: color-mix(in srgb, var(--theme-accent) 13%, transparent);
+  --theme-editor-scrollbar-bg: color-mix(in srgb, var(--theme-muted) 34%, transparent);
+  --theme-editor-scrollbar-hover-bg: color-mix(in srgb, var(--theme-muted) 54%, transparent);
+  --theme-editor-scrollbar-active-bg: color-mix(in srgb, var(--theme-accent) 66%, transparent);
 }
 
 /* ---------- Globals ---------- */

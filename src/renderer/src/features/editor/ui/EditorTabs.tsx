@@ -19,13 +19,13 @@ export function EditorTabs({
 }: Props) {
   if (fileOrder.length === 0) {
     return (
-      <div className="flex h-9 flex-shrink-0 items-center border-b border-border bg-surface px-3 font-code text-[11px] text-muted">
+      <div className="flex h-9 flex-shrink-0 items-center border-b border-panel-border bg-tab-bg px-3 font-code text-[11px] text-muted">
         No file open · pick one from the explorer
       </div>
     )
   }
   return (
-    <div className="flex h-9 flex-shrink-0 items-stretch overflow-x-auto border-b border-border bg-surface font-code text-[11px]">
+    <div className="flex h-9 flex-shrink-0 items-stretch overflow-x-auto border-b border-panel-border bg-tab-bg font-code text-[11px]">
       {fileOrder.map(path => {
         const file = openFiles[path]
         if (!file) return null
@@ -40,12 +40,12 @@ export function EditorTabs({
           //   selected state without recoloring the whole tab.
           <div
             key={path}
-            className={`group relative flex min-w-[140px] max-w-[240px] items-stretch border-r border-border ${
-              active ? 'bg-canvas text-ink' : 'bg-surface text-ink-dim hover:bg-surface-hi hover:text-ink'
+            className={`group relative flex min-w-[140px] max-w-[240px] items-stretch border-r border-panel-border ${
+              active ? 'bg-tab-active-bg text-ink' : 'bg-tab-bg text-ink-dim hover:bg-tab-hover-bg hover:text-ink'
             }`}
           >
             {active && (
-              <span className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-accent" aria-hidden="true" />
+              <span className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-tab-accent" aria-hidden="true" />
             )}
             <button
               type="button"
@@ -58,7 +58,7 @@ export function EditorTabs({
               </span>
               <span className="truncate">{name}</span>
               {file.dirty && (
-                <span className="ml-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-accent" aria-label="modified" />
+                <span className="ml-1 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-tab-accent" aria-label="modified" />
               )}
             </button>
             <button

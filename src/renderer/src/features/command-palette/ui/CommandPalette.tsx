@@ -926,8 +926,8 @@ export function CommandPalette() {
       <div
         className={`
           mt-[12vh] flex flex-col
-          bg-surface border border-border
-          shadow-lg shadow-black/30
+          bg-popover-bg border border-popover-border
+          shadow-[0_16px_48px_var(--theme-shadow-color)]
           overflow-hidden
           ${mode === 'resume'
             ? 'w-[min(1180px,95vw)] max-h-[80vh]'
@@ -1059,7 +1059,7 @@ export function CommandPalette() {
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  className="border border-border bg-surface-hi px-2 py-1 text-[11px] text-muted hover:text-ink"
+                  className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
                   onClick={() => {
                     setPromptTemplateForm({ id: null, title: '', body: '' })
                     setMode(mode === 'edit-prompt-template' ? 'prompt-template' : 'commands')
@@ -1097,8 +1097,8 @@ export function CommandPalette() {
                     text-[13px] font-code
                     ${
                       i === selectedIndex
-                        ? 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1112,8 +1112,8 @@ export function CommandPalette() {
                           command.state.tone === 'danger'
                             ? 'rounded border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger'
                             : command.state.tone === 'accent'
-                              ? 'rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
-                              : 'rounded border border-border bg-surface-hi px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
+                              ? 'rounded border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
+                              : 'rounded border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
                         }
                       >
                         {command.state.label}
@@ -1146,8 +1146,8 @@ export function CommandPalette() {
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1184,9 +1184,9 @@ export function CommandPalette() {
                     ${
                       i === selectedIndex
                         ? mode === 'ai-workspace-clear'
-                          ? 'bg-danger-soft text-ink'
-                          : 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                          ? 'bg-row-danger-selected-bg text-row-selected-fg'
+                          : 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1213,7 +1213,7 @@ export function CommandPalette() {
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  className="border border-border bg-surface-hi px-2 py-1 text-[11px] text-muted hover:text-ink"
+                  className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
                   onClick={() => {
                     setMode('commands')
                     setQuery('')
@@ -1249,8 +1249,8 @@ export function CommandPalette() {
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1284,8 +1284,8 @@ export function CommandPalette() {
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-danger-soft text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-danger-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1319,8 +1319,8 @@ export function CommandPalette() {
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1432,8 +1432,8 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
                 command.state.tone === 'danger'
                   ? 'border border-danger-border bg-danger-soft px-1.5 py-0.5 uppercase tracking-wider text-danger'
                   : command.state.tone === 'accent'
-                    ? 'border border-accent/30 bg-accent/10 px-1.5 py-0.5 uppercase tracking-wider text-accent'
-                    : 'border border-border bg-surface-hi px-1.5 py-0.5 uppercase tracking-wider text-muted'
+                    ? 'border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 uppercase tracking-wider text-accent'
+                    : 'border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 uppercase tracking-wider text-muted'
               }
             >
               {command.state.label}
