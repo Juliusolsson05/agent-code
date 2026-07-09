@@ -8,6 +8,7 @@ import {
   isAutosaveDebugBundleReason,
 } from '@main/storage/debugBundleLog.js'
 import { getAppRunId } from '@main/incident/appRunIds.js'
+import { getBuildInfo } from '@main/buildInfo.js'
 import { INCIDENT_RUNS_DIR } from '@main/storage/paths.js'
 // Filename-safe session-id token — shared with feedDebugLog so the two
 // session-keyed storage layouts can't diverge on their escape rule. See
@@ -235,6 +236,14 @@ async function enrichBundleWithIncidentJournal(bundlePath: string): Promise<void
     const manifestPath = join(bundlePath, 'manifest.json')
     const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
     manifest.appRunId = appRunId
+    // Build provenance (#374), stamped for the same reason as appRunId: the
+    // renderer can't know it (it lives in a main-only injected define), and a
+    // bundle without it can't prove WHICH source built the app that produced
+    // the report — a dirty local build was mistaken for origin/main during the
+    // crash-classifier investigation. Duplicated in the copied run manifest
+    // below, but bundle manifest.json is the file people actually open first,
+    // and the run-manifest copy can be missing (journal failed to start).
+    manifest.build = getBuildInfo()
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
   } catch (err) {
     console.warn('[debug-bundle] failed to stamp appRunId into manifest', err)
@@ -260,6 +269,22 @@ async function enrichBundleWithIncidentJournal(bundlePath: string): Promise<void
     await writeFile(join(bundlePath, 'incident-heartbeat.json'), heartbeat, 'utf8')
   } catch {
     // No heartbeat yet (very early crash) is fine.
+  }
+  // The run's manifest.json, copied verbatim (#374). The journal tails above
+  // give the bundle the run's TIMELINE but nothing about the run's IDENTITY —
+  // versions, platform, build provenance, classifier version all live in the
+  // manifest, and pre-#374 bundles forced triage to go find the matching
+  // ~/.config run dir (often already pruned by 50-run retention) to learn
+  // them. Write-once at run start and a few hundred bytes, so a whole-file
+  // copy is bounded. `incident-` prefix matches its journal siblings and
+  // avoids colliding with the bundle's own manifest.json.
+  try {
+    const runManifest = await readFile(join(runDir, 'manifest.json'), 'utf8')
+    await writeFile(join(bundlePath, 'incident-run-manifest.json'), runManifest, 'utf8')
+  } catch {
+    // Missing run manifest means the journal never started (degraded boot,
+    // e.g. read-only ~/.config) — the bundle manifest.json build stamp above
+    // still carries provenance, so skipping is safe.
   }
 }
 

@@ -53,7 +53,11 @@ import { buildAppMenu } from '@main/menu/appMenu.js'
 import { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { installProcessCrashHooks } from '@main/incident/installCrashHooks.js'
 import { installWindowIncidentHooks } from '@main/incident/installWindowIncidentHooks.js'
-import { classifyPreviousRun } from '@main/incident/previousRunClassifier.js'
+import {
+  classifyPreviousRun,
+  PREVIOUS_RUN_CLASSIFIER_VERSION,
+} from '@main/incident/previousRunClassifier.js'
+import { getBuildInfo } from '@main/buildInfo.js'
 
 // Main process — thin Electron host.
 //
@@ -214,6 +218,15 @@ async function startApp(): Promise<void> {
   stateProcessLock = lock
   appRunJournal = new AppRunJournal({
     appVersion: app.getVersion(),
+    // Build provenance (#374): git SHA / branch / dirty / timestamp / mode /
+    // package version, injected at bundle time (electron.vite.config.ts) and
+    // read through the typed accessor. Threaded here — the app's composition
+    // point — so the journal itself stays free of build-global knowledge.
+    build: getBuildInfo(),
+    // Version of the prior-run classifier COMPILED INTO this build, recorded
+    // in the run manifest so triage knows which decision procedure will judge
+    // this run's death on the next launch.
+    classifierVersion: PREVIOUS_RUN_CLASSIFIER_VERSION,
     perfEnabled: performanceService.getConfig().enabled,
     lock,
   })
@@ -298,6 +311,11 @@ async function startApp(): Promise<void> {
         context: {
           priorRunId: priorRun.priorRunId,
           priorRunDir: priorRun.priorRunDir,
+          // Which classifier version produced THIS verdict (#374). The report
+          // carries it (rather than us importing the constant here) so the
+          // context can never claim a version other than the code path that
+          // actually ran.
+          classifierVersion: priorRun.classifierVersion,
           ...priorRun.evidence,
         },
       })

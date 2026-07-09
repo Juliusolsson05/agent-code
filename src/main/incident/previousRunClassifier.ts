@@ -29,12 +29,77 @@ export type PreviousRunClassification =
   | 'force_quit_or_power_loss'
   | 'unknown'
 
+// Version of THIS classifier's decision procedure, stamped into every
+// PreviousRunReport (and from there into the app.prior_unclean_shutdown
+// incident context) and into each run's manifest.json. WHY: incident artifacts
+// outlive the code that produced them — the #374 investigation wasted time
+// deciding whether a surprising classification came from current logic or a
+// stale build. With the version in the artifact, that question is answered by
+// reading the artifact.
+//
+// BUMP THIS when the classification SEMANTICS change: a new/removed
+// classification value, a different priority order between evidence sources
+// (node report vs incidents vs minidumps), or a changed matching rule (e.g.
+// the minidump time-window bounds or the confidence thresholds below). Do NOT
+// bump for pure refactors or added evidence fields that don't change which
+// classification comes out — the version answers "would this classifier have
+// judged the same evidence differently?", not "did the file change?".
+export const PREVIOUS_RUN_CLASSIFIER_VERSION = 1
+
 export type PreviousRunReport = {
   priorRunId: string
   priorRunDir: string
   classification: PreviousRunClassification
   hadCleanMarker: boolean
+  // Echo of PREVIOUS_RUN_CLASSIFIER_VERSION so callers stamp provenance into
+  // the incident context without importing the constant themselves.
+  classifierVersion: number
   evidence: Record<string, unknown>
+}
+
+// One Crashpad minidump candidate observed during the prior-run scan. Kept
+// deliberately small (path + mtime + which subdir + window verdict): the whole
+// candidate list lands in the incident context and must stay cheap to record.
+export type CrashpadMinidumpCandidate = {
+  path: string
+  mtimeMs: number
+  subdir: 'completed' | 'pending'
+  // false ⇔ the dump's mtime is AFTER the heartbeat-derived upper bound (see
+  // CrashpadScan.upperBoundMs) — it postdates the prior run's plausible death
+  // window, so it likely belongs to a later process (helper, another run).
+  withinWindow: boolean
+}
+
+// Full record of one Crashpad scan (#374). Everything here flows into the
+// app.prior_unclean_shutdown incident context so an ambiguous or wrong
+// native-crash attribution is auditable from the artifact alone — the original
+// sin this replaces was a lower-bound-only match that silently picked the
+// newest dump and recorded nothing about what else it saw.
+export type CrashpadScan = {
+  // Subdirectories actually enumerated (a missing pending/ or completed/ is
+  // normal and simply won't appear here).
+  scannedDirs: string[]
+  // Lower bound: the prior run's manifest startedAt (or run-dir mtime
+  // fallback). Dumps older than this minus a small slop are not candidates.
+  sinceMs: number
+  // Upper bound: prior run's last heartbeat ts + heartbeat interval + slop.
+  // undefined when heartbeat.json was missing/unreadable — then no upper
+  // bound can be derived and every candidate counts as within-window.
+  upperBoundMs: number | undefined
+  // Newest-first, bounded to MAX_MINIDUMP_CANDIDATES so a machine with a
+  // pathological dump pile can't bloat the incident record.
+  candidates: CrashpadMinidumpCandidate[]
+  // How many dumps passed the lower bound BEFORE the bound above was applied —
+  // lets triage see that e.g. 40 dumps qualified even though only 10 are listed.
+  qualifyingCount: number
+  selected: string | undefined
+  selectedMtimeMs: number | undefined
+  // 'high' only when the attribution is unambiguous: exactly one qualifying
+  // dump AND it sits inside the heartbeat-derived window (or no window could
+  // be derived). 'low' when several dumps qualify (any of them could be the
+  // prior run's death) or the winner postdates the window (it may belong to a
+  // different process entirely). Absent when nothing was selected.
+  confidence?: 'high' | 'low'
 }
 
 export type ClassifyPreviousRunOptions = {
@@ -71,7 +136,14 @@ export function classifyPreviousRun(
   // the OS quit sequence) ended that run cleanly.
   const hadCleanMarker = existsSync(join(priorRunDir, 'clean-shutdown'))
   if (hadCleanMarker) {
-    return { priorRunId, priorRunDir, classification: 'clean', hadCleanMarker: true, evidence: {} }
+    return {
+      priorRunId,
+      priorRunDir,
+      classification: 'clean',
+      hadCleanMarker: true,
+      classifierVersion: PREVIOUS_RUN_CLASSIFIER_VERSION,
+      evidence: {},
+    }
   }
 
   // No marker → something other than a clean quit. Look for a recorded cause.
@@ -79,7 +151,22 @@ export function classifyPreviousRun(
   const kinds = new Set(incidents.map(incident => incident?.kind).filter(Boolean))
 
   let classification: PreviousRunClassification
-  let minidumpPath: string | undefined
+  // Memoized single scan: two branches below may want minidump evidence, and
+  // the scan is a real directory enumeration on the startup hot path — it must
+  // run at most once per launch. `undefined` also doubles as "the scan never
+  // ran" so evidence assembly can distinguish no-scan from scanned-and-empty.
+  let crashpadScan: CrashpadScan | undefined
+  const runCrashpadScan = (): CrashpadScan | undefined => {
+    if (!options.crashDumpsDir) return undefined
+    if (!crashpadScan) {
+      crashpadScan = scanCrashpadMinidumps(
+        options.crashDumpsDir,
+        readPriorStartedAt(priorRunDir),
+        readPriorLastHeartbeatTs(priorRunDir),
+      )
+    }
+    return crashpadScan
+  }
   // Look for a Node.js diagnostic report first: process.report.reportOnFatalError
   // (enabled in AppRunJournal.start) writes report.<ts>.<pid>.<seq>.json into the
   // run directory when V8 aborts on a fatal error, and the "trigger" field
@@ -94,12 +181,12 @@ export function classifyPreviousRun(
     // A V8 fatal abort raises SIGABRT, so Crashpad almost always wrote a
     // minidump for the SAME crash the diagnostic report describes. Look it up
     // here too: when this branch first landed it returned without touching
-    // minidumpPath, which REGRESSED evidence for the exact crash class the
-    // branch was added for — pre-report-flag code fell through to the
+    // the minidump lookup, which REGRESSED evidence for the exact crash class
+    // the branch was added for — pre-report-flag code fell through to the
     // minidump lookup below and surfaced `native`/`minidumpPath` for OOM
     // aborts, the new branch dropped both, and downstream triage that
     // symbolicates from context.minidumpPath got undefined.
-    minidumpPath = findRecentMinidump(options.crashDumpsDir, readPriorStartedAt(priorRunDir))
+    runCrashpadScan()
   } else if (kinds.has('main.uncaught_exception')) {
     classification = 'main_crash_suspected'
   } else if (
@@ -119,8 +206,8 @@ export function classifyPreviousRun(
     // runs from BEFORE the reportOnFatalError flag existed — or when V8 aborts
     // before Node writes the report — the minidump-only path still surfaces the
     // native crash so we don't regress.
-    minidumpPath = findRecentMinidump(options.crashDumpsDir, readPriorStartedAt(priorRunDir))
-    if (minidumpPath) {
+    const scan = runCrashpadScan()
+    if (scan?.selected) {
       classification = 'main_crash_suspected'
     } else {
       const hadHeartbeat = existsSync(join(priorRunDir, 'heartbeat.json'))
@@ -133,10 +220,25 @@ export function classifyPreviousRun(
     priorRunDir,
     classification,
     hadCleanMarker: false,
+    classifierVersion: PREVIOUS_RUN_CLASSIFIER_VERSION,
     evidence: {
       incidentKinds: [...kinds],
       // Point triage straight at the dump so a native crash is symbolicatable.
-      ...(minidumpPath ? { native: true, minidumpPath } : {}),
+      // `native`/`minidumpPath` keep their pre-#374 top-level shape (existing
+      // triage tooling greps for context.minidumpPath); the full scan record
+      // rides alongside under `crashpad`.
+      ...(crashpadScan?.selected
+        ? {
+            native: true,
+            minidumpPath: crashpadScan.selected,
+            minidumpConfidence: crashpadScan.confidence,
+          }
+        : {}),
+      // Complete Crashpad scan context (#374): bounds, every candidate seen,
+      // and the confidence verdict — recorded whenever a scan RAN (even an
+      // empty one: "we looked and found nothing" is evidence too, and its
+      // absence distinguishes "no crashDumpsDir supplied" from "no dumps").
+      ...(crashpadScan ? { crashpad: crashpadScan } : {}),
       // Node diagnostic report path + trigger, when found — the JSON alongside
       // it holds heap statistics, native/JS stacks, and env info at the moment
       // of the abort. Callers surface these as evidence on the
@@ -251,34 +353,142 @@ function readPriorStartedAt(priorRunDir: string): number {
   }
 }
 
-// Find the newest Crashpad .dmp written within (or just after) the prior run's
-// lifetime. Scans completed/ and pending/ (a fresh crash lands in pending until
-// Crashpad finishes it). Returns undefined if none — read-only, never throws.
-function findRecentMinidump(crashDumpsDir: string | undefined, sinceMs: number): string | undefined {
-  if (!crashDumpsDir) return undefined
-  let best: { path: string; mtimeMs: number } | undefined
-  for (const sub of ['completed', 'pending']) {
+// Mirrors AppRunJournal's HEARTBEAT_INTERVAL_MS. NOT imported from there: that
+// module pulls in `electron` (BrowserWindow) at load time, and this classifier
+// is deliberately a pure-fs module so it stays cheap to load on the startup
+// hot path and trivially testable without an Electron runtime. If the journal
+// interval ever changes, this constant must change with it — the only cost of
+// drift is a slightly mis-sized matching window, never a wrong crash/no-crash
+// verdict (the window only tunes confidence + within-window marking).
+const PRIOR_RUN_HEARTBEAT_INTERVAL_MS = 5_000
+
+// Slop below the lower bound (prior run start): absorbs clock/mtime skew
+// between the run's manifest timestamp and when Crashpad flushed the dump.
+// Unchanged from the pre-#374 matcher.
+const MINIDUMP_LOWER_BOUND_SLOP_MS = 5_000
+
+// Slop above the upper bound (last heartbeat + one interval). Generous by
+// design — 60s, not another 5s — because everything on the death side of the
+// timeline is slower and less trustworthy than the healthy-run side: the final
+// heartbeat write itself can lag on a struggling disk (the exact scenario that
+// kills runs), Crashpad serializes the dump AFTER the process is already dead
+// (large heaps take seconds), and pending→completed processing can touch
+// mtimes later still. A too-tight bound would mark the true crash dump
+// "outside window" and downgrade a correct attribution to low confidence; a
+// 60s-too-loose bound only risks including a dump from an immediate relaunch
+// crash-loop, which the multiple-candidates → 'low' rule already flags.
+const MINIDUMP_UPPER_BOUND_SLOP_MS = 60_000
+
+// Cap on candidates RECORDED in the incident context (the scan itself still
+// looks at every dump — `qualifyingCount` preserves the true total). 10 keeps
+// the worst case (a crash-looping machine with dozens of dumps) from bloating
+// incidents.jsonl while comfortably covering the ambiguity triage actually
+// needs to see: past ~3 candidates the verdict is "hopelessly ambiguous"
+// regardless of how many more there are.
+const MAX_MINIDUMP_CANDIDATES = 10
+
+// Last heartbeat timestamp of the prior run, for deriving the upper edge of
+// the plausible death window. heartbeat.json is overwrite-only and constant
+// size (~600 bytes), so a whole-file read is bounded — this does NOT violate
+// the classifier's cheap-synchronous-startup invariant. undefined when the
+// file is missing (journal never started / very early crash) or torn beyond
+// parsing, in which case no upper bound is derivable.
+function readPriorLastHeartbeatTs(priorRunDir: string): number | undefined {
+  try {
+    const heartbeat = JSON.parse(
+      readFileSync(join(priorRunDir, 'heartbeat.json'), 'utf8'),
+    ) as { ts?: unknown }
+    return typeof heartbeat.ts === 'number' && Number.isFinite(heartbeat.ts)
+      ? heartbeat.ts
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// Scan Crashpad's completed/ and pending/ for .dmp files plausibly written by
+// the prior run, recording EVERYTHING the decision saw (#374). Pre-#374 this
+// was a lower-bound-only "newest dump wins" match that returned a bare path —
+// which silently attributed a helper-process or crash-loop dump to the wrong
+// run with no way to audit it afterwards. Read-only, never throws.
+//
+// Window semantics:
+//   lower bound  = prior run start − 5s slop      (a dump can't predate its run)
+//   upper bound  = last heartbeat + interval + 60s (a dump long after the run's
+//                                                   last sign of life is suspect)
+// The lower bound still GATES candidacy (unchanged behavior). The upper bound
+// deliberately does NOT gate: an out-of-window dump is still listed and even
+// selectable when nothing better exists — because the heartbeat file can be
+// stale for benign reasons (torn write at death) and dropping the only dump on
+// the floor would regress the native-crash detection this matcher exists for.
+// Instead, out-of-window shows up as withinWindow:false + confidence:'low', so
+// the attribution is made AND flagged as unproven.
+function scanCrashpadMinidumps(
+  crashDumpsDir: string,
+  sinceMs: number,
+  lastHeartbeatTs: number | undefined,
+): CrashpadScan {
+  const upperBoundMs = lastHeartbeatTs !== undefined
+    ? lastHeartbeatTs + PRIOR_RUN_HEARTBEAT_INTERVAL_MS + MINIDUMP_UPPER_BOUND_SLOP_MS
+    : undefined
+  const scannedDirs: string[] = []
+  const qualifying: CrashpadMinidumpCandidate[] = []
+  for (const sub of ['completed', 'pending'] as const) {
+    const dir = join(crashDumpsDir, sub)
     let names: string[]
     try {
-      names = readdirSync(join(crashDumpsDir, sub)).filter(name => name.endsWith('.dmp'))
+      names = readdirSync(dir).filter(name => name.endsWith('.dmp'))
     } catch {
+      // Missing subdir is normal (no completed crashes yet); it simply doesn't
+      // appear in scannedDirs, which itself documents what the scan could see.
       continue
     }
+    scannedDirs.push(dir)
     for (const name of names) {
-      const path = join(crashDumpsDir, sub, name)
+      const path = join(dir, name)
       try {
         const mtimeMs = statSync(path).mtimeMs
-        // 5s slop absorbs clock/mtime skew between the run's manifest timestamp
-        // and when Crashpad flushed the dump.
-        if (mtimeMs >= sinceMs - 5_000 && (!best || mtimeMs > best.mtimeMs)) {
-          best = { path, mtimeMs }
+        if (mtimeMs >= sinceMs - MINIDUMP_LOWER_BOUND_SLOP_MS) {
+          qualifying.push({
+            path,
+            mtimeMs,
+            subdir: sub,
+            withinWindow: upperBoundMs === undefined || mtimeMs <= upperBoundMs,
+          })
         }
       } catch {
         // raced with Crashpad moving the file; skip.
       }
     }
   }
-  return best?.path
+  // Newest-first so the recorded (bounded) list keeps the most decision-
+  // relevant candidates when truncated.
+  qualifying.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  // Selection: newest WITHIN-WINDOW dump wins; only when none is within the
+  // window fall back to the newest overall (see the gating rationale above).
+  // With no derivable window every candidate is withinWindow, which reduces to
+  // the pre-#374 "newest wins" behavior exactly.
+  const selected = qualifying.find(c => c.withinWindow) ?? qualifying[0]
+  // 'high' demands an unambiguous story: exactly one dump could plausibly be
+  // this run's death, and the heartbeat timeline doesn't contradict it.
+  // Multiple qualifying dumps mean ANY of them could be the crash (only mtime
+  // ordering picked the winner), and an out-of-window winner means the dump
+  // postdates the run's last sign of life by more than the generous slop —
+  // both make the attribution a guess, and guesses must not be reported with
+  // the same confidence as proof (issue #374 acceptance criterion).
+  const confidence: 'high' | 'low' | undefined = selected
+    ? (qualifying.length === 1 && selected.withinWindow ? 'high' : 'low')
+    : undefined
+  return {
+    scannedDirs,
+    sinceMs,
+    upperBoundMs,
+    candidates: qualifying.slice(0, MAX_MINIDUMP_CANDIDATES),
+    qualifyingCount: qualifying.length,
+    selected: selected?.path,
+    selectedMtimeMs: selected?.mtimeMs,
+    ...(confidence ? { confidence } : {}),
+  }
 }
 
 const MAX_TAIL_BYTES = 256 * 1024
