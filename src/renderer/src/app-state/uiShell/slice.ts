@@ -41,6 +41,7 @@ export const createUiShellSlice: StateCreator<
   bulkProviderSwitchOpen: false,
   usageModalOpen: false,
   rewindPromptSessionId: null,
+  agentViewModePickerSessionId: null,
   // Default keeps the dispatch list at 25% (matching the
   // previous-hardcoded `basis-1/4`) so the migration is visually a
   // no-op. The clamp range in setDispatchListRatio is what enforces
@@ -243,4 +244,17 @@ export const createUiShellSlice: StateCreator<
     set({ rewindPromptSessionId: sessionId }, false, 'uiShell/openRewindPrompt'),
   closeRewindPrompt: () =>
     set({ rewindPromptSessionId: null }, false, 'uiShell/closeRewindPrompt'),
+
+  openAgentViewModePicker: sessionId =>
+    set(
+      { agentViewModePickerSessionId: sessionId },
+      false,
+      'uiShell/openAgentViewModePicker',
+    ),
+  closeAgentViewModePicker: () =>
+    set(
+      { agentViewModePickerSessionId: null },
+      false,
+      'uiShell/closeAgentViewModePicker',
+    ),
 })

@@ -193,7 +193,9 @@ export default function App() {
   const [sessionRecordingEnabled, setSessionRecordingEnabled] = useState(false)
   const [caffeinateStatus, setCaffeinateStatus] = useState<CaffeinateStatus | null>(null)
   const [caffeinateMessage, setCaffeinateMessage] = useState<string | null>(null)
-  const [agentViewModePickerSessionId, setAgentViewModePickerSessionId] = useState<SessionId | null>(null)
+  const agentViewModePickerSessionId = useAppStore(state => state.agentViewModePickerSessionId)
+  const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
+  const closeAgentViewModePicker = useAppStore(state => state.closeAgentViewModePicker)
 
   useEffect(() => {
     applyTheme(settings)
@@ -471,14 +473,6 @@ export default function App() {
       workspace.tileTabs?.tabIds ?? (workspace.activeTab ? [workspace.activeTab.id] : []),
     )
   }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
-
-  const openAgentViewModePicker = useCallback((sessionId: string) => {
-    setAgentViewModePickerSessionId(sessionId)
-  }, [])
-
-  const closeAgentViewModePicker = useCallback(() => {
-    setAgentViewModePickerSessionId(null)
-  }, [])
 
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 

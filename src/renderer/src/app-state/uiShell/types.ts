@@ -175,6 +175,14 @@ export type UiShellState = {
    *  See `RewindToPromptModal` + the parent plan doc for the full
    *  contract. */
   rewindPromptSessionId: SessionId | null
+  /**
+   * Per-session agent view-mode picker modal. Was App.tsx-local useState
+   * before #494 — moved into uiShell so the command palette and the
+   * surface registry can drive it without App threading a callback. Same
+   * open/close shape as rewindPromptSessionId: non-null = open for that
+   * session.
+   */
+  agentViewModePickerSessionId: SessionId | null
   /** Splitter ratio between the dispatch agent list and the active
    *  agent pane in `DispatchLayout`. 0..1, where 0.25 means the list
    *  is 25% of the available width. Clamped to [0.15, 0.5] when the

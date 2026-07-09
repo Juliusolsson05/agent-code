@@ -86,6 +86,8 @@ export type UiShellSlice = UiShellState & {
   closeUsageModal: () => void
   openRewindPrompt: (sessionId: SessionId) => void
   closeRewindPrompt: () => void
+  openAgentViewModePicker: (sessionId: SessionId) => void
+  closeAgentViewModePicker: () => void
 }
 
 export type WorkspaceSlice = {
