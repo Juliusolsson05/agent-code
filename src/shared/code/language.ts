@@ -96,6 +96,21 @@ export function supportsLsp(language: string): boolean {
   )
 }
 
+// Monaco does not ship `typescriptreact` / `javascriptreact` languages —
+// those are VS Code language IDs. Monaco's own `typescript` / `javascript`
+// tokenizers handle JSX/TSX syntax natively. Creating a model with an
+// unregistered language ID silently selects the *plaintext* tokenizer,
+// which is exactly the "highlighting is completely blank for .tsx files"
+// bug (#513). Everything that talks TO MONACO (createModel, provider
+// registration) must translate through this; everything that talks to the
+// LSP keeps the react-variant IDs because tsserver distinguishes them
+// (languageId drives JSX parsing on the server side).
+export function monacoLanguageId(language: string): string {
+  if (language === 'typescriptreact') return 'typescript'
+  if (language === 'javascriptreact') return 'javascript'
+  return language
+}
+
 export function languageFileExtension(language: string): string {
   if (language === 'javascript') return 'js'
   if (language === 'javascriptreact') return 'jsx'

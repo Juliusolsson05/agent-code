@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type * as Monaco from 'monaco-editor'
 
+import { monacoLanguageId } from '@shared/code/language'
 import { getMonaco } from '@renderer/lib/code/monacoRuntime'
 import {
   activateEditorTheme,
@@ -49,7 +50,11 @@ export function MonacoFileEditor({
       editorThemeActive = true
       const uri = monaco.Uri.file(file.absolutePath)
       const existing = monaco.editor.getModel(uri)
-      model = existing ?? monaco.editor.createModel(file.currentText, file.language, uri)
+      // monacoLanguageId: buffers carry LSP-facing ids ('typescriptreact');
+      // Monaco only knows 'typescript'/'javascript' — see language.ts.
+      model =
+        existing ??
+        monaco.editor.createModel(file.currentText, monacoLanguageId(file.language), uri)
       if (existing && existing.getValue() !== file.currentText) {
         existing.setValue(file.currentText)
       }

@@ -1,6 +1,7 @@
 import type * as Monaco from 'monaco-editor'
 
 import {
+  monacoLanguageId,
   normalizeCodeLanguage,
   supportsLsp,
 } from '@shared/code/language'
@@ -22,6 +23,13 @@ const semanticLegends = new Map<
   { tokenTypes: string[]; tokenModifiers: string[] }
 >()
 const registeredLanguages = new Set<string>()
+// Guard keyed on the MONACO language id, separate from
+// `registeredLanguages` (keyed on the LSP id): 'typescript' and
+// 'typescriptreact' both collapse onto Monaco 'typescript', and Monaco
+// keeps every registered provider alive globally — a second registration
+// for the same Monaco language would double every semantic-tokens
+// request.
+const registeredMonacoLanguages = new Set<string>()
 const pendingSemanticProviders = new Map<string, Promise<void>>()
 
 let monacoPromise: Promise<typeof Monaco> | null = null
@@ -138,6 +146,34 @@ export async function getMonaco(): Promise<typeof Monaco> {
   // to trigger the Monaco load themselves. See monacoModelProbe.ts for the
   // dependency-direction rationale.
   registerMonacoModelCountProbe(() => monaco.editor.getModels().length)
+  // JSX/TSX support for the built-in TypeScript worker. Without `jsx` set,
+  // the worker parses `.tsx` model content as plain TS and floods it with
+  // syntax errors on the first `<`. `allowNonTsExtensions` lets the worker
+  // attach to models whose URIs don't end in .ts/.tsx (transcript snippets
+  // use synthetic URIs).
+  //
+  // Semantic validation is intentionally OFF: the worker sees one file at a
+  // time, so every cross-file import resolves to "cannot find module"
+  // noise. Real semantic diagnostics come from the typescript-language-
+  // server via LspManager (which sees the whole project); the worker keeps
+  // only syntax validation, which is reliable single-file.
+  const tsDefaults = [
+    monaco.languages.typescript.typescriptDefaults,
+    monaco.languages.typescript.javascriptDefaults,
+  ]
+  for (const defaults of tsDefaults) {
+    defaults.setCompilerOptions({
+      ...defaults.getCompilerOptions(),
+      jsx: monaco.languages.typescript.JsxEmit.ReactJSX,
+      allowJs: true,
+      allowNonTsExtensions: true,
+      target: monaco.languages.typescript.ScriptTarget.ESNext,
+    })
+    defaults.setDiagnosticsOptions({
+      noSemanticValidation: true,
+      noSyntaxValidation: false,
+    })
+  }
   const monacoWindow = window as Window & {
     MonacoEnvironment?: {
       getWorker: (_moduleId: string, label: string) => Worker
@@ -192,7 +228,15 @@ export async function ensureSemanticProvider(
 
     semanticLegends.set(normalized, legend)
     registeredLanguages.add(normalized)
-    monaco.languages.registerDocumentSemanticTokensProvider(normalized, {
+    const monacoId = monacoLanguageId(normalized)
+    if (registeredMonacoLanguages.has(monacoId)) return
+    registeredMonacoLanguages.add(monacoId)
+    // Models are created with the MONACO id (monacoLanguageId, task 1 of
+    // #513); registering the provider under the raw LSP id
+    // ('typescriptreact') would attach it to a language no model uses.
+    // The legend request above still uses `normalized` because tsserver
+    // keys its behavior on the LSP id.
+    monaco.languages.registerDocumentSemanticTokensProvider(monacoId, {
       getLegend() {
         const current = semanticLegends.get(normalized)
         return {

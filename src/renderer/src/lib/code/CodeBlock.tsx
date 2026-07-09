@@ -3,6 +3,7 @@ import hljs from 'highlight.js'
 
 import {
   languageFileExtension,
+  monacoLanguageId,
   normalizeCodeLanguage,
   supportsLsp,
 } from '@shared/code/language'
@@ -129,7 +130,10 @@ export const CodeBlock = memo(function CodeBlock({
       if (disposed) return
 
       const uri = monaco.Uri.parse(clientUri)
-      const model = monaco.editor.createModel(code, normalizedLanguage, uri)
+      // monacoLanguageId: 'typescriptreact'/'javascriptreact' are LSP ids
+      // Monaco doesn't ship — see language.ts. Without the mapping, .tsx
+      // snippets render with the plaintext tokenizer (blank highlighting).
+      const model = monaco.editor.createModel(code, monacoLanguageId(normalizedLanguage), uri)
       cleanups.push(() => model.dispose())
 
       const editor = monaco.editor.create(containerRef.current, {
