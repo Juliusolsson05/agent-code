@@ -210,14 +210,13 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -z "${CSC_LINK:-}" ]; then
-            echo "CSC_LINK is not configured; building unsigned artifacts."
-            export CSC_IDENTITY_AUTO_DISCOVERY=false
-            unset CSC_LINK CSC_KEY_PASSWORD
-            unset APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID
-          fi
-          npm run package:mac
+        # The unsigned-fallback policy (no CSC_LINK/CSC_NAME → disable
+        # identity auto-discovery, strip APPLE_* notarization vars) lives
+        # in scripts/package-mac.mjs so local dev builds and CI share ONE
+        # implementation (#495 A6). This step used to carry its own inline
+        # copy of that logic, which is exactly how it drifted out of the
+        # npm scripts in the first place.
+        run: npm run package:mac
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
