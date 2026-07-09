@@ -162,13 +162,9 @@ export function MonacoFileEditor({
     )
   }
 
-  if (file.error) {
-    return (
-      <div className="flex h-full items-center justify-center bg-canvas p-6 text-[12px] text-danger">
-        {file.error}
-      </div>
-    )
-  }
-
+  // NOTE: buffer errors are deliberately NOT handled here anymore. They
+  // used to replace this whole pane, which hid the user's unsaved text at
+  // the exact moment a save failed. EditorWorkbench renders
+  // EditorStatusBanner above the editor instead (#513).
   return <div ref={containerRef} className="h-full min-h-0 min-w-0 bg-canvas" />
 }

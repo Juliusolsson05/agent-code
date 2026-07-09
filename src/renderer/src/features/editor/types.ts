@@ -16,6 +16,12 @@ export type EditorFileBuffer = {
   dirty: boolean
   loading: boolean
   error: string | null
+  /** True when the last save failed the optimistic mtime check ("file
+   *  changed on disk") or the watcher flagged an external change under a
+   *  dirty buffer. Distinct from `error` (which also covers hard IO
+   *  failures) because the conflict state has dedicated recovery actions
+   *  (reload / overwrite) while a hard error only has retry. */
+  conflict: boolean
   mtimeMs: number | null
   selection: { line: number; column: number } | null
 }

@@ -190,32 +190,90 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     ),
   })
 
-  // Save handler — wired into MonacoFileEditor's Cmd+S. Validates
-  // we have an active cwd + active file, reads the buffer, writes
-  // to disk via the editorFs IPC, then calls markFileSaved on
-  // success. The mtime guard matters more once main caches reads:
+  // Save handler — wired into MonacoFileEditor's Cmd+S (via saveActive)
+  // and the confirm dialog's Save & Close (via saveThenClose). Reads the
+  // buffer, writes to disk via the editorFs IPC, then calls markFileSaved
+  // on success. The mtime guard matters more once main caches reads:
   // cache invalidation keeps this process fresh, but it cannot see
   // every external editor/agent write before save. Passing the last
   // observed mtime makes "agent changed this while I was typing"
-  // fail closed instead of overwriting a newer disk version.
+  // fail closed instead of overwriting a newer disk version — and the
+  // `conflict` flag routes that failure to the banner's Reload/Overwrite
+  // actions rather than a dead-end error string.
+  const saveFile = useCallback(
+    async (path: string): Promise<boolean> => {
+      if (!activeCwd) return false
+      const buf = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
+      if (!buf || !buf.dirty) return true
+      const result = await window.api.editorWriteTextFile({
+        root: activeCwd,
+        path,
+        text: buf.currentText,
+        expectedMtimeMs: buf.mtimeMs,
+      })
+      if (result.ok) {
+        markFileSaved(activeCwd, path, buf.currentText, result.mtimeMs)
+        return true
+      }
+      setFileError(activeCwd, path, result.error, { conflict: result.conflict === true })
+      return false
+    },
+    [activeCwd, markFileSaved, setFileError],
+  )
+
   const saveActive = useCallback(async () => {
-    if (!activeCwd) return
     const activePath = cwdState.activeFilePath
     if (!activePath) return
-    const buf = cwdState.openFiles[activePath]
-    if (!buf || !buf.dirty) return
-    const result = await window.api.editorWriteTextFile({
-      root: activeCwd,
-      path: activePath,
-      text: buf.currentText,
-      expectedMtimeMs: buf.mtimeMs,
-    })
-    if (result.ok) {
-      markFileSaved(activeCwd, activePath, buf.currentText, result.mtimeMs)
-    } else {
-      setFileError(activeCwd, activePath, result.error)
-    }
-  }, [activeCwd, cwdState, markFileSaved, setFileError])
+    await saveFile(activePath)
+  }, [cwdState.activeFilePath, saveFile])
+
+  const saveThenClose = useCallback(
+    async (path: string): Promise<boolean> => {
+      if (!activeCwd) return false
+      const ok = await saveFile(path)
+      if (ok) closeFileAction(activeCwd, path)
+      return ok
+    },
+    [activeCwd, saveFile, closeFileAction],
+  )
+
+  // Banner recovery actions for the conflict state. Reload = disk wins
+  // (markFileSaved replaces the buffer with disk content and clears
+  // dirty/conflict — exactly "discard my edits"). Overwrite = buffer
+  // wins: expectedMtimeMs null skips the optimistic check ONCE, as an
+  // explicit user decision rather than a default.
+  const reloadFromDisk = useCallback(
+    async (path: string) => {
+      if (!activeCwd) return
+      const result = await window.api.editorReadTextFile({ root: activeCwd, path })
+      if (!result.ok) {
+        setFileError(activeCwd, path, result.error)
+        return
+      }
+      markFileSaved(activeCwd, path, result.text, result.mtimeMs)
+    },
+    [activeCwd, markFileSaved, setFileError],
+  )
+
+  const overwriteDisk = useCallback(
+    async (path: string) => {
+      if (!activeCwd) return
+      const buf = useGlobalEditorStore.getState().byCwd[activeCwd]?.openFiles[path]
+      if (!buf) return
+      const result = await window.api.editorWriteTextFile({
+        root: activeCwd,
+        path,
+        text: buf.currentText,
+        expectedMtimeMs: null,
+      })
+      if (result.ok) {
+        markFileSaved(activeCwd, path, buf.currentText, result.mtimeMs)
+      } else {
+        setFileError(activeCwd, path, result.error, { conflict: result.conflict === true })
+      }
+    },
+    [activeCwd, markFileSaved, setFileError],
+  )
 
   // Open a file from the explorer. Reads via IPC, then commits to
   // the store as a fresh buffer (or refreshes savedText on an
@@ -295,9 +353,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             activeFile={active}
             projectRoot={activeCwd}
             onActivateFile={path => setActiveFile(activeCwd, path)}
-            onCloseFile={path => closeFileAction(activeCwd, path)}
+            onCloseFile={(path, opts) => closeFileAction(activeCwd, path, opts)}
             onChangeFile={(path, text) => updateFileText(activeCwd, path, text)}
             onSave={() => void saveActive()}
+            onSaveThenClose={saveThenClose}
+            onReloadFromDisk={path => void reloadFromDisk(path)}
+            onOverwriteDisk={path => void overwriteDisk(path)}
             onSelectionRevealed={clearRevealedSelection}
           />
         ) : (

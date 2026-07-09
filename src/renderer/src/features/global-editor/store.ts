@@ -87,10 +87,15 @@ type GlobalEditorStore = {
   }) => void
   setActiveFile: (cwd: string, path: string | null) => void
   updateFileText: (cwd: string, path: string, text: string) => void
-  setFileError: (cwd: string, path: string, error: string | null) => void
+  setFileError: (
+    cwd: string,
+    path: string,
+    error: string | null,
+    opts?: { conflict?: boolean },
+  ) => void
   clearFileSelection: (cwd: string, path: string) => void
   markFileSaved: (cwd: string, path: string, text: string, mtimeMs: number) => void
-  closeFile: (cwd: string, path: string) => boolean
+  closeFile: (cwd: string, path: string, opts?: { force?: boolean }) => boolean
 }
 
 // Exported because consumers (notably GlobalEditorShell's
@@ -131,6 +136,7 @@ function createBuffer(params: {
     dirty: false,
     loading: false,
     error: null,
+    conflict: false,
     mtimeMs: params.mtimeMs,
     selection: params.selection ?? null,
   }
@@ -196,6 +202,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
             savedText: text,
             mtimeMs,
             error: null,
+            conflict: false,
             selection: selection ?? existing.selection,
           }
         : createBuffer({ root: cwd, path, text, mtimeMs, selection })
@@ -249,6 +256,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
                 // so keeping an old "file changed on disk" message after the
                 // user has continued editing is more misleading than helpful.
                 error: null,
+                conflict: false,
               },
             },
           },
@@ -256,13 +264,14 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       }
     }),
 
-  setFileError: (cwd, path, error) =>
+  setFileError: (cwd, path, error, opts) =>
     set(state => {
       const prev = state.byCwd[cwd]
       if (!prev) return state
       const current = prev.openFiles[path]
       if (!current) return state
-      if (current.error === error) return state
+      const conflict = opts?.conflict === true
+      if (current.error === error && current.conflict === conflict) return state
       return {
         byCwd: {
           ...state.byCwd,
@@ -273,6 +282,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
               [path]: {
                 ...current,
                 error,
+                conflict,
               },
             },
           },
@@ -329,6 +339,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
                 dirty: false,
                 mtimeMs,
                 error: null,
+                conflict: false,
               },
             },
           },
@@ -336,14 +347,16 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       }
     }),
 
-  closeFile: (cwd, path) => {
+  closeFile: (cwd, path, opts) => {
     const prev = get().byCwd[cwd]
     const current = prev?.openFiles[path]
-    // Dirty-file guard: same contract as useEditorStore — refuse
-    // to close a dirty buffer silently. Caller (the tab close
-    // button) gets a false return and decides whether to surface
-    // a confirm prompt.
-    if (current?.dirty) return false
+    // Dirty-file guard: refuse to close a dirty buffer silently. The
+    // caller gets a false return, shows ConfirmCloseDialog (owned by
+    // EditorWorkbench), and re-calls with { force: true } if the user
+    // chooses Discard. Before the dialog existed this false return was
+    // silently dropped by every caller, which made dirty tabs
+    // permanently uncloseable — #513 bug 1.
+    if (current?.dirty && !opts?.force) return false
     set(state => {
       const cwdState = state.byCwd[cwd]
       if (!cwdState) return state

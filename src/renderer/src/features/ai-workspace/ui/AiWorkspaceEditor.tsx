@@ -30,6 +30,7 @@ function bufferFromEntry(
     dirty: false,
     loading: false,
     error: null,
+    conflict: false,
     mtimeMs,
     selection: null,
   }
@@ -91,6 +92,7 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
           dirty: false,
           loading: false,
           error: result.error,
+          conflict: false,
           mtimeMs: null,
           selection: null,
         },
@@ -116,16 +118,24 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
           ...current,
           currentText: text,
           dirty: text !== current.savedText,
+          // Same contract as the Global Editor store: typing past a save
+          // error clears it — the next Cmd+S re-runs the authoritative
+          // mtime check, so a pinned stale message only misleads.
+          error: null,
+          conflict: false,
         },
       }
     })
   }, [])
 
-  const saveActive = useCallback(async () => {
-    if (!activeFilePath) return
-    const buffer = openFiles[activeFilePath]
-    const entry = entriesById.get(activeFilePath)
-    if (!buffer || !entry || !buffer.dirty) return
+  // Parameterized (not "active-only") so the confirm dialog's
+  // Save & Close can target the tab being closed, which is not
+  // necessarily the active one.
+  const saveFile = useCallback(async (entryId: string): Promise<boolean> => {
+    const buffer = openFiles[entryId]
+    const entry = entriesById.get(entryId)
+    if (!buffer || !entry) return false
+    if (!buffer.dirty) return true
     const result = await window.api.aiWorkspaceWriteFile({
       path: entry.path,
       text: buffer.currentText,
@@ -134,33 +144,124 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
     if (!result.ok) {
       setOpenFiles(prev => ({
         ...prev,
-        [activeFilePath]: { ...buffer, error: result.error },
+        [entryId]: { ...buffer, error: result.error, conflict: result.conflict === true },
       }))
-      return
+      return false
     }
     setOpenFiles(prev => ({
       ...prev,
-      [activeFilePath]: {
+      [entryId]: {
         ...buffer,
         savedText: buffer.currentText,
         dirty: false,
         mtimeMs: result.mtimeMs,
         error: null,
+        conflict: false,
       },
     }))
     void loadWorkspace()
-  }, [activeFilePath, entriesById, loadWorkspace, openFiles])
-
-  const closeFile = useCallback((entryId: string) => {
-    setFileOrder(prev => prev.filter(id => id !== entryId))
-    setOpenFiles(prev => {
-      const next = { ...prev }
-      delete next[entryId]
-      return next
-    })
-    setActiveFilePath(prev => prev === entryId ? null : prev)
     return true
-  }, [])
+  }, [entriesById, loadWorkspace, openFiles])
+
+  const saveActive = useCallback(async () => {
+    if (!activeFilePath) return
+    await saveFile(activeFilePath)
+  }, [activeFilePath, saveFile])
+
+  const closeFile = useCallback(
+    (entryId: string, opts?: { force?: boolean }) => {
+      // Same dirty-close contract as the Global Editor store: refuse
+      // without force so EditorWorkbench can interpose its confirm
+      // dialog. The dirty check reads the render-scoped `openFiles`
+      // closure (NOT a setState updater side-channel — updaters run at
+      // render time, so a flag written inside one is not readable
+      // synchronously after the setState call).
+      if (openFiles[entryId]?.dirty && !opts?.force) return false
+      setOpenFiles(prev => {
+        const next = { ...prev }
+        delete next[entryId]
+        return next
+      })
+      setFileOrder(prev => prev.filter(id => id !== entryId))
+      setActiveFilePath(prev => (prev === entryId ? null : prev))
+      return true
+    },
+    [openFiles],
+  )
+
+  const saveThenClose = useCallback(
+    async (entryId: string): Promise<boolean> => {
+      const ok = await saveFile(entryId)
+      if (ok) closeFile(entryId, { force: true })
+      return ok
+    },
+    [saveFile, closeFile],
+  )
+
+  // Conflict-banner recovery. Reload = disk wins; Overwrite = buffer
+  // wins with the mtime check skipped once (explicit user decision).
+  const reloadFromDisk = useCallback(
+    async (entryId: string) => {
+      const entry = entriesById.get(entryId)
+      if (!entry) return
+      const result = await window.api.aiWorkspaceReadFile(entry.path)
+      setOpenFiles(prev => {
+        const current = prev[entryId]
+        if (!current) return prev
+        if (!result.ok) {
+          return { ...prev, [entryId]: { ...current, error: result.error, conflict: false } }
+        }
+        return {
+          ...prev,
+          [entryId]: {
+            ...current,
+            savedText: result.text,
+            currentText: result.text,
+            dirty: false,
+            mtimeMs: result.mtimeMs,
+            error: null,
+            conflict: false,
+          },
+        }
+      })
+    },
+    [entriesById],
+  )
+
+  const overwriteDisk = useCallback(
+    async (entryId: string) => {
+      const buffer = openFiles[entryId]
+      const entry = entriesById.get(entryId)
+      if (!buffer || !entry) return
+      const result = await window.api.aiWorkspaceWriteFile({
+        path: entry.path,
+        text: buffer.currentText,
+        expectedMtimeMs: null,
+      })
+      setOpenFiles(prev => {
+        const current = prev[entryId]
+        if (!current) return prev
+        if (!result.ok) {
+          return {
+            ...prev,
+            [entryId]: { ...current, error: result.error, conflict: result.conflict === true },
+          }
+        }
+        return {
+          ...prev,
+          [entryId]: {
+            ...current,
+            savedText: current.currentText,
+            dirty: false,
+            mtimeMs: result.mtimeMs,
+            error: null,
+            conflict: false,
+          },
+        }
+      })
+    },
+    [entriesById, openFiles],
+  )
 
   const activeFile = activeFilePath ? openFiles[activeFilePath] ?? null : null
 
@@ -194,6 +295,9 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
       onCloseFile={closeFile}
       onChangeFile={updateText}
       onSave={() => void saveActive()}
+      onSaveThenClose={saveThenClose}
+      onReloadFromDisk={entryId => void reloadFromDisk(entryId)}
+      onOverwriteDisk={entryId => void overwriteDisk(entryId)}
     />
   )
 }
