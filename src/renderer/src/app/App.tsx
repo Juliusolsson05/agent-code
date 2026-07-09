@@ -2,7 +2,6 @@ import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/provider
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
-import { AgentStatusPanel } from '@renderer/features/agent-status/ui/AgentStatusPanel'
 import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
 import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
 import { HtmlDebugPanel } from '@renderer/features/debug/ui/HtmlDebugPanel'
@@ -14,13 +13,10 @@ import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
 import { ReaderView } from '@renderer/features/reader/ui/ReaderView'
 import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
-import { GitBar } from '@renderer/features/git/ui/GitBar'
-import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
 import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
-import { RemotePanel } from '@renderer/features/remote/ui/RemotePanel'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
@@ -80,7 +76,6 @@ export default function App() {
   const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
   const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
-  const remotePanelOpen = useAppStore(state => state.remotePanelOpen)
   const toggleRemotePanel = useAppStore(state => state.toggleRemotePanel)
   const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
@@ -487,39 +482,6 @@ export default function App() {
             </GlobalEditorShell>
           )}
         </main>
-
-        {gitBarOpen && (
-          <GitBar
-            cwd={
-              commandTargetId
-                ? workspace.state.sessions[commandTargetId]?.cwd ?? null
-                : null
-            }
-            onClose={toggleGitBar}
-          />
-        )}
-
-        {worktreesBarOpen && (
-          <WorktreesBar
-            cwd={
-              commandTargetId
-                ? workspace.state.sessions[commandTargetId]?.cwd ?? null
-                : null
-            }
-            workspace={workspace}
-            onClose={toggleWorktreesBar}
-          />
-        )}
-
-        {agentStatusPanelOpen && commandTargetId && (
-          <AgentStatusPanel
-            sessionId={commandTargetId}
-            workspace={workspace}
-            onClose={closeAgentStatusPanel}
-          />
-        )}
-
-        {remotePanelOpen && <RemotePanel onClose={toggleRemotePanel} />}
 
         {debugPanelOpen && commandTargetId && (
           <DebugPanel

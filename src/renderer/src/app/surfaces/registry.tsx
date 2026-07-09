@@ -5,6 +5,10 @@ import { TiledDispatchCountSurface } from '@renderer/features/workspace/surfaces
 import { DebugBundleNoteSurface } from '@renderer/features/debug/surfaces/DebugBundleNoteSurface'
 import { RecordingNoteSurface } from '@renderer/features/debug/surfaces/RecordingNoteSurface'
 import { UsageModalSurface } from '@renderer/features/usage/surfaces/UsageModalSurface'
+import { GitBarSurface } from '@renderer/features/git/surfaces/GitBarSurface'
+import { WorktreesBarSurface } from '@renderer/features/worktrees/surfaces/WorktreesBarSurface'
+import { AgentStatusPanelSurface } from '@renderer/features/agent-status/surfaces/AgentStatusPanelSurface'
+import { RemotePanelSurface } from '@renderer/features/remote/surfaces/RemotePanelSurface'
 import { PathPickerSurface } from '@renderer/features/path-picker/surfaces/PathPickerSurface'
 import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/TileTabsModalSurface'
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
@@ -54,4 +58,9 @@ export const overlaySurfaces: SurfaceEntry[] = [
 ]
 
 /** Rendered INSIDE the main flex row, as siblings after <main>. */
-export const sidePanelSurfaces: SurfaceEntry[] = []
+export const sidePanelSurfaces: SurfaceEntry[] = [
+  { id: 'git-bar', Component: GitBarSurface },
+  { id: 'worktrees-bar', Component: WorktreesBarSurface },
+  { id: 'agent-status-panel', Component: AgentStatusPanelSurface },
+  { id: 'remote-panel', Component: RemotePanelSurface },
+]
