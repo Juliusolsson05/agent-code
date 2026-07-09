@@ -1,6 +1,8 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { copyFile, mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { resolve } from 'path'
@@ -87,12 +89,88 @@ function copyMainRuntimeResourcesPlugin(): Plugin {
   }
 }
 
-export default defineConfig({
+// ---------------------------------------------------------------------------
+// Build provenance (issue #374) — computed at CONFIG-EVALUATION time and
+// injected into the main bundle via `define` below. This is the builder's
+// answer to "which exact source produced this binary?": incident artifacts
+// (run manifests, app.run.started events, debug bundles) stamp these values so
+// a stale local dev run can never masquerade as origin/main during crash
+// triage.
+//
+// WHY config time and not runtime: a packaged app has no .git directory, and
+// even in dev, shelling out to git from the Electron main process would add a
+// synchronous subprocess to the startup hot path. The config is evaluated once
+// per build / dev-server start, which is exactly the granularity at which the
+// source state can change.
+//
+// WHY try/catch around every git call: CI tarballs, shallow/cache checkouts
+// without .git, or a machine without git installed must yield 'unknown'
+// values, NEVER a failed build — provenance is forensics, not a build gate
+// (same invariant as the incident journal itself: the diagnostic layer must
+// never break the product).
+// ---------------------------------------------------------------------------
+
+function gitOutput(cmd: string): string {
+  try {
+    // stderr ignored: a non-repo checkout prints "fatal: not a git repository"
+    // which would pollute every build log despite being an expected case.
+    return execSync(cmd, { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim() || 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+function gitDirty(): boolean | 'unknown' {
+  try {
+    // Any porcelain output (staged, unstaged, or untracked) counts as dirty:
+    // triage cares whether the SHA fully identifies the source, and an
+    // untracked-but-imported file breaks that just as much as an edit.
+    return execSync('git status --porcelain', { cwd: __dirname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().length > 0
+  } catch {
+    // 'unknown', not false — absence of evidence must not read as "clean".
+    return 'unknown'
+  }
+}
+
+function readPackageVersion(): string {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as { version?: unknown }
+    return typeof pkg.version === 'string' ? pkg.version : 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+// Keep this shape byte-compatible with `BuildInfo` in src/main/buildInfo.ts —
+// that module is the ONLY consumer of the injected global and documents every
+// field. (Not imported here to keep the config free of src/ imports; the
+// fallback-spread in getBuildInfo() tolerates drift by materializing missing
+// fields as 'unknown'.)
+function computeBuildProvenance(mode: string): Record<string, unknown> {
+  return {
+    gitSha: gitOutput('git rev-parse HEAD'),
+    branch: gitOutput('git rev-parse --abbrev-ref HEAD'),
+    dirty: gitDirty(),
+    buildTimestamp: new Date().toISOString(),
+    buildMode: mode,
+    packageVersion: readPackageVersion(),
+  }
+}
+
+export default defineConfig(({ mode }) => ({
   main: {
     plugins: [
       externalizeDepsPlugin({ exclude: headlessExclude }),
       copyMainRuntimeResourcesPlugin(),
     ],
+    // JSON.stringify is load-bearing: Vite `define` values are injected as raw
+    // source text, so the stringified object becomes an object-literal
+    // expression at every reference site. An un-stringified value would be
+    // spliced as invalid code. Main-process only — the renderer must not
+    // carry provenance it would only ever round-trip back to main.
+    define: {
+      __AGENT_CODE_BUILD_INFO__: JSON.stringify(computeBuildProvenance(mode)),
+    },
     resolve: { alias: [...headlessAlias, ...Object.entries(projectAlias).map(([find, replacement]) => ({ find, replacement }))] },
     build: {
       rollupOptions: {
@@ -130,4 +208,4 @@ export default defineConfig({
       include: ['monaco-editor']
     }
   }
-})
+}))
