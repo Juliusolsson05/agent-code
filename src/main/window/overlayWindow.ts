@@ -203,26 +203,11 @@ function createOverlayWindow(): void {
     },
   })
 
-  // 'floating' keeps the overlay above normal app windows; all-workspaces
-  // makes it follow the user across desktops/Spaces.
-  //
-  // skipTransformProcessType is LOAD-BEARING, and visibleOnFullScreen is
-  // deliberately ABSENT. The first shipped version passed
-  // `{ visibleOnFullScreen: true }`, and on macOS that makes Electron
-  // transform the ENTIRE APP's activation policy between
-  // ForegroundApplication and UIElementApplication (accessory/LSUIElement).
-  // Observed result: the Dock icon vanished (and app.dock.show() can't
-  // reliably restore it — electron#26350), the menu bar disappeared, and
-  // the MAIN window stopped behaving like a normal window (couldn't be
-  // moved/focused properly; see also electron#37487 for overlay windows
-  // corrupting app state via this transform). A status pip must never
-  // change what kind of app Agent Code is, so we skip the transform
-  // entirely (electron#27200). The trade: the overlay won't float above
-  // fullscreen (green-button) Spaces — acceptable; it still floats over
-  // normal windows on every desktop. Do NOT reintroduce
-  // visibleOnFullScreen without solving the process-transform side effect.
+  // 'floating' + visibleOnFullScreen keeps the overlay above normal app
+  // windows AND visible over a fullscreen Chrome Space on macOS — the
+  // "am I done yet?" glance from another app is the core use case.
   overlayWindow.setAlwaysOnTop(true, 'floating')
-  overlayWindow.setVisibleOnAllWorkspaces(true, { skipTransformProcessType: true })
+  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
 
   overlayWindow.on('moved', () => {
     if (!overlayWindow || overlayWindow.isDestroyed()) return
