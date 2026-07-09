@@ -82,7 +82,7 @@ const lspManager = new LspManager()
 // Ghost log writer — one queue per session. Writes are batched at
 // 100 ms and persisted under `<userData>/ghost-logs/<sessionId>.ghost.jsonl`.
 // See `./ghostJournal.ts` for the full rationale; see
-// `src/renderer/src/workspace/ghosts.ts` for the renderer side.
+// `src/renderer/src/session-runtime/ghosts.ts` for the renderer side.
 const ghostJournals = new GhostJournalRegistry()
 // Session recorder — one folder per recording under session-recordings/.
 // Constructed and installed as the outbound-IPC observer whenever the

@@ -95,13 +95,13 @@ export type ReplayTick = {
   rows: RenderLedger['rows']
   /** The injected view bridge's output, opaque to this harness (#493 PR-3:
    *  the RenderRow→FeedRenderItem bridge is feed-owned; rendering/ must not
-   *  import it). Empty when no `projectItems` was injected. Tests that assert
-   *  on painted items inject the real bridge and narrow the type themselves. */
+   *  import it). Tests that assert on painted items inject the real bridge
+   *  and narrow the type themselves. */
   feedItems: unknown[]
   /** Candidate ids the injected bridge could not resolve (the #239 "present
    *  but invisible" class). Non-empty is itself a smell the invariants flag.
-   *  Empty (vacuously) when no `projectItems` was injected — corpus/replay
-   *  tests MUST inject the real bridge or the drop invariant checks nothing. */
+   *  Always real: `projectItems` is a required option, so there is no
+   *  un-projected run for this to be vacuously empty on. */
   dropped: string[]
   /** Rejections the ADAPTER made at collection time (hidden meta rows,
    *  compaction-synthesis kills, duplicate-turn drops) — the half of the
@@ -143,8 +143,12 @@ export type ReplayOptions = {
    * entry.timestamp), only the receipt-time stamps drift.
    */
   onBeforeFold?: (wall: number) => void
-  /** See ReplayItemsProjection. Omitted ⇒ feedItems/dropped stay empty. */
-  projectItems?: ReplayItemsProjection
+  /** See ReplayItemsProjection. REQUIRED, not optional (4-agent review of
+   *  #503): an omitted projection would be indistinguishable from "projected
+   *  with zero drops", silently vacating the #239 dropped-candidate invariant
+   *  for that run. Making the field mandatory turns the forgotten-injection
+   *  mistake into a compile error instead of a green-but-hollow test. */
+  projectItems: ReplayItemsProjection
 }
 
 // ---------------------------------------------------------------------------
@@ -244,7 +248,7 @@ function runtimeViewFor(
  */
 export function replayRecording(
   recording: ParsedRecording,
-  options: ReplayOptions = {},
+  options: ReplayOptions,
 ): ReplayResult {
   const provider: AgentProviderKind = isAgentProviderKind(recording.header.provider)
     ? recording.header.provider
@@ -270,9 +274,7 @@ export function replayRecording(
     const slices = slicesFromState(state)
     const bundle = adapter(slices)
     const rl = ledger(bundle.input)
-    const { items, dropped } = options.projectItems
-      ? options.projectItems(rl, runtimeViewFor(state), provider)
-      : { items: [], dropped: [] }
+    const { items, dropped } = options.projectItems(rl, runtimeViewFor(state), provider)
 
     ticks.push({
       index,

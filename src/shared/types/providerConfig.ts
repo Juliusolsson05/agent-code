@@ -121,7 +121,7 @@ export type TranscriptEntryMapper = {
 
 /**
  * Per-provider turn-ownership policy for the renderer's semantic reducer
- * (`workspace/semantic/foldEvent.ts`).
+ * (`session-runtime/semantic/foldEvent.ts`).
  *
  * WHY this exists: foldSemanticEvent used to hard-gate turn replacement and
  * block soft-open on `sessionKind === 'codex'` / `'claude'` literals at five
