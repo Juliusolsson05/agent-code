@@ -42,6 +42,7 @@ import type {
   OrchestrationAgentRecord,
 } from '@mcp/shared/orchestrationTypes'
 import { forgetDebugTrace } from '@renderer/features/debug/renderTrace'
+import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
 
 import type {
   WorkspaceSetRuntimes,
@@ -62,6 +63,11 @@ import type { SessionActions } from '@renderer/workspace/hook/actions/session'
 
 function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId): void {
   delete refs.seenUuidsRef.current[sessionId]
+  // The live-window bookkeeping (trimmed uuids, older-prepend grace) shares
+  // the seen-uuid lifecycle by contract — trimmed ⊆ ever-seen (see
+  // liveEntryWindow.ts). Every site that deletes/resets a session's seen
+  // set must clear it too.
+  clearLiveEntryWindowSession(sessionId)
   delete refs.latestScreenRef.current[sessionId]
   // Render traces are intentionally not stored in SessionRuntime: they are
   // large, debug-only forensic buffers populated by DOM/screen capture paths

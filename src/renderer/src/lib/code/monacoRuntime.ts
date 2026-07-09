@@ -9,6 +9,7 @@ import {
   normalizeMonacoThemeColor,
   normalizeMonacoThemeColorAlpha,
 } from './monacoThemeColors'
+import { registerMonacoModelCountProbe } from './monacoModelProbe'
 
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
@@ -132,6 +133,11 @@ export async function getMonaco(): Promise<typeof Monaco> {
     monacoPromise = import('monaco-editor')
   }
   const monaco = await monacoPromise
+  // Memory-gauge probe (#375 part A): registered HERE, after the lazy chunk
+  // resolved, so the gauges can count live models without ever being able
+  // to trigger the Monaco load themselves. See monacoModelProbe.ts for the
+  // dependency-direction rationale.
+  registerMonacoModelCountProbe(() => monaco.editor.getModels().length)
   const monacoWindow = window as Window & {
     MonacoEnvironment?: {
       getWorker: (_moduleId: string, label: string) => Worker
@@ -158,6 +164,7 @@ export async function getMonaco(): Promise<typeof Monaco> {
   installThemeListener(monaco)
   return monaco
 }
+
 
 export async function ensureSemanticProvider(
   monaco: typeof Monaco,

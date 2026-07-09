@@ -34,6 +34,7 @@ import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
 import { VoiceDictationOverlay } from '@renderer/features/voice-dictation/ui/VoiceDictationOverlay'
 import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
+import { setSemanticRawCaptureEnabled } from '@renderer/session-runtime/semantic/rawCapture'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { RemotePanel } from '@renderer/features/remote/ui/RemotePanel'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
@@ -211,6 +212,12 @@ export default function App() {
         if (cancelled) return
         setDevDebugEnabled(config.enabled)
         setSessionRecordingEnabled(config.sessionRecordingEnabled)
+        // Raw semantic-event capture rides the same dev-debug switch: the
+        // payloads it retains are only readable through dev-debug surfaces,
+        // so capture-without-panel would be pure heap cost (#375 part C —
+        // see rawCapture.ts). Not reset on unmount/cancel: it's process-wide
+        // diagnostic state, not React state.
+        setSemanticRawCaptureEnabled(config.enabled)
       })
       .catch(() => {
         if (cancelled) return

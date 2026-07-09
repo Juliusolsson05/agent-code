@@ -257,8 +257,21 @@ export function collectCommittedCandidates(
     // Ingest-time stable id (plan migration hazard: keys must never fall
     // back to visible index — index reuse after order shifts made React
     // retain wrong subtrees, the "phantom duplicate" class). uuid when the
-    // provider gave one; otherwise position-at-INGEST, which is stable
-    // because the entries array is append-only.
+    // provider gave one; otherwise position-at-INGEST.
+    //
+    // STABILITY CONTRACT (updated for the #375 live window): the entries
+    // array is no longer strictly append-only — the live ingest path trims
+    // the oldest entries once the window exceeds MAX_LIVE_ENTRIES, and
+    // older-history pagination PREPENDS (which also shifts indices; that
+    // predates the window). The `ingest-${index}` fallback survives both
+    // because the trimmer refuses to run at all while ANY entry in the
+    // array lacks a uuid (planLiveEntryTrim constraint 1 in
+    // session-runtime/liveEntryWindow.ts — the guard that keeps this id
+    // scheme honest), and in practice every mapped entry carries a uuid
+    // (Claude lines have them, Codex/opencode mappers synthesize them), so
+    // the fallback only ever fires on arrays that are frozen against
+    // trimming. If you ever make this fallback load-bearing for real
+    // entries, the window guard is the other half of the contract.
     const id = `entry:${e.uuid ?? `ingest-${index}`}`
 
     const isConversation = CONVERSATION_TYPES.has(e.type ?? '')

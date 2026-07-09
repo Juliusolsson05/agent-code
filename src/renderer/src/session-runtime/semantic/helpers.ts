@@ -81,7 +81,21 @@ export function flattenSemanticUsage(
  *  makes the archive immutable enough for React memo/debug use
  *  without deep-copying large parsed tool payloads. If this ever
  *  becomes memory-sensitive, the right fix is a purpose-built
- *  render-history shape, not returning to text-only summaries. */
+ *  render-history shape, not returning to text-only summaries.
+ *
+ *  DECISION RECORD (#375 part C, 2026-07-09): history turns were
+ *  deliberately EXCLUDED from the raw-payload compaction that hit
+ *  `semantic.log` and the feed-debug SEM entries. These block maps are
+ *  PAINT INPUTS — the ledger's semantic-history plane draws rows from
+ *  them via the view bridge whenever the committed transcript lags the
+ *  stream. Compacting a turn is only safe once every one of its blocks
+ *  is committed-suppressed (owned by a durable entry), and computing
+ *  that here would drag ownership knowledge from the DECIDE layer into
+ *  the ingest reducer — an inversion of the #493 layering. If history
+ *  memory ever matters (20 turns × block maps, gauged by
+ *  renderer.session.memory.semanticHistoryBytes), build the purpose-
+ *  built shape above with suppression evidence flowing forward from the
+ *  ledger, don't strip fields blind here. */
 export function semanticHistoryRow(
   turn: SemanticLiveTurn,
 ): SemanticLiveTurn {

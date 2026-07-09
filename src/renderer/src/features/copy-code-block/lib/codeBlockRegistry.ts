@@ -40,3 +40,12 @@ export function unregisterCodeBlock(id: string): void {
 export function getCodeBlockCode(id: string): string | null {
   return codeById.has(id) ? (codeById.get(id) as string) : null
 }
+
+/** Size probe for the renderer memory gauges (#375 part A). The LIFECYCLE
+ *  INVARIANT above makes leaks here "slow", not impossible — this gauge is
+ *  how a debug bundle proves whether the unmount cleanup is actually
+ *  keeping up (a registry that only ever grows across a long session means
+ *  a CodeBlock stopped unregistering). */
+export function codeBlockRegistrySize(): number {
+  return codeById.size
+}

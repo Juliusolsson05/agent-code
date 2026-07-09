@@ -25,6 +25,7 @@ import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/applyPromptSuggestionToRuntime'
 import { summarizeSemanticEventForDebug } from '@renderer/session-runtime/semantic/summarize'
+import { isSemanticRawCaptureEnabled } from '@renderer/session-runtime/semantic/rawCapture'
 import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
 import {
   isCodexRolloutEntry,
@@ -35,6 +36,15 @@ import {
   indexEntryIntoMaps,
   summarizeEntryForDebug,
 } from '@renderer/session-runtime/entries'
+import {
+  MAX_LIVE_ENTRIES,
+  isUuidTrimmed,
+  markUuidsTrimmed,
+  planLiveEntryTrim,
+  stampHistoryMarker,
+  withinOlderPrependGrace,
+} from '@renderer/session-runtime/liveEntryWindow'
+import { emitRendererMemoryGauges } from '@renderer/performance/memoryInstrumentation'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   gcSupersededGhosts,
@@ -165,6 +175,14 @@ const WORK_CONTEXT_RECENT_RAW_LIMIT = 500
 const GHOST_ORPHAN_TTL_MS = 30000
 const GHOST_ORPHAN_SWEEP_MS = 1000
 const GHOST_SUPERSEDED_GC_MS = 5000
+
+// Memory-gauge cadence (#375 part A). Separate interval from the 1 Hz ghost
+// sweep ON PURPOSE: the sweep cadence is a correctness knob (orphan latency),
+// the gauge cadence is a cost knob (per-session byte sampling), and sharing
+// one timer invites tuning one and silently changing the other. 30s is slow
+// enough that the sampling stringify work is noise and fast enough to catch
+// growth trends inside a single debugging session.
+const MEMORY_GAUGE_INTERVAL_MS = 30_000
 
 // WHY this quiet-window exists (Codex queued-message idle reconciliation):
 // The three edge-site clears (onSessionProcessState, onSessionSemanticEvent,
@@ -450,6 +468,18 @@ export function useIpcSubscriptions(
         return changed ? next : prev
       })
     }, GHOST_ORPHAN_SWEEP_MS)
+    // Memory gauges (#375 part A) — reads the ref mirrors, never React
+    // state, so the sweep is O(sessions) with zero render impact. Lives in
+    // this effect (not its own hook) so it shares the one atomic teardown
+    // with every other subscription. perf.gauge no-ops when telemetry is
+    // off, and the byte estimators sample rather than stringify wholesale,
+    // so this is deliberately NOT gated on any flag.
+    const memoryGaugeTimer = window.setInterval(() => {
+      emitRendererMemoryGauges(
+        refs.latestRuntimesRef.current,
+        refs.seenUuidsRef.current,
+      )
+    }, MEMORY_GAUGE_INTERVAL_MS)
     const refreshWorktrees = (cwd: string | null | undefined): void => {
       if (!cwd) return
       const cached = worktreeCache.get(cwd)
@@ -1058,12 +1088,21 @@ export function useIpcSubscriptions(
               summary: shouldClearIdleQueue
                 ? `${summarizeSemanticEventForDebug(semanticEvent)} · cleared stale local queue`
                 : summarizeSemanticEventForDebug(semanticEvent),
-              data: shouldClearIdleQueue
-                ? {
-                    ...semanticEvent,
-                    clearedQueuedMessages: current.queuedMessages.length,
-                  }
-                : semanticEvent,
+              // Raw-payload compaction (#375 part C): this used to store
+              // the ENTIRE raw semantic event per SEM row — at
+              // FEED_DEBUG_LOG_CAP=500 rows/session, one of the largest
+              // steady-state heap slabs the investigation found. The
+              // `summary` above already carries the human-readable digest;
+              // the full payload only earns its heap when someone is
+              // actively debugging, so it rides the same dev-debug flag as
+              // the semantic.log raw capture (see rawCapture.ts).
+              data: {
+                eventType: eventType || 'semantic',
+                ...(shouldClearIdleQueue
+                  ? { clearedQueuedMessages: current.queuedMessages.length }
+                  : {}),
+                ...(isSemanticRawCaptureEnabled() ? { event: semanticEvent } : {}),
+              },
             },
           ),
         )
@@ -1569,9 +1608,22 @@ export function useIpcSubscriptions(
           for (const e of mapped) {
             const u = entryUuid(e)
             if (u) {
-              if (seen.has(u)) continue
+              // Live-path dedupe is seen ∪ trimmed (#375 part B): a trimmed
+              // uuid normally still sits in `seen`, but the trimmed check is
+              // load-bearing for any lifecycle where `seen` is reset while
+              // the runtime entries survive — a resume bootstrapTail replay
+              // must NOT re-append trimmed old rows at the tail of the feed.
+              // Only the older-history loader may bring them back (in order,
+              // at the head) — see loadOlderHistory's asymmetric dedupe.
+              if (seen.has(u) || isUuidTrimmed(sessionId, u)) continue
               seen.add(u)
             }
+            // Remember this line's pagination marker on the entry itself
+            // (non-enumerable rider — see liveEntryWindow.ts for why not a
+            // map). The trim below advances historyOldestMarker to the
+            // oldest RETAINED entry's marker so pagination can re-fetch the
+            // trimmed region.
+            stampHistoryMarker(e, marker)
             if (isCompactSummaryEntry(e)) pendingCompaction = null
             appended.push(e)
             if (indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)) {
@@ -1697,11 +1749,68 @@ export function useIpcSubscriptions(
         const nextEntries = appended.length > 0 || reconciledOptimisticText !== null
           ? [...baseEntries, ...appended]
           : current.entries
+
+        // ---- Live entries window (#375 part B) ----
+        // The live append path above is what used to make `entries`
+        // unbounded — bootstrap loads 120, older pages 200, but a long-
+        // running agent appends forever. Trim the OLDEST entries back out
+        // of the window here (the only place the array grows without a
+        // user gesture) once it exceeds MAX_LIVE_ENTRIES.
+        //
+        // Scroll safety: skip while older-history pagination is in flight
+        // and for a grace period after a prepend. Feed has no shrink-
+        // anchoring — removing rows above the viewport yanks the scroll —
+        // and a user who recently paged history in is reading exactly the
+        // rows a trim would remove. Skipping is always safe: the window is
+        // a memory bound, not an invariant, and the next quiet burst trims.
+        //
+        // The ledger needs NO notification: its adapter caches are keyed on
+        // the entries array REFERENCE, so the sliced array triggers exactly
+        // one clean recompute of the committed plane.
+        let finalEntries = nextEntries
+        let entriesTrimmed = 0
+        let trimmedOldestMarker: string | null = null
+        let trimProtectBoundMs: number | null = null
+        if (
+          nextEntries.length > MAX_LIVE_ENTRIES &&
+          !current.loadingOlderHistory &&
+          !withinOlderPrependGrace(sessionId)
+        ) {
+          // Bounds come from CURRENT semantic state (this handler never
+          // folds semantic events) and POST-reconcile ghosts (a ghost this
+          // burst just superseded no longer needs its committed owner
+          // protected). See planLiveEntryTrim for the constraint set — it
+          // returns null whenever trimming would be unsafe.
+          const plan = planLiveEntryTrim(nextEntries, current.semantic, nextGhosts)
+          if (plan) {
+            finalEntries = nextEntries.slice(plan.cut)
+            entriesTrimmed = plan.cut
+            trimmedOldestMarker = plan.nextOldestMarker
+            trimProtectBoundMs = plan.protectBeforeMs
+            markUuidsTrimmed(sessionId, plan.trimmedUuids)
+            // Rebuild the tool indices FROM RETAINED ENTRIES ONLY.
+            // Per-id deletion is wrong here: the maps hold cross-entry
+            // pairings (a retained tool_result row resolves its command
+            // via toolUseIndex — ToolResultRow), so deleting a trimmed
+            // entry's tool_use id would orphan the retained result row.
+            // A wholesale rebuild is O(window) and only runs at trim
+            // frequency (~once per 500 appends). In-place clear keeps the
+            // stable map references Feed holds through context; the
+            // version bump below is what tells React the contents moved.
+            toolUseIndex.clear()
+            toolResultIndex.clear()
+            for (const e of finalEntries) {
+              indexEntryIntoMaps(e, toolUseIndex, toolResultIndex)
+            }
+            toolIndexChanged = true
+          }
+        }
+
         const nextRuntimeBase = withDerivedSessionStatus(
           appendFeedDebugLog(
             {
               ...current,
-              entries: nextEntries,
+              entries: finalEntries,
               // Bump totalEntries by however many real entries just
               // landed via this burst. `appended` is already deduped
               // against the `seen` UUID set seeded from the initial
@@ -1717,8 +1826,19 @@ export function useIpcSubscriptions(
               // user can tell at a glance how much further the
               // conversation has progressed while they were focused
               // on another pane.
+              //
+              // The live-window trim NEVER decrements this: totalEntries
+              // is the on-disk denominator and `entries` was always
+              // documented as a window over it (state.ts). A trim is
+              // indistinguishable from "never paged those in".
               totalEntries: current.totalEntries + appended.length,
-              historyOldestMarker: oldestMarker,
+              // On trim, pagination re-anchors at the oldest RETAINED
+              // entry so loadOlderHistory ("strictly before marker") can
+              // fetch the trimmed region back from disk.
+              historyOldestMarker: entriesTrimmed > 0
+                ? trimmedOldestMarker
+                : oldestMarker,
+              ...(entriesTrimmed > 0 ? { hasOlderHistory: true } : {}),
               bootstrapping: true,
               pendingCompaction,
               queuedMessages,
@@ -1787,7 +1907,29 @@ export function useIpcSubscriptions(
         // ingest path only commits durable entries and side effects. Keeping
         // unread out of this path also avoids reviving the old per-append NEW
         // behavior when provider-specific condition handling changes.
-        const nextRuntime = nextRuntimeBase
+        //
+        // The trim record is a SEPARATE feed-debug entry (not folded into the
+        // jsonl_entries data) so debug bundles stay explainable: "why did the
+        // entry count drop by 500 between two bursts" must be answerable by
+        // a grep for entries_trimmed, not by diffing burst counts.
+        const nextRuntime = entriesTrimmed > 0
+          ? appendFeedDebugLog(nextRuntimeBase, {
+              layer: 'STATE',
+              kind: 'entries_trimmed',
+              summary: `live window trimmed ${entriesTrimmed} · ${finalEntries.length} retained`,
+              data: {
+                trimmedCount: entriesTrimmed,
+                retainedCount: finalEntries.length,
+                preTrimCount: nextEntries.length,
+                newOldestMarker: trimmedOldestMarker,
+                protectBoundMs: trimProtectBoundMs === null ||
+                  !Number.isFinite(trimProtectBoundMs)
+                  ? null
+                  : trimProtectBoundMs,
+                totalEntries: current.totalEntries + appended.length,
+              },
+            })
+          : nextRuntimeBase
         closeSpan({
           sessionId,
           burstSize: entries.length,
@@ -1795,6 +1937,7 @@ export function useIpcSubscriptions(
           reconciledOptimisticUser: reconciledOptimisticText !== null,
           ghostsChanged,
           queuedMessages: queuedMessages.length,
+          entriesTrimmed,
         })
         return {
           ...prev,
@@ -1966,6 +2109,7 @@ export function useIpcSubscriptions(
 
     return () => {
       window.clearInterval(orphanSweepTimer)
+      window.clearInterval(memoryGaugeTimer)
       offStarted()
       offScreen()
       // No singular offEntry() — see the deleted-handler comment

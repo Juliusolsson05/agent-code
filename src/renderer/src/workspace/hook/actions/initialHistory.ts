@@ -4,6 +4,10 @@ import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/sta
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
+import {
+  isUuidTrimmed,
+  stampHistoryMarker,
+} from '@renderer/session-runtime/liveEntryWindow'
 import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import {
   ghostsToPersist,
@@ -180,8 +184,18 @@ export async function loadInitialHistoryForSession({
         }
         for (const entry of mapped) {
           const uuid = (entry as { uuid?: string }).uuid
-          if (uuid && seen.has(uuid)) continue
+          // Like the live-burst path, this TAIL loader treats trimmed
+          // uuids as already-seen (#375 part B): the bootstrap chunk is
+          // the newest slice of the transcript, so a trimmed uuid showing
+          // up here means the window trimmed past it — re-appending it
+          // out of order would corrupt the feed. Only loadOlderHistory
+          // may readmit trimmed uuids.
+          if (uuid && (seen.has(uuid) || isUuidTrimmed(sessionId, uuid))) continue
           if (uuid) seen.add(uuid)
+          // Pagination-marker rider — see liveEntryWindow.ts. Stamped at
+          // every ingest site so a future trim can re-anchor
+          // historyOldestMarker at whatever entry ends up oldest-retained.
+          stampHistoryMarker(entry, marker)
           initialEntries.push(entry)
           if (indexEntryIntoMaps(entry, toolUseIndex, toolResultIndex)) {
             toolIndexChanged = true
