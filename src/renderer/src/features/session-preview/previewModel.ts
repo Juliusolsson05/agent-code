@@ -9,7 +9,7 @@ import {
   isConversationEntry,
 } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
+import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 
 // previewModel — turn a raw JSONL transcript tail into the exact inputs
 // the real feed row components consume.

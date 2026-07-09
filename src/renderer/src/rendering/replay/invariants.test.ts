@@ -8,9 +8,22 @@ import {
   replayRecording,
   type RecordingHeader,
   type RecordedLine,
+  type ReplayItemsProjection,
   type ReplayResult,
   type ReplayTick,
 } from '@renderer/rendering/replay/recordedSession'
+import {
+  ledgerFeedContextFromRuntime,
+  ledgerToFeedItems,
+} from '@renderer/features/feed/ledger/ledgerFeedItems'
+
+// The REAL feed-owned view bridge, injected through the harness's
+// projectItems seam (#493 PR-3): the harness itself may not import
+// features/, but this test's whole point is exercising the full stack —
+// including the #239 dropped-candidate accounting — so it supplies the
+// production bridge.
+const projectItems: ReplayItemsProjection = (ledger, view, provider) =>
+  ledgerToFeedItems(ledger, ledgerFeedContextFromRuntime(view, provider))
 import { assertInvariants } from '@renderer/rendering/replay/invariants'
 
 // ---------------------------------------------------------------------------
@@ -172,7 +185,7 @@ describe('invariant replay — green over a realistic recording', () => {
   it('finds no violations across a prompt → tool → completion → exit stream', () => {
     vi.useFakeTimers()
     const recording = parseRecording({ header: HEADER, events: realisticRecording() })
-    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w) })
+    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w), projectItems })
 
     // Sanity: the stream actually exercised the transitions we care about —
     // otherwise "no violations" is vacuous.

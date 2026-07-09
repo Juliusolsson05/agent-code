@@ -26,7 +26,7 @@
 import { memo, useEffect, useState } from 'react'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
-import type { StreamPhase } from '@renderer/workspace/workspaceState'
+import type { StreamPhase } from '@renderer/session-runtime/state'
 
 type Props = {
   phase: StreamPhase

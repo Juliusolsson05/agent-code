@@ -7,7 +7,7 @@ import {
 import type {
   RenderedViewLeaseFeature,
   SessionRuntime,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import { hasVisibleConditions } from '@renderer/workspace/conditions/selectors'
 
 export type EffectiveAgentSurface = 'rendered' | 'terminal'

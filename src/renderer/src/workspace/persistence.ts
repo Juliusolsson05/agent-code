@@ -7,7 +7,7 @@ import type {
   TabId,
   TileNode,
 } from '@renderer/workspace/types'
-import type { TileTabsState } from '@renderer/workspace/workspaceState'
+import type { TileTabsState } from '@renderer/workspace/types'
 
 // ---------------------------------------------------------------------------
 // Persisted state shape (serialized to ~/.config/agent-code/workspace.json)

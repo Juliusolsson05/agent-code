@@ -444,3 +444,29 @@ export type ProviderSwitchBatch = {
 export const RATIO_MIN = 0.1
 export const RATIO_MAX = 0.9
 export const RATIO_DEFAULT = 0.5
+
+// -----------------------------------------------------------------------------
+// Mode-surface layout states. These lived in workspaceState.ts until the #493
+// layer split moved SessionRuntime (and everything the runtime object is made
+// of) into session-runtime/state.ts. Spotlight / Reader / TileTabs are pure
+// tile-tree VIEW selections — they reference TabId/SessionId and nothing from
+// the runtime — so they belong with the rest of the layout data model here,
+// not in the ingest layer.
+// -----------------------------------------------------------------------------
+
+export type SpotlightState = {
+  tabId: TabId
+  focusedSessionId: SessionId
+}
+
+export type ReaderModeState = {
+  tabId: TabId
+  focusedSessionId: SessionId
+}
+
+export type TileTabsState = {
+  tabIds: TabId[]
+  focusedTabId: TabId
+  direction: SplitDirection
+  ratios: number[]
+}

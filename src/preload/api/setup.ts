@@ -4,6 +4,7 @@ import type {
   SetupCheckResult,
   SetupInstallResult,
   SetupInstallTarget,
+  SetupSetToolPathResult,
   SetupToolId,
 } from '@shared/types/setup.js'
 
@@ -14,5 +15,7 @@ export const setupApi = {
     ipcRenderer.invoke('setup:install', target),
   setupSkipOptional: (tool: SetupToolId): Promise<SetupCheckResult> =>
     ipcRenderer.invoke('setup:skip-optional', tool),
+  setupSetToolPath: (tool: SetupToolId, path: string): Promise<SetupSetToolPathResult> =>
+    ipcRenderer.invoke('setup:set-tool-path', tool, path),
 }
 

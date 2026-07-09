@@ -3,7 +3,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { MutableRefObject } from 'react'
 
 import { SlashCommandPicker } from '@providers/claude/renderer/SlashCommandPicker'
-import type { ClaudeDraftImage, SlashPickerState } from '@renderer/workspace/workspaceState'
+import type { ClaudeDraftImage, SlashPickerState } from '@renderer/session-runtime/state'
 import type { ComposerDictationController } from '@renderer/workspace/tile-tree/TileLeaf/useComposerDictation'
 import { PromptSuggestionChip } from '@renderer/workspace/tile-tree/TileLeaf/PromptSuggestionChip'
 

@@ -13,14 +13,17 @@
   "homepage": "https://github.com/Juliusolsson05/agent-code#readme",
   "main": "out/main/index.js",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build:app": "electron-vite build && node scripts/copy-packaged-resources.mjs && node scripts/build-hotkey-helper.mjs",
     "client:build": "vite build --config src/remote-client/vite.config.ts",
     "client:dev": "vite --config src/remote-client/vite.config.ts",
     "build": "npm run build:app",
-    "pack:mac": "npm run build && electron-builder --mac --dir",
-    "package:mac": "electron-builder --mac --publish never",
+    "pack:mac": "npm run build && node scripts/package-mac.mjs --dir",
+    "package:mac": "node scripts/package-mac.mjs",
     "dist:mac": "npm run build && npm run package:mac",
     "start": "electron-vite preview",
     "test": "NODE_ENV=test vitest run",

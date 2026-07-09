@@ -1,6 +1,6 @@
 import type { SetupToolId } from '@shared/types/setup.js'
 import { loadSetupState, updateToolPaths } from '@main/setup/setupState.js'
-import { resolveToolPath } from '@main/setup/binaryResolver.js'
+import { isExecutable, resolveToolPath } from '@main/setup/binaryResolver.js'
 import { dirname } from 'path'
 
 type ToolchainPaths = Partial<Record<SetupToolId, string>>
@@ -53,16 +53,28 @@ export async function refreshToolchainFromState(): Promise<void> {
  * `null` would force the user back through the setup gate for no
  * reason. The setup gate will catch a genuinely missing tool the next
  * time it runs.
+ *
+ * Tools with a still-valid manual override are skipped entirely.
+ * Revalidation runs on every app launch, so without this skip a user's
+ * deliberate setup:set-tool-path choice would survive exactly one
+ * session and then get silently replaced by whatever `command -v`
+ * prefers (codex review of #504). The override only loses its veto when
+ * its file is gone or no longer an executable regular file — then the
+ * auto layers take over, same precedence as checkPrerequisites (see the
+ * precedence comment in prerequisites.ts).
  */
 export async function revalidateToolchain(): Promise<void> {
   const previous = { ...cachedPaths }
   const tools = Object.keys(previous) as SetupToolId[]
   if (tools.length === 0) return
 
+  const { manualToolPaths } = await loadSetupState()
   const updates: Partial<Record<SetupToolId, string | null>> = {}
   await Promise.all(
     tools.map(async tool => {
       try {
+        const manual = manualToolPaths[tool]
+        if (manual && (await isExecutable(manual))) return
         const resolved = await resolveToolPath(tool)
         if (resolved && resolved !== previous[tool]) {
           updates[tool] = resolved

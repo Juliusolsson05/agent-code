@@ -11,6 +11,7 @@ import { INCIDENT_RUNS_DIR, STATE_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
 import { createIncidentId, getAppRunId } from '@main/incident/appRunIds.js'
+import type { BuildInfo } from '@main/buildInfo.js'
 import type {
   AppRunHeartbeat,
   AppRunIncident,
@@ -40,6 +41,16 @@ type AcquiredStateProcessLock = Extract<StateProcessLock, { acquired: true }>
 
 type AppRunJournalOptions = {
   appVersion: string
+  // Build provenance injected at bundle time (see @main/buildInfo.js). Passed
+  // in rather than imported here so the journal stays a pure sink: main/index
+  // is the single composition point that decides what identity a run has, and
+  // tests can construct a journal with a synthetic build block without
+  // fighting a module-level global.
+  build: BuildInfo
+  // PREVIOUS_RUN_CLASSIFIER_VERSION compiled into this bundle — threaded in
+  // (not imported from previousRunClassifier) for the same composition-point
+  // reason as `build`.
+  classifierVersion: number
   perfEnabled: boolean
   lock: AcquiredStateProcessLock
 }
@@ -94,6 +105,8 @@ export class AppRunJournal {
       electron: versions.electron,
       chrome: versions.chrome,
       appVersion: options.appVersion,
+      build: options.build,
+      classifierVersion: options.classifierVersion,
       stateDir: STATE_DIR,
       perfEnabled: options.perfEnabled,
       lock: {
@@ -170,6 +183,15 @@ export class AppRunJournal {
       data: {
         runDir: this.runDir,
         perfEnabled: this.manifest.perfEnabled,
+        // Build provenance duplicated from manifest.json into the event stream
+        // (#374): events.jsonl tails get copied into debug bundles and pasted
+        // into issues ON THEIR OWN, without the manifest beside them — the
+        // startup event is often the only provenance line that survives the
+        // copy/paste. Nested object is safe through sanitizePerformanceData:
+        // it only redacts/truncates TOP-LEVEL keys, and 'build' matches no
+        // sensitive-key pattern.
+        build: this.manifest.build,
+        classifierVersion: this.manifest.classifierVersion,
       },
     })
     await this.writeHeartbeat()

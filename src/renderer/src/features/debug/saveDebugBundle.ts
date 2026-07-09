@@ -1,6 +1,6 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { useAppStore } from '@renderer/app-state/store'
 import { sanitizeHtml } from '@renderer/lib/sanitizeHtml'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'

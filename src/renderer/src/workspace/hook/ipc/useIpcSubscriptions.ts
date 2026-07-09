@@ -11,8 +11,8 @@ import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 import { isCompactSummaryEntry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
-import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
-import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/workspace/runtime/feedDebug'
+import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
 import {
   hasPendingSemanticTools,
@@ -20,11 +20,11 @@ import {
   semanticHistoryRow,
   SEMANTIC_HISTORY_CAP,
   withDerivedSessionStatus,
-} from '@renderer/workspace/semantic/helpers'
-import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
-import { reduceStreamPhase } from '@renderer/workspace/semantic/streamPhaseMachine'
+} from '@renderer/session-runtime/semantic/helpers'
+import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
+import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import { applyPromptSuggestionToRuntime } from '@renderer/workspace/hook/ipc/applyPromptSuggestionToRuntime'
-import { summarizeSemanticEventForDebug } from '@renderer/workspace/semantic/summarize'
+import { summarizeSemanticEventForDebug } from '@renderer/session-runtime/semantic/summarize'
 import { recordScreenTailSnapshot } from '@renderer/features/debug/renderTrace'
 import {
   isCodexRolloutEntry,
@@ -34,7 +34,7 @@ import {
   entryTextContent,
   indexEntryIntoMaps,
   summarizeEntryForDebug,
-} from '@renderer/workspace/entries/utils'
+} from '@renderer/session-runtime/entries'
 import { pickerEqual } from '@renderer/workspace/layout/helpers'
 import {
   gcSupersededGhosts,
@@ -42,13 +42,13 @@ import {
   ghostsToPersist,
   orphanStale,
   reconcileUpstream,
-} from '@renderer/workspace/ghosts'
+} from '@renderer/session-runtime/ghosts'
 import {
   codexPromptsMatchForOwnership,
 } from '@renderer/workspace/hook/actions/streaming'
-import { applyClaudeQueueDequeue } from '@renderer/workspace/claudeQueueReconstruction'
-import { shouldClearIdleQueuedMessages } from '@renderer/workspace/queueInvariants'
-import type { StreamPhase } from '@renderer/workspace/workspaceState'
+import { applyClaudeQueueDequeue } from '@renderer/session-runtime/claudeQueueReconstruction'
+import { shouldClearIdleQueuedMessages } from '@renderer/session-runtime/queueInvariants'
+import type { StreamPhase } from '@renderer/session-runtime/state'
 import {
   conditionStateByKind,
   type ClaudeCompactionState,

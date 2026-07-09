@@ -4,7 +4,7 @@ import {
   type ProviderConditionSnapshot,
 } from '@shared/types/providerConditions'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 // WHY this predicate exists (conditions audit Finding 2 + Additional A):
 // Several call sites used `runtime.conditions !== null` as a proxy for "there is

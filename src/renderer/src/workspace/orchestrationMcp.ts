@@ -6,9 +6,9 @@ import type {
   OrchestrationCloseResult,
   OrchestrationLifecycleState,
 } from '@mcp/shared/orchestrationTypes'
-import { entryTextContent } from '@renderer/workspace/entries/utils'
+import { entryTextContent } from '@renderer/session-runtime/entries'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>
@@ -16,9 +16,30 @@ type VisibleMessageSummary = {
   messages: OrchestrationAgentMessage[]
   messageCount: number
   latestAssistantText?: string
+  // True when text was cut or older messages were dropped by count/char caps.
+  truncated: boolean
+  // Sum of ORIGINAL char counts of the texts we actually extracted for this
+  // response (returned tail + latest-assistant lookup). Not the whole
+  // transcript — see the WHY inside visibleMessageSummary.
+  totalChars: number
 }
 
 const DEFAULT_MAX_MESSAGES = 20
+// Byte caps (#373). Count caps alone did not bound orchestration reads: a
+// single child message can be hundreds of KB (pasted diffs, giant tool output
+// surfacing as assistant text), and one answer used to be mirrored 5x per
+// read (see buildAgentRecord). Defaults are copied from the transcript MCP
+// tools (AgentTranscriptReader DEFAULT_MAX_CHARS / DEFAULT_MAX_CHARS_PER_ITEM)
+// so "bounded agent output" means the same thing across both consumption
+// surfaces.
+const DEFAULT_MAX_CHARS_PER_MESSAGE = 4_000
+const DEFAULT_MAX_CHARS_PER_AGENT = 24_000
+// Size of the at-a-glance excerpt kept on agent-record mirror fields
+// (latestAssistantText/finalAssistantText on OrchestrationAgentRecord and
+// output.finalAssistantText). Big enough to recognize an answer and decide
+// whether to read more; small enough that repeating it per agent in
+// list/wait responses stays cheap.
+const MIRROR_EXCERPT_MAX_CHARS = 400
 
 export function listOrchestrationAgents(params: {
   state: WorkspaceState
@@ -47,6 +68,8 @@ export function readOrchestrationAgent(params: {
   parentSessionId: string
   sessionId: string
   maxMessages?: number
+  maxCharsPerMessage?: number
+  maxCharsPerAgent?: number
 }): OrchestrationAgentOutput {
   const meta = params.state.sessions[params.sessionId]
   if (!meta || !isVisibleToOrchestrationParent(meta, params.parentSessionId)) {
@@ -59,6 +82,8 @@ export function readOrchestrationAgent(params: {
     parentSessionId: params.parentSessionId,
     runtime,
     maxMessages: params.maxMessages,
+    maxCharsPerMessage: params.maxCharsPerMessage,
+    maxCharsPerAgent: params.maxCharsPerAgent,
   })
 }
 
@@ -68,6 +93,8 @@ export function readOrchestrationRunOutputs(params: {
   parentSessionId: string
   runId?: string
   maxMessagesPerAgent?: number
+  maxCharsPerMessage?: number
+  maxCharsPerAgent?: number
 }): OrchestrationAgentOutput[] {
   return matchingOrchestrationSessionIds(params.state, params.parentSessionId, params.runId)
     .map(sessionId => {
@@ -79,6 +106,8 @@ export function readOrchestrationRunOutputs(params: {
         parentSessionId: params.parentSessionId,
         runtime: params.runtimes[sessionId] ?? null,
         maxMessages: params.maxMessagesPerAgent,
+        maxCharsPerMessage: params.maxCharsPerMessage,
+        maxCharsPerAgent: params.maxCharsPerAgent,
       })
     })
     .filter((output): output is OrchestrationAgentOutput => output !== null)
@@ -186,13 +215,17 @@ function buildAgentOutput(params: {
   parentSessionId: string
   runtime: SessionRuntime | null
   maxMessages?: number
+  maxCharsPerMessage?: number
+  maxCharsPerAgent?: number
 }): OrchestrationAgentOutput {
   const summary = visibleMessageSummary(
     params.runtime,
     params.meta,
     boundedMaxMessages(params.maxMessages),
+    boundedMaxCharsPerMessage(params.maxCharsPerMessage),
+    boundedMaxCharsPerAgent(params.maxCharsPerAgent),
   )
-  const { messages, messageCount, latestAssistantText } = summary
+  const { messages, messageCount, latestAssistantText, truncated, totalChars } = summary
   const agent = buildAgentRecord({
     sessionId: params.sessionId,
     meta: params.meta,
@@ -202,14 +235,31 @@ function buildAgentOutput(params: {
     messageCount,
     latestAssistantText,
   })
+  // WHY the output no longer re-spreads latest/finalAssistantText into `agent`
+  // (#373): before this change ONE child answer appeared verbatim FIVE times
+  // in a single read_agent response — messages[last].text,
+  // agent.latestAssistantText, agent.finalAssistantText,
+  // output.latestAssistantText, output.finalAssistantText (and seven times for
+  // closed agents in wait_agents, which also returns the agents[] records).
+  // finalAssistantText was never independently computed; it was always a
+  // verbatim alias of latestAssistantText assigned right here. We keep exactly
+  // one full (per-message-capped) copy at output.latestAssistantText; every
+  // other mirror is a short excerpt produced by buildAgentRecord /
+  // mirrorExcerpt so existing readers keep working without the 5x payload.
   return {
     agent: {
       ...agent,
-      ...(latestAssistantText ? { latestAssistantText, finalAssistantText: latestAssistantText } : {}),
       messageCount,
     },
     messages,
-    ...(latestAssistantText ? { latestAssistantText, finalAssistantText: latestAssistantText } : {}),
+    ...(latestAssistantText
+      ? {
+          latestAssistantText,
+          finalAssistantText: mirrorExcerpt(latestAssistantText),
+        }
+      : {}),
+    ...(truncated ? { truncated: true } : {}),
+    ...(totalChars > 0 ? { totalChars } : {}),
   }
 }
 
@@ -270,7 +320,22 @@ function buildAgentRecord(params: {
       ? { completedAt: activityAt }
       : {}),
     ...(params.runtime?.processError ? { errorSummary: params.runtime.processError } : {}),
-    ...(latestAssistantText ? { latestAssistantText, finalAssistantText: latestAssistantText } : {}),
+    // Bounded excerpts on purpose (#373): the record-level mirrors exist as
+    // at-a-glance hints in list/wait/agents[] payloads, so a full answer here
+    // multiplied every child answer across responses (the 5x/7x duplication —
+    // see buildAgentOutput). The full capped copy lives ONLY at
+    // output.latestAssistantText.
+    //
+    // LIFECYCLE HAZARD: hasDurableOutput above is derived from
+    // latestAssistantText. Excerpting must never turn non-empty text into
+    // empty/absent, or completed children regress to `waiting` and
+    // wait_agents never resolves. mirrorExcerpt only shortens, never drops.
+    ...(latestAssistantText
+      ? {
+          latestAssistantText: mirrorExcerpt(latestAssistantText),
+          finalAssistantText: mirrorExcerpt(latestAssistantText),
+        }
+      : {}),
     messageCount: params.messageCount
       ?? (statusOnly ? cheapMessageCount(params.runtime, params.meta) : messages.length),
   }
@@ -328,7 +393,11 @@ function visibleMessages(
     if (!text?.trim()) continue
     messages.push({
       role: entry.type,
-      text,
+      // Defensive per-message cap (#373): this fallback path has no caller
+      // that threads explicit caps today (buildAgentOutput always supplies
+      // messages), but if a future caller reaches it, an uncapped message
+      // must not resurrect the unbounded-read problem.
+      ...boundedMessageFields(text, DEFAULT_MAX_CHARS_PER_MESSAGE),
       ...((entry as { timestamp?: string }).timestamp ? { timestamp: (entry as { timestamp?: string }).timestamp } : {}),
     })
   }
@@ -336,7 +405,7 @@ function visibleMessages(
   if (liveText) {
     messages.push({
       role: 'assistant',
-      text: liveText,
+      ...boundedMessageFields(liveText, DEFAULT_MAX_CHARS_PER_MESSAGE),
     })
   }
   return messages
@@ -346,11 +415,15 @@ function visibleMessageSummary(
   runtime: SessionRuntime | null,
   meta: SessionMeta | undefined,
   maxMessages: number,
+  maxCharsPerMessage: number,
+  maxCharsPerAgent: number,
 ): VisibleMessageSummary {
   if (!runtime) {
     return {
       messages: [],
       messageCount: 0,
+      truncated: false,
+      totalChars: 0,
     }
   }
   // WHY this scans from the tail and only extracts text for messages that can
@@ -361,18 +434,75 @@ function visibleMessageSummary(
   // on the renderer thread. We keep messageCount as a cheap visible-entry count
   // rather than exact non-empty text count because exactness would require the
   // same full text extraction this path exists to avoid.
+  //
+  // BYTE CAPS (#373): counts alone never bounded this response — one pasted
+  // diff in a child message is enough to blow the parent's context. Every
+  // extracted text is capped at maxCharsPerMessage, and the returned tail as a
+  // whole shares a maxCharsPerAgent running budget. Because the scan walks
+  // newest -> oldest, "budget exhausted" naturally drops the OLDEST messages
+  // first, mirroring the transcript reader's boundItems budget semantics.
+  // The NEWEST message is exempt from dropping: it is truncated down to the
+  // agent budget instead (see the floor inside pushTail), so a starved budget
+  // still returns a non-empty tail.
+  // totalChars only sums the ORIGINAL sizes of texts we actually extracted:
+  // whole-transcript totals would require the full extraction this fast path
+  // exists to avoid.
   const messagesReversed: OrchestrationAgentMessage[] = []
   let messageCount = 0
   let latestAssistantText: string | undefined
+  let usedChars = 0
+  let totalChars = 0
+  let truncated = false
+  let budgetExhausted = false
+
+  const pushTail = (
+    role: 'user' | 'assistant',
+    rawText: string,
+    timestamp?: string,
+  ): { text: string; truncated: boolean } | null => {
+    let bounded = boundText(rawText, maxCharsPerMessage)
+    if (usedChars + bounded.text.length > maxCharsPerAgent) {
+      if (messagesReversed.length > 0) {
+        // Everything older than this point is dropped too (the scan only gets
+        // older from here), so flip the latch instead of retrying per message.
+        budgetExhausted = true
+        truncated = true
+        return null
+      }
+      // NEWEST-MESSAGE FLOOR (#510 review): the first push is the newest
+      // message in the tail (live turn if present, else the newest visible
+      // entry). Dropping it because maxCharsPerAgent is smaller than one
+      // per-message-capped text would return `messages: []` for an agent that
+      // plainly produced output — budget starvation must degrade to a shorter
+      // excerpt, never to nothing. usedChars is always 0 here (nothing kept
+      // yet), so the whole agent budget is available; boundedMaxCharsPerAgent
+      // clamps it to >=100, which keeps a 76-char excerpt + marker even in the
+      // worst case. Older messages then fail the budget check above and drop
+      // as before.
+      bounded = boundText(rawText, maxCharsPerAgent)
+      truncated = true
+    }
+    usedChars += bounded.text.length
+    totalChars += bounded.totalChars
+    if (bounded.truncated) truncated = true
+    messagesReversed.push({
+      role,
+      text: bounded.text,
+      ...(timestamp ? { timestamp } : {}),
+      ...(bounded.truncated ? { truncated: true, totalChars: bounded.totalChars } : {}),
+    })
+    return bounded
+  }
 
   const liveText = runtime.semantic.currentTurn?.text?.trim()
   if (liveText) {
     messageCount += 1
-    latestAssistantText = liveText
-    messagesReversed.push({
-      role: 'assistant',
-      text: liveText,
-    })
+    const pushed = pushTail('assistant', liveText)
+    // The live turn is the newest assistant text whether or not it fit the
+    // tail budget. Cap it like any message; NEVER drop it (lifecycle hazard —
+    // see buildAgentRecord).
+    latestAssistantText = pushed?.text ?? boundText(liveText, maxCharsPerMessage).text
+    if (!pushed) totalChars += liveText.length
   }
 
   const entries = orchestrationVisibleEntries(runtime, meta)
@@ -381,19 +511,31 @@ function visibleMessageSummary(
     if (entry.type !== 'user' && entry.type !== 'assistant') continue
     messageCount += 1
 
-    const needsTailMessage = messagesReversed.length < maxMessages
+    const needsTailMessage = !budgetExhausted && messagesReversed.length < maxMessages
     const needsLatestAssistant = entry.type === 'assistant' && !latestAssistantText
-    if (!needsTailMessage && !needsLatestAssistant) continue
+    if (!needsTailMessage && !needsLatestAssistant) {
+      // There is at least one visible entry beyond what the caps allow, so the
+      // caller must know the tail is an excerpt of a longer conversation.
+      // (Slight over-report is possible when the skipped entry has empty text;
+      // acceptable, because checking would need the extraction we skip.)
+      truncated = true
+      continue
+    }
 
     const text = entryTextContent(entry)
     if (!text?.trim()) continue
-    if (needsLatestAssistant) latestAssistantText = text
+    const timestamp = (entry as { timestamp?: string }).timestamp
+    let pushed: { text: string } | null = null
     if (needsTailMessage) {
-      messagesReversed.push({
-        role: entry.type,
-        text,
-        ...((entry as { timestamp?: string }).timestamp ? { timestamp: (entry as { timestamp?: string }).timestamp } : {}),
-      })
+      pushed = pushTail(entry.type, text, timestamp)
+    }
+    if (needsLatestAssistant) {
+      const boundedLatest = pushed ?? boundText(text, maxCharsPerMessage)
+      latestAssistantText = boundedLatest.text
+      if (!pushed) {
+        totalChars += text.length
+        if (text.length > maxCharsPerMessage) truncated = true
+      }
     }
   }
 
@@ -401,7 +543,42 @@ function visibleMessageSummary(
     messages: messagesReversed.reverse(),
     messageCount,
     ...(latestAssistantText ? { latestAssistantText } : {}),
+    truncated,
+    totalChars,
   }
+}
+
+// Truncation marker deliberately matches AgentTranscriptReader.truncateItemText
+// (same "…\n[truncated]" shape, same 24-char headroom) so parent agents see one
+// consistent truncation dialect across transcript tools and orchestration reads.
+function boundText(text: string, maxChars: number): {
+  text: string
+  truncated: boolean
+  totalChars: number
+} {
+  if (text.length <= maxChars) {
+    return { text, truncated: false, totalChars: text.length }
+  }
+  return {
+    text: `${text.slice(0, Math.max(0, maxChars - 24))}\n[truncated]`,
+    truncated: true,
+    totalChars: text.length,
+  }
+}
+
+function boundedMessageFields(
+  text: string,
+  maxChars: number,
+): Pick<OrchestrationAgentMessage, 'text' | 'truncated' | 'totalChars'> {
+  const bounded = boundText(text, maxChars)
+  return {
+    text: bounded.text,
+    ...(bounded.truncated ? { truncated: true, totalChars: bounded.totalChars } : {}),
+  }
+}
+
+function mirrorExcerpt(text: string): string {
+  return boundText(text, MIRROR_EXCERPT_MAX_CHARS).text
 }
 
 function hasAssistantOutput(
@@ -514,4 +691,20 @@ function boundedMaxMessages(value: number | undefined): number {
   if (value === undefined) return DEFAULT_MAX_MESSAGES
   if (!Number.isFinite(value)) return DEFAULT_MAX_MESSAGES
   return Math.max(1, Math.min(100, Math.floor(value)))
+}
+
+// Clamp ranges intentionally match the transcript MCP tool schemas
+// (createBuiltInMcpServer: maxCharsPerItem 50..100_000, maxChars
+// 100..500_000) so a caller can reuse the same numbers on both surfaces. The
+// clamp is enforced here — not just in the zod schema — because renderer
+// requests also arrive from main-side callers (bridge tombstone reads) that
+// never pass through the MCP schema.
+function boundedMaxCharsPerMessage(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_MAX_CHARS_PER_MESSAGE
+  return Math.max(50, Math.min(100_000, Math.floor(value)))
+}
+
+function boundedMaxCharsPerAgent(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return DEFAULT_MAX_CHARS_PER_AGENT
+  return Math.max(100, Math.min(500_000, Math.floor(value)))
 }

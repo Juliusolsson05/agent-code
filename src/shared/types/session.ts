@@ -280,6 +280,14 @@ export interface AgentSession extends AgentSessionEmitter {
     | { kind: 'no-headless' }
   >
 
+  /** Optional (Claude today): a synchronous read of the live plain-text TUI
+   *  screen (headless snapshotPlain). The prompt-delivery path polls this to
+   *  detect the paste-commit *transition* — a NEW `[Pasted text #N]`
+   *  placeholder OR the paste's tail newly inlined — before firing Enter, the
+   *  same content-match signal the desktop composer uses. Returns '' when the
+   *  headless instance isn't up yet. */
+  snapshotScreen?(): string
+
   /** Optional (Codex today): wait for the composer to be ready to
    *  accept a prompt (past the startup/trust chrome). See
    *  sessionManager.ts:987. */

@@ -7,7 +7,7 @@ import type {
   DevDebugModuleProps,
 } from '@renderer/features/debug/devModules/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 const STORAGE_KEY = 'agent-code:dev-debug:enabled-modules'
 

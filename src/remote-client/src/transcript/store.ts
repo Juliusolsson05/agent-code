@@ -1,15 +1,15 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
+import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import {
   reduceStreamPhase,
   type StreamPhaseState,
-} from '@renderer/workspace/semantic/streamPhaseMachine'
-import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
+} from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import {
   emptySemanticRuntime,
   type SemanticLiveTurn,
   type SemanticRuntimeState,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import { isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
@@ -47,6 +47,13 @@ export type SessionTranscript = {
   entries: Entry[]
   semanticTurn: SemanticLiveTurn | null
   semanticHistory: SemanticLiveTurn[]
+  /** The full fold state, mirrored on exactly the ticks that update
+   *  semanticTurn/semanticHistory above. Exposed since #493 PR-2 so
+   *  SessionView can hand the ledger a REAL SemanticRuntimeState (the
+   *  RuntimeRenderInput contract) instead of fabricating a partial
+   *  {currentTurn, history} object behind an `as unknown as` cast. The
+   *  two scalar mirrors stay because non-ledger surfaces read them. */
+  semantic: SemanticRuntimeState
   phase: StreamPhaseState
   toolUseIndex: Map<string, ToolUseBlock>
   toolResultIndex: Map<string, ToolResultBlock>
@@ -110,6 +117,7 @@ function emptyTranscript(): SessionTranscript {
     entries: [],
     semanticTurn: null,
     semanticHistory: [],
+    semantic: emptySemanticRuntime(),
     phase: emptyPhase(),
     toolUseIndex: new Map(),
     toolResultIndex: new Map(),
@@ -157,12 +165,14 @@ export class TranscriptStore {
         // turn, no phase, no prompts (useIpcSubscriptions offExit).
         const state = this.state(e.sessionId)
         state.semantic = { ...state.semantic, currentTurn: null }
+        const clearedSemantic = state.semantic
         this.mutate(e.sessionId, t => ({
           ...t,
           exited: true,
           workingStatus: null,
           phase: emptyPhase(),
           semanticTurn: null,
+          semantic: clearedSemantic,
           conditions: null,
         }))
       }),
@@ -521,6 +531,7 @@ export class TranscriptStore {
       ...prev,
       semanticTurn: nextSemantic.currentTurn,
       semanticHistory: nextSemantic.history,
+      semantic: nextSemantic,
       phase: nextPhase,
     }))
   }

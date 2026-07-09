@@ -3,7 +3,7 @@ import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKin
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
-import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
+import type { ClaudeDraftImage } from '@renderer/session-runtime/state'
 import { commandTargetSessionIdForState } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'

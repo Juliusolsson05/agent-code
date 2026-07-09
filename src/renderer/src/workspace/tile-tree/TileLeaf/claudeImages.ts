@@ -1,4 +1,4 @@
-import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
+import type { ClaudeDraftImage } from '@renderer/session-runtime/state'
 
 // Helpers for turning pasted / dropped / clipboard images into the
 // `ClaudeDraftImage` payload shape the workspace runtime stores.
