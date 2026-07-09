@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback } from 'react'
 
 import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
@@ -10,12 +10,12 @@ import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
-import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { useAiWorkspaceOpenRequests } from '@renderer/features/global-editor/hooks/useAiWorkspaceOpenRequests'
 import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
-import {
-  AUTO_DEBUG_BUNDLE_INTERVAL_MS,
-  autosaveActiveAgentDebugBundles,
-} from '@renderer/features/debug/saveDebugBundle'
+import { useThemeSync } from '@renderer/features/settings/hooks/useThemeSync'
+import { useDictationHotkeySync } from '@renderer/features/voice-dictation/useDictationHotkeySync'
+import { useDebugAutosave } from '@renderer/features/debug/useDebugAutosave'
+import { useRenderedLeaseHygiene } from '@renderer/workspace/hook/effects/useRenderedLeaseHygiene'
 import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
@@ -27,7 +27,6 @@ import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
 import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
 import { SidePanels } from '@renderer/app/surfaces/SidePanels'
-import { applyTheme } from '@renderer/app-state/settings/theme'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
 
@@ -54,7 +53,6 @@ export default function App() {
   const linkedAgentParentId = useAppStore(state => state.linkedAgentParentId)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
-  const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const useProxyStreaming = settings.useProxyStreaming
   const defaultWorkspaceMode = settings.defaultWorkspaceMode
   const toggleCommandPalette = useAppStore(state => state.toggleCommandPalette)
@@ -78,125 +76,15 @@ export default function App() {
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
 
-  useEffect(() => {
-    applyTheme(settings)
-    void window.api.remoteSetThemeSettings(settings)
-  }, [settings])
-
-  useEffect(() => {
-    const off = window.api.onAiWorkspaceOpenRequest(request => {
-      useGlobalEditorStore.getState().openAiWorkspace(request.workspaceId)
-      useAppStore.getState().openGlobalEditor()
-    })
-    return off
-  }, [])
-
+  useThemeSync()
+  useAiWorkspaceOpenRequests()
   useDevDebugConfigSync()
   useCaffeinateSync()
-
-  useEffect(() => {
-    // The default dictation trigger is bare Fn, which Chromium does not expose
-    // reliably to renderer keydown. Settings live in the renderer, but the
-    // actual capture must live in main/native; keep this one-way sync here so
-    // every pane shares the same OS listener while the focused pane decides
-    // whether to consume the resulting press/release event.
-    const binding = settings.dictationEnabled ? settings.dictationShortcut : ''
-    void window.api.configureDictationHotkey({ binding }).then(result => {
-      if (!result.ok) {
-        console.warn('[dictation] hotkey registration failed:', result)
-      }
-    })
-  }, [settings.dictationEnabled, settings.dictationShortcut])
+  useDictationHotkeySync()
 
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
-  const workspaceRef = useRef(workspace)
-
-  useEffect(() => {
-    workspaceRef.current = workspace
-  }, [workspace])
-
-  useEffect(() => {
-    if (settings.agentViewMode !== 'terminal') return
-    // WHY hard Terminal mode force-clears rendered interaction state:
-    // Hybrid leases are intentionally allowed to mount TileLeaf for a feature,
-    // but Terminal mode is the user's explicit "do not mount Agent Code's
-    // rendered agent surface" setting. If a picker lease survives the setting
-    // transition, switching back to Hybrid later can resurrect a stale picker
-    // that was invisible while Terminal mode was active. Clearing at the app
-    // boundary keeps the mode switch semantic: Terminal is an immediate hard
-    // reset of rendered-only affordances, not a pause button for them.
-    for (const sessionId of Object.keys(workspace.runtimes)) {
-      const runtime = workspace.runtimes[sessionId]
-      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
-      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
-      workspace.releaseAllRenderedViewLeases(sessionId)
-    }
-  }, [settings.agentViewMode, workspace])
-
-  useEffect(() => {
-    // NOTE the field is `readerMode`, not `reader` (cross-app audit V1): the
-    // workspace object never exposed a `reader` property, so the old guard read
-    // `undefined`, collapsed to "spotlight OR settings only", and SKIPPED the
-    // lease cleanup whenever Reader Mode was the surface hiding the feed. Reader
-    // Mode replaces the feed interaction layer exactly like spotlight/settings,
-    // so a surviving Copy-Assistant / Copy-Code-Block picker lease left
-    // Escape/Enter/arrows acting on hidden state. This typo class is the reason
-    // the cross-app audit calls for a typecheck gate — `workspace.reader`
-    // compiled silently because nothing ran `tsc`.
-    if (!workspace.readerMode && !workspace.spotlight && !settingsPageOpen) return
-    // WHY reader/spotlight/settings clear picker leases:
-    // these surfaces hide or replace the feed interaction layer while global
-    // keybinds are still alive. If a Copy Assistant or Copy Code Block picker
-    // survives underneath them, Escape/Enter/arrows either act on hidden state
-    // or force Hybrid to keep TileLeaf mounted for UI the user cannot see.
-    // Draft-driven rendering is intentionally unaffected because composer
-    // draft text is real user state; picker leases are transient affordances.
-    for (const sessionId of Object.keys(workspace.runtimes)) {
-      const runtime = workspace.runtimes[sessionId]
-      if (runtime?.assistantPicker) workspace.pickerCancel(sessionId)
-      if (runtime?.codeBlockPicker) workspace.setCodeBlockPicker(sessionId, null)
-      workspace.releaseRenderedViewLease(sessionId, 'copy-assistant-message')
-      workspace.releaseRenderedViewLease(sessionId, 'copy-code-block')
-    }
-  }, [settingsPageOpen, workspace])
-
-  useEffect(() => {
-    if (!aggressiveDebugPersistenceEnabled) return
-
-    let disposed = false
-    let inFlight = false
-
-    const saveAll = (reason: 'autosave-enabled' | 'autosave-interval' | 'autosave-beforeunload') => {
-      if (inFlight && reason !== 'autosave-beforeunload') return
-      inFlight = true
-      void autosaveActiveAgentDebugBundles(workspaceRef.current, reason)
-        .catch(err => {
-          // eslint-disable-next-line no-console
-          console.warn('[debug-autosave] failed', err)
-        })
-        .finally(() => {
-          if (!disposed) inFlight = false
-        })
-    }
-
-    // Take an immediate baseline when the mode is enabled so a crash
-    // inside the first interval still leaves at least one bundle.
-    saveAll('autosave-enabled')
-    const timer = window.setInterval(
-      () => saveAll('autosave-interval'),
-      AUTO_DEBUG_BUNDLE_INTERVAL_MS,
-    )
-    const onBeforeUnload = () => {
-      saveAll('autosave-beforeunload')
-    }
-    window.addEventListener('beforeunload', onBeforeUnload)
-
-    return () => {
-      disposed = true
-      window.clearInterval(timer)
-      window.removeEventListener('beforeunload', onBeforeUnload)
-    }
-  }, [aggressiveDebugPersistenceEnabled])
+  useRenderedLeaseHygiene(workspace)
+  useDebugAutosave(workspace)
 
   const { onNewTabRequest, onResumeRequest } = usePathPickerRequests()
 
