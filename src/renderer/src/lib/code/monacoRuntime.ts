@@ -19,6 +19,30 @@ import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
 
+// Installed at MODULE SCOPE, not inside getMonaco(): Monaco resolves
+// MonacoEnvironment lazily when a language service first needs a worker,
+// but nothing guarantees every model/editor creation site awaits
+// getMonaco() first (a future direct import of 'monaco-editor' from
+// anywhere else would race it). The worker getter has no dependency on
+// the loaded monaco module, so there is no reason to defer installing it
+// — and a missing environment doesn't throw, it silently degrades to
+// no-tokenization, which is the worst possible failure mode to debug
+// (#513 "highlighting is blank half the time").
+const monacoWindow = window as Window & {
+  MonacoEnvironment?: {
+    getWorker: (moduleId: string, label: string) => Worker
+  }
+}
+monacoWindow.MonacoEnvironment ??= {
+  getWorker(_moduleId: string, label: string) {
+    if (label === 'typescript' || label === 'javascript') return new tsWorker()
+    if (label === 'json') return new jsonWorker()
+    if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker()
+    if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker()
+    return new editorWorker()
+  },
+}
+
 const semanticLegends = new Map<
   string,
   { tokenTypes: string[]; tokenModifiers: string[] }
@@ -184,28 +208,6 @@ export async function getMonaco(): Promise<typeof Monaco> {
       noSemanticValidation: true,
       noSyntaxValidation: false,
     })
-  }
-  const monacoWindow = window as Window & {
-    MonacoEnvironment?: {
-      getWorker: (_moduleId: string, label: string) => Worker
-    }
-  }
-  if (!monacoWindow.MonacoEnvironment) {
-    monacoWindow.MonacoEnvironment = {
-      getWorker(_moduleId: string, label: string) {
-        if (label === 'typescript' || label === 'javascript') {
-          return new tsWorker()
-        }
-        if (label === 'json') return new jsonWorker()
-        if (label === 'css' || label === 'scss' || label === 'less') {
-          return new cssWorker()
-        }
-        if (label === 'html' || label === 'handlebars' || label === 'razor') {
-          return new htmlWorker()
-        }
-        return new editorWorker()
-      },
-    }
   }
   // Define-once: getMonaco() is called by every CodeBlock mount, and
   // re-deriving all four themes from getComputedStyle on each mount is

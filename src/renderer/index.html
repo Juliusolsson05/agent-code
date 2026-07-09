@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!--
+      WHY worker-src 'self' blob:
+      Monaco language services run in Web Workers (Vite ?worker imports
+      are same-origin files in prod, but Vite's dev server and some
+      Monaco fallback paths construct blob: workers). With no worker-src
+      directive, workers fall back to script-src 'self', which blocks
+      blob: — the TS/JSON/CSS/HTML workers die silently and tokenization
+      goes blank intermittently (#513).
+
       WHY https://cdn.jsdelivr.net is in img-src:
       The Global Editor's ExplorerPane uses vscode-icons-js to pick
       per-extension file icons; the actual SVG files live in the
@@ -20,7 +28,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; img-src 'self' data: blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'"
+      content="default-src 'self'; img-src 'self' data: blob: https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; worker-src 'self' blob:"
     />
     <title>Agent Code</title>
   </head>
