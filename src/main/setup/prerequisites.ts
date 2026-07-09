@@ -3,7 +3,7 @@ import type {
   SetupToolId,
   SetupToolStatus,
 } from '@shared/types/setup.js'
-import { resolveToolPath } from '@main/setup/binaryResolver.js'
+import { isExecutable, resolveToolPath } from '@main/setup/binaryResolver.js'
 import {
   isBundledArchiveAvailable,
   type BundledToolId,
@@ -89,7 +89,21 @@ export async function checkPrerequisites(): Promise<SetupCheckResult> {
   const brewPath = await resolveToolPath('brew')
   const entries = await Promise.all(
     CHECK_ORDER.map(async tool => {
-      const systemPath = tool === 'brew' ? brewPath : await resolveToolPath(tool)
+      let systemPath = tool === 'brew' ? brewPath : await resolveToolPath(tool)
+      // Probe missed? Fall back to the persisted path when it still points
+      // at an executable (#495 A1). Two things land here: (1) the user's
+      // manual override from setup:set-tool-path — without this fallback
+      // the updateToolPaths() write-back below would DELETE the override
+      // seconds after it was saved (null path → delete entry), re-locking
+      // the gate the override exists to open; (2) a previously-probed
+      // path during a transient probe failure (slow rc file, shell
+      // hiccup), which used to get wiped for the same reason. A persisted
+      // path that no longer exists/execs still clears naturally — the
+      // fallback re-checks the file, not the bookkeeping.
+      if (!systemPath) {
+        const persisted = state.toolPaths[tool]
+        if (persisted && (await isExecutable(persisted))) systemPath = persisted
+      }
       // WHY bundled detection takes precedence over PATH:
       //   When we ship a tool, that is the version we tested with and
       //   the version proxy diagnostics + behaviour assume. A user's
