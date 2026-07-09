@@ -5,7 +5,20 @@ import {
   replayRecording,
   type RecordingHeader,
   type RecordedLine,
+  type ReplayItemsProjection,
 } from '@renderer/rendering/replay/recordedSession'
+import {
+  ledgerFeedContextFromRuntime,
+  ledgerToFeedItems,
+} from '@renderer/features/feed/ledger/ledgerFeedItems'
+
+// The REAL feed-owned view bridge, injected through the harness's
+// projectItems seam (#493 PR-3): the harness itself may not import
+// features/, but this test's whole point is exercising the full stack —
+// including the #239 dropped-candidate accounting — so it supplies the
+// production bridge.
+const projectItems: ReplayItemsProjection = (ledger, view, provider) =>
+  ledgerToFeedItems(ledger, ledgerFeedContextFromRuntime(view, provider))
 
 // ---------------------------------------------------------------------------
 // Slice 4 — replay-harness round trip. Hand-build a small recording (the 9
@@ -135,7 +148,7 @@ describe('replay harness — recorded-session round trip', () => {
   it('replays a hand-built recording and produces the expected rows tick by tick', () => {
     vi.useFakeTimers()
     const recording = parseRecording({ header: HEADER, events: buildRecording() })
-    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w) })
+    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w), projectItems })
 
     const rowIds = replay.ticks.map(t => t.rows.map(r => r.candidate.id))
 
@@ -179,7 +192,7 @@ describe('replay harness — recorded-session round trip', () => {
   it('reuses the SAME ledger object on ticks whose inputs did not change (D11)', () => {
     vi.useFakeTimers()
     const recording = parseRecording({ header: HEADER, events: buildRecording() })
-    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w) })
+    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w), projectItems })
 
     // Tick 6 is the screen frame that follows the tool block_started (tick 5).
     // A screen event moves no ledger slice, so the adapter's plane caches all
@@ -209,7 +222,7 @@ describe('replay harness — recorded-session round trip', () => {
     // The torn line is dropped; every complete line survives.
     expect(recording.lines).toHaveLength(buildRecording().length)
 
-    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w) })
+    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w), projectItems })
     expect(replay.ticks.at(-1)?.rows.map(r => r.candidate.id)).toEqual(['entry:u1', 'entry:a1'])
   })
 
@@ -223,7 +236,7 @@ describe('replay harness — recorded-session round trip', () => {
       { t: 90, wall: T + 90, ch: '__truncated', reason: 'size-cap', bytes: 1234 },
     ]
     const recording = parseRecording({ header: HEADER, events: withNotes })
-    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w) })
+    const replay = replayRecording(recording, { onBeforeFold: w => vi.setSystemTime(w), projectItems })
 
     // Notes/tombstones are preserved in the parsed line list (triage tooling
     // reads them) but produce NO pipeline tick — the tick count equals the

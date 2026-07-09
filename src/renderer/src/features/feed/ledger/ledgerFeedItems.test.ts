@@ -15,7 +15,7 @@ import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import {
   ledgerFeedContextFromRuntime,
   ledgerToFeedItems,
-} from '@renderer/rendering/view/ledgerFeedItems'
+} from '@renderer/features/feed/ledger/ledgerFeedItems'
 
 // ---------------------------------------------------------------------------
 // View bridge: the ledger must drive Feed's EXISTING row components. These

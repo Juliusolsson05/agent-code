@@ -1,6 +1,5 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { isAgentProviderKind } from '@shared/types/providerKind'
-import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
 import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
 import {
   createLedgerInputAdapter,
@@ -8,10 +7,6 @@ import {
 } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { RenderLedger, OwnershipDecision } from '@renderer/rendering/model/types'
-import {
-  ledgerFeedContextFromRuntime,
-  ledgerToFeedItems,
-} from '@renderer/rendering/view/ledgerFeedItems'
 import {
   applyFeedEvent,
   createReplayFoldState,
@@ -34,9 +29,10 @@ import {
 //        │  createSessionLedger()        ← constructed ONCE, holds last-call cache
 //        ▼
 //   RenderLedger { rows, decisions }
-//        │  ledgerToFeedItems(...)       ← the view bridge (exercises #239 drops)
-//        ▼
-//   FeedRenderItem[]
+//        │  options.projectItems         ← INJECTED view bridge (#493 PR-3: the
+//        ▼                                 bridge lives in features/feed, which
+//   items (opaque to this harness)        this decide-layer harness must not
+//                                         import; tests inject the real one)
 //
 // The adapter and ledger are built ONCE and fed each tick (rec-research-seam.md
 // §(c)): that is what makes the D11 identity caches real. Building them per tick
@@ -97,10 +93,15 @@ export type ReplayTick = {
   ledger: RenderLedger
   /** Convenience alias for `ledger.rows` (what paints). */
   rows: RenderLedger['rows']
-  /** The view-bridge output — exercises the full stack through FeedRenderItem. */
-  feedItems: FeedRenderItem[]
-  /** Candidate ids the view bridge could not resolve (the #239 "present but
-   *  invisible" class). Non-empty is itself a smell the invariants can flag. */
+  /** The injected view bridge's output, opaque to this harness (#493 PR-3:
+   *  the RenderRow→FeedRenderItem bridge is feed-owned; rendering/ must not
+   *  import it). Empty when no `projectItems` was injected. Tests that assert
+   *  on painted items inject the real bridge and narrow the type themselves. */
+  feedItems: unknown[]
+  /** Candidate ids the injected bridge could not resolve (the #239 "present
+   *  but invisible" class). Non-empty is itself a smell the invariants flag.
+   *  Empty (vacuously) when no `projectItems` was injected — corpus/replay
+   *  tests MUST inject the real bridge or the drop invariant checks nothing. */
   dropped: string[]
   /** Rejections the ADAPTER made at collection time (hidden meta rows,
    *  compaction-synthesis kills, duplicate-turn drops) — the half of the
@@ -116,6 +117,18 @@ export type ReplayResult = {
   ticks: ReplayTick[]
 }
 
+/** The view-bridge seam. The harness runs slices → adapter → ledger and stops
+ *  at RenderLedger (the decide layer's own output); projecting rows into feed
+ *  items is the RENDER layer's job, so the projection is injected by callers
+ *  (tests import the real `ledgerToFeedItems`+`ledgerFeedContextFromRuntime`
+ *  from features/feed/ledger and adapt them here). This is what lets the
+ *  replay harness live inside rendering/ without importing features/. */
+export type ReplayItemsProjection = (
+  ledger: RenderLedger,
+  runtimeView: RuntimeRenderInput,
+  provider: AgentProviderKind,
+) => { items: unknown[]; dropped: string[] }
+
 export type ReplayOptions = {
   /**
    * Clock-injection seam (plan §6 "inject wall as the fold clock"). Called with
@@ -130,6 +143,8 @@ export type ReplayOptions = {
    * entry.timestamp), only the receipt-time stamps drift.
    */
   onBeforeFold?: (wall: number) => void
+  /** See ReplayItemsProjection. Omitted ⇒ feedItems/dropped stay empty. */
+  projectItems?: ReplayItemsProjection
 }
 
 // ---------------------------------------------------------------------------
@@ -255,10 +270,9 @@ export function replayRecording(
     const slices = slicesFromState(state)
     const bundle = adapter(slices)
     const rl = ledger(bundle.input)
-    const { items, dropped } = ledgerToFeedItems(
-      rl,
-      ledgerFeedContextFromRuntime(runtimeViewFor(state), provider),
-    )
+    const { items, dropped } = options.projectItems
+      ? options.projectItems(rl, runtimeViewFor(state), provider)
+      : { items: [], dropped: [] }
 
     ticks.push({
       index,
