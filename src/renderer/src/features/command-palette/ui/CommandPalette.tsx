@@ -138,6 +138,7 @@ export function CommandPalette() {
   // workspace has no concept of "the file tree."
   const fileTreeVisible = useGlobalEditorStore(state => state.fileTreeVisible)
   const toggleFileTreeVisible = useGlobalEditorStore(state => state.toggleFileTreeVisible)
+  const editorFullscreen = useGlobalEditorStore(state => state.editorFullscreen)
 
   const enterDispatchMode = workspace.enterDispatchMode
   const exitDispatchMode = workspace.exitDispatchMode
@@ -415,6 +416,7 @@ export function CommandPalette() {
         caffeinateSupported,
         globalEditorOpen,
         fileTreeVisible,
+        editorFullscreen,
         dispatchModeEnabled,
         globalDispatchEnabled,
         agentViewMode,
@@ -493,6 +495,7 @@ export function CommandPalette() {
       caffeinateSupported,
       globalEditorOpen,
       fileTreeVisible,
+      editorFullscreen,
       dispatchModeEnabled,
       globalDispatchEnabled,
       agentViewMode,

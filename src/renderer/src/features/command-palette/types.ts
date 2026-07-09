@@ -182,6 +182,9 @@ export type CommandContext = {
      *  Only consulted while the overlay is open; otherwise it has no
      *  visible effect. Source of truth is the global-editor store. */
     fileTreeVisible: boolean
+    /** Whether the Global Editor is in fullscreen (workspace hidden).
+     *  Same scoping as fileTreeVisible — global-editor store owns it. */
+    editorFullscreen: boolean
     dispatchModeEnabled: boolean
     globalDispatchEnabled: boolean
     /** App-wide agent pane surface policy from Settings. The command registry
