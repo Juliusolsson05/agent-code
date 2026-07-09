@@ -4,8 +4,13 @@ import type {
   AiWorkspaceFileEntry,
   AiWorkspaceRecord,
 } from '@mcp/shared/aiWorkspaceTypes'
-import { normalizeCodeLanguage } from '@shared/code/language'
 import { basename } from '@renderer/features/editor/lib/path'
+import {
+  makeBuffer,
+  withError,
+  withSaved,
+  withTextUpdate,
+} from '@renderer/features/editor/lib/bufferOps'
 import { disposeEditorModel } from '@renderer/features/editor/lib/editorModelRegistry'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { EditorWorkbench } from '@renderer/features/editor/ui/EditorWorkbench'
@@ -22,19 +27,13 @@ function bufferFromEntry(
   text: string,
   mtimeMs: number,
 ): EditorFileBuffer {
-  return {
+  return makeBuffer({
     path: entry.entryId,
     absolutePath: entry.path,
-    language: normalizeCodeLanguage(null, basename(entry.path)),
-    savedText: text,
-    currentText: text,
-    dirty: false,
-    loading: false,
-    error: null,
-    conflict: false,
+    fileName: basename(entry.path),
+    text,
     mtimeMs,
-    selection: null,
-  }
+  })
 }
 
 export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
@@ -84,19 +83,16 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
       setFileOrder(prev => prev.includes(entry.entryId) ? prev : [...prev, entry.entryId])
       setOpenFiles(prev => ({
         ...prev,
-        [entry.entryId]: {
-          path: entry.entryId,
-          absolutePath: entry.path,
-          language: normalizeCodeLanguage(null, basename(entry.path)),
-          savedText: '',
-          currentText: '',
-          dirty: false,
-          loading: false,
-          error: result.error,
-          conflict: false,
-          mtimeMs: null,
-          selection: null,
-        },
+        [entry.entryId]: withError(
+          makeBuffer({
+            path: entry.entryId,
+            absolutePath: entry.path,
+            fileName: basename(entry.path),
+            text: '',
+            mtimeMs: null,
+          }),
+          result.error,
+        ),
       }))
       setActiveFilePath(entry.entryId)
       return
@@ -113,19 +109,9 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
     setOpenFiles(prev => {
       const current = prev[entryId]
       if (!current) return prev
-      return {
-        ...prev,
-        [entryId]: {
-          ...current,
-          currentText: text,
-          dirty: text !== current.savedText,
-          // Same contract as the Global Editor store: typing past a save
-          // error clears it — the next Cmd+S re-runs the authoritative
-          // mtime check, so a pinned stale message only misleads.
-          error: null,
-          conflict: false,
-        },
-      }
+      // Shared transition — same dirty/error semantics as the Global
+      // Editor store, by construction (bufferOps).
+      return { ...prev, [entryId]: withTextUpdate(current, text) }
     })
   }, [])
 
@@ -145,20 +131,13 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
     if (!result.ok) {
       setOpenFiles(prev => ({
         ...prev,
-        [entryId]: { ...buffer, error: result.error, conflict: result.conflict === true },
+        [entryId]: withError(buffer, result.error, result.conflict === true),
       }))
       return false
     }
     setOpenFiles(prev => ({
       ...prev,
-      [entryId]: {
-        ...buffer,
-        savedText: buffer.currentText,
-        dirty: false,
-        mtimeMs: result.mtimeMs,
-        error: null,
-        conflict: false,
-      },
+      [entryId]: withSaved(buffer, buffer.currentText, result.mtimeMs),
     }))
     void loadWorkspace()
     return true
@@ -215,20 +194,9 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
         const current = prev[entryId]
         if (!current) return prev
         if (!result.ok) {
-          return { ...prev, [entryId]: { ...current, error: result.error, conflict: false } }
+          return { ...prev, [entryId]: withError(current, result.error) }
         }
-        return {
-          ...prev,
-          [entryId]: {
-            ...current,
-            savedText: result.text,
-            currentText: result.text,
-            dirty: false,
-            mtimeMs: result.mtimeMs,
-            error: null,
-            conflict: false,
-          },
-        }
+        return { ...prev, [entryId]: withSaved(current, result.text, result.mtimeMs) }
       })
     },
     [entriesById],
@@ -250,19 +218,12 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
         if (!result.ok) {
           return {
             ...prev,
-            [entryId]: { ...current, error: result.error, conflict: result.conflict === true },
+            [entryId]: withError(current, result.error, result.conflict === true),
           }
         }
         return {
           ...prev,
-          [entryId]: {
-            ...current,
-            savedText: current.currentText,
-            dirty: false,
-            mtimeMs: result.mtimeMs,
-            error: null,
-            conflict: false,
-          },
+          [entryId]: withSaved(current, current.currentText, result.mtimeMs),
         }
       })
     },

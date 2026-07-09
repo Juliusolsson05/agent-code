@@ -2,6 +2,12 @@ import { create } from 'zustand'
 
 import { normalizeCodeLanguage } from '@shared/code/language'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
+import {
+  makeBuffer,
+  withError,
+  withSaved,
+  withTextUpdate,
+} from '@renderer/features/editor/lib/bufferOps'
 // Benign module cycle — see the MODULE-CYCLE NOTE in
 // globalEditorPersistence.ts before "fixing" this import.
 import { loadPersistedGlobalEditorState } from '@renderer/features/global-editor/lib/globalEditorPersistence'
@@ -17,15 +23,13 @@ import { loadPersistedGlobalEditorState } from '@renderer/features/global-editor
 // navigation punishes the user by wiping the editor every few
 // seconds.
 //
-// WHY a separate store rather than reusing useEditorStore:
-// useEditorStore (in features/editor/store.ts) is the
-// single-workspace store from the prior "Code Editor" mode
-// (feat/code-editor). Its `enterEditor` action explicitly clears
-// open buffers when projectRoot changes — the opposite of what
-// Global Editor needs. Trying to extend that store with per-cwd
-// memory would tangle two distinct lifecycles. A separate store
-// keeps the prior mode's semantics intact while letting Global
-// Editor own its own per-cwd memory model.
+// HISTORY: this store replaced `useEditorStore` (the deleted
+// features/editor/store.ts from the prior single-workspace "Code
+// Editor" mode, feat/code-editor). That store cleared open buffers on
+// every projectRoot change — the opposite of the per-cwd memory this
+// one exists to provide. The semantics it pioneered (dirty-preserving
+// reopen, dirty-close guard) live on here; the buffer math itself is
+// now shared with AI Workspace via features/editor/lib/bufferOps.
 //
 // PERSISTENCE (#513): open-tab PATHS and pane geometry survive app
 // restarts via lib/globalEditorPersistence (localStorage). The original
@@ -146,19 +150,14 @@ function createBuffer(params: {
   mtimeMs: number
   selection?: { line: number; column: number } | null
 }): EditorFileBuffer {
-  return {
+  return makeBuffer({
     path: params.path,
     absolutePath: absolutePath(params.root, params.path),
-    language: normalizeCodeLanguage(null, basename(params.path)),
-    savedText: params.text,
-    currentText: params.text,
-    dirty: false,
-    loading: false,
-    error: null,
-    conflict: false,
+    fileName: basename(params.path),
+    text: params.text,
     mtimeMs: params.mtimeMs,
-    selection: params.selection ?? null,
-  }
+    selection: params.selection,
+  })
 }
 
 // Clamp splitter ratio. 0.2 / 0.8 are picked so neither pane can
@@ -227,9 +226,10 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
       // If the file is already open AND dirty, preserve the dirty
       // buffer (savedText becomes the new on-disk content but the
       // user-typed text stays). Otherwise replace with a fresh
-      // buffer at on-disk content. This mirrors the prior
-      // useEditorStore semantics so behaviour is consistent
-      // between Global Editor and the "Code Editor" mode.
+      // buffer at on-disk content. Dirty preservation is what makes a
+      // re-click on an already-open file (tree, rendered path,
+      // quick-open) safe — it revalidates against disk without ever
+      // discarding the user's unsaved edits.
       const buffer: EditorFileBuffer = existing?.dirty
         ? {
             ...existing,
@@ -279,19 +279,9 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
             ...prev,
             openFiles: {
               ...prev.openFiles,
-              [path]: {
-                ...current,
-                currentText: text,
-                dirty: text !== current.savedText,
-                // WHY typing clears the stale save error instead of leaving it
-                // pinned until the next successful write: conflicts are tied
-                // to the previous save attempt, not to every future edit. The
-                // next Cmd+S will re-run the authoritative mtime check in main,
-                // so keeping an old "file changed on disk" message after the
-                // user has continued editing is more misleading than helpful.
-                error: null,
-                conflict: false,
-              },
+              // Error/conflict clearing on type is part of the shared
+              // transition — see withTextUpdate's WHY in bufferOps.
+              [path]: withTextUpdate(current, text),
             },
           },
         },
@@ -313,11 +303,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
             ...prev,
             openFiles: {
               ...prev.openFiles,
-              [path]: {
-                ...current,
-                error,
-                conflict,
-              },
+              [path]: withError(current, error, conflict),
             },
           },
         },
@@ -366,15 +352,7 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
             ...prev,
             openFiles: {
               ...prev.openFiles,
-              [path]: {
-                ...current,
-                savedText: text,
-                currentText: text,
-                dirty: false,
-                mtimeMs,
-                error: null,
-                conflict: false,
-              },
+              [path]: withSaved(current, text, mtimeMs),
             },
           },
         },
