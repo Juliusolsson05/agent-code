@@ -2205,6 +2205,15 @@ Do NOT merge (user policy). Report the PR URL and stop.
 
 ---
 
+## Execution Notes (post-implementation, 2026-07-09)
+
+All 17 tasks executed on this branch. Deviations from the plan as written:
+
+- **Task 2 (theme controller):** implemented as a shared refcount module (`lib/code/monacoThemeState.ts`) consulted by both existing theme owners, NOT the planned full `monacoThemeController.ts` consolidation. The existing renderer test (`monacoEditorTheme.renderer.test.ts`) pins the split-listener contract — the editor module must never call `setTheme` while inactive — and consolidation would have required rewriting the test to a new contract for zero additional behavior. The actual bug (getMonaco() re-asserting the slab theme on every call) is fixed either way.
+- **Tasks 11/12 backend:** the recursive lister and content-search handlers landed inside `editorFs.ts` alongside the other handlers (same ignore lists, same containment) rather than a separate file — they are 2 more `ipcMain.handle` blocks, not a new subsystem.
+- **Task 15:** `toggle-global-editor`'s description was updated to mention tab persistence (Task 14 changed the "not persisted across restarts" claim it used to make).
+- Verification: `tsc` node+web clean; `npm run test` 481/481 passing (one pre-existing submodule suite failure, identical on `main`); `npm run build` (electron-vite production bundle) succeeds. Manual end-to-end checklist from Task 17 step 3 left for PR review — it needs a human driving the app window.
+
 ## Plan Self-Review Notes
 
 - **Spec coverage vs issue #513:** A1→Task 1, A2→Task 2, A3→Task 3, A4→Task 4, B5→Task 6, B6→Task 7, B7/B8→Task 8, B8(models)→Task 5, C9→Task 9, C10→Task 10, C11→Task 11, C12→Task 12, C13→Task 13, C14→Task 14, D15→Task 15, D16/D17→Task 16. Out-of-scope list unchanged.
