@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
 import { STATE_DIR } from '@main/storage/paths.js'
+import { getToolPath } from '@main/setup/toolchain.js'
 import type {
   AiWorkspaceAttachFileParams,
   AiWorkspaceCreateParams,
@@ -63,7 +64,13 @@ function stableStringify(value: unknown): string {
 
 async function gitField(cwd: string, args: string[]): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
+    // Resolve through the setup toolchain like every other git caller
+    // (ipc/git.ts) instead of a bare PATH-dependent 'git' (#495 A5
+    // consistency fix). A Finder-launched app inherits launchd's minimal
+    // PATH; the setup-cached absolute path is the one the user actually
+    // validated. Fallback stays 'git' so a machine that never ran setup
+    // behaves exactly as before.
+    const { stdout } = await execFileAsync(getToolPath('git', 'git'), ['-C', cwd, ...args], {
       timeout: 1500,
     })
     const value = stdout.trim()

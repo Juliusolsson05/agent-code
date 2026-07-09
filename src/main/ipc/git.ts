@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { stat } from 'fs/promises'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { getToolPath } from '@main/setup/toolchain.js'
@@ -62,6 +63,16 @@ const worktreeStatusCache = new Map<string, CacheEntry<GitWorktreeStatus[]>>()
 const gitQueue: QueuedGitCommand[] = []
 let activeGitProcesses = 0
 
+// Latched "the git binary itself is unspawnable" flag (#495 A5). The ''
+// swallow below is a deliberate contract (see the `git()` comment) — but it
+// made ENOENT-on-the-binary indistinguishable from "clean worktree", so a
+// Mac without git showed a fake clean GitBar instead of telling the user
+// git is missing. We latch here (module-level, one flag for all cwds —
+// binary presence is machine-global, not per-repo) and expose it on the
+// git:status result. Cleared on ANY later successful exec so installing
+// git mid-session recovers on the next 10s poll without a restart.
+let gitMissing = false
+
 function seedCacheAliases<T>(
   cache: Map<string, CacheEntry<T>>,
   keys: string[],
@@ -113,8 +124,23 @@ async function runGitCommand(cwd: string, args: string[]): Promise<string> {
     // active child. Central backpressure makes git data lag under load instead
     // of letting housekeeping work starve orchestration coordination.
     const { stdout } = await exec(getToolPath('git', 'git'), args, { cwd, timeout: 5000 })
+    gitMissing = false
     return stdout
-  } catch {
+  } catch (err) {
+    // Keep returning '' for EVERY failure — timeouts, not-a-repo, missing
+    // HEAD, missing submodule checkouts all deliberately read as "no
+    // output" (contract documented on `git()` above; callers depend on
+    // it). A5 is ONLY about the missing-binary case masquerading as clean
+    // state, so the latch is the single side effect added here.
+    //
+    // WHY the existsSync(cwd) guard: execFile reports ENOENT both for a
+    // missing BINARY and for a missing CWD, and deleted-worktree cwds are
+    // routine in this app (WorktreesBar polls paths that a `git worktree
+    // remove` can race). Only latch when the cwd is present, i.e. when
+    // ENOENT can only mean the binary.
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT' && existsSync(cwd)) {
+      gitMissing = true
+    }
     return ''
   }
 }
@@ -514,7 +540,11 @@ export function registerGitIpc(): void {
         submodules: submodules.length > 0 ? submodules : undefined,
       }
     } catch {
-      return { ok: false as const }
+      // gitMissing rides the failure result so GitBar can distinguish
+      // "not a repo" from "no git on this machine" (#495 A5). It is read
+      // AFTER the probes above ran, so a fresh latch from this very call
+      // is already visible.
+      return { ok: false as const, gitMissing }
     }
   })
 }

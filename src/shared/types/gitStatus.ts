@@ -44,4 +44,14 @@ export type GitBarStatusResult =
       commits: GitRecentCommit[]
       submodules?: GitSubmoduleStatus[]
     }
-  | { ok: false }
+  | {
+      ok: false
+      /** True when the git BINARY itself could not be spawned (ENOENT),
+       *  as opposed to "cwd is not a git repository" (#495 A5). Before
+       *  this flag both cases collapsed into the same { ok:false } and
+       *  the renderer told a user without git "not a git repository" —
+       *  a lie that hid the actual fix (install git / point Setup at
+       *  it). Required, not optional: the producer must decide, and the
+       *  renderer must branch. */
+      gitMissing: boolean
+    }
