@@ -31,7 +31,7 @@ import { ViewPromptsModal } from '@renderer/features/workspace/ui/ViewPromptsMod
 import { GitBar } from '@renderer/features/git/ui/GitBar'
 import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
-import { PathPickerModal } from '@renderer/features/path-picker/ui/PathPickerModal'
+import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
 import { VoiceDictationOverlay } from '@renderer/features/voice-dictation/ui/VoiceDictationOverlay'
 import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
@@ -81,8 +81,6 @@ export default function App() {
   const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
   const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
   const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
-  const pathPickerOpen = useAppStore(state => state.pathPickerOpen)
-  const pathPickerDefault = useAppStore(state => state.pathPickerDefault)
   const commandPaletteOpen = useAppStore(state => state.commandPaletteOpen)
   const tileTabsModalOpen = useAppStore(state => state.tileTabsModalOpen)
   const tileTabsInitialSelectedIds = useAppStore(state => state.tileTabsInitialSelectedIds)
@@ -115,9 +113,6 @@ export default function App() {
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const useProxyStreaming = settings.useProxyStreaming
   const defaultWorkspaceMode = settings.defaultWorkspaceMode
-  const openPathPicker = useAppStore(state => state.openPathPicker)
-  const closePathPicker = useAppStore(state => state.closePathPicker)
-  const setPathPickerDefault = useAppStore(state => state.setPathPickerDefault)
   const openCommandPalette = useAppStore(state => state.openCommandPalette)
   const closeCommandPalette = useAppStore(state => state.closeCommandPalette)
   const toggleCommandPalette = useAppStore(state => state.toggleCommandPalette)
@@ -228,7 +223,6 @@ export default function App() {
 
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
   const workspaceRef = useRef(workspace)
-  const pathPickerDefaultedRef = useRef(false)
 
   useEffect(() => {
     workspaceRef.current = workspace
@@ -317,94 +311,7 @@ export default function App() {
     }
   }, [aggressiveDebugPersistenceEnabled])
 
-  // Pre-fill the path input once per modal open. Do not keep syncing
-  // while the modal is visible: newTab/resume mutates workspace
-  // sessions before the modal closes, and re-syncing here resets the
-  // picker mid-submit. Also preserve explicit defaults from the
-  // resume shortcut.
-  useEffect(() => {
-    if (!pathPickerOpen) {
-      pathPickerDefaultedRef.current = false
-      return
-    }
-    if (pathPickerDefaultedRef.current) return
-    pathPickerDefaultedRef.current = true
-    if (pathPickerDefault) return
-
-    let cancelled = false
-    // Pre-fill from the active tab's context, not a global "most
-    // recent session" walk. The old code did
-    // `Object.values(state.sessions).pop()` which returns the last
-    // inserted session across ALL tabs — once Dispatch Mode landed,
-    // that's frequently a background detached agent in a different
-    // project, and the user opens the new-tab picker pre-filled with
-    // a directory they aren't standing in. Prefer (a) the active
-    // tab's focused session, (b) the first session resolved for the
-    // active tab by the canonical resolver. Falls through to
-    // window.api.defaultCwd() when the active tab has no sessions.
-    const activeTabId = workspace.activeTab?.id
-    let fallbackCwd: string | undefined
-    if (activeTabId) {
-      const focusedId = workspace.activeTab?.focusedSessionId ?? null
-      const candidateId = focusedId ?? resolveTabSessions(workspace.state, activeTabId)[0] ?? null
-      if (candidateId) {
-        fallbackCwd = workspace.state.sessions[candidateId]?.cwd
-      }
-    }
-    if (fallbackCwd) {
-      setPathPickerDefault(fallbackCwd)
-      return
-    }
-    void window.api.defaultCwd().then(cwd => {
-      if (!cancelled) setPathPickerDefault(cwd)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [pathPickerDefault, pathPickerOpen, setPathPickerDefault, workspace.activeTab, workspace.state])
-
-  // New tab flow: show the path modal. On accept it calls workspace.newTab
-  // with the expanded absolute path and closes the modal.
-  const onNewTabRequest = useCallback(() => {
-    openPathPicker()
-  }, [openPathPicker])
-
-  // Resume flow: same modal as new tab, but the default value is the
-  // currently-focused tab's cwd so the resume list for that cwd is
-  // visible immediately. This is the "continue where I was" shortcut.
-  const onResumeRequest = useCallback(
-    (defaultCwd: string) => {
-      if (defaultCwd) {
-        // Pre-fill with the current tab's cwd, bypassing the useEffect
-        // that normally fills from "most recent session" — this is a
-        // direct-to-resume flow and the default MUST reflect where
-        // the user is standing.
-        setPathPickerDefault(defaultCwd)
-      }
-      openPathPicker(defaultCwd)
-    },
-    [openPathPicker, setPathPickerDefault],
-  )
-
-  const onPathPickerAccept = useCallback(
-    async (cwd: string, provider?: AgentProviderKind) => {
-      await workspace.newTab(cwd, undefined, provider)
-      closePathPicker()
-    },
-    [closePathPicker, workspace],
-  )
-
-  const onPathPickerResume = useCallback(
-    async (cwd: string, sessionId: string, provider: AgentProviderKind) => {
-      // Resume reuses newTab's plumbing — same workspace entry, same
-      // tile tree shape — but passes the resume id through to the
-      // spawn call so main spawns the selected provider with its
-      // provider-native resume command.
-      await workspace.newTab(cwd, sessionId, provider)
-      closePathPicker()
-    },
-    [closePathPicker, workspace],
-  )
+  const { onNewTabRequest, onResumeRequest } = usePathPickerRequests()
 
   const onTileTabsRequest = useCallback(() => {
     openTileTabsModal(
@@ -872,14 +779,6 @@ export default function App() {
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
         setAggressiveDebugPersistence={enabled =>
           setSettings({ aggressiveDebugPersistence: enabled })}
-      />
-
-      <PathPickerModal
-        open={pathPickerOpen}
-        defaultValue={pathPickerDefault}
-        onCancel={closePathPicker}
-        onAccept={onPathPickerAccept}
-        onResume={onPathPickerResume}
       />
 
       {/* Tiled Dispatch tile-count prompt. Rendered at the app root (fixed

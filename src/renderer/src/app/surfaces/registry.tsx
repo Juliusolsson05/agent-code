@@ -1,5 +1,6 @@
 import type { SurfaceEntry } from './types'
 import { CaffeinateToastSurface } from '@renderer/features/caffeinate/surfaces/CaffeinateToastSurface'
+import { PathPickerSurface } from '@renderer/features/path-picker/surfaces/PathPickerSurface'
 
 // The surface registry (issue #494). Adding a surface = write a wrapper
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
@@ -11,7 +12,9 @@ import { CaffeinateToastSurface } from '@renderer/features/caffeinate/surfaces/C
 // entries at the END unless you have a stacking reason and write it down.
 
 /** Rendered at the app root, after the overlays. */
-export const modalSurfaces: SurfaceEntry[] = []
+export const modalSurfaces: SurfaceEntry[] = [
+  { id: 'path-picker', Component: PathPickerSurface },
+]
 
 /** Rendered at the app root, after the main row, before the modals. */
 export const overlaySurfaces: SurfaceEntry[] = [
