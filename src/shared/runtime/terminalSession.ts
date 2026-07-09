@@ -149,6 +149,12 @@ export class TerminalSession extends EventEmitter {
     // every well-behaved terminal understands.
     env.TERM = 'xterm-256color'
     env.COLORTERM = 'truecolor'
+    // #495 A12: GUI-launched (Finder/launchd) processes often inherit no
+    // locale, and a C/POSIX locale makes agent CLIs emit mangled non-ASCII
+    // that our UTF-8 stream parsing downstream trusts. Only fill when the
+    // user expressed nothing — an explicit non-UTF-8 locale is their choice.
+    const locale = env.LC_ALL ?? env.LC_CTYPE ?? env.LANG
+    if (!locale || locale === 'C' || locale === 'POSIX') env.LANG = 'en_US.UTF-8'
     // Caller overrides win last so integrations that need to
     // override TERM or add flags can do so.
     for (const [k, v] of Object.entries(this.extraEnv)) {
