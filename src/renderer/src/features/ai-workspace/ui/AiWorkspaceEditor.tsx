@@ -6,6 +6,7 @@ import type {
 } from '@mcp/shared/aiWorkspaceTypes'
 import { normalizeCodeLanguage } from '@shared/code/language'
 import { basename } from '@renderer/features/editor/lib/path'
+import { disposeEditorModel } from '@renderer/features/editor/lib/editorModelRegistry'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
 import { EditorWorkbench } from '@renderer/features/editor/ui/EditorWorkbench'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
@@ -176,7 +177,8 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
       // closure (NOT a setState updater side-channel — updaters run at
       // render time, so a flag written inside one is not readable
       // synchronously after the setState call).
-      if (openFiles[entryId]?.dirty && !opts?.force) return false
+      const buffer = openFiles[entryId]
+      if (buffer?.dirty && !opts?.force) return false
       setOpenFiles(prev => {
         const next = { ...prev }
         delete next[entryId]
@@ -184,6 +186,10 @@ export function AiWorkspaceEditor({ workspaceId, onClose }: Props) {
       })
       setFileOrder(prev => prev.filter(id => id !== entryId))
       setActiveFilePath(prev => (prev === entryId ? null : prev))
+      // AI Workspace buffers carry the file's real absolute path (they
+      // are multi-root by design), which is exactly the model registry
+      // key — dispose so a closed tab's model doesn't linger.
+      if (buffer) disposeEditorModel(buffer.absolutePath)
       return true
     },
     [openFiles],

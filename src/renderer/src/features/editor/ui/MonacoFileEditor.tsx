@@ -4,6 +4,10 @@ import type * as Monaco from 'monaco-editor'
 import { monacoLanguageId } from '@shared/code/language'
 import { getMonaco } from '@renderer/lib/code/monacoRuntime'
 import {
+  acquireEditorModel,
+  releaseEditorModel,
+} from '@renderer/features/editor/lib/editorModelRegistry'
+import {
   activateEditorTheme,
   deactivateEditorTheme,
 } from '@renderer/features/editor/lib/monacoEditorTheme'
@@ -33,6 +37,7 @@ export function MonacoFileEditor({
     let disposed = false
     let editor: Monaco.editor.IStandaloneCodeEditor | null = null
     let model: Monaco.editor.ITextModel | null = null
+    let acquiredModelPath: string | null = null
     let changeDisposable: Monaco.IDisposable | null = null
     let saveCommandId: string | null = null
     let editorThemeActive = false
@@ -48,16 +53,17 @@ export function MonacoFileEditor({
       // monacoEditorTheme.ts for the global-theme trade-off.
       activateEditorTheme(monaco)
       editorThemeActive = true
-      const uri = monaco.Uri.file(file.absolutePath)
-      const existing = monaco.editor.getModel(uri)
       // monacoLanguageId: buffers carry LSP-facing ids ('typescriptreact');
       // Monaco only knows 'typescript'/'javascript' — see language.ts.
-      model =
-        existing ??
-        monaco.editor.createModel(file.currentText, monacoLanguageId(file.language), uri)
-      if (existing && existing.getValue() !== file.currentText) {
-        existing.setValue(file.currentText)
-      }
+      // Acquired (not created) so the model — and with it the undo stack —
+      // survives tab switches; see editorModelRegistry's ownership
+      // contract.
+      model = acquireEditorModel(monaco, {
+        absolutePath: file.absolutePath,
+        text: file.currentText,
+        monacoLangId: monacoLanguageId(file.language),
+      })
+      acquiredModelPath = file.absolutePath
       editor = monaco.editor.create(container, {
         model,
         readOnly: false,
@@ -113,13 +119,11 @@ export function MonacoFileEditor({
         deactivateEditorTheme(monacoRuntime)
         editorThemeActive = false
       }
-      // WHY the model is kept alive only when another editor already owned it:
-      // Monaco models are global by URI. The first editor slice recreates a
-      // single editor per active file, so disposing models on tab switch is
-      // fine. If a future split-editor view shares a file model across panes,
-      // this should move into an editor document registry with reference
-      // counts instead of component-local ownership.
-      if (model && !model.isDisposed()) model.dispose()
+      // Viewer role only: release the refcount, never dispose here. The
+      // model must outlive this component so the undo stack survives tab
+      // switches; disposal happens on actual tab close via
+      // disposeEditorModel — see editorModelRegistry's ownership contract.
+      if (acquiredModelPath) releaseEditorModel(acquiredModelPath)
       if (editorRef.current === editor) editorRef.current = null
     }
   }, [file?.path, projectRoot, onSelectionRevealed])

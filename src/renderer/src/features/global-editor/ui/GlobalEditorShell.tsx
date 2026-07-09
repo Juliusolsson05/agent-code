@@ -6,6 +6,10 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 import { ExplorerPane } from '@renderer/features/editor/ui/ExplorerPane'
 import { EditorWorkbench } from '@renderer/features/editor/ui/EditorWorkbench'
+import {
+  disposeEditorModel,
+  editorModelKey,
+} from '@renderer/features/editor/lib/editorModelRegistry'
 import { AiWorkspaceEditor } from '@renderer/features/ai-workspace/ui/AiWorkspaceEditor'
 
 import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
@@ -227,14 +231,27 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     await saveFile(activePath)
   }, [cwdState.activeFilePath, saveFile])
 
+  // Close + model disposal. The store owns the buffer's life; the model
+  // registry owns the Monaco model keyed by absolute path — a successful
+  // close is the one moment both end together (see editorModelRegistry).
+  const closeFileAndDisposeModel = useCallback(
+    (path: string, opts?: { force?: boolean }): boolean => {
+      if (!activeCwd) return false
+      const closed = closeFileAction(activeCwd, path, opts)
+      if (closed) disposeEditorModel(editorModelKey(activeCwd, path))
+      return closed
+    },
+    [activeCwd, closeFileAction],
+  )
+
   const saveThenClose = useCallback(
     async (path: string): Promise<boolean> => {
       if (!activeCwd) return false
       const ok = await saveFile(path)
-      if (ok) closeFileAction(activeCwd, path)
+      if (ok) closeFileAndDisposeModel(path)
       return ok
     },
-    [activeCwd, saveFile, closeFileAction],
+    [activeCwd, saveFile, closeFileAndDisposeModel],
   )
 
   // Banner recovery actions for the conflict state. Reload = disk wins
@@ -353,7 +370,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
             activeFile={active}
             projectRoot={activeCwd}
             onActivateFile={path => setActiveFile(activeCwd, path)}
-            onCloseFile={(path, opts) => closeFileAction(activeCwd, path, opts)}
+            onCloseFile={closeFileAndDisposeModel}
             onChangeFile={(path, text) => updateFileText(activeCwd, path, text)}
             onSave={() => void saveActive()}
             onSaveThenClose={saveThenClose}
