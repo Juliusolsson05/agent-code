@@ -5,6 +5,7 @@ import { performance } from 'perf_hooks'
 import { getMainProvider } from '@providers/registry.main.js'
 import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 import { TerminalSession } from '@shared/runtime/terminalSession.js'
+import { pickShell } from '@shared/runtime/pickShell.js'
 // WHY the manager no longer imports ScreenSnapshot from
 // @providers/claude/runtime/claudeSession or JsonlEntry from
 // claude-code-headless: those Claude-provider imports inverted the
@@ -647,7 +648,13 @@ export class SessionManager extends EventEmitter {
         tmuxSessionName = reg.generateName()
         await reg.createSession({
           name: tmuxSessionName,
-          command: process.env.SHELL ?? '/bin/zsh',
+          // pickShell, not the old bare `process.env.SHELL ?? '/bin/zsh'`:
+          // this was the second copy of the shell-selection expression and
+          // the tmux path had the SAME missing existence check as
+          // TerminalSession (#495 A8) — a stale $SHELL made the tmux
+          // session's command unspawnable, which surfaces as tmux exiting
+          // immediately on attach. One probed chain for both spawn paths.
+          command: pickShell(),
           cwd: options.cwd,
         })
       }
