@@ -16,6 +16,10 @@ import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global
 import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
 import { QuickOpenOverlay } from '@renderer/features/global-editor/ui/QuickOpenOverlay'
 import { ContentSearchOverlay } from '@renderer/features/global-editor/ui/ContentSearchOverlay'
+import {
+  loadPersistedGlobalEditorState,
+  startGlobalEditorPersistence,
+} from '@renderer/features/global-editor/lib/globalEditorPersistence'
 import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
@@ -191,6 +195,38 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     // where activeTabId hadn't yet been synced).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeTabId, setActiveCwd])
+
+  // Persistence writer — exactly one subscriber for the app (this shell
+  // is a singleton wrapper around the workspace area).
+  useEffect(() => startGlobalEditorPersistence(), [])
+
+  // Rehydrate persisted tabs when a cwd becomes active with no live
+  // state. Sequential opens preserve fileOrder (parallel opens would
+  // race the store's append). Missing/renamed files fail silently — the
+  // read errors and that tab simply doesn't come back, which is correct
+  // for paths-only persistence. The ref makes rehydration once-per-cwd
+  // per app run, so closing all tabs doesn't resurrect them on the next
+  // tab switch.
+  const rehydratedCwdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    if (!open || !activeCwd) return
+    if (rehydratedCwdsRef.current.has(activeCwd)) return
+    rehydratedCwdsRef.current.add(activeCwd)
+    const live = useGlobalEditorStore.getState().byCwd[activeCwd]
+    if ((live?.fileOrder.length ?? 0) > 0) return // live state wins
+    const persistedTabs = loadPersistedGlobalEditorState()?.tabsByCwd[activeCwd]
+    if (!persistedTabs) return
+    void (async () => {
+      for (const path of persistedTabs.fileOrder) {
+        await openFileInGlobalEditor({ root: activeCwd, path })
+      }
+      if (persistedTabs.activeFilePath) {
+        useGlobalEditorStore
+          .getState()
+          .setActiveFile(activeCwd, persistedTabs.activeFilePath)
+      }
+    })()
+  }, [open, activeCwd])
 
   // Keep main-process file watchers aligned with the open buffer set.
   // Only the active cwd's buffers are watched: background cwd states are

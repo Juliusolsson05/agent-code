@@ -2,6 +2,9 @@ import { create } from 'zustand'
 
 import { normalizeCodeLanguage } from '@shared/code/language'
 import type { EditorFileBuffer } from '@renderer/features/editor/types'
+// Benign module cycle — see the MODULE-CYCLE NOTE in
+// globalEditorPersistence.ts before "fixing" this import.
+import { loadPersistedGlobalEditorState } from '@renderer/features/global-editor/lib/globalEditorPersistence'
 
 // Per-cwd workspace state for the Global Editor overlay.
 //
@@ -24,15 +27,15 @@ import type { EditorFileBuffer } from '@renderer/features/editor/types'
 // keeps the prior mode's semantics intact while letting Global
 // Editor own its own per-cwd memory model.
 //
-// WHY in-memory only (no disk persistence): cc-shell already
-// persists session metadata, tab layouts, ghost logs, debug
-// bundles, perf telemetry. Adding ANOTHER persistence channel
-// for editor draft state — including potentially-sensitive
-// file contents that haven't been saved — is risk per
-// session-respawn-oom-root-cause.md's "every persistence path is
-// a potential leak" pattern. Restart wipes the buffer; if the
-// user has unsaved work they save before quitting. Disk
-// persistence is a follow-up if we feel the friction.
+// PERSISTENCE (#513): open-tab PATHS and pane geometry survive app
+// restarts via lib/globalEditorPersistence (localStorage). The original
+// in-memory-only rule was about UNSAVED FILE CONTENTS — "every
+// persistence path is a potential leak" per
+// session-respawn-oom-root-cause.md — and that half still stands as a
+// hard invariant: buffer text is NEVER persisted anywhere. Restart wipes
+// unsaved edits; the tabs come back by re-reading disk on rehydrate
+// (GlobalEditorShell's rehydration effect), so there is no stale-content
+// failure mode.
 export type GlobalEditorCwdState = {
   /** Order in which files were opened — drives EditorTabs render. */
   fileOrder: string[]
@@ -186,11 +189,18 @@ function clampFileTreeWidth(px: number): number {
   return px
 }
 
+// Geometry hydrates from the persisted snapshot at store creation —
+// clamped through the same guards as live updates so a hand-edited or
+// stale localStorage value can't wedge the layout. Tab rehydration is
+// deliberately NOT done here: it needs disk reads (async IPC), which a
+// synchronous store initializer can't await; GlobalEditorShell owns it.
+const persisted = loadPersistedGlobalEditorState()
+
 export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   byCwd: {},
-  splitterRatio: 0.5,
-  fileTreeWidthPx: 260,
-  fileTreeVisible: true,
+  splitterRatio: clampSplitter(persisted?.splitterRatio ?? 0.5),
+  fileTreeWidthPx: clampFileTreeWidth(persisted?.fileTreeWidthPx ?? 260),
+  fileTreeVisible: persisted?.fileTreeVisible ?? true,
   aiWorkspaceId: null,
   activeCwd: null,
   quickOpenOpen: false,
