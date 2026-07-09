@@ -81,6 +81,103 @@ type MitmproxyManifest = {
 // entry so a later corruption doesn't permanently poison the slot.
 const runtimeInstallLocks = new Map<string, Promise<string | null>>()
 
+// ---------------------------------------------------------------------------
+// Real-exec probe (#495 A13)
+//
+// `access(X_OK)` proves the mode bits, not that the kernel will actually
+// execute the file: a volume mounted `noexec` (network home, hardened
+// corporate images, some container-mapped dirs) passes the access check
+// and then fails the real execve with EACCES. Before this probe, that
+// failure surfaced far downstream as a mystery spawn error inside tmux
+// detection or the cloudflared tunnel — nothing pointed at the mount.
+// So after the mode-bit check we run the binary once with its version
+// flag (the same smoke-test flags scripts/runtime-tools/fetch-*.mjs use:
+// tmux `-V`, cloudflared/mitmdump `--version`) and translate an EACCES
+// spawn failure into a typed error that names the noexec suspicion —
+// EACCES *after* X_OK passed is precisely the noexec signature.
+
+/**
+ * Typed so callers/logs can distinguish "binary missing" from "binary
+ * present but the OS refuses to execute it". The resolvers below catch it
+ * and degrade to null (the module's documented contract — callers fall
+ * back or disable the feature) but log it loudly first; the message is the
+ * diagnosis a bug report needs.
+ */
+export class BundledToolExecProbeError extends Error {
+  constructor(
+    readonly tool: BundledToolId,
+    readonly binary: string,
+    message: string,
+    opts?: { cause?: unknown },
+  ) {
+    super(message, opts)
+    this.name = 'BundledToolExecProbeError'
+  }
+}
+
+// Cache keyed by binary path, NOT by tool: mitmdump probes a freshly
+// extracted per-version path, and a re-extraction after corruption gets a
+// new tmp path and therefore a fresh probe. Failures are cached too — a
+// noexec mount does not heal within a process lifetime, and re-spawning a
+// known-broken binary on every resolve would just spam the journal. The
+// cached promise is always awaited immediately by its first caller, so a
+// cached rejection never floats unhandled.
+const execProbeCache = new Map<string, Promise<void>>()
+
+function probeExecutable(
+  tool: BundledToolId,
+  binary: string,
+  versionArgs: string[],
+): Promise<void> {
+  const cached = execProbeCache.get(binary)
+  if (cached) return cached
+  const probe = new Promise<void>((resolve, reject) => {
+    const child = spawn(binary, versionArgs, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', chunk => {
+      stderr += String(chunk)
+    })
+    child.once('error', err => {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code === 'EACCES') {
+        reject(
+          new BundledToolExecProbeError(
+            tool,
+            binary,
+            `bundled ${tool} at ${binary} has its executable bit set but the OS refused to execute it (EACCES) — the containing filesystem may be mounted noexec`,
+            { cause: err },
+          ),
+        )
+        return
+      }
+      reject(
+        new BundledToolExecProbeError(
+          tool,
+          binary,
+          `bundled ${tool} at ${binary} failed to spawn: ${code ?? err.message}`,
+          { cause: err },
+        ),
+      )
+    })
+    child.once('exit', code => {
+      if (code === 0) resolve()
+      else {
+        reject(
+          new BundledToolExecProbeError(
+            tool,
+            binary,
+            `bundled ${tool} at ${binary} exited ${code} on its version probe: ${stderr.trim()}`,
+          ),
+        )
+      }
+    })
+  })
+  execProbeCache.set(binary, probe)
+  return probe
+}
+
 export function getPlatformKey(): string | null {
   // WHY mapping process.arch -> manifest arch lives ONLY here:
   //   Node's `process.arch` reports `x64` but mitmproxy upstream
@@ -231,6 +328,23 @@ async function installMitmproxy(
       await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
       return null
     }
+    // Real-exec probe (#495 A13), mirroring tmux/cloudflared. mitmdump is
+    // the one tool that extracts into userData, so a noexec home volume
+    // hits IT specifically even when the app bundle itself executes fine.
+    // Probing the tmp path BEFORE the rename means a refused binary never
+    // becomes the marked canonical install — the marker is never written,
+    // so nothing downstream ever trusts it. Deliberately NOT probed on the
+    // marker fast path above: mitmdump is a PyInstaller bundle whose
+    // --version costs real Python startup time, and paying that on every
+    // first Claude session per app run guards only against a volume being
+    // remounted noexec between launches — not worth the latency.
+    try {
+      await probeExecutable('mitmdump', tmpExe, ['--version'])
+    } catch (probeErr) {
+      console.error('[runtimeTools] extracted mitmdump failed its exec probe:', probeErr)
+      await rm(tmpDir, { recursive: true, force: true }).catch(() => {})
+      return null
+    }
     // Replace any existing install in one go: rm-rf the old dir
     // (could be a half-extracted leftover from a prior crash), then
     // rename our verified tmp dir into place.
@@ -314,6 +428,18 @@ async function resolveTmux(): Promise<string | null> {
     // a genuinely non-executable file.
   }
   if (!(await isExecutable(binary))) return null
+  // Real-exec probe (#495 A13) — see probeExecutable's WHY. Degrade to
+  // null on failure (same as "no bundled artifact"): the tmux caller in
+  // main/index.ts deliberately runs WITHOUT a PATH fallback and treats
+  // null as "tmux unavailable → direct PTY mode", which is exactly the
+  // right degradation for a binary the OS refuses to run. Throwing here
+  // would instead abort boot via the fatal-startup handler.
+  try {
+    await probeExecutable('tmux', binary, ['-V'])
+  } catch (err) {
+    console.error('[runtimeTools] bundled tmux failed its exec probe:', err)
+    return null
+  }
   return binary
 }
 
@@ -383,6 +509,16 @@ async function resolveCloudflared(): Promise<string | null> {
     // Same defensive chmod as tmux; the access check below is the gate.
   }
   if (!(await isExecutable(binary))) return null
+  // Real-exec probe (#495 A13). null (not throw) keeps the documented
+  // module contract; the tunnel toggle then fails with its existing
+  // visible "cloudflared unavailable" error while LAN keeps working, and
+  // the log below carries the actual noexec diagnosis.
+  try {
+    await probeExecutable('cloudflared', binary, ['--version'])
+  } catch (err) {
+    console.error('[runtimeTools] bundled cloudflared failed its exec probe:', err)
+    return null
+  }
   return binary
 }
 
@@ -484,15 +620,39 @@ async function isExecutable(path: string): Promise<boolean> {
   }
 }
 
-function extractTarGz(archive: string, destDir: string): Promise<void> {
-  // Spawning system /usr/bin/tar is intentional. mitmproxy's macOS
+// #495 A14: prefer the absolute system path, but don't die when it moved.
+// Cached per process — the answer can't change under us in any way worth
+// re-statting for.
+let tarBinaryPromise: Promise<string> | null = null
+function resolveTarBinary(): Promise<string> {
+  tarBinaryPromise ??= (async () => {
+    try {
+      await access('/usr/bin/tar', fsConstants.X_OK)
+      return '/usr/bin/tar'
+    } catch {
+      // Bare name → spawn resolves it through PATH. Covers hardened or
+      // stripped-down images where /usr/bin/tar is absent but a tar (BSD
+      // or GNU — `-xzf -C` is portable across both) is installed
+      // elsewhere. If PATH has none either, spawn emits ENOENT and the
+      // extraction fails with a clear "tar" error instead of a hardcoded
+      // path that was wrong from the start.
+      return 'tar'
+    }
+  })()
+  return tarBinaryPromise
+}
+
+async function extractTarGz(archive: string, destDir: string): Promise<void> {
+  // Spawning system tar is intentional. mitmproxy's macOS
   // archive uses standard gzip-compressed tar — no extended POSIX
   // attributes that node-tar handles better than BSD tar — and
   // shelling out keeps Agent Code free of a tar dependency just for
-  // this one path. macOS ships tar by default; if it is missing the
-  // user has bigger problems than Claude proxy streaming.
+  // this one path. macOS ships /usr/bin/tar by default; resolveTarBinary
+  // prefers that absolute path (immune to a poisoned PATH) and only
+  // falls back to PATH resolution when it is genuinely absent.
+  const tar = await resolveTarBinary()
   return new Promise((resolve, reject) => {
-    const child = spawn('/usr/bin/tar', ['-xzf', archive, '-C', destDir], {
+    const child = spawn(tar, ['-xzf', archive, '-C', destDir], {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     let stderr = ''
