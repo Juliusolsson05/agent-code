@@ -17,6 +17,7 @@ import {
   semanticToIndex,
 } from '@renderer/session-runtime/semantic/helpers'
 import { summarizeSemanticEvent } from '@renderer/session-runtime/semantic/summarize'
+import { isSemanticRawCaptureEnabled } from '@renderer/session-runtime/semantic/rawCapture'
 import { asRecord } from '@shared/lib/asRecord'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
@@ -1108,12 +1109,19 @@ export function foldSemanticEvent(
   }
 
   const summary = summarizeSemanticEvent(ev)
+  // Raw-payload compaction (#375 part C): the log used to retain `raw: ev`
+  // unconditionally — 200 full semantic events (text deltas, tool payloads)
+  // per session, forever. The compact row (type/ts/summary) is what the
+  // debug panels actually render in their list views; the full payload is
+  // only worth its heap when someone is actively debugging, so it now rides
+  // the dev-debug flag (see rawCapture.ts for why that flag and not a new
+  // one).
   const logEntry = {
     id: state.nextLogId,
     type: String(ev.type ?? '?'),
     ts: now,
     summary,
-    raw: ev,
+    ...(isSemanticRawCaptureEnabled() ? { raw: ev } : {}),
   }
   const log = [...state.log, logEntry]
   if (log.length > SEMANTIC_LOG_CAP) {

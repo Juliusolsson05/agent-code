@@ -246,7 +246,13 @@ export type SemanticLogEntry = {
   type: string
   ts: number
   summary: string
-  raw: Record<string, unknown>
+  /** The full raw semantic event — captured ONLY when raw capture is on
+   *  (semantic/rawCapture.ts, rides AGENT_CODE_DEV_DEBUG). Optional since
+   *  #375 part C: retaining every event's full payload in a 200-deep ring
+   *  per session was one of the renderer's largest steady-state heap
+   *  costs, and the only consumers are dev-debug panels / exported debug
+   *  bundles, which degrade gracefully to `summary` when this is absent. */
+  raw?: Record<string, unknown>
 }
 
 export type SemanticErrorEntry = {

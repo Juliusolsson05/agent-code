@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 
 import type { DetachedSessionRecord, SessionId, SessionKind, SessionMeta, Tab, TabId } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
+import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
 import { clearTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { sanitizeTileTabsState, titleFromCwd } from '@renderer/workspace/layout/helpers'
 
@@ -129,6 +130,9 @@ export function useTabActions(
       })
       for (const id of idsToKill) {
         delete refs.seenUuidsRef.current[id]
+        // Live-window bookkeeping follows the seen-uuid lifecycle
+        // (liveEntryWindow.ts).
+        clearLiveEntryWindowSession(id)
         delete refs.latestScreenRef.current[id]
       }
       setState(prev => {
