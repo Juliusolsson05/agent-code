@@ -1,6 +1,6 @@
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import type { GhostPredicateContext } from '@renderer/rendering/model/ghostPredicate'
 import type { GhostLedgerCandidate, LedgerInput } from '@renderer/rendering/model/ledger'
 import type { OwnershipDecision, RenderCandidate } from '@renderer/rendering/model/types'

@@ -6,9 +6,9 @@ import type {
   OrchestrationCloseResult,
   OrchestrationLifecycleState,
 } from '@mcp/shared/orchestrationTypes'
-import { entryTextContent } from '@renderer/workspace/entries/utils'
+import { entryTextContent } from '@renderer/session-runtime/entries'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta, WorkspaceState } from '@renderer/workspace/types'
 
 type RuntimeMap = Record<SessionId, SessionRuntime>

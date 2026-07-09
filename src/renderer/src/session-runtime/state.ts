@@ -1,9 +1,25 @@
+// -----------------------------------------------------------------------------
+// session-runtime/state.ts — the INGEST layer's clean object (#493).
+//
+// SessionRuntime is the single provider-neutral per-session object that the
+// ingest pipeline (channels → reducers in this folder) produces and every
+// downstream surface selects from. This file was split out of
+// workspace/workspaceState.ts so the layer has one grep-able home; the layout
+// types that also lived there (Spotlight/Reader/TileTabs) moved to
+// workspace/types.ts — they are tile-tree view state, not runtime.
+//
+// DEPENDENCY LAW (the reason this folder exists): session-runtime/ must never
+// import workspace/, rendering/, features/, app-state/, or react. The pane-UI
+// field types below (PickerItem, ClaudeDraftImage, PendingRewindUndo, …) ride
+// along here NOT because they are ingest concepts but because SessionRuntime
+// embeds them — they are serializable state descriptors, and hoisting them
+// out would force this file to import the UI tree, inverting the layer
+// direction. The contract for who may read which slice of SessionRuntime is
+// declared per consumer (see RuntimeRenderInput for the DECIDE layer's pick),
+// not by physically partitioning the type.
+// -----------------------------------------------------------------------------
+
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import type {
-  SessionId,
-  SplitDirection,
-  TabId,
-} from '@renderer/workspace/types'
 import type {
   Entry,
   ToolResultBlock,
@@ -668,21 +684,4 @@ export function emptyRuntime(): SessionRuntime {
     ghosts: new Map(),
     subAgents: {},
   }
-}
-
-export type SpotlightState = {
-  tabId: TabId
-  focusedSessionId: SessionId
-}
-
-export type ReaderModeState = {
-  tabId: TabId
-  focusedSessionId: SessionId
-}
-
-export type TileTabsState = {
-  tabIds: TabId[]
-  focusedTabId: TabId
-  direction: SplitDirection
-  ratios: number[]
 }

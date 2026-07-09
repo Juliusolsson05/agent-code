@@ -1,11 +1,11 @@
 import { useEffect } from 'react'
 
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
-  SessionRuntime,
   SpotlightState,
   TileTabsState,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/workspace/types'
 import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import {

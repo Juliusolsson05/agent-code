@@ -93,7 +93,7 @@ import { asRecord } from '@shared/lib/asRecord'
 import type {
   SemanticLiveBlock,
   SemanticLiveTurn,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 
 // -----------------------------------------------------------------------------
 // Semantic block → Claude content blocks

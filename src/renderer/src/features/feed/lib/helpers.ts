@@ -7,7 +7,7 @@ import {
   type ToolResultBlock,
   type ToolUseBlock,
 } from '@shared/types/transcript'
-import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import { asRecord } from '@shared/lib/asRecord'
 
 function isToolUseBlock(block: ContentBlock): block is ToolUseBlock {

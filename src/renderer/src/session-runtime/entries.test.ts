@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
+import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import type {
   Entry,
   ToolResultBlock,

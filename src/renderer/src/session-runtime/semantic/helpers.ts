@@ -6,7 +6,7 @@ import {
   type SessionRuntime,
   type SessionStatus,
   type SessionStatusSource,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 
 // ---------------------------------------------------------------------------
 // Size caps for the semantic runtime ring buffers

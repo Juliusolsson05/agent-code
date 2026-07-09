@@ -1,14 +1,14 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
-import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
-import { appendFeedDebugLog } from '@renderer/workspace/runtime/feedDebug'
+import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
+import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
 import {
   ghostsToPersist,
   reconcileUpstream,
-} from '@renderer/workspace/ghosts'
+} from '@renderer/session-runtime/ghosts'
 import {
   deriveAgentWorkContext,
   ingestWorktreeRawEvent,

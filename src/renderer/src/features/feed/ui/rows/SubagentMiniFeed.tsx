@@ -1,5 +1,5 @@
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
-import type { SubAgentState } from '@renderer/workspace/workspaceState'
+import type { SubAgentState } from '@renderer/session-runtime/state'
 
 // The drill-in view for one subagent: its tool-call timeline + a live
 // current-activity line. Deliberately compact — this is "what is it doing",

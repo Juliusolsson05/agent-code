@@ -14,7 +14,7 @@ import type { SessionRuntime, Workspace } from '@renderer/workspace/workspaceSto
 import type { GridRelatedAgentTab } from '@renderer/workspace/gridRelatedAgents'
 import {
   selectMergedEntries,
-} from '@renderer/workspace/mergedEntries'
+} from '@renderer/session-runtime/mergedEntries'
 import type { SessionId } from '@renderer/workspace/types'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { QueueStrip } from '@renderer/workspace/tile-tree/TileLeaf/QueueStrip'

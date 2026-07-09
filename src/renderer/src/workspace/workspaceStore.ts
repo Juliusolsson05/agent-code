@@ -22,7 +22,7 @@ export { useWorkspace, type Workspace } from '@renderer/workspace/hook'
 // graph.
 // -----------------------------------------------------------------------------
 
-export { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
+export { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 export {
   codexHistoryMarker,
   codexTurnIdFromRollout,
@@ -35,15 +35,20 @@ export {
 
 export { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 
+// Split across the two post-#493 homes: runtime types live in the ingest
+// layer (session-runtime/state), the mode-surface layout states in
+// workspace/types.
 export type {
   PickerItem,
   QueuedMessage,
-  ReaderModeState,
   SessionRuntime,
   SlashPickerState,
+} from '@renderer/session-runtime/state'
+export type {
+  ReaderModeState,
   SpotlightState,
   TileTabsState,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/workspace/types'
 
 // Re-exported from ./types so external callers (ReaderView, etc.)
 // can keep importing from '../workspace/workspaceStore' without

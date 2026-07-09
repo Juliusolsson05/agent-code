@@ -1,7 +1,7 @@
 import {
   taskNotificationFromEntry,
   type TaskNotification,
-} from '@renderer/features/feed/lib/taskNotification'
+} from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
@@ -20,7 +20,7 @@ import {
 import type {
   SemanticLiveTurn,
   StreamPhase,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import { WorkIndicator } from '@renderer/features/feed/WorkIndicator'
 import { toolHintFromTurn } from '@renderer/features/feed/workIndicatorHints'
 import {
@@ -52,14 +52,14 @@ import {
 } from '@renderer/features/feed/ui/semantic'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
-import { semanticTurnScrollSignal } from '@renderer/workspace/semantic/helpers'
+import { semanticTurnScrollSignal } from '@renderer/session-runtime/semantic/helpers'
 import {
   EAGER_TAIL,
   EntryRow,
   LazyEntry,
 } from '@renderer/features/feed/ui/rows'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import type { SubAgentState } from '@renderer/workspace/workspaceState'
+import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 import * as perf from '@renderer/performance/client'
 

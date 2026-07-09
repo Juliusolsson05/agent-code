@@ -8,7 +8,7 @@ import type {
   SemanticLiveTurn,
   SessionRuntime,
   StreamPhase,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { RenderLedger, RenderRow } from '@renderer/rendering/model/types'
 import { groupSemanticActivity } from '@renderer/features/feed/ui/semantic/renderUnits'

@@ -1,4 +1,4 @@
-import type { StreamPhase } from '@renderer/workspace/workspaceState'
+import type { StreamPhase } from '@renderer/session-runtime/state'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 

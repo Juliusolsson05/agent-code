@@ -4,13 +4,13 @@ import {
   emptyRuntime,
   type RenderedViewLeaseFeature,
   type SessionRuntime,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import {
   appendFeedDebugLog,
   type FeedDebugInput,
-} from '@renderer/workspace/runtime/feedDebug'
-import { withDerivedSessionStatus } from '@renderer/workspace/semantic/helpers'
+} from '@renderer/session-runtime/feedDebug'
+import { withDerivedSessionStatus } from '@renderer/session-runtime/semantic/helpers'
 
 import type {
   WorkspaceSetRuntimes,

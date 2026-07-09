@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { applyClaudeQueueDequeue } from '@renderer/workspace/claudeQueueReconstruction'
-import type { QueuedMessage } from '@renderer/workspace/workspaceState'
+import { applyClaudeQueueDequeue } from '@renderer/session-runtime/claudeQueueReconstruction'
+import type { QueuedMessage } from '@renderer/session-runtime/state'
 
 // Regression coverage for the 2026-07-07 soak bundles
 // debug-bundles/manual/2026-07-07T13-17-20-472-5b19529f ("completed agents

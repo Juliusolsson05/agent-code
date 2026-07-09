@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime } from '@renderer/workspace/workspaceState'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import {
   assistantUuidsWithText,

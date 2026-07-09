@@ -1,5 +1,5 @@
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 export type DevDebugModuleProps = {
   workspace: Workspace

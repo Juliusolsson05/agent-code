@@ -12,7 +12,7 @@ import type {
   TabId,
   WorkspaceState,
 } from '@renderer/workspace/types'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 export type AgentStatusKind = AgentProviderKind
 
