@@ -34,7 +34,7 @@ If you remember one thing: **you cannot fix a rendering bug by reading code and 
 
 A rendering bug report is not a description — it is a **captured artifact**. The app ships the capture gestures for exactly this:
 
-- **"Save debug logs"** captures a *debug bundle*: the full `SessionRuntime` slices at the moment the bug was on screen, plus what the renderer actually painted. These land in `testing/fixtures/rendering-bundles/` (46 and counting) and drive `bundleCorpus.test.ts`.
+- **"Save debug logs"** captures a *debug bundle*: the full `SessionRuntime` slices at the moment the bug was on screen, plus what the renderer actually painted. These land in `testing/fixtures/rendering-bundles/` (48 and growing) and drive `bundleCorpus.test.ts`.
 - **"Attach recording note"** bookmarks a timestamp inside a *session recording* — the raw stream of all nine `SessionFeed` channels — the instant you see the bug. These become `testing/fixtures/rendering-recordings/` fixtures driving `recordingCorpus.test.ts`.
 
 You do not start editing `ownership.ts` from a hunch. You get the capture, extract it into a failing fixture, and *then* you have something a fix can be measured against. This is the `superpowers:systematic-debugging` iron law ("no fixes without root-cause investigation first") applied to a domain where "investigation" means "a replayable recording."
@@ -55,11 +55,11 @@ This is the acceptance bar that #172 was *reopened* to install, after PR #184 cl
 
 - Ledger tests assert the **final order** of rows (the D4 chronological merge), not that a row is present.
 - Ownership tests assert **who owns each slot and why** (the `OwnershipDecision.reason` + `evidence`), not just that something rendered.
-- The present-but-invisible class (#239) is caught by replaying through the **view bridge** and asserting nothing landed in `ledgerToFeedItems.dropped` — because a row can be *selected by the ledger* and still never reach the DOM.
+- The present-but-invisible class (#239) is caught by replaying through the **view bridge** and asserting nothing landed in `ledgerToFeedItems.dropped` — because a row can be *selected by the ledger* and still never reach the DOM. Post-#493 the replay harness itself stops at the `RenderLedger` (so `rendering/` never imports the feed layer); the bridge reaches replay through the **required** `ReplayOptions.projectItems` injection — tests pass the real `ledgerToFeedItems` there.
 
 ### P4 — The decision record is the debug schema. Never build a second derivation.
 
-The ledger emits an `OwnershipDecision` for **every** candidate, selected or rejected, carrying its `reason` and `evidence[]`. That record *is* what feed-debug and debug bundles serialize — there is no separate "explain why this rendered" code path that could disagree with what actually painted (this is what structurally killed #344, "row vanished with no explanation"). When you add a decision, you are simultaneously adding the diagnosis. **Do not** write a parallel explainer; if the debug output and the paint output can diverge, you have reintroduced the bug class.
+The ledger emits an `OwnershipDecision` for **every** candidate, selected or rejected, carrying its `reason` and `evidence[]`. That record is retained on every `RenderLedger` and is what the replay invariants and corpus tooling consume verbatim — there is no separate "decide why this rendered" code path that could disagree with what actually painted (this is what structurally killed #344, "row vanished with no explanation"). Be precise about what the runtime capture surfaces write, though: feed-debug logs the *painter's* rows — `DebugVisibleRow`/`VisibleDecision` (`features/feed/types.ts`), i.e. what `Feed.tsx` actually put on screen — and `saveDebugBundle.ts` writes `render-diagnostics.json` from runtime ownership sets (`buildRenderDiagnostics`), not `OwnershipDecision` records verbatim. Those captures are *recordings of the paint*, derived downstream of the one decision point. The principle is about derivation, not file format: when you add a decision, you are simultaneously adding the diagnosis. **Do not** write a parallel explainer that re-decides visibility; if the debug output and the paint output can diverge, you have reintroduced the bug class.
 
 ### P5 — Reference stability is correctness, not performance.
 
@@ -77,10 +77,10 @@ TDD here is not one test file — it is three nets at increasing scope, because 
 
 ### Layer 1 — Unit tests: assert the law
 
-`src/renderer/src/rendering/**/*.test.ts`. Each is **named for the incident it pins** and asserts a specific law:
+Tests live beside the code they pin, across all three layer directories: `src/renderer/src/rendering/**/*.test.ts`, `src/renderer/src/features/feed/ledger/*.test.ts`, and `src/renderer/src/session-runtime/**/*.test.ts` (the vitest `unit` project includes all of `src/**/*.test.ts`, so a moved test is never silently un-run). Each is **named for the incident it pins** and asserts a specific law:
 
 - `model/ledger.test.ts` — the "load-bearing ten": the ordering law (#239 stale history sorts *before* the newer prompt; null timestamps sort last, never as "now"), committed ownership across the resp_*/rollout id split (#170), the Claude-vs-Codex whole-turn-suppression policy split on identical input (#165/#191), tool-*use* vs tool-*result* ownership (dump invariant 10), and D11 by-reference stability.
-- `model/ownership.test.ts`, `model/ghostPredicate.test.ts`, `model/unknowns.test.ts`, `observations/*.test.ts`, `policy/foldPolicy.test.ts`, `view/ledgerFeedItems.test.ts`.
+- `model/ghostPredicate.test.ts`, `model/unknowns.test.ts`, `observations/committed.test.ts`, `observations/semantic.test.ts`, `features/feed/ledger/ledgerFeedItems.test.ts`. Note there is deliberately **no `model/ownership.test.ts`** — the ownership pass has no dedicated file; its laws are pinned in `model/ledger.test.ts`, the collector tests (`observations/committed.test.ts`), the named end-to-end fixtures below, and the replay invariants. (The old `policy/foldPolicy.test.ts` is gone with its module — per-provider fold policy lives in `src/providers/*/renderer/semanticFoldPolicy.ts` now.)
 - `adapter/collectLedgerInput.test.ts` — the **executable D11 spec** (same refs in ⇒ same bundle out; when only `semanticCurrent` advances, the other planes survive by reference).
 - Named end-to-end fixtures: `fixtures.buriedPrompt239`, `fixtures.queueHandoff`, `fixtures.deadCommittedChannel159`, `fixtures.opencodeInterleave*`, `fixtures.sidecarTailGhost`, `fixtures.sidechainLeak`.
 
@@ -88,7 +88,7 @@ These run under the **`unit`** vitest project (node-pure — the ledger has no R
 
 ### Layer 2 — The bundle corpus: real bugs, real ground truth
 
-`bundleCorpus.test.ts` replays all 46 captured debug bundles through the *real* pipeline and diffs the new output against the **legacy renderer's actually-painted rows** stored in each fixture — the external ground truth. Its assertion is subtle and important:
+`bundleCorpus.test.ts` replays every captured debug bundle (48 at last count, growing) through the *real* pipeline and diffs the new output against the **legacy renderer's actually-painted rows** stored in each fixture — the external ground truth. Its assertion is subtle and important:
 
 > It asserts that the divergence set **equals the checked-in `triage` exactly** — *stability*, not blanket parity.
 
@@ -101,7 +101,9 @@ Because many divergences from the legacy renderer are *the fix working*. Each di
 Two mechanisms, both surviving the cutover (they don't need the deleted legacy renderer):
 
 - **`recordingCorpus.test.ts`** — golden replay of redacted *session recordings* (the nine `SessionFeed` channels) against the pipeline's own last-blessed output. This is the permanent successor to shadow mode, and it catches **multi-tick** bugs that single-tick bundles can't (e.g. the queue-desync class #469 — enqueue, park, dequeue-the-wrong-item across ticks).
-- **`replay/invariants.ts`** — `assertInvariants` runs **five whole-class nets at every tick**, needing *no expected output*: (1) dual-render, (2) vanish-without-replacement (with careful block-grain-vs-turn-grain asymmetry so a surviving sibling block doesn't "explain" a lost one), (3) unexplained-shrink, (4) D11 reference-instability, (5) unrenderable-drop (the #239 present-but-invisible class, caught only by replaying through the view bridge). These express the three failure shapes from §1 *directly* as machine-checkable properties.
+- **`replay/invariants.ts`** — `assertInvariants` runs **five whole-class nets at every tick**, needing *no expected output*: (1) dual-render, (2) vanish-without-replacement (with careful block-grain-vs-turn-grain asymmetry so a surviving sibling block doesn't "explain" a lost one), (3) unexplained-shrink, (4) D11 reference-instability, (5) unrenderable-drop (the #239 present-but-invisible class, caught only by running the view bridge over each tick's ledger). These express the three failure shapes from §1 *directly* as machine-checkable properties.
+
+**The injection seam (post-#493):** `replay/recordedSession.ts` itself stops at the `RenderLedger` — it no longer imports the view bridge, because `rendering/` must never depend on `features/feed/`. Instead, `ReplayOptions.projectItems` is a **required** option (an omitted projection would be indistinguishable from "projected to nothing", silently gutting the unrenderable-drop net), and the corpus/invariant tests inject the *real* `ledgerToFeedItems` bridge through it. So the tests still exercise ledger→items end to end; the dependency arrow just points from the test, not from the replay harness.
 
 **Honest gap to know:** the invariant/recording replay is **reducer-faithful, not full-React-fold** — `useIpcSubscriptions` (the fold glue) only runs under the `renderer` vitest project, while replay runs under `unit`. So the fold-glue bug class (e.g. queue reconstruction #469) is currently *recorded but not fully replayed*. Don't assume a green recording corpus exercised the React hook layer.
 

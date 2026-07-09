@@ -15,17 +15,25 @@ A provider (Claude, Codex, opencode) is a program emitting a messy, out-of-order
 ```
    raw provider events                clean per-session state              decided + ordered rows              JSX
   ─────────────────────  ─INGEST─▶   ──────────────────────  ─DECIDE─▶  ─────────────────────  ─RENDER─▶  ──────────
-  channels (SessionFeed)             SessionRuntime                      RenderLedger                      <Feed/>
-  screen / jsonl-entries /           entries[] · semantic{current,       rows[]  (FeedRenderItem[]         a dumb painter:
-  semantic-event / conditions /      history} · ghosts · streamPhase      after the view bridge)           data in, JSX out,
-  process-state / exit               · tool indices · status             decisions[] · unknowns[]          zero decisions
+  channels (SessionFeed)             SessionRuntime, read via            RenderLedger                      <Feed/>
+  screen / jsonl-entries /           RuntimeRenderInput:                 rows[]  (FeedRenderItem[]         a dumb painter:
+  semantic-event / conditions /      entries[] · semantic{current,        after the view bridge)           data in, JSX out,
+  process-state / exit               history} · ghosts · streamPhase*    decisions[] · unknowns[]          zero decisions
 ```
 
-- **INGEST** (`src/renderer/src/workspace/…`) folds channels into **one immutable-per-tick `SessionRuntime`** per session. It is the *only* place that touches transports.
-- **DECIDE** (`src/renderer/src/rendering/…`) is the **ownership ledger**: a pure function from `SessionRuntime` to an ordered, fully-explained list of rows. It decides *what is visible*, *who owns it*, and *in what order* — and records *why* for every candidate, chosen or rejected.
+- **INGEST** (reducers in `src/renderer/src/session-runtime/…`, wired to transports by `workspace/hook/ipc/useIpcSubscriptions.ts`) folds channels into **one immutable-per-tick `SessionRuntime`** per session. It is the *only* place that touches transports.
+- **DECIDE** (`src/renderer/src/rendering/…`) is the **ownership ledger**: a pure function from the **`RuntimeRenderInput`** slice of `SessionRuntime` (see below) to an ordered, fully-explained list of rows. It decides *what is visible*, *who owns it*, and *in what order* — and records *why* for every candidate, chosen or rejected.
 - **RENDER** (`src/renderer/src/features/feed/…`) is the **feed painter**. It consumes the ledger's ordered `FeedRenderItem[]` and emits JSX. It makes **no** visibility/ownership/order decisions.
 
-The seam between DECIDE and RENDER is the hook `useLedgerFeedItems` (`src/renderer/src/rendering/view/useLedgerFeedItems.ts`). Both consumers of the pipeline — the **desktop** (`TileLeaf`) and the **remote phone client** (`src/remote-client/src/ui/SessionView.tsx`) — mount the *same* `<Feed>` and hand it the *same* ledger output via `renderItemsOverride`. There is one rendering pipeline; the phone is not a second implementation.
+The seam between DECIDE and RENDER is the hook `useLedgerFeedItems` (`src/renderer/src/features/feed/ledger/useLedgerFeedItems.ts`). Both consumers of the pipeline — the **desktop** (`TileLeaf`) and the **remote phone client** (`src/remote-client/src/ui/SessionView.tsx`) — mount the *same* `<Feed>` and hand it the *same* ledger output via `renderItemsOverride`. There is one rendering pipeline; the phone is not a second implementation.
+
+### The folder layout is the layering (post-#493)
+
+The three stages are three directories with **one-way imports** — `session-runtime/` → `rendering/` → `features/feed/` — and the boundary between the first two is a *declared type*, not a convention:
+
+- `src/renderer/src/session-runtime/` — the INGEST reducers and the `SessionRuntime` type (`state.ts`), plus **`RuntimeRenderInput`** (`state.ts`): a `Pick` of exactly the fields the decide layer may read (`entries`, `semantic`, `ghosts` as a `ReadonlyMap`, `streamPhase`, `streamPhasePendingToolName`, `streamPhasePendingToolUseId`, `lastJsonlEntryAt`). It is a Pick — not a wrapper object — so callers pass the same runtime reference and the D11 identity chain survives. Adding a field to it is a contract change licensing the decide layer to depend on it.
+- `src/renderer/src/rendering/` — the DECIDE layer. It imports only `RuntimeRenderInput`, never the full `SessionRuntime`; the other ~50 runtime fields (pane UI, lifecycle, paging, debug state) are structurally invisible to it.
+- `src/renderer/src/features/feed/` — the RENDER layer, including the ledger→feed **view bridge** in `features/feed/ledger/` (it lives with the painter, not the decide layer, because it resolves drawable payloads — a presentation concern).
 
 ### Why three stages, and why this direction
 
@@ -46,9 +54,9 @@ Four sub-properties, each with a real enforcement site:
 | Exactly one owner per slot | the ownership pass (`model/ownership.ts`) + replay invariant `checkSingleOwner` (`replay/invariants.ts`) |
 | Explicit, evidence-based transfer | every suppression carries `evidence: string[]` + `suppressionOwnerId` (`model/types.ts:189-197`) |
 | Rejected candidates keep their reason | every candidate gets an `OwnershipDecision`, selected or not; collection-time kills keep decisions too |
-| **Debug == paint** | `OwnershipDecision` *is* the debug schema; feed-debug and debug bundles serialize these directly — never a re-derivation |
+| **Debug == paint** | `OwnershipDecision` is the decide stage's decision record *and* its debug schema — `RenderLedger.decisions` is retained on every pass and consumed verbatim by the replay invariants. The runtime capture surfaces record *what was painted*, derived from the same pipeline output rather than re-deciding it: feed-debug logs the painter's `DebugVisibleRow`/`VisibleDecision` rows (`features/feed/types.ts`, emitted from `Feed.tsx`), and `saveDebugBundle.ts` writes `render-diagnostics.json` from runtime ownership sets (`buildRenderDiagnostics`). What is forbidden is a second *visibility derivation* that could disagree with the paint. |
 
-That last property is the one that makes this system diagnosable. "Why did this row vanish?" is answerable from a bundle because the bundle *is* the decisions, not a second guess at them. The whole pipeline is machine-checked against real recordings by five replay invariants (`replay/invariants.ts`): dual-render, vanish-without-replacement, unexplained-shrink, identity-instability (D11), and unrenderable-drop.
+That last property is the one that makes this system diagnosable. "Why did this row vanish?" is answerable because every candidate's decision is recorded in the ledger the paint came from — not guessed at by a parallel explainer. The whole pipeline is machine-checked against real recordings by five replay invariants (`replay/invariants.ts`): dual-render, vanish-without-replacement, unexplained-shrink, identity-instability (D11), and unrenderable-drop.
 
 **The block-level rule.** Ownership is decided per *block* (one tool call, one text segment, one thinking block), never per *turn*. The ownership bugs are unit-granular: Codex commits one response item at a time (#165), a committed tool-use must not hide a still-live tool output, #194 suppressed by itemId. A "turn" is a grouping used only for *policy* application (e.g. Claude's whole-turn suppression), never the ownership atom.
 
@@ -56,7 +64,7 @@ That last property is the one that makes this system diagnosable. "Why did this 
 
 ## 3. Stage INGEST — channels → `SessionRuntime`
 
-**Where:** `src/renderer/src/workspace/…`. **Produces:** one `SessionRuntime` per session (`workspace/workspaceState.ts`, type at `:285-576`).
+**Where:** reducers and state in `src/renderer/src/session-runtime/…`; the transport-facing fold glue in `workspace/hook/ipc/useIpcSubscriptions.ts`. **Produces:** one `SessionRuntime` per session (`session-runtime/state.ts`).
 
 ### The channels (`SessionFeed`)
 
@@ -72,9 +80,9 @@ All nine listeners are wired in one place — `workspace/hook/ipc/useIpcSubscrip
 
 Ingest is a set of **reference-stable reducers** — each returns `prev` unchanged on a no-op so React memoization holds, and each runtime *slice* only changes reference when its own reducer really changed it. This is the foundation of the identity-stability chain (see §6).
 
-- **JSONL / committed plane** — `workspace/entries/utils.ts`. Raw provider lines route through the provider mapper (see below), dedupe by UUID, and fold into `runtime.entries`. Tool blocks are folded into in-place lookup maps `toolUseIndex`/`toolResultIndex` (keyed by tool_use_id); `indexEntryIntoMaps` returns *whether it changed* so callers bump the monotonic `toolIndexVersion` only when a cross-entry pairing actually moved (the naive `useMemo([entries])` rebuild was O(N²) at bootstrap). `lastJsonlEntryAt` tracks the newest observed entry *timestamp* (producer clock, `null` — never `0` — as the "never seen" sentinel).
-- **Semantic / live plane** — `workspace/semantic/foldEvent.ts`, `foldSemanticEvent(state, ev, sessionKind)`. The **one-session-one-reducer** contract: every semantic event flows through here before any UI reads it; surfaces select from `runtime.semantic`, they never open their own subscription. The model is **block-level**: a `SemanticLiveTurn` holds `blocks: Record<number, SemanticLiveBlock>` keyed by index plus a `blockOrder: number[]`, because streaming deltas arrive out of order. Blocks accumulate copy-on-write as `text_delta`/`thinking_delta`/`tool_input_delta`/… events arrive; `tool_result` attaches onto the originating block by correlation id. Turn *replacement* is policy-gated (`canReplaceMismatchedTurn`) — an ended turn is always replaceable, a live turn yields only to trusted sources.
-- **Stream-phase plane** — `workspace/semantic/streamPhaseMachine.ts`, `reduceStreamPhase`, deliberately *outside* `foldSemanticEvent` because the phase lives on `SessionRuntime`, not `SemanticRuntimeState` (folding it in would be a layering violation). It drives the single in-feed `WorkIndicator`.
+- **JSONL / committed plane** — the bulk-burst handler in `useIpcSubscriptions.ts`, with the shared entry utilities in `session-runtime/entries.ts` (`indexEntryIntoMaps`, `entryTextContent`). Raw provider lines route through the provider mapper (see below), dedupe by UUID, and fold into `runtime.entries`. Tool blocks are folded into in-place lookup maps `toolUseIndex`/`toolResultIndex` (keyed by tool_use_id); `indexEntryIntoMaps` returns *whether it changed* so callers bump the monotonic `toolIndexVersion` only when a cross-entry pairing actually moved (the naive `useMemo([entries])` rebuild was O(N²) at bootstrap). `lastJsonlEntryAt` tracks the newest observed entry *timestamp* (producer clock, `null` — never `0` — as the "never seen" sentinel).
+- **Semantic / live plane** — `session-runtime/semantic/foldEvent.ts`, `foldSemanticEvent(state, ev, sessionKind)`. The **one-session-one-reducer** contract: every semantic event flows through here before any UI reads it; surfaces select from `runtime.semantic`, they never open their own subscription. The model is **block-level**: a `SemanticLiveTurn` holds `blocks: Record<number, SemanticLiveBlock>` keyed by index plus a `blockOrder: number[]`, because streaming deltas arrive out of order. Blocks accumulate copy-on-write as `text_delta`/`thinking_delta`/`tool_input_delta`/… events arrive; `tool_result` attaches onto the originating block by correlation id. Turn *replacement* is policy-gated (`canReplaceMismatchedTurn`) — an ended turn is always replaceable, a live turn yields only to trusted sources.
+- **Stream-phase plane** — `session-runtime/semantic/streamPhaseMachine.ts`, `reduceStreamPhase`, deliberately *outside* `foldSemanticEvent` because the phase lives on `SessionRuntime`, not `SemanticRuntimeState` (folding it in would be a layering violation). It drives the single in-feed `WorkIndicator`.
 
 ### Provider neutrality
 
@@ -82,7 +90,7 @@ All "which provider says what" knowledge is pushed into a capability registry �
 
 ### The provisional planes: ghosts and optimistic rows
 
-- **Ghosts** (`workspace/ghosts.ts`) are a disk-backed ledger of *provisional* entries minted from the live semantic stream to paper over the gap between a provider streaming an event and durably writing it to JSONL. They exist for exactly one situation: committed truth stalled *past* the live stream (JSONL stuck mid-turn, or a crash + resume with partial JSONL). They are reconciled away (`reconcileUpstream`) when the authoritative entry lands.
+- **Ghosts** (`session-runtime/ghosts.ts`) are a disk-backed ledger of *provisional* entries minted from the live semantic stream to paper over the gap between a provider streaming an event and durably writing it to JSONL. They exist for exactly one situation: committed truth stalled *past* the live stream (JSONL stuck mid-turn, or a crash + resume with partial JSONL). They are reconciled away (`reconcileUpstream`) when the authoritative entry lands.
 - **Optimistic rows** are local user echoes appended into `runtime.entries` with a `optimistic-codex-user:` uuid prefix, reconciled by *text identity* (not tail position — the #290 double-render fix) when the committed user entry lands.
 
 ### The trust / provenance invariant
@@ -93,19 +101,19 @@ All "which provider says what" knowledge is pushed into a capability registry �
 
 The `screen` channel feeds only *current-state parsers* (trust dialog, slash picker, activity spinner) and never contributes assistant text. This is enforced in the fold layer, *before* candidates exist. Downstream, the `source`/`sourcePlane` on a candidate is evidence for a debug bundle, not something to re-litigate.
 
-### What INGEST hands DECIDE
+### What INGEST hands DECIDE: `RuntimeRenderInput`
 
-A `SessionRuntime` with cleanly separated planes, each changing reference independently:
+The decide layer does not read `SessionRuntime` — it reads **`RuntimeRenderInput`** (`session-runtime/state.ts`), the declared #493 contract: a `Pick` of exactly the fields the pipeline consumes, each a cleanly separated plane changing reference independently:
 
 | Slice | What it is |
 |---|---|
 | `entries: Entry[]` | committed JSONL window + embedded optimistic user rows |
 | `semantic: { currentTurn, history }` | block-level live turns |
-| `ghosts: Map` | provisional records for the stalled-committed case |
-| `streamPhase` + `streamPhasePendingTool*` + `turnStartedAt` | the WorkIndicator inputs |
-| `toolUseIndex` / `toolResultIndex` / `toolIndexVersion` | O(1) tool pairing |
+| `ghosts: ReadonlyMap` | provisional records for the stalled-committed case (read-only — mutation is the ghost reducers' job; ghost-less hosts satisfy it with a frozen empty map) |
+| `streamPhase` + `streamPhasePendingToolName` + `streamPhasePendingToolUseId` | the WorkIndicator inputs |
 | `lastJsonlEntryAt` | producer-clock watermark for the ghost predicate |
-| `conditions`, `subAgents`, `queuedMessages`, status fields | live prompt state, fleet, lifecycle |
+
+Everything else on `SessionRuntime` is *not* a decide input. The tool indices (`toolUseIndex`/`toolResultIndex`/`toolIndexVersion`) feed the RENDER-side tool-pairing context; `conditions`, `subAgents`, `queuedMessages`, and the status/lifecycle fields feed other UI surfaces. Because `RuntimeRenderInput` is a Pick, desktop callers pass the same runtime object unchanged (structural subtype — no wrapper, so per-plane reference identity survives), while the remote client and the replay harness construct honest partial inputs instead of casting.
 
 ---
 
@@ -115,7 +123,7 @@ A `SessionRuntime` with cleanly separated planes, each changing reference indepe
 
 ### The data model (`model/types.ts`)
 
-- **`RenderCandidate`** — one potential visible unit, block-level. Its identity fields are plural because no single id spans providers (Codex `resp_*`, rollout turn/task ids, Claude `message.id == turnId`, opencode `messageId + callID`); `id` is a pipeline-stable synthetic identity assigned *at ingest* and must never fall back to the visible index (that produced the React-subtree-reuse "phantom duplicate" class). Notable fields:
+- **`RenderCandidate`** — one potential visible unit, block-level. Its identity fields are plural because no single id spans providers (Codex `resp_*`, rollout turn/task ids, Claude `message.id == turnId`, opencode `messageId + callID`); `id` is a pipeline-stable synthetic identity, synthesized at the **collection/observation boundary** (`rendering/observations/*.ts`) from source identities — `entry:<uuid>` for committed rows (position-at-ingest fallback when the provider gave no uuid; stable because `entries` is append-only), `sem:<turnId>:<blockIndex>` for live blocks, `ghost:<uuid>`, `optimistic:<uuid>` — and must never fall back to the visible index (that produced the React-subtree-reuse "phantom duplicate" class). Notable fields:
   - `timestampMs: number | null` — the **D4 trust hierarchy**: committed `entry.timestamp` (producer clock) > semantic `startedAt/endedAt` (local receipt) > `null`. Channel-receipt `ts` values are diagnostics and must *never* land here. `null` means "no trustworthy time" and sorts *after* timestamped content.
   - `textKey` / `normalizedTextKey` — exact and NFKC-collapsed text keys for committed-text ownership (never prefix/fuzzy).
   - `ownedToolUseIds` / `ownedToolResultIds` — block-grain ownership *evidence* mined from a committed entry's content array. They live on the entry-grain candidate (not separate block candidates) because committed rows must stay one-per-entry; without them the corpus proved committed tool ownership was empty for Claude and tool cards painted twice.
@@ -165,13 +173,13 @@ Anything unrecognized — a proxy event type with no handler, a block kind with 
 
 **Where:** `src/renderer/src/features/feed/`. **Consumes:** an ordered `FeedRenderItem[]`. **Rule:** makes no decisions.
 
-### The view bridge (`rendering/view/ledgerFeedItems.ts`) — the layer boundary
+### The view bridge (`features/feed/ledger/ledgerFeedItems.ts`) — the layer boundary
 
 `ledgerToFeedItems(ledger, ctx)` maps `RenderLedger.rows` → `FeedRenderItem[]`. Because the ledger carries only turnId + blockIndex (not the drawable payload), the bridge looks each row up in `entriesByUuid`/`turnsById` and attaches the rich block/entry. Two mechanics matter:
 - It **pre-groups semantic rows by turnId** and emits a turn's blocks contiguously at the turn's first position (the ordering law interleaves equal-timestamp turns; the bridge un-interleaves for paint).
 - It carries a **`dropped[]`** list: a ledger-*selected* candidate whose payload can't be resolved is pushed to `dropped` and loudly `console.warn`-ed by `useLedgerFeedItems`, *never* silently omitted (a silent drop is the #239 present-but-invisible class).
 
-`buildSemanticTurnItems` emits one `semantic-block` per approved block, folds consecutive churn tools into a `semantic-collapsed-activity` unit via **`groupSemanticActivity`** (grouping only — *suppression removed*, because the ledger is the sole suppressor; if the bridge re-ran suppression it would become a second decision-maker, the exact thing #491 killed), and emits `semantic-text` for blockless turns (Codex/opencode deliver text on `turn.text` with an empty block map).
+`buildSemanticTurnItems` emits one `semantic-block` per approved block, folds consecutive churn tools into a `semantic-collapsed-activity` unit via **`groupSemanticActivity`** (grouping only — *suppression removed*, because the ledger is the sole suppressor; if the bridge re-ran suppression it would become a second decision-maker, the exact thing #491 killed), and emits `semantic-text` for blockless turns (Codex/opencode deliver text on `turn.text` with an empty block map). One deliberate carve-out: a **RUNNING collapsed-activity unit emits no item at all** — `SemanticCollapsedActivityRow` paints null while running (the WorkIndicator owns the busy surface), so emitting an item would put a null-painting row in the list while the ledger counts its blocks as content, the false-ownership class the pipeline exists to kill (#492 review finding). Only the finished "worked: N reads" receipt emits.
 
 ### The `FeedRenderItem` union (`feed/model/renderModel.ts`)
 
@@ -205,17 +213,17 @@ This is why typing in the composer never re-parses the transcript's markdown, an
 
 | You want… | Start at |
 |---|---|
-| the runtime object every stage reads | `workspace/workspaceState.ts` (`SessionRuntime`) |
+| the runtime object + the decide-layer contract | `session-runtime/state.ts` (`SessionRuntime`, `RuntimeRenderInput`) |
 | how channels become the runtime | `workspace/hook/ipc/useIpcSubscriptions.ts` |
-| the semantic fold | `workspace/semantic/foldEvent.ts` |
+| the semantic fold | `session-runtime/semantic/foldEvent.ts` |
 | provider neutrality | `providers/registry.renderer.capabilities.ts` + `shared/types/providerConfig.ts` |
 | the ledger contract / one invariant | `rendering/model/types.ts` |
 | ownership decisions | `rendering/model/ownership.ts` |
 | the ordering law | `rendering/model/order.ts` |
-| ghosts | `rendering/model/ghostPredicate.ts` + `workspace/ghosts.ts` + `docs/design/ghost-system.md` |
+| ghosts | `rendering/model/ghostPredicate.ts` + `session-runtime/ghosts.ts` + `docs/design/ghost-system.md` |
 | unknowns / redaction | `rendering/model/unknowns.ts` |
 | runtime → ledger seam | `rendering/adapter/collectLedgerInput.ts` |
-| ledger → feed bridge | `rendering/view/ledgerFeedItems.ts` + `useLedgerFeedItems.ts` |
+| ledger → feed bridge | `features/feed/ledger/ledgerFeedItems.ts` + `useLedgerFeedItems.ts` |
 | the painter | `features/feed/ui/Feed.tsx` |
 | the item contract | `features/feed/model/renderModel.ts` |
 | row dispatch | `features/feed/ui/rows/{EntryRow,ConversationRow,Block}.tsx` |
@@ -225,4 +233,4 @@ This is why typing in the composer never re-parses the transcript's markdown, an
 
 ### A note on what's *gone*
 
-The pre-rewrite decision core is deleted: `deriveFeedRenderModel` (the plane partitioner), `deriveFeedCommittedProjection` (the dedup feeder), the `SemanticStreamingTurn` / `StreamingTurn.tsx` component (retired by #491 block-level un-collapse), and the `AGENT_CODE_RENDER_PIPELINE` flag + shadow-diff scaffolding (Stage-3 cutover, parity was green over the incident corpus). If you find a comment referencing any of these as live code, it is stale — fix it in the same PR.
+The pre-rewrite decision core is deleted: `deriveFeedRenderModel` (the plane partitioner), `deriveFeedCommittedProjection` (the dedup feeder), the `SemanticStreamingTurn` / `StreamingTurn.tsx` component (retired by #491 block-level un-collapse), the `AGENT_CODE_RENDER_PIPELINE` flag and the legacy runtime path it gated (Stage-3 cutover, parity was green over the incident corpus), and `rendering/policy/foldPolicy.ts` (dead since the per-provider fold policy moved to `src/providers/*/renderer/semanticFoldPolicy.ts`; removed in #493). Note that `rendering/shadow/shadowDiff.ts` is **not** gone — the runtime shadow *mode* died at cutover, but the normalization/diff engine survives as the comparison core of the bundle and recording corpus tests. If you find a comment referencing any of the deleted names as live code, it is stale — fix it in the same PR.
