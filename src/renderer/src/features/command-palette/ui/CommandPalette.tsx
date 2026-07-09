@@ -19,9 +19,11 @@ import {
   type PromptTemplate,
 } from '@renderer/features/prompt-templates/templates'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
-import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { AgentViewMode } from '@renderer/app-state/settings/types'
-import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
+import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
+import { useAppStore } from '@renderer/app-state/hooks'
+import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
+import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
+import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
 import {
   SessionPreviewPane,
   type PreviewTarget,
@@ -69,153 +71,115 @@ type PromptTemplateForm = {
   body: string
 }
 
-type Props = {
-  open: boolean
-  onClose: () => void
-  workspace: Workspace
-  onNewTabRequest: () => void
-  onResumeRequest: (defaultCwd: string) => void
-  onTileTabsRequest: () => void
-  onReorderTabsRequest: () => void
-  onSettingsRequest: () => void
-  openViewPrompts: (sessionId: string) => void
-  openPromptSearch: () => void
-  openAgentActivity: () => void
-  openCloseOldAgents: () => void
-  openBulkProviderSwitch: () => void
-  openRewindPrompt: (sessionId: string) => void
-  openAgentViewModePicker: (sessionId: string) => void
-  openUsageModal: () => void
-  toggleGitBar: () => void
-  toggleWorktreesBar: () => void
-  toggleDebugPanel: () => void
-  toggleFeedDebugPanel: () => void
-  toggleProxyDebugPanel: () => void
-  toggleHtmlDebugPanel: () => void
-  toggleDevDebugPanel: () => void
-  openAgentStatusPanel: () => void
-  closeAgentStatusPanel: () => void
-  toggleAgentStatusPanel: () => void
-  togglePerformancePanel: () => void
-  toggleRemotePanel: () => void
-  toggleCaffeinate: () => Promise<void> | void
-  toggleGlobalEditor: () => void
-  toggleFileTreeVisible: () => void
-  enterDispatchMode: () => Promise<void> | void
-  enterGlobalDispatch: () => Promise<void> | void
-  exitDispatchMode: () => void
-  openTiledDispatchPrompt: () => void
-  openDispatchAttach: (intent: DispatchAttachIntent) => void
-  openLinkedAgent: (sessionId: string) => void
-  openPinAgents: () => void
-  toggleCustomRendering: () => void
-  toggleStatusMode: () => void
-  toggleWorktreeBadges: () => void
-  customRenderingEnabled: boolean
-  agentViewMode: AgentViewMode
-  /** Sparse per-command picker-visibility overrides from settings, keyed
-   *  by stable command id. Threaded straight into the command context so
-   *  buildCommandRegistry's `commandVisible` gate can consult it. The
-   *  palette itself does NO filtering — it only forwards the flag. */
-  commandVisibilityOverrides: Record<string, boolean>
-  /** Global "reveal every command" escape hatch (currently always false;
-   *  see App.tsx). Forwarded, not interpreted, here. */
-  showHiddenCommands: boolean
-  statusModeEnabled: boolean
-  worktreeBadgesEnabled: boolean
-  dangerousAgentsEnabled: boolean
-  aggressiveDebugPersistenceEnabled: boolean
-  gitBarOpen: boolean
-  worktreesBarOpen: boolean
-  debugPanelOpen: boolean
-  feedDebugPanelOpen: boolean
-  proxyDebugPanelOpen: boolean
-  htmlDebugPanelOpen: boolean
-  devDebugEnabled: boolean
-  sessionRecordingEnabled: boolean
-  devDebugPanelOpen: boolean
-  agentStatusPanelOpen: boolean
-  performancePanelOpen: boolean
-  caffeinateActive: boolean
-  caffeinateSupported: boolean
-  globalEditorOpen: boolean
-  fileTreeVisible: boolean
-  dispatchModeEnabled: boolean
-  globalDispatchEnabled: boolean
-  setDangerousAgentsEnabled: (enabled: boolean) => void
-  setAggressiveDebugPersistence: (enabled: boolean) => void
-}
+// Global "reveal every command" escape hatch. Hard-coded false, moved
+// here from App.tsx (#494): issue #249 shipped the per-command override
+// mechanism only. A future "show hidden commands" affordance can flip
+// this to reveal the full list in one shot.
+const SHOW_HIDDEN_COMMANDS = false
 
-export function CommandPalette({
-  open,
-  onClose,
-  workspace,
-  onNewTabRequest,
-  onResumeRequest,
-  onTileTabsRequest,
-  onReorderTabsRequest,
-  onSettingsRequest,
-  openViewPrompts,
-  openPromptSearch,
-  openAgentActivity,
-  openCloseOldAgents,
-  openBulkProviderSwitch,
-  openRewindPrompt,
-  openAgentViewModePicker,
-  openUsageModal,
-  toggleGitBar,
-  toggleWorktreesBar,
-  toggleDebugPanel,
-  toggleFeedDebugPanel,
-  toggleProxyDebugPanel,
-  toggleHtmlDebugPanel,
-  toggleDevDebugPanel,
-  openAgentStatusPanel,
-  closeAgentStatusPanel,
-  toggleAgentStatusPanel,
-  togglePerformancePanel,
-  toggleRemotePanel,
-  toggleCaffeinate,
-  toggleGlobalEditor,
-  toggleFileTreeVisible,
-  enterDispatchMode,
-  enterGlobalDispatch,
-  exitDispatchMode,
-  openTiledDispatchPrompt,
-  openDispatchAttach,
-  openLinkedAgent,
-  openPinAgents,
-  toggleCustomRendering,
-  toggleStatusMode,
-  toggleWorktreeBadges,
-  customRenderingEnabled,
-  agentViewMode,
-  commandVisibilityOverrides,
-  showHiddenCommands,
-  statusModeEnabled,
-  worktreeBadgesEnabled,
-  dangerousAgentsEnabled,
-  aggressiveDebugPersistenceEnabled,
-  gitBarOpen,
-  worktreesBarOpen,
-  debugPanelOpen,
-  feedDebugPanelOpen,
-  proxyDebugPanelOpen,
-  htmlDebugPanelOpen,
-  devDebugEnabled,
-  sessionRecordingEnabled,
-  devDebugPanelOpen,
-  agentStatusPanelOpen,
-  performancePanelOpen,
-  caffeinateActive,
-  caffeinateSupported,
-  globalEditorOpen,
-  fileTreeVisible,
-  dispatchModeEnabled,
-  globalDispatchEnabled,
-  setDangerousAgentsEnabled,
-  setAggressiveDebugPersistence,
-}: Props) {
+export function CommandPalette() {
+  // #494: the palette used to receive ~76 props whose only purpose was
+  // to be reassembled into `commandContext` below. It now sources every
+  // value itself — the store actions/flags by selector, workspace via
+  // context, caffeinate/dev-debug via their feature stores — so App.tsx
+  // stopped being a wiring hub. The `commandContext` SHAPE (ui/flags
+  // buckets, types.ts) is deliberately unchanged: command definitions
+  // are untouched, and the future provider-enumeration rewrite (#394 §7)
+  // rebuilds command CONTENT, not this assembly.
+  const workspace = useWorkspaceContext()
+  const open = useAppStore(state => state.commandPaletteOpen)
+  const onClose = useAppStore(state => state.closeCommandPalette)
+  const settings = useAppStore(state => state.settings)
+  const setSettings = useAppStore(state => state.setSettings)
+  const { onNewTabRequest, onResumeRequest } = usePathPickerRequests()
+
+  const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
+  const onTileTabsRequest = useCallback(() => {
+    openTileTabsModal(
+      workspace.tileTabs?.tabIds ?? (workspace.activeTab ? [workspace.activeTab.id] : []),
+    )
+  }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
+  const onReorderTabsRequest = useAppStore(state => state.openReorderTabs)
+  const onSettingsRequest = useAppStore(state => state.openSettingsPage)
+  const openViewPrompts = useAppStore(state => state.openViewPrompts)
+  const openPromptSearch = useAppStore(state => state.openPromptSearch)
+  const openAgentActivity = useAppStore(state => state.openAgentActivity)
+  const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
+  const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
+  const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
+  const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
+  const openUsageModal = useAppStore(state => state.openUsageModal)
+  const toggleGitBar = useAppStore(state => state.toggleGitBar)
+  const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
+  const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
+  const toggleFeedDebugPanel = useAppStore(state => state.toggleFeedDebugPanel)
+  const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
+  const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
+  const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
+  const openAgentStatusPanel = useAppStore(state => state.openAgentStatusPanel)
+  const closeAgentStatusPanel = useAppStore(state => state.closeAgentStatusPanel)
+  const toggleAgentStatusPanel = useAppStore(state => state.toggleAgentStatusPanel)
+  const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
+  const toggleRemotePanel = useAppStore(state => state.toggleRemotePanel)
+  const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
+  const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
+  const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
+  const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
+  const openPinAgents = useAppStore(state => state.openPinAgents)
+  const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
+  const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
+  const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
+  const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
+  const caffeinateStatus = useCaffeinateStore(state => state.status)
+  const devDebugEnabled = useDevDebugConfig(state => state.enabled)
+  const sessionRecordingEnabled = useDevDebugConfig(state => state.sessionRecordingEnabled)
+  // File-tree visibility lives on the global-editor store, not on
+  // uiShell, because it's editor-scoped state — the rest of the
+  // workspace has no concept of "the file tree."
+  const fileTreeVisible = useGlobalEditorStore(state => state.fileTreeVisible)
+  const toggleFileTreeVisible = useGlobalEditorStore(state => state.toggleFileTreeVisible)
+
+  const enterDispatchMode = workspace.enterDispatchMode
+  const exitDispatchMode = workspace.exitDispatchMode
+  const enterGlobalDispatch = useCallback(
+    () =>
+      workspace.setDispatchScope(
+        workspace.dispatchMode?.scope === 'global' ? 'project' : 'global',
+      ),
+    [workspace],
+  )
+  const setDangerousAgentsEnabled = useCallback(
+    (enabled: boolean) => setSettings({ dangerousAgentsEnabled: enabled }),
+    [setSettings],
+  )
+  const setAggressiveDebugPersistence = useCallback(
+    (enabled: boolean) => setSettings({ aggressiveDebugPersistence: enabled }),
+    [setSettings],
+  )
+
+  const customRenderingEnabled = settings.customRendering
+  const agentViewMode = settings.agentViewMode
+  const commandVisibilityOverrides = settings.commandVisibilityOverrides
+  const showHiddenCommands = SHOW_HIDDEN_COMMANDS
+  const statusModeEnabled = settings.showStatusMode
+  const worktreeBadgesEnabled = settings.showWorktreeBadges
+  const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
+  const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
+  const gitBarOpen = useAppStore(state => state.gitBarOpen)
+  const worktreesBarOpen = useAppStore(state => state.worktreesBarOpen)
+  const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
+  const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
+  const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
+  const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
+  const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
+  const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
+  const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
+  const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
+  const caffeinateActive = caffeinateStatus?.active === true
+  const caffeinateSupported = caffeinateStatus?.supported !== false
+  const dispatchModeEnabled = workspace.dispatchMode !== null
+  const globalDispatchEnabled = workspace.dispatchMode?.scope === 'global'
+
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [mode, setMode] = useState<PaletteMode>('commands')
