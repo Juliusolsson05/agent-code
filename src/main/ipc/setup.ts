@@ -5,10 +5,10 @@ import type {
   SetupSetToolPathResult,
   SetupToolId,
 } from '@shared/types/setup.js'
-import { isExecutable } from '@main/setup/binaryResolver.js'
+import { classifyExecutable } from '@main/setup/binaryResolver.js'
 import { installWithHomebrew } from '@main/setup/homebrewInstaller.js'
 import { checkPrerequisites } from '@main/setup/prerequisites.js'
-import { markOptionalSkipped, updateToolPaths } from '@main/setup/setupState.js'
+import { markOptionalSkipped, setManualToolPath } from '@main/setup/setupState.js'
 import { refreshToolchainFromState } from '@main/setup/toolchain.js'
 
 export function registerSetupIpc(): void {
@@ -41,16 +41,17 @@ export function registerSetupIpc(): void {
   // Escape hatch for #495 A1: automatic resolution is a probe, and a
   // probe false-negative must never be the *sole* gate on the whole
   // product. The user pastes an absolute path; we accept it iff it is an
-  // executable file, persist it through the same updateToolPaths() the
-  // automatic probe uses (so revalidateToolchain and PATH augmentation
-  // treat it identically to a probed path — no second bookkeeping story),
-  // then re-run the check so the gate can unlock in one round-trip.
+  // executable *regular file*, persist it via setManualToolPath() — which
+  // records durable user intent in manualToolPaths AND updates the same
+  // toolPaths cache the automatic probe writes, so PATH augmentation
+  // treats it identically to a probed path — then re-run the check so the
+  // gate can unlock in one round-trip.
   //
-  // checkPrerequisites re-probes every tool and writes back its own
-  // updateToolPaths(); it keeps a persisted path whose file still execs
-  // when the probe misses (see the fallback in prerequisites.ts), so the
-  // manual override survives the recheck instead of being deleted by the
-  // null-path write-back.
+  // A valid override outranks every automatic layer from here on:
+  // checkPrerequisites and revalidateToolchain both consult
+  // manualToolPaths before probing (precedence comment in
+  // prerequisites.ts), so neither the recheck below nor the next app
+  // launch can silently replace or delete what the user chose.
   ipcMain.handle(
     'setup:set-tool-path',
     async (_evt, tool: SetupToolId, rawPath: string): Promise<SetupSetToolPathResult> => {
@@ -58,10 +59,26 @@ export function registerSetupIpc(): void {
       if (!candidate.startsWith('/')) {
         return { ok: false, reason: 'Enter an absolute path (starting with /).' }
       }
-      if (!(await isExecutable(candidate))) {
-        return { ok: false, reason: 'Not an executable file at that path.' }
+      // classifyExecutable, not a bare X_OK check: POSIX access(dir, X_OK)
+      // succeeds for any searchable directory, so `/usr/local/bin` used to
+      // validate here and the provider later tried to spawn a directory.
+      // The verdict lets us tell the user *how* the path is wrong — the
+      // directory case gets its own message because it is the natural typo
+      // (pasting the containing dir instead of the binary).
+      switch (await classifyExecutable(candidate)) {
+        case 'ok':
+          break
+        case 'directory':
+          return {
+            ok: false,
+            reason: `That path is a directory — enter the path to the binary itself (e.g. ${candidate.replace(/\/+$/, '')}/${tool}).`,
+          }
+        case 'missing':
+          return { ok: false, reason: 'No file exists at that path.' }
+        default:
+          return { ok: false, reason: 'Not an executable file at that path.' }
       }
-      await updateToolPaths({ [tool]: candidate })
+      await setManualToolPath(tool, candidate)
       await refreshToolchainFromState()
       return { ok: true, check: await checkPrerequisites() }
     },

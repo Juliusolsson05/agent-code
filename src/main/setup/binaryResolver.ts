@@ -1,4 +1,4 @@
-import { access } from 'fs/promises'
+import { access, stat } from 'fs/promises'
 import { constants as fsConstants } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -20,13 +20,47 @@ const TOOL_COMMAND: Record<SetupToolId, string> = {
   ),
 } as Record<SetupToolId, string>
 
-export async function isExecutable(path: string): Promise<boolean> {
+// WHY a classifier and not a plain boolean: on POSIX, X_OK against a
+// DIRECTORY means "searchable", so `access('/usr/local/bin', X_OK)`
+// succeeds. The old boolean-only check therefore accepted directories
+// as "executables" — a user could paste `/usr/local/bin` into the
+// manual override, the SetupGate would happily unlock, and the failure
+// (spawn EACCES/EISDIR) surfaced minutes later when a provider tried
+// to exec the directory, with no hint that setup was the culprit.
+// The classifier lets callers that talk to humans (setup:set-tool-path)
+// say *which* way the path is wrong, while machine callers collapse it
+// through isExecutable() below.
+//
+// stat() (not lstat) on purpose: it follows symlinks, and a symlink to
+// a real binary (brew's `/opt/homebrew/bin/*`, volta/asdf shims) must
+// classify by its target — rejecting symlinks would break the most
+// common install layouts on macOS.
+export type ExecutableVerdict =
+  | 'ok'
+  | 'missing' // nothing stat-able at the path (or unreadable parent)
+  | 'directory' // exists but is a directory — the /usr/local/bin trap
+  | 'not-a-file' // socket/FIFO/device — spawnable by nothing we do
+  | 'not-executable' // regular file without +x for this user
+
+export async function classifyExecutable(path: string): Promise<ExecutableVerdict> {
+  let info
+  try {
+    info = await stat(path)
+  } catch {
+    return 'missing'
+  }
+  if (info.isDirectory()) return 'directory'
+  if (!info.isFile()) return 'not-a-file'
   try {
     await access(path, fsConstants.X_OK)
-    return true
   } catch {
-    return false
+    return 'not-executable'
   }
+  return 'ok'
+}
+
+export async function isExecutable(path: string): Promise<boolean> {
+  return (await classifyExecutable(path)) === 'ok'
 }
 
 // Layer 2 of resolution (#495 A1): a direct executable scan that cannot be
