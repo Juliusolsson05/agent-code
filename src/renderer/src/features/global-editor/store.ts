@@ -70,11 +70,24 @@ type GlobalEditorStore = {
    *  cwd; this also fronts the "active cwd" so callers don't
    *  need to thread it through. */
   activeCwd: string | null
+  /** ⌘P overlay. Transient UI state, global like fileTreeVisible —
+   *  lives here (not uiShell) because it is editor-scoped chrome. */
+  quickOpenOpen: boolean
+  /** ⌘⇧F overlay. Same scoping rationale as quickOpenOpen. */
+  contentSearchOpen: boolean
+  /** Editor takes 100% of the workspace area; the wrapped workspace
+   *  stays mounted but hidden (see GlobalEditorShell). Global, not
+   *  per-cwd: fullscreen is a viewing posture, not project data. */
+  editorFullscreen: boolean
 
   setActiveCwd: (cwd: string | null) => void
   setSplitterRatio: (ratio: number) => void
   setFileTreeWidthPx: (px: number) => void
   toggleFileTreeVisible: () => void
+  setQuickOpenOpen: (open: boolean) => void
+  setContentSearchOpen: (open: boolean) => void
+  setEditorFullscreen: (on: boolean) => void
+  toggleEditorFullscreen: () => void
   openAiWorkspace: (workspaceId: string) => void
   closeAiWorkspace: () => void
 
@@ -180,12 +193,20 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
   fileTreeVisible: true,
   aiWorkspaceId: null,
   activeCwd: null,
+  quickOpenOpen: false,
+  contentSearchOpen: false,
+  editorFullscreen: false,
 
   setActiveCwd: cwd => set({ activeCwd: cwd }),
   setSplitterRatio: ratio => set({ splitterRatio: clampSplitter(ratio) }),
   setFileTreeWidthPx: px => set({ fileTreeWidthPx: clampFileTreeWidth(px) }),
   toggleFileTreeVisible: () =>
     set(state => ({ fileTreeVisible: !state.fileTreeVisible })),
+  setQuickOpenOpen: open => set({ quickOpenOpen: open }),
+  setContentSearchOpen: open => set({ contentSearchOpen: open }),
+  setEditorFullscreen: on => set({ editorFullscreen: on }),
+  toggleEditorFullscreen: () =>
+    set(state => ({ editorFullscreen: !state.editorFullscreen })),
   openAiWorkspace: workspaceId => set({ aiWorkspaceId: workspaceId }),
   closeAiWorkspace: () => set({ aiWorkspaceId: null }),
 

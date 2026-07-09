@@ -16,6 +16,7 @@ import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSel
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
 // Keybinds: global window-level listeners. The handler is attached to
 // `document` in a single useEffect, which captures the key BEFORE the
@@ -39,6 +40,13 @@ import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlo
 //   cmd-alt-1..9    activate Nth tab, including while Dispatch Mode owns cmd-N.
 //   cmd-[           previous tab
 //   cmd-]           next tab
+//   cmd-shift-p     command palette
+//   cmd-shift-e     Global Editor overlay toggle
+//   cmd-alt-e       Global Editor fullscreen (opens the editor first if
+//                   needed; Esc exits fullscreen)
+//   cmd-p           Quick Open file in the Global Editor (opens the
+//                   editor first if needed)
+//   cmd-shift-f     Search in files (Global Editor; opens it if needed)
 //   alt-d           split current pane vertically (new pane to the right)
 //   alt-shift-d     split current pane horizontally (new pane below)
 //   alt-t           split with a TERMINAL below (new row, horizontal split)
@@ -220,6 +228,50 @@ export function useKeybinds(
       if (cmd && shift && k.toLowerCase() === 'e' && !alt) {
         e.preventDefault()
         toggleGlobalEditor()
+        return
+      }
+
+      // --- Alt+Cmd+E: Global Editor fullscreen ---
+      //
+      // Chord picked for adjacency to ⌘⇧E (same key, different
+      // modifier = same feature family). When the editor is closed,
+      // this opens it straight into fullscreen — "give me a big
+      // editor" is one gesture, not two. Esc exits (handled in
+      // GlobalEditorShell so it can defer to open overlays).
+      if (cmd && alt && !shift && k.toLowerCase() === 'e') {
+        e.preventDefault()
+        const editorStore = useGlobalEditorStore.getState()
+        if (!useAppStore.getState().globalEditorOpen) {
+          toggleGlobalEditor()
+          editorStore.setEditorFullscreen(true)
+        } else {
+          editorStore.toggleEditorFullscreen()
+        }
+        return
+      }
+
+      // --- Cmd+P: Quick Open file (Global Editor) ---
+      //
+      // Opens the editor first when it's closed: quick-open with
+      // nowhere to show the file would be a dead command. Plain ⌘P is
+      // free (⌘⇧P above is the command palette), and it matches the
+      // VS Code muscle memory quick-open trained into everyone.
+      if (cmd && !shift && !alt && k.toLowerCase() === 'p') {
+        e.preventDefault()
+        if (!useAppStore.getState().globalEditorOpen) toggleGlobalEditor()
+        useGlobalEditorStore.getState().setQuickOpenOpen(true)
+        return
+      }
+
+      // --- Cmd+Shift+F: Search in files (Global Editor) ---
+      //
+      // Same open-editor-first behavior as ⌘P, same VS Code muscle
+      // memory. Verified unbound before claiming (only ⌘⇧P / ⌘⇧E
+      // shared the cmd+shift namespace here).
+      if (cmd && shift && !alt && k.toLowerCase() === 'f') {
+        e.preventDefault()
+        if (!useAppStore.getState().globalEditorOpen) toggleGlobalEditor()
+        useGlobalEditorStore.getState().setContentSearchOpen(true)
         return
       }
 

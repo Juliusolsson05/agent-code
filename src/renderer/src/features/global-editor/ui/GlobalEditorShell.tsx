@@ -14,6 +14,8 @@ import { AiWorkspaceEditor } from '@renderer/features/ai-workspace/ui/AiWorkspac
 
 import { EMPTY_CWD_STATE, useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
+import { QuickOpenOverlay } from '@renderer/features/global-editor/ui/QuickOpenOverlay'
+import { ContentSearchOverlay } from '@renderer/features/global-editor/ui/ContentSearchOverlay'
 import { useFocusedAgentCwd } from '@renderer/features/global-editor/useFocusedAgentCwd'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
@@ -106,6 +108,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     fileTreeVisible,
     aiWorkspaceId,
     closeAiWorkspace,
+    quickOpenOpen,
+    setQuickOpenOpen,
+    contentSearchOpen,
+    setContentSearchOpen,
+    editorFullscreen,
+    setEditorFullscreen,
   } = useGlobalEditorStore(
     useShallow(state => ({
       splitterRatio: state.splitterRatio,
@@ -115,6 +123,12 @@ export function GlobalEditorShell({ children, workspace }: Props) {
       fileTreeVisible: state.fileTreeVisible,
       aiWorkspaceId: state.aiWorkspaceId,
       closeAiWorkspace: state.closeAiWorkspace,
+      quickOpenOpen: state.quickOpenOpen,
+      setQuickOpenOpen: state.setQuickOpenOpen,
+      contentSearchOpen: state.contentSearchOpen,
+      setContentSearchOpen: state.setContentSearchOpen,
+      editorFullscreen: state.editorFullscreen,
+      setEditorFullscreen: state.setEditorFullscreen,
     })),
   )
   const {
@@ -370,6 +384,22 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     [activeCwd, clearFileSelection],
   )
 
+  // Escape exits fullscreen — but only when no editor overlay owns the
+  // key (Quick Open / content search close themselves on Escape and must
+  // not ALSO drop the user out of fullscreen with the same press).
+  useEffect(() => {
+    if (!open || !editorFullscreen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      const { quickOpenOpen: qo, contentSearchOpen: cs } =
+        useGlobalEditorStore.getState()
+      if (qo || cs) return
+      setEditorFullscreen(false)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, editorFullscreen, setEditorFullscreen])
+
   // When the overlay is closed, render the workspace area
   // full-bleed. This is the "off" state — zero overhead, no extra
   // DOM, no event listeners.
@@ -404,7 +434,16 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     >
       <div
         className="flex flex-col min-h-0 overflow-hidden border-r border-border"
-        style={{ width: `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)` }}
+        style={{
+          // Fullscreen: the editor takes the whole workspace area; the
+          // wrapped workspace stays MOUNTED but display:none (below).
+          // Unmounting would tear down every terminal/feed in the tab
+          // (xterm buffers, scroll positions, in-flight renders) just
+          // because the user wanted a big editor for a minute.
+          width: editorFullscreen
+            ? '100%'
+            : `calc(${leftPercent}% - ${SPLITTER_PX / 2}px)`,
+        }}
       >
         {aiWorkspaceId ? (
           <AiWorkspaceEditor workspaceId={aiWorkspaceId} onClose={closeAiWorkspace} />
@@ -461,19 +500,34 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         the hook) so the cursor doesn't flicker as the splitter
         moves under it.
       */}
-      <SplitHandle
-        dragging={outerSplitter.dragging}
-        onMouseDown={outerSplitter.onMouseDown}
-        hitSizePx={SPLITTER_HIT_PX}
-        barSizePx={SPLITTER_PX}
-      />
-      {outerSplitter.cursorLock}
+      {!editorFullscreen && (
+        <SplitHandle
+          dragging={outerSplitter.dragging}
+          onMouseDown={outerSplitter.onMouseDown}
+          hitSizePx={SPLITTER_HIT_PX}
+          barSizePx={SPLITTER_PX}
+        />
+      )}
+      {!editorFullscreen && outerSplitter.cursorLock}
       <div
         className="flex flex-col min-h-0 overflow-hidden"
-        style={{ width: `calc(${rightPercent}% - ${SPLITTER_PX / 2}px)` }}
+        style={
+          editorFullscreen
+            ? { display: 'none' }
+            : { width: `calc(${rightPercent}% - ${SPLITTER_PX / 2}px)` }
+        }
       >
         {children}
       </div>
+      {quickOpenOpen && activeCwd && (
+        <QuickOpenOverlay root={activeCwd} onClose={() => setQuickOpenOpen(false)} />
+      )}
+      {contentSearchOpen && activeCwd && (
+        <ContentSearchOverlay
+          root={activeCwd}
+          onClose={() => setContentSearchOpen(false)}
+        />
+      )}
     </div>
   )
 }
