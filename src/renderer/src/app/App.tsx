@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
 
-import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
 import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
@@ -22,7 +21,7 @@ import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
-import { useDevDebugConfig, useDevDebugConfigSync } from '@renderer/features/debug/devDebugConfig'
+import { useDevDebugConfigSync } from '@renderer/features/debug/devDebugConfig'
 import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
@@ -49,43 +48,19 @@ export default function App() {
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
   const resetSettings = useAppStore(state => state.resetSettings)
-  const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
-  const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
-  const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
-  const commandPaletteOpen = useAppStore(state => state.commandPaletteOpen)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
-  const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
   const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
   const linkedAgentParentId = useAppStore(state => state.linkedAgentParentId)
-  const gitBarOpen = useAppStore(state => state.gitBarOpen)
-  const worktreesBarOpen = useAppStore(state => state.worktreesBarOpen)
-  const debugPanelOpen = useAppStore(state => state.debugPanelOpen)
-  const feedDebugPanelOpen = useAppStore(state => state.feedDebugPanelOpen)
-  const proxyDebugPanelOpen = useAppStore(state => state.proxyDebugPanelOpen)
-  const htmlDebugPanelOpen = useAppStore(state => state.htmlDebugPanelOpen)
-  const devDebugPanelOpen = useAppStore(state => state.devDebugPanelOpen)
-  const agentStatusPanelOpen = useAppStore(state => state.agentStatusPanelOpen)
   const performancePanelOpen = useAppStore(state => state.performancePanelOpen)
-  const toggleRemotePanel = useAppStore(state => state.toggleRemotePanel)
-  const globalEditorOpen = useAppStore(state => state.globalEditorOpen)
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const useProxyStreaming = settings.useProxyStreaming
   const defaultWorkspaceMode = settings.defaultWorkspaceMode
-  const openCommandPalette = useAppStore(state => state.openCommandPalette)
-  const closeCommandPalette = useAppStore(state => state.closeCommandPalette)
   const toggleCommandPalette = useAppStore(state => state.toggleCommandPalette)
-  const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
-  const openReorderTabs = useAppStore(state => state.openReorderTabs)
-  const openPinAgents = useAppStore(state => state.openPinAgents)
-  const openSettingsPage = useAppStore(state => state.openSettingsPage)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
-  const openViewPrompts = useAppStore(state => state.openViewPrompts)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
-  const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
-  const openLinkedAgent = useAppStore(state => state.openLinkedAgent)
   const closeLinkedAgent = useAppStore(state => state.closeLinkedAgent)
   // Create, attach, and linked-agent flows share the same overlay
   // shell. The close handler clears every intent so re-opening one
@@ -99,36 +74,9 @@ export default function App() {
     newAgentPlacementOpen ||
     dispatchAttachIntent !== null ||
     linkedAgentParentId !== null
-  const toggleGitBar = useAppStore(state => state.toggleGitBar)
-  const toggleWorktreesBar = useAppStore(state => state.toggleWorktreesBar)
-  const toggleDebugPanel = useAppStore(state => state.toggleDebugPanel)
-  const toggleFeedDebugPanel = useAppStore(state => state.toggleFeedDebugPanel)
-  const toggleProxyDebugPanel = useAppStore(state => state.toggleProxyDebugPanel)
-  const toggleHtmlDebugPanel = useAppStore(state => state.toggleHtmlDebugPanel)
-  const toggleDevDebugPanel = useAppStore(state => state.toggleDevDebugPanel)
-  const openAgentStatusPanel = useAppStore(state => state.openAgentStatusPanel)
-  const closeAgentStatusPanel = useAppStore(state => state.closeAgentStatusPanel)
-  const toggleAgentStatusPanel = useAppStore(state => state.toggleAgentStatusPanel)
   const togglePerformancePanel = useAppStore(state => state.togglePerformancePanel)
-  const toggleGlobalEditor = useAppStore(state => state.toggleGlobalEditor)
-  // File-tree visibility lives on the global-editor store, not on
-  // uiShell, because it's editor-scoped state — the rest of the
-  // workspace has no concept of "the file tree." We subscribe here
-  // only to thread the flag + action to the command palette, which
-  // shows the toggle when the Global Editor is open.
-  const fileTreeVisible = useGlobalEditorStore(state => state.fileTreeVisible)
-  const toggleFileTreeVisible = useGlobalEditorStore(state => state.toggleFileTreeVisible)
-  const openPromptSearch = useAppStore(state => state.openPromptSearch)
-  const openAgentActivity = useAppStore(state => state.openAgentActivity)
-  const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
-  const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
-  const openUsageModal = useAppStore(state => state.openUsageModal)
-  const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
-  const devDebugEnabled = useDevDebugConfig(state => state.enabled)
-  const sessionRecordingEnabled = useDevDebugConfig(state => state.sessionRecordingEnabled)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
-  const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
 
   useEffect(() => {
     applyTheme(settings)
@@ -251,12 +199,6 @@ export default function App() {
   }, [aggressiveDebugPersistenceEnabled])
 
   const { onNewTabRequest, onResumeRequest } = usePathPickerRequests()
-
-  const onTileTabsRequest = useCallback(() => {
-    openTileTabsModal(
-      workspace.tileTabs?.tabIds ?? (workspace.activeTab ? [workspace.activeTab.id] : []),
-    )
-  }, [openTileTabsModal, workspace.activeTab, workspace.tileTabs])
 
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
@@ -478,84 +420,6 @@ export default function App() {
 
       <GlobalOverlays />
 
-      <CommandPalette
-        open={commandPaletteOpen}
-        onClose={closeCommandPalette}
-        workspace={workspace}
-        onNewTabRequest={onNewTabRequest}
-        onResumeRequest={onResumeRequest}
-        toggleGitBar={toggleGitBar}
-        toggleWorktreesBar={toggleWorktreesBar}
-        toggleDebugPanel={toggleDebugPanel}
-        toggleFeedDebugPanel={toggleFeedDebugPanel}
-        toggleProxyDebugPanel={toggleProxyDebugPanel}
-        toggleHtmlDebugPanel={toggleHtmlDebugPanel}
-        toggleDevDebugPanel={toggleDevDebugPanel}
-        openAgentStatusPanel={openAgentStatusPanel}
-        closeAgentStatusPanel={closeAgentStatusPanel}
-        toggleAgentStatusPanel={toggleAgentStatusPanel}
-        togglePerformancePanel={togglePerformancePanel}
-        toggleRemotePanel={toggleRemotePanel}
-        toggleCaffeinate={toggleCaffeinate}
-        toggleGlobalEditor={toggleGlobalEditor}
-        toggleFileTreeVisible={toggleFileTreeVisible}
-        enterDispatchMode={workspace.enterDispatchMode}
-        enterGlobalDispatch={() =>
-          workspace.setDispatchScope(
-            workspace.dispatchMode?.scope === 'global' ? 'project' : 'global',
-          )
-        }
-        exitDispatchMode={workspace.exitDispatchMode}
-        openTiledDispatchPrompt={openTiledDispatchPrompt}
-        openDispatchAttach={openDispatchAttach}
-        openLinkedAgent={openLinkedAgent}
-        openPinAgents={openPinAgents}
-        onTileTabsRequest={onTileTabsRequest}
-        onReorderTabsRequest={openReorderTabs}
-        onSettingsRequest={openSettingsPage}
-        openViewPrompts={openViewPrompts}
-        openPromptSearch={openPromptSearch}
-        openAgentActivity={openAgentActivity}
-        openCloseOldAgents={openCloseOldAgents}
-        openBulkProviderSwitch={openBulkProviderSwitch}
-        openRewindPrompt={openRewindPrompt}
-        openAgentViewModePicker={openAgentViewModePicker}
-        openUsageModal={openUsageModal}
-        toggleCustomRendering={toggleCustomRendering}
-        toggleStatusMode={toggleStatusMode}
-        toggleWorktreeBadges={toggleWorktreeBadges}
-        customRenderingEnabled={settings.customRendering}
-        agentViewMode={settings.agentViewMode}
-        commandVisibilityOverrides={settings.commandVisibilityOverrides}
-        // Hard-coded false for now: issue #249 ships the per-command
-        // override mechanism only. A future "show hidden commands"
-        // affordance can flip this to reveal the full list in one shot.
-        showHiddenCommands={false}
-        statusModeEnabled={settings.showStatusMode}
-        worktreeBadgesEnabled={settings.showWorktreeBadges}
-        dangerousAgentsEnabled={dangerousAgentsEnabled}
-        aggressiveDebugPersistenceEnabled={aggressiveDebugPersistenceEnabled}
-        gitBarOpen={gitBarOpen}
-        worktreesBarOpen={worktreesBarOpen}
-        debugPanelOpen={debugPanelOpen}
-        feedDebugPanelOpen={feedDebugPanelOpen}
-        proxyDebugPanelOpen={proxyDebugPanelOpen}
-        htmlDebugPanelOpen={htmlDebugPanelOpen}
-        devDebugEnabled={devDebugEnabled}
-        sessionRecordingEnabled={sessionRecordingEnabled}
-        devDebugPanelOpen={devDebugPanelOpen}
-        agentStatusPanelOpen={agentStatusPanelOpen}
-        performancePanelOpen={performancePanelOpen}
-        caffeinateActive={caffeinateStatus?.active === true}
-        caffeinateSupported={caffeinateStatus?.supported !== false}
-        globalEditorOpen={globalEditorOpen}
-        fileTreeVisible={fileTreeVisible}
-        dispatchModeEnabled={workspace.dispatchMode !== null}
-        globalDispatchEnabled={workspace.dispatchMode?.scope === 'global'}
-        setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
-        setAggressiveDebugPersistence={enabled =>
-          setSettings({ aggressiveDebugPersistence: enabled })}
-      />
 
       <GlobalModals />
     </div>

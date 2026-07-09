@@ -10,6 +10,7 @@ import { WorktreesBarSurface } from '@renderer/features/worktrees/surfaces/Workt
 import { AgentStatusPanelSurface } from '@renderer/features/agent-status/surfaces/AgentStatusPanelSurface'
 import { RemotePanelSurface } from '@renderer/features/remote/surfaces/RemotePanelSurface'
 import { DebugSurfaces } from '@renderer/features/debug/surfaces/DebugSurfaces'
+import { CommandPaletteSurface } from '@renderer/features/command-palette/surfaces/CommandPaletteSurface'
 import { PathPickerSurface } from '@renderer/features/path-picker/surfaces/PathPickerSurface'
 import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/TileTabsModalSurface'
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
@@ -34,6 +35,7 @@ import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/Rew
 
 /** Rendered at the app root, after the overlays. */
 export const modalSurfaces: SurfaceEntry[] = [
+  { id: 'command-palette', Component: CommandPaletteSurface },
   { id: 'path-picker', Component: PathPickerSurface },
   { id: 'tile-tabs', Component: TileTabsModalSurface },
   { id: 'reorder-tabs', Component: ReorderTabsSurface },
