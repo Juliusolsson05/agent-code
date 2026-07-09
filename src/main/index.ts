@@ -24,7 +24,7 @@ import {
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
-import { STATE_FILE } from '@main/storage/paths.js'
+import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import {
   scheduleDebugStoragePrune,
   setDebugRetentionJournal,
@@ -193,7 +193,38 @@ if (!hasSingleInstanceLock) {
 // ---------- App lifecycle ----------
 
 async function startApp(): Promise<void> {
-  const lock = await acquireStateProcessLock()
+  // #495 A10: acquiring the state lock is the FIRST write into STATE_DIR
+  // (~/.config/agent-code). On a Mac where that directory is unwritable —
+  // wrong ownership after a migration/restore, a read-only or full volume,
+  // an MDM-managed home — mkdir/open throws EACCES/EROFS/EPERM and, without
+  // this guard, the app died with a raw unhandled-rejection crash while the
+  // *already-running* case right below gets a friendly dialog. Mirror that
+  // dialog for the permission family so the very first launch on a hostile
+  // account explains itself instead of looking like a broken install.
+  // Anything outside that errno family still rethrows: crashing loudly on
+  // unknown corruption is deliberate (see the fatal-startup handler above,
+  // which journals it as an incident).
+  let lock: StateProcessLock
+  try {
+    lock = await acquireStateProcessLock()
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') {
+      dialog.showErrorBox(
+        'Agent Code cannot write its state directory',
+        `Agent Code needs to write to ${STATE_DIR} but the operating system refused (${code}). ` +
+          'Check that the directory is owned by your user, the disk is not full or read-only, ' +
+          'and no security policy blocks writes there, then relaunch.',
+      )
+      // app.exit(1), not app.quit(): quit runs will-quit handlers that touch
+      // the same unwritable state (clean-shutdown marker, lock release) and
+      // would just cascade more EACCES noise. There is nothing to clean up —
+      // we never acquired anything.
+      app.exit(1)
+      return
+    }
+    throw err
+  }
   if (!lock.acquired) {
     console.warn(
       '[app] refusing to start a second Agent Code main process for shared state:',
