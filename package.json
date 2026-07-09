@@ -32,6 +32,7 @@
     "test:integration": "NODE_ENV=test vitest run --project integration",
     "test:renderer": "NODE_ENV=test vitest run --project renderer",
     "test:coverage": "NODE_ENV=test vitest run --coverage",
+    "fixture:audit": "node scripts/audit-rendering-fixture.mjs",
     "runtime:fetch:mitmproxy": "node scripts/runtime-tools/fetch-mitmproxy.mjs",
     "runtime:verify:mitmproxy": "node scripts/runtime-tools/verify-mitmproxy.mjs",
     "runtime:fetch:tmux": "node scripts/runtime-tools/fetch-tmux.mjs",
