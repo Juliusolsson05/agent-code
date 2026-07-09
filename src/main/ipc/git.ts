@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { join } from 'path'
+import { existsSync } from 'fs'
 import { stat } from 'fs/promises'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { getToolPath } from '@main/setup/toolchain.js'
@@ -62,6 +63,20 @@ const worktreeStatusCache = new Map<string, CacheEntry<GitWorktreeStatus[]>>()
 const gitQueue: QueuedGitCommand[] = []
 let activeGitProcesses = 0
 
+// Latched "there is no usable git on this machine" flag (#495 A5). The ''
+// swallow below is a deliberate contract (see the `git()` comment) — but it
+// made ENOENT-on-the-binary indistinguishable from "clean worktree", so a
+// Mac without git showed a fake clean GitBar instead of telling the user
+// git is missing. Covers two classified causes (see runGitCommand): the
+// binary is unspawnable (ENOENT), and the macOS no-CLT case where
+// /usr/bin/git exists but is Apple's xcrun shim that exits non-zero
+// (#508 review). We latch here (module-level, one flag for all cwds —
+// git usability is machine-global, not per-repo) and expose it on the
+// git:status / git:worktrees / git:worktree-status results. Cleared on ANY
+// later successful exec so installing git (or the CLT) mid-session
+// recovers on the next 10s poll without a restart.
+let gitMissing = false
+
 function seedCacheAliases<T>(
   cache: Map<string, CacheEntry<T>>,
   keys: string[],
@@ -113,8 +128,41 @@ async function runGitCommand(cwd: string, args: string[]): Promise<string> {
     // active child. Central backpressure makes git data lag under load instead
     // of letting housekeeping work starve orchestration coordination.
     const { stdout } = await exec(getToolPath('git', 'git'), args, { cwd, timeout: 5000 })
+    gitMissing = false
     return stdout
-  } catch {
+  } catch (err) {
+    // Keep returning '' for EVERY failure — timeouts, not-a-repo, missing
+    // HEAD, missing submodule checkouts all deliberately read as "no
+    // output" (contract documented on `git()` above; callers depend on
+    // it). A5 is ONLY about the missing-binary case masquerading as clean
+    // state, so the latch is the single side effect added here.
+    //
+    // WHY the existsSync(cwd) guard: execFile reports ENOENT both for a
+    // missing BINARY and for a missing CWD, and deleted-worktree cwds are
+    // routine in this app (WorktreesBar polls paths that a `git worktree
+    // remove` can race). Only latch when the cwd is present, i.e. when
+    // ENOENT can only mean the binary.
+    //
+    // WHY the stderr sniff in addition to ENOENT (#508 review): on a mac
+    // without Xcode Command Line Tools, /usr/bin/git EXISTS — it is
+    // Apple's xcrun shim — so the spawn succeeds and the failure is a
+    // non-zero exit whose stderr says some variant of "xcode-select:
+    // note: no developer tools were found…" / "xcrun: error: invalid
+    // active developer path…". Functionally that machine has no git, so
+    // it must classify as git-unavailable too or the UI falls back to the
+    // "not a git repository" lie A5 was written to kill. Matching stderr
+    // is safe here because every command this runner issues is read-only
+    // plumbing (no hooks run), so no repo content can echo these strings
+    // back at us.
+    const failure = err as NodeJS.ErrnoException & { stderr?: unknown }
+    const cltShimFailure =
+      typeof failure?.stderr === 'string' &&
+      /xcrun|xcode-select|no developer tools|invalid active developer path/i.test(
+        failure.stderr,
+      )
+    if ((failure?.code === 'ENOENT' && existsSync(cwd)) || cltShimFailure) {
+      gitMissing = true
+    }
     return ''
   }
 }
@@ -443,13 +491,19 @@ async function inspectSubmodule(
 }
 
 export function registerGitIpc(): void {
+  // WHY both worktree handlers carry `gitMissing` exactly like git:status
+  // (#508 review): a machine without a working git makes listWorktreesForCwd
+  // return [] (the '' swallow), which these handlers collapse into a bare
+  // { ok:false } — and the Worktrees panel then renders "not a git
+  // repository", the same lie A5 fixed on GitBar. The flag is read AFTER
+  // the probes ran, so a latch set by this very call is already visible.
   ipcMain.handle('git:worktrees', async (_evt, cwd: string) => {
     try {
       const worktrees = await listWorktreesForCwd(cwd)
       if (worktrees.length === 0) throw new Error('not a git worktree')
       return { ok: true as const, worktrees }
     } catch {
-      return { ok: false as const }
+      return { ok: false as const, gitMissing }
     }
   })
 
@@ -459,7 +513,7 @@ export function registerGitIpc(): void {
       if (worktrees.length === 0) throw new Error('not a git worktree')
       return { ok: true as const, worktrees }
     } catch {
-      return { ok: false as const }
+      return { ok: false as const, gitMissing }
     }
   })
 
@@ -514,7 +568,11 @@ export function registerGitIpc(): void {
         submodules: submodules.length > 0 ? submodules : undefined,
       }
     } catch {
-      return { ok: false as const }
+      // gitMissing rides the failure result so GitBar can distinguish
+      // "not a repo" from "no git on this machine" (#495 A5). It is read
+      // AFTER the probes above ran, so a fresh latch from this very call
+      // is already visible.
+      return { ok: false as const, gitMissing }
     }
   })
 }

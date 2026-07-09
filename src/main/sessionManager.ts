@@ -5,6 +5,7 @@ import { performance } from 'perf_hooks'
 import { getMainProvider } from '@providers/registry.main.js'
 import { resolveProviderTranscriptPath } from '@main/providerSwitch/shared.js'
 import { TerminalSession } from '@shared/runtime/terminalSession.js'
+import { pickShell } from '@shared/runtime/pickShell.js'
 // WHY the manager no longer imports ScreenSnapshot from
 // @providers/claude/runtime/claudeSession or JsonlEntry from
 // claude-code-headless: those Claude-provider imports inverted the
@@ -26,7 +27,9 @@ import type {
 } from '@shared/types/session.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import { getToolPath } from '@main/setup/toolchain.js'
+import { getToolPath, refreshToolchainFromState } from '@main/setup/toolchain.js'
+import { resolveToolPath } from '@main/setup/binaryResolver.js'
+import { updateToolPaths } from '@main/setup/setupState.js'
 import { forgetFeedDebugSession } from '@main/storage/feedDebugLog.js'
 import type {
   ConditionCustomAction,
@@ -440,6 +443,34 @@ export class SessionManager extends EventEmitter {
     // third provider silently fell through and spawned a PLAIN SHELL
     // (#394 §4.1 — the worst of the silent failure modes).
     if (isAgentProviderKind(kind)) {
+      // Resolve the provider CLI to an ABSOLUTE path, or fail the spawn
+      // right here — before any session-scoped state (MCP registration,
+      // registry rows, proxy servers) exists (#495 A9). The old
+      // `getToolPath(kind, kind)` fell back to the bare literal ('claude'
+      // /'codex') when setup.json had no cached path; node-pty then
+      // PATH-resolves it at exec time, and on a Finder-launched app with
+      // launchd's minimal PATH that dies as exit-127 INSIDE the PTY —
+      // where it reads like a provider crash, not a lookup failure — and
+      // (Claude) the already-started mitmproxy leaked. Failing at create
+      // time instead surfaces through session:spawn's reject, which the
+      // renderer already renders via sessionSpawnErrorMessage.
+      let binary = getToolPath(kind, '')
+      if (!binary) {
+        // One late re-resolve before giving up: launch-from-Finder rescue
+        // for the user who installed the CLI after the setup gate ran.
+        // Persist a hit through the same updateToolPaths →
+        // refreshToolchainFromState pair the setup gate uses so the next
+        // spawn takes the fast cache path and PATH augmentation applies.
+        const resolved = await resolveToolPath(kind)
+        if (resolved) {
+          await updateToolPaths({ [kind]: resolved })
+          await refreshToolchainFromState()
+          binary = resolved
+        }
+      }
+      if (!binary) {
+        throw new Error(`${kind} CLI not found — open Setup to locate it`)
+      }
       const initialSize = {
         cols: options.cols ?? 120,
         rows: options.rows ?? 40,
@@ -466,7 +497,7 @@ export class SessionManager extends EventEmitter {
       // details don't leak into the manager.
       const session = provider.createSession({
         cwd: options.cwd,
-        binary: getToolPath(kind, kind),
+        binary,
         cols: initialSize.cols,
         rows: initialSize.rows,
         // 100ms (~10Hz), NOT the old 16ms (~60Hz). The 'screen'
@@ -647,7 +678,13 @@ export class SessionManager extends EventEmitter {
         tmuxSessionName = reg.generateName()
         await reg.createSession({
           name: tmuxSessionName,
-          command: process.env.SHELL ?? '/bin/zsh',
+          // pickShell, not the old bare `process.env.SHELL ?? '/bin/zsh'`:
+          // this was the second copy of the shell-selection expression and
+          // the tmux path had the SAME missing existence check as
+          // TerminalSession (#495 A8) — a stale $SHELL made the tmux
+          // session's command unspawnable, which surfaces as tmux exiting
+          // immediately on attach. One probed chain for both spawn paths.
+          command: pickShell(),
           cwd: options.cwd,
         })
       }

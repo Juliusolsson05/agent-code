@@ -1,6 +1,8 @@
 import { EventEmitter } from 'events'
 import { spawn as ptySpawn, type IPty } from 'node-pty'
 
+import { pickShell } from './pickShell.js'
+
 // TerminalSession — a plain shell session that the user drives directly.
 //
 // Counterpart to ClaudeSession. Where ClaudeSession spawns `claude`
@@ -111,15 +113,14 @@ export class TerminalSession extends EventEmitter {
     this.cwd = options.cwd ?? process.cwd()
     this.cols = options.cols ?? 80
     this.rows = options.rows ?? 24
-    // Resolve the shell binary with a small fallback chain. $SHELL is
-    // the user's preference; the rest are sane defaults that exist on
-    // almost every unix. We don't check for existence — if none of
-    // them are present the spawn will error and the exit handler
-    // below will surface it.
-    this.shell =
-      options.shell ??
-      process.env.SHELL ??
-      '/bin/zsh'
+    // Resolve the shell binary with the pickShell fallback chain
+    // ($SHELL → /bin/zsh → /bin/bash → /bin/sh) — and unlike the
+    // original expression here, pickShell actually PROBES each
+    // candidate for existence (#495 A8): a stale $SHELL pointing at an
+    // uninstalled binary used to make every terminal pane die on spawn
+    // in a way that read like a crash. An explicit options.shell still
+    // bypasses the probe — see pickShell for why.
+    this.shell = pickShell(options.shell)
     this.extraEnv = options.env ?? {}
     this.runtime = options.runtime ?? 'direct'
     this.tmuxSessionName = options.tmuxSessionName ?? null

@@ -129,6 +129,10 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
           rows: [],
           indexStatus: null,
           gitUnavailable: Boolean(cwd),
+          // A thrown loadWorktreeDump is a renderer-side failure, not a
+          // classified "no git on this machine" verdict — only main's IPC
+          // result may claim gitMissing (see loadWorktreeDump).
+          gitMissing: false,
           activityUnavailable: true,
         })
       } finally {
@@ -148,6 +152,7 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
       rows: [],
       indexStatus: null,
       gitUnavailable: false,
+      gitMissing: false,
       activityUnavailable: true,
     }
     try {
@@ -256,7 +261,13 @@ export function WorktreesBar({ cwd, workspace, onClose }: Props) {
 
       {error && (
         <div className="px-3 py-4 text-muted text-center">
-          not a git repository
+          {/* Same split as GitBar (#495 A5): "not a git repository" is a
+              lie on a machine whose git binary is missing/unusable, and
+              this persistent muted state — not a toast — is the right
+              surface because the poll would re-fire a toast forever. */}
+          {dump?.gitMissing
+            ? 'git not found — Git features disabled'
+            : 'not a git repository'}
         </div>
       )}
 

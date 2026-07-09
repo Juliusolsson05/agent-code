@@ -334,21 +334,40 @@ export class ClaudeSession extends EventEmitter {
       proxyEnv.NODE_EXTRA_CA_CERTS = proxy.info.caCertPath
       proxyEnv.NO_PROXY = 'localhost,127.0.0.1,::1'
       proxyEnv.no_proxy = proxyEnv.NO_PROXY
-      this.pty = ptySpawn(this.binary, args, {
-        name: 'xterm-256color',
-        cols: this.cols,
-        rows: this.rows,
-        cwd: this.cwd,
-        env: proxyEnv,
-      })
+      // From here on we have a live mitmdump child but no PTY, no
+      // ClaudeCodeHeadless, and therefore no exit/stop plumbing. Any
+      // throw between proxy.start() above and the end of start() leaks
+      // the proxy process — nothing else would ever call stop() on it.
+      // Wrap the spawn so a failure rolls the proxy back (#495 A9; same
+      // shape as codexSession's guarded spawn).
+      try {
+        this.pty = ptySpawn(this.binary, args, {
+          name: 'xterm-256color',
+          cols: this.cols,
+          rows: this.rows,
+          cwd: this.cwd,
+          env: proxyEnv,
+        })
+      } catch (err) {
+        await this.rollbackStart()
+        throw err
+      }
     } else {
-      this.pty = ptySpawn(this.binary, args, {
-        name: 'xterm-256color',
-        cols: this.cols,
-        rows: this.rows,
-        cwd: this.cwd,
-        env: cleanEnv,
-      })
+      // No proxy in this branch, so rollbackStart is near-vacuous today —
+      // kept anyway so both spawn paths share one failure contract and a
+      // future resource acquired before this point is covered by default.
+      try {
+        this.pty = ptySpawn(this.binary, args, {
+          name: 'xterm-256color',
+          cols: this.cols,
+          rows: this.rows,
+          cwd: this.cwd,
+          env: cleanEnv,
+        })
+      } catch (err) {
+        await this.rollbackStart()
+        throw err
+      }
     }
 
     this.headless = new ClaudeCodeHeadless({
@@ -580,7 +599,19 @@ export class ClaudeSession extends EventEmitter {
     })
     this.armLiveBridgeReady()
 
-    const { projectDir } = await this.headless.start()
+    // If headless.start() throws we are in the same leak shape as a
+    // pty-spawn failure: a live mitmdump child, a live PTY, and a
+    // partially-constructed ClaudeCodeHeadless. Roll all of it back so
+    // the caller can retry cleanly instead of being told "start failed"
+    // while a proxy port quietly stays bound (mirrors codexSession's
+    // guarded headless.start()).
+    let projectDir: string
+    try {
+      ;({ projectDir } = await this.headless.start())
+    } catch (err) {
+      await this.rollbackStart()
+      throw err
+    }
     this.emit('started', {
       projectDir,
       proxyUrl: this.proxyServer?.info.proxyUrl,
@@ -673,26 +704,59 @@ export class ClaudeSession extends EventEmitter {
     // `adapter.dispose()` which frees per-flow state; stopping the
     // proxy first would leak chunk events into a live adapter during
     // the mitmdump shutdown window.
-    if (this.proxyServer) {
-      if (this.proxyEventHandler) {
-        this.proxyServer.off('event', this.proxyEventHandler)
-        this.proxyEventHandler = null
-      }
-      try {
-        await this.proxyServer.stop()
-      } catch (err) {
-        // Best-effort shutdown, but not silent: if mitmdump hangs on
-        // exit or the runtime dir can't be cleaned, a leaked proxy
-        // process will keep the port bound and the next session spawn
-        // will fail with an opaque bind error. Logging here is the
-        // only breadcrumb that links that failure back to a prior
-        // session's teardown.
-        console.warn(
-          `[claudeSession] proxy.stop() failed for session ${this.shellSessionId ?? '<unknown>'}:`,
-          err,
-        )
-      }
-      this.proxyServer = null
+    await this.teardownProxy()
+  }
+
+  // Proxy teardown shared by stop() and rollbackStart(). One
+  // implementation on purpose: the detach-handler → stop → null sequence
+  // has GC-relevance (the handler closure captures `this.headless`) and
+  // a leak-relevance (a live mitmdump keeps its port bound), and two
+  // hand-maintained copies of it is exactly how the rollback path missed
+  // it in the first place (#495 A9).
+  private async teardownProxy(): Promise<void> {
+    if (!this.proxyServer) return
+    if (this.proxyEventHandler) {
+      this.proxyServer.off('event', this.proxyEventHandler)
+      this.proxyEventHandler = null
     }
+    try {
+      await this.proxyServer.stop()
+    } catch (err) {
+      // Best-effort shutdown, but not silent: if mitmdump hangs on
+      // exit or the runtime dir can't be cleaned, a leaked proxy
+      // process will keep the port bound and the next session spawn
+      // will fail with an opaque bind error. Logging here is the
+      // only breadcrumb that links that failure back to a prior
+      // session's teardown.
+      console.warn(
+        `[claudeSession] proxy.stop() failed for session ${this.shellSessionId ?? '<unknown>'}:`,
+        err,
+      )
+    }
+    this.proxyServer = null
+  }
+
+  // Unified cleanup for start() failure paths — the Claude port of
+  // codexSession.rollbackStart. From the moment proxy.start() resolves we
+  // have a live mitmdump child but (until start() returns) no exit/stop
+  // plumbing wired to it: any throw between the two would leak the proxy
+  // process and its bound port — nothing else would ever call stop() on
+  // it. Must be safe to call regardless of how far start() got — each
+  // field is guarded so a failure mid-construction (proxy up, PTY up,
+  // headless half-attached) doesn't cascade into a second throw that
+  // masks the original error.
+  private async rollbackStart(): Promise<void> {
+    if (this.liveBridgeTimer) {
+      clearTimeout(this.liveBridgeTimer)
+      this.liveBridgeTimer = null
+    }
+    try { this.pty?.kill() } catch { /* best-effort */ }
+    this.pty = null
+    await this.teardownProxy()
+    // Intentionally no headless.stop() here: if headless.start() threw,
+    // its internal state is undefined; calling stop() on it risks a
+    // second throw. Let GC collect it — teardownProxy already detached
+    // the proxy-event handler that would otherwise pin it.
+    this.headless = null
   }
 }

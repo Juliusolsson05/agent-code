@@ -18,7 +18,7 @@
   },
   "scripts": {
     "dev": "electron-vite dev",
-    "build:app": "electron-vite build && node scripts/copy-packaged-resources.mjs",
+    "build:app": "electron-vite build && node scripts/copy-packaged-resources.mjs && node scripts/build-hotkey-helper.mjs",
     "client:build": "vite build --config src/remote-client/vite.config.ts",
     "client:dev": "vite --config src/remote-client/vite.config.ts",
     "build": "npm run build:app",

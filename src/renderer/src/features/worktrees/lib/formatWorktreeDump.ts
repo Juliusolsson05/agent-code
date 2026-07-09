@@ -22,7 +22,14 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
   }
 
   if (dump.gitUnavailable) {
-    lines.push('Status: not a Git repository or no worktree information is available')
+    // Mirror the WorktreesBar/GitBar copy split (#495 A5): this dump gets
+    // pasted into bug reports, where "not a Git repository" on a machine
+    // with no usable git would send the reader down the wrong path.
+    lines.push(
+      dump.gitMissing
+        ? 'Status: no usable git executable on this machine — Git features disabled'
+        : 'Status: not a Git repository or no worktree information is available',
+    )
     return lines.join('\n')
   }
 
