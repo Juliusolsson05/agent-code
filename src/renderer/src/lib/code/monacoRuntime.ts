@@ -11,6 +11,7 @@ import {
   normalizeMonacoThemeColorAlpha,
 } from './monacoThemeColors'
 import { registerMonacoModelCountProbe } from './monacoModelProbe'
+import { isEditorThemeActive } from './monacoThemeState'
 
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
@@ -34,6 +35,7 @@ const pendingSemanticProviders = new Map<string, Promise<void>>()
 
 let monacoPromise: Promise<typeof Monaco> | null = null
 let themeListenerInstalled = false
+let themesDefined = false
 
 function currentThemeName(): string {
   const root = document.documentElement
@@ -125,7 +127,16 @@ function defineThemes(monaco: typeof Monaco): void {
     },
   })
 
-  monaco.editor.setTheme(currentThemeName())
+  // Only assert the slab theme when the editor-canvas theme isn't in
+  // charge. defineThemes used to end with an unconditional setTheme,
+  // which meant every getMonaco() call (i.e. every CodeBlock mount) and
+  // every app-theme change yanked the GLOBAL theme back to the slab
+  // palette even while the file editor was open — the "editor randomly
+  // flips dark" half of #513. Ownership contract lives in
+  // monacoThemeState.ts.
+  if (!isEditorThemeActive()) {
+    monaco.editor.setTheme(currentThemeName())
+  }
 }
 
 function installThemeListener(monaco: typeof Monaco): void {
@@ -196,7 +207,13 @@ export async function getMonaco(): Promise<typeof Monaco> {
       },
     }
   }
-  defineThemes(monaco)
+  // Define-once: getMonaco() is called by every CodeBlock mount, and
+  // re-deriving all four themes from getComputedStyle on each mount is
+  // wasted layout work. Theme *changes* re-derive via the listener.
+  if (!themesDefined) {
+    themesDefined = true
+    defineThemes(monaco)
+  }
   installThemeListener(monaco)
   return monaco
 }

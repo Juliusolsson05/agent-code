@@ -5,6 +5,11 @@ import {
   normalizeMonacoThemeColor,
   normalizeMonacoThemeColorAlpha,
 } from '@renderer/lib/code/monacoThemeColors'
+import {
+  editorThemeAcquired,
+  editorThemeReleased,
+  isEditorThemeActive,
+} from '@renderer/lib/code/monacoThemeState'
 
 // Dedicated Monaco theme for the editor mode.
 //
@@ -92,9 +97,13 @@ function defineEditorThemes(monaco: typeof Monaco): void {
 // avoid hitting on every editor mount. We also listen once for the
 // Agent Code theme-changed event the rest of the app fires when the user
 // switches mode/accent, redefining the theme so the editor follows along.
+//
+// The activation refcount itself lives in lib/code/monacoThemeState so
+// monacoRuntime's slab-theme listener can consult it without a
+// lib→features import — see that module's ownership contract (#513
+// theme-war fix).
 let initialized = false
 let themeListenerAttached = false
-let activeEditorThemeUsers = 0
 
 export function ensureEditorThemes(monaco: typeof Monaco): void {
   if (!initialized) {
@@ -105,7 +114,7 @@ export function ensureEditorThemes(monaco: typeof Monaco): void {
     themeListenerAttached = true
     window.addEventListener(THEME_CHANGED_EVENT, () => {
       defineEditorThemes(monaco)
-      if (activeEditorThemeUsers > 0) {
+      if (isEditorThemeActive()) {
         // Re-applying the same theme name nudges Monaco to repaint all live
         // editors with the freshly resolved colour tokens. Monaco themes are
         // global, so this must only happen while editor mode is actively using
@@ -124,14 +133,14 @@ export function activateEditorTheme(monaco: typeof Monaco): void {
   // future split-editor view can mount multiple MonacoFileEditor instances; the
   // first one should switch the global theme to the editor palette, and the last
   // one should restore the default CodeBlock/runtime palette.
-  activeEditorThemeUsers += 1
+  editorThemeAcquired()
   ensureEditorThemes(monaco)
   monaco.editor.setTheme(currentEditorThemeName())
 }
 
 export function deactivateEditorTheme(monaco: typeof Monaco): void {
-  activeEditorThemeUsers = Math.max(0, activeEditorThemeUsers - 1)
-  if (activeEditorThemeUsers === 0) {
+  editorThemeReleased()
+  if (!isEditorThemeActive()) {
     monaco.editor.setTheme(defaultAgentCodeThemeName())
   }
 }

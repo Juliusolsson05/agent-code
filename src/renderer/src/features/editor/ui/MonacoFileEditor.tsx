@@ -77,6 +77,12 @@ export function MonacoFileEditor({
         padding: { top: 8, bottom: 8 },
         bracketPairColorization: { enabled: true },
         guides: { bracketPairs: 'active', indentation: true },
+        // Monaco defaults semanticHighlighting to "configuredByTheme", and
+        // defineTheme-created custom themes never opt in — so LSP semantic
+        // tokens were computed (IPC + tsserver round trip) and then never
+        // painted. Explicit true is the only way to get semantic colors
+        // with our custom themes (#513).
+        'semanticHighlighting.enabled': true,
       })
       editorRef.current = editor
       changeDisposable = model.onDidChangeContent(() => {

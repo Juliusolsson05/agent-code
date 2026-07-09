@@ -182,6 +182,10 @@ export const CodeBlock = memo(function CodeBlock({
           horizontalScrollbarSize: 8,
           alwaysConsumeMouseWheel: false,
         },
+        // See MonacoFileEditor — custom themes never enable semantic
+        // tokens by default, so the LSP semantic-token provider this
+        // component registers was painting nothing.
+        'semanticHighlighting.enabled': true,
       })
       cleanups.push(() => editor.dispose())
 
