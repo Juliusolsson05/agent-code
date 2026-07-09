@@ -6,8 +6,12 @@ import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 
 // Registry wrapper (#494). The candidate-row memo moved here from
-// App.tsx — it now recomputes only when this surface re-renders instead
-// of on every App render; same values, strictly less work.
+// App.tsx for cohesion — the row-building logic now lives next to the
+// only surface that consumes it, instead of padding the composition
+// root. NOT a perf win: this wrapper is always mounted and re-renders
+// whenever App does (WorkspaceContext's value is the per-render hook
+// object), and the useMemo deps are unchanged, so the memo recomputes
+// on exactly the same schedule as before.
 export function PinAgentsSurface() {
   const workspace = useWorkspaceContext()
   const open = useAppStore(state => state.pinAgentsOpen)

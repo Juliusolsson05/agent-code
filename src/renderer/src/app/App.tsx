@@ -14,7 +14,10 @@ import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPic
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
 import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
 import { SidePanels } from '@renderer/app/surfaces/SidePanels'
-import { MainSurface, RestoreBanner, SettingsBar, SetupGate } from '@renderer/app/shell'
+import { MainSurface } from '@renderer/app/shell/MainSurface'
+import { RestoreBanner } from '@renderer/app/shell/RestoreBanner'
+import { SettingsBar } from '@renderer/app/shell/SettingsBar'
+import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 
 // App — the composition root, and ONLY that (issue #494).
 //
@@ -32,6 +35,13 @@ import { MainSurface, RestoreBanner, SettingsBar, SetupGate } from '@renderer/ap
 // ADDING A SURFACE MUST NOT EDIT THIS FILE — write a wrapper in the
 // owning feature's surfaces/ folder and register it there. If you find
 // yourself adding a useEffect here, it belongs in a feature hook.
+//
+// Note the invariant is "no feature SURFACES mounted directly here",
+// not "zero feature imports": App legitimately imports feature hooks
+// (the sync hooks above) and SetupGate (a whole-app gate that wraps
+// nothing and belongs to the frame, not the surface registry). An
+// earlier revision laundered the SetupGate import through a shell
+// barrel to claim zero feature imports — don't reintroduce that.
 export default function App() {
   // The only settings App itself reads are the useWorkspace() arguments —
   // everything else is consumed by the shell pieces / surfaces directly.
@@ -66,6 +76,12 @@ export default function App() {
           </main>
           <SidePanels />
         </div>
+        {/* Mount order here IS the z-order contract: overlays and modals
+            are fixed-position siblings and mostly share z-50, so DOM
+            order is the paint-order tiebreaker. Overlays render first
+            (paint under); anything that must sit at a specific height
+            within the modal stack lives in modalSurfaces at an explicit
+            index — see app/surfaces/registry.tsx. Do not swap these. */}
         <GlobalOverlays />
         <GlobalModals />
       </div>

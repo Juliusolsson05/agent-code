@@ -28,15 +28,37 @@ import { RewindToPromptSurface } from '@renderer/features/workspace/surfaces/Rew
 // in the owning feature's surfaces/ folder + add ONE import + ONE array
 // entry here. App.tsx is never edited.
 //
-// ORDER MATTERS within each array: it is the DOM sibling order, which
-// decides paint order when z-indexes tie. The order below is the exact
-// order App.tsx rendered these surfaces before the extraction — keep new
-// entries at the END unless you have a stacking reason and write it down.
+// ORDER MATTERS within each array, AND the mount order of the groups in
+// App.tsx (overlays → modals) is part of the same contract: together they
+// define the DOM sibling order at the app root, which IS the paint order
+// whenever z-indexes tie. Most of these surfaces are `position: fixed`
+// z-50, so "which array, at which index" decides what covers what. The
+// order below is the exact order App.tsx rendered these surfaces before
+// the extraction — keep new entries at the END unless you have a stacking
+// reason and write it down.
 
 /** Rendered at the app root, after the overlays. */
 export const modalSurfaces: SurfaceEntry[] = [
   { id: 'command-palette', Component: CommandPaletteSurface },
   { id: 'path-picker', Component: PathPickerSurface },
+  // ⚠ Two non-modal surfaces interleaved into the modal stack ON PURPOSE.
+  // Pre-refactor App.tsx rendered them exactly here — after the palette
+  // and path picker, before the tile-tabs..usage modals — and that DOM
+  // position is load-bearing because all three of palette / dispatch-count
+  // / toast are fixed z-50, so sibling order is the only tiebreaker:
+  //   - tiled-dispatch-count must paint ABOVE the command palette. Tiled
+  //     dispatch can fire while the palette is open (native menu; the
+  //     palette deliberately stays open for keepPaletteOpen-style flows),
+  //     and the count prompt is the thing awaiting input — burying it
+  //     behind the palette soft-locks the flow.
+  //   - both must stay BELOW the later modals (a modal opened over the
+  //     toast dims it, as before).
+  // The first cut of this registry put these two in overlaySurfaces
+  // (rendered before the modals group), which silently reversed the
+  // palette/count-prompt stacking — codex review of PR #505 caught it.
+  // Grouping by semantic kind is NOT safe here; group by paint order.
+  { id: 'tiled-dispatch-count', Component: TiledDispatchCountSurface },
+  { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
   { id: 'tile-tabs', Component: TileTabsModalSurface },
   { id: 'reorder-tabs', Component: ReorderTabsSurface },
   { id: 'pin-agents', Component: PinAgentsSurface },
@@ -53,11 +75,17 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'usage', Component: UsageModalSurface },
 ]
 
-/** Rendered at the app root, after the main row, before the modals. */
+/**
+ * Rendered at the app root, after the main row, BEFORE the modals — so
+ * everything in this array paints UNDER the modal stack when z-indexes
+ * tie. Only surfaces that must never cover a modal belong here (voice
+ * dictation is z-40, below the z-50 stack regardless). A z-50 surface
+ * that needs a specific position relative to the modals goes into
+ * modalSurfaces at an explicit index instead — see the interleaved
+ * entries there for why.
+ */
 export const overlaySurfaces: SurfaceEntry[] = [
   { id: 'voice-dictation', Component: VoiceDictationSurface },
-  { id: 'tiled-dispatch-count', Component: TiledDispatchCountSurface },
-  { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
 ]
 
 /** Rendered INSIDE the main flex row, as siblings after <main>. */
