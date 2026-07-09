@@ -1,6 +1,10 @@
+import { execFile } from 'child_process'
 import { EventEmitter } from 'events'
 import { mkdir, writeFile } from 'fs/promises'
 import { join } from 'path'
+import { promisify } from 'util'
+
+const execFileAsync = promisify(execFile)
 
 import { STATE_DIR } from '@main/storage/paths.js'
 import { detectCliInstallMethod } from '@main/setup/cliInstallMethod.js'
@@ -434,6 +438,20 @@ export class CliUpdateOrchestrator extends EventEmitter {
     }
     await appendLog(logPath, `$ ${command}\n${commandOutput}\n`)
 
+    // Diagnostic context: which `<cli>` binaries exist on PATH, and what
+    // does the resolved binary report after the update? The most common
+    // "npm reports success, --version still stale" failure mode has a
+    // multi-install root cause — Homebrew's Node.js and nvm both hold a
+    // global copy, npm installed into one prefix, PATH resolves to the
+    // other. Without this diagnostic in the log, "View log" shows only
+    // the npm output ("changed 2 packages") and the user has no signal
+    // that they have two `codex` binaries fighting for PATH.
+    //
+    // Best-effort: swallow errors and skip individual sections if the
+    // probe fails. The log is diagnostic, not truth — the re-probe below
+    // is what decides success.
+    await appendDiagnostics(logPath, cli, ctx.binary)
+
     // Re-probe to see if the update stuck. This is the crucial step:
     // the Codex npm vendored-binary bug means the command can exit 0
     // and `<cli> --version` still reports the old number. Without this
@@ -591,4 +609,57 @@ async function appendLog(logPath: string, chunk: string): Promise<void> {
   } catch (err) {
     console.warn('[cli-update] failed to append log:', err)
   }
+}
+
+/** Post-update diagnostic dump. Runs three cheap probes and appends their
+ *  output to the log so "View log" shows the multi-install situation
+ *  without asking the user to open a terminal:
+ *
+ *    - `which -a <cli>` (POSIX) / `where.exe <cli>` (Windows): every
+ *      copy of the binary on PATH, in PATH order. This is the single
+ *      most useful signal — two lines usually means "the update landed
+ *      on one but PATH resolves to the other."
+ *    - `<resolvedBinary> --version`: what the binary we detected
+ *      actually reports right now. Different from the re-probe below in
+ *      that it's captured in the log for the user's own reading.
+ *    - `echo $PATH` (POSIX only): order of PATH entries so the user can
+ *      see which shim is winning. Trimmed to keep the log small.
+ *
+ *  Not routed through runShellCommand because we don't want a stuck
+ *  probe to bleed into the update's success/failure classification —
+ *  each probe has its own short timeout, and any error becomes a "diag
+ *  section unavailable" line rather than a thrown exception. */
+async function appendDiagnostics(logPath: string, cli: CliUpdateKind, binary: string): Promise<void> {
+  const sections: string[] = ['\n--- Agent Code diagnostics ---\n']
+  // 1. which -a / where.exe
+  try {
+    const isWin = process.platform === 'win32'
+    const cmd = isWin ? 'where.exe' : 'which'
+    const args = isWin ? [cli] : ['-a', cli]
+    const result = await execFileAsync(cmd, args, { timeout: 3_000, env: process.env })
+    sections.push(`$ ${cmd} ${args.join(' ')}\n${result.stdout || result.stderr || '(no output)'}\n`)
+  } catch (err) {
+    // ENOENT on `which` would be exotic; on Windows the where.exe hit
+    // may fail if PATH is unusually restricted. Either way, degrade
+    // gracefully — a missing diagnostic section is still better than
+    // aborting the whole log write.
+    sections.push(`$ which -a ${cli}\n(diagnostic unavailable: ${(err as Error).message})\n`)
+  }
+  // 2. resolved binary --version
+  try {
+    const result = await execFileAsync(binary, ['--version'], {
+      timeout: 3_000,
+      env: { ...process.env, NO_COLOR: '1', CI: '1' },
+    })
+    sections.push(`$ ${binary} --version\n${result.stdout || result.stderr || '(no output)'}\n`)
+  } catch (err) {
+    sections.push(`$ ${binary} --version\n(diagnostic unavailable: ${(err as Error).message})\n`)
+  }
+  // 3. PATH order (POSIX only — on Windows PATH is inherited from the
+  // system env verbatim, less commonly the source of shadowing issues).
+  if (process.platform !== 'win32') {
+    const pathEntries = (process.env.PATH ?? '').split(':').filter(Boolean)
+    sections.push(`$ echo $PATH | tr ':' '\\n'\n${pathEntries.join('\n')}\n`)
+  }
+  await appendLog(logPath, sections.join('\n'))
 }
