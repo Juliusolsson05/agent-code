@@ -63,3 +63,13 @@ export type SetupInstallResult = {
   output: string
   check: SetupCheckResult
 }
+
+// Result of the manual path override (#495 A1). The escape hatch exists
+// because automatic resolution is a probe, and a probe can be wrong —
+// a false negative must never be able to lock the user out of the app.
+// ok:false carries a human-readable reason for inline display; ok:true
+// returns a fresh check so the gate can re-render (and unlock Continue)
+// without a second round-trip.
+export type SetupSetToolPathResult =
+  | { ok: true; check: SetupCheckResult }
+  | { ok: false; reason: string }

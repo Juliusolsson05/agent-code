@@ -9,6 +9,23 @@ const SETUP_STATE_FILE = join(STATE_DIR, 'setup.json')
 export type PersistedSetupState = {
   version: 1
   toolPaths: Partial<Record<SetupToolId, string>>
+  // WHY a second map instead of a flag on toolPaths entries: toolPaths is
+  // the *effective* resolution cache — checkPrerequisites and
+  // revalidateToolchain overwrite it freely with whatever the probes find,
+  // and that churn is correct for auto-resolved paths (a new volta shim
+  // SHOULD replace a stale /usr/local copy). A manual override from
+  // setup:set-tool-path is different in kind: it is the user's explicit
+  // word, and codex review of #504 caught that storing it only in the
+  // shared map let the very next auto-probe silently erase it (user's
+  // ~/bin/claude-wrapper replaced by PATH's /usr/local/bin/claude).
+  // Keeping user intent in its own map means the auto writers can stay
+  // dumb — they never have to know which toolPaths entries are sacred —
+  // while the two auto-resolution entry points (checkPrerequisites,
+  // revalidateToolchain) consult this map first and skip the auto layers
+  // for a still-valid override. Absent from setup.json files written
+  // before this field existed; loadSetupState defaults it to {} so no
+  // version bump / migration is needed.
+  manualToolPaths: Partial<Record<SetupToolId, string>>
   skippedOptionalTools: Partial<Record<SetupToolId, boolean>>
   updatedAt: number
 }
@@ -16,6 +33,7 @@ export type PersistedSetupState = {
 const DEFAULT_SETUP_STATE: PersistedSetupState = {
   version: 1,
   toolPaths: {},
+  manualToolPaths: {},
   skippedOptionalTools: {},
   updatedAt: 0,
 }
@@ -31,6 +49,7 @@ export async function loadSetupState(): Promise<PersistedSetupState> {
     cache = {
       version: 1,
       toolPaths: parsed.toolPaths ?? {},
+      manualToolPaths: parsed.manualToolPaths ?? {},
       skippedOptionalTools: parsed.skippedOptionalTools ?? {},
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
     }
@@ -83,6 +102,26 @@ export async function updateToolPaths(
     else delete toolPaths[tool]
   }
   return await saveSetupState({ ...state, toolPaths })
+}
+
+// Records a user-supplied override from setup:set-tool-path. Writes BOTH
+// maps: manualToolPaths is the durable record of user intent (what makes
+// the override win over future auto-probes — see the type comment above),
+// and toolPaths is the effective cache that refreshToolchainFromState /
+// applyToolEnv consume immediately, so the override takes effect in the
+// same round-trip instead of waiting for the next checkPrerequisites
+// write-back. Callers are expected to have validated the path (executable
+// regular file) BEFORE calling — this module stays pure bookkeeping.
+export async function setManualToolPath(
+  tool: SetupToolId,
+  path: string,
+): Promise<PersistedSetupState> {
+  const state = await loadSetupState()
+  return await saveSetupState({
+    ...state,
+    manualToolPaths: { ...state.manualToolPaths, [tool]: path },
+    toolPaths: { ...state.toolPaths, [tool]: path },
+  })
 }
 
 export async function markOptionalSkipped(

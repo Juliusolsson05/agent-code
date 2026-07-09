@@ -3,7 +3,7 @@ import type {
   SetupToolId,
   SetupToolStatus,
 } from '@shared/types/setup.js'
-import { resolveToolPath } from '@main/setup/binaryResolver.js'
+import { isExecutable, resolveToolPath } from '@main/setup/binaryResolver.js'
 import {
   isBundledArchiveAvailable,
   type BundledToolId,
@@ -89,7 +89,42 @@ export async function checkPrerequisites(): Promise<SetupCheckResult> {
   const brewPath = await resolveToolPath('brew')
   const entries = await Promise.all(
     CHECK_ORDER.map(async tool => {
-      const systemPath = tool === 'brew' ? brewPath : await resolveToolPath(tool)
+      // Resolution precedence (#495 A1 + codex review of #504), highest
+      // first — each layer only runs when every layer above it failed:
+      //
+      //   0. Valid manual override (manualToolPaths + file still an
+      //      executable regular file). The user's explicit word beats
+      //      every probe: an earlier revision consulted the probes FIRST,
+      //      so a user who deliberately pointed us at
+      //      ~/bin/claude-wrapper had it silently replaced by PATH's
+      //      /usr/local/bin/claude on the very next check, and the
+      //      write-back below then erased the override from toolPaths.
+      //      Override-first also makes the write-back safe by
+      //      construction: when the override wins, the value written back
+      //      IS the override. An override whose file vanished or lost +x
+      //      falls through to auto layers (the gate must not stay
+      //      "found" on a dead path) but stays recorded in
+      //      manualToolPaths — intent is durable, and it resumes winning
+      //      if the file comes back.
+      //   1. Login-shell probe (`command -v` through a POSIX shell) —
+      //      reflects the user's curated environment.
+      //   2. Direct PATH/well-known-dir scan inside resolveToolPath —
+      //      catches exotic-$SHELL / broken-rc false negatives.
+      //   3. Persisted auto-path fallback: a previously-probed toolPaths
+      //      entry whose file still execs, so a transient probe failure
+      //      (slow rc file, shell hiccup) can't wipe a good cached path
+      //      via the null → delete write-back. Re-checks the file, not
+      //      the bookkeeping, so genuinely-removed tools still clear.
+      const manual = state.manualToolPaths[tool]
+      let systemPath =
+        manual && (await isExecutable(manual)) ? manual : null
+      if (!systemPath) {
+        systemPath = tool === 'brew' ? brewPath : await resolveToolPath(tool)
+      }
+      if (!systemPath) {
+        const persisted = state.toolPaths[tool]
+        if (persisted && (await isExecutable(persisted))) systemPath = persisted
+      }
       // WHY bundled detection takes precedence over PATH:
       //   When we ship a tool, that is the version we tested with and
       //   the version proxy diagnostics + behaviour assume. A user's
