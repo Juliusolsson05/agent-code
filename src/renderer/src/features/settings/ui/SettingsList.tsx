@@ -5,6 +5,7 @@ import type {
 } from '@renderer/features/settings/lib/settingsRegistry'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
+import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 
 type Props = {
   definitions: SettingDefinition[]
@@ -209,6 +210,12 @@ function SettingRow({
               </button>
             </div>
           ) : null}
+
+          {/* CLI auto-updater — the row owns its own subscription
+              because the value lives in setup.json (main-owned), not
+              in the renderer Settings store. See
+              features/cli-updates/CliUpdateBehaviorRow.tsx. */}
+          {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
         </div>
       </div>
     </div>

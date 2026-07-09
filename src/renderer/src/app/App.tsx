@@ -18,6 +18,8 @@ import { MainSurface } from '@renderer/app/shell/MainSurface'
 import { RestoreBanner } from '@renderer/app/shell/RestoreBanner'
 import { SettingsBar } from '@renderer/app/shell/SettingsBar'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
+import { CliUpdateBanner } from '@renderer/features/cli-updates/CliUpdateBanner'
+import { useCliUpdateSync } from '@renderer/features/cli-updates/store'
 
 // App — the composition root, and ONLY that (issue #494).
 //
@@ -55,6 +57,11 @@ export default function App() {
   useDevDebugConfigSync()
   useCaffeinateSync()
   useDictationHotkeySync()
+  // Fetch the initial CLI-update snapshot on mount and subscribe to
+  // subsequent transitions. Same mount-once discipline as the other
+  // sync hooks above — installing this in more than one place would
+  // leak IPC listeners and double every state change.
+  useCliUpdateSync()
 
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
   useRenderedLeaseHygiene(workspace)
@@ -68,6 +75,12 @@ export default function App() {
       <div className="relative h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
         <SetupGate />
         <RestoreBanner />
+        {/* CLI updater banner. Sits above the tab bar next to
+            RestoreBanner because both surfaces communicate "durable
+            degraded state for this run" — the exact use case
+            RestoreBanner's header comment names. Renders as null when
+            neither CLI has anything to report. */}
+        <CliUpdateBanner />
         <TabBar workspace={workspace} onNewTabRequest={onNewTabRequest} />
         <SettingsBar />
         <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
