@@ -91,6 +91,21 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      // Marker for the CLI auto-update three-way (Automatic / Notify /
+      // Off). The row is rendered by its own self-subscribing component
+      // in <SettingsList> — the value lives in setup.json (main-owned),
+      // not in Settings, so there's no getValue/onChange to hoist here.
+      // See features/cli-updates/CliUpdateBehaviorRow.tsx.
+      control: {
+        type: 'cli-update-behavior'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
       control: {
         type: 'command-visibility'
         /** Full command catalog to render rows for. Carried as a value
@@ -486,6 +501,32 @@ export function getSettingsRegistry(): SettingDefinition[] {
           await ctx.workspace.reloadAgentSessions(value)
         },
       },
+    },
+    {
+      // Kept in the experimental category alongside proxy-streaming for
+      // now — the auto-updater is opinionated (it takes over the
+      // upstream CLIs' own update flow) and users may want to see it in
+      // the same drawer as other things that reshape default behavior
+      // rather than mixed into workspace polish toggles. If it graduates
+      // to being the obvious default it can move.
+      id: 'cli-update-behavior',
+      category: 'experimental',
+      title: 'CLI Auto-Updates',
+      description:
+        "Detect new Claude Code and Codex releases on launch and update the user's installed CLI in the background using the correct install method.",
+      keywords: [
+        'cli',
+        'update',
+        'auto',
+        'claude',
+        'codex',
+        'version',
+        'npm',
+        'brew',
+        'homebrew',
+        'winget',
+      ],
+      control: { type: 'cli-update-behavior' },
     },
     {
       id: 'reset-settings',

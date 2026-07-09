@@ -2,9 +2,27 @@ import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 
 import { STATE_DIR } from '@main/storage/paths.js'
+import type { CliUpdateBehavior, CliUpdateKind } from '@shared/types/cliUpdate.js'
 import type { SetupToolId } from '@shared/types/setup.js'
 
 const SETUP_STATE_FILE = join(STATE_DIR, 'setup.json')
+
+/** Per-CLI persisted cache of the last successful latest-version probe
+ *  plus the GitHub ETag we used to conditional-GET it. Persisting the
+ *  ETag is the entire point of the "clever" cheap-poll design: on every
+ *  launch we send it back and get a 304 with no body when nothing
+ *  changed. Losing the ETag between launches (e.g. a corrupt setup.json)
+ *  costs one full-body GitHub roundtrip — inconvenient but not broken.
+ *
+ *  `lastCheckedAt` isn't used to gate the next check (we check on every
+ *  launch — see cliLatestVersion.ts for why the cache TTL is intentionally
+ *  zero); it's kept for debug attribution ("when did we last hear from
+ *  the network?"). */
+export type CliUpdateCacheEntry = {
+  latestVersion: string
+  etag: string | null
+  lastCheckedAt: number
+}
 
 export type PersistedSetupState = {
   version: 1
@@ -27,6 +45,16 @@ export type PersistedSetupState = {
   // version bump / migration is needed.
   manualToolPaths: Partial<Record<SetupToolId, string>>
   skippedOptionalTools: Partial<Record<SetupToolId, boolean>>
+  // Auto-updater behavior + cache. Same "additive, no version bump"
+  // rationale as manualToolPaths: absent from older setup.json blobs,
+  // loadSetupState defaults it, no migration path required. The
+  // behavior lives here (main-process-owned) rather than in the
+  // renderer's Settings so we don't have to bump the Zustand persist
+  // version every time we tweak the update policy — a class of bug that
+  // already burned us twice (#249, #494). See @shared/types/cliUpdate.ts
+  // for the behavior union.
+  cliUpdateBehavior: CliUpdateBehavior
+  cliUpdateCache: Partial<Record<CliUpdateKind, CliUpdateCacheEntry>>
   updatedAt: number
 }
 
@@ -35,6 +63,8 @@ const DEFAULT_SETUP_STATE: PersistedSetupState = {
   toolPaths: {},
   manualToolPaths: {},
   skippedOptionalTools: {},
+  cliUpdateBehavior: 'automatic',
+  cliUpdateCache: {},
   updatedAt: 0,
 }
 
@@ -51,6 +81,17 @@ export async function loadSetupState(): Promise<PersistedSetupState> {
       toolPaths: parsed.toolPaths ?? {},
       manualToolPaths: parsed.manualToolPaths ?? {},
       skippedOptionalTools: parsed.skippedOptionalTools ?? {},
+      // Coerce the CLI-update fields defensively: a hand-edited setup.json
+      // with a stray string for cliUpdateBehavior must not throw at load —
+      // fall back to 'automatic'. Same discipline as customAppearance in
+      // the renderer settings coercer.
+      cliUpdateBehavior:
+        parsed.cliUpdateBehavior === 'automatic' ||
+        parsed.cliUpdateBehavior === 'notify' ||
+        parsed.cliUpdateBehavior === 'off'
+          ? parsed.cliUpdateBehavior
+          : 'automatic',
+      cliUpdateCache: parsed.cliUpdateCache ?? {},
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
     }
   } catch {
@@ -135,5 +176,31 @@ export async function markOptionalSkipped(
       ...state.skippedOptionalTools,
       [tool]: skipped,
     },
+  })
+}
+
+/** Persist the user's CLI auto-update preference. Written by the setting
+ *  row in the renderer via IPC — same shape as markOptionalSkipped:
+ *  pure bookkeeping over the persisted state. */
+export async function setCliUpdateBehavior(
+  behavior: CliUpdateBehavior,
+): Promise<PersistedSetupState> {
+  const state = await loadSetupState()
+  return await saveSetupState({ ...state, cliUpdateBehavior: behavior })
+}
+
+/** Persist a successful latest-version probe. Called after every non-error
+ *  cliLatestVersion query so the next launch can start with a known-good
+ *  ETag (Codex) and version (Claude). Failed probes leave the previous
+ *  cache untouched — the whole point of the "on failure keep last state"
+ *  degradation. */
+export async function updateCliUpdateCache(
+  cli: CliUpdateKind,
+  entry: CliUpdateCacheEntry,
+): Promise<PersistedSetupState> {
+  const state = await loadSetupState()
+  return await saveSetupState({
+    ...state,
+    cliUpdateCache: { ...state.cliUpdateCache, [cli]: entry },
   })
 }

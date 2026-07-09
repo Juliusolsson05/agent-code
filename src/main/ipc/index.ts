@@ -35,6 +35,8 @@ import type { RemoteController } from '@main/remote/RemoteController.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { registerIncidentIpc } from '@main/ipc/incident.js'
 import { registerUsageIpc } from '@main/ipc/usage.js'
+import { registerCliUpdatesIpc } from '@main/ipc/cliUpdates.js'
+import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
 
 // IPC registration aggregator.
 //
@@ -61,6 +63,7 @@ export type IpcDeps = {
   caffeinateController: CaffeinateController
   remoteController: RemoteController
   appRunJournal: AppRunJournal
+  cliUpdateOrchestrator: CliUpdateOrchestrator
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -91,4 +94,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
   registerUsageIpc()
+  registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
 }

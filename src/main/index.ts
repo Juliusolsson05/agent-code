@@ -43,6 +43,7 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
 import { getPlatformKey, resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { initializeToolchain } from '@main/setup/toolchain.js'
+import { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
@@ -600,6 +601,18 @@ async function startApp(): Promise<void> {
   performanceService.mark('app.main.sessionManager.created')
 
   wireSessionForwarder(manager, lspManager)
+  // CLI auto-updater — constructed AFTER SessionManager because it uses
+  // the manager to decide whether an active session of the target kind
+  // is currently running (updating a binary while a session holds a
+  // handle to it is safe on POSIX and hostile on Windows). The
+  // orchestrator's boot probe fires shortly after registration below,
+  // and it never blocks the main-window creation because the check is
+  // scheduled via setTimeout inside scheduleBootProbe(). The initial
+  // behavior is loaded from setup.json before IPC registers so the
+  // renderer's first `cli-updates:get` sees the user's preference,
+  // not the placeholder default.
+  const cliUpdateOrchestrator = new CliUpdateOrchestrator(manager)
+  await cliUpdateOrchestrator.loadInitialBehavior()
   registerAllIpc({
     manager,
     remoteController,
@@ -613,7 +626,11 @@ async function startApp(): Promise<void> {
     aiWorkspaceRegistry,
     caffeinateController,
     appRunJournal,
+    cliUpdateOrchestrator,
   })
+  // Boot probe runs after the IPC is wired so its first `state` push
+  // has a live subscriber to receive it on the renderer side.
+  cliUpdateOrchestrator.scheduleBootProbe()
   performanceService.mark('app.main.ipc.registered')
   appRunJournal.record({ area: 'window.main', name: 'window.create.start' })
   createMainWindow()
