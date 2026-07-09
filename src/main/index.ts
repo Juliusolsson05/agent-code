@@ -311,11 +311,15 @@ async function startApp(): Promise<void> {
         context: {
           priorRunId: priorRun.priorRunId,
           priorRunDir: priorRun.priorRunDir,
-          // Which classifier version produced THIS verdict (#374). The report
-          // carries it (rather than us importing the constant here) so the
-          // context can never claim a version other than the code path that
-          // actually ran.
+          // Which classifier version + feature flags produced THIS verdict
+          // (#374 asked for both). The report carries them (rather than us
+          // importing the constants here) so the context can never claim a
+          // decision procedure other than the code path that actually ran.
+          // The flags are static today, but recording them from day one means
+          // the moment any behavior becomes toggleable, old and new incidents
+          // stay comparable without archaeology.
           classifierVersion: priorRun.classifierVersion,
+          classifierFlags: priorRun.classifierFlags,
           ...priorRun.evidence,
         },
       })

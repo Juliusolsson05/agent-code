@@ -157,6 +157,25 @@ export async function saveDebugBundle(
     const tmpPath = `${bundlePath}.tmp-${process.pid}-${Date.now()}`
     try {
       await writeBundleFiles(tmpPath, params.files)
+      // Provenance stamp for autosave bundles too (#374): every bundle must be
+      // able to identify the build that produced it, and autosave bundles are
+      // the ones most likely to be the ONLY artifact left after a crash — the
+      // exact case where "which source built this?" matters most. Stamped on
+      // the temp dir BEFORE the swap so the stable folder is always coherent:
+      // a reader never observes a snapshot whose manifest lacks the stamp.
+      //
+      // Deliberately only the cheap identity stamp (manifest appRunId + build
+      // + the write-once incident-run-manifest.json copy), NOT the journal
+      // tails that manual saves also get. Autosave ticks every 60s per active
+      // pane, and its history shows what happens when that path gets heavy
+      // (see buildAutosaveFolderName: the folder-churn / debug-retention spam
+      // incident). Copying ~200 KiB of events/incidents tails per pane per
+      // minute would roughly double the bytes written per tick for data that
+      // is fully recoverable anyway: the stamped appRunId keys straight into
+      // the run's journal dir under INCIDENT_RUNS_DIR, which outlives the run
+      // (50-run retention). Identity is the part that CANNOT be recovered
+      // later; the timeline can.
+      await stampBundleProvenance(tmpPath)
       await rm(bundlePath, { recursive: true, force: true })
       await rename(tmpPath, bundlePath)
     } finally {
@@ -178,8 +197,8 @@ export async function saveDebugBundle(
 
   // Phase 7: correlate this manual bundle with the always-on incident journal,
   // so a bundle is self-contained for triage without timestamp-matching against
-  // the incidents dir. Manual-only (autosave already returned above — it's a
-  // high-frequency cache that shouldn't pay this cost).
+  // the incidents dir. Autosave gets the identity stamp only (see the autosave
+  // branch above for why the journal-tail copies stay manual-only).
   await enrichBundleWithIncidentJournal(bundlePath)
 
   try {
@@ -222,12 +241,44 @@ async function writeBundleFiles(bundlePath: string, files: DebugBundleFile[]): P
   }
 }
 
-// Phase 7: stamp the bundle manifest with the canonical appRunId, and copy a
-// bounded tail of this run's journal (events.jsonl + heartbeat.json +
-// incidents.jsonl) into the bundle. Entirely best-effort: the timestamped
+// Phase 7: full enrichment for MANUAL bundles — the identity stamp shared with
+// autosave, plus a bounded tail of this run's journal (events.jsonl +
+// heartbeat.json + incidents.jsonl). Entirely best-effort: the timestamped
 // bundle the user asked for is the durable artifact, so NOTHING here may throw
 // out of the save path.
 async function enrichBundleWithIncidentJournal(bundlePath: string): Promise<void> {
+  const appRunId = await stampBundleProvenance(bundlePath)
+
+  // Copy the journal tail so the bundle is triage-complete on its own.
+  const runDir = join(INCIDENT_RUNS_DIR, appRunId)
+  const copies: Array<[src: string, dest: string, maxBytes: number]> = [
+    [join(runDir, 'events.jsonl'), 'incident-events.jsonl', 128 * 1024],
+    [join(runDir, 'incidents.jsonl'), 'incident-incidents.jsonl', 64 * 1024],
+  ]
+  for (const [src, dest, maxBytes] of copies) {
+    try {
+      const tail = await readJsonlTailBytes(src, maxBytes)
+      if (tail) await writeFile(join(bundlePath, dest), tail, 'utf8')
+    } catch (err) {
+      console.warn(`[debug-bundle] failed to copy ${dest}`, err)
+    }
+  }
+  // heartbeat.json is tiny and overwrite-only — copy it whole if present.
+  try {
+    const heartbeat = await readFile(join(runDir, 'heartbeat.json'), 'utf8')
+    await writeFile(join(bundlePath, 'incident-heartbeat.json'), heartbeat, 'utf8')
+  } catch {
+    // No heartbeat yet (very early crash) is fine.
+  }
+}
+
+// Identity stamp shared by BOTH bundle flavors (#374 requires EVERY bundle —
+// autosave included — to identify the build that produced it). Two cheap,
+// bounded writes; anything heavier belongs in enrichBundleWithIncidentJournal
+// so the 60s-per-pane autosave tick stays lean. Never throws (same best-effort
+// contract as the rest of the save path). Returns the appRunId so the manual
+// enrichment above doesn't resolve it twice.
+async function stampBundleProvenance(bundlePath: string): Promise<string> {
   const appRunId = getAppRunId()
 
   // (a) The renderer builds manifest.json without an appRunId (it doesn't own
@@ -249,43 +300,25 @@ async function enrichBundleWithIncidentJournal(bundlePath: string): Promise<void
     console.warn('[debug-bundle] failed to stamp appRunId into manifest', err)
   }
 
-  // (b) Copy the journal tail so the bundle is triage-complete on its own.
-  const runDir = join(INCIDENT_RUNS_DIR, appRunId)
-  const copies: Array<[src: string, dest: string, maxBytes: number]> = [
-    [join(runDir, 'events.jsonl'), 'incident-events.jsonl', 128 * 1024],
-    [join(runDir, 'incidents.jsonl'), 'incident-incidents.jsonl', 64 * 1024],
-  ]
-  for (const [src, dest, maxBytes] of copies) {
-    try {
-      const tail = await readJsonlTailBytes(src, maxBytes)
-      if (tail) await writeFile(join(bundlePath, dest), tail, 'utf8')
-    } catch (err) {
-      console.warn(`[debug-bundle] failed to copy ${dest}`, err)
-    }
-  }
-  // heartbeat.json is tiny and overwrite-only — copy it whole if present.
+  // (b) The run's manifest.json, copied verbatim (#374). The journal tails
+  // (manual-only, above) give a bundle the run's TIMELINE but nothing about
+  // the run's IDENTITY — versions, platform, build provenance, classifier
+  // version all live in the manifest, and pre-#374 bundles forced triage to go
+  // find the matching ~/.config run dir (often already pruned by 50-run
+  // retention) to learn them. Write-once at run start and a few hundred
+  // bytes, so a whole-file copy is bounded — cheap enough for autosave.
+  // `incident-` prefix matches its journal siblings and avoids colliding with
+  // the bundle's own manifest.json.
   try {
-    const heartbeat = await readFile(join(runDir, 'heartbeat.json'), 'utf8')
-    await writeFile(join(bundlePath, 'incident-heartbeat.json'), heartbeat, 'utf8')
-  } catch {
-    // No heartbeat yet (very early crash) is fine.
-  }
-  // The run's manifest.json, copied verbatim (#374). The journal tails above
-  // give the bundle the run's TIMELINE but nothing about the run's IDENTITY —
-  // versions, platform, build provenance, classifier version all live in the
-  // manifest, and pre-#374 bundles forced triage to go find the matching
-  // ~/.config run dir (often already pruned by 50-run retention) to learn
-  // them. Write-once at run start and a few hundred bytes, so a whole-file
-  // copy is bounded. `incident-` prefix matches its journal siblings and
-  // avoids colliding with the bundle's own manifest.json.
-  try {
-    const runManifest = await readFile(join(runDir, 'manifest.json'), 'utf8')
+    const runManifest = await readFile(join(INCIDENT_RUNS_DIR, appRunId, 'manifest.json'), 'utf8')
     await writeFile(join(bundlePath, 'incident-run-manifest.json'), runManifest, 'utf8')
   } catch {
     // Missing run manifest means the journal never started (degraded boot,
     // e.g. read-only ~/.config) — the bundle manifest.json build stamp above
     // still carries provenance, so skipping is safe.
   }
+
+  return appRunId
 }
 
 // Read the trailing `maxBytes` of a possibly-large JSONL file, dropping the

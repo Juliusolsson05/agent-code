@@ -44,7 +44,37 @@ export type PreviousRunClassification =
 // bump for pure refactors or added evidence fields that don't change which
 // classification comes out — the version answers "would this classifier have
 // judged the same evidence differently?", not "did the file change?".
-export const PREVIOUS_RUN_CLASSIFIER_VERSION = 1
+//
+// Version history:
+//   v1 — initial versioned classifier (#374): heartbeat-derived minidump
+//        window, node diagnostic-report detection, confidence verdicts.
+//   v2 — confidence-rule tightening from the #509 review: (a) 'high' now also
+//        requires that a heartbeat window was actually DERIVED (no readable
+//        heartbeat ⇒ never 'high'), (b) the recorded candidate list is
+//        guaranteed to contain the selected dump even under truncation, and
+//        (c) a dump newer than the selected one but outside the window is
+//        recorded prominently (`newerOutOfWindowDump`). Same evidence can now
+//        yield a different confidence than v1, hence the bump.
+export const PREVIOUS_RUN_CLASSIFIER_VERSION = 2
+
+// Feature flags of the decision procedure, stamped alongside the version into
+// the app.prior_unclean_shutdown incident context (#374 asked for flags, not
+// just a version number). Static today — every behavior is unconditionally on
+// — but the record exists NOW so that when a behavior ever becomes toggleable
+// (env var, config, platform gate), the artifact already has the slot and old
+// incidents remain comparable with new ones. Keys name behaviors that have
+// actually varied across classifier history, i.e. the ones a future triager
+// would need to know were active:
+//   nodeDiagnosticReport        — prefer Node fatal-error reports over all
+//                                 downstream signals (added for #388).
+//   crashpadUpperBoundWindow    — heartbeat-derived upper bound on minidump
+//                                 matching (v1; pre-#374 was lower-bound-only).
+//   windowRequiredForHighConfidence — 'high' demands a derived window (v2).
+export const PREVIOUS_RUN_CLASSIFIER_FLAGS: Record<string, boolean> = {
+  nodeDiagnosticReport: true,
+  crashpadUpperBoundWindow: true,
+  windowRequiredForHighConfidence: true,
+}
 
 export type PreviousRunReport = {
   priorRunId: string
@@ -54,6 +84,10 @@ export type PreviousRunReport = {
   // Echo of PREVIOUS_RUN_CLASSIFIER_VERSION so callers stamp provenance into
   // the incident context without importing the constant themselves.
   classifierVersion: number
+  // Echo of PREVIOUS_RUN_CLASSIFIER_FLAGS, for the same reason: the context
+  // must record the flags of the code path that ACTUALLY ran, not whatever
+  // constant the caller happens to import.
+  classifierFlags: Record<string, boolean>
   evidence: Record<string, unknown>
 }
 
@@ -87,18 +121,37 @@ export type CrashpadScan = {
   // bound can be derived and every candidate counts as within-window.
   upperBoundMs: number | undefined
   // Newest-first, bounded to MAX_MINIDUMP_CANDIDATES so a machine with a
-  // pathological dump pile can't bloat the incident record.
+  // pathological dump pile can't bloat the incident record. INVARIANT: the
+  // selected dump is always present in this list, even when truncation would
+  // otherwise drop it (see the recording logic in scanCrashpadMinidumps) — a
+  // scan record whose own candidate list omits its verdict is unauditable.
   candidates: CrashpadMinidumpCandidate[]
   // How many dumps passed the lower bound BEFORE the bound above was applied —
   // lets triage see that e.g. 40 dumps qualified even though only 10 are listed.
   qualifyingCount: number
   selected: string | undefined
   selectedMtimeMs: number | undefined
+  // Present when a qualifying dump NEWER than the selected one exists outside
+  // the heartbeat window. This is the honest record of the selection's known
+  // blind spot: selection prefers within-window dumps, but a frozen event
+  // loop stops heartbeats MINUTES before the actual death, so the REAL crash
+  // dump can postdate the window while an unrelated in-window dump (e.g. a
+  // mid-run helper crash) wins the pick. We keep the in-window preference —
+  // an out-of-window dump plausibly belongs to a later process entirely, and
+  // preferring it would trade one misattribution for another — but the newer
+  // dump is surfaced here (and as minidumpNewerOutOfWindowPath in the
+  // incident evidence) so triage always sees both, and confidence is 'low'
+  // whenever this field is set (≥2 qualifying dumps by construction).
+  newerOutOfWindowDump?: CrashpadMinidumpCandidate
   // 'high' only when the attribution is unambiguous: exactly one qualifying
-  // dump AND it sits inside the heartbeat-derived window (or no window could
-  // be derived). 'low' when several dumps qualify (any of them could be the
-  // prior run's death) or the winner postdates the window (it may belong to a
-  // different process entirely). Absent when nothing was selected.
+  // dump, it sits inside the heartbeat-derived window, AND a window was
+  // actually derivable. No readable heartbeat caps confidence at 'low' (v2):
+  // without an upper bound every dump trivially counts as "within window", so
+  // a lone post-start dump could just as well belong to a helper or a later
+  // process — that is a plausible attribution, not a proven one, and 'high'
+  // must mean proven. 'low' when several dumps qualify (any of them could be
+  // the prior run's death) or the winner postdates the window (it may belong
+  // to a different process entirely). Absent when nothing was selected.
   confidence?: 'high' | 'low'
 }
 
@@ -142,6 +195,7 @@ export function classifyPreviousRun(
       classification: 'clean',
       hadCleanMarker: true,
       classifierVersion: PREVIOUS_RUN_CLASSIFIER_VERSION,
+      classifierFlags: PREVIOUS_RUN_CLASSIFIER_FLAGS,
       evidence: {},
     }
   }
@@ -221,6 +275,7 @@ export function classifyPreviousRun(
     classification,
     hadCleanMarker: false,
     classifierVersion: PREVIOUS_RUN_CLASSIFIER_VERSION,
+    classifierFlags: PREVIOUS_RUN_CLASSIFIER_FLAGS,
     evidence: {
       incidentKinds: [...kinds],
       // Point triage straight at the dump so a native crash is symbolicatable.
@@ -232,6 +287,14 @@ export function classifyPreviousRun(
             native: true,
             minidumpPath: crashpadScan.selected,
             minidumpConfidence: crashpadScan.confidence,
+            // Top-level (not just inside `crashpad`) whenever the selection
+            // bypassed a newer out-of-window dump: whoever symbolicates
+            // minidumpPath must see, at the same altitude, that another dump
+            // may be the real death — see CrashpadScan.newerOutOfWindowDump
+            // for the stale-heartbeat scenario this guards against.
+            ...(crashpadScan.newerOutOfWindowDump
+              ? { minidumpNewerOutOfWindowPath: crashpadScan.newerOutOfWindowDump.path }
+              : {}),
           }
         : {}),
       // Complete Crashpad scan context (#374): bounds, every candidate seen,
@@ -468,25 +531,58 @@ function scanCrashpadMinidumps(
   // window fall back to the newest overall (see the gating rationale above).
   // With no derivable window every candidate is withinWindow, which reduces to
   // the pre-#374 "newest wins" behavior exactly.
+  //
+  // Known blind spot, kept deliberately: when a NEWER out-of-window dump
+  // coexists with an older in-window one, the in-window dump still wins even
+  // though a stale heartbeat (frozen event loop before death — a failure mode
+  // this app has actually had) means the newer dump may be the real crash.
+  // Preferring newest-overall instead would misattribute in the mirror case
+  // (the newer dump belongs to the CURRENT run's helper/GPU process — those
+  // land after the prior run's window too). Neither ordering can be proven
+  // right from mtimes alone, so we pick the one anchored to the run's
+  // evidenced lifetime and make the ambiguity loud instead of resolving it
+  // silently: the bypassed newer dump is recorded as `newerOutOfWindowDump`,
+  // and confidence is necessarily 'low' (two dumps qualify).
   const selected = qualifying.find(c => c.withinWindow) ?? qualifying[0]
+  // qualifying[0] is the newest overall; if it isn't the selected one, the
+  // selection skipped past it, which (given find() takes the first
+  // withinWindow entry) can only mean qualifying[0] is newer AND out-of-window.
+  const newerOutOfWindowDump =
+    selected && selected !== qualifying[0] ? qualifying[0] : undefined
   // 'high' demands an unambiguous story: exactly one dump could plausibly be
-  // this run's death, and the heartbeat timeline doesn't contradict it.
-  // Multiple qualifying dumps mean ANY of them could be the crash (only mtime
-  // ordering picked the winner), and an out-of-window winner means the dump
-  // postdates the run's last sign of life by more than the generous slop —
-  // both make the attribution a guess, and guesses must not be reported with
-  // the same confidence as proof (issue #374 acceptance criterion).
+  // this run's death, the heartbeat timeline doesn't contradict it, and that
+  // timeline actually EXISTS (upperBoundMs derived — see the confidence field
+  // comment on CrashpadScan for why no-heartbeat caps at 'low'). Multiple
+  // qualifying dumps mean ANY of them could be the crash (only mtime ordering
+  // picked the winner), and an out-of-window winner means the dump postdates
+  // the run's last sign of life by more than the generous slop — all of these
+  // make the attribution a guess, and guesses must not be reported with the
+  // same confidence as proof (issue #374 acceptance criterion).
   const confidence: 'high' | 'low' | undefined = selected
-    ? (qualifying.length === 1 && selected.withinWindow ? 'high' : 'low')
+    ? (qualifying.length === 1 && selected.withinWindow && upperBoundMs !== undefined
+        ? 'high'
+        : 'low')
     : undefined
+  // Bounded candidate record, with the invariant that the SELECTED dump is
+  // always in it: in a crash-loop pile-up more than MAX newer out-of-window
+  // dumps can sort ahead of an in-window selection, and a plain slice would
+  // then record a verdict whose winning dump appears nowhere in the recorded
+  // evidence. Overwrite the last (least decision-relevant) slot rather than
+  // appending so the record stays bounded — qualifyingCount already tells
+  // triage the list was truncated.
+  const candidates = qualifying.slice(0, MAX_MINIDUMP_CANDIDATES)
+  if (selected && !candidates.includes(selected)) {
+    candidates[candidates.length - 1] = selected
+  }
   return {
     scannedDirs,
     sinceMs,
     upperBoundMs,
-    candidates: qualifying.slice(0, MAX_MINIDUMP_CANDIDATES),
+    candidates,
     qualifyingCount: qualifying.length,
     selected: selected?.path,
     selectedMtimeMs: selected?.mtimeMs,
+    ...(newerOutOfWindowDump ? { newerOutOfWindowDump } : {}),
     ...(confidence ? { confidence } : {}),
   }
 }
