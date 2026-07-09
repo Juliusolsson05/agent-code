@@ -34,6 +34,37 @@ import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
 
 export type RemoteTransportMode = 'lan' | 'tunnel'
 
+// #495 A11: doEnable's rethrow reaches the RemotePanel error line verbatim
+// (ipc/remote.ts passes it through, the panel's withBusy() renders
+// `err.message`). Raw Node bind errors read like
+// "listen EADDRINUSE: address already in use 0.0.0.0:52341" — accurate but
+// actionless for the user staring at the Remote panel. Translate ONLY the
+// two errno families a bind can realistically hit on macOS into copy that
+// says what to do next; everything else (including the deliberate loud
+// tunnel-unavailable error from buildTransport) passes through untouched.
+// The original error rides along as `cause` so journals/devtools keep the
+// full errno + syscall detail. This is a message mapper, not a policy
+// change: the rethrow semantics (teardown first, caller sees a rejection)
+// and the controller's documented no-auto-fallback stance are unchanged.
+function translateBindError(err: unknown): unknown {
+  const code = (err as NodeJS.ErrnoException | null)?.code
+  if (code === 'EADDRINUSE') {
+    return new Error(
+      'The port the remote server picked is already in use — try enabling again ' +
+        '(a fresh port is chosen each time).',
+      { cause: err },
+    )
+  }
+  if (code === 'EACCES' || code === 'EPERM') {
+    return new Error(
+      'macOS blocked the network bind. Check System Settings → Network → Firewall ' +
+        'and allow incoming connections for Agent Code, then try again.',
+      { cause: err },
+    )
+  }
+  return err
+}
+
 export type RemoteStatus = {
   enabled: boolean
   url: string | null
@@ -156,7 +187,7 @@ export class RemoteController extends EventEmitter {
       // clean — teardownLive disposes the feed tap even when the server was
       // never constructed. (start() journals its own incidents.)
       await this.teardownLive()
-      throw err
+      throw translateBindError(err)
     }
     const status = this.getStatus()
     this.emit('status-changed', status)
