@@ -100,8 +100,9 @@ a running session can move mid-task from Claude Code to Codex or back.
 
 ## Getting started
 
-Requires Node 22, plus `claude` and `codex` on `PATH`. The headless runtimes
-live as git submodules, so clone with them included:
+Requires Node 20+ (CI builds on 20 — see `.nvmrc`), plus `claude` and `codex`
+on `PATH`. The headless runtimes live as git submodules, so clone with them
+included:
 
 ```bash
 git clone --recurse-submodules https://github.com/Juliusolsson05/agent-code.git
@@ -115,6 +116,14 @@ If you already cloned without `--recurse-submodules`, initialize them once:
 ```bash
 git submodule update --init --recursive
 ```
+
+**Submodules are load-bearing:** the dev build compiles the five package
+submodules (`claude-code-headless`, `codex-headless`, `opencode-headless`,
+`agent-transcript-parser`, `agent-voice-dictation`) straight from their
+`src/` via Vite aliases, so `npm run dev` will not start without them
+checked out. All submodule repos are public; no special access is needed
+(CI's `SUBMODULE_PAT`/`SUBMODULE_SSH_KEY` plumbing predates them being
+public and is kept for private forks).
 
 To build a distributable macOS app, first fetch the bundled runtime artifacts
 (tmux, mitmproxy), then package:
