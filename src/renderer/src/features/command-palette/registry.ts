@@ -10,6 +10,7 @@ import { copyAssistantCommands } from '@renderer/features/copy-assistant/command
 import { copyCodeBlockCommands } from '@renderer/features/copy-code-block/commands/copyCodeBlockCommands'
 import { promptTemplateCommands } from '@renderer/features/prompt-templates/commands/promptTemplateCommands'
 import { agentStatusCommands } from '@renderer/features/agent-status/commands/agentStatusCommands'
+import { agentOverlayCommands } from '@renderer/features/agent-overlay/commands/agentOverlayCommands'
 import { remoteCommands } from '@renderer/features/remote/commands/remoteCommands'
 import { usageCommands } from '@renderer/features/usage/commands/usageCommands'
 import { commandAllowedByRenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
@@ -35,6 +36,7 @@ const commandDefs: CommandDef[] = [
   ...copyCodeBlockCommands,
   ...promptTemplateCommands,
   ...agentStatusCommands,
+  ...agentOverlayCommands,
   ...remoteCommands,
   ...usageCommands,
 ]
