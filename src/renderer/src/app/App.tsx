@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
 import { AgentStatusPanel } from '@renderer/features/agent-status/ui/AgentStatusPanel'
 import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
-import { DebugBundleNotePrompt } from '@renderer/features/debug/ui/DebugBundleNotePrompt'
 import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
 import { HtmlDebugPanel } from '@renderer/features/debug/ui/HtmlDebugPanel'
 import { ProxyDebugPanel } from '@renderer/features/debug/ui/ProxyDebugPanel'
@@ -12,16 +11,13 @@ import { DevDebugPanel } from '@renderer/features/debug/ui/DevDebugPanel'
 import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
-import { UsageModal } from '@renderer/features/usage/ui/UsageModal'
 import { ReaderView } from '@renderer/features/reader/ui/ReaderView'
 import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
-import { TiledDispatchCountOverlay } from '@renderer/features/workspace/ui/TiledDispatchCountOverlay'
 import { GitBar } from '@renderer/features/git/ui/GitBar'
 import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
-import { VoiceDictationOverlay } from '@renderer/features/voice-dictation/ui/VoiceDictationOverlay'
 import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { RemotePanel } from '@renderer/features/remote/ui/RemotePanel'
@@ -71,12 +67,8 @@ export default function App() {
   const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
   const commandPaletteOpen = useAppStore(state => state.commandPaletteOpen)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
-  const debugBundleNotePrompt = useAppStore(state => state.debugBundleNotePrompt)
-  const recordingNotePrompt = useAppStore(state => state.recordingNotePrompt)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
-  const tiledDispatchPromptOpen = useAppStore(state => state.tiledDispatchPromptOpen)
   const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
-  const closeTiledDispatchPrompt = useAppStore(state => state.closeTiledDispatchPrompt)
   const dispatchAttachIntent = useAppStore(state => state.dispatchAttachIntent)
   const linkedAgentParentId = useAppStore(state => state.linkedAgentParentId)
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
@@ -103,8 +95,6 @@ export default function App() {
   const openPinAgents = useAppStore(state => state.openPinAgents)
   const openSettingsPage = useAppStore(state => state.openSettingsPage)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
-  const closeDebugBundleNotePrompt = useAppStore(state => state.closeDebugBundleNotePrompt)
-  const closeRecordingNotePrompt = useAppStore(state => state.closeRecordingNotePrompt)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
@@ -146,9 +136,7 @@ export default function App() {
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
   const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
   const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
-  const usageModalOpen = useAppStore(state => state.usageModalOpen)
   const openUsageModal = useAppStore(state => state.openUsageModal)
-  const closeUsageModal = useAppStore(state => state.closeUsageModal)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
   const sessionRecordingEnabled = useDevDebugConfig(state => state.sessionRecordingEnabled)
@@ -588,7 +576,6 @@ export default function App() {
       </div>
 
       <GlobalOverlays />
-      <VoiceDictationOverlay />
 
       <CommandPalette
         open={commandPaletteOpen}
@@ -667,77 +654,6 @@ export default function App() {
         setDangerousAgentsEnabled={enabled => setSettings({ dangerousAgentsEnabled: enabled })}
         setAggressiveDebugPersistence={enabled =>
           setSettings({ aggressiveDebugPersistence: enabled })}
-      />
-
-      {/* Tiled Dispatch tile-count prompt. Rendered at the app root (fixed
-          overlay) because the command is `app`-surface — it can be invoked
-          from the grid, classic Dispatch, or an already-tiled layout. */}
-      {tiledDispatchPromptOpen && (
-        <TiledDispatchCountOverlay
-          workspace={workspace}
-          onClose={closeTiledDispatchPrompt}
-        />
-      )}
-
-
-      <DebugBundleNotePrompt
-        open={debugBundleNotePrompt !== null}
-        title={debugBundleNotePrompt?.title ?? ''}
-        description={debugBundleNotePrompt?.description ?? ''}
-        bundlePath={debugBundleNotePrompt?.bundlePath ?? ''}
-        onCancel={closeDebugBundleNotePrompt}
-        onConfirm={note => {
-          const prompt = debugBundleNotePrompt
-          if (!prompt) return
-          const trimmed = note.trim()
-          closeDebugBundleNotePrompt()
-          if (!trimmed) return
-          void window.api.addDebugBundleNote({
-            bundlePath: prompt.bundlePath,
-            note: trimmed,
-          }).then(
-            () => workspace.showPaneToast(prompt.sessionId, 'debug note saved', 3000),
-            err => {
-              const message = err instanceof Error ? err.message : String(err)
-              workspace.showPaneToast(prompt.sessionId, `debug note failed: ${message}`, 5000)
-            },
-          )
-        }}
-      />
-
-      {/* Attach-Recording-Note input (plan §7b). Reuses the debug-bundle note
-          modal with recording-specific labels. The `reserved` marker is
-          already written by the time this opens; onConfirm fills it. Cancel
-          leaves the reserved marker in place — a bare timestamp is still a
-          useful flag, so we do NOT delete it on skip. */}
-      <DebugBundleNotePrompt
-        open={recordingNotePrompt !== null}
-        heading="Attach Recording Note"
-        fieldLabel="Note"
-        placeholder="What did you see? (marks the exact recorded tick)"
-        title={recordingNotePrompt?.title ?? ''}
-        description=""
-        bundlePath=""
-        onCancel={closeRecordingNotePrompt}
-        onConfirm={note => {
-          const prompt = recordingNotePrompt
-          if (!prompt) return
-          const trimmed = note.trim()
-          closeRecordingNotePrompt()
-          if (!trimmed) return
-          void window.api.fillRecordingNote(prompt.sessionId, prompt.noteId, trimmed).then(
-            () => workspace.showPaneToast(prompt.sessionId, 'recording note attached', 3000),
-            err => {
-              const message = err instanceof Error ? err.message : String(err)
-              workspace.showPaneToast(prompt.sessionId, `recording note failed: ${message}`, 5000)
-            },
-          )
-        }}
-      />
-
-      <UsageModal
-        open={usageModalOpen}
-        onClose={closeUsageModal}
       />
 
       <GlobalModals />

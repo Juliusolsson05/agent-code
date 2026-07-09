@@ -1,5 +1,10 @@
 import type { SurfaceEntry } from './types'
 import { CaffeinateToastSurface } from '@renderer/features/caffeinate/surfaces/CaffeinateToastSurface'
+import { VoiceDictationSurface } from '@renderer/features/voice-dictation/surfaces/VoiceDictationSurface'
+import { TiledDispatchCountSurface } from '@renderer/features/workspace/surfaces/TiledDispatchCountSurface'
+import { DebugBundleNoteSurface } from '@renderer/features/debug/surfaces/DebugBundleNoteSurface'
+import { RecordingNoteSurface } from '@renderer/features/debug/surfaces/RecordingNoteSurface'
+import { UsageModalSurface } from '@renderer/features/usage/surfaces/UsageModalSurface'
 import { PathPickerSurface } from '@renderer/features/path-picker/surfaces/PathPickerSurface'
 import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/TileTabsModalSurface'
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
@@ -29,6 +34,8 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'reorder-tabs', Component: ReorderTabsSurface },
   { id: 'pin-agents', Component: PinAgentsSurface },
   { id: 'bury-pane', Component: BuryPanePromptSurface },
+  { id: 'debug-bundle-note', Component: DebugBundleNoteSurface },
+  { id: 'recording-note', Component: RecordingNoteSurface },
   { id: 'view-prompts', Component: ViewPromptsSurface },
   { id: 'prompt-search', Component: PromptSearchSurface },
   { id: 'agent-activity', Component: AgentActivitySurface },
@@ -36,10 +43,13 @@ export const modalSurfaces: SurfaceEntry[] = [
   { id: 'bulk-provider-switch', Component: BulkProviderSwitchSurface },
   { id: 'agent-view-mode-picker', Component: AgentViewModePickerSurface },
   { id: 'rewind-to-prompt', Component: RewindToPromptSurface },
+  { id: 'usage', Component: UsageModalSurface },
 ]
 
 /** Rendered at the app root, after the main row, before the modals. */
 export const overlaySurfaces: SurfaceEntry[] = [
+  { id: 'voice-dictation', Component: VoiceDictationSurface },
+  { id: 'tiled-dispatch-count', Component: TiledDispatchCountSurface },
   { id: 'caffeinate-toast', Component: CaffeinateToastSurface },
 ]
 
