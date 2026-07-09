@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
 import { AgentStatusPanel } from '@renderer/features/agent-status/ui/AgentStatusPanel'
-import { PinAgentsModal, type PinAgentsModalRow } from '@renderer/features/dispatch-pin/PinAgentsModal'
 import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
 import { DebugBundleNotePrompt } from '@renderer/features/debug/ui/DebugBundleNotePrompt'
 import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
@@ -15,19 +14,9 @@ import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
 import { UsageModal } from '@renderer/features/usage/ui/UsageModal'
 import { ReaderView } from '@renderer/features/reader/ui/ReaderView'
-import { TileTabsModal } from '@renderer/features/tile-tabs/ui/TileTabsModal'
 import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
-import { AgentActivityModal } from '@renderer/features/workspace/ui/AgentActivityModal'
-import { BuryPanePrompt } from '@renderer/features/workspace/ui/BuryPanePrompt'
-import { CloseOldAgentsModal } from '@renderer/features/workspace/ui/CloseOldAgentsModal'
-import { BulkProviderSwitchModal } from '@renderer/features/workspace/ui/BulkProviderSwitchModal'
-import { AgentViewModePickerModal } from '@renderer/features/workspace/ui/AgentViewModePickerModal'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
 import { TiledDispatchCountOverlay } from '@renderer/features/workspace/ui/TiledDispatchCountOverlay'
-import { PromptSearchModal } from '@renderer/features/workspace/ui/PromptSearchModal'
-import { ReorderTabsModal } from '@renderer/features/workspace/ui/ReorderTabsModal'
-import { RewindToPromptModal } from '@renderer/features/workspace/ui/RewindToPromptModal'
-import { ViewPromptsModal } from '@renderer/features/workspace/ui/ViewPromptsModal'
 import { GitBar } from '@renderer/features/git/ui/GitBar'
 import { WorktreesBar } from '@renderer/features/worktrees/ui/WorktreesBar'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
@@ -59,7 +48,6 @@ import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
 import { resolveTabSessions } from '@renderer/workspace/queries'
-import type { SessionId, TabId } from '@renderer/workspace/types'
 
 // App — thin shell around the workspace hook.
 //
@@ -82,15 +70,9 @@ export default function App() {
   const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
   const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
   const commandPaletteOpen = useAppStore(state => state.commandPaletteOpen)
-  const tileTabsModalOpen = useAppStore(state => state.tileTabsModalOpen)
-  const tileTabsInitialSelectedIds = useAppStore(state => state.tileTabsInitialSelectedIds)
-  const reorderTabsOpen = useAppStore(state => state.reorderTabsOpen)
-  const pinAgentsOpen = useAppStore(state => state.pinAgentsOpen)
   const settingsPageOpen = useAppStore(state => state.settingsPageOpen)
-  const buryPromptSessionId = useAppStore(state => state.buryPromptSessionId)
   const debugBundleNotePrompt = useAppStore(state => state.debugBundleNotePrompt)
   const recordingNotePrompt = useAppStore(state => state.recordingNotePrompt)
-  const viewPromptsSessionId = useAppStore(state => state.viewPromptsSessionId)
   const newAgentPlacementOpen = useAppStore(state => state.newAgentPlacementOpen)
   const tiledDispatchPromptOpen = useAppStore(state => state.tiledDispatchPromptOpen)
   const openTiledDispatchPrompt = useAppStore(state => state.openTiledDispatchPrompt)
@@ -117,18 +99,13 @@ export default function App() {
   const closeCommandPalette = useAppStore(state => state.closeCommandPalette)
   const toggleCommandPalette = useAppStore(state => state.toggleCommandPalette)
   const openTileTabsModal = useAppStore(state => state.openTileTabsModal)
-  const closeTileTabsModal = useAppStore(state => state.closeTileTabsModal)
   const openReorderTabs = useAppStore(state => state.openReorderTabs)
-  const closeReorderTabs = useAppStore(state => state.closeReorderTabs)
   const openPinAgents = useAppStore(state => state.openPinAgents)
-  const closePinAgents = useAppStore(state => state.closePinAgents)
   const openSettingsPage = useAppStore(state => state.openSettingsPage)
   const closeSettingsPage = useAppStore(state => state.closeSettingsPage)
-  const closeBuryPrompt = useAppStore(state => state.closeBuryPrompt)
   const closeDebugBundleNotePrompt = useAppStore(state => state.closeDebugBundleNotePrompt)
   const closeRecordingNotePrompt = useAppStore(state => state.closeRecordingNotePrompt)
   const openViewPrompts = useAppStore(state => state.openViewPrompts)
-  const closeViewPrompts = useAppStore(state => state.closeViewPrompts)
   const closeNewAgentPlacement = useAppStore(state => state.closeNewAgentPlacement)
   const closeDispatchAttach = useAppStore(state => state.closeDispatchAttach)
   const openDispatchAttach = useAppStore(state => state.openDispatchAttach)
@@ -165,31 +142,19 @@ export default function App() {
   // shows the toggle when the Global Editor is open.
   const fileTreeVisible = useGlobalEditorStore(state => state.fileTreeVisible)
   const toggleFileTreeVisible = useGlobalEditorStore(state => state.toggleFileTreeVisible)
-  const promptSearchOpen = useAppStore(state => state.promptSearchOpen)
   const openPromptSearch = useAppStore(state => state.openPromptSearch)
-  const closePromptSearch = useAppStore(state => state.closePromptSearch)
-  const agentActivityOpen = useAppStore(state => state.agentActivityOpen)
   const openAgentActivity = useAppStore(state => state.openAgentActivity)
-  const closeAgentActivity = useAppStore(state => state.closeAgentActivity)
-  const closeOldAgentsOpen = useAppStore(state => state.closeOldAgentsOpen)
   const openCloseOldAgents = useAppStore(state => state.openCloseOldAgents)
-  const closeCloseOldAgents = useAppStore(state => state.closeCloseOldAgents)
-  const bulkProviderSwitchOpen = useAppStore(state => state.bulkProviderSwitchOpen)
   const openBulkProviderSwitch = useAppStore(state => state.openBulkProviderSwitch)
-  const closeBulkProviderSwitch = useAppStore(state => state.closeBulkProviderSwitch)
   const usageModalOpen = useAppStore(state => state.usageModalOpen)
   const openUsageModal = useAppStore(state => state.openUsageModal)
   const closeUsageModal = useAppStore(state => state.closeUsageModal)
-  const rewindPromptSessionId = useAppStore(state => state.rewindPromptSessionId)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
-  const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
   const sessionRecordingEnabled = useDevDebugConfig(state => state.sessionRecordingEnabled)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
-  const agentViewModePickerSessionId = useAppStore(state => state.agentViewModePickerSessionId)
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
-  const closeAgentViewModePicker = useAppStore(state => state.closeAgentViewModePicker)
 
   useEffect(() => {
     applyTheme(settings)
@@ -331,83 +296,6 @@ export default function App() {
   const spotlightTabExists = spotlightTabId
     ? state.tabs.some(tab => tab.id === spotlightTabId)
     : false
-
-  // Candidate rows for the Pin Agents modal. Built here (not inside
-  // the modal) because we already have cheap access to the full
-  // workspace state via the workspace hook — the modal stays a dumb
-  // props-driven component.
-  //
-  // Ordering: currently-pinned agents first in pin order, then
-  // everyone else tab-by-tab in tab order. Pinned-first means the
-  // user's existing pins surface at the top when they open the
-  // modal — the most common operation is "tweak my pins," not
-  // "scroll through every agent in the workspace."
-  //
-  // Terminals are excluded: pin reducer / sanity effect / modal
-  // selection all agree pins are agents. Detached agents ARE
-  // included — they're the ones the user is most likely pinning
-  // (background work they want one keystroke away).
-  const pinAgentsRows = useMemo<PinAgentsModalRow[]>(() => {
-    const rows: PinAgentsModalRow[] = []
-    const pinnedSet = new Set(state.pinnedSessionIds)
-    const seen = new Set<SessionId>()
-
-    const tabIndexFor = (tabId: TabId): number => state.tabs.findIndex(tab => tab.id === tabId)
-
-    const pushRow = (sessionId: SessionId, tabId: TabId): void => {
-      if (seen.has(sessionId)) return
-      const meta = state.sessions[sessionId]
-      if (!meta || meta.kind === 'terminal') return
-      const tabIndex = tabIndexFor(tabId)
-      const tab = state.tabs[tabIndex]
-      if (!tab) return
-      seen.add(sessionId)
-      rows.push({
-        sessionId,
-        tabIndex,
-        tabTitle: tab.title,
-        // Same title fallback the dispatch selectors use — keep this
-        // in sync if the title source ever changes. Inlined rather
-        // than importing the selector helper because it's two lines.
-        title: meta.title?.trim() || meta.cwd?.split('/').filter(Boolean).pop() || 'agent',
-      })
-    }
-
-    // Pass 1: pinned ids, in pin order. Owner-tab lookup goes through
-    // resolveTabSessions so it sees BOTH grid leaves and detached
-    // agents owned by the tab. The previous code branched on
-    // `state.detachedSessions[sessionId]` before falling back to a
-    // grid-only `collectLeaves` walk — the same divergence pattern
-    // this whole PR is closing.
-    for (const sessionId of state.pinnedSessionIds) {
-      const owner = state.tabs.find(tab => resolveTabSessions(state, tab.id).includes(sessionId))
-      if (owner) pushRow(sessionId, owner.id)
-    }
-
-    // Pass 2: every other agent, tab-by-tab. resolveTabSessions
-    // already yields grid leaves first (in tile-tree order) then
-    // detached agents oldest-first — exactly the order this modal
-    // wants — so no manual interleaving is needed. The pinnedSet
-    // check is belt-and-suspenders since `seen` would also catch
-    // double-adds, but it makes the intent obvious to a future
-    // reader.
-    for (const tab of state.tabs) {
-      for (const sessionId of resolveTabSessions(state, tab.id)) {
-        if (pinnedSet.has(sessionId)) continue
-        pushRow(sessionId, tab.id)
-      }
-    }
-
-    return rows
-  }, [
-    state.detachedSessions,
-    state.pinnedSessionIds,
-    state.sessions,
-    state.tabs,
-  ])
-  const buriedPromptMeta = buryPromptSessionId
-    ? workspace.state.sessions[buryPromptSessionId] ?? null
-    : null
 
   // WHY render this above TabBar instead of as a toast:
   //
@@ -791,53 +679,6 @@ export default function App() {
         />
       )}
 
-      <TileTabsModal
-        open={tileTabsModalOpen}
-        tabs={workspace.state.tabs.map(tab => ({ id: tab.id, title: tab.title }))}
-        initialSelectedIds={tileTabsInitialSelectedIds}
-        onCancel={closeTileTabsModal}
-        onConfirm={tabIds => {
-          workspace.openTileTabs(tabIds)
-          closeTileTabsModal()
-        }}
-      />
-
-      <ReorderTabsModal
-        open={reorderTabsOpen}
-        tabs={workspace.state.tabs.map(tab => ({ id: tab.id, title: tab.title }))}
-        activeTabId={workspace.state.activeTabId}
-        onCancel={closeReorderTabs}
-        onConfirm={tabIds => {
-          workspace.reorderTabs(tabIds)
-          closeReorderTabs()
-        }}
-      />
-
-      <PinAgentsModal
-        open={pinAgentsOpen}
-        rows={pinAgentsRows}
-        initialSelectedIds={workspace.state.pinnedSessionIds}
-        onCancel={closePinAgents}
-        onConfirm={ids => {
-          workspace.setPinnedSessionIds(ids)
-          closePinAgents()
-        }}
-      />
-
-      <BuryPanePrompt
-        open={buryPromptSessionId !== null && buriedPromptMeta !== null}
-        title={
-          buriedPromptMeta
-            ? `${buriedPromptMeta.kind ?? DEFAULT_PROVIDER} · ${buriedPromptMeta.cwd.split('/').filter(Boolean).pop() ?? buriedPromptMeta.cwd}`
-            : ''
-        }
-        description={buriedPromptMeta?.cwd ?? ''}
-        onCancel={closeBuryPrompt}
-        onConfirm={note => {
-          if (!buryPromptSessionId) return
-          workspace.buryFocused(note, buryPromptSessionId)
-        }}
-      />
 
       <DebugBundleNotePrompt
         open={debugBundleNotePrompt !== null}
@@ -892,52 +733,6 @@ export default function App() {
             },
           )
         }}
-      />
-
-      <ViewPromptsModal
-        open={viewPromptsSessionId !== null}
-        sessionId={viewPromptsSessionId}
-        workspace={workspace}
-        onClose={closeViewPrompts}
-      />
-
-      <PromptSearchModal
-        open={promptSearchOpen}
-        workspace={workspace}
-        onClose={closePromptSearch}
-      />
-
-      <AgentActivityModal
-        open={agentActivityOpen}
-        workspace={workspace}
-        onClose={closeAgentActivity}
-      />
-
-      <CloseOldAgentsModal
-        open={closeOldAgentsOpen}
-        workspace={workspace}
-        onClose={closeCloseOldAgents}
-      />
-
-      <BulkProviderSwitchModal
-        open={bulkProviderSwitchOpen}
-        workspace={workspace}
-        onClose={closeBulkProviderSwitch}
-      />
-
-      <AgentViewModePickerModal
-        open={agentViewModePickerSessionId !== null}
-        sessionId={agentViewModePickerSessionId}
-        workspace={workspace}
-        globalMode={settings.agentViewMode}
-        onClose={closeAgentViewModePicker}
-      />
-
-      <RewindToPromptModal
-        open={rewindPromptSessionId !== null}
-        sessionId={rewindPromptSessionId}
-        workspace={workspace}
-        onClose={closeRewindPrompt}
       />
 
       <UsageModal
