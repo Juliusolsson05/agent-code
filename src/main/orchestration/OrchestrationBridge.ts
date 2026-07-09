@@ -769,6 +769,8 @@ function truncateOrchestrationText(
 // backwards mirrors the renderer's visibleMessageSummary and the transcript
 // reader's boundItems: when the budget runs out, the OLDEST messages are the
 // ones dropped, because the newest output is what a coordinating parent needs.
+// The NEWEST message itself is never dropped — a starved budget truncates it
+// down instead (see the floor in the loop), matching the renderer.
 function capMessagesByChars(
   messages: OrchestrationAgentMessage[],
   caps: { maxCharsPerMessage?: number; maxCharsPerAgent?: number },
@@ -783,10 +785,24 @@ function capMessagesByChars(
   let truncated = false
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!
-    const bounded = truncateOrchestrationText(message.text, perMessage)
+    let bounded = truncateOrchestrationText(message.text, perMessage)
     if (usedChars + bounded.text.length > budget) {
+      if (keptReversed.length > 0) {
+        truncated = true
+        break
+      }
+      // NEWEST-MESSAGE FLOOR (#510 review): mirrors the identical rule in the
+      // renderer's visibleMessageSummary.pushTail. This is the first (newest)
+      // message and nothing has been kept yet (usedChars === 0), so a budget
+      // smaller than one per-message-capped text must shrink the newest
+      // message to fit, not return `messages: []` for a tombstoned agent that
+      // has output. The Math.max(100, …) floor is defensive: every current
+      // caller clamps maxCharsPerAgent to >=100 (limitOutputMessages) or uses
+      // MAX_CLOSED_AGENT_CHARS, but this helper must keep a minimal excerpt
+      // even if a future caller passes something absurd. `budget` is finite
+      // here — an Infinity budget can never trip the overflow check above.
+      bounded = truncateOrchestrationText(message.text, Math.max(100, budget))
       truncated = true
-      break
     }
     usedChars += bounded.text.length
     if (bounded.truncated) truncated = true

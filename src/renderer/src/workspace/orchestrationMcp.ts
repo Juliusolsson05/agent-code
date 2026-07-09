@@ -441,6 +441,9 @@ function visibleMessageSummary(
   // whole shares a maxCharsPerAgent running budget. Because the scan walks
   // newest -> oldest, "budget exhausted" naturally drops the OLDEST messages
   // first, mirroring the transcript reader's boundItems budget semantics.
+  // The NEWEST message is exempt from dropping: it is truncated down to the
+  // agent budget instead (see the floor inside pushTail), so a starved budget
+  // still returns a non-empty tail.
   // totalChars only sums the ORIGINAL sizes of texts we actually extracted:
   // whole-transcript totals would require the full extraction this fast path
   // exists to avoid.
@@ -457,13 +460,27 @@ function visibleMessageSummary(
     rawText: string,
     timestamp?: string,
   ): { text: string; truncated: boolean } | null => {
-    const bounded = boundText(rawText, maxCharsPerMessage)
+    let bounded = boundText(rawText, maxCharsPerMessage)
     if (usedChars + bounded.text.length > maxCharsPerAgent) {
-      // Everything older than this point is dropped too (the scan only gets
-      // older from here), so flip the latch instead of retrying per message.
-      budgetExhausted = true
+      if (messagesReversed.length > 0) {
+        // Everything older than this point is dropped too (the scan only gets
+        // older from here), so flip the latch instead of retrying per message.
+        budgetExhausted = true
+        truncated = true
+        return null
+      }
+      // NEWEST-MESSAGE FLOOR (#510 review): the first push is the newest
+      // message in the tail (live turn if present, else the newest visible
+      // entry). Dropping it because maxCharsPerAgent is smaller than one
+      // per-message-capped text would return `messages: []` for an agent that
+      // plainly produced output — budget starvation must degrade to a shorter
+      // excerpt, never to nothing. usedChars is always 0 here (nothing kept
+      // yet), so the whole agent budget is available; boundedMaxCharsPerAgent
+      // clamps it to >=100, which keeps a 76-char excerpt + marker even in the
+      // worst case. Older messages then fail the budget check above and drop
+      // as before.
+      bounded = boundText(rawText, maxCharsPerAgent)
       truncated = true
-      return null
     }
     usedChars += bounded.text.length
     totalChars += bounded.totalChars
