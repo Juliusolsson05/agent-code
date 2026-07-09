@@ -2,7 +2,7 @@ import { useMemo, useRef } from 'react'
 
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
-import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
 import {
   createLedgerInputAdapter,
   type RuntimeLedgerSlices,
@@ -33,8 +33,13 @@ import {
 // Feed re-render" compose end to end.
 // ---------------------------------------------------------------------------
 
+// `runtime` is the DECLARED render-input contract, not the whole
+// SessionRuntime — the decide layer's licensed surface is exactly those
+// seven fields (#493 PR-2). Desktop passes the full runtime (structural
+// subtype, same object, so the D11 identity chain is untouched); the
+// remote client passes its minimal store object with no cast.
 export function useLedgerFeedItems(
-  runtime: SessionRuntime,
+  runtime: RuntimeRenderInput,
   provider: AgentProviderKind,
   sessionId: string,
 ): FeedRenderItem[] {

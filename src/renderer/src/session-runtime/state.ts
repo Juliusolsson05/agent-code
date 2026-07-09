@@ -591,6 +591,41 @@ export type SessionRuntime = {
   subAgents: Record<string, SubAgentState>
 }
 
+/**
+ * The slice of SessionRuntime the DECIDE layer (rendering/) may read — the
+ * declared input contract of issue #493 PR-2.
+ *
+ * This is a PICK, not a partition: SessionRuntime's other ~50 fields are
+ * pane-UI / lifecycle / paging / debug state the ledger must never see.
+ * The list is exactly what the pipeline reads today (useLedgerFeedItems'
+ * slice assembly + ledgerFeedContextFromRuntime) — nothing speculative.
+ * Adding a field here is a CONTRACT change: it licenses the decide layer
+ * to depend on it, so it should happen in the same PR as the consumer.
+ *
+ * WHY a Pick instead of a separate interface SessionRuntime extends:
+ * callers pass the SAME runtime object (structural subtype) — no wrapper
+ * is ever constructed, so the D11 reference-identity chain (the adapter's
+ * per-plane caches key on these exact field references) survives intact.
+ * The two former `as unknown as SessionRuntime` casts (remote SessionView,
+ * replay's runtimeViewFor) become honestly-typed against this instead.
+ */
+export type RuntimeRenderInput = Pick<
+  SessionRuntime,
+  | 'entries'
+  | 'semantic'
+  | 'streamPhase'
+  | 'streamPhasePendingToolName'
+  | 'streamPhasePendingToolUseId'
+  | 'lastJsonlEntryAt'
+> & {
+  /** ReadonlyMap, not SessionRuntime's mutable Map: the decide layer only
+   *  READS the ghost plane (mutation is the ghost reducer's job, here in
+   *  session-runtime). Read-only also lets ghost-less hosts (the phone)
+   *  satisfy the contract with a shared frozen empty map. The full runtime's
+   *  Map is assignable, so desktop callers still pass `runtime` unchanged. */
+  ghosts: ReadonlyMap<string, GhostEntry>
+}
+
 export function emptySemanticRuntime(): SemanticRuntimeState {
   return {
     currentTurn: null,

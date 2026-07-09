@@ -9,7 +9,7 @@ import type {
 // the join-suppression set (below) tied to the exact blocks that CONSUME a
 // notification — if the two ever diverged, we'd either suppress a standalone
 // row nobody re-renders (lost background result) or double-paint one.
-import { isAgentSpawnToolName } from '@renderer/features/feed/lib/agentSpawnTools'
+import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 
 // ---------------------------------------------------------------------------
 // Committed candidate collector — the anti-corruption boundary between raw
