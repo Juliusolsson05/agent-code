@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react'
 import type * as Monaco from 'monaco-editor'
 
-import { monacoLanguageId } from '@shared/code/language'
-import { getMonaco } from '@renderer/lib/code/monacoRuntime'
+import { monacoLanguageId, supportsLsp } from '@shared/code/language'
+import { ensureSemanticProvider, getMonaco } from '@renderer/lib/code/monacoRuntime'
+import { ensureEditorLanguageFeatures } from '@renderer/lib/code/editorLanguageFeatures'
 import {
   acquireEditorModel,
   releaseEditorModel,
@@ -37,22 +38,23 @@ export function MonacoFileEditor({
     let disposed = false
     let editor: Monaco.editor.IStandaloneCodeEditor | null = null
     let model: Monaco.editor.ITextModel | null = null
-    let acquiredModelPath: string | null = null
-    let changeDisposable: Monaco.IDisposable | null = null
-    let saveCommandId: string | null = null
-    let editorThemeActive = false
-    let monacoRuntime: typeof Monaco | null = null
+    // Collect ALL cleanup functions as they're created — even inside the
+    // async block. The effect cleanup runs them all (LIFO), regardless of
+    // how far the async init got before unmount. Same pattern (and WHY)
+    // as CodeBlock's Monaco effect: cleanups captured in locals that the
+    // cleanup closure can't reach when the async hasn't finished yet are
+    // exactly how the MaxListenersExceeded IPC leak happened there.
+    const cleanups: Array<() => void> = []
 
     void (async () => {
       const monaco = await getMonaco()
       if (disposed) return
-      monacoRuntime = monaco
       // Register and switch to the editor-mode theme before creating the
       // instance so the first paint already uses the canvas background
       // instead of flashing the darker code-slab theme. See
       // monacoEditorTheme.ts for the global-theme trade-off.
       activateEditorTheme(monaco)
-      editorThemeActive = true
+      cleanups.push(() => deactivateEditorTheme(monaco))
       // monacoLanguageId: buffers carry LSP-facing ids ('typescriptreact');
       // Monaco only knows 'typescript'/'javascript' — see language.ts.
       // Acquired (not created) so the model — and with it the undo stack —
@@ -63,7 +65,12 @@ export function MonacoFileEditor({
         text: file.currentText,
         monacoLangId: monacoLanguageId(file.language),
       })
-      acquiredModelPath = file.absolutePath
+      // Viewer role only: release the refcount on unmount, never dispose.
+      // The model must outlive this component so the undo stack survives
+      // tab switches; disposal happens on actual tab close via
+      // disposeEditorModel — see editorModelRegistry's ownership contract.
+      const acquiredModelPath = file.absolutePath
+      cleanups.push(() => releaseEditorModel(acquiredModelPath))
       editor = monaco.editor.create(container, {
         model,
         readOnly: false,
@@ -90,15 +97,91 @@ export function MonacoFileEditor({
         // with our custom themes (#513).
         'semanticHighlighting.enabled': true,
       })
+      const createdEditor = editor
+      cleanups.push(() => {
+        createdEditor.dispose()
+        if (editorRef.current === createdEditor) editorRef.current = null
+      })
       editorRef.current = editor
-      changeDisposable = model.onDidChangeContent(() => {
+      const changeDisposable = model.onDidChangeContent(() => {
         if (!file) return
         onChange(file.path, model?.getValue() ?? '')
       })
-      saveCommandId = editor.addCommand(
-        monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
-        () => onSave(),
-      ) ?? null
+      cleanups.push(() => changeDisposable.dispose())
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => onSave())
+
+      // ── LSP wiring (#513) ──────────────────────────────────────────
+      // The transcript CodeBlock had all of this from day one; the actual
+      // FILE EDITOR never did. clientUri must be exactly
+      // model.uri.toString(): the semantic-token provider and every
+      // request in editorLanguageFeatures key their main-process doc
+      // lookup on it.
+      ensureEditorLanguageFeatures(monaco, file.language)
+      if (supportsLsp(file.language)) {
+        const clientUri = model.uri.toString()
+        await ensureSemanticProvider(monaco, projectRoot, file.language).catch(() => {
+          // fail open — same rationale as CodeBlock: a broken language
+          // server must never mean a broken editor.
+        })
+        if (disposed) return
+        await window.api.openLspDocument({
+          clientUri,
+          content: file.currentText,
+          language: file.language,
+          workspaceRoot: projectRoot,
+          filePath: file.path,
+        })
+        if (disposed) return
+        // NOTE: the LSP doc closes on COMPONENT unmount (tab switch),
+        // not on tab close like the Monaco model. That's deliberate churn
+        // for now — reopen re-syncs cheaply; aligning LSP doc lifetime
+        // with the model registry is a follow-up once something actually
+        // needs background-document diagnostics.
+        cleanups.push(() => void window.api.closeLspDocument(clientUri))
+
+        const unsubDiag = window.api.onLspDiagnostics(event => {
+          if (event.clientUri !== clientUri) return
+          if (!model || model.isDisposed()) return
+          monaco.editor.setModelMarkers(
+            model,
+            'agent-code-lsp',
+            event.diagnostics.map(d => ({
+              message: d.message,
+              startLineNumber: d.startLine + 1,
+              startColumn: d.startCharacter + 1,
+              endLineNumber: d.endLine + 1,
+              endColumn: d.endCharacter + 1,
+              severity:
+                d.severity === 'error'
+                  ? monaco.MarkerSeverity.Error
+                  : d.severity === 'warning'
+                    ? monaco.MarkerSeverity.Warning
+                    : d.severity === 'info'
+                      ? monaco.MarkerSeverity.Info
+                      : monaco.MarkerSeverity.Hint,
+            })),
+          )
+        })
+        cleanups.push(unsubDiag)
+
+        // Debounced change sync. 200ms: fast enough that diagnostics
+        // feel live, slow enough that a keystroke burst is one didChange,
+        // not thirty IPC round trips.
+        let changeTimer: number | null = null
+        const lspChangeSub = model.onDidChangeContent(() => {
+          if (changeTimer !== null) window.clearTimeout(changeTimer)
+          changeTimer = window.setTimeout(() => {
+            changeTimer = null
+            if (!model || model.isDisposed()) return
+            void window.api.changeLspDocument(clientUri, model.getValue())
+          }, 200)
+        })
+        cleanups.push(() => {
+          lspChangeSub.dispose()
+          if (changeTimer !== null) window.clearTimeout(changeTimer)
+        })
+      }
+
       if (file.selection) {
         editor.setPosition({
           lineNumber: file.selection.line,
@@ -112,19 +195,15 @@ export function MonacoFileEditor({
 
     return () => {
       disposed = true
-      changeDisposable?.dispose()
-      void saveCommandId
-      editor?.dispose()
-      if (editorThemeActive && monacoRuntime) {
-        deactivateEditorTheme(monacoRuntime)
-        editorThemeActive = false
+      // LIFO so resources that depend on earlier ones release first
+      // (diagnostics unsub before editor dispose, editor before theme).
+      for (let i = cleanups.length - 1; i >= 0; i--) {
+        try {
+          cleanups[i]()
+        } catch {
+          // best-effort teardown
+        }
       }
-      // Viewer role only: release the refcount, never dispose here. The
-      // model must outlive this component so the undo stack survives tab
-      // switches; disposal happens on actual tab close via
-      // disposeEditorModel — see editorModelRegistry's ownership contract.
-      if (acquiredModelPath) releaseEditorModel(acquiredModelPath)
-      if (editorRef.current === editor) editorRef.current = null
     }
   }, [file?.path, projectRoot, onSelectionRevealed])
 
