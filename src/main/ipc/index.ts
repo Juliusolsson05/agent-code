@@ -35,7 +35,6 @@ import type { RemoteController } from '@main/remote/RemoteController.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { registerIncidentIpc } from '@main/ipc/incident.js'
 import { registerUsageIpc } from '@main/ipc/usage.js'
-import { registerAgentOverlayIpc } from '@main/ipc/agentOverlay.js'
 
 // IPC registration aggregator.
 //
@@ -92,5 +91,4 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerRemoteIpc(deps.remoteController)
   registerIncidentIpc(deps.appRunJournal)
   registerUsageIpc()
-  registerAgentOverlayIpc()
 }

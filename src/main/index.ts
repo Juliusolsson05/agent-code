@@ -32,8 +32,7 @@ import {
 } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
-import { createMainWindow, focusMainWindow, hasMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
-import { initAgentOverlay, syncAgentOverlayWindow } from '@main/window/overlayWindow.js'
+import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/mainWindow.js'
@@ -626,24 +625,10 @@ async function startApp(): Promise<void> {
   // Install the application menu right after the window exists — the File
   // items dispatch command ids to THIS window's renderer (issue #148).
   Menu.setApplicationMenu(buildAppMenu())
-  // Floating agent-status overlay: restores its persisted enabled state
-  // (recreating the always-on-top window if it was on last run) and wires
-  // the app-level focus/blur auto-hide. After createMainWindow so its
-  // enabled-state push has a main renderer to land on.
-  initAgentOverlay()
   performanceService.mark('app.main.window.created')
 
   app.on('activate', () => {
-    // Main-window-specific check, NOT getAllWindows().length: the
-    // agent-status overlay is a second BrowserWindow, so a raw window
-    // count would see "1 window" after the main window closed and never
-    // recreate it from the Dock (PR #514 review finding 1). The overlay
-    // itself is destroyed on main-window close (its data source is the
-    // main renderer), so recreate it here alongside the main window.
-    if (!hasMainWindow()) {
-      createMainWindow()
-      syncAgentOverlayWindow()
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
   })
 }
 

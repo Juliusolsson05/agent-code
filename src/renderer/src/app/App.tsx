@@ -10,7 +10,6 @@ import { useDevDebugConfigSync } from '@renderer/features/debug/devDebugConfig'
 import { useDebugAutosave } from '@renderer/features/debug/useDebugAutosave'
 import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
 import { useDictationHotkeySync } from '@renderer/features/voice-dictation/useDictationHotkeySync'
-import { useAgentOverlayBridge } from '@renderer/features/agent-overlay/useAgentOverlayBridge'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
 import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
@@ -60,10 +59,6 @@ export default function App() {
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
   useRenderedLeaseHygiene(workspace)
   useDebugAutosave(workspace)
-  // Reporter for the floating agent-status overlay window (a cross-cutting
-  // sync hook like the ones above, but workspace-dependent so it mounts
-  // here, after useWorkspace).
-  useAgentOverlayBridge(workspace)
 
   const { onNewTabRequest, onResumeRequest } = usePathPickerRequests()
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
