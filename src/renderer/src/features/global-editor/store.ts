@@ -96,6 +96,9 @@ type GlobalEditorStore = {
   clearFileSelection: (cwd: string, path: string) => void
   markFileSaved: (cwd: string, path: string, text: string, mtimeMs: number) => void
   closeFile: (cwd: string, path: string, opts?: { force?: boolean }) => boolean
+  /** Explorer rename support: move an open buffer to its new path,
+   *  preserving dirty text. No-op when the file isn't open. */
+  renameOpenFile: (cwd: string, fromPath: string, toPath: string) => void
 }
 
 // Exported because consumers (notably GlobalEditorShell's
@@ -342,6 +345,37 @@ export const useGlobalEditorStore = create<GlobalEditorStore>()((set, get) => ({
                 conflict: false,
               },
             },
+          },
+        },
+      }
+    }),
+
+  renameOpenFile: (cwd, fromPath, toPath) =>
+    set(state => {
+      const prev = state.byCwd[cwd]
+      const buf = prev?.openFiles[fromPath]
+      if (!prev || !buf) return state
+      const nextFiles = { ...prev.openFiles }
+      delete nextFiles[fromPath]
+      nextFiles[toPath] = {
+        ...buf,
+        path: toPath,
+        absolutePath: absolutePath(cwd, toPath),
+        language: normalizeCodeLanguage(null, basename(toPath)),
+        // Rename does not touch content — dirty text rides along. mtime
+        // stays valid (rename preserves it on POSIX) so the next save's
+        // conflict check remains meaningful. The Monaco model is disposed
+        // by the caller (its URI embeds the old path), which costs the
+        // undo stack — acceptable for an explicit rename.
+      }
+      return {
+        byCwd: {
+          ...state.byCwd,
+          [cwd]: {
+            fileOrder: prev.fileOrder.map(p => (p === fromPath ? toPath : p)),
+            openFiles: nextFiles,
+            activeFilePath:
+              prev.activeFilePath === fromPath ? toPath : prev.activeFilePath,
           },
         },
       }

@@ -126,6 +126,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     clearFileSelection,
     markFileSaved,
     closeFileAction,
+    renameOpenFile,
     cwdState,
   } = useGlobalEditorStore(
     useShallow(state => {
@@ -146,6 +147,7 @@ export function GlobalEditorShell({ children, workspace }: Props) {
         clearFileSelection: state.clearFileSelection,
         markFileSaved: state.markFileSaved,
         closeFileAction: state.closeFile,
+        renameOpenFile: state.renameOpenFile,
         cwdState: (aCwd && byCwd[aCwd]) || EMPTY_CWD_STATE,
       }
     }),
@@ -413,6 +415,19 @@ export function GlobalEditorShell({ children, workspace }: Props) {
                 root={activeCwd}
                 activeFilePath={cwdState.activeFilePath}
                 onOpenFile={openFileFromTree}
+                onFileRenamed={(fromPath, toPath) => {
+                  renameOpenFile(activeCwd, fromPath, toPath)
+                  // The model URI embeds the old path — dispose it; the
+                  // next mount recreates under the new URI. Undo history
+                  // is lost on rename; acceptable for an explicit act.
+                  disposeEditorModel(editorModelKey(activeCwd, fromPath))
+                }}
+                onFileDeleted={path => {
+                  // Deleted on disk → force-close the buffer. A zombie
+                  // tab that can only fail to save is worse than closing.
+                  closeFileAction(activeCwd, path, { force: true })
+                  disposeEditorModel(editorModelKey(activeCwd, path))
+                }}
               />
             }
             sidebarVisible={fileTreeVisible}
