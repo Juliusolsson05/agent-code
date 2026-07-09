@@ -47,7 +47,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
 
   return (
     <div className="h-full min-h-0 min-w-0 bg-canvas">
-      <div className="flex h-full min-h-0 min-w-0 border-t border-border">
+      <div className="flex h-full min-h-0 min-w-0 border-t border-panel-border">
         <SettingsSidebar
           selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory}
@@ -55,7 +55,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
         />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
+          <div className="flex items-center justify-between border-b border-panel-border bg-panel-header-bg px-4 py-3">
             <div>
               <div className="text-[13px] text-ink">Settings</div>
               <div className="mt-1 text-[11px] text-muted">
@@ -65,7 +65,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
             <button
               type="button"
               onClick={onClose}
-              className="border border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+              className="border border-control-border bg-control-bg px-2.5 py-1.5 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
             >
               Close
             </button>
@@ -148,10 +148,10 @@ function CustomAppearanceModal({
       onMouseDown={event => {
         if (event.target === event.currentTarget) onClose()
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/80 px-6 py-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-6 py-6"
     >
-      <div className="flex h-full max-h-[760px] w-full max-w-4xl flex-col border border-border bg-canvas">
-        <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
+      <div className="flex h-full max-h-[760px] w-full max-w-4xl flex-col border border-popover-border bg-popover-bg shadow-[0_16px_48px_var(--theme-shadow-color)]">
+        <div className="flex items-center justify-between border-b border-panel-border bg-panel-header-bg px-4 py-3">
           <div>
             <div id="custom-appearance-title" className="text-[13px] text-ink">
               Custom Appearance
@@ -164,14 +164,14 @@ function CustomAppearanceModal({
             <button
               type="button"
               onClick={() => setView(view === 'json' ? 'schema' : 'json')}
-              className="border border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+              className="border border-control-border bg-control-bg px-2.5 py-1.5 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
             >
               {view === 'json' ? 'Show Schema' : 'Show JSON'}
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="border border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+              className="border border-control-border bg-control-bg px-2.5 py-1.5 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
             >
               Close
             </button>
@@ -188,21 +188,21 @@ function CustomAppearanceModal({
                 setError(null)
               }}
               spellCheck={false}
-              className="h-full min-h-[420px] w-full resize-none border border-border bg-code-bg px-3 py-3 font-code text-[12px] leading-5 text-code-ink outline-none focus:border-accent"
+              className="h-full min-h-[420px] w-full resize-none border border-input-border bg-code-bg px-3 py-3 font-code text-[12px] leading-5 text-code-ink outline-none focus:border-input-border-focus"
             />
           ) : (
-            <pre className="h-full min-h-[420px] overflow-auto border border-border bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink">
+            <pre className="h-full min-h-[420px] overflow-auto border border-input-border bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink">
               {CUSTOM_APPEARANCE_SCHEMA_JSON}
             </pre>
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border bg-surface px-4 py-3">
+        <div className="flex items-center justify-between border-t border-panel-border bg-panel-header-bg px-4 py-3">
           <div className="min-w-0 text-[11px] text-danger">{error ?? ''}</div>
           <button
             type="button"
             onClick={save}
-            className="border border-accent bg-accent px-3 py-2 text-[12px] text-accent-fg"
+            className="border border-control-active-bg bg-control-active-bg px-3 py-2 text-[12px] text-control-active-fg"
           >
             Save Custom Appearance
           </button>

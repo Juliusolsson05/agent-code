@@ -121,8 +121,8 @@ export function HotkeyInput({ value, onChange }: Props) {
           className={`
             min-w-0 flex-1 border px-3 py-2 text-left font-code text-[12px]
             ${capturing
-              ? 'border-accent bg-accent/10 text-accent'
-              : 'border-border text-ink-dim hover:border-border-hi hover:text-ink'}
+              ? 'border-input-border-focus bg-row-selected-bg text-accent'
+              : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'}
           `}
         >
           {capturing
@@ -132,7 +132,7 @@ export function HotkeyInput({ value, onChange }: Props) {
         <button
           type="button"
           onClick={() => void onChange(DEFAULT_DICTATION_HOTKEY)}
-          className="border border-border px-3 py-2 text-[12px] text-ink-dim hover:border-border-hi hover:text-ink"
+          className="border border-control-border bg-control-bg px-3 py-2 text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
         >
           Default
         </button>
@@ -143,14 +143,14 @@ export function HotkeyInput({ value, onChange }: Props) {
           <button
             type="button"
             onClick={() => void onChange('Fn')}
-            className="border border-border px-2 py-1 text-[11px] text-muted hover:border-border-hi hover:text-ink"
+            className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-muted hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
           >
             fn
           </button>
           <button
             type="button"
             onClick={() => void onChange('Cmd')}
-            className="border border-border px-2 py-1 text-[11px] text-muted hover:border-border-hi hover:text-ink"
+            className="border border-control-border bg-control-bg px-2 py-1 text-[11px] text-muted hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
           >
             Cmd
           </button>

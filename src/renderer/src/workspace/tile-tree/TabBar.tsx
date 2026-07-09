@@ -35,7 +35,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
     <div
       className="
         flex items-stretch
-        bg-surface border-b border-border
+        bg-tab-bg border-b border-panel-border
         flex-shrink-0
         select-none
         [-webkit-app-region:drag]
@@ -69,20 +69,20 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
                 flex items-center gap-2
                 px-3 py-2
                 min-w-[120px] max-w-[220px]
-                border-r border-border
+                border-r border-panel-border
                 cursor-pointer
                 transition-colors duration-120
                 ${
                   active
-                    ? 'bg-canvas text-ink'
-                    : 'bg-surface text-ink-dim hover:bg-surface-hi'
+                    ? 'bg-tab-active-bg text-ink'
+                    : 'bg-tab-bg text-ink-dim hover:bg-tab-hover-bg'
                 }
               `}
             >
               <span
                 className={`
                   w-1 h-1 rounded-full flex-shrink-0
-                  ${active ? 'bg-accent' : 'bg-muted'}
+                  ${active ? 'bg-tab-accent' : 'bg-muted'}
                 `}
               />
               <span className="flex-1 min-w-0 text-[11px] truncate tabular-nums">
