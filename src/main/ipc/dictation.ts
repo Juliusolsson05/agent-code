@@ -13,6 +13,7 @@ import {
   unregisterDictationHotkey,
 } from '@main/dictation/hotkey.js'
 import { sendToMainWindow } from '@main/window/mainWindow.js'
+import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
 import type { DictationDebugEventInput } from '@preload/api/types.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
@@ -60,6 +61,12 @@ const sha8 = (buf: Uint8Array): string =>
 
 export function registerDictationIpc(deps: {
   dictationDebugJournals: DictationDebugJournalRegistry
+  // App-run journal for hotkey-helper degrade breadcrumbs (#495 A4). The
+  // dictation debug journals above are per-recording-session and lazily
+  // created by the renderer; a hotkey registration failure happens BEFORE
+  // any recording session exists, so it must land in the always-on app-run
+  // journal or it lands nowhere durable.
+  appRunJournal: AppRunJournal
 }): void {
   // Per-session journal emitter. `debugSessionId` is null-tolerant: a session
   // that never received one (older preload, or a programmatic caller) simply
@@ -79,7 +86,22 @@ export function registerDictationIpc(deps: {
 
   ipcMain.handle('dictation:hotkey-configure', async (_evt, params: { binding?: string }) => {
     try {
-      return await configureDictationHotkey(params.binding ?? '')
+      const result = await configureDictationHotkey(params.binding ?? '')
+      if (!result.ok && result.message) {
+        // Durable breadcrumb for the graceful degrade (#495 A4). The
+        // renderer also receives `result.message`, but its console.warn is
+        // ephemeral; the journal entry is what lets a future session
+        // answer "why did dictation stop working on this machine?" from a
+        // debug bundle. Severity 'warn', not 'error': the app keeps
+        // running fine, one feature is unavailable.
+        deps.appRunJournal.record({
+          area: 'dictation.hotkey',
+          name: 'dictation.hotkey.unavailable',
+          severity: 'warn',
+          data: { binding: result.binding, message: result.message },
+        })
+      }
+      return result
     } catch (err) {
       return {
         ok: false,

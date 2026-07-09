@@ -460,7 +460,13 @@ function mitmproxyArchivePath(
 // that resolves to a real filesystem location. Reading manifests and
 // spawning executables both require the unpacked path. In dev there
 // is no `.asar` segment and the swap is a no-op.
-function unpackAsarPath(p: string): string {
+//
+// Exported (not just module-local) because every consumer of a bundled
+// out/main/runtime artifact needs the identical swap — macHotkeyHelper.ts
+// resolves the build-time-compiled dictation helper through this. One
+// implementation beats N copies that can drift on the `.asar${sep}`
+// boundary detail.
+export function unpackAsarPath(p: string): string {
   return p.includes(`.asar${sep}`)
     ? p.replace(`.asar${sep}`, `.asar.unpacked${sep}`)
     : p

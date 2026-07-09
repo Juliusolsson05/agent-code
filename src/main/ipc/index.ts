@@ -78,7 +78,10 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerGitIpc()
   registerWorktreeActivityIpc(deps.worktreeActivityIndex)
   registerSetupIpc()
-  registerDictationIpc({ dictationDebugJournals: deps.dictationDebugJournals })
+  registerDictationIpc({
+    dictationDebugJournals: deps.dictationDebugJournals,
+    appRunJournal: deps.appRunJournal,
+  })
   registerPasteDebugIpc({ pasteDebugJournals: deps.pasteDebugJournals })
   registerDevDebugIpc(deps.sessionRecorders)
   registerOrchestrationIpc(deps.orchestrationBridge)
