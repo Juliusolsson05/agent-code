@@ -11,6 +11,13 @@ asarUnpack:
   # the whole tree must live on the filesystem rather than inside the
   # asar virtual FS. See third_party/<tool>/README.md and issue #119.
   - out/main/runtime/**/*
+  # Native Node modules (node-pty's pty.node is the one that matters —
+  # it is the PTY layer for EVERY terminal). electron-builder's implicit
+  # native-module detection is a documented footgun once a custom
+  # asarUnpack list exists: if detection misses, the packaged app can't
+  # dlopen the module and every terminal is dead — invisible in
+  # `npm run dev`, fatal in the dmg (#495 A3). Explicit beats implicit.
+  - "**/*.node"
 files:
   - out/**
   - package.json
@@ -30,9 +37,25 @@ extraMetadata:
   main: out/main/index.js
 mac:
   category: public.app-category.developer-tools
+  # Committed .icns (#495 A18): without an explicit icon, electron-builder
+  # regenerates one from build/icon.png at pack time via sips/iconutil —
+  # fine on a provisioned Mac, non-deterministic and host-dependent
+  # everywhere else. The committed artifact makes the icon reproducible.
+  icon: build/icon.icns
+  # WHY an explicit arch list (#495 A2): electron-builder defaults to the
+  # HOST arch, so CI on an arm64 runner shipped arm64-only artifacts and
+  # an Intel Mac had nothing to run. Two thin per-arch artifacts beat one
+  # universal: lipo-merging has historically choked on asymmetric native
+  # deps (node-pty), thin dmgs are half the download, and artifactName
+  # already templates ${arch} so names don't collide. Native deps are
+  # rebuilt per target arch by electron-builder's default npmRebuild —
+  # do NOT set npmRebuild:false or the x64 dmg ships the dev machine's
+  # arm64 pty.node and crashes on launch (#495 A3).
   target:
-    - dmg
-    - zip
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
