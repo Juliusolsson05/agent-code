@@ -11,7 +11,7 @@ import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import {
   ledgerFeedContextFromRuntime,
   ledgerToFeedItems,
-} from '@renderer/rendering/view/ledgerFeedItems'
+} from '@renderer/features/feed/ledger/ledgerFeedItems'
 
 // ---------------------------------------------------------------------------
 // The producer hook: runtime → adapter → ledger → view bridge →

@@ -48,10 +48,10 @@ import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLed
 //     THE SAME PURE LEAF REDUCERS the fold calls, in the same composition.
 //     This is NOT a second fold reimplementation — every state transition that
 //     matters to the ledger is delegated to the production reducer:
-//       - semantic turn structure    → foldSemanticEvent   (workspace/semantic/foldEvent.ts)
-//       - stream phase               → reduceStreamPhase   (workspace/semantic/streamPhaseMachine.ts)
-//       - ghost bridge from semantic → ghostsFromSemanticTurn (workspace/ghosts.ts)
-//       - ghost→committed handoff    → reconcileUpstream    (workspace/ghosts.ts)
+//       - semantic turn structure    → foldSemanticEvent   (session-runtime/semantic/foldEvent.ts)
+//       - stream phase               → reduceStreamPhase   (session-runtime/semantic/streamPhaseMachine.ts)
+//       - ghost bridge from semantic → ghostsFromSemanticTurn (session-runtime/ghosts.ts)
+//       - ghost→committed handoff    → reconcileUpstream    (session-runtime/ghosts.ts)
 //       - raw JSONL line → Entry     → the provider's real TranscriptEntryMapper
 //     Only the thin ORCHESTRATION glue (dedup set, entries append, the
 //     lastJsonlEntryAt cursor, exit teardown) is re-expressed here, mirrored

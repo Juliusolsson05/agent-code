@@ -32,7 +32,7 @@ import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useC
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
-import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
+import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
 
 // Claude paste-state-machine constants + helpers moved to
 // ./TileLeaf/claudePaste.ts. Image helpers moved to

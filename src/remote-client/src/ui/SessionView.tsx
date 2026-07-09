@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 
 
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
-import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
+import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
 import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import {

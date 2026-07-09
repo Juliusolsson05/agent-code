@@ -14,7 +14,20 @@ import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import {
   parseRecording,
   replayRecording,
+  type ReplayItemsProjection,
 } from '@renderer/rendering/replay/recordedSession'
+import {
+  ledgerFeedContextFromRuntime,
+  ledgerToFeedItems,
+} from '@renderer/features/feed/ledger/ledgerFeedItems'
+
+// The REAL feed-owned view bridge, injected through the harness's
+// projectItems seam (#493 PR-3): the harness itself may not import
+// features/, but this test's whole point is exercising the full stack —
+// including the #239 dropped-candidate accounting — so it supplies the
+// production bridge.
+const projectItems: ReplayItemsProjection = (ledger, view, provider) =>
+  ledgerToFeedItems(ledger, ledgerFeedContextFromRuntime(view, provider))
 import type { GhostLike } from '@renderer/rendering/observations/ghosts'
 import {
   diffShadowUnits,
@@ -128,7 +141,7 @@ describe.skipIf(files.length === 0)(`recording corpus (${files.length} recording
         // structurally the harness's RecordedLine; cast across the local type.
         events: fixture.events as unknown as Parameters<typeof parseRecording>[0]['events'],
       })
-      const replayed = replayRecording(parsed)
+      const replayed = replayRecording(parsed, { projectItems })
       const finalLedger =
         replayed.ticks.length > 0
           ? replayed.ticks[replayed.ticks.length - 1].ledger
