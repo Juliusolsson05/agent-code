@@ -695,10 +695,14 @@ function registerOrchestrationTools(
     {
       title: 'Read Orchestration Agent Output',
       description:
-        'Reads clean user-visible output from one orchestration-created child agent. Returns visible messages and latest/final assistant text without provider-internal event noise.',
+        'Reads clean user-visible output from one orchestration-created child agent. Returns visible messages and latest/final assistant text without provider-internal event noise. Message text is byte-capped (defaults: 4000 chars per message, 24000 per agent); truncated/totalChars fields flag excerpts.',
       inputSchema: {
         sessionId: z.string(),
         maxMessages: z.number().int().min(1).max(100).optional(),
+        // Ranges match the agent_transcript_* tools so the same numbers mean
+        // the same thing on both consumption surfaces (#373).
+        maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
+        maxCharsPerAgent: z.number().int().min(100).max(500_000).optional(),
       },
     },
     async args => {
@@ -715,6 +719,8 @@ function registerOrchestrationTools(
         parentSessionId: scope.sessionId,
         sessionId: args.sessionId,
         maxMessages: args.maxMessages,
+        maxCharsPerMessage: args.maxCharsPerMessage,
+        maxCharsPerAgent: args.maxCharsPerAgent,
       }).catch(err => {
         readError = err
         return null
@@ -737,10 +743,13 @@ function registerOrchestrationTools(
     {
       title: 'Read Orchestration Run Outputs',
       description:
-        'Reads clean user-visible outputs from every orchestration child agent in this parent session, optionally filtered by run id.',
+        'Reads clean user-visible outputs from every orchestration child agent in this parent session, optionally filtered by run id. Outputs are byte-capped per message/agent and share a cross-agent total budget; over-budget agents degrade to status summaries with short excerpts and truncated=true.',
       inputSchema: {
         runId: z.string().optional(),
         maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
+        maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
+        maxCharsPerAgent: z.number().int().min(100).max(500_000).optional(),
+        maxTotalChars: z.number().int().min(1_000).max(2_000_000).optional(),
       },
     },
     async args => {
@@ -756,8 +765,15 @@ function registerOrchestrationTools(
         parentSessionId: scope.sessionId,
         runId: args.runId,
         maxMessagesPerAgent: args.maxMessagesPerAgent,
+        maxCharsPerMessage: args.maxCharsPerMessage,
+        maxCharsPerAgent: args.maxCharsPerAgent,
       })
-      return toolText({ ok: true, outputs })
+      const bounded = boundOutputsToTotalChars(outputs, args.maxTotalChars)
+      return toolText({
+        ok: true,
+        outputs: bounded.outputs,
+        ...(bounded.truncated ? { truncated: true } : {}),
+      })
     },
   )
 
@@ -766,13 +782,16 @@ function registerOrchestrationTools(
     {
       title: 'Wait For Orchestration Agents',
       description:
-        'Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs.',
+        'Waits for all matching orchestration-created child agents to leave active states, then returns their statuses and latest outputs. Outputs are byte-capped per message/agent and share a cross-agent total budget; over-budget agents degrade to status summaries with short excerpts and truncated=true.',
       inputSchema: {
         runId: z.string().optional(),
         sessionIds: z.array(z.string()).optional(),
         timeoutMs: z.number().int().min(1000).max(600000).default(30000),
         pollIntervalMs: z.number().int().min(250).max(10000).default(1000),
         maxMessagesPerAgent: z.number().int().min(1).max(100).optional(),
+        maxCharsPerMessage: z.number().int().min(50).max(100_000).optional(),
+        maxCharsPerAgent: z.number().int().min(100).max(500_000).optional(),
+        maxTotalChars: z.number().int().min(1_000).max(2_000_000).optional(),
       },
     },
     async args => {
@@ -803,12 +822,16 @@ function registerOrchestrationTools(
         parentSessionId: scope.sessionId,
         runId: args.runId,
         maxMessagesPerAgent: args.maxMessagesPerAgent,
+        maxCharsPerMessage: args.maxCharsPerMessage,
+        maxCharsPerAgent: args.maxCharsPerAgent,
       }).then(outputs => outputs.filter(output => agentIds.has(output.agent.sessionId)))
+      const bounded = boundOutputsToTotalChars(outputs, args.maxTotalChars)
       return toolText({
         ok: true,
         done: !agents.some(agent => isOrchestrationAgentActive(agent.lifecycleState)),
         agents,
-        outputs,
+        outputs: bounded.outputs,
+        ...(bounded.truncated ? { truncated: true } : {}),
       })
     },
   )
@@ -866,6 +889,79 @@ function registerOrchestrationTools(
       return toolText({ ok: true, ...result })
     },
   )
+}
+
+// Cross-agent total budget for read_run_outputs / wait_agents (#373).
+//
+// WHY this lives in the tool handler and not in the renderer or bridge: the
+// renderer produces outputs per agent and never sees the assembled multi-agent
+// payload, and the bridge additionally merges in main-side closed-agent
+// tombstones AFTER the renderer read. This is the last point before
+// JSON.stringify hits the parent's context window, so it is the only place a
+// total can be enforced honestly.
+//
+// Default sizing: per-agent reads default to 24_000 chars, so a 20-child run
+// could still assemble ~480K chars of "individually bounded" output. 120_000
+// chars (~30K tokens) keeps roughly five fully detailed agents while every
+// other agent still reports status/lifecycle/counts plus a short excerpt —
+// enough for a coordinator to decide which child to re-read with read_agent.
+const DEFAULT_ORCHESTRATION_MAX_TOTAL_CHARS = 120_000
+
+function boundOutputsToTotalChars(
+  outputs: OrchestrationAgentOutput[],
+  maxTotalChars: number | undefined,
+): { outputs: OrchestrationAgentOutput[]; truncated: boolean } {
+  const budget = maxTotalChars === undefined
+    ? DEFAULT_ORCHESTRATION_MAX_TOTAL_CHARS
+    : Math.max(1_000, Math.min(2_000_000, Math.floor(maxTotalChars)))
+  // JSON.stringify length is the honest size metric here: it is exactly what
+  // toolText emits into the model context, including keys and mirror fields.
+  const fullSizes = outputs.map(output => JSON.stringify(output).length)
+  const total = fullSizes.reduce((sum, size) => sum + size, 0)
+  if (total <= budget) return { outputs, truncated: false }
+
+  // Summary-first degradation: guarantee every agent's status/lifecycle/
+  // counts and a short excerpt survive, THEN spend leftover budget restoring
+  // full outputs in list order. The alternative — greedily keeping full
+  // outputs until the budget dies — would silently drop entire agents at the
+  // end of the list, and a coordinator that cannot see an agent at all will
+  // misclassify it far worse than one that sees a truncated summary.
+  const summaries = outputs.map(summarizeOrchestrationOutput)
+  const summarySizes = summaries.map(summary => JSON.stringify(summary).length)
+  let used = summarySizes.reduce((sum, size) => sum + size, 0)
+  const result: OrchestrationAgentOutput[] = [...summaries]
+  for (let index = 0; index < outputs.length; index += 1) {
+    const upgraded = used - summarySizes[index]! + fullSizes[index]!
+    if (upgraded > budget) continue
+    used = upgraded
+    result[index] = outputs[index]!
+  }
+  return { outputs: result, truncated: true }
+}
+
+function summarizeOrchestrationOutput(output: OrchestrationAgentOutput): OrchestrationAgentOutput {
+  // The agent record already carries lifecycleState, statusSummary, counts and
+  // ≤400-char excerpt mirrors — exactly the "summary" a coordinator needs.
+  // Message bodies are what blow the budget, so they are dropped; messageCount
+  // on the record still says how much exists. latestAssistantText keeps a
+  // short excerpt rather than disappearing: callers pattern-match on its
+  // presence to mean "the child produced output" (same invariant as the
+  // renderer lifecycle hazard — shorten, never drop).
+  const excerpt = output.agent.latestAssistantText ?? output.finalAssistantText
+  const originalChars = output.totalChars
+    ?? output.messages.reduce((sum, message) => sum + (message.totalChars ?? message.text.length), 0)
+  return {
+    agent: output.agent,
+    messages: [],
+    ...(output.latestAssistantText
+      ? {
+          latestAssistantText: excerpt ?? output.latestAssistantText,
+          finalAssistantText: excerpt ?? output.latestAssistantText,
+        }
+      : {}),
+    truncated: true,
+    ...(originalChars > 0 ? { totalChars: originalChars } : {}),
+  }
 }
 
 function isOrchestrationAgentActive(state: string | undefined): boolean {
