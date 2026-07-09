@@ -33,6 +33,7 @@ import {
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
 import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
+import { initAgentOverlay } from '@main/window/overlayWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/mainWindow.js'
@@ -625,6 +626,11 @@ async function startApp(): Promise<void> {
   // Install the application menu right after the window exists — the File
   // items dispatch command ids to THIS window's renderer (issue #148).
   Menu.setApplicationMenu(buildAppMenu())
+  // Floating agent-status overlay: restores its persisted enabled state
+  // (recreating the always-on-top window if it was on last run) and wires
+  // the app-level focus/blur auto-hide. After createMainWindow so its
+  // enabled-state push has a main renderer to land on.
+  initAgentOverlay()
   performanceService.mark('app.main.window.created')
 
   app.on('activate', () => {

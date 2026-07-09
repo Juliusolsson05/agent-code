@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Entry for the floating agent-status overlay window (see
+      src/main/window/overlayWindow.ts). Same CSP shape as index.html
+      minus the jsDelivr img-src allowance — the overlay renders no file
+      icons, and a second window is no reason to widen the policy.
+      Google Fonts stays: the overlay shares styles.css, whose font
+      tokens resolve the same way here.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'"
+    />
+    <title>Agent Status</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/overlay/main.tsx"></script>
+  </body>
+</html>
