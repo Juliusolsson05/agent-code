@@ -47,6 +47,10 @@ import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
+import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
+import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
+import { SidePanels } from '@renderer/app/surfaces/SidePanels'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -586,6 +590,7 @@ export default function App() {
           : null
 
   return (
+    <WorkspaceProvider workspace={workspace}>
     <div className="relative h-screen flex flex-col bg-canvas text-ink font-code min-h-0">
       <SetupGate />
       {restoreBannerMessage ? (
@@ -851,8 +856,11 @@ export default function App() {
             onClose={toggleDevDebugPanel}
           />
         )}
+
+        <SidePanels />
       </div>
 
+      <GlobalOverlays />
       <VoiceDictationOverlay />
 
       <CommandPalette
@@ -1122,7 +1130,9 @@ export default function App() {
         onClose={closeUsageModal}
       />
 
+      <GlobalModals />
     </div>
+    </WorkspaceProvider>
   )
 }
 
