@@ -9,7 +9,7 @@ import {
   withoutProvisionalProviderSession,
 } from '@renderer/workspace/providerSessionIdentity'
 import type { SessionMeta } from '@renderer/workspace/types'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 // We don't need a full runtime — the helper touches exactly one field. Cast a
 // minimal object so the test stays focused and doesn't depend on emptyRuntime

@@ -4,7 +4,7 @@ import type { GhostLedgerCandidate } from '@renderer/rendering/model/ledger'
 // ---------------------------------------------------------------------------
 // Ghost collector: runtime ghost map → ledger ghost plane.
 //
-// The runtime's ghost reducer (workspace/ghosts.ts) already does the
+// The runtime's ghost reducer (session-runtime/ghosts.ts) already does the
 // LIFECYCLE work — mint, reconcile-supersede, orphan, gc. This collector
 // does NONE of that; it only translates each ghost record's current state
 // into (paintable candidate + predicate facts) pairs so the five-rule gate

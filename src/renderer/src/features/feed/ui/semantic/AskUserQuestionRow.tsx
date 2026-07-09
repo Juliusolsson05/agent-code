@@ -1,7 +1,7 @@
 import { useContext, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
-import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 
 import {
   AskUserQuestionConditionContext,

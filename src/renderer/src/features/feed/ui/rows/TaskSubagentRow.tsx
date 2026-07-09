@@ -3,7 +3,7 @@ import { memo, useContext, useState } from 'react'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import {
   taskNotificationStatusKind,
-} from '@renderer/features/feed/lib/taskNotification'
+} from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'

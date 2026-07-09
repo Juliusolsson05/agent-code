@@ -5,10 +5,10 @@ import type {
 } from '@renderer/features/feed/model/renderModel'
 import type { VisibleDecision } from '@renderer/features/feed/types'
 import type {
+  RuntimeRenderInput,
   SemanticLiveTurn,
-  SessionRuntime,
   StreamPhase,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { RenderLedger, RenderRow } from '@renderer/rendering/model/types'
 import { groupSemanticActivity } from '@renderer/features/feed/ui/semantic/renderUnits'
@@ -63,7 +63,7 @@ export type LedgerFeedItemsResult = {
  *  Entry-shaped (atp mints provisional ClaudeEntry rows), so they join the
  *  same lookup the legacy fold relied on. */
 export function ledgerFeedContextFromRuntime(
-  runtime: SessionRuntime,
+  runtime: RuntimeRenderInput,
   provider: AgentProviderKind,
 ): LedgerFeedContext {
   const entriesByUuid = new Map<string, Entry>()

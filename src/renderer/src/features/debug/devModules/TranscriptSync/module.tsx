@@ -16,7 +16,7 @@ import {
   resumableProviderSessionId,
 } from '@renderer/workspace/providerSessionIdentity'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
-import type { FeedDebugEntry } from '@renderer/workspace/workspaceState'
+import type { FeedDebugEntry } from '@renderer/session-runtime/state'
 
 export const transcriptSyncModule: DevDebugModule = {
   id: 'transcript-sync',

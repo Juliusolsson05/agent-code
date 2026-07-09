@@ -3,7 +3,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
-import type { ClaudeDraftImage } from '@renderer/workspace/workspaceState'
+import type { ClaudeDraftImage } from '@renderer/session-runtime/state'
 import {
   SUPPORTED_CLAUDE_IMAGE_FORMATS_TEXT,
   exceedsClaudeImageSizeLimit,

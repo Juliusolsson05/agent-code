@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
-import { useLedgerFeedItems } from '@renderer/rendering/view/useLedgerFeedItems'
+import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
 import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
 import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
-import type { Entry } from '@shared/types/transcript'
+import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
+import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import {
   conditionStateByKind,
   type ClaudeAskUserQuestionState,
@@ -26,7 +26,7 @@ import { useMobileDictation } from '../dictation/mobileDictation'
 // "deliberately skipped subsystems" note below). A single frozen empty map
 // keeps the ledger's ghost plane cache stable across renders — a fresh map
 // each render would defeat the adapter's by-reference plane memoization.
-const NO_GHOSTS: ReadonlyMap<string, Entry> = new Map()
+const NO_GHOSTS: ReadonlyMap<string, GhostEntry> = new Map()
 
 // One session, desktop-grade: this mounts the REAL desktop Feed component
 // (see the alias table in ../vite.config.ts — the phone renders the same
@@ -103,25 +103,28 @@ export function SessionView({
   // the desktop does. It used to rely on Feed's legacy deriveFeedRenderModel
   // path (the only remaining consumer of it after the desktop flip); that
   // path is deleted, so the phone must produce renderItemsOverride too. The
-  // ledger reads a minimal SessionRuntime view — the seven fields
-  // useLedgerFeedItems/ledgerFeedContextFromRuntime touch — assembled from
-  // the wire transcript. Only entries + semantic + phase differ across
-  // renders; ghosts is the frozen empty map (no optimistic plane on the
-  // phone) and lastJsonlEntryAt is irrelevant with no ghosts to invalidate.
+  // ledger takes the DECLARED RuntimeRenderInput contract (#493 PR-2), so
+  // this view is honestly typed — the old `as unknown as SessionRuntime`
+  // cast over a fabricated partial object is gone; `semantic` is the store's
+  // REAL fold state. Only entries + semantic + phase differ across renders;
+  // ghosts is the frozen empty map (no optimistic plane on the phone) and
+  // lastJsonlEntryAt is irrelevant with no ghosts to invalidate.
+  //
+  // Memo deps stay the scalar mirrors (semanticTurn/semanticHistory), NOT
+  // transcript.semantic: the fold object also changes reference on
+  // flows/log-only updates, and re-firing on those would recompute the
+  // pipeline more often than the desktop does for the same stream.
   const runtimeView = useMemo(
-    () =>
-      ({
-        entries: transcript.entries,
-        semantic: {
-          currentTurn: transcript.semanticTurn,
-          history: transcript.semanticHistory,
-        },
-        ghosts: NO_GHOSTS,
-        streamPhase: transcript.phase.streamPhase,
-        streamPhasePendingToolName: transcript.phase.streamPhasePendingToolName,
-        streamPhasePendingToolUseId: transcript.phase.streamPhasePendingToolUseId,
-        lastJsonlEntryAt: 0,
-      }) as unknown as SessionRuntime,
+    (): RuntimeRenderInput => ({
+      entries: transcript.entries,
+      semantic: transcript.semantic,
+      ghosts: NO_GHOSTS,
+      streamPhase: transcript.phase.streamPhase,
+      streamPhasePendingToolName: transcript.phase.streamPhasePendingToolName,
+      streamPhasePendingToolUseId: transcript.phase.streamPhasePendingToolUseId,
+      lastJsonlEntryAt: 0,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see comment above
     [
       transcript.entries,
       transcript.semanticTurn,

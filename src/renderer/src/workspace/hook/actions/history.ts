@@ -1,7 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { useCallback } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'

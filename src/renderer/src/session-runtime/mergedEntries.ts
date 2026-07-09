@@ -104,7 +104,7 @@
 // rows at the bottom of every feed again.
 
 import type { Entry } from '@shared/types/transcript'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { ClaudeContentBlock, GhostEntry } from 'agent-transcript-parser/ghost'
 import { mergeWithUpstream } from 'agent-transcript-parser/ghost'
 

@@ -1,4 +1,4 @@
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 // The prompt_suggestion semantic event is deliberately kept OUT of
 // foldSemanticEvent (it is not a turn and must never enter history — that

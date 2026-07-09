@@ -1,5 +1,5 @@
-import type { SemanticLiveTurn, StreamPhase } from '@renderer/workspace/workspaceState'
-import { hasPendingSemanticTools } from '@renderer/workspace/semantic/helpers'
+import type { SemanticLiveTurn, StreamPhase } from '@renderer/session-runtime/state'
+import { hasPendingSemanticTools } from '@renderer/session-runtime/semantic/helpers'
 
 // The stream-phase machine — the in-feed WorkIndicator's state, reduced from
 // semantic events OUTSIDE foldSemanticEvent (the phase lives on

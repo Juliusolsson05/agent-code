@@ -1,4 +1,4 @@
-import type { TaskNotification } from '@renderer/features/feed/lib/taskNotification'
+import type { TaskNotification } from '@renderer/session-runtime/taskNotification'
 import { createContext } from 'react'
 
 import type {
@@ -7,7 +7,7 @@ import type {
 } from '@shared/types/transcript'
 
 import type { AgentProvider } from '@renderer/features/feed/types'
-import type { SubAgentState } from '@renderer/workspace/workspaceState'
+import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
 // ---------------------------------------------------------------------------

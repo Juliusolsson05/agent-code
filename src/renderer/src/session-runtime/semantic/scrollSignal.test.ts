@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { semanticTurnScrollSignal } from '@renderer/workspace/semantic/helpers'
+import { semanticTurnScrollSignal } from '@renderer/session-runtime/semantic/helpers'
 import type {
   SemanticLiveBlock,
   SemanticLiveTurn,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 
 function block(partial: Partial<SemanticLiveBlock> & { blockIndex: number }): SemanticLiveBlock {
   return { kind: 'text', ...partial }

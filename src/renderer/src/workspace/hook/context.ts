@@ -1,11 +1,11 @@
 import type { Dispatch, SetStateAction } from 'react'
 
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
-  SessionRuntime,
   SpotlightState,
   TileTabsState,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/workspace/types'
 import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 
 export type WorkspaceSetState = (

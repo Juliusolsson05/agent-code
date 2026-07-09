@@ -1,5 +1,6 @@
 import type { SessionId, TileNode } from '@renderer/workspace/types'
-import type { SlashPickerState, TileTabsState } from '@renderer/workspace/workspaceState'
+import type { SlashPickerState } from '@renderer/session-runtime/state'
+import type { TileTabsState } from '@renderer/workspace/types'
 
 // Layout & picker utilities for the workspace store.
 //

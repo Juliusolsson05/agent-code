@@ -5,7 +5,7 @@ import {
   getEffectiveAgentSurface,
   resolveConfiguredAgentViewMode,
 } from '@renderer/workspace/agentDisplayMode'
-import { emptyRuntime } from '@renderer/workspace/workspaceState'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 
 // A claude snapshot carrying a single visible permission prompt — the canonical

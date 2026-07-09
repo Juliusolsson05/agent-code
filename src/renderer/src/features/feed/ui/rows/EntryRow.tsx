@@ -10,7 +10,7 @@ import {
 import { CompactBoundaryRow } from '@renderer/features/feed/ui/rows/CompactBoundaryRow'
 import { CompactSummaryRow } from '@renderer/features/feed/ui/rows/CompactSummaryRow'
 import { ConversationRow } from '@renderer/features/feed/ui/rows/ConversationRow'
-import { taskNotificationFromEntry } from '@renderer/features/feed/lib/taskNotification'
+import { taskNotificationFromEntry } from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationRow } from '@renderer/features/feed/ui/rows/TaskNotificationRow'
 import { SystemRow } from '@renderer/features/feed/ui/rows/SystemRow'
 

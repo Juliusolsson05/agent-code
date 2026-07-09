@@ -1,4 +1,4 @@
-import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 
 // Derived render-unit shape used by buildSemanticRenderUnits.
 //

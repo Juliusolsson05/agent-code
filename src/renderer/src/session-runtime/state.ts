@@ -1,9 +1,25 @@
+// -----------------------------------------------------------------------------
+// session-runtime/state.ts — the INGEST layer's clean object (#493).
+//
+// SessionRuntime is the single provider-neutral per-session object that the
+// ingest pipeline (channels → reducers in this folder) produces and every
+// downstream surface selects from. This file was split out of
+// workspace/workspaceState.ts so the layer has one grep-able home; the layout
+// types that also lived there (Spotlight/Reader/TileTabs) moved to
+// workspace/types.ts — they are tile-tree view state, not runtime.
+//
+// DEPENDENCY LAW (the reason this folder exists): session-runtime/ must never
+// import workspace/, rendering/, features/, app-state/, or react. The pane-UI
+// field types below (PickerItem, ClaudeDraftImage, PendingRewindUndo, …) ride
+// along here NOT because they are ingest concepts but because SessionRuntime
+// embeds them — they are serializable state descriptors, and hoisting them
+// out would force this file to import the UI tree, inverting the layer
+// direction. The contract for who may read which slice of SessionRuntime is
+// declared per consumer (see RuntimeRenderInput for the DECIDE layer's pick),
+// not by physically partitioning the type.
+// -----------------------------------------------------------------------------
+
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import type {
-  SessionId,
-  SplitDirection,
-  TabId,
-} from '@renderer/workspace/types'
 import type {
   Entry,
   ToolResultBlock,
@@ -575,6 +591,41 @@ export type SessionRuntime = {
   subAgents: Record<string, SubAgentState>
 }
 
+/**
+ * The slice of SessionRuntime the DECIDE layer (rendering/) may read — the
+ * declared input contract of issue #493 PR-2.
+ *
+ * This is a PICK, not a partition: SessionRuntime's other ~50 fields are
+ * pane-UI / lifecycle / paging / debug state the ledger must never see.
+ * The list is exactly what the pipeline reads today (useLedgerFeedItems'
+ * slice assembly + ledgerFeedContextFromRuntime) — nothing speculative.
+ * Adding a field here is a CONTRACT change: it licenses the decide layer
+ * to depend on it, so it should happen in the same PR as the consumer.
+ *
+ * WHY a Pick instead of a separate interface SessionRuntime extends:
+ * callers pass the SAME runtime object (structural subtype) — no wrapper
+ * is ever constructed, so the D11 reference-identity chain (the adapter's
+ * per-plane caches key on these exact field references) survives intact.
+ * The two former `as unknown as SessionRuntime` casts (remote SessionView,
+ * replay's runtimeViewFor) become honestly-typed against this instead.
+ */
+export type RuntimeRenderInput = Pick<
+  SessionRuntime,
+  | 'entries'
+  | 'semantic'
+  | 'streamPhase'
+  | 'streamPhasePendingToolName'
+  | 'streamPhasePendingToolUseId'
+  | 'lastJsonlEntryAt'
+> & {
+  /** ReadonlyMap, not SessionRuntime's mutable Map: the decide layer only
+   *  READS the ghost plane (mutation is the ghost reducer's job, here in
+   *  session-runtime). Read-only also lets ghost-less hosts (the phone)
+   *  satisfy the contract with a shared frozen empty map. The full runtime's
+   *  Map is assignable, so desktop callers still pass `runtime` unchanged. */
+  ghosts: ReadonlyMap<string, GhostEntry>
+}
+
 export function emptySemanticRuntime(): SemanticRuntimeState {
   return {
     currentTurn: null,
@@ -668,21 +719,4 @@ export function emptyRuntime(): SessionRuntime {
     ghosts: new Map(),
     subAgents: {},
   }
-}
-
-export type SpotlightState = {
-  tabId: TabId
-  focusedSessionId: SessionId
-}
-
-export type ReaderModeState = {
-  tabId: TabId
-  focusedSessionId: SessionId
-}
-
-export type TileTabsState = {
-  tabIds: TabId[]
-  focusedTabId: TabId
-  direction: SplitDirection
-  ratios: number[]
 }

@@ -4,7 +4,7 @@ import {
   semanticRenderUnitPaintsDom,
   semanticTurnHasRenderableContent,
 } from '@renderer/features/feed/ui/semantic/renderUnits'
-import type { SemanticLiveTurn } from '@renderer/workspace/workspaceState'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 
 // Build a turn containing a single collapsible Read tool block whose live
 // status is controlled by `status`. A running Read collapses into a

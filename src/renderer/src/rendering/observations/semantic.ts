@@ -37,7 +37,7 @@ export type SemanticBlockLike = {
    *  flow through the adapter unchanged (non-tool blocks pass by reference,
    *  the tool-block `{...b}` spread preserves them) — they were just untyped,
    *  so the collector could not read them and a thinking-only turn vanished.
-   *  Source of truth for the field names: workspace/workspaceState.ts
+   *  Source of truth for the field names: session-runtime/state.ts
    *  SemanticLiveBlock. */
   thinking?: string
   reasoningSummary?: string
@@ -189,7 +189,7 @@ function collectTurn(
     // candidates and disappeared from the feed. Keep the block when ANY
     // content field has non-empty trimmed text; reject as empty-thinking only
     // when all four are hollow (e.g. encrypted, genuinely unrenderable).
-    // Mirrors the ghost builder's content probe (workspace/ghosts.ts:
+    // Mirrors the ghost builder's content probe (session-runtime/ghosts.ts:
     // thinking || reasoningSummary || reasoningText) so live and ghost agree
     // on what counts as a paintable reasoning block.
     if (kind === 'thinking') {

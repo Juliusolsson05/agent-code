@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isAgentSpawnToolName } from './agentSpawnTools'
+import { isAgentSpawnToolName } from './registry.renderer.capabilities'
 
 describe('isAgentSpawnToolName (P2c dispatch-name blind spot)', () => {
   it('matches all three spawn families', () => {

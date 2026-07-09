@@ -27,7 +27,7 @@ import type {
   FeedDebugEntry,
   SemanticLiveBlock,
   SemanticLiveTurn,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import {
   conditionStateByKind,
   type ClaudeAskUserQuestionState,

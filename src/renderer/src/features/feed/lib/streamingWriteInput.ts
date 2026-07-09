@@ -4,7 +4,7 @@
 //   While a Write tool_use block streams, the renderer only has
 //   `block.inputJson` — the raw concatenation of every
 //   `input_json_delta.partial_json` fragment the model has emitted so
-//   far (see workspace/semantic/foldEvent.ts:421). That string is
+//   far (see session-runtime/semantic/foldEvent.ts:421). That string is
 //   almost never valid JSON mid-stream: the `content` string is
 //   unterminated, the closing brace is missing, and a fragment can
 //   end anywhere — mid-key, mid-value, even mid-escape. So the

@@ -6,7 +6,7 @@ import {
   emptyRuntime,
   type SemanticLiveTurn,
   type SessionRuntime,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import {
   createLedgerInputAdapter,
   type RuntimeLedgerSlices,
@@ -15,7 +15,7 @@ import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import {
   ledgerFeedContextFromRuntime,
   ledgerToFeedItems,
-} from '@renderer/rendering/view/ledgerFeedItems'
+} from '@renderer/features/feed/ledger/ledgerFeedItems'
 
 // ---------------------------------------------------------------------------
 // View bridge: the ledger must drive Feed's EXISTING row components. These
