@@ -161,6 +161,19 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
             </button>
           </div>
 
+          {/* #495 A11: when the macOS application firewall silently drops
+              inbound connections, the bind SUCCEEDS — the desktop cannot
+              detect it, the phone just times out. Honest static guidance is
+              the right-sized fix (auto-falling back to Tunnel would
+              contradict the controller's documented fail-loud policy), so
+              this renders whenever LAN is live, not only after a failure. */}
+          {status?.enabled && status.transport === 'lan' && (
+            <div className="text-ink-dim text-[10px]">
+              Phone can&apos;t connect? macOS Firewall may be blocking Agent Code —
+              allow incoming connections in System Settings, or switch to Tunnel.
+            </div>
+          )}
+
           {error && <div className="text-danger">{error}</div>}
 
           {/* Transport: LAN (default, zero dependencies) vs internet tunnel */}
