@@ -68,6 +68,26 @@ export function SetupGate() {
     }
   }, [])
 
+  // Manual path override (#495 A1). Automatic resolution is a probe and
+  // can be wrong (exotic $SHELL, rc-file breakage, Finder-launch PATH) —
+  // if a *required* tool is falsely reported missing there must be a way
+  // through that isn't "retry the same failing probe". ok:true hands back
+  // a fresh check, so a valid path unlocks Continue in one round-trip.
+  const setToolPath = useCallback(async (tool: SetupToolId, path: string): Promise<string | null> => {
+    setBusy('check')
+    setError(null)
+    try {
+      const result = await window.api.setupSetToolPath(tool, path)
+      if (!result.ok) return result.reason
+      setCheck(result.check)
+      return null
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    } finally {
+      setBusy(null)
+    }
+  }, [])
+
   const continueWithOptionalSkipped = useCallback(async () => {
     const skippedTools = missingOptional.filter(tool => tool.installable && !tool.skipped)
     setBusy('check')
@@ -104,6 +124,7 @@ export function SetupGate() {
               tool={tool}
               busy={busy}
               onInstall={install}
+              onSetPath={setToolPath}
             />
           ))}
         </div>
@@ -147,11 +168,25 @@ function SetupRow({
   tool,
   busy,
   onInstall,
+  onSetPath,
 }: {
   tool: SetupToolStatus
   busy: SetupInstallTarget | 'check' | null
   onInstall: (target: SetupInstallTarget) => void
+  onSetPath: (tool: SetupToolId, path: string) => Promise<string | null>
 }) {
+  const [overrideOpen, setOverrideOpen] = useState(false)
+  const [overridePath, setOverridePath] = useState('')
+  const [overrideError, setOverrideError] = useState<string | null>(null)
+
+  const submitOverride = async () => {
+    const reason = await onSetPath(tool.id, overridePath)
+    setOverrideError(reason)
+    if (!reason) {
+      setOverrideOpen(false)
+      setOverridePath('')
+    }
+  }
   const target = OPTIONAL_INSTALL_TARGET[tool.id]
   const installing = target ? busy === target : false
   const isBundled = tool.source === 'bundled'
@@ -178,27 +213,75 @@ function SetupRow({
   const detail = isBundled
     ? 'Shipped with Agent Code; no install required.'
     : (tool.path ?? tool.detail ?? 'Not found')
+  // The manual override renders only for missing REQUIRED tools: those
+  // are the ones whose false-negative locks the whole app (#495 A1).
+  // Optional tools already have Install/Skip affordances and can't block.
+  const canOverride = !isBundled && !tool.found && tool.required
+
   return (
-    <div className="flex items-center justify-between gap-4 px-5 py-3">
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[12px] text-ink">{tool.label}</span>
-          <span className={`border px-1.5 py-0.5 text-[10px] ${statusBorder}`}>
-            {statusLabel}
-          </span>
+    <div className="px-5 py-3">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-ink">{tool.label}</span>
+            <span className={`border px-1.5 py-0.5 text-[10px] ${statusBorder}`}>
+              {statusLabel}
+            </span>
+          </div>
+          <div className="mt-1 truncate text-[11px] text-muted">{detail}</div>
         </div>
-        <div className="mt-1 truncate text-[11px] text-muted">{detail}</div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          {canOverride ? (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => setOverrideOpen(open => !open)}
+              className="border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
+            >
+              Enter path manually…
+            </button>
+          ) : null}
+          {!isBundled && !tool.found && target && tool.installable ? (
+            <button
+              type="button"
+              disabled={busy !== null}
+              onClick={() => onInstall(target)}
+              className="border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
+            >
+              {installing ? 'Installing…' : 'Install'}
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      {!isBundled && !tool.found && target && tool.installable ? (
-        <button
-          type="button"
-          disabled={busy !== null}
-          onClick={() => onInstall(target)}
-          className="shrink-0 border border-border px-3 py-2 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
-        >
-          {installing ? 'Installing…' : 'Install'}
-        </button>
+      {canOverride && overrideOpen ? (
+        <div className="mt-2">
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={overridePath}
+              onChange={e => setOverridePath(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && overridePath.trim()) void submitOverride()
+              }}
+              placeholder={`/absolute/path/to/${tool.id}`}
+              spellCheck={false}
+              className="min-w-0 flex-1 border border-border bg-canvas px-2 py-1.5 text-[11px] text-ink placeholder:text-muted focus:border-border-hi focus:outline-none"
+            />
+            <button
+              type="button"
+              disabled={busy !== null || !overridePath.trim()}
+              onClick={() => void submitOverride()}
+              className="border border-border px-3 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink disabled:opacity-50"
+            >
+              Set
+            </button>
+          </div>
+          {overrideError ? (
+            <div className="mt-1 text-[11px] text-danger">{overrideError}</div>
+          ) : null}
+        </div>
       ) : null}
     </div>
   )

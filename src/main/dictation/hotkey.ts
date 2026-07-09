@@ -10,6 +10,11 @@ export async function configureDictationHotkey(binding: string): Promise<{
   ok: boolean
   binding: string
   native: boolean
+  /** Failure reason from the native-helper layer (#495 A4) — e.g. "Xcode
+   *  Command Line Tools not installed" in dev, or "bundled helper binary
+   *  missing" in a packaged build. Rides the existing
+   *  DictationHotkeyConfigureResult ok:false arm; absent on success. */
+  message?: string
 }> {
   currentBinding = binding.trim()
   if (registeredElectronHotkey) {
@@ -25,7 +30,7 @@ export async function configureDictationHotkey(binding: string): Promise<{
     // expose it to renderer keydown. Route every macOS dictation binding
     // through the same CGEventTap helper as the standalone app so the default,
     // bare modifiers, and normal key chords all have one press/release model.
-    const ok = await startMacDictationHotkeyHelper(currentBinding, {
+    const result = await startMacDictationHotkeyHelper(currentBinding, {
       onPress: () => {
         // Press/release bugs are catastrophic for hold-to-talk: one missed
         // release leaves the composer "listening" forever. Keep this trace in
@@ -41,7 +46,12 @@ export async function configureDictationHotkey(binding: string): Promise<{
         sendToMainWindow('dictation:hotkey-up', { binding: currentBinding })
       },
     })
-    return { ok, binding: currentBinding, native: true }
+    return {
+      ok: result.ok,
+      binding: currentBinding,
+      native: true,
+      ...(result.message ? { message: result.message } : {}),
+    }
   }
 
   try {

@@ -25,6 +25,13 @@ export type WorktreeDump = {
   rows: WorktreeDumpRow[]
   indexStatus: WorktreeActivityIndexStatus | null
   gitUnavailable: boolean
+  /** Refines gitUnavailable the same way GitBar's error state does (#495
+   *  A5, threaded here by the #508 review): true means the MACHINE has no
+   *  usable git (missing binary, or macOS's no-CLT xcrun shim), false
+   *  means git works but this cwd is not a git worktree. Only meaningful
+   *  when gitUnavailable is true; the two need different copy because
+   *  "not a git repository" is actively misleading on a git-less Mac. */
+  gitMissing: boolean
   activityUnavailable: boolean
 }
 
@@ -41,12 +48,17 @@ export async function loadWorktreeDump(params: {
       rows: [],
       indexStatus: null,
       gitUnavailable: false,
+      gitMissing: false,
       activityUnavailable: true,
     }
   }
 
+  // The IPC-rejection fallback claims gitMissing:false, not true: a rejected
+  // invoke means the BRIDGE failed (main crashed mid-call, channel torn
+  // down), which says nothing about git on the machine — only main's own
+  // classified { ok:false, gitMissing } result is allowed to make that claim.
   const gitResult = await window.api.gitWorktreeStatus(cwd)
-    .catch(() => ({ ok: false as const, error: 'git unavailable' }))
+    .catch(() => ({ ok: false as const, gitMissing: false }))
   if (!gitResult.ok) {
     return {
       cwd,
@@ -54,6 +66,7 @@ export async function loadWorktreeDump(params: {
       rows: [],
       indexStatus: null,
       gitUnavailable: true,
+      gitMissing: gitResult.gitMissing,
       activityUnavailable: true,
     }
   }
@@ -70,6 +83,7 @@ export async function loadWorktreeDump(params: {
     rows,
     indexStatus: activityResult.ok ? activityResult.status : null,
     gitUnavailable: false,
+    gitMissing: false,
     activityUnavailable: !activityResult.ok,
   }
 }

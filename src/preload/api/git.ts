@@ -18,14 +18,20 @@ import type { GitBarStatusResult } from '@shared/types/gitStatus.js'
 // directories so the bar can cleanly degrade.
 
 export const gitApi = {
+  // The ok:false arms carry `gitMissing` for the same reason GitBarStatusResult
+  // does (#495 A5, threaded through the worktree handlers by the #508 review):
+  // "no usable git on this machine" and "cwd is not a git worktree" need
+  // different renderer copy, and collapsing them into a bare { ok:false } is
+  // how the Worktrees panel ended up telling a git-less user "not a git
+  // repository".
   gitWorktrees: (cwd: string): Promise<
     | { ok: true; worktrees: WorktreeIdentity[] }
-    | { ok: false }
+    | { ok: false; gitMissing: boolean }
   > => ipcRenderer.invoke('git:worktrees', cwd),
 
   gitWorktreeStatus: (cwd: string): Promise<
     | { ok: true; worktrees: GitWorktreeStatus[] }
-    | { ok: false }
+    | { ok: false; gitMissing: boolean }
   > => ipcRenderer.invoke('git:worktree-status', cwd),
 
   worktreeActivitySummary: (

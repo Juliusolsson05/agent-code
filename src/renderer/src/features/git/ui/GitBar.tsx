@@ -47,7 +47,12 @@ type Props = {
 
 export function GitBar({ cwd, onClose }: Props) {
   const [data, setData] = useState<GitData | null>(null)
-  const [error, setError] = useState(false)
+  // Failure kind, not a boolean: `git:status` distinguishes "cwd is not a
+  // repo" from "the git binary itself is missing" (#495 A5), and the two
+  // need different copy — "not a git repository" is actively misleading on
+  // a machine without git. Rendered as a persistent muted STATE, not a
+  // toast: the 10s poll would re-fire a toast forever.
+  const [error, setError] = useState<'not-repo' | 'git-missing' | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const refresh = useCallback(async () => {
@@ -55,10 +60,10 @@ export function GitBar({ cwd, onClose }: Props) {
     const result = await window.api.gitStatus(cwd)
     if (result.ok) {
       setData(result)
-      setError(false)
+      setError(null)
     } else {
       setData(null)
-      setError(true)
+      setError(result.gitMissing ? 'git-missing' : 'not-repo')
     }
   }, [cwd])
 
@@ -102,7 +107,9 @@ export function GitBar({ cwd, onClose }: Props) {
 
       {error && (
         <div className="px-3 py-4 text-muted text-center">
-          not a git repository
+          {error === 'git-missing'
+            ? 'git not found — Git features disabled'
+            : 'not a git repository'}
         </div>
       )}
 

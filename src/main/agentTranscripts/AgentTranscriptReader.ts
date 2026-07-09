@@ -266,7 +266,17 @@ async function streamReadTranscript(
   if (!sawFinalAssistant && lastAssistant?.kind === 'assistant_message') {
     lastAssistant.final = true
     if (lastSelectedAssistant) lastSelectedAssistant.final = true
-    if (options.projection === 'final' && !selected.includes(lastAssistant)) {
+    // WHY the extra lastSelectedAssistant check: `selected` holds truncated
+    // CLONES (truncateItemText always spreads), so `includes(lastAssistant)`
+    // can never match by reference when the last assistant was selected via an
+    // include override. Without this guard, projection:'final' plus
+    // include.assistantMessages would append the same answer twice. If the
+    // clone was later evicted by the tail ring, includes() is false and we
+    // correctly re-add the final answer, same as before.
+    const lastAssistantAlreadySelected =
+      selected.includes(lastAssistant) ||
+      (lastSelectedAssistant !== null && selected.includes(lastSelectedAssistant))
+    if (options.projection === 'final' && !lastAssistantAlreadySelected) {
       addProjectedReadItem(selected, lastAssistant, {
         tail,
         maxItems,
@@ -328,12 +338,25 @@ function addProjectedReadItem(
   },
 ): AgentTranscriptItem | null {
   if (options.tail > 0) {
-    selected.push(item)
+    // Truncate BEFORE the ring, not only in the boundItems final pass (#373).
+    // tail can be as large as 10_000 (schema max), and this ring used to hold
+    // RAW items while streaming: a transcript full of megabyte tool dumps
+    // meant the reader retained tail x raw-item bytes in memory even though
+    // boundItems would throw almost all of it away afterwards. Per-item
+    // truncation is idempotent, so boundItems re-running it on these items is
+    // a no-op; boundItems remains the final authority for maxItems/maxChars.
+    // Text truncation deliberately does NOT markTruncated() here — matching
+    // boundItems, where only dropped ITEMS flip the result-level flag.
+    const bounded = truncateItemText(item, options.maxCharsPerItem)
+    selected.push(bounded)
     while (selected.length > options.tail) {
       selected.shift()
       options.markTruncated()
     }
-    return item
+    // Return the ring object (not the raw item): the caller tracks the
+    // returned reference as lastSelectedAssistant and later mutates
+    // `.final = true` on it, which must reach the copy actually in the ring.
+    return bounded
   }
 
   const bounded = truncateItemText(item, options.maxCharsPerItem)

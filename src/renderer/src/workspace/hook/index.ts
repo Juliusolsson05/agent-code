@@ -350,6 +350,8 @@ export function useWorkspace(
             parentSessionId: request.parentSessionId,
             sessionId: request.sessionId,
             maxMessages: request.maxMessages,
+            maxCharsPerMessage: request.maxCharsPerMessage,
+            maxCharsPerAgent: request.maxCharsPerAgent,
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,
@@ -367,6 +369,8 @@ export function useWorkspace(
             parentSessionId: request.parentSessionId,
             runId: request.runId,
             maxMessagesPerAgent: request.maxMessagesPerAgent,
+            maxCharsPerMessage: request.maxCharsPerMessage,
+            maxCharsPerAgent: request.maxCharsPerAgent,
           })
           await window.api.resolveOrchestrationRequest({
             requestId: request.requestId,

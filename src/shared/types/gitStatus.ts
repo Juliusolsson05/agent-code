@@ -44,4 +44,18 @@ export type GitBarStatusResult =
       commits: GitRecentCommit[]
       submodules?: GitSubmoduleStatus[]
     }
-  | { ok: false }
+  | {
+      ok: false
+      /** True when there is no USABLE git on this machine, as opposed to
+       *  "cwd is not a git repository" (#495 A5). Two classified causes:
+       *  the binary could not be spawned at all (ENOENT), or — the macOS
+       *  no-Xcode-CLT case (#508 review) — /usr/bin/git exists but is
+       *  Apple's xcrun shim, which exits non-zero with an
+       *  xcode-select/xcrun stderr instead of running git. Before this
+       *  flag both collapsed into the same { ok:false } and the renderer
+       *  told a user without git "not a git repository" — a lie that hid
+       *  the actual fix (install git or CLT / point Setup at it).
+       *  Required, not optional: the producer must decide, and the
+       *  renderer must branch. */
+      gitMissing: boolean
+    }

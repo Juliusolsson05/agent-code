@@ -8,7 +8,11 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
     '# Worktree Status Dump',
     '',
     `Project cwd: ${dump.cwd ?? '(none)'}`,
-    `Generated: ${new Date(dump.generatedAt).toLocaleString()}`,
+    // #495 A15: toISOString, not toLocaleString — dump text is saved and
+    // pasted across machines, and locale+timezone-dependent output made
+    // byte-identical worktree states diff. (Row-level relativeTime()
+    // usages stay locale-free and ephemeral-UI-only, so they're fine.)
+    `Generated: ${new Date(dump.generatedAt).toISOString()}`,
     '',
   ]
 
@@ -18,7 +22,14 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
   }
 
   if (dump.gitUnavailable) {
-    lines.push('Status: not a Git repository or no worktree information is available')
+    // Mirror the WorktreesBar/GitBar copy split (#495 A5): this dump gets
+    // pasted into bug reports, where "not a Git repository" on a machine
+    // with no usable git would send the reader down the wrong path.
+    lines.push(
+      dump.gitMissing
+        ? 'Status: no usable git executable on this machine — Git features disabled'
+        : 'Status: not a Git repository or no worktree information is available',
+    )
     return lines.join('\n')
   }
 
@@ -33,7 +44,8 @@ export function formatWorktreeDump(dump: WorktreeDump): string {
   lines.push(`- Detached: ${countRows(dump.rows, row => row.detached)}`)
   lines.push(`- Agent activity: ${dump.activityUnavailable ? 'unavailable' : 'available'}`)
   if (dump.indexStatus?.lastIndexedAt) {
-    lines.push(`- Activity index updated: ${new Date(dump.indexStatus.lastIndexedAt).toLocaleString()}`)
+    // Same #495 A15 rationale as the Generated line above.
+    lines.push(`- Activity index updated: ${new Date(dump.indexStatus.lastIndexedAt).toISOString()}`)
   }
   lines.push('')
 

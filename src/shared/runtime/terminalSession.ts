@@ -1,6 +1,8 @@
 import { EventEmitter } from 'events'
 import { spawn as ptySpawn, type IPty } from 'node-pty'
 
+import { pickShell } from './pickShell.js'
+
 // TerminalSession — a plain shell session that the user drives directly.
 //
 // Counterpart to ClaudeSession. Where ClaudeSession spawns `claude`
@@ -111,15 +113,14 @@ export class TerminalSession extends EventEmitter {
     this.cwd = options.cwd ?? process.cwd()
     this.cols = options.cols ?? 80
     this.rows = options.rows ?? 24
-    // Resolve the shell binary with a small fallback chain. $SHELL is
-    // the user's preference; the rest are sane defaults that exist on
-    // almost every unix. We don't check for existence — if none of
-    // them are present the spawn will error and the exit handler
-    // below will surface it.
-    this.shell =
-      options.shell ??
-      process.env.SHELL ??
-      '/bin/zsh'
+    // Resolve the shell binary with the pickShell fallback chain
+    // ($SHELL → /bin/zsh → /bin/bash → /bin/sh) — and unlike the
+    // original expression here, pickShell actually PROBES each
+    // candidate for existence (#495 A8): a stale $SHELL pointing at an
+    // uninstalled binary used to make every terminal pane die on spawn
+    // in a way that read like a crash. An explicit options.shell still
+    // bypasses the probe — see pickShell for why.
+    this.shell = pickShell(options.shell)
     this.extraEnv = options.env ?? {}
     this.runtime = options.runtime ?? 'direct'
     this.tmuxSessionName = options.tmuxSessionName ?? null
@@ -149,6 +150,29 @@ export class TerminalSession extends EventEmitter {
     // every well-behaved terminal understands.
     env.TERM = 'xterm-256color'
     env.COLORTERM = 'truecolor'
+    // #495 A12 (+ codex follow-up on #507): GUI-launched (Finder/launchd)
+    // processes often inherit no locale, and MDM/launchd-managed setups
+    // frequently pin LC_ALL=C or LC_CTYPE=C; either way a C/POSIX locale
+    // makes agent CLIs emit mangled non-ASCII that our UTF-8 stream parsing
+    // downstream trusts. POSIX precedence is LC_ALL > LC_CTYPE > LANG, so
+    // the first cut of this fix (set LANG only) was a no-op whenever LC_ALL
+    // or LC_CTYPE carried the C pin — LANG=en_US.UTF-8 sat *below* the
+    // override and the PTY still came up non-UTF-8.
+    //
+    // Policy: C/POSIX/empty are placeholders, not choices — delete them,
+    // then default LANG only when nothing real remains. A real locale value
+    // is the user's explicit choice (even a non-UTF-8 one like ja_JP.eucJP)
+    // and is never touched; deleting a placeholder LC_ALL also lets a real
+    // LANG underneath win again instead of staying masked. Exact-match on
+    // 'C'/'POSIX' on purpose: 'C.UTF-8' is a real, working UTF-8 locale.
+    const isLocalePlaceholder = (v: string | undefined): boolean =>
+      v === undefined || v === '' || v === 'C' || v === 'POSIX'
+    for (const key of ['LC_ALL', 'LC_CTYPE', 'LANG'] as const) {
+      if (key in env && isLocalePlaceholder(env[key])) delete env[key]
+    }
+    if (isLocalePlaceholder(env.LC_ALL ?? env.LC_CTYPE ?? env.LANG)) {
+      env.LANG = 'en_US.UTF-8'
+    }
     // Caller overrides win last so integrations that need to
     // override TERM or add flags can do so.
     for (const [k, v] of Object.entries(this.extraEnv)) {

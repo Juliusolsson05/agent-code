@@ -1,3 +1,5 @@
+import type { BuildInfo } from '@main/buildInfo.js'
+
 export type AppRunJournalSeverity = 'debug' | 'info' | 'warn' | 'error' | 'fatal'
 
 export type AppRunJournalIds = {
@@ -28,6 +30,16 @@ export type AppRunJournalEvent = AppRunJournalEventInput & {
 }
 
 export type AppRunJournalManifest = {
+  // DELIBERATELY still 1 after adding `build` + `classifierVersion` (#374).
+  // The additions are purely additive: no existing field changed meaning or
+  // shape, and every reader of this manifest is tolerant by construction —
+  // previousRunClassifier.readPriorStartedAt() picks out `startedAt` and
+  // ignores the rest, and debug bundles copy the file verbatim. A version bump
+  // is reserved for changes that would make an OLD reader misinterpret a NEW
+  // file (renames, semantic changes, removals); bumping on additive changes
+  // would force every consumer to branch on version for zero safety gain, and
+  // — worse — retained manifests from the previous 50 runs would suddenly look
+  // "old-schema" to naive tooling.
   schemaVersion: 1
   appRunId: string
   startedAt: number
@@ -39,6 +51,20 @@ export type AppRunJournalManifest = {
   electron: string | undefined
   chrome: string | undefined
   appVersion: string
+  // Which exact SOURCE built the running bundle (#374). appVersion above is
+  // not enough: in dev app.getVersion() reports Electron's own version, and
+  // even in packaged builds a version string can't distinguish a dirty local
+  // build from the tagged release. Injected at build time via the `define`
+  // block in electron.vite.config.ts; see src/main/buildInfo.ts for per-field
+  // semantics. All-'unknown' means the bundle ran without build injection
+  // (vitest, or a broken define) — itself a useful triage signal.
+  build: BuildInfo
+  // PREVIOUS_RUN_CLASSIFIER_VERSION of the classifier COMPILED INTO this run.
+  // Recorded in the manifest (not only on incidents) so triage can tell which
+  // classifier will judge this run's death on the NEXT launch — the classifier
+  // that examines this run's evidence is the next build's, and after an
+  // upgrade those can differ.
+  classifierVersion: number
   stateDir: string
   perfEnabled: boolean
   lock: {
