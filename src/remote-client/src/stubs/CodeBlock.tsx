@@ -61,7 +61,11 @@ export function CodeBlock({
   }, [code, language, allowAutoDetect, highlight])
 
   return (
-    <pre className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px]">
+    /* max-w-full: on a phone this pins the block to the feed column so a long
+     * code line scrolls INSIDE the block instead of widening the whole page
+     * (the reported "everything is cramped/overflowing" symptom). No-op on
+     * desktop, where the block already sits inside the 880px column. */
+    <pre className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-w-full max-h-[360px]">
       {html ? (
         <code
           className={html.className}

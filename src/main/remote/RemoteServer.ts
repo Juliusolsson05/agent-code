@@ -84,12 +84,41 @@ export type RemoteServerDeps = {
   clientDistDir?: string | null
   getThemeSettings?: () => Record<string, unknown> | null
   journal?: AppRunJournal | null
+  /**
+   * Transcribe a phone-captured audio blob to composer-ready text. OPTIONAL:
+   * absent (or a null-returning wire) makes POST /dictate answer 503 so the
+   * phone hides its mic. Wired in RemoteController to the desktop's existing
+   * Deepgram batch engine — the API key stays in the main process and never
+   * crosses to the phone, which is the whole reason transcription is a server
+   * dep and not something the client does itself. Returns { ok:false,
+   * error:'no-key' } when DEEPGRAM_API_KEY is unset. Audio is
+   * transcribe-and-discard: it is NEVER written to any debug/state root.
+   */
+  transcribeAudio?: (
+    audio: Buffer,
+    mimeType?: string,
+  ) => Promise<{ ok: true; text: string } | { ok: false; error: string }>
+  /**
+   * Whether transcribeAudio would succeed if called RIGHT NOW (i.e. the STT
+   * key is actually present). Needed separately from transcribeAudio's
+   * existence because RemoteController always wires the function and only
+   * discovers a missing DEEPGRAM_API_KEY inside the call — but the phone
+   * needs the verdict at HELLO time to disable its mic up front, instead of
+   * letting the user record and upload into a guaranteed 503 (review
+   * finding). A function, not a boolean, so every new connection re-reads
+   * the environment. Absent = assume available (transcribeAudio's presence
+   * is then the only gate).
+   */
+  isSttAvailable?: () => boolean
 }
 
 const SUBMIT_BYTES = '\r'
 const INTERRUPT_BYTES = '\x1b'
 
 const PAIR_BODY_LIMIT_BYTES = 16 * 1024
+// Generous but bounded: webm/opus voice is ~1 KB/s, so 8 MB is many minutes
+// of dictation while still stopping a hostile peer from ballooning memory.
+const DICTATE_BODY_LIMIT_BYTES = 8 * 1024 * 1024
 
 const STATIC_CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -236,6 +265,10 @@ export class RemoteServer extends EventEmitter {
       res.end(JSON.stringify({ ok: true }))
       return
     }
+    if (req.method === 'POST' && url.pathname === '/dictate') {
+      await this.handleDictate(req, res)
+      return
+    }
     if (req.method === 'GET') {
       this.serveClient(url.pathname, res)
       return
@@ -244,7 +277,15 @@ export class RemoteServer extends EventEmitter {
   }
 
   private async handlePair(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const body = await readBodyCapped(req, PAIR_BODY_LIMIT_BYTES)
+    let body: string
+    try {
+      body = await readBodyCapped(req, PAIR_BODY_LIMIT_BYTES)
+    } catch {
+      // Overflow destroys the socket by design (unauthenticated endpoint —
+      // see readBodyCapped); this catch just keeps the rejection from
+      // escaping handleHttp's void'd promise as an unhandled rejection.
+      return
+    }
     let code = ''
     let deviceName = ''
     try {
@@ -292,6 +333,78 @@ export class RemoteServer extends EventEmitter {
         deviceName: redeemed.device.name,
       }),
     )
+  }
+
+  // POST /dictate — phone audio -> composer text. The phone's mic button can't
+  // reach the desktop's Fn-hotkey dictation path, so it records in-browser and
+  // posts the blob here; we run it through the SAME Deepgram batch engine the
+  // desktop uses (deps.transcribeAudio) so the API key never leaves the main
+  // process. Auth is the exact /ws-upgrade gate — a valid, unrevoked device
+  // token, here on the Authorization: Bearer header (keeps the token out of
+  // any proxy access log that records URLs). Audio is transcribe-and-discard;
+  // it is never written to a debug/state root.
+  private async handleDictate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const auth = req.headers['authorization'] ?? ''
+    const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+    const verdict = this.deps.pairing.verifyToken(token)
+    if (!verdict.ok) {
+      this.deps.journal?.record({
+        area: 'remote.server',
+        name: 'remote_dictate.rejected',
+        data: { reason: verdict.reason },
+      })
+      res.writeHead(401, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'unauthorized' }))
+      return
+    }
+    if (!this.deps.transcribeAudio) {
+      // No transcriber wired (e.g. no DEEPGRAM_API_KEY at all) — tell the phone
+      // so it hides the mic rather than offering a button that can't work.
+      res.writeHead(503, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ ok: false, error: 'dictation-unavailable' }))
+      return
+    }
+    let audio: Buffer
+    try {
+      audio = await readBodyCappedBinary(req, DICTATE_BODY_LIMIT_BYTES)
+    } catch (err) {
+      if (err instanceof BodyTooLargeError) {
+        // The reader stopped CONSUMING but left the socket alive precisely so
+        // this promised 413 can reach the client (see readBodyCappedBinary's
+        // WHY). `connection: close` tells well-behaved clients not to reuse
+        // the socket, and the end-callback severs it once the response has
+        // flushed — the peer may still be mid-upload and must not keep the
+        // paused request pinned open indefinitely.
+        res.writeHead(413, { 'content-type': 'application/json', connection: 'close' })
+        res.end(JSON.stringify({ ok: false, error: 'audio too large' }), () => {
+          req.destroy()
+        })
+      }
+      // Non-overflow rejection = the request stream itself errored; the
+      // socket is already unusable and there is nothing meaningful to write.
+      return
+    }
+    void this.deps.registry.touch(verdict.deviceId)
+    const mimeType =
+      typeof req.headers['content-type'] === 'string' ? req.headers['content-type'] : undefined
+    const result = await this.deps.transcribeAudio(audio, mimeType)
+    if (!result.ok) {
+      // no-key is a config gap (503, works once configured); anything else is
+      // an upstream STT failure (502). Never echo raw error internals further
+      // than the short code the client needs to branch on.
+      res.writeHead(result.error === 'no-key' ? 503 : 502, {
+        'content-type': 'application/json',
+      })
+      res.end(JSON.stringify({ ok: false, error: result.error }))
+      return
+    }
+    this.deps.journal?.record({
+      area: 'remote.server',
+      name: 'remote_dictate.ok',
+      data: { deviceId: verdict.deviceId, chars: result.text.length },
+    })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, text: result.text }))
   }
 
   private serveClient(pathname: string, res: ServerResponse): void {
@@ -404,6 +517,9 @@ export class RemoteServer extends EventEmitter {
       deviceId,
       deviceName: device?.name ?? 'unknown',
       themeSettings: this.deps.getThemeSettings?.() ?? null,
+      // Per-connection STT capability so the phone gates its mic BEFORE
+      // recording (see the sttAvailable WHY in protocol/messages.ts).
+      sttAvailable: Boolean(this.deps.transcribeAudio) && (this.deps.isSttAvailable?.() ?? true),
     })
     this.send(ws, { type: 'session-list', sessions: this.deps.feedSource.listSessions() })
     // Late-joiner replay — same channel shape as live events so the client
@@ -633,6 +749,46 @@ async function readBodyCapped(req: IncomingMessage, limit: number): Promise<stri
       chunks.push(chunk)
     })
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    req.on('error', reject)
+  })
+}
+
+/** Overflow marker for readBodyCappedBinary so handleDictate can tell "cap
+ *  tripped, socket still writable → answer 413" apart from "stream errored,
+ *  socket is gone → nothing to write". */
+class BodyTooLargeError extends Error {
+  constructor() {
+    super('body too large')
+  }
+}
+
+// Binary sibling of readBodyCapped for the /dictate audio blob: same
+// cap discipline, but resolves the raw Buffer instead of decoding UTF-8
+// (audio bytes must not go through a string round-trip) and — unlike the
+// /pair helper — does NOT destroy the socket on overflow. /dictate is an
+// AUTHENTICATED endpoint that promises a 413 JSON body; req.destroy() here
+// killed the connection before handleDictate could write it, so the phone
+// saw a bare connection reset and reported a generic upload failure (review
+// finding). Instead: stop consuming (detach the data listener + pause, so
+// TCP backpressure holds the rest of the upload without buffering it) and
+// reject with the marker error; the caller writes the 413 and severs the
+// socket only after the response has flushed.
+async function readBodyCappedBinary(req: IncomingMessage, limit: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    let size = 0
+    const chunks: Buffer[] = []
+    const onData = (chunk: Buffer): void => {
+      size += chunk.length
+      if (size > limit) {
+        req.removeListener('data', onData)
+        req.pause()
+        reject(new BodyTooLargeError())
+        return
+      }
+      chunks.push(chunk)
+    }
+    req.on('data', onData)
+    req.on('end', () => resolve(Buffer.concat(chunks)))
     req.on('error', reject)
   })
 }

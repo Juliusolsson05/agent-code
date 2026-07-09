@@ -49,11 +49,6 @@ export function PairScreen({
       />
       <button
         className="mono"
-        style={{
-          background: 'var(--accent)', color: 'var(--accent-fg)', border: 'none',
-          borderRadius: 8, padding: '10px 22px', fontSize: 15, fontWeight: 600,
-          opacity: busy || submitting || code.trim().length < 8 ? 0.4 : 1,
-        }}
         disabled={busy || submitting || code.trim().length < 8}
         onClick={() => void submit()}
       >

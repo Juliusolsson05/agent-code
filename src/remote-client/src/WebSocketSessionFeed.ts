@@ -100,12 +100,20 @@ export class WebSocketSessionFeed implements SessionFeed {
   }
   private readonly sessionListListeners = new Set<(s: RemoteSessionSummary[]) => void>()
   private readonly connectionListeners = new Set<(s: ConnectionState) => void>()
+  private readonly sttListeners = new Set<(available: boolean | null) => void>()
   private readonly pending = new Map<string, Pending>()
   private socket: WebSocketLike | null = null
   private disposed = false
   private reconnectAttempt = 0
   private nextRequestId = 1
   private lastSessionList: RemoteSessionSummary[] = []
+  /** Latest hello-declared STT capability. null = unknown (no hello yet, or
+   *  a pre-capability server that omits the field) — consumers treat null as
+   *  available so version skew degrades to the old fail-at-upload behavior,
+   *  never to a wrongly-hidden mic. Re-stamped on every (re)connect's hello,
+   *  which is what lets a key added on the desktop light the mic up without
+   *  a page reload. */
+  private sttAvailable: boolean | null = null
 
   constructor(private readonly opts: WebSocketSessionFeedOptions) {
     this.dial()
@@ -125,6 +133,19 @@ export class WebSocketSessionFeed implements SessionFeed {
   onConnectionState(cb: (state: ConnectionState) => void): Unsub {
     this.connectionListeners.add(cb)
     return () => this.connectionListeners.delete(cb)
+  }
+
+  getSttAvailability(): boolean | null {
+    return this.sttAvailable
+  }
+
+  /** Fires when the hello frame changes the STT verdict — a listener (not
+   *  just the getter) because the hello lands asynchronously after the
+   *  socket opens, so a component that read the getter at mount would
+   *  otherwise never learn the real answer. */
+  onSttAvailability(cb: (available: boolean | null) => void): Unsub {
+    this.sttListeners.add(cb)
+    return () => this.sttListeners.delete(cb)
   }
 
   dispose(): void {
@@ -360,9 +381,18 @@ export class WebSocketSessionFeed implements SessionFeed {
         pending.resolve({ ok: frame.ok, error: frame.error, result: frame.result })
         return
       }
-      case 'hello':
+      case 'hello': {
         applyRemoteThemeSettings(frame.themeSettings)
+        // Missing field (older server) stays null = unknown, NOT false — the
+        // mic must not vanish just because the desktop predates the
+        // capability handshake.
+        const stt = typeof frame.sttAvailable === 'boolean' ? frame.sttAvailable : null
+        if (stt !== this.sttAvailable) {
+          this.sttAvailable = stt
+          for (const cb of [...this.sttListeners]) cb(stt)
+        }
         return
+      }
       case 'theme-settings':
         applyRemoteThemeSettings(frame.themeSettings)
         return

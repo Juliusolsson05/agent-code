@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 
 import { Feed } from '@renderer/features/feed/ui/Feed'
 import { SessionFeedProvider } from '@renderer/features/sessionFeed/SessionFeedContext'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
+import { PaneHeader } from '@renderer/workspace/tile-tree/TileLeaf/PaneHeader'
+import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerInput'
+import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
 import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 import {
@@ -10,8 +13,13 @@ import {
   type ClaudeAskUserQuestionState,
 } from '@shared/types/providerConditions'
 
+import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
+import type { ConditionAction, ConditionSnapshot } from '@shared/conditions-core/contract'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
+
 import type { WebSocketSessionFeed, ConnectionState } from '../WebSocketSessionFeed'
 import type { TranscriptStore } from '../transcript/store'
+import { useMobileDictation } from '../dictation/mobileDictation'
 
 // The phone has no optimistic-echo plane: it renders committed + semantic
 // state streamed from the desktop, never a locally-minted ghost (see the
@@ -36,26 +44,20 @@ const NO_GHOSTS: ReadonlyMap<string, GhostEntry> = new Map()
 // through it) — the phone's WebSocketSessionFeed IS a SessionFeed, so the
 // rows work unmodified over the WS transport.
 
-type ConditionAction =
-  | { kind: 'pty'; id: string; label: string; data: string }
-  | { kind: 'custom'; id: string; label: string; name: string; payload?: unknown }
-
-type LiveCondition = {
-  conditionKind: string
-  actions: ConditionAction[]
-}
-
 export function SessionView({
   feed,
   store,
   connection,
   sessionId,
+  token,
   onBack,
 }: {
   feed: WebSocketSessionFeed
   store: TranscriptStore
   connection: ConnectionState
   sessionId: string
+  /** The device token — sent as the Authorization bearer on /dictate. */
+  token: string
   onBack: () => void
 }): React.JSX.Element {
   const subscribe = useCallback(
@@ -67,12 +69,33 @@ export function SessionView({
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The session's cwd for the real PaneHeader title strip. Self-subscribed
+  // here rather than threaded App→SessionList so the header stays
+  // self-contained; cwd is effectively static per session, but onSessionList
+  // also covers the race where the list arrives after this view mounts.
+  const [cwd, setCwd] = useState<string | null>(
+    () => feed.getSessionList().find(s => s.sessionId === sessionId)?.cwd ?? null,
+  )
+
+  // The composer's textarea ref, auto-grown by the desktop hook (pure DOM,
+  // reused verbatim) so the mounted ComposerInput shell reflows exactly like
+  // the desktop as the draft wraps.
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  useComposerAutoGrow(inputRef, draft)
 
   // Backfill on first view of a session — the live stream only covers
   // what happened after the phone connected.
   useEffect(() => {
     void store.loadInitialHistory(sessionId)
   }, [store, sessionId])
+
+  useEffect(() => {
+    const off = feed.onSessionList(list => {
+      const summary = list.find(s => s.sessionId === sessionId)
+      if (summary) setCwd(summary.cwd ?? null)
+    })
+    return off
+  }, [feed, sessionId])
 
   const provider = store.getKind(sessionId)
 
@@ -124,29 +147,6 @@ export function SessionView({
     [transcript.conditions],
   )
 
-  // EVERY live condition renders in the tap-target bar — including
-  // AskUserQuestion, even though the feed also renders it inline via
-  // AskUserQuestionRow. WHY the redundancy is deliberate (review finding):
-  // the inline row depends on the transcript pipeline having delivered a
-  // parseable AUQ block; when the input is still streaming, malformed, or
-  // the backfill raced, the row shows a placeholder with no buttons and the
-  // agent sits blocked with no answer path. The snapshot-driven bar is the
-  // guaranteed fallback — its actions are server-verified against the live
-  // condition's own menu, so a duplicated affordance is safe; a hidden
-  // prompt is not.
-  const tapConditions = useMemo<LiveCondition[]>(() => {
-    const snapshot = transcript.conditions
-    if (!snapshot) return []
-    // Object.values over the partial Record types members as possibly
-    // undefined; the flatMap narrows instead of asserting.
-    return Object.values(snapshot.conditions).flatMap(record => {
-      if (!record) return []
-      const actions = (record.actions ?? []) as ConditionAction[]
-      if (actions.length === 0) return []
-      return [{ conditionKind: record.kind, actions }]
-    })
-  }, [transcript.conditions])
-
   const sendPrompt = useCallback(() => {
     const text = draft.trim()
     if (!text || sending) return
@@ -170,18 +170,69 @@ export function SessionView({
     })
   }, [feed, sessionId])
 
-  const runAction = useCallback(
-    (action: ConditionAction) => {
-      setError(null)
-      const done = (ok: boolean, detail?: string): void => {
-        if (!ok) setError(detail ?? 'Action failed — it may have expired.')
+  // Phone composer key handling. Enter submits; Shift+Enter inserts a newline
+  // (native — we don't preventDefault); Esc interrupts. These are the only
+  // shapes the v1 wire accepts. Slash-command escapes and image paste are
+  // deliberately absent (out of scope — they'd need the wire to widen). This
+  // matters mainly for an external keyboard paired to a phone/tablet; the
+  // on-screen Send/Stop buttons cover pure-touch use.
+  const onComposerKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        sendPrompt()
+        return
       }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        interrupt()
+      }
+    },
+    [sendPrompt, interrupt],
+  )
+
+  // Server-declared STT capability from the WS hello. Self-subscribed (same
+  // pattern as cwd above) because the hello lands asynchronously after the
+  // socket opens — a mount-time read alone could permanently miss the
+  // verdict. Drives the mic's disabled state so a desktop with no Deepgram
+  // key disables dictation up front instead of failing after the user has
+  // already recorded and uploaded.
+  const [sttAvailable, setSttAvailable] = useState<boolean | null>(() =>
+    feed.getSttAvailability(),
+  )
+  useEffect(() => feed.onSttAvailability(setSttAvailable), [feed])
+
+  // Voice dictation. Feeds the real ComposerInput shell's dictation slot (so
+  // the activity meter lights up while recording) AND the tap mic button
+  // below. The transcript comes back <stt>-wrapped from the server; append it
+  // to the draft on its own line so it reads as a distinct dictated segment.
+  const dictation = useMobileDictation({
+    token,
+    sttAvailable,
+    onTranscript: text => setDraft(prev => (prev ? `${prev}\n${text}` : text)),
+    onError: setError,
+  })
+
+  // The dispatch the generic ConditionOutlet drives. Same routing the old
+  // hand-rolled tap-bar used (pty -> structured replyWithPtyAction, custom ->
+  // resolveCondition), just expressed as the (action) => Promise<void> the
+  // core outlet expects. WHY the STRUCTURED replyWithPtyAction and not a raw
+  // sendInput: the phone wire refuses arbitrary bytes, and the pty reply must
+  // carry the action's own {id,label,data} so the desktop can verify it
+  // against the live condition menu — which is exactly why we mount the core
+  // ConditionOutlet directly and NOT ProviderConditionOutlet (its
+  // makeDispatchFromOnSend collapses the action to bytes and throws the id
+  // away). The error branches differ by result shape: pty replies carry
+  // `error`, custom resolutions carry `failedAtStep`.
+  const dispatch = useCallback(
+    async (action: ConditionAction): Promise<void> => {
+      setError(null)
       if (action.kind === 'pty') {
-        void feed.replyWithPtyAction(sessionId, action).then(r => done(r.ok, r.error))
+        const r = await feed.replyWithPtyAction(sessionId, action)
+        if (!r.ok) setError(r.error ?? 'Action failed — it may have expired.')
       } else {
-        void feed
-          .resolveCondition(sessionId, action)
-          .then(r => done(r.ok, r.ok ? undefined : r.failedAtStep))
+        const r = await feed.resolveCondition(sessionId, action)
+        if (!r.ok) setError(r.failedAtStep ?? 'Action failed — it may have expired.')
       }
     },
     [feed, sessionId],
@@ -195,8 +246,20 @@ export function SessionView({
         <div className="topbar">
           <button onClick={onBack}>‹ Back</button>
           <span className={`conn-dot ${connection}`} />
-          <span className="title mono">{sessionId.slice(0, 8)}</span>
         </div>
+        {/* The REAL desktop pane header (provider badge + shortened cwd) in
+            place of the old 8-char session id. Kept as its own bar below the
+            phone's Back/conn nav — on desktop this IS the pane's top bar.
+            statusMode off (a multi-pane-grid glance affordance, meaningless on
+            a single phone screen) and related-agent chips empty (the v1 wire
+            emits no sub-agent data). */}
+        <PaneHeader
+          paneLabel={provider}
+          projectDir={cwd}
+          statusMode={false}
+          isSessionLive={Boolean(working) || !transcript.exited}
+          relatedAgentTabs={[]}
+        />
 
         {/* Pre-transcript fallback: states that never reach the jsonl/
             semantic channels (trust dialog body, login prompts, provider
@@ -241,60 +304,104 @@ export function SessionView({
 
         {working && <div className="working">● {working}</div>}
 
-        {tapConditions.length > 0 && (
+        {/* The REAL desktop condition rendering. The generic core outlet routes
+            the live snapshot through the provider's own conditionViews registry
+            (Claude/Codex permission, trust, approval, AskUserQuestion views) —
+            the exact components the desktop draws — instead of the old flat
+            label+button bar. It also preserves the old "guaranteed fallback"
+            property the hand-rolled bar had: it is snapshot-driven, so even if
+            the feed's inline AskUserQuestionRow is mid-stream or malformed, the
+            outlet still shows real, server-verified action buttons. The `.conditions`
+            wrapper keeps the phone's sticky-above-composer placement. */}
+        {transcript.conditions && (
           <div className="conditions">
-            {tapConditions.map(condition => (
-              <div key={condition.conditionKind}>
-                <div className="prompt-title">{titleFor(condition.conditionKind)}</div>
-                <div className="actions">
-                  {condition.actions.map(action => (
-                    <button
-                      key={`${condition.conditionKind}:${action.id}`}
-                      onClick={() => runAction(action)}
-                    >
-                      {action.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
+            <ConditionOutlet
+              snapshot={transcript.conditions as ConditionSnapshot}
+              registry={getRendererProviderCapabilities(transcript.conditions.provider).conditionViews}
+              dispatch={dispatch}
+            />
           </div>
         )}
 
         {error && <div className="working" style={{ color: 'var(--danger)' }}>{error}</div>}
 
+        {/* The REAL desktop composer shell — pixel-identical ❯ chevron,
+            focus-accent border, auto-grow, dictation slot. Driven by a phone
+            controller: local draft state, Enter/Shift+Enter/Esc key handling,
+            and (until Task 6) a disabled dictation controller. Slash picker and
+            image strip are inert via props (pickerState=null, draftImages=[]).
+            The Send/Stop buttons below are a touch affordance the desktop
+            (Enter-to-send) doesn't need but a phone does. */}
         <div className="composer">
-          <textarea
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            placeholder="Prompt the agent…"
-            rows={1}
+          <ComposerInput
+            inputRef={inputRef}
+            input={draft}
+            focused={true}
+            slashMode={false}
+            provider={provider}
+            draftImages={[]}
+            pickerState={null}
+            historyIndex={null}
+            history={[]}
+            setInputText={setDraft}
+            endHistoryCycle={() => {}}
+            onKeyDown={onComposerKeyDown}
+            onPaste={() => {}}
+            onFocusRequest={() => {}}
+            onUserEngagement={() => {}}
+            onHoverChange={() => {}}
+            removeDraftImage={() => {}}
+            dictation={dictation}
+            promptSuggestion={null}
+            onApplySuggestion={() => {}}
+            onDismissSuggestion={() => {}}
           />
-          {working ? (
-            <button className="stop" onClick={interrupt}>
-              Stop
+          <div className="composer-actions">
+            {/* Explicit tap mic button — the desktop starts dictation from the
+                Fn hotkey, which a phone has no equivalent for. Tap to record,
+                tap again to stop → transcribe → append. Disabled during the
+                transient start/stop transitions (so a double-tap can't race
+                the recorder) AND when the controller says dictation can't
+                work at all — insecure LAN origin (getUserMedia needs a secure
+                context) or no STT key on the desktop. In the disabled states
+                the controller's label carries the full reason, surfaced here
+                as title/aria-label so the mic explains itself instead of
+                fake-failing with a permission error (review finding). */}
+            <button
+              type="button"
+              className={`mic${dictation.status === 'recording' ? ' recording' : ''}`}
+              onClick={dictation.toggle}
+              disabled={
+                !dictation.enabled ||
+                dictation.status === 'starting' ||
+                dictation.status === 'stopping'
+              }
+              aria-label={
+                !dictation.enabled
+                  ? dictation.label
+                  : dictation.status === 'recording'
+                    ? 'Stop recording'
+                    : 'Dictate'
+              }
+              title={dictation.label}
+            >
+              {dictation.status === 'recording'
+                ? '⏺'
+                : dictation.status === 'starting' || dictation.status === 'stopping'
+                  ? '…'
+                  : '🎤'}
             </button>
-          ) : null}
-          <button disabled={!draft.trim() || sending || transcript.exited} onClick={sendPrompt}>
-            {sending ? '…' : 'Send'}
-          </button>
+            {working ? (
+              <button className="stop" onClick={interrupt}>
+                Stop
+              </button>
+            ) : null}
+            <button disabled={!draft.trim() || sending || transcript.exited} onClick={sendPrompt}>
+              {sending ? '…' : 'Send'}
+            </button>
+          </div>
         </div>
       </div>
     </SessionFeedProvider>
   )
-}
-
-/** Human titles for condition kinds surfaced as tap bars. Unknown kinds
- *  fall back to the raw kind string — better an ugly label than a hidden
- *  prompt the agent is blocked on. */
-function titleFor(kind: string): string {
-  const titles: Record<string, string> = {
-    'claude.permission-prompt': 'Permission requested',
-    'claude.trust-dialog': 'Trust this folder?',
-    'claude.resume-prompt': 'Resume session?',
-    'claude.ask-user-question': 'The agent has a question',
-    'codex.approval': 'Approval requested',
-    'codex.trust-dialog': 'Trust this folder?',
-  }
-  return titles[kind] ?? kind
 }

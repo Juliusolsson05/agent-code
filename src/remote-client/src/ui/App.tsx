@@ -123,6 +123,7 @@ export function App(): React.JSX.Element {
       store={store}
       connection={connection}
       sessionId={selectedSessionId}
+      token={token}
       onBack={() => setSelectedSessionId(null)}
     />
   )

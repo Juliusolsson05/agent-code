@@ -38,6 +38,13 @@ export type OutboundFrame =
       deviceId: string
       deviceName: string
       themeSettings?: Record<string, unknown> | null
+      /** Server-side STT capability (transcriber wired AND key present) so
+       *  the mic can be disabled BEFORE recording instead of failing after
+       *  upload with a 503. Optional: an older server doesn't send it, and
+       *  absence means "unknown → keep the mic enabled" (the pre-capability
+       *  fail-at-upload behavior). Mirror of protocol/messages.ts — see its
+       *  WHY comment for the per-connection evaluation semantics. */
+      sttAvailable?: boolean
     }
   | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
   | { type: 'session-list'; sessions: RemoteSessionSummary[] }
