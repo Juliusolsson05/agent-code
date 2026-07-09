@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import {
   MAX_LIVE_ENTRIES,
+  MAX_LIVE_ENTRY_BYTES,
   TRIM_TO_LIVE_ENTRIES,
+  TRIM_TO_LIVE_ENTRY_BYTES,
+  estimateLiveEntriesBytes,
   historyMarkerOf,
   planLiveEntryTrim,
   stampHistoryMarker,
@@ -110,14 +113,20 @@ describe('indexEntryIntoMaps', () => {
 
 const BASE_TS = Date.parse('2026-07-09T10:00:00.000Z')
 
-function windowEntry(i: number, opts: { uuid?: string | null; marker?: string | null } = {}): Entry {
+function windowEntry(
+  i: number,
+  opts: { uuid?: string | null; marker?: string | null; blocks?: unknown[] } = {},
+): Entry {
   const uuid = opts.uuid === null ? undefined : opts.uuid ?? `u-${i}`
   const entry = {
     type: 'user',
     ...(uuid ? { uuid } : {}),
     parentUuid: null,
     timestamp: new Date(BASE_TS + i * 1000).toISOString(),
-    message: { role: 'user', content: [{ type: 'text', text: `row ${i}` }] },
+    message: {
+      role: 'user',
+      content: opts.blocks ?? [{ type: 'text', text: `row ${i}` }],
+    },
   } as unknown as Entry
   if (opts.marker !== null) stampHistoryMarker(entry, opts.marker ?? `m-${i}`)
   return entry
@@ -235,5 +244,117 @@ describe('planLiveEntryTrim', () => {
     // Trimming without advancing historyOldestMarker would strand the
     // trimmed region — unreachable by pagination forever.
     expect(planLiveEntryTrim(entries, emptySemanticRuntime(), emptyGhosts)).toBeNull()
+  })
+
+  // ---- Constraint 5: pair integrity (#511 review blocker 1) ----
+  // The ingest path rebuilds toolUseIndex/toolResultIndex from RETAINED
+  // entries only after a trim, so a boundary that separates a cross-entry
+  // pair (tool_use trimmed, tool_result retained) would permanently strip
+  // the retained result row of its source-tool metadata.
+
+  it('pulls the boundary older instead of splitting a cross-entry tool pair', () => {
+    const entries = windowEntries(MAX_LIVE_ENTRIES + 100)
+    const cut = entries.length - TRIM_TO_LIVE_ENTRIES
+    // tool_use in the last would-be-trimmed entry, its result in the first
+    // retained one — the exact adjacent assistant/user split every provider
+    // produces, landing exactly on the hysteresis boundary.
+    entries[cut - 1] = windowEntry(cut - 1, {
+      blocks: [{ type: 'tool_use', id: 'tu-split', name: 'Read', input: { file_path: '/x' } }],
+    })
+    entries[cut] = windowEntry(cut, {
+      blocks: [{ type: 'tool_result', tool_use_id: 'tu-split', content: 'file body' }],
+    })
+    const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), emptyGhosts)
+    expect(plan).not.toBeNull()
+    // Boundary retreats to RETAIN the tool_use entry (never trims the
+    // result instead — it might sit inside the protected region).
+    expect(plan!.cut).toBe(cut - 1)
+    expect(plan!.trimmedUuids).toHaveLength(cut - 1)
+    expect(plan!.nextOldestMarker).toBe(`m-${cut - 1}`)
+  })
+
+  it('resolves chained pair references to a fixpoint', () => {
+    const entries = windowEntries(MAX_LIVE_ENTRIES + 100)
+    const cut = entries.length - TRIM_TO_LIVE_ENTRIES
+    // Retaining the result at cut+10 forces entry 500 (its use) to stay;
+    // entry 500 ALSO carries a result whose use lives at 400 — retention
+    // must chase the chain, not stop after one hop.
+    entries[400] = windowEntry(400, {
+      blocks: [{ type: 'tool_use', id: 'tu-a', name: 'Bash', input: { command: 'ls' } }],
+    })
+    entries[500] = windowEntry(500, {
+      blocks: [
+        { type: 'tool_result', tool_use_id: 'tu-a', content: 'a done' },
+        { type: 'tool_use', id: 'tu-b', name: 'Bash', input: { command: 'pwd' } },
+      ],
+    })
+    entries[cut + 10] = windowEntry(cut + 10, {
+      blocks: [{ type: 'tool_result', tool_use_id: 'tu-b', content: 'b done' }],
+    })
+    const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), emptyGhosts)
+    expect(plan).not.toBeNull()
+    expect(plan!.cut).toBe(400)
+    expect(plan!.trimmedUuids).toHaveLength(400)
+    expect(plan!.nextOldestMarker).toBe('m-400')
+  })
+
+  it('leaves the boundary alone for pairs that are entirely trimmed or entirely retained', () => {
+    const entries = windowEntries(MAX_LIVE_ENTRIES + 100)
+    const cut = entries.length - TRIM_TO_LIVE_ENTRIES
+    // Fully trimmed pair — both sides leave the window together.
+    entries[10] = windowEntry(10, {
+      blocks: [{ type: 'tool_use', id: 'tu-old', name: 'Bash', input: {} }],
+    })
+    entries[11] = windowEntry(11, {
+      blocks: [{ type: 'tool_result', tool_use_id: 'tu-old', content: 'ok' }],
+    })
+    // Fully retained pair — never enters the trimmed-use index at all.
+    entries[cut + 1] = windowEntry(cut + 1, {
+      blocks: [{ type: 'tool_use', id: 'tu-new', name: 'Bash', input: {} }],
+    })
+    entries[cut + 2] = windowEntry(cut + 2, {
+      blocks: [{ type: 'tool_result', tool_use_id: 'tu-new', content: 'ok' }],
+    })
+    const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), emptyGhosts)
+    expect(plan).not.toBeNull()
+    expect(plan!.cut).toBe(cut)
+  })
+
+  // ---- Byte budget (#511 review blocker 2) ----
+  // #375 is a bytes problem: a few hundred entries dragging huge
+  // tool_results must trigger the window long before the count cap.
+
+  it('trims on the byte budget even when the entry count is far under MAX_LIVE_ENTRIES', () => {
+    const big = 'x'.repeat(100_000)
+    const entries = Array.from({ length: 400 }, (_, i) =>
+      windowEntry(i, { blocks: [{ type: 'text', text: big }] }),
+    )
+    expect(entries.length).toBeLessThan(MAX_LIVE_ENTRIES)
+    expect(estimateLiveEntriesBytes(entries)).toBeGreaterThan(MAX_LIVE_ENTRY_BYTES)
+    const plan = planLiveEntryTrim(entries, emptySemanticRuntime(), emptyGhosts)
+    expect(plan).not.toBeNull()
+    expect(plan!.cut).toBeGreaterThan(0)
+    // Hysteresis: retained estimate lands at/under the byte target (no
+    // safety constraint is active here to stop the walk early).
+    expect(plan!.retainedBytesEstimate).toBeLessThanOrEqual(TRIM_TO_LIVE_ENTRY_BYTES)
+    // The plan's estimates and the shared estimator agree exactly — both
+    // read the same per-entry cache.
+    expect(estimateLiveEntriesBytes(entries.slice(plan!.cut))).toBe(plan!.retainedBytesEstimate)
+    expect(plan!.preTrimBytesEstimate).toBe(estimateLiveEntriesBytes(entries))
+  })
+
+  it('byte trims stop at the protection bound rather than reaching the byte target', () => {
+    const big = 'x'.repeat(100_000)
+    const entries = Array.from({ length: 400 }, (_, i) =>
+      windowEntry(i, { blocks: [{ type: 'text', text: big }] }),
+    )
+    // Live turn started at entry 20's wall clock — everything from there on
+    // is protected, so only 20 entries are trimmable even though the byte
+    // target would ask for far more. Trim what's allowed and stop.
+    const semantic = semanticWithHistoryStart(BASE_TS + 20 * 1000)
+    const plan = planLiveEntryTrim(entries, semantic, emptyGhosts)
+    expect(plan).not.toBeNull()
+    expect(plan!.cut).toBe(20)
+    expect(plan!.retainedBytesEstimate).toBeGreaterThan(TRIM_TO_LIVE_ENTRY_BYTES)
   })
 })

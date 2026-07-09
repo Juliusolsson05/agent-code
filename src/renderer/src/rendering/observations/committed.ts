@@ -261,7 +261,8 @@ export function collectCommittedCandidates(
     //
     // STABILITY CONTRACT (updated for the #375 live window): the entries
     // array is no longer strictly append-only — the live ingest path trims
-    // the oldest entries once the window exceeds MAX_LIVE_ENTRIES, and
+    // the oldest entries once the window exceeds its count or byte budget
+    // (MAX_LIVE_ENTRIES / MAX_LIVE_ENTRY_BYTES), and
     // older-history pagination PREPENDS (which also shifts indices; that
     // predates the window). The `ingest-${index}` fallback survives both
     // because the trimmer refuses to run at all while ANY entry in the

@@ -152,6 +152,24 @@ export function useHistoryActions(
           // region MUST restore its pairings or the reloaded rows would
           // paint permanently degraded. Same in-place-mutate + version-bump
           // contract as the ingest sites (see entries.ts).
+          //
+          // INTENTIONAL BEHAVIOR CHANGE for never-trimmed sessions too
+          // (evaluated for the #511 review, kept deliberately): scroll-back
+          // in an ordinary session now also indexes what it pages in, so
+          // rows that previously painted the degraded generic fallback
+          // (Read/Edit/TodoWrite/git/AskUserQuestion cards missing their
+          // source-tool metadata) now render rich. Gating this to post-trim
+          // sessions would preserve a bug purely for behavioral stasis.
+          // Why it can't regress anything else: tool_use ids are
+          // provider-generated and unique within a session, so an old
+          // paged-in block can never collide with (and overwrite) a live
+          // pairing — the only same-id re-index is the reloaded-trimmed-
+          // region case, where re-pointing to the equivalent reloaded block
+          // is exactly the intent. And the toolIndexVersion bump rides a
+          // state update that already replaces the entries array reference,
+          // so Feed re-renders exactly once either way — the bump changes
+          // what the mounted tool rows can RESOLVE, not how often they
+          // paint.
           let toolIndexChanged = false
           for (const entry of prepend) {
             if (indexEntryIntoMaps(entry, current.toolUseIndex, current.toolResultIndex)) {

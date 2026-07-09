@@ -1,5 +1,5 @@
 import type { SessionRuntime } from '@renderer/session-runtime/state'
-import { trimmedUuidCount } from '@renderer/session-runtime/liveEntryWindow'
+import { estimateJsonBytes, trimmedUuidCount } from '@renderer/session-runtime/liveEntryWindow'
 import { codeBlockRegistrySize } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
 import { monacoModelCount } from '@renderer/lib/code/monacoModelProbe'
 
@@ -39,7 +39,14 @@ import * as perf from './client'
  *  workload we're instrumenting against. A 30s gauge only needs
  *  order-of-magnitude trend fidelity ("entries plateaued after the trim
  *  landed", "semantic.log is 40 MB, entries are 2 MB"), so we stringify
- *  up to SAMPLE_CAP evenly-spaced items and extrapolate avg × length. */
+ *  up to SAMPLE_CAP evenly-spaced items and extrapolate avg × length.
+ *
+ *  The single-item primitive (estimateJsonBytes: stringify length,
+ *  never-throws) is SHARED with the live window's byte budget and lives
+ *  in liveEntryWindow.ts — this module already imports from there, so
+ *  the reverse import would be a cycle. Keeping both consumers on the
+ *  same primitive is what makes the entries gauge directly comparable
+ *  with the trim records' preTrim/retained byte estimates. */
 const SAMPLE_CAP = 64
 
 export function estimateJsonBytesSampled(items: readonly unknown[]): number {
@@ -49,15 +56,7 @@ export function estimateJsonBytesSampled(items: readonly unknown[]): number {
   let sampledBytes = 0
   for (let i = 0; i < items.length; i += step) {
     sampled += 1
-    try {
-      // string.length undercounts multi-byte UTF-8 but is allocation-free
-      // compared to TextEncoder; for a trend gauge the constant factor is
-      // irrelevant.
-      sampledBytes += JSON.stringify(items[i])?.length ?? 0
-    } catch {
-      // Circular or otherwise unstringifiable item — shouldn't exist in
-      // these collections, but a diagnostic must never throw into ingest.
-    }
+    sampledBytes += estimateJsonBytes(items[i])
   }
   if (sampled === 0) return 0
   return Math.round((sampledBytes / sampled) * items.length)
@@ -100,6 +99,11 @@ export function emitRendererMemoryGauges(
     )
     perf.gauge('renderer.session.memory.feedDebugLog', runtime.feedDebugLog.length, {
       sessionId,
+      // Same sampled-byte dimension as the entries/semantic gauges — the
+      // ring is count-capped but records vary from one-line summaries to
+      // multi-KB data payloads, so a count alone can't be compared against
+      // the byte gauges when apportioning heap between structures.
+      bytesEstimate: estimateJsonBytesSampled(runtime.feedDebugLog),
     })
     perf.gauge('renderer.session.memory.ghostMap', runtime.ghosts.size, { sessionId })
     perf.gauge('renderer.session.memory.toolIndex', runtime.toolUseIndex.size, {

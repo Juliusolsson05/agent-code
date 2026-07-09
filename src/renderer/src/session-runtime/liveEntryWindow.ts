@@ -1,4 +1,4 @@
-import type { Entry } from '@shared/types/transcript'
+import { isConversationEntry, type Entry } from '@shared/types/transcript'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 
 import type { SemanticRuntimeState } from '@renderer/session-runtime/state'
@@ -48,6 +48,27 @@ export const MAX_LIVE_ENTRIES = 2000
  *  and ledger recompute cost is paid once per ~500 appends instead of
  *  on every append past the cap. */
 export const TRIM_TO_LIVE_ENTRIES = 1500
+
+/** Byte budget — the OTHER trim trigger. #375 is fundamentally a BYTES
+ *  problem, not an entry-count problem: 2000 chat-sized entries are a
+ *  couple of MB and harmless, while a few hundred entries each dragging
+ *  a multi-hundred-KB tool_result (build logs, file reads, agent output
+ *  dumps) blow past that long before the count cap fires. A count-only
+ *  window would leave exactly the pathological sessions the window
+ *  exists for unbounded. 32 MiB is deliberately generous for the same
+ *  reason MAX_LIVE_ENTRIES is: the point is to bound the pathological
+ *  case, not to squeeze memory — and estimates are JSON.stringify
+ *  string lengths (see estimateEntryBytes), i.e. order-of-magnitude
+ *  truth, so the cap must have headroom for estimator error. */
+export const MAX_LIVE_ENTRY_BYTES = 32 * 1024 * 1024
+
+/** Byte-trim hysteresis target, mirroring TRIM_TO_LIVE_ENTRIES: cut to
+ *  ~24 MiB so byte-driven trims also happen in chunks, not one giant
+ *  entry per burst. Both budgets are targets, not guarantees — the
+ *  safety constraints in planLiveEntryTrim (live-turn ownership, ghost
+ *  evidence, pair integrity, marker anchoring) always win, and when
+ *  they forbid reaching the target we trim what's allowed and stop. */
+export const TRIM_TO_LIVE_ENTRY_BYTES = 24 * 1024 * 1024
 
 /** How long after an older-history prepend trimming stays suspended.
  *
@@ -188,6 +209,71 @@ export function clearLiveEntryWindowSession(sessionId: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Byte accounting
+// ---------------------------------------------------------------------------
+
+/** JSON.stringify length of one value — the byte-estimate primitive shared
+ *  with the perf memory gauges (performance/memoryInstrumentation.ts imports
+ *  it; it lives HERE and not there because that module already imports this
+ *  one for trimmedUuidCount, and the reverse import would be a cycle).
+ *  string.length undercounts multi-byte UTF-8 but is allocation-free compared
+ *  to TextEncoder; both the gauges and the trim budget only need
+ *  order-of-magnitude fidelity. Never throws — a byte estimate must not be
+ *  able to take down ingest, so circular/unstringifiable values count as 0. */
+export function estimateJsonBytes(item: unknown): number {
+  try {
+    return JSON.stringify(item)?.length ?? 0
+  } catch {
+    return 0
+  }
+}
+
+/** Per-entry byte estimates, cached for the lifetime of the entry OBJECT.
+ *
+ *  WHY a WeakMap and not ingest-time accounting on runtime state: an exact
+ *  running total would need decrement bookkeeping at every trim / reload /
+ *  optimistic-reconcile site to stay honest — a whole class of drift bugs
+ *  for what is a budget heuristic (memoryInstrumentation.ts makes the same
+ *  argument for its gauges). The WeakMap has no decrement problem at all:
+ *  GC owns eviction, so memory is proportional to live entries by
+ *  construction, exactly like the marker rider above.
+ *
+ *  WHY caching is sound: entries are immutable after mapping — updated tool
+ *  results arrive as NEW entry objects (see indexEntryIntoMaps' re-point
+ *  semantics), never as in-place mutation of an ingested entry. The symbol
+ *  marker rider is non-enumerable, so it never perturbs the estimate.
+ *
+ *  Cost shape: each entry is stringified exactly ONCE in its lifetime
+ *  (O(appended) per burst), and the per-burst budget check is a cache-hit
+ *  sum — cheaper in aggregate than re-sampling the window per burst would
+ *  be, and unlike sampling it can't be fooled by a skewed size mix. */
+const entryBytesCache = new WeakMap<Entry, number>()
+
+export function estimateEntryBytes(entry: Entry): number {
+  let bytes = entryBytesCache.get(entry)
+  if (bytes === undefined) {
+    bytes = estimateJsonBytes(entry)
+    entryBytesCache.set(entry, bytes)
+  }
+  return bytes
+}
+
+export function estimateLiveEntriesBytes(entries: readonly Entry[]): number {
+  let total = 0
+  for (const entry of entries) total += estimateEntryBytes(entry)
+  return total
+}
+
+/** Cheap per-burst gate for the ingest path: should the planner even run?
+ *  Count check first (free), byte sum second (cache-hit WeakMap walk).
+ *  Callers keep their own cheaper guards (older-history grace, in-flight
+ *  pagination) in front of this. */
+export function liveEntryWindowOverBudget(entries: readonly Entry[]): boolean {
+  if (entries.length > MAX_LIVE_ENTRIES) return true
+  return estimateLiveEntriesBytes(entries) > MAX_LIVE_ENTRY_BYTES
+}
+
+// ---------------------------------------------------------------------------
 // The trim planner
 // ---------------------------------------------------------------------------
 
@@ -209,6 +295,23 @@ export type LiveEntryTrimPlan = {
   nextOldestMarker: string
   /** The computed protection bound, surfaced for the feed-debug record. */
   protectBeforeMs: number
+  /** Estimated bytes of the FULL pre-trim window and of the retained
+   *  slice, surfaced for the feed-debug record so a bundle grep can tell
+   *  a count-triggered trim from a byte-triggered one and see how close
+   *  the safety constraints let us get to the byte target. */
+  preTrimBytesEstimate: number
+  retainedBytesEstimate: number
+}
+
+/** Content blocks of a conversation entry, or [] for shapes the tool-pair
+ *  scan can't (and needn't) see inside. Mirrors indexEntryIntoMaps'
+ *  reading of `message.content` — the two MUST agree on what counts as a
+ *  tool block, because constraint 5 below exists precisely to keep the
+ *  maps that indexEntryIntoMaps builds pair-complete after a trim. */
+function contentBlocksOf(entry: Entry): readonly Record<string, unknown>[] {
+  if (!isConversationEntry(entry)) return []
+  const content = entry.message.content
+  return Array.isArray(content) ? (content as Record<string, unknown>[]) : []
 }
 
 function entryTimestampMs(entry: Entry): number | null {
@@ -288,14 +391,61 @@ function computeProtectBound(
  *    is aborted — advancing historyOldestMarker is what keeps the trimmed
  *    region reachable, and a trim that can't advance it would strand those
  *    entries permanently.
+ *
+ * 5. THE BOUNDARY MUST NOT SPLIT A CROSS-ENTRY TOOL PAIR. tool_use and its
+ *    tool_result live in DIFFERENT entries (assistant entry carries the
+ *    use, the following user entry carries the result — on every
+ *    provider), and the ingest path rebuilds toolUseIndex/toolResultIndex
+ *    from RETAINED entries only after applying a plan. If the cut landed
+ *    between a pair, the retained result would lose its source-tool
+ *    metadata: ToolResultRow resolves its command/file/args through
+ *    toolUseIndex, so Read/Edit/TodoWrite/git/AskUserQuestion rich
+ *    rendering and result suppression would silently degrade for that row
+ *    — permanently, since no later burst re-delivers the trimmed use. The
+ *    fix direction is always to RETAIN MORE (pull the boundary older until
+ *    no retained result references a trimmed use), never to trim the
+ *    result too: the result may be inside the protected region. Applied to
+ *    a fixpoint because retaining an entry can expose ITS result blocks
+ *    referencing still-older uses (each region is scanned once, so the
+ *    whole pass stays O(window)). The reverse split — use retained, result
+ *    trimmed — cannot happen: results always come later in the array than
+ *    their use, and trims only take the head.
  */
 export function planLiveEntryTrim(
   entries: readonly Entry[],
   semantic: SemanticRuntimeState,
   ghosts: ReadonlyMap<string, GhostEntry>,
 ): LiveEntryTrimPlan | null {
-  if (entries.length <= MAX_LIVE_ENTRIES) return null
-  const desiredCut = entries.length - TRIM_TO_LIVE_ENTRIES
+  // Either budget can trigger (#375 is a bytes problem — see the constant
+  // docs). The byte sum is a WeakMap cache-hit walk, so evaluating it on
+  // every planner call is cheap; callers additionally pre-gate with
+  // liveEntryWindowOverBudget.
+  const preTrimBytesEstimate = estimateLiveEntriesBytes(entries)
+  const overCount = entries.length > MAX_LIVE_ENTRIES
+  const overBytes = preTrimBytesEstimate > MAX_LIVE_ENTRY_BYTES
+  if (!overCount && !overBytes) return null
+
+  // Desired cut = whichever budget asks for MORE. The byte walk stops at
+  // entries.length - 1 (never propose trimming the final entry): there is
+  // deliberately NO larger retained-count floor for byte trims, because any
+  // floor re-opens exactly the unbounded-bytes hole the cap closes (a few
+  // hundred multi-MB entries would ride under it forever). If a byte trim
+  // would cut into live/visible content, constraints 2-3 below stop it —
+  // the protection bound, not an arbitrary count, is the real floor.
+  const cutForCount = overCount ? entries.length - TRIM_TO_LIVE_ENTRIES : 0
+  let cutForBytes = 0
+  if (overBytes) {
+    let retainedBytes = preTrimBytesEstimate
+    while (
+      cutForBytes < entries.length - 1 &&
+      retainedBytes > TRIM_TO_LIVE_ENTRY_BYTES
+    ) {
+      retainedBytes -= estimateEntryBytes(entries[cutForBytes])
+      cutForBytes += 1
+    }
+  }
+  const desiredCut = Math.max(cutForCount, cutForBytes)
+  if (desiredCut === 0) return null
 
   // Constraint 1: any uuid-less entry anywhere freezes the window.
   for (const entry of entries) {
@@ -325,6 +475,54 @@ export function planLiveEntryTrim(
   }
   if (cut === 0) return null
 
+  // Constraint 5: pair integrity (see the doc block above). Index the
+  // tool_use ids of the would-be-trimmed region, then pull the boundary
+  // older until no retained tool_result references a trimmed tool_use.
+  // Fixpoint via non-overlapping region scans: pass 1 scans the retained
+  // window [cut, end); each later pass scans only the region the previous
+  // pass newly retained — every index is visited at most once, O(window).
+  const trimmedToolUseEntryIndex = new Map<string, number>()
+  for (let i = 0; i < cut; i++) {
+    for (const block of contentBlocksOf(entries[i])) {
+      if (block.type === 'tool_use' && typeof block.id === 'string') {
+        trimmedToolUseEntryIndex.set(block.id, i)
+      }
+    }
+  }
+  if (trimmedToolUseEntryIndex.size > 0) {
+    let boundary = cut
+    let scanFrom = cut
+    let scanTo = entries.length
+    for (;;) {
+      let required = boundary
+      for (let i = scanFrom; i < scanTo; i++) {
+        for (const block of contentBlocksOf(entries[i])) {
+          if (block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') {
+            continue
+          }
+          const useEntryIndex = trimmedToolUseEntryIndex.get(block.tool_use_id)
+          // `< required` (the running minimum), not `< boundary`: a use
+          // that an earlier block in this same pass already pulled into
+          // the retained region needs no further action.
+          if (useEntryIndex !== undefined && useEntryIndex < required) {
+            required = useEntryIndex
+          }
+        }
+      }
+      if (required === boundary) break
+      scanTo = boundary
+      scanFrom = required
+      boundary = required
+    }
+    if (boundary < cut) {
+      cut = boundary
+      // trimmedUuids[i] is entries[i]'s uuid by construction of the
+      // constraint loop above, so tightening the boundary is a truncate.
+      trimmedUuids.length = boundary
+    }
+  }
+  if (cut === 0) return null
+
   // Constraint 4: find the oldest retained marker (skip forward past
   // retained entries whose raw line had none — pagination will re-read a
   // few filtered lines in that case, which the loader's mapper drops
@@ -339,5 +537,18 @@ export function planLiveEntryTrim(
   }
   if (!nextOldestMarker) return null
 
-  return { cut, trimmedUuids, nextOldestMarker, protectBeforeMs }
+  // Cache-hit walk of the final trimmed slice — the constraint loops above
+  // may have stopped short of desiredCut, so this can't be accumulated
+  // inline without re-deriving it on every early break.
+  let trimmedBytesEstimate = 0
+  for (let i = 0; i < cut; i++) trimmedBytesEstimate += estimateEntryBytes(entries[i])
+
+  return {
+    cut,
+    trimmedUuids,
+    nextOldestMarker,
+    protectBeforeMs,
+    preTrimBytesEstimate,
+    retainedBytesEstimate: preTrimBytesEstimate - trimmedBytesEstimate,
+  }
 }

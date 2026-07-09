@@ -37,8 +37,8 @@ import {
   summarizeEntryForDebug,
 } from '@renderer/session-runtime/entries'
 import {
-  MAX_LIVE_ENTRIES,
   isUuidTrimmed,
+  liveEntryWindowOverBudget,
   markUuidsTrimmed,
   planLiveEntryTrim,
   stampHistoryMarker,
@@ -1755,7 +1755,10 @@ export function useIpcSubscriptions(
         // unbounded — bootstrap loads 120, older pages 200, but a long-
         // running agent appends forever. Trim the OLDEST entries back out
         // of the window here (the only place the array grows without a
-        // user gesture) once it exceeds MAX_LIVE_ENTRIES.
+        // user gesture) once it exceeds EITHER budget: entry count
+        // (MAX_LIVE_ENTRIES) or estimated bytes (MAX_LIVE_ENTRY_BYTES —
+        // a few hundred entries dragging huge tool_results are the actual
+        // #375 pathology, and a count-only cap would never fire on them).
         //
         // Scroll safety: skip while older-history pagination is in flight
         // and for a grace period after a prepend. Feed has no shrink-
@@ -1771,10 +1774,14 @@ export function useIpcSubscriptions(
         let entriesTrimmed = 0
         let trimmedOldestMarker: string | null = null
         let trimProtectBoundMs: number | null = null
+        let trimPreTrimBytes: number | null = null
+        let trimRetainedBytes: number | null = null
+        // Cheap guards first — liveEntryWindowOverBudget walks the window's
+        // per-entry byte cache, so it goes last in the &&-chain.
         if (
-          nextEntries.length > MAX_LIVE_ENTRIES &&
           !current.loadingOlderHistory &&
-          !withinOlderPrependGrace(sessionId)
+          !withinOlderPrependGrace(sessionId) &&
+          liveEntryWindowOverBudget(nextEntries)
         ) {
           // Bounds come from CURRENT semantic state (this handler never
           // folds semantic events) and POST-reconcile ghosts (a ghost this
@@ -1787,12 +1794,22 @@ export function useIpcSubscriptions(
             entriesTrimmed = plan.cut
             trimmedOldestMarker = plan.nextOldestMarker
             trimProtectBoundMs = plan.protectBeforeMs
+            trimPreTrimBytes = plan.preTrimBytesEstimate
+            trimRetainedBytes = plan.retainedBytesEstimate
             markUuidsTrimmed(sessionId, plan.trimmedUuids)
             // Rebuild the tool indices FROM RETAINED ENTRIES ONLY.
             // Per-id deletion is wrong here: the maps hold cross-entry
             // pairings (a retained tool_result row resolves its command
             // via toolUseIndex — ToolResultRow), so deleting a trimmed
             // entry's tool_use id would orphan the retained result row.
+            // This rebuild is only PAIR-COMPLETE because the planner's
+            // constraint 5 guarantees the boundary never separates a
+            // tool pair: every retained tool_result's source tool_use
+            // entry is itself retained, so re-indexing the retained
+            // window reproduces every pairing a retained row can ask
+            // for. If that constraint ever regresses, the symptom is a
+            // retained result row silently losing its rich rendering
+            // (Read/Edit/git cards degrade to the generic fallback).
             // A wholesale rebuild is O(window) and only runs at trim
             // frequency (~once per 500 appends). In-place clear keeps the
             // stable map references Feed holds through context; the
@@ -1921,6 +1938,12 @@ export function useIpcSubscriptions(
                 trimmedCount: entriesTrimmed,
                 retainedCount: finalEntries.length,
                 preTrimCount: nextEntries.length,
+                // Byte estimates answer "which budget fired": a trim with
+                // preTrimCount <= MAX_LIVE_ENTRIES was byte-driven, and
+                // retainedBytesEstimate >> TRIM_TO_LIVE_ENTRY_BYTES means
+                // the safety constraints stopped it short of the target.
+                preTrimBytesEstimate: trimPreTrimBytes,
+                retainedBytesEstimate: trimRetainedBytes,
                 newOldestMarker: trimmedOldestMarker,
                 protectBoundMs: trimProtectBoundMs === null ||
                   !Number.isFinite(trimProtectBoundMs)
