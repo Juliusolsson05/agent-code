@@ -98,6 +98,11 @@
     // modules. It is consumed by renderer feed code, not by main, so keep it
     // out of the node project for the same reason as registry.renderer.ts.
     "src/providers/registry.renderer.capabilities.ts",
+    // ...and its colocated spawn-tool test (moved here from features/feed in
+    // #493 PR-2), which imports the registry and would otherwise re-trigger
+    // the same renderer-subtree walk this block exists to stop. The web
+    // project + vitest cover it.
+    "src/providers/registry.renderer.capabilities.spawnTool.test.ts",
     // conditions-core ships ONE renderer-only file: ConditionOutlet.tsx (a JSX
     // component). The rest of conditions-core (contract.ts/view.ts/dispatch.ts)
     // is node-safe and SHOULD be type-checked by this project. Excluding just

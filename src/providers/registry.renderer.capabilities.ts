@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { ConditionView } from '@shared/conditions-core/view'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
 import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
 import {
@@ -265,4 +265,31 @@ export function getRendererProviderCapabilities(id: string): RendererProviderCap
   const provider = rendererProviderCapabilities[id]
   if (!provider) throw new Error(`Unknown provider: ${id}`)
   return provider
+}
+
+// Shared predicate: does this tool_use spawn a subagent the fleet row
+// should own? (Residue plan P2c — the 2026-06-21 dispatch-name blind
+// spot: a session spawning via the built-in MCP orchestration server
+// painted ZERO Task cards while state-snapshot.subAgents held 73 tracked
+// children, because the interception only knew 'Agent'/'spawn_agent'.)
+//
+// Lives HERE (not in features/feed/lib, its pre-#493 home) because it is a
+// pure union over each provider's RendererProviderCapabilities.isSpawnTool —
+// provider vocabulary, owned by this registry. Moving it also cut the last
+// value-level rendering/ → features/feed edge (#493 PR-2): the committed
+// collector's task-notification join and the feed's fleet rows now share it
+// through the providers layer, which BOTH may legally import.
+//
+// WHY union across ALL providers instead of resolving the caller's provider:
+// the call sites differ. Block.tsx has the ProviderContext, but
+// ConversationRow.tsx's grouping walk (isAgentBlock) does not thread a
+// provider. A provider-agnostic union preserves the previous behavior EXACTLY
+// — the old Set matched any of the three names regardless of provider — while
+// still sourcing the names from the registry. Because each provider's spawn
+// names are disjoint in practice (no backend emits another's spawn verb), the
+// union is identical to a per-provider check for any real transcript.
+export function isAgentSpawnToolName(name: string): boolean {
+  return AGENT_PROVIDER_KINDS.some(kind =>
+    getRendererProviderCapabilities(kind).isSpawnTool(name),
+  )
 }

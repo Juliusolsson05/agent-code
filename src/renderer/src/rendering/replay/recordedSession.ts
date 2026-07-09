@@ -1,7 +1,7 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
-import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
 import {
   createLedgerInputAdapter,
   type RuntimeLedgerSlices,
@@ -202,24 +202,23 @@ export function parseRecording(input: {
 // Replay
 // ---------------------------------------------------------------------------
 
-/** Thin SessionRuntime view for the view-stage context builder. The bridge
- *  (`ledgerFeedContextFromRuntime`) reads only these seven fields; casting a
- *  partial object is far cheaper — and clearer — than fabricating a full
- *  SessionRuntime. If the bridge ever grows a new read, tsc flags it here. */
+/** The render-input view for the view-stage context builder. Since PR-2 of
+ *  #493 the bridge takes the DECLARED contract (`RuntimeRenderInput`) instead
+ *  of the whole SessionRuntime, so this is now honestly typed — the old
+ *  `as unknown as SessionRuntime` cast is gone. If the bridge ever grows a
+ *  new read, the contract type changes and tsc flags this builder. */
 function runtimeViewFor(
   state: ReturnType<typeof createReplayFoldState>,
-): SessionRuntime {
+): RuntimeRenderInput {
   return {
     entries: state.entries,
     ghosts: state.ghosts,
-    semantic: {
-      currentTurn: state.semantic.currentTurn,
-      history: state.semantic.history,
-    },
+    semantic: state.semantic,
     streamPhase: state.phase.streamPhase,
     streamPhasePendingToolName: state.phase.streamPhasePendingToolName,
     streamPhasePendingToolUseId: state.phase.streamPhasePendingToolUseId,
-  } as unknown as SessionRuntime
+    lastJsonlEntryAt: state.lastJsonlEntryAt,
+  }
 }
 
 /**

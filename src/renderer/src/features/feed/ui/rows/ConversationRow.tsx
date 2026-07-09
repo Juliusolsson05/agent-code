@@ -8,7 +8,7 @@ import type {
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
-import { isAgentSpawnToolName } from '@renderer/features/feed/lib/agentSpawnTools'
+import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 
 import { Block } from '@renderer/features/feed/ui/rows/Block'
 import { SubagentGroupHeader } from '@renderer/features/feed/ui/rows/SubagentGroupHeader'

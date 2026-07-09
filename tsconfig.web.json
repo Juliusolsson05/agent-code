@@ -73,6 +73,13 @@
     "src/shared/conditions-core/**/*",
     "src/providers/*/parsers/**/*",
     "src/providers/*/renderer/**/*",
+    // The spawn-tool test lives at providers/ ROOT beside the capability
+    // registry it tests (moved from features/feed in #493 PR-2). The two
+    // globs above don't reach providers-root files, and nothing imports a
+    // test — without this line it would fall out of every project's file
+    // list and go un-type-checked (the registry itself rides in
+    // transitively via renderer imports; the node project excludes both).
+    "src/providers/registry.renderer.capabilities.spawnTool.test.ts",
     // registry.renderer.ts lives at providers/ root, outside the
     // `*/renderer/**/*` glob above. TileTree imports it to mount
     // provider-specific TileLeaf components, so the web project
