@@ -20,6 +20,10 @@ import type { Entry } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { dispatchAttentionLabelFromConditions } from '@renderer/workspace/conditions/selectors'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
+import {
+  dispatchActivity,
+  dispatchActivityClasses,
+} from '@renderer/workspace/dispatch/dispatchActivity'
 
 // WHY this module exists separately from DispatchLayout:
 // The full Dispatch index list (sections, pinned group, activity-colored
@@ -29,7 +33,17 @@ import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 // were extracted here so both the classic and tiled layouts render an
 // identical index. This is a pure move: behavior is unchanged.
 
-export type DispatchAgentActivity = 'working' | 'running' | 'idle' | 'exited' | 'starting'
+// Moved to ./dispatchActivity so the floating agent-status overlay (a
+// separate renderer entry) can share the activity vocabulary without
+// bundling this whole component graph. Re-exported here so the existing
+// importers (DispatchMiniList, DispatchLayout, TiledDispatchLayout) keep
+// working unchanged.
+export {
+  dispatchActivity,
+  dispatchActivityClasses,
+  dispatchActivityDotClass,
+} from '@renderer/workspace/dispatch/dispatchActivity'
+export type { DispatchAgentActivity } from '@renderer/workspace/dispatch/dispatchActivity'
 
 const latestPromptTitleCache = new WeakMap<
   Entry[],
@@ -424,97 +438,6 @@ function DispatchUnreadBadge({
       NEW
     </span>
   )
-}
-
-// Exported for reuse by the Tiled Dispatch mini-list, which shows a
-// compact activity dot derived from the same runtime state.
-export function dispatchActivity(runtime: {
-  sessionStatus?: string
-  streamPhase?: string
-  exited?: number | null
-  processStatus?: string
-}): DispatchAgentActivity {
-  if (runtime.sessionStatus === undefined) return 'starting'
-  if (isSessionExited(runtime)) return 'exited'
-  if (runtime.streamPhase && runtime.streamPhase !== 'idle') return 'working'
-  if (runtime.sessionStatus === 'running') return 'running'
-  return 'idle'
-}
-
-// Exported so the Tiled Dispatch mini-list can render its index chips with
-// the exact same activity background + accent-when-selected palette as the
-// main index's chip cell — the two surfaces must read identically.
-export function dispatchActivityClasses(
-  activity: DispatchAgentActivity,
-  active: boolean,
-): {
-  row: string
-  index: string
-  title: string
-} {
-  // Dispatch is a dense scanning surface, so full-row status backgrounds
-  // make every state compete with the actual content. The index cell is the
-  // one stable visual affordance every row already has, which makes it the
-  // right place for both active selection and process state. Active wins here
-  // because it answers "where am I focused?" while the text metadata still
-  // spells out whether the underlying session is running, working, or exited.
-  if (active) {
-    return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-accent text-accent-fg',
-      title: '',
-    }
-  }
-  if (activity === 'working') {
-    return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-success text-success-fg',
-      title: '',
-    }
-  }
-  if (activity === 'running') {
-    return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-info text-info-fg',
-      title: '',
-    }
-  }
-  if (activity === 'starting') {
-    return {
-      row: 'bg-surface hover:bg-surface-hi text-ink',
-      index: 'bg-warning text-warning-fg',
-      title: '',
-    }
-  }
-  if (activity === 'exited') {
-    return {
-      row: 'bg-surface hover:bg-surface-hi text-muted opacity-75',
-      index: 'bg-danger text-danger-fg',
-      title: '',
-    }
-  }
-  return {
-    row: 'bg-surface hover:bg-surface-hi text-ink-dim',
-    index: 'bg-surface-hi text-muted',
-    title: '',
-  }
-}
-
-// Activity → dot color for the compact mini-list. Mirrors the index-cell
-// palette in dispatchActivityClasses so the two surfaces read the same.
-export function dispatchActivityDotClass(activity: DispatchAgentActivity): string {
-  switch (activity) {
-    case 'working':
-      return 'bg-success'
-    case 'running':
-      return 'bg-info'
-    case 'starting':
-      return 'bg-warning'
-    case 'exited':
-      return 'bg-danger'
-    default:
-      return 'bg-muted'
-  }
 }
 
 export function DispatchEmpty({ message }: { message: string }) {

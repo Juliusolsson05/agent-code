@@ -191,7 +191,15 @@ export default defineConfig(({ mode }) => ({
     resolve: { alias: [...headlessAlias, ...Object.entries(projectAlias).map(([find, replacement]) => ({ find, replacement }))] },
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/preload/index.ts')
+        // Two preload bundles: the full bridge for the main window and a
+        // least-privilege pick for the agent-status overlay window (see
+        // src/preload/overlay.ts). Entry keys become out/preload/<key>.mjs
+        // — the runtime paths in mainWindow.ts / overlayWindow.ts depend
+        // on those names.
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          overlay: resolve(__dirname, 'src/preload/overlay.ts'),
+        }
       }
     }
   },
@@ -200,7 +208,15 @@ export default defineConfig(({ mode }) => ({
     resolve: { alias: [...headlessAlias, ...Object.entries(projectAlias).map(([find, replacement]) => ({ find, replacement }))] },
     build: {
       rollupOptions: {
-        input: resolve(__dirname, 'src/renderer/index.html')
+        // Two windows, two HTML entries, one Vite renderer project.
+        // `overlay` is the floating agent-status window (a tiny React app
+        // sharing styles.css and the preload bundle with the main window).
+        // Key names become output chunk prefixes only; the runtime load
+        // paths are the .html files (see mainWindow.ts / overlayWindow.ts).
+        input: {
+          index: resolve(__dirname, 'src/renderer/index.html'),
+          overlay: resolve(__dirname, 'src/renderer/overlay.html'),
+        }
       }
     },
     plugins: [react(), tailwindcss()],

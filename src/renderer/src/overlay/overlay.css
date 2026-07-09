@@ -1,0 +1,36 @@
+/*
+ * Overlay-window-only overrides, imported AFTER styles.css in
+ * overlay/main.tsx so these rules win the cascade.
+ *
+ * WHY transparent backgrounds: the BrowserWindow is created with
+ * `transparent: true` and the React root draws its own rounded pill —
+ * styles.css paints html/body/#root with var(--theme-canvas), which
+ * would fill the whole window rectangle with an opaque slab and turn
+ * the "floating pill" into a floating brick.
+ */
+html,
+body,
+#root {
+  background: transparent !important;
+}
+
+body {
+  overflow: hidden;
+  /* The overlay is a glanceable status pip, not a document — stray
+   * text selection from a sloppy click just looks broken. */
+  user-select: none;
+}
+
+/*
+ * Frameless-window drag plumbing. Electron treats app-region: drag
+ * elements as title-bar: the OS moves the window and the DOM never
+ * sees the click. Interactive children must explicitly opt back out
+ * or their onClick silently dies — which is exactly the kind of bug
+ * that only shows up in the packaged window, not in a browser tab.
+ */
+.app-region-drag {
+  -webkit-app-region: drag;
+}
+.app-region-no-drag {
+  -webkit-app-region: no-drag;
+}
