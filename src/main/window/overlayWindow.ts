@@ -1,11 +1,12 @@
 import { app, BrowserWindow, screen } from 'electron'
+import { mkdirSync, writeFileSync } from 'fs'
 import { mkdir, readFile, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
 import type { AgentOverlaySnapshot } from '@shared/types/agentOverlay.js'
 import { STATE_DIR } from '@main/storage/paths.js'
-import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { onMainWindowClosed, sendToMainWindow } from '@main/window/mainWindow.js'
 
 // The floating agent-status overlay window (issue: "see agent status while
 // in Chrome"). A tiny frameless always-on-top BrowserWindow that lives
@@ -52,6 +53,15 @@ const state: PersistedOverlayState = {
 // per-session snapshot cache.
 let lastSnapshot: AgentOverlaySnapshot | null = null
 
+// Serializes IPC against the async state restore. The agent-overlay IPC
+// handlers are registered (registerAllIpc) BEFORE initAgentOverlay runs,
+// so a very early toggle/get-enabled could act on the default state and
+// then be silently overwritten when loadPersistedState resolves (PR #514
+// review finding 4). Every public read/write of `state.enabled` awaits
+// this instead. Starts resolved so unit-style callers that never ran
+// init don't deadlock.
+let restoreDone: Promise<void> = Promise.resolve()
+
 let persistTimer: NodeJS.Timeout | null = null
 
 function schedulePersist(): void {
@@ -70,6 +80,25 @@ function schedulePersist(): void {
       }
     })()
   }, 200)
+}
+
+/**
+ * Synchronous write-through for moments when the debounce would lose
+ * data: app quit (the 200ms timer dies with the process) and
+ * enabled-toggles (losing a drag position is cosmetic; losing the
+ * user's on/off choice breaks the "comes back after restart" contract).
+ */
+function flushPersistNow(): void {
+  if (persistTimer) {
+    clearTimeout(persistTimer)
+    persistTimer = null
+  }
+  try {
+    mkdirSync(STATE_DIR, { recursive: true })
+    writeFileSync(OVERLAY_STATE_FILE, JSON.stringify(state, null, 2))
+  } catch {
+    // Same best-effort contract as schedulePersist.
+  }
 }
 
 async function loadPersistedState(): Promise<void> {
@@ -115,8 +144,26 @@ function defaultPosition(): { x: number; y: number } {
   }
 }
 
+/**
+ * Keep the overlay grabbable. Two ways it can end up off-screen with no
+ * recovery path (it has no menu, no taskbar entry, no edges to grab):
+ * a persisted position on a display that no longer exists (monitor
+ * unplugged), and an expand-resize near a screen edge growing past the
+ * work area. Clamp against whichever display best matches the requested
+ * bounds so multi-monitor drags still land where the user put it.
+ */
+function clampBoundsToDisplay(bounds: Electron.Rectangle): Electron.Rectangle {
+  const area = screen.getDisplayMatching(bounds).workArea
+  const width = Math.min(bounds.width, area.width)
+  const height = Math.min(bounds.height, area.height)
+  const x = Math.min(Math.max(bounds.x, area.x), area.x + area.width - width)
+  const y = Math.min(Math.max(bounds.y, area.y), area.y + area.height - height)
+  return { x, y, width, height }
+}
+
 function createOverlayWindow(): void {
-  const pos = state.position ?? defaultPosition()
+  const requested = state.position ?? defaultPosition()
+  const pos = clampBoundsToDisplay({ ...requested, width: DEFAULT_W, height: DEFAULT_H })
   overlayWindow = new BrowserWindow({
     width: DEFAULT_W,
     height: DEFAULT_H,
@@ -143,11 +190,13 @@ function createOverlayWindow(): void {
     focusable: false,
     alwaysOnTop: true,
     webPreferences: {
-      // Same runtime-relative preload path as the main window — and the
-      // same trap: this is a filesystem path resolved at runtime from
-      // out/main/, NOT a vite alias. See the long comment in
-      // mainWindow.ts before "fixing" it.
-      preload: join(__dirname, '../preload/index.mjs'),
+      // The overlay gets its OWN slim preload (src/preload/overlay.ts),
+      // not the main window's index.mjs: the full bridge exposes every
+      // privileged API (fs, git, sessions, remote...) and this window
+      // needs exactly four overlay methods. Same runtime-path trap as
+      // mainWindow.ts though: this is a filesystem path resolved from
+      // out/main/ at runtime, NOT a vite alias.
+      preload: join(__dirname, '../preload/overlay.mjs'),
       sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
@@ -171,6 +220,16 @@ function createOverlayWindow(): void {
     overlayWindow = null
   })
 
+  // Same hardening stance as the main window (see mainWindow.ts): the
+  // overlay carries a preload bridge, so even though it only ever loads
+  // our own overlay.html, any navigation or window.open escape would
+  // hand that bridge to foreign content. Deny both outright — unlike the
+  // main window there is no legitimate external-link path here.
+  overlayWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  overlayWindow.webContents.on('will-navigate', event => {
+    event.preventDefault()
+  })
+
   overlayWindow.webContents.on('did-finish-load', () => {
     // Initial state push: cached snapshot + persisted expanded mode.
     // `expanded` is intentionally ONLY sent here — see AgentOverlayStateEvent.
@@ -179,8 +238,10 @@ function createOverlayWindow(): void {
 
   overlayWindow.once('ready-to-show', () => {
     // showInactive, never show(): even the first reveal must not pull key
-    // focus from whatever the user is doing.
-    overlayWindow?.showInactive()
+    // focus from whatever the user is doing. Guarded on enabled because a
+    // fast toggle-on→toggle-off can land the disable while the window is
+    // still loading — an unguarded reveal would resurrect it.
+    if (state.enabled) overlayWindow?.showInactive()
   })
 
   if (process.env['ELECTRON_RENDERER_URL']) {
@@ -201,7 +262,7 @@ function sendToOverlay(payload: { snapshot: AgentOverlaySnapshot | null; expande
 // ---------------------------------------------------------------------------
 
 export function initAgentOverlay(): void {
-  void loadPersistedState().then(() => {
+  restoreDone = loadPersistedState().then(() => {
     if (state.enabled) createOverlayWindow()
     // Tell the main renderer the restored enabled state so the reporter
     // hook starts publishing without a round-trip race: the renderer also
@@ -209,6 +270,22 @@ export function initAgentOverlay(): void {
     // before this async restore finishes — the push wins either way.
     sendToMainWindow('agent-overlay:enabled-changed', { enabled: state.enabled })
   })
+
+  // The overlay's lifetime is keyed to the MAIN window, not the app: its
+  // data source is the main renderer, so once that closes the overlay
+  // could only show frozen state — and a surviving overlay would keep
+  // `window-all-closed` (session/service cleanup) from ever firing.
+  // destroy(), not close(): nothing in the overlay needs a close
+  // ceremony, and destroy is immune to any future close-prevention.
+  // Recreation on Dock re-activation goes through syncAgentOverlayWindow.
+  onMainWindowClosed(() => {
+    if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.destroy()
+    overlayWindow = null
+  })
+
+  // Quit can arrive inside the persist debounce window; flush so a
+  // toggle-then-quit never loses the enabled flag.
+  app.on('before-quit', flushPersistNow)
 
   // Auto-hide while Agent Code itself is focused: the main window already
   // shows richer status everywhere, so the overlay would be pure clutter.
@@ -235,8 +312,11 @@ export function initAgentOverlay(): void {
   })
 }
 
-/** Toggle the overlay on/off. Returns the new enabled state. */
-export function toggleAgentOverlay(): boolean {
+/** Toggle the overlay on/off. Returns the new enabled state. Awaits the
+ *  persisted-state restore so an early palette toggle can never race it
+ *  (finding 4) — invoke-based IPC makes the async shape free. */
+export async function toggleAgentOverlay(): Promise<boolean> {
+  await restoreDone
   state.enabled = !state.enabled
   if (state.enabled) {
     if (!overlayWindow || overlayWindow.isDestroyed()) {
@@ -246,16 +326,32 @@ export function toggleAgentOverlay(): boolean {
     }
   } else {
     // Hide, don't destroy: re-toggling is instant and keeps the renderer's
-    // measured size/expanded UI state warm. The window dies with the app.
+    // measured size/expanded UI state warm. The window dies with the main
+    // window (onMainWindowClosed above) or the app.
     overlayWindow?.hide()
   }
-  schedulePersist()
+  // Synchronous persist, not the debounce: the on/off choice is the one
+  // piece of state whose loss the user actually notices after a restart.
+  flushPersistNow()
   sendToMainWindow('agent-overlay:enabled-changed', { enabled: state.enabled })
   return state.enabled
 }
 
-export function isAgentOverlayEnabled(): boolean {
+export async function isAgentOverlayEnabled(): Promise<boolean> {
+  await restoreDone
   return state.enabled
+}
+
+/**
+ * Recreate the overlay window if it should exist but doesn't — called
+ * from the macOS `activate` path after the main window is recreated
+ * (the overlay was destroyed together with the previous main window).
+ */
+export function syncAgentOverlayWindow(): void {
+  void restoreDone.then(() => {
+    if (!state.enabled) return
+    if (!overlayWindow || overlayWindow.isDestroyed()) createOverlayWindow()
+  })
 }
 
 export function publishAgentOverlaySnapshot(snapshot: AgentOverlaySnapshot): void {
@@ -282,7 +378,9 @@ export function resizeAgentOverlayContent(size: { width: number; height: number 
   overlayWindow.setResizable(true)
   // Keep the top-left corner anchored: the window grows down/right when
   // the pill expands into the list, which matches the default top-right
-  // placement growing INTO the screen instead of off its top edge.
-  overlayWindow.setBounds({ x, y, width, height })
+  // placement growing INTO the screen instead of off its top edge —
+  // then clamp, so an expand near a screen edge can't push the window
+  // (and its only grabbable area) past the work area.
+  overlayWindow.setBounds(clampBoundsToDisplay({ x, y, width, height }))
   overlayWindow.setResizable(false)
 }

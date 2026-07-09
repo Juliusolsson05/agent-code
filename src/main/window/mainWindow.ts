@@ -65,6 +65,32 @@ export function focusMainWindow(): void {
 }
 
 /**
+ * "Does a live main window exist?" — for lifecycle decisions that must
+ * NOT count auxiliary windows. The macOS `activate` handler used to
+ * check `BrowserWindow.getAllWindows().length === 0`, which broke the
+ * moment the agent-status overlay became a second window: close the
+ * main window with the overlay alive and Dock activation would never
+ * recreate it (PR #514 review finding).
+ */
+export function hasMainWindow(): boolean {
+  return mainWindow !== null && !mainWindow.isDestroyed()
+}
+
+// Main-window close hooks. Auxiliary windows (currently only the
+// agent-status overlay) key their lifetime off the MAIN window, not the
+// app: the overlay's data source is the main renderer, so a closed main
+// window means frozen snapshots — and a surviving overlay would also
+// block `window-all-closed` cleanup forever. A callback registry
+// (instead of the overlay importing the window object) keeps the import
+// direction one-way: overlayWindow.ts → mainWindow.ts, never back.
+type MainWindowClosedHandler = () => void
+const mainWindowClosedHandlers = new Set<MainWindowClosedHandler>()
+
+export function onMainWindowClosed(handler: MainWindowClosedHandler): void {
+  mainWindowClosedHandlers.add(handler)
+}
+
+/**
  * Send an IPC message to the renderer. No-op when the window is gone
  * — callers shouldn't have to guard lifecycle around every event.
  * This is the ONE place the rest of main/ should reach into the
@@ -174,6 +200,21 @@ export function createMainWindow(): void {
   mainWindow.on('ready-to-show', () => {
     mainWindow?.show()
     pushTrafficLightInset()
+  })
+
+  mainWindow.on('closed', () => {
+    // Null the module ref so hasMainWindow() answers correctly between
+    // close and any later recreate via `activate`. Handlers must never
+    // break window teardown — they're lifecycle conveniences, not
+    // load-bearing cleanup (that stays on `window-all-closed`).
+    mainWindow = null
+    for (const handler of mainWindowClosedHandlers) {
+      try {
+        handler()
+      } catch {
+        /* see above */
+      }
+    }
   })
 
   // Recompute the traffic light inset whenever the window geometry

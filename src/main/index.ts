@@ -32,8 +32,8 @@ import {
 } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
 import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
-import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
-import { initAgentOverlay } from '@main/window/overlayWindow.js'
+import { createMainWindow, focusMainWindow, hasMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
+import { initAgentOverlay, syncAgentOverlayWindow } from '@main/window/overlayWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/mainWindow.js'
@@ -634,7 +634,16 @@ async function startApp(): Promise<void> {
   performanceService.mark('app.main.window.created')
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+    // Main-window-specific check, NOT getAllWindows().length: the
+    // agent-status overlay is a second BrowserWindow, so a raw window
+    // count would see "1 window" after the main window closed and never
+    // recreate it from the Dock (PR #514 review finding 1). The overlay
+    // itself is destroyed on main-window close (its data source is the
+    // main renderer), so recreate it here alongside the main window.
+    if (!hasMainWindow()) {
+      createMainWindow()
+      syncAgentOverlayWindow()
+    }
   })
 }
 

@@ -131,6 +131,15 @@ export function dispatchAttentionLabelFromConditions(
   for (const rule of policy.attentionLabels) {
     const record = conditions.conditions[rule.kind]
     if (!record) continue
+    // Same visibility gate as conditionRequiresAttention above: a record
+    // whose state says `visible: false` (e.g. a claude permission-prompt
+    // snapshot lingering after dismissal) is NOT blocking the user and
+    // must not produce a label. This selector was presence-only, which
+    // made the agent-status overlay's "waiting" pill pulse for hidden
+    // prompts (PR #514 review). Flagless states (codex approval,
+    // ask-user-question) stay presence-gated — absent flag means visible.
+    const state = record.state as { visible?: boolean }
+    if (typeof state?.visible === 'boolean' && !state.visible) continue
     const label =
       typeof rule.label === 'function' ? rule.label(record.state) : rule.label
     if (label) return label
