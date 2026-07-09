@@ -47,6 +47,7 @@ import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
@@ -69,6 +70,7 @@ import type { CaffeinateStatus } from '@preload/index'
 // This file stays short on purpose.
 
 export default function App() {
+  const { showToast } = useGlobalToast()
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
   const resetSettings = useAppStore(state => state.resetSettings)
@@ -278,9 +280,22 @@ export default function App() {
     void window.api.configureDictationHotkey({ binding }).then(result => {
       if (!result.ok) {
         console.warn('[dictation] hotkey registration failed:', result)
+        // The whole point of #495 A4 / #508 is that this failure must be
+        // VISIBLE: main already journals it (AppRunJournal) and returns the
+        // actionable reason on the configure result, but a packaged user
+        // never sees a console.warn — the toast is the only surface they
+        // actually look at. Long duration + click-to-dismiss because the
+        // message carries a fix ("grant Accessibility permission…",
+        // "xcode-select --install") the user needs time to read. No
+        // re-toast loop risk: this effect fires only on settings changes,
+        // not on a poll.
+        showToast(
+          `Dictation hotkey unavailable: ${result.message ?? `could not register "${result.binding}"`}`,
+          12000,
+        )
       }
     })
-  }, [settings.dictationEnabled, settings.dictationShortcut])
+  }, [settings.dictationEnabled, settings.dictationShortcut, showToast])
 
   const workspace = useWorkspace(dangerousAgentsEnabled, useProxyStreaming, defaultWorkspaceMode)
   const workspaceRef = useRef(workspace)

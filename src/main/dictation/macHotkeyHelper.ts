@@ -25,6 +25,19 @@ let child: HotkeyHelperProcess | null = null
  */
 export type MacHotkeyHelperStartResult = { ok: boolean; message?: string }
 
+// How long to wait for the helper's post-spawn verdict before declaring the
+// start OK. The helper's startup protocol (see main.swift) is fully
+// deterministic: it either prints `{"type":"ready"}` on stdout immediately
+// after the CGEventTap is installed, or it exits within milliseconds with a
+// distinct code (64 empty binding / 65 unsupported key / 66 tap creation
+// failed — the accessibility-denied case). So on a healthy machine this wait
+// costs ~tens of ms, not the full window; the timeout only fires if the
+// helper neither became ready nor exited (a machine so loaded the tiny
+// binary hasn't reached emit("ready") yet), and in that ambiguous case we
+// side with ok:true — a false "hotkey broken" toast on a slow-but-working
+// machine is worse than the pre-#508 behavior of always claiming ok.
+const HELPER_READY_WAIT_MS = 2000
+
 export async function startMacDictationHotkeyHelper(
   binding: string,
   handlers: { onPress: () => void; onRelease: () => void },
@@ -42,6 +55,27 @@ export async function startMacDictationHotkeyHelper(
     })
     child = helper
 
+    // Post-spawn startup watch (#508 review). A successful spawn() proves
+    // nothing: the helper still exits immediately when the binding is
+    // unsupported (64/65) or when it cannot create its CGEventTap (66 —
+    // the Accessibility-permission-denied case). Returning {ok:true} right
+    // after spawn made those failures invisible to the configure result:
+    // the renderer showed the hotkey as registered while the helper was
+    // already dead. Wait for the helper's own verdict — its first
+    // `{"type":"ready"}` stdout line (emitted right after tap install) or
+    // an early exit — before declaring ok. Single-settle guard because
+    // ready/exit/error/timeout can race.
+    let stderrBuf = ''
+    let startSettled = false
+    let settleStart: (result: MacHotkeyHelperStartResult) => void = () => {}
+    const startVerdict = new Promise<MacHotkeyHelperStartResult>(resolve => {
+      settleStart = result => {
+        if (startSettled) return
+        startSettled = true
+        resolve(result)
+      }
+    })
+
     helper.stdout.setEncoding('utf8')
     helper.stdout.on('data', chunk => {
       for (const line of String(chunk).split('\n')) {
@@ -53,6 +87,7 @@ export async function startMacDictationHotkeyHelper(
           if (event.type === 'ready') {
             // eslint-disable-next-line no-console
             console.log(`[dictation:hotkey] mac helper ready for "${binding}"`)
+            settleStart({ ok: true })
           }
         } catch {
           // eslint-disable-next-line no-console
@@ -65,9 +100,25 @@ export async function startMacDictationHotkeyHelper(
     helper.stderr.on('data', chunk => {
       // Accessibility prompts and unsupported binding errors come from the
       // helper process, not the renderer. Keep them in main where the user can
-      // see the operational problem during local development.
+      // see the operational problem during local development — and buffer
+      // them so an early exit can carry the helper's own words (e.g.
+      // "accessibility permission is required") back through the configure
+      // result instead of a bare exit code.
+      stderrBuf += String(chunk)
       // eslint-disable-next-line no-console
       console.warn(String(chunk).trim())
+    })
+
+    helper.on('error', err => {
+      // spawn() reports missing/unspawnable binaries asynchronously via
+      // 'error', not by throwing — without this handler an unspawnable
+      // helper would ALSO count as {ok:true} (and crash the process on the
+      // unhandled 'error' event).
+      settleStart({
+        ok: false,
+        message: `dictation hotkey helper failed to spawn — ${stderrTail(err.message)}`,
+      })
+      if (child === helper) child = null
     })
 
     helper.on('exit', (code, signal) => {
@@ -78,9 +129,18 @@ export async function startMacDictationHotkeyHelper(
         )
       }
       if (child === helper) child = null
+      settleStart({ ok: false, message: describeEarlyExit(code, signal, stderrBuf) })
     })
 
-    return { ok: true }
+    const readyTimer = setTimeout(() => settleStart({ ok: true }), HELPER_READY_WAIT_MS)
+    const result = await startVerdict
+    clearTimeout(readyTimer)
+    if (!result.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(`[dictation:hotkey] ${result.message}`)
+      stopMacDictationHotkeyHelper()
+    }
+    return result
   } catch (err) {
     // Kill the silent degrade (#495 A4): translate the raw error into a
     // one-line actionable reason before it leaves this module. The caller
@@ -123,6 +183,38 @@ async function describeHelperFailure(err: unknown): Promise<string> {
     )
   }
   return `dictation hotkey helper unavailable: swiftc compile failed — ${stderrTail(detail)}`
+}
+
+/**
+ * Map a helper early-exit to an actionable one-liner. Exit codes are the
+ * helper's own startup contract (native/macos-hotkey-helper/.../main.swift):
+ * 64 = empty binding, 65 = unsupported key in binding, 66 = CGEventTap
+ * creation failed. 66 is called out specifically because its dominant cause
+ * is a denied/revoked Accessibility permission — the ONE failure an end
+ * user can actually fix themselves, so the message must name the fix, not
+ * just echo "failed to create event tap".
+ */
+function describeEarlyExit(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderr: string,
+): string {
+  const detail =
+    stderrTail(stderr) || `exited code=${code ?? 'null'} signal=${signal ?? 'null'}`
+  if (code === 66) {
+    return (
+      `dictation hotkey helper could not create its event tap (${detail}) — ` +
+      'grant Agent Code Accessibility permission in System Settings → ' +
+      'Privacy & Security → Accessibility, then re-enable dictation'
+    )
+  }
+  if (code === 64 || code === 65) {
+    return (
+      `dictation hotkey helper rejected the binding (${detail}) — ` +
+      'choose a different dictation shortcut in Settings'
+    )
+  }
+  return `dictation hotkey helper exited during startup — ${detail}`
 }
 
 // Keep the reason to one journal/IPC-friendly line: swiftc failures embed
