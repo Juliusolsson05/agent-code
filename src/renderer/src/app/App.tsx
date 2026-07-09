@@ -47,6 +47,8 @@ import { TabBar } from '@renderer/workspace/tile-tree/TabBar'
 import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
+import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
 import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
@@ -57,7 +59,6 @@ import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/comma
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, TabId } from '@renderer/workspace/types'
-import type { CaffeinateStatus } from '@preload/index'
 
 // App — thin shell around the workspace hook.
 //
@@ -191,8 +192,8 @@ export default function App() {
   // gate Attach-Recording-Note (plan §7b). Read once alongside the dev-debug
   // flag below.
   const [sessionRecordingEnabled, setSessionRecordingEnabled] = useState(false)
-  const [caffeinateStatus, setCaffeinateStatus] = useState<CaffeinateStatus | null>(null)
-  const [caffeinateMessage, setCaffeinateMessage] = useState<string | null>(null)
+  const caffeinateStatus = useCaffeinateStore(state => state.status)
+  const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
   const agentViewModePickerSessionId = useAppStore(state => state.agentViewModePickerSessionId)
   const openAgentViewModePicker = useAppStore(state => state.openAgentViewModePicker)
   const closeAgentViewModePicker = useAppStore(state => state.closeAgentViewModePicker)
@@ -228,51 +229,7 @@ export default function App() {
     }
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    void window.api.getCaffeinateStatus()
-      .then(status => {
-        if (!cancelled) setCaffeinateStatus(status)
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setCaffeinateStatus({
-            supported: false,
-            active: false,
-            pid: null,
-            startedAt: null,
-            command: [],
-            message: 'Could not read caffeinate status.',
-          })
-        }
-      })
-    const off = window.api.onCaffeinateStateChanged(status => {
-      setCaffeinateStatus(status)
-      setCaffeinateMessage(status.message)
-    })
-    return () => {
-      cancelled = true
-      off()
-    }
-  }, [])
-
-  const toggleCaffeinate = useCallback(async () => {
-    try {
-      const result = await window.api.toggleCaffeinate()
-      setCaffeinateStatus(result.status)
-      setCaffeinateMessage(result.message)
-    } catch (err) {
-      setCaffeinateMessage(
-        err instanceof Error ? err.message : 'Could not toggle caffeinate.',
-      )
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!caffeinateMessage) return
-    const timer = window.setTimeout(() => setCaffeinateMessage(null), 5000)
-    return () => window.clearTimeout(timer)
-  }, [caffeinateMessage])
+  useCaffeinateSync()
 
   useEffect(() => {
     // The default dictation trigger is bare Fn, which Chromium does not expose
@@ -953,22 +910,6 @@ export default function App() {
           onClose={closeTiledDispatchPrompt}
         />
       )}
-
-      {caffeinateMessage ? (
-        <div
-          role="status"
-          className="
-            fixed bottom-3 right-3 z-50 max-w-[360px]
-            border border-border bg-surface-hi px-3 py-2
-            text-[11px] leading-snug text-ink shadow-lg
-          "
-        >
-          <div className="font-semibold uppercase tracking-wide text-muted">
-            Caffeinate
-          </div>
-          <div>{caffeinateMessage}</div>
-        </div>
-      ) : null}
 
       <TileTabsModal
         open={tileTabsModalOpen}
