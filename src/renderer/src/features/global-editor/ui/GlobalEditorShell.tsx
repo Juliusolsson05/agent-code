@@ -176,6 +176,60 @@ export function GlobalEditorShell({ children, workspace }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, activeTabId, setActiveCwd])
 
+  // Keep main-process file watchers aligned with the open buffer set.
+  // Only the active cwd's buffers are watched: background cwd states are
+  // dormant (not rendered, not editable) and their buffers revalidate
+  // against disk on reactivation via openFileInGlobalEditor's
+  // read-on-open, so watching them would spend fs watchers on files
+  // nobody is looking at.
+  useEffect(() => {
+    if (!open || !activeCwd) return
+    const paths = cwdState.fileOrder
+    for (const path of paths) {
+      void window.api.editorWatchFile({ root: activeCwd, path })
+    }
+    return () => {
+      for (const path of paths) {
+        void window.api.editorUnwatchFile({ root: activeCwd, path })
+      }
+    }
+  }, [open, activeCwd, cwdState.fileOrder])
+
+  // React to external writes pushed by the watcher. Clean buffers follow
+  // disk silently — this is what makes agent writes show up live in an
+  // open tab. Dirty buffers flip to the conflict banner instead: the user
+  // has divergent edits and must pick a side (Reload / Overwrite).
+  useEffect(() => {
+    if (!open) return
+    return window.api.onEditorFileChanged(event => {
+      if (event.root !== activeCwd) return
+      const buf = useGlobalEditorStore.getState().byCwd[event.root]?.openFiles[event.path]
+      if (!buf) return
+      if (event.kind === 'unlink') {
+        setFileError(event.root, event.path, 'file was deleted on disk', {
+          conflict: true,
+        })
+        return
+      }
+      if (buf.dirty) {
+        setFileError(
+          event.root,
+          event.path,
+          'file changed on disk while you have unsaved edits',
+          { conflict: true },
+        )
+        return
+      }
+      void window.api
+        .editorReadTextFile({ root: event.root, path: event.path })
+        .then(result => {
+          if (result.ok) {
+            markFileSaved(event.root, event.path, result.text, result.mtimeMs)
+          }
+        })
+    })
+  }, [open, activeCwd, markFileSaved, setFileError])
+
   // Outer splitter (editor pane ↔ workspace pane). Ratio-based.
   // We measure against the OUTER container's bounding rect so the
   // ratio means "fraction of full overlay width allocated to the

@@ -16,6 +16,7 @@ import { registerDebugIpc } from '@main/ipc/debug.js'
 import { registerGitIpc } from '@main/ipc/git.js'
 import { registerPerformanceIpc } from '@main/ipc/performance.js'
 import { registerEditorFsIpc } from '@main/ipc/editorFs.js'
+import { registerEditorFsWatchIpc } from '@main/ipc/editorFsWatch.js'
 import { registerSetupIpc } from '@main/ipc/setup.js'
 import { registerWorktreeActivityIpc } from '@main/ipc/worktreeActivity.js'
 import { registerDictationIpc } from '@main/ipc/dictation.js'
@@ -67,6 +68,7 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerPerformanceIpc(deps.manager)
   installPerformanceIpcInstrumentation()
   registerEditorFsIpc()
+  registerEditorFsWatchIpc()
   registerSessionIpc(deps.manager, deps.pasteDebugJournals)
   registerProviderIpc()
   registerLspIpc(deps.lspManager)

@@ -40,3 +40,31 @@ export type EditorFsWriteResult =
 export type EditorFsMutationResult =
   | { ok: true; path: string }
   | { ok: false; error: string }
+
+/** Pushed on `editor-fs:file-changed` for files registered via
+ *  `editor-fs:watch`. `mtimeMs` is null when the post-change stat failed
+ *  (fast delete-after-write) — consumers treat that like a change and
+ *  revalidate by re-reading. */
+export type EditorFsChangeEvent = {
+  root: string
+  path: string
+  kind: 'change' | 'unlink'
+  mtimeMs: number | null
+}
+
+export type EditorFsRecursiveListResult =
+  | { ok: true; files: string[]; truncated: boolean }
+  | { ok: false; error: string }
+
+export type EditorFsSearchMatch = {
+  path: string
+  /** 1-based — these are UI-facing (openFileInGlobalEditor selection). */
+  line: number
+  column: number
+  /** The matched line, trimmed to ≤200 chars around the hit. */
+  preview: string
+}
+
+export type EditorFsSearchResult =
+  | { ok: true; matches: EditorFsSearchMatch[]; truncated: boolean; filesScanned: number }
+  | { ok: false; error: string }

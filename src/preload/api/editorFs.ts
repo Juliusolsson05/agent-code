@@ -9,13 +9,46 @@ export type {
   EditorFsReadResult,
   EditorFsWriteResult,
   EditorFsMutationResult,
+  EditorFsChangeEvent,
+  EditorFsRecursiveListResult,
+  EditorFsSearchMatch,
+  EditorFsSearchResult,
 } from '@shared/types/editorFs.js'
 import type {
   EditorFsListResult,
   EditorFsReadResult,
   EditorFsWriteResult,
   EditorFsMutationResult,
+  EditorFsChangeEvent,
+  EditorFsRecursiveListResult,
+  EditorFsSearchResult,
 } from '@shared/types/editorFs.js'
+
+type Unsub = () => void
+
+// Multiplexed subscription for file-change pushes — same pattern (and
+// WHY) as preload/api/lsp.ts's diagnostics bridge: buffers watch/unwatch
+// as tabs open and close, and per-subscription ipcRenderer.on listeners
+// would thrash Electron's IPC listener list. One process-lifetime
+// listener fans out to an in-memory Set.
+const fileChangeSubscribers = new Set<(event: EditorFsChangeEvent) => void>()
+let fileChangeListenerInstalled = false
+
+function subscribeFileChanges(cb: (event: EditorFsChangeEvent) => void): Unsub {
+  fileChangeSubscribers.add(cb)
+  if (!fileChangeListenerInstalled) {
+    fileChangeListenerInstalled = true
+    ipcRenderer.on(
+      'editor-fs:file-changed',
+      (_evt: unknown, payload: EditorFsChangeEvent) => {
+        for (const subscriber of fileChangeSubscribers) subscriber(payload)
+      },
+    )
+  }
+  return () => {
+    fileChangeSubscribers.delete(cb)
+  }
+}
 
 // Editor filesystem bridge.
 //
@@ -70,4 +103,25 @@ export const editorFsApi = {
     path: string
   }): Promise<EditorFsMutationResult> =>
     ipcRenderer.invoke('editor-fs:delete', params),
+
+  editorListFilesRecursive: (params: {
+    root: string
+  }): Promise<EditorFsRecursiveListResult> =>
+    ipcRenderer.invoke('editor-fs:list-files-recursive', params),
+
+  editorSearchContent: (params: {
+    root: string
+    query: string
+    caseSensitive?: boolean
+  }): Promise<EditorFsSearchResult> =>
+    ipcRenderer.invoke('editor-fs:search-content', params),
+
+  editorWatchFile: (params: { root: string; path: string }): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:watch', params),
+
+  editorUnwatchFile: (params: { root: string; path: string }): Promise<void> =>
+    ipcRenderer.invoke('editor-fs:unwatch', params),
+
+  onEditorFileChanged: (cb: (event: EditorFsChangeEvent) => void): Unsub =>
+    subscribeFileChanges(cb),
 }
