@@ -48,6 +48,7 @@ import { TileTree } from '@renderer/workspace/tile-tree/TileTree'
 import { DispatchLayout } from '@renderer/workspace/dispatch/DispatchLayout'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
+import { useDevDebugConfig, useDevDebugConfigSync } from '@renderer/features/debug/devDebugConfig'
 import { useCaffeinateSync } from '@renderer/features/caffeinate/useCaffeinateSync'
 import { WorkspaceProvider } from '@renderer/workspace/WorkspaceContext'
 import { GlobalModals } from '@renderer/app/surfaces/GlobalModals'
@@ -187,11 +188,8 @@ export default function App() {
   const rewindPromptSessionId = useAppStore(state => state.rewindPromptSessionId)
   const openRewindPrompt = useAppStore(state => state.openRewindPrompt)
   const closeRewindPrompt = useAppStore(state => state.closeRewindPrompt)
-  const [devDebugEnabled, setDevDebugEnabled] = useState(false)
-  // Mirrors DevDebugConfig.sessionRecordingEnabled so the command registry can
-  // gate Attach-Recording-Note (plan §7b). Read once alongside the dev-debug
-  // flag below.
-  const [sessionRecordingEnabled, setSessionRecordingEnabled] = useState(false)
+  const devDebugEnabled = useDevDebugConfig(state => state.enabled)
+  const sessionRecordingEnabled = useDevDebugConfig(state => state.sessionRecordingEnabled)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
   const agentViewModePickerSessionId = useAppStore(state => state.agentViewModePickerSessionId)
@@ -211,24 +209,7 @@ export default function App() {
     return off
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    void window.api.getDevDebugConfig()
-      .then(config => {
-        if (cancelled) return
-        setDevDebugEnabled(config.enabled)
-        setSessionRecordingEnabled(config.sessionRecordingEnabled)
-      })
-      .catch(() => {
-        if (cancelled) return
-        setDevDebugEnabled(false)
-        setSessionRecordingEnabled(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
+  useDevDebugConfigSync()
   useCaffeinateSync()
 
   useEffect(() => {
