@@ -2,7 +2,7 @@ import { ipcRenderer } from 'electron'
 
 import { subscribe } from '@preload/api/ipc.js'
 import type { Unsub } from '@preload/api/types.js'
-import type { CliUpdateBehavior, CliUpdateSnapshot } from '@shared/types/cliUpdate.js'
+import type { CliUpdateBehavior, CliUpdateKind, CliUpdateSnapshot } from '@shared/types/cliUpdate.js'
 
 // Preload bridge for the CLI auto-updater.
 //
@@ -22,6 +22,13 @@ export const cliUpdatesApi = {
    *  either way. */
   cliUpdatesRefresh: (): Promise<CliUpdateSnapshot> =>
     ipcRenderer.invoke('cli-updates:refresh'),
+  /** Run a one-shot update for a single CLI, bypassing the behavior
+   *  gate. Called from the notify-mode "Update now" button — the user
+   *  asked for THIS update to run without turning on automatic mode
+   *  permanently. Silent if the target isn't behind or a session is
+   *  active. */
+  cliUpdatesUpdateNow: (cli: CliUpdateKind): Promise<CliUpdateSnapshot> =>
+    ipcRenderer.invoke('cli-updates:update-now', cli),
   /** Persist the user's automatic/notify/off preference. Resolves with
    *  the new snapshot so the setting page can render without waiting
    *  for the state push. */

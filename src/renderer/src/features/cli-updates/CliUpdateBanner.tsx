@@ -58,9 +58,16 @@ function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry |
               : state.reason === 'unparseable-version'
                 ? `--version output was unrecognizable`
                 : 'command failed'
+      // Include the install method so the user knows what channel we
+      // tried to update through — e.g. "via brew" tells them to check
+      // brew's own doctor output rather than digging through npm.
+      // Correctness+design review both noted the banner had this info
+      // in state.installMethod but wasn't surfacing it.
+      const methodHint =
+        state.installMethod === 'unknown' ? '' : ` (via ${state.installMethod})`
       return {
         tone: 'warning',
-        text: `${label} auto-update failed (${reasonHint}). Wanted ${state.wantedLatest}, still at ${state.from}.`,
+        text: `${label} auto-update failed${methodHint} — ${reasonHint}. Wanted ${state.wantedLatest}, still at ${state.from}.`,
         action: {
           label: 'View log',
           onClick: () => {
@@ -76,16 +83,13 @@ function describeState(cli: CliUpdateKind, state: CliUpdateState): BannerEntry |
         action: {
           label: 'Update now',
           onClick: () => {
-            // Refresh dispatches a fresh probe which, in `notify` mode,
-            // only emits the notification. We need to run the update as
-            // a one-off — the pragma here is to temporarily switch to
-            // automatic, refresh, then switch back. That's noisy and
-            // error-prone; simpler is to just tell main to run once via
-            // refresh AND to accept that in `notify` mode the button is
-            // best-effort. Rather than build another handler, we simply
-            // switch behavior to 'automatic' — the user asked for the
-            // update, and they can switch back afterward if they want.
-            void window.api.cliUpdatesSetBehavior('automatic')
+            // One-shot update: bypasses the automatic/notify/off
+            // preference for this click only, leaving the persisted
+            // behavior untouched. A user on 'notify' who clicks
+            // Update now gets THIS update, and next launch is still
+            // in notify mode. Fires the same session-active check +
+            // spawn + re-probe pipeline the automatic path uses.
+            void window.api.cliUpdatesUpdateNow(cli)
           },
         },
       }

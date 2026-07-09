@@ -73,18 +73,21 @@ async function queryLatestClaude(): Promise<LatestVersionResult> {
   // ~100 bytes for the fresh dist-tags. That is the cheapest correct
   // answer for this registry.
   try {
-    const response = await fetchWithTimeout(NPM_URL(CLAUDE_PKG), {
-      headers: {
-        // Ask for the abbreviated metadata dialect even though we're
-        // already down to ?fields=dist-tags — belt-and-braces: if the
-        // ?fields= route disappears one day, this Accept header keeps
-        // the payload small.
-        Accept: 'application/vnd.npm.install-v1+json',
-        'User-Agent': AGENT_CODE_UA,
+    const parsed = await fetchJsonWithTimeout<{ 'dist-tags'?: Record<string, string> }>(
+      NPM_URL(CLAUDE_PKG),
+      {
+        headers: {
+          // Ask for the abbreviated metadata dialect even though we're
+          // already down to ?fields=dist-tags — belt-and-braces: if the
+          // ?fields= route disappears one day, this Accept header keeps
+          // the payload small.
+          Accept: 'application/vnd.npm.install-v1+json',
+          'User-Agent': AGENT_CODE_UA,
+        },
       },
-    })
-    if (!response.ok) return { ok: false, reason: 'network' }
-    const parsed = (await response.json()) as { 'dist-tags'?: Record<string, string> }
+    )
+    if (!parsed.ok) return { ok: false, reason: 'network' }
+    const body = parsed.body
     // WHY `stable`, not `latest`:
     //   Anthropic's `dist-tags` object exposes three channels — `latest`,
     //   `stable`, and `next`. Only `stable` matches the version Anthropic
@@ -95,7 +98,7 @@ async function queryLatestClaude(): Promise<LatestVersionResult> {
     //   If `stable` isn't present (unlikely — it's been there since the
     //   dist-tags split in 2025), fall back to `latest` rather than giving
     //   up.
-    const version = parsed['dist-tags']?.stable ?? parsed['dist-tags']?.latest
+    const version = body['dist-tags']?.stable ?? body['dist-tags']?.latest
     if (!version) return { ok: false, reason: 'unexpected' }
     return { ok: true, version, etag: null }
   } catch {
@@ -114,24 +117,25 @@ async function queryLatestCodex(cachedEtag: string | null): Promise<LatestVersio
       'User-Agent': AGENT_CODE_UA,
     }
     if (cachedEtag) headers['If-None-Match'] = cachedEtag
-    const response = await fetchWithTimeout(GITHUB_URL(CODEX_REPO), { headers })
+    const result = await fetchJsonWithTimeout<{ tag_name?: string; name?: string }>(
+      GITHUB_URL(CODEX_REPO),
+      { headers },
+    )
     // 304 Not Modified — nothing changed since last check. Zero body,
     // zero rate-limit impact for authenticated requests (we're unauth so
     // it still counts as one hit, but at 60/hr and once-per-launch we're
     // fine). This is why the Codex path is essentially free.
-    if (response.status === 304) return { ok: true, notModified: true }
-    if (!response.ok) return { ok: false, reason: 'network' }
-    const etag = response.headers.get('etag')
-    const parsed = (await response.json()) as { tag_name?: string; name?: string }
+    if (!result.ok && result.reason === 'not-modified') return { ok: true, notModified: true }
+    if (!result.ok) return { ok: false, reason: 'network' }
     // Codex tags look like `rust-v0.144.0`; we normalize the leading
     // `rust-v` off so the semver comparator can eat it. The CLI itself
     // does the same strip in codex-rs/tui/src/updates.rs
     // (`extract_version_from_latest_tag`), so we're matching its
     // canonical form.
-    const raw = parsed.tag_name ?? parsed.name
+    const raw = result.body.tag_name ?? result.body.name
     if (!raw) return { ok: false, reason: 'unexpected' }
     const version = raw.replace(/^rust-v/, '').replace(/^v/, '')
-    return { ok: true, version, etag: etag ?? null }
+    return { ok: true, version, etag: result.etag }
   } catch {
     return { ok: false, reason: 'network' }
   }
@@ -140,14 +144,37 @@ async function queryLatestCodex(cachedEtag: string | null): Promise<LatestVersio
 // Node's global `fetch` has no built-in timeout — a hung server would keep
 // the socket open and prevent the app from exiting cleanly. AbortController
 // is the documented way to enforce a deadline on the platform fetch.
-async function fetchWithTimeout(
+//
+// WHY the timeout wraps BOTH headers AND body:
+//   The naive shape (clear the timer as soon as `fetch()` resolves) only
+//   covers the response-headers roundtrip. A malicious or slow proxy can
+//   send 200 OK headers instantly and then stall the body forever, and
+//   `response.json()` would hang indefinitely — which in our case leaves
+//   the per-CLI mutex permanently held so the next launch's probe short-
+//   circuits. Correctness review caught this. Solution: keep the
+//   AbortController armed until body consumption completes (or fails,
+//   which surfaces as an AbortError that our outer catch treats as
+//   network failure).
+type FetchJsonResult<T> =
+  | { ok: true; body: T; etag: string | null }
+  | { ok: false; reason: 'not-modified' | 'network' }
+
+async function fetchJsonWithTimeout<T>(
   url: string,
   init: RequestInit,
-): Promise<Response> {
+): Promise<FetchJsonResult<T>> {
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS)
   try {
-    return await fetch(url, { ...init, signal: ac.signal })
+    const response = await fetch(url, { ...init, signal: ac.signal })
+    if (response.status === 304) return { ok: false, reason: 'not-modified' }
+    if (!response.ok) return { ok: false, reason: 'network' }
+    const etag = response.headers.get('etag')
+    // Await body consumption UNDER the same AbortController — a slow
+    // body abort here throws AbortError which the caller's outer catch
+    // classifies as 'network'.
+    const body = (await response.json()) as T
+    return { ok: true, body, etag: etag ?? null }
   } finally {
     clearTimeout(timer)
   }

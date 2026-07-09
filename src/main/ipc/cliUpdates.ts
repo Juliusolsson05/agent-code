@@ -3,7 +3,7 @@ import { ipcMain, shell } from 'electron'
 import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
 import { setCliUpdateBehavior } from '@main/setup/setupState.js'
 import { sendToMainWindow } from '@main/window/mainWindow.js'
-import type { CliUpdateBehavior, CliUpdateSnapshot } from '@shared/types/cliUpdate.js'
+import type { CliUpdateBehavior, CliUpdateKind, CliUpdateSnapshot } from '@shared/types/cliUpdate.js'
 
 // IPC layer for the CLI auto-updater.
 //
@@ -40,6 +40,14 @@ export function registerCliUpdatesIpc(orchestrator: CliUpdateOrchestrator): void
 
   ipcMain.handle('cli-updates:refresh', async () => {
     return await orchestrator.refresh()
+  })
+
+  ipcMain.handle('cli-updates:update-now', async (_evt, cli: CliUpdateKind) => {
+    // Boundary validation — the renderer is trusted but a version
+    // skew could send an unknown kind; fall through with a no-op
+    // rather than crash the main process.
+    if (cli !== 'claude' && cli !== 'codex') return orchestrator.getSnapshot()
+    return await orchestrator.updateOnce(cli)
   })
 
   ipcMain.handle('cli-updates:set-behavior', async (_evt, behavior: CliUpdateBehavior) => {

@@ -133,6 +133,70 @@ export class CliUpdateOrchestrator extends EventEmitter {
     return this.snapshot
   }
 
+  /** Run a one-shot update for the given CLI, bypassing the behavior
+   *  gate. Used by the banner's "Update now" button in notify mode:
+   *  the user asked for THIS update to run without switching to
+   *  automatic mode for every future launch.
+   *
+   *  Correctness review caught the previous implementation flipping
+   *  behavior to 'automatic' permanently — surprising and irreversible
+   *  from the user's perspective. This path leaves the persisted
+   *  behavior untouched and runs the same update pipeline the
+   *  automatic path uses (session-active check + spawn + re-probe +
+   *  failure classification). */
+  async updateOnce(cli: CliUpdateKind): Promise<CliUpdateSnapshot> {
+    // Same mutex as scheduled probes — never let a manual click race
+    // an in-flight automatic update on the same CLI.
+    if (this.running[cli]) return this.snapshot
+    this.running[cli] = true
+    try {
+      await this.updateOnceInner(cli)
+    } finally {
+      this.running[cli] = false
+    }
+    return this.snapshot
+  }
+
+  private async updateOnceInner(cli: CliUpdateKind): Promise<void> {
+    const binary = getToolPath(cli, '')
+    if (!binary) return
+    const installed = await readInstalledVersion(binary)
+    if (!installed.ok) return
+
+    // Read the latest from cache first — the click follows a notify
+    // banner which was populated from a fresh probe, so cachedVersion
+    // is authoritative here. We do NOT re-query the network on click:
+    // the click is "please act on what the banner said", not "please
+    // re-check freshness."
+    const setup = await loadSetupState()
+    const cachedLatest = setup.cliUpdateCache[cli]?.latestVersion
+    const latestVersion = cachedLatest ?? ''
+    if (!latestVersion || compareSemver(installed.version, latestVersion) >= 0) {
+      // Nothing to do — either the banner was stale (cache empty) or
+      // an earlier auto-run beat us to it. Silent.
+      return
+    }
+
+    const installMethod = await detectCliInstallMethod(binary)
+    if (this.hasActiveSession(cli)) {
+      this.updateSnapshot(cli, {
+        kind: 'deferred',
+        cli,
+        from: installed.version,
+        wantedLatest: latestVersion,
+        reason: 'session-active',
+        checkedAt: Date.now(),
+      })
+      return
+    }
+    await this.runUpdate(cli, {
+      binary,
+      from: installed.version,
+      to: latestVersion,
+      installMethod,
+    })
+  }
+
   /** Persist the user's behavior preference and update our in-memory
    *  copy. Does NOT re-probe — the setting change only affects future
    *  transitions. Turning the feature off between launches means the
@@ -204,10 +268,18 @@ export class CliUpdateOrchestrator extends EventEmitter {
       // GitHub 304 — nothing changed since we cached. Reuse the cached
       // version+etag. This is the whole point of the ETag path.
       if (!cachedVersion) {
-        // 304 with no cache is only possible if setup.json was hand-edited
-        // between the fetch that gave us the etag and now. Fall back to
-        // an unconditional refetch on the next launch by clearing the
-        // etag; silent for this launch.
+        // 304 with no cachedVersion is only possible if setup.json was
+        // hand-edited or partially corrupted between the fetch that gave
+        // us the etag and now. Clear the etag so the NEXT launch does an
+        // unconditional refetch — otherwise GitHub keeps 304-ing us and
+        // we're permanently stuck with no version to compare against.
+        // (Correctness review: the previous comment claimed this cleared
+        // the etag but the code silently returned instead.)
+        await updateCliUpdateCache(cli, {
+          latestVersion: '',
+          etag: null,
+          lastCheckedAt: Date.now(),
+        })
         return
       }
       latestVersion = cachedVersion
@@ -253,8 +325,21 @@ export class CliUpdateOrchestrator extends EventEmitter {
     }
 
     // Behind. What happens next depends on the user's behavior setting.
+    // Re-read behavior HERE (not from the closure at probeAll entry)
+    // because probeOneInner awaits the network — a user who flipped the
+    // setting from 'automatic' to 'off' or 'notify' during those seconds
+    // must NOT get an update they explicitly said they don't want.
+    // Correctness review caught the previous version defaulting the
+    // 'off' branch to auto-update.
     const sev = severity(installed.version, latestVersion) ?? 'patch'
-    if (this.snapshot.behavior === 'notify') {
+    const currentBehavior = this.snapshot.behavior
+    if (currentBehavior === 'off') {
+      // Turned off mid-probe. Leave state untouched so the banner stays
+      // silent; the cache was updated above so the next launch after
+      // switching back on has the latest version pre-loaded.
+      return
+    }
+    if (currentBehavior === 'notify') {
       this.updateSnapshot(cli, {
         kind: 'notify',
         cli,
@@ -354,11 +439,18 @@ export class CliUpdateOrchestrator extends EventEmitter {
     // and `<cli> --version` still reports the old number. Without this
     // re-probe we'd cheerfully claim success and let the CLI's own
     // banner nag the user forever.
+    //
+    // Correctness review caught that "any advance = success" is wrong:
+    // if brew jumps to an intermediate version (e.g. the cask lags GH
+    // releases by a version), we'd report success while still behind
+    // the wanted latest, and the next launch would try to update again
+    // and repeat forever. The success criterion is "reached OR passed
+    // the target", not merely "advanced from the starting point".
     const after = await readInstalledVersion(ctx.binary)
     const afterVersion = after.ok ? after.version : ctx.from
-    const advanced = after.ok && compareSemver(afterVersion, ctx.from) > 0
+    const reachedTarget = after.ok && compareSemver(afterVersion, ctx.to) >= 0
 
-    if (advanced) {
+    if (reachedTarget) {
       const sev = severity(ctx.from, afterVersion) ?? 'patch'
       this.updateSnapshot(cli, {
         kind: 'updated',
