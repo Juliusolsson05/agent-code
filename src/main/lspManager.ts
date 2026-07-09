@@ -1,8 +1,7 @@
 import { EventEmitter } from 'events'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
-import { createRequire } from 'module'
 import { resolve } from 'path'
-import { pathToFileURL } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 
 import {
   createMessageConnection,
@@ -12,30 +11,42 @@ import {
 } from 'vscode-jsonrpc/node.js'
 import {
   DiagnosticSeverity,
+  type CompletionItem,
+  type CompletionList,
+  type DocumentSymbol,
+  type Hover,
   type InitializeParams,
   type InitializeResult,
+  type Location,
+  type LocationLink,
   type PublishDiagnosticsParams,
+  type Range,
   type SemanticTokens,
   type SemanticTokensLegend,
+  type SymbolInformation,
 } from 'vscode-languageserver-protocol'
 
 import {
   languageFileExtension,
   supportsLsp,
 } from '@shared/code/language.js'
+import {
+  lspServerForLanguage,
+  type LspServerSpec,
+} from '@main/lsp/serverRegistry.js'
 // Diagnostics event shape is the shared renderer↔main contract. Re-export so
 // existing importers of `LspDiagnostic`/`LspDiagnosticsEvent` from
 // `@main/lspManager` keep working, but the source of truth is shared.
-import type { LspDiagnostic, LspDiagnosticsEvent } from '@shared/types/lsp.js'
+import type {
+  LspCompletionItem,
+  LspDiagnostic,
+  LspDiagnosticsEvent,
+  LspDocumentSymbol,
+  LspHoverResult,
+  LspLocation,
+  LspPosition,
+} from '@shared/types/lsp.js'
 export type { LspDiagnostic, LspDiagnosticsEvent } from '@shared/types/lsp.js'
-
-const require = createRequire(import.meta.url)
-
-type SupportedLanguage =
-  | 'javascript'
-  | 'javascriptreact'
-  | 'typescript'
-  | 'typescriptreact'
 
 type OpenDocumentParams = {
   clientUri: string
@@ -50,11 +61,12 @@ type OpenDocumentRecord = {
   serverKey: string
   serverUri: string
   version: number
-  language: SupportedLanguage
+  language: string
 }
 
 type ServerRecord = {
   key: string
+  specId: string
   workspaceRoot: string
   process: ChildProcessWithoutNullStreams
   connection: MessageConnection
@@ -78,18 +90,10 @@ function hashText(input: string): string {
   return Math.abs(hash).toString(16)
 }
 
-function normalizeSupportedLanguage(language: string): SupportedLanguage | null {
-  if (language === 'javascript') return 'javascript'
-  if (language === 'javascriptreact') return 'javascriptreact'
-  if (language === 'typescript') return 'typescript'
-  if (language === 'typescriptreact') return 'typescriptreact'
-  return null
-}
-
 function makeVirtualServerUri(
   workspaceRoot: string,
   clientUri: string,
-  language: SupportedLanguage,
+  language: string,
 ): string {
   const ext = languageFileExtension(language)
   const filePath = resolve(
@@ -98,6 +102,114 @@ function makeVirtualServerUri(
     `virtual-${hashText(clientUri)}.${ext}`,
   )
   return pathToFileURL(filePath).href
+}
+
+// ── Raw-LSP → shared-shape normalizers ────────────────────────────────────
+// These stay module-level (not methods) because they're pure and the
+// request methods below should read as "send request, normalize, return".
+
+function hoverContentsToMarkdown(contents: Hover['contents']): string {
+  // LSP hover contents come in three shapes across server generations:
+  // MarkupContent ({kind, value}), MarkedString (string | {language,
+  // value}), or an array of MarkedStrings. Normalize all of them to one
+  // markdown string so the renderer never branches.
+  const parts = Array.isArray(contents) ? contents : [contents]
+  return parts
+    .map(part => {
+      if (typeof part === 'string') return part
+      if ('kind' in part) return part.value // MarkupContent
+      return `\`\`\`${part.language}\n${part.value}\n\`\`\`` // MarkedString
+    })
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+function toLspLocation(uri: string, range: Range): LspLocation | null {
+  // Servers can return non-file URIs (untitled:, jdt:, …). Only file:
+  // URIs are openable by the editor; drop the rest rather than letting
+  // fileURLToPath throw on them.
+  if (!uri.startsWith('file://')) return null
+  return {
+    absolutePath: fileURLToPath(uri),
+    startLine: range.start.line,
+    startCharacter: range.start.character,
+    endLine: range.end.line,
+    endCharacter: range.end.character,
+  }
+}
+
+function normalizeDefinitionResult(
+  result: Location | Location[] | LocationLink[] | null,
+): LspLocation[] {
+  if (!result) return []
+  const items = Array.isArray(result) ? result : [result]
+  const out: LspLocation[] = []
+  for (const item of items) {
+    if ('targetUri' in item) {
+      // LocationLink: targetSelectionRange is the precise symbol span;
+      // targetRange is the enclosing construct — the selection range is
+      // what "jump to definition" should land on.
+      const loc = toLspLocation(item.targetUri, item.targetSelectionRange)
+      if (loc) out.push(loc)
+    } else {
+      const loc = toLspLocation(item.uri, item.range)
+      if (loc) out.push(loc)
+    }
+  }
+  return out
+}
+
+function normalizeCompletionResult(
+  result: CompletionItem[] | CompletionList | null,
+): LspCompletionItem[] {
+  const items = Array.isArray(result) ? result : (result?.items ?? [])
+  // Cap: tsserver returns 1k+ global symbols on a bare identifier;
+  // IPC-serializing all of them per keystroke is renderer jank for
+  // entries nobody scrolls to. Servers front-load relevance via sortText,
+  // and Monaco re-filters client-side as the user types more.
+  return items.slice(0, 200).map(item => {
+    const label = item.label
+    return {
+      label,
+      kind: item.kind ?? 1,
+      insertText: item.insertText ?? label,
+      detail: item.detail ?? undefined,
+      documentation:
+        typeof item.documentation === 'string'
+          ? item.documentation
+          : item.documentation?.value,
+      sortText: item.sortText ?? undefined,
+      isSnippet: item.insertTextFormat === 2, // InsertTextFormat.Snippet
+    }
+  })
+}
+
+function normalizeSymbols(
+  result: DocumentSymbol[] | SymbolInformation[] | null,
+): LspDocumentSymbol[] {
+  if (!result || result.length === 0) return []
+  const first = result[0]
+  if ('range' in first) {
+    const mapSymbol = (symbol: DocumentSymbol): LspDocumentSymbol => ({
+      name: symbol.name,
+      kind: symbol.kind,
+      startLine: symbol.selectionRange.start.line,
+      startCharacter: symbol.selectionRange.start.character,
+      endLine: symbol.selectionRange.end.line,
+      endCharacter: symbol.selectionRange.end.character,
+      children: (symbol.children ?? []).map(mapSymbol),
+    })
+    return (result as DocumentSymbol[]).map(mapSymbol)
+  }
+  return (result as SymbolInformation[]).map(symbol => ({
+    name: symbol.name,
+    kind: symbol.kind,
+    startLine: symbol.location.range.start.line,
+    startCharacter: symbol.location.range.start.character,
+    endLine: symbol.location.range.end.line,
+    endCharacter: symbol.location.range.end.character,
+    children: [],
+  }))
 }
 
 export type LspManagerEvents = {
@@ -122,22 +234,34 @@ export interface LspManager {
 export class LspManager extends EventEmitter {
   private readonly servers = new Map<string, ServerRecord>()
   private readonly docs = new Map<string, OpenDocumentRecord>()
+  // Single-flight per server key. getOrCreateServer is async (PATH
+  // detection via the registry), and a transcript can mount dozens of
+  // code blocks in one tick — without coalescing, every one of them would
+  // race the "does a server exist yet?" check and spawn a duplicate
+  // process. Same pattern (and WHY) as monacoRuntime's
+  // pendingSemanticProviders.
+  private readonly serverPromises = new Map<string, Promise<ServerRecord | null>>()
 
   async ensureSemanticLegend(
     workspaceRoot: string,
     language: string,
   ): Promise<SemanticTokensLegend | null> {
     if (!supportsLsp(language)) return null
-    const server = this.getOrCreateServer(workspaceRoot)
+    const spec = lspServerForLanguage(language)
+    if (!spec) return null
+    const server = await this.getOrCreateServer(workspaceRoot, spec)
+    if (!server) return null
     return await server.legendPromise
   }
 
   async openDocument(params: OpenDocumentParams): Promise<void> {
     if (!supportsLsp(params.language)) return
-    const language = normalizeSupportedLanguage(params.language)
-    if (!language) return
+    const spec = lspServerForLanguage(params.language)
+    if (!spec) return
+    const language = params.language
     const workspaceRoot = params.workspaceRoot || process.cwd()
-    const server = this.getOrCreateServer(workspaceRoot)
+    const server = await this.getOrCreateServer(workspaceRoot, spec)
+    if (!server) return
     await server.initialized
 
     const serverUri = params.filePath
@@ -211,6 +335,101 @@ export class LspManager extends EventEmitter {
     }
   }
 
+  // ── Editor language-feature requests ────────────────────────────────
+  // All follow the getSemanticTokens shape: doc lookup → server lookup →
+  // await initialized → sendRequest → normalize. Unknown clientUris fail
+  // open with an empty result — providers in the renderer are global per
+  // Monaco language, so they legitimately fire for models (e.g. closed
+  // tabs mid-teardown) that no longer have an LSP doc.
+
+  private requestContext(
+    clientUri: string,
+  ): { doc: OpenDocumentRecord; server: ServerRecord } | null {
+    const doc = this.docs.get(clientUri)
+    if (!doc) return null
+    const server = this.servers.get(doc.serverKey)
+    if (!server) return null
+    return { doc, server }
+  }
+
+  private async sendDocRequest<T>(
+    clientUri: string,
+    method: string,
+    extraParams: Record<string, unknown>,
+  ): Promise<T | null> {
+    const ctx = this.requestContext(clientUri)
+    if (!ctx) return null
+    await ctx.server.initialized
+    try {
+      return (await ctx.server.connection.sendRequest(method, {
+        textDocument: { uri: ctx.doc.serverUri },
+        ...extraParams,
+      })) as T
+    } catch (err) {
+      if (isDestroyedStreamError(err) || ctx.server.closed) return null
+      throw err
+    }
+  }
+
+  async getHover(clientUri: string, position: LspPosition): Promise<LspHoverResult> {
+    const hover = await this.sendDocRequest<Hover | null>(
+      clientUri,
+      'textDocument/hover',
+      { position },
+    )
+    if (!hover) return null
+    const markdown = hoverContentsToMarkdown(hover.contents)
+    return markdown ? { markdown } : null
+  }
+
+  async getDefinition(clientUri: string, position: LspPosition): Promise<LspLocation[]> {
+    const result = await this.sendDocRequest<Location | Location[] | LocationLink[] | null>(
+      clientUri,
+      'textDocument/definition',
+      { position },
+    )
+    return normalizeDefinitionResult(result)
+  }
+
+  async getCompletions(
+    clientUri: string,
+    position: LspPosition,
+  ): Promise<LspCompletionItem[]> {
+    const result = await this.sendDocRequest<CompletionItem[] | CompletionList | null>(
+      clientUri,
+      'textDocument/completion',
+      { position },
+    )
+    return normalizeCompletionResult(result)
+  }
+
+  async getReferences(clientUri: string, position: LspPosition): Promise<LspLocation[]> {
+    const result = await this.sendDocRequest<Location[] | null>(
+      clientUri,
+      'textDocument/references',
+      { position, context: { includeDeclaration: false } },
+    )
+    if (!result) return []
+    const out: LspLocation[] = []
+    // Cap mirrors the completion cap's rationale — a popular symbol in a
+    // big repo can reference thousands of sites; the peek widget shows a
+    // scrollable subset and nobody reads past a few hundred.
+    for (const location of result.slice(0, 500)) {
+      const loc = toLspLocation(location.uri, location.range)
+      if (loc) out.push(loc)
+    }
+    return out
+  }
+
+  async getDocumentSymbols(clientUri: string): Promise<LspDocumentSymbol[]> {
+    const result = await this.sendDocRequest<DocumentSymbol[] | SymbolInformation[] | null>(
+      clientUri,
+      'textDocument/documentSymbol',
+      {},
+    )
+    return normalizeSymbols(result)
+  }
+
   async dispose(): Promise<void> {
     for (const clientUri of this.docs.keys()) {
       await this.closeDocument(clientUri)
@@ -223,22 +442,44 @@ export class LspManager extends EventEmitter {
     this.servers.clear()
   }
 
-  private getOrCreateServer(workspaceRoot: string): ServerRecord {
-    const key = resolve(workspaceRoot)
+  private getOrCreateServer(
+    workspaceRoot: string,
+    spec: LspServerSpec,
+  ): Promise<ServerRecord | null> {
+    // Composite key: one server per (workspace root × server spec). A
+    // root that mixes TS and Python gets one tsserver AND one pyright,
+    // each seeing the same rootUri.
+    const key = `${resolve(workspaceRoot)}::${spec.id}`
     const existing = this.servers.get(key)
-    if (existing) return existing
+    if (existing) return Promise.resolve(existing)
+    const pending = this.serverPromises.get(key)
+    if (pending) return pending
 
-    const cliPath = require.resolve('typescript-language-server/lib/cli.mjs')
-    const child = spawn(process.execPath, [cliPath, '--stdio'], {
-      cwd: workspaceRoot,
+    const creation = this.createServer(resolve(workspaceRoot), key, spec).finally(() => {
+      this.serverPromises.delete(key)
+    })
+    this.serverPromises.set(key, creation)
+    return creation
+  }
+
+  private async createServer(
+    rootAbs: string,
+    key: string,
+    spec: LspServerSpec,
+  ): Promise<ServerRecord | null> {
+    // The registry owns HOW to spawn (bundled tsserver via
+    // ELECTRON_RUN_AS_NODE, others via PATH detection); null means the
+    // server simply isn't installed — fail open, the editor works without
+    // LSP for that language.
+    const resolved = await spec.resolveCommand()
+    if (!resolved) return null
+
+    const child = spawn(resolved.command, resolved.args, {
+      cwd: rootAbs,
       stdio: 'pipe',
       env: {
         ...process.env,
-        // In packaged Electron, process.execPath is the app executable.
-        // Without this flag, spawning the language server re-launches
-        // Agent Code instead of running the CLI as a Node script.
-        ELECTRON_RUN_AS_NODE: '1',
-        NODE_NO_WARNINGS: '1',
+        ...resolved.env,
       },
     })
 
@@ -271,7 +512,9 @@ export class LspManager extends EventEmitter {
 
     const initializeParams: InitializeParams = {
       processId: process.pid,
-      rootUri: pathToFileURL(key).href,
+      // rootAbs, NOT the composite `key` — the key carries a `::specId`
+      // suffix that must never leak into file URIs.
+      rootUri: pathToFileURL(rootAbs).href,
       capabilities: {
         textDocument: {
           semanticTokens: {
@@ -284,6 +527,19 @@ export class LspManager extends EventEmitter {
           publishDiagnostics: {
             relatedInformation: false,
           },
+          // Editor language features (#513). Declared here so servers
+          // advertise/emit the richer response shapes; the normalizers at
+          // the top of this file handle the older fallbacks anyway.
+          hover: { contentFormat: ['markdown', 'plaintext'] },
+          definition: { linkSupport: true },
+          completion: {
+            completionItem: {
+              snippetSupport: true,
+              documentationFormat: ['markdown', 'plaintext'],
+            },
+          },
+          references: {},
+          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
         },
         workspace: {
           configuration: false,
@@ -291,8 +547,8 @@ export class LspManager extends EventEmitter {
       },
       workspaceFolders: [
         {
-          uri: pathToFileURL(key).href,
-          name: key.split('/').pop() ?? key,
+          uri: pathToFileURL(rootAbs).href,
+          name: rootAbs.split('/').pop() ?? rootAbs,
         },
       ],
     }
@@ -315,7 +571,8 @@ export class LspManager extends EventEmitter {
 
     const record: ServerRecord = {
       key,
-      workspaceRoot: key,
+      specId: spec.id,
+      workspaceRoot: rootAbs,
       process: child,
       connection,
       initialized,

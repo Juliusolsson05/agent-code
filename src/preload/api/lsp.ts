@@ -1,7 +1,12 @@
 import { ipcRenderer } from 'electron'
 
 import type {
+  LspCompletionItem,
   LspDiagnosticsEvent,
+  LspDocumentSymbol,
+  LspHoverResult,
+  LspLocation,
+  LspPosition,
   LspSemanticLegend,
   Unsub,
 } from '@preload/api/types.js'
@@ -65,6 +70,33 @@ export const lspApi = {
     clientUri: string,
   ): Promise<{ data: number[] } | null> =>
     ipcRenderer.invoke('lsp:get-semantic-tokens', clientUri),
+
+  // Editor language-feature requests (#513). Positions are 0-based LSP
+  // convention — the renderer's editorLanguageFeatures owns the 1-based
+  // Monaco conversion at the boundary.
+  getLspHover: (clientUri: string, position: LspPosition): Promise<LspHoverResult> =>
+    ipcRenderer.invoke('lsp:get-hover', clientUri, position),
+
+  getLspDefinition: (
+    clientUri: string,
+    position: LspPosition,
+  ): Promise<LspLocation[]> =>
+    ipcRenderer.invoke('lsp:get-definition', clientUri, position),
+
+  getLspCompletions: (
+    clientUri: string,
+    position: LspPosition,
+  ): Promise<LspCompletionItem[]> =>
+    ipcRenderer.invoke('lsp:get-completions', clientUri, position),
+
+  getLspReferences: (
+    clientUri: string,
+    position: LspPosition,
+  ): Promise<LspLocation[]> =>
+    ipcRenderer.invoke('lsp:get-references', clientUri, position),
+
+  getLspDocumentSymbols: (clientUri: string): Promise<LspDocumentSymbol[]> =>
+    ipcRenderer.invoke('lsp:get-document-symbols', clientUri),
 
   onLspDiagnostics: (cb: (e: LspDiagnosticsEvent) => void): Unsub =>
     subscribeLspDiagnostics(cb),

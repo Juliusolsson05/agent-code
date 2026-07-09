@@ -87,13 +87,26 @@ export function normalizeCodeLanguage(
   return inferLanguageFromPath(filePath) ?? 'plaintext'
 }
 
+// Languages the LSP layer will ATTEMPT to serve. This is the renderer-
+// visible candidate list, deliberately optimistic: actual availability is
+// decided in main by serverRegistry.resolveCommand() (PATH detection).
+// The renderer fails open — a candidate language with no installed server
+// just gets no legend/diagnostics, identical to before multi-language
+// support existed. tsserver ships as an npm dependency, so the TS family
+// is always real; the rest require the user to have the server installed
+// (pyright-langserver / rust-analyzer / gopls on PATH).
+export const LSP_LANGUAGES = new Set([
+  'javascript',
+  'javascriptreact',
+  'typescript',
+  'typescriptreact',
+  'python',
+  'rust',
+  'go',
+])
+
 export function supportsLsp(language: string): boolean {
-  return (
-    language === 'javascript' ||
-    language === 'javascriptreact' ||
-    language === 'typescript' ||
-    language === 'typescriptreact'
-  )
+  return LSP_LANGUAGES.has(language)
 }
 
 // Monaco does not ship `typescriptreact` / `javascriptreact` languages —
@@ -119,6 +132,7 @@ export function languageFileExtension(language: string): string {
   if (language === 'json') return 'json'
   if (language === 'python') return 'py'
   if (language === 'rust') return 'rs'
+  if (language === 'go') return 'go'
   if (language === 'shell') return 'sh'
   return 'txt'
 }

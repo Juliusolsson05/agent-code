@@ -30,3 +30,50 @@ export type LspSemanticLegend = {
   tokenTypes: string[]
   tokenModifiers: string[]
 }
+
+// ── Request/response shapes for editor language features ─────────────────
+//
+// WHY raw-LSP-shaped (0-based positions, numeric kind enums) instead of
+// Monaco-shaped: main must stay Monaco-free (it has no Monaco at all), and
+// the renderer already owns a Monaco mapping layer
+// (editorLanguageFeatures.ts) where the 1-based conversion and kind-enum
+// translation live in ONE place. Shipping Monaco shapes over IPC would
+// smear that mapping across both processes.
+
+/** 0-based, LSP convention. Monaco is 1-based — convert at the boundary. */
+export type LspPosition = { line: number; character: number }
+
+export type LspLocation = {
+  absolutePath: string
+  startLine: number
+  startCharacter: number
+  endLine: number
+  endCharacter: number
+}
+
+export type LspHoverResult = { markdown: string } | null
+
+export type LspCompletionItem = {
+  label: string
+  /** Raw LSP CompletionItemKind (1-based enum); renderer maps to Monaco's
+   *  DIFFERENT integer space. */
+  kind: number
+  insertText: string
+  detail?: string
+  documentation?: string
+  sortText?: string
+  /** LSP InsertTextFormat.Snippet — Monaco needs the InsertAsSnippet rule
+   *  flag or `$0` placeholders render literally. */
+  isSnippet: boolean
+}
+
+export type LspDocumentSymbol = {
+  name: string
+  /** Raw LSP SymbolKind. */
+  kind: number
+  startLine: number
+  startCharacter: number
+  endLine: number
+  endCharacter: number
+  children: LspDocumentSymbol[]
+}

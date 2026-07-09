@@ -219,6 +219,11 @@ export type {
   LspSemanticLegend,
   LspDiagnostic,
   LspDiagnosticsEvent,
+  LspPosition,
+  LspLocation,
+  LspHoverResult,
+  LspCompletionItem,
+  LspDocumentSymbol,
 } from '@shared/types/lsp.js'
 
 // Claude image save params/result live in @shared/types/claudeImage.
