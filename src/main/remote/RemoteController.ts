@@ -46,8 +46,20 @@ export type RemoteTransportMode = 'lan' | 'tunnel'
 // full errno + syscall detail. This is a message mapper, not a policy
 // change: the rethrow semantics (teardown first, caller sees a rejection)
 // and the controller's documented no-auto-fallback stance are unchanged.
+//
+// Gated on the bind SIGNATURE, not the errno alone (codex follow-up on
+// #507): doEnable's catch sees every failure in the enable path, and
+// EACCES/EPERM also come out of loadOrCreateRemoteSecret() and
+// DeviceRegistry.load() when ~/.config/agent-code/remote is unwritable —
+// translating those would misreport a filesystem-permission problem as
+// "macOS blocked the network bind" and send the user to Firewall settings
+// that can't help. Node tags server.listen() failures with
+// `syscall: 'listen'` (that is exactly the error LanTransport /
+// CloudflaredTunnel reject with off the server's 'error' event), so that
+// field IS the bind shape; anything without it keeps its own message.
 function translateBindError(err: unknown): unknown {
-  const code = (err as NodeJS.ErrnoException | null)?.code
+  if ((err as NodeJS.ErrnoException | null)?.syscall !== 'listen') return err
+  const code = (err as NodeJS.ErrnoException).code
   if (code === 'EADDRINUSE') {
     return new Error(
       'The port the remote server picked is already in use — try enabling again ' +

@@ -292,7 +292,29 @@ async function installMitmproxy(
   // written last during extraction, so its presence guarantees the
   // full bundle is in place.
   if ((await fileExists(marker)) && (await isExecutable(finalExe))) {
-    return finalExe
+    // Real-exec probe on the fast path too (#495 A13, codex follow-up on
+    // #507). The first cut skipped it here to dodge PyInstaller's startup
+    // cost, but that left a hole: an install marked on a PREVIOUS launch
+    // bypassed the probe entirely, so a volume that turned noexec since
+    // (MDM policy change, home directory migrated onto a hardened mount)
+    // reproduced the exact opaque downstream spawn failure A13 exists to
+    // diagnose. probeExecutable caches per binary path, so this costs one
+    // sub-second spawn per app run on the async proxy-setup path — not per
+    // session — which is cheap enough that no fancier volume-keyed cache
+    // is warranted. Degrade to null rather than falling through to
+    // re-extract: an execve-refused canonical install almost always means
+    // the mount is noexec, and a fresh extraction would fail the same
+    // probe pre-rename after burning ~87 MB of tar work every launch.
+    try {
+      await probeExecutable('mitmdump', finalExe, ['--version'])
+      return finalExe
+    } catch (probeErr) {
+      console.error(
+        '[runtimeTools] installed mitmdump failed its exec probe:',
+        probeErr,
+      )
+      return null
+    }
   }
 
   const archivePath = mitmproxyArchivePath(manifest, platformKey, platform)
@@ -333,11 +355,10 @@ async function installMitmproxy(
     // hits IT specifically even when the app bundle itself executes fine.
     // Probing the tmp path BEFORE the rename means a refused binary never
     // becomes the marked canonical install — the marker is never written,
-    // so nothing downstream ever trusts it. Deliberately NOT probed on the
-    // marker fast path above: mitmdump is a PyInstaller bundle whose
-    // --version costs real Python startup time, and paying that on every
-    // first Claude session per app run guards only against a volume being
-    // remounted noexec between launches — not worth the latency.
+    // so nothing downstream ever trusts it. (The marker fast path above
+    // runs the same probe for installs marked on earlier launches; this
+    // one exists so a refused binary is caught before it can ever be
+    // marked at all.)
     try {
       await probeExecutable('mitmdump', tmpExe, ['--version'])
     } catch (probeErr) {

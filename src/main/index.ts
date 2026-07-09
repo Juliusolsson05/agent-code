@@ -199,17 +199,26 @@ async function startApp(): Promise<void> {
   // an MDM-managed home — mkdir/open throws EACCES/EROFS/EPERM and, without
   // this guard, the app died with a raw unhandled-rejection crash while the
   // *already-running* case right below gets a friendly dialog. Mirror that
-  // dialog for the permission family so the very first launch on a hostile
-  // account explains itself instead of looking like a broken install.
-  // Anything outside that errno family still rethrows: crashing loudly on
-  // unknown corruption is deliberate (see the fatal-startup handler above,
-  // which journals it as an incident).
+  // dialog for the permission family — plus ENOSPC/EDQUOT (codex follow-up
+  // on #507: the dialog copy literally tells the user to check disk space,
+  // so a full disk or blown quota has to reach that copy instead of the raw
+  // crash it got before) — so the very first launch on a hostile account
+  // explains itself instead of looking like a broken install. Anything
+  // outside that errno family still rethrows: crashing loudly on unknown
+  // corruption is deliberate (see the fatal-startup handler above, which
+  // journals it as an incident).
   let lock: StateProcessLock
   try {
     lock = await acquireStateProcessLock()
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code
-    if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') {
+    if (
+      code === 'EACCES' ||
+      code === 'EROFS' ||
+      code === 'EPERM' ||
+      code === 'ENOSPC' ||
+      code === 'EDQUOT'
+    ) {
       dialog.showErrorBox(
         'Agent Code cannot write its state directory',
         `Agent Code needs to write to ${STATE_DIR} but the operating system refused (${code}). ` +

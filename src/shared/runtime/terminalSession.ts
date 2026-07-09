@@ -149,12 +149,29 @@ export class TerminalSession extends EventEmitter {
     // every well-behaved terminal understands.
     env.TERM = 'xterm-256color'
     env.COLORTERM = 'truecolor'
-    // #495 A12: GUI-launched (Finder/launchd) processes often inherit no
-    // locale, and a C/POSIX locale makes agent CLIs emit mangled non-ASCII
-    // that our UTF-8 stream parsing downstream trusts. Only fill when the
-    // user expressed nothing — an explicit non-UTF-8 locale is their choice.
-    const locale = env.LC_ALL ?? env.LC_CTYPE ?? env.LANG
-    if (!locale || locale === 'C' || locale === 'POSIX') env.LANG = 'en_US.UTF-8'
+    // #495 A12 (+ codex follow-up on #507): GUI-launched (Finder/launchd)
+    // processes often inherit no locale, and MDM/launchd-managed setups
+    // frequently pin LC_ALL=C or LC_CTYPE=C; either way a C/POSIX locale
+    // makes agent CLIs emit mangled non-ASCII that our UTF-8 stream parsing
+    // downstream trusts. POSIX precedence is LC_ALL > LC_CTYPE > LANG, so
+    // the first cut of this fix (set LANG only) was a no-op whenever LC_ALL
+    // or LC_CTYPE carried the C pin — LANG=en_US.UTF-8 sat *below* the
+    // override and the PTY still came up non-UTF-8.
+    //
+    // Policy: C/POSIX/empty are placeholders, not choices — delete them,
+    // then default LANG only when nothing real remains. A real locale value
+    // is the user's explicit choice (even a non-UTF-8 one like ja_JP.eucJP)
+    // and is never touched; deleting a placeholder LC_ALL also lets a real
+    // LANG underneath win again instead of staying masked. Exact-match on
+    // 'C'/'POSIX' on purpose: 'C.UTF-8' is a real, working UTF-8 locale.
+    const isLocalePlaceholder = (v: string | undefined): boolean =>
+      v === undefined || v === '' || v === 'C' || v === 'POSIX'
+    for (const key of ['LC_ALL', 'LC_CTYPE', 'LANG'] as const) {
+      if (key in env && isLocalePlaceholder(env[key])) delete env[key]
+    }
+    if (isLocalePlaceholder(env.LC_ALL ?? env.LC_CTYPE ?? env.LANG)) {
+      env.LANG = 'en_US.UTF-8'
+    }
     // Caller overrides win last so integrations that need to
     // override TERM or add flags can do so.
     for (const [k, v] of Object.entries(this.extraEnv)) {
