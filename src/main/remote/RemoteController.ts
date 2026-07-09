@@ -171,6 +171,12 @@ export class RemoteController extends EventEmitter {
             return { ok: false, error: 'transcribe-failed' }
           }
         },
+        // MUST match transcribeAudio's own key gate above — this is what the
+        // server advertises in the WS hello so the phone disables its mic
+        // instead of recording into a guaranteed 503. Env-read per call so a
+        // key exported before a phone (re)connects is picked up without a
+        // desktop restart.
+        isSttAvailable: () => Boolean(process.env.DEEPGRAM_API_KEY?.trim()),
       })
       this.transport = mode
       this.server.on('clients-changed', () => this.emitStatus())

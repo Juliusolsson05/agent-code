@@ -191,12 +191,24 @@ export function SessionView({
     [sendPrompt, interrupt],
   )
 
+  // Server-declared STT capability from the WS hello. Self-subscribed (same
+  // pattern as cwd above) because the hello lands asynchronously after the
+  // socket opens — a mount-time read alone could permanently miss the
+  // verdict. Drives the mic's disabled state so a desktop with no Deepgram
+  // key disables dictation up front instead of failing after the user has
+  // already recorded and uploaded.
+  const [sttAvailable, setSttAvailable] = useState<boolean | null>(() =>
+    feed.getSttAvailability(),
+  )
+  useEffect(() => feed.onSttAvailability(setSttAvailable), [feed])
+
   // Voice dictation. Feeds the real ComposerInput shell's dictation slot (so
   // the activity meter lights up while recording) AND the tap mic button
   // below. The transcript comes back <stt>-wrapped from the server; append it
   // to the draft on its own line so it reads as a distinct dictated segment.
   const dictation = useMobileDictation({
     token,
+    sttAvailable,
     onTranscript: text => setDraft(prev => (prev ? `${prev}\n${text}` : text)),
     onError: setError,
   })
@@ -347,15 +359,30 @@ export function SessionView({
           <div className="composer-actions">
             {/* Explicit tap mic button — the desktop starts dictation from the
                 Fn hotkey, which a phone has no equivalent for. Tap to record,
-                tap again to stop → transcribe → append. Disabled only during
-                the transient start/stop transitions so a double-tap can't race
-                the recorder. */}
+                tap again to stop → transcribe → append. Disabled during the
+                transient start/stop transitions (so a double-tap can't race
+                the recorder) AND when the controller says dictation can't
+                work at all — insecure LAN origin (getUserMedia needs a secure
+                context) or no STT key on the desktop. In the disabled states
+                the controller's label carries the full reason, surfaced here
+                as title/aria-label so the mic explains itself instead of
+                fake-failing with a permission error (review finding). */}
             <button
               type="button"
               className={`mic${dictation.status === 'recording' ? ' recording' : ''}`}
               onClick={dictation.toggle}
-              disabled={dictation.status === 'starting' || dictation.status === 'stopping'}
-              aria-label={dictation.status === 'recording' ? 'Stop recording' : 'Dictate'}
+              disabled={
+                !dictation.enabled ||
+                dictation.status === 'starting' ||
+                dictation.status === 'stopping'
+              }
+              aria-label={
+                !dictation.enabled
+                  ? dictation.label
+                  : dictation.status === 'recording'
+                    ? 'Stop recording'
+                    : 'Dictate'
+              }
               title={dictation.label}
             >
               {dictation.status === 'recording'

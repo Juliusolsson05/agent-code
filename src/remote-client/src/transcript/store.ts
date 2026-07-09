@@ -433,7 +433,29 @@ export class TranscriptStore {
         workingStatus: prev.transcript.workingStatus,
         screenText: prev.transcript.screenText,
       },
-      semantic: prev.semantic,
+      // The fold state resets WITH the transcript (review finding — this used
+      // to carry prev.semantic across the roll). ingestSemanticEvent folds
+      // onto state.semantic, so keeping the old runtime meant the FIRST
+      // semantic event after a /clear re-published the dead conversation's
+      // currentTurn + history into the fresh transcript's mirrors — the old
+      // conversation's rows reappearing on the phone right after the desktop
+      // cleared them.
+      //
+      // Mid-turn safety, traced: roll detection rides the first live jsonl
+      // frame whose `file` differs, and a new conversation's first jsonl
+      // write (the prompt entry at submit time, or the resumed history on
+      // resume) is flushed BEFORE the provider's response begins — while the
+      // new turn's semantic events only start with that response stream
+      // (`turn_started` ≈ message_start, a full API roundtrip later). So in
+      // the normal path this reset runs before any new-turn semantic event
+      // exists, and everything it wipes belongs to the OLD conversation —
+      // exactly the intent. If jsonl-watcher latency ever inverted that
+      // ordering, the loss is bounded and self-healing: foldSemanticEvent
+      // re-opens a turn from later `turn_started`/`turn_delta` events, and
+      // the turn's content still commits through the jsonl entries — a brief
+      // live-streaming gap versus guaranteed cross-conversation contamination
+      // the other way.
+      semantic: emptySemanticRuntime(),
       seen: new Set(),
       liveMapper: null,
       kind: prev.kind,

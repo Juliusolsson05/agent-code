@@ -152,6 +152,16 @@ export type OutboundFrame =
       deviceId: string
       deviceName: string
       themeSettings?: Record<string, unknown> | null
+      /** Whether POST /dictate can currently succeed (transcriber wired AND
+       *  an STT key present). Rides the hello so the phone can disable its
+       *  mic up front instead of letting the user record + upload into a
+       *  guaranteed 503 (review finding). Evaluated per connection — a key
+       *  added while the desktop runs is picked up on the phone's next
+       *  (re)connect, which reconnect backoff makes near-immediate. Optional
+       *  so a version-skewed pair degrades gracefully: an older server just
+       *  doesn't send it, and the phone treats absence as "unknown → keep
+       *  the mic enabled" (the old fail-at-upload behavior). */
+      sttAvailable?: boolean
     }
   | { type: 'theme-settings'; themeSettings: Record<string, unknown> | null }
   | { type: 'session-list'; sessions: OutboundSessionSummary[] }
