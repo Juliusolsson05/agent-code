@@ -1,4 +1,4 @@
-import { trimSemanticId } from '@renderer/workspace/semantic/helpers'
+import { trimSemanticId } from '@renderer/session-runtime/semantic/helpers'
 
 // One-line summaries for the proxy debug panel event tail + the
 // feed-debug log SEM layer. Both surfaces render tens of lines at

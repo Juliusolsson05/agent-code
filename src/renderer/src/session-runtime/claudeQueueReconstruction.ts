@@ -1,5 +1,5 @@
-import { parseTaskNotification } from '@renderer/features/feed/lib/taskNotification'
-import type { QueuedMessage } from '@renderer/workspace/workspaceState'
+import { parseTaskNotification } from '@renderer/session-runtime/taskNotification'
+import type { QueuedMessage } from '@renderer/session-runtime/state'
 
 // Reconstruction of Claude's PROVIDER-OWNED message queue from the
 // `queue-operation` transcript records our renderer replays live in

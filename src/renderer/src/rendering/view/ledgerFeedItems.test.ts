@@ -6,7 +6,7 @@ import {
   emptyRuntime,
   type SemanticLiveTurn,
   type SessionRuntime,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import {
   createLedgerInputAdapter,
   type RuntimeLedgerSlices,

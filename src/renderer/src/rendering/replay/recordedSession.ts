@@ -1,7 +1,7 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import {
   createLedgerInputAdapter,
   type RuntimeLedgerSlices,

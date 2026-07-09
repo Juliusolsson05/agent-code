@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useAppStore } from '@renderer/app-state/hooks'
-import { emptySemanticRuntime } from '@renderer/workspace/workspaceState'
+import { emptySemanticRuntime } from '@renderer/session-runtime/state'
 
 // ProxyDebugPanel — live inspector for the semantic stream and any
 // provider transport attribution that survives into the shared runtime.

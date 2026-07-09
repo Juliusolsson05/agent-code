@@ -1,17 +1,17 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import {
   appendFeedDebugLog,
-} from '@renderer/workspace/runtime/feedDebug'
-import { withDerivedSessionStatus } from '@renderer/workspace/semantic/helpers'
+} from '@renderer/session-runtime/feedDebug'
+import { withDerivedSessionStatus } from '@renderer/session-runtime/semantic/helpers'
 import {
   entryTextContent,
-} from '@renderer/workspace/entries/utils'
+} from '@renderer/session-runtime/entries'
 import { isOptimisticCodexUserEntry } from '@providers/codex/renderer/transcript/entries'
-import { isSemanticTurnRunning } from '@renderer/workspace/semantic/helpers'
+import { isSemanticTurnRunning } from '@renderer/session-runtime/semantic/helpers'
 import {
   buildCommittedAssistantText,
   semanticTurnHasRenderableContent,

@@ -19,7 +19,7 @@ import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import {
   parseSemanticTodos,
   type SemanticLiveTurn,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 
 import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'

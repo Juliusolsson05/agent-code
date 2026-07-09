@@ -2,12 +2,12 @@ import type { Settings } from '@renderer/app-state/settings/types'
 import type { DispatchAttachIntent, UiShellState } from '@renderer/app-state/uiShell/types'
 import type { SessionId, TabId } from '@renderer/workspace/types'
 import type { WorkspaceState } from '@renderer/workspace/types'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type {
   ReaderModeState,
-  SessionRuntime,
   SpotlightState,
   TileTabsState,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/workspace/types'
 
 export type SettingsSlice = {
   settings: Settings

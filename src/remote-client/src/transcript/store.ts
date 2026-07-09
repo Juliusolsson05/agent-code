@@ -1,15 +1,15 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
+import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import {
   reduceStreamPhase,
   type StreamPhaseState,
-} from '@renderer/workspace/semantic/streamPhaseMachine'
-import { indexEntryIntoMaps } from '@renderer/workspace/entries/utils'
+} from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
 import {
   emptySemanticRuntime,
   type SemanticLiveTurn,
   type SemanticRuntimeState,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import { isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'

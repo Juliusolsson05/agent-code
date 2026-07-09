@@ -5,16 +5,16 @@ import { asRecord } from '@shared/lib/asRecord'
 import {
   emptySemanticRuntime,
   type SemanticRuntimeState,
-} from '@renderer/workspace/workspaceState'
-import { foldSemanticEvent } from '@renderer/workspace/semantic/foldEvent'
+} from '@renderer/session-runtime/state'
+import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
 import {
   reduceStreamPhase,
   type StreamPhaseState,
-} from '@renderer/workspace/semantic/streamPhaseMachine'
+} from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import {
   ghostsFromSemanticTurn,
   reconcileUpstream,
-} from '@renderer/workspace/ghosts'
+} from '@renderer/session-runtime/ghosts'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
 

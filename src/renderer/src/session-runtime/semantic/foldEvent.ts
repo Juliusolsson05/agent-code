@@ -1,9 +1,9 @@
-import type { SessionKind } from '@renderer/workspace/types'
+import type { SessionKind } from '@shared/types/providerKind'
 import type {
   SemanticLiveBlock,
   SemanticLiveTurn,
   SemanticRuntimeState,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 
 import {
   SEMANTIC_ERROR_CAP,
@@ -15,8 +15,8 @@ import {
   flattenSemanticUsage,
   hasPendingSemanticTools,
   semanticToIndex,
-} from '@renderer/workspace/semantic/helpers'
-import { summarizeSemanticEvent } from '@renderer/workspace/semantic/summarize'
+} from '@renderer/session-runtime/semantic/helpers'
+import { summarizeSemanticEvent } from '@renderer/session-runtime/semantic/summarize'
 import { asRecord } from '@shared/lib/asRecord'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'

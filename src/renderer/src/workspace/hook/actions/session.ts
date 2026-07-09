@@ -1,7 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useRef } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '@renderer/workspace/workspaceState'
+import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'
 import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
@@ -20,7 +20,7 @@ import { sessionSpawnErrorMessage } from '@renderer/workspace/spawn/errorMessage
 import {
   ghostsToPersist,
   reconcileUpstream,
-} from '@renderer/workspace/ghosts'
+} from '@renderer/session-runtime/ghosts'
 import { reduceGhostLogSansSuperseded as reduceGhostLog } from 'agent-transcript-parser/ghost'
 
 import type {

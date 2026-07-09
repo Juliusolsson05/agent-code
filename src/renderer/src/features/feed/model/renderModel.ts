@@ -4,7 +4,7 @@ import { type Entry } from '@shared/types/transcript'
 import type {
   SemanticLiveTurn,
   StreamPhase,
-} from '@renderer/workspace/workspaceState'
+} from '@renderer/session-runtime/state'
 import type {
   AgentProvider,
   DebugVisibleRow,

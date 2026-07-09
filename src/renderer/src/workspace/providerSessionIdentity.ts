@@ -1,5 +1,5 @@
 import type { SessionMeta } from '@renderer/workspace/types'
-import type { SessionRuntime } from '@renderer/workspace/workspaceState'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 
 export function hasDurableProviderSession(
   meta: Pick<SessionMeta, 'providerSessionId' | 'providerSessionIdSource'> | null | undefined,
