@@ -74,9 +74,16 @@ jobs:
             exit 0
           fi
 
+          # WHY no hard-fail when both secrets are absent: every submodule
+          # repo (the five Juliusolsson05 packages/* repos and openai/codex)
+          # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
+          # anonymously. The exit-1 here predated the repos going public and
+          # contradicted README.md's "no special access needed" (#506
+          # review). The PAT/SSH branches above are kept for private forks
+          # of the submodules — configure either secret and it takes over.
           if [ -z "$SUBMODULE_SSH_KEY" ]; then
-            echo "Either SUBMODULE_PAT or SUBMODULE_SSH_KEY must be configured."
-            exit 1
+            echo "No SUBMODULE_PAT/SUBMODULE_SSH_KEY configured; submodule repos are public, using anonymous HTTPS."
+            exit 0
           fi
 
           mkdir -p ~/.ssh
@@ -95,8 +102,9 @@ jobs:
           git config --global url."git@github-personal:Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
 
       - name: Checkout submodules
-        # Juliusolsson05 submodules use SUBMODULE_PAT or SUBMODULE_SSH_KEY;
-        # public third-party submodules keep HTTPS.
+        # All submodules are public: anonymous HTTPS works with no secrets.
+        # SUBMODULE_PAT / SUBMODULE_SSH_KEY (previous step) only rewrite the
+        # URLs when configured, for private forks.
         run: git submodule update --init --recursive
 
       - name: Setup Node
@@ -150,9 +158,16 @@ jobs:
             exit 0
           fi
 
+          # WHY no hard-fail when both secrets are absent: every submodule
+          # repo (the five Juliusolsson05 packages/* repos and openai/codex)
+          # is PUBLIC, so the plain HTTPS URLs in .gitmodules clone fine
+          # anonymously. The exit-1 here predated the repos going public and
+          # contradicted README.md's "no special access needed" (#506
+          # review). The PAT/SSH branches above are kept for private forks
+          # of the submodules — configure either secret and it takes over.
           if [ -z "$SUBMODULE_SSH_KEY" ]; then
-            echo "Either SUBMODULE_PAT or SUBMODULE_SSH_KEY must be configured."
-            exit 1
+            echo "No SUBMODULE_PAT/SUBMODULE_SSH_KEY configured; submodule repos are public, using anonymous HTTPS."
+            exit 0
           fi
 
           mkdir -p ~/.ssh
@@ -171,8 +186,9 @@ jobs:
           git config --global url."git@github-personal:Juliusolsson05/".insteadOf "https://github.com/Juliusolsson05/"
 
       - name: Checkout submodules
-        # Juliusolsson05 submodules use SUBMODULE_PAT or SUBMODULE_SSH_KEY;
-        # public third-party submodules keep HTTPS.
+        # All submodules are public: anonymous HTTPS works with no secrets.
+        # SUBMODULE_PAT / SUBMODULE_SSH_KEY (previous step) only rewrite the
+        # URLs when configured, for private forks.
         run: git submodule update --init --recursive
 
       - name: Setup Node
@@ -221,7 +237,16 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: macos-release
+          # WHY the conditional name: without CSC_LINK the packaging step
+          # builds UNSIGNED dev artifacts (scripts/package-mac.mjs fallback),
+          # and an unsigned build parked under a name like "macos-release"
+          # is exactly the artifact someone grabs and ships by mistake. The
+          # artifact name tracks what the build actually IS (signed vs not),
+          # not what the run intended: publish_release=true already
+          # guarantees CSC_LINK via the validate-release job, so every
+          # published artifact is named macos-release, and everything
+          # unsigned is unmistakably macos-unsigned-dev.
+          name: ${{ secrets.CSC_LINK != '' && 'macos-release' || 'macos-unsigned-dev' }}
           path: |
             release/*.dmg
             release/*.zip

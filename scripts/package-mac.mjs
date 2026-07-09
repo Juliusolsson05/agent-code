@@ -11,19 +11,53 @@
 //
 // Signing inputs (all env): CSC_LINK/CSC_KEY_PASSWORD (cert), or CSC_NAME
 // (keychain identity). When neither is present we force auto-discovery off
-// and ALSO strip the APPLE_* notarization vars — electron-builder would
-// otherwise try to notarize an unsigned app, which hard-fails at the end
-// of a long build.
+// and ALSO strip EVERY notarization-credential env var — electron-builder
+// would otherwise try to notarize an unsigned app, which hard-fails at the
+// end of a long build.
+//
+// WHY the list is longer than APPLE_ID/APPLE_APP_SPECIFIC_PASSWORD/
+// APPLE_TEAM_ID: app-builder-lib's getNotarizeOptions() (see
+// node_modules/app-builder-lib/out/macPackager.js) has THREE independent
+// credential paths, any of which arms notarization:
+//   1. APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD (+ APPLE_TEAM_ID)
+//   2. APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER (App Store
+//      Connect API key — common on developer Macs that also ship other
+//      apps, exported in ~/.zshrc and forgotten)
+//   3. APPLE_KEYCHAIN_PROFILE (+ optional APPLE_KEYCHAIN) — a stored
+//      `notarytool store-credentials` profile
+// And notarization is NOT gated on a real signature: on arm64 the
+// no-identity path falls back to AD-HOC signing (fallBackToAdhoc in
+// macPackager.sign()) and then still calls notarizeIfProvided(), so a dev
+// with only path-2/3 creds exported would watch the whole "UNSIGNED"
+// build succeed and then die in notarytool at the very end. Stripping
+// only path 1 (the original shape of this block) left exactly that hole.
 import { spawnSync } from 'node:child_process'
 
 const env = { ...process.env }
 if (!env.CSC_LINK && !env.CSC_NAME) {
   env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
   delete env.CSC_KEY_PASSWORD
-  delete env.APPLE_ID
-  delete env.APPLE_APP_SPECIFIC_PASSWORD
-  delete env.APPLE_TEAM_ID
+  const notarizationVars = [
+    'APPLE_ID',
+    'APPLE_APP_SPECIFIC_PASSWORD',
+    'APPLE_TEAM_ID',
+    'APPLE_API_KEY',
+    'APPLE_API_KEY_ID',
+    'APPLE_API_ISSUER',
+    'APPLE_KEYCHAIN_PROFILE',
+    'APPLE_KEYCHAIN',
+  ]
+  // Log the names (never the values) of the creds we're ignoring so a dev
+  // wondering "why wasn't my build notarized?" gets the answer in the build
+  // output instead of re-deriving this policy from source.
+  const ignored = notarizationVars.filter((name) => env[name] !== undefined)
+  for (const name of notarizationVars) delete env[name]
   console.log('[package-mac] no CSC_LINK/CSC_NAME in env — building UNSIGNED (dev) artifacts')
+  if (ignored.length > 0) {
+    console.log(
+      `[package-mac] ignoring notarization env vars (unsigned apps cannot be notarized): ${ignored.join(', ')}`,
+    )
+  }
 }
 
 const res = spawnSync(
