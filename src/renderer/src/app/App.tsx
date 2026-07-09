@@ -1,12 +1,6 @@
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
 import { CommandPalette } from '@renderer/features/command-palette/ui/CommandPalette'
-import { DebugPanel } from '@renderer/features/debug/ui/DebugPanel'
-import { FeedDebugPanel } from '@renderer/features/debug/ui/FeedDebugPanel'
-import { HtmlDebugPanel } from '@renderer/features/debug/ui/HtmlDebugPanel'
-import { ProxyDebugPanel } from '@renderer/features/debug/ui/ProxyDebugPanel'
-import { DevDebugPanel } from '@renderer/features/debug/ui/DevDebugPanel'
 import { SettingsPage } from '@renderer/features/settings/ui/SettingsPage'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { SpotlightView } from '@renderer/features/spotlight/ui/SpotlightView'
@@ -15,7 +9,6 @@ import { TileTabsView } from '@renderer/features/tile-tabs/ui/TileTabsView'
 import { NewAgentPlacementOverlay } from '@renderer/features/workspace/ui/NewAgentPlacementOverlay'
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
-import { getEffectiveAgentSurface } from '@renderer/workspace/agentDisplayMode'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { GlobalEditorShell } from '@renderer/features/global-editor/ui/GlobalEditorShell'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
@@ -37,9 +30,7 @@ import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
 import { SidePanels } from '@renderer/app/surfaces/SidePanels'
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { useKeybinds } from '@renderer/workspace/tile-tree/useKeybinds'
-import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { useWorkspace } from '@renderer/workspace/workspaceStore'
-import { resolveTabSessions } from '@renderer/workspace/queries'
 
 // App — thin shell around the workspace hook.
 //
@@ -270,7 +261,6 @@ export default function App() {
   useKeybinds(workspace, onNewTabRequest, onResumeRequest, toggleCommandPalette)
 
   const { state, activeTab } = workspace
-  const commandTargetId = commandTargetSessionId(workspace)
   const readerModeTabId = workspace.readerMode?.tabId ?? null
   const spotlightTabId = workspace.spotlight?.tabId ?? null
   const readerModeTabExists = readerModeTabId
@@ -482,57 +472,6 @@ export default function App() {
             </GlobalEditorShell>
           )}
         </main>
-
-        {debugPanelOpen && commandTargetId && (
-          <DebugPanel
-            sessionId={commandTargetId}
-            runtime={workspace.getRuntime(commandTargetId)}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
-            inlineRawTerminalDisabled={
-              getEffectiveAgentSurface({
-                kind: workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER,
-                mode: settings.agentViewMode,
-                runtime: workspace.getRuntime(commandTargetId),
-              }) === 'terminal'
-            }
-            onClose={toggleDebugPanel}
-          />
-        )}
-
-        {feedDebugPanelOpen && commandTargetId && (
-          <FeedDebugPanel
-            sessionId={commandTargetId}
-            runtime={workspace.getRuntime(commandTargetId)}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
-            onClose={toggleFeedDebugPanel}
-          />
-        )}
-
-        {proxyDebugPanelOpen && commandTargetId && (
-          <ProxyDebugPanel
-            sessionId={commandTargetId}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
-            onClose={toggleProxyDebugPanel}
-          />
-        )}
-
-        {htmlDebugPanelOpen && commandTargetId && (
-          <HtmlDebugPanel
-            sessionId={commandTargetId}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
-            onClose={toggleHtmlDebugPanel}
-          />
-        )}
-
-        {devDebugEnabled && devDebugPanelOpen && commandTargetId && (
-          <DevDebugPanel
-            sessionId={commandTargetId}
-            runtime={workspace.getRuntime(commandTargetId)}
-            kind={workspace.state.sessions[commandTargetId]?.kind ?? DEFAULT_PROVIDER}
-            workspace={workspace}
-            onClose={toggleDevDebugPanel}
-          />
-        )}
 
         <SidePanels />
       </div>

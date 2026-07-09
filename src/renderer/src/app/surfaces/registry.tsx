@@ -9,6 +9,7 @@ import { GitBarSurface } from '@renderer/features/git/surfaces/GitBarSurface'
 import { WorktreesBarSurface } from '@renderer/features/worktrees/surfaces/WorktreesBarSurface'
 import { AgentStatusPanelSurface } from '@renderer/features/agent-status/surfaces/AgentStatusPanelSurface'
 import { RemotePanelSurface } from '@renderer/features/remote/surfaces/RemotePanelSurface'
+import { DebugSurfaces } from '@renderer/features/debug/surfaces/DebugSurfaces'
 import { PathPickerSurface } from '@renderer/features/path-picker/surfaces/PathPickerSurface'
 import { TileTabsModalSurface } from '@renderer/features/workspace/surfaces/TileTabsModalSurface'
 import { ReorderTabsSurface } from '@renderer/features/workspace/surfaces/ReorderTabsSurface'
@@ -63,4 +64,5 @@ export const sidePanelSurfaces: SurfaceEntry[] = [
   { id: 'worktrees-bar', Component: WorktreesBarSurface },
   { id: 'agent-status-panel', Component: AgentStatusPanelSurface },
   { id: 'remote-panel', Component: RemotePanelSurface },
+  { id: 'debug-surfaces', Component: DebugSurfaces },
 ]
