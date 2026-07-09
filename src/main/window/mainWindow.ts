@@ -182,6 +182,16 @@ export function createMainWindow(): void {
   // every case that shifts them.
   mainWindow.on('resize', pushTrafficLightInset)
 
+  // ALSO re-push after every renderer load. ready-to-show fires once per
+  // window, so a renderer reload (Cmd+R, crash recovery, vite full
+  // reload) got a fresh React tree that never received the inset — the
+  // spacer collapsed to 0, tabs slid under the traffic lights, and the
+  // tab bar's built-in drag strip vanished until the next manual resize.
+  // did-finish-load fires on every navigation/reload, and the renderer
+  // subscribes in a mount effect that runs before this event's IPC
+  // round-trip can complete, so the push always lands on a listener.
+  mainWindow.webContents.on('did-finish-load', pushTrafficLightInset)
+
   mainWindow.webContents.on('before-input-event', handleZoomInput)
 
   mainWindow.webContents.on('zoom-changed', (event, zoomDirection) => {
