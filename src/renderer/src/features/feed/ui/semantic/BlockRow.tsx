@@ -23,6 +23,7 @@ import {
 
 import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
+import { StreamingCodeBlock } from '@renderer/features/feed/ui/kit/StreamingCodeBlock'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
@@ -602,12 +603,18 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
       <MarkerRow marker="⏺">
         <div className="flex flex-col gap-2">
           {fence.prose ? <StreamingProse text={fence.prose} /> : null}
-          <CodeBlock
+          {/* Live open fence — sealed-line streaming highlight. The old
+              path mounted a Monaco CodeBlock whose effect listed `code`
+              in its deps, so EVERY streaming delta disposed and rebuilt
+              the editor+model+LSP; its key also embedded the fence
+              language, which usually arrives a delta after the ``` and
+              remounted the block a second time. StreamingCodeBlock
+              appends highlighted sealed lines instead, and its blockKey
+              deliberately excludes the language. */}
+          <StreamingCodeBlock
             code={fence.code}
             language={fence.language}
-            codeId={`live:${block.blockIndex}:${fence.language ?? 'plain'}`}
-            engine="monaco"
-            allowAutoDetect={!fence.language}
+            blockKey={`live-fence:${block.blockIndex}`}
           />
         </div>
       </MarkerRow>
