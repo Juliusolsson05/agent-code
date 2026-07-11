@@ -28,6 +28,9 @@ import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
 import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
+import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
+import { commandFromCommitted } from '@renderer/features/feed/ui/resolve/fromCommitted'
+import { routeFamily } from '@renderer/features/feed/ui/resolve/registry'
 
 /* ---------- Block dispatcher ---------- */
 
@@ -175,6 +178,19 @@ export const Block = memo(function Block({
         )
       }
 
+      // Command family — one card for Bash / exec_command / write_stdin /
+      // local_shell_call, live-identical (spec §6). Routed AFTER the
+      // git-intent interception above (git cards win for recognized git
+      // commands) and after spawn/AskUserQuestion. The paired result is
+      // consumed INTO the card (output + exit code); the tool_result
+      // branch below suppresses it with the same routeFamily predicate —
+      // the #442 lesson: whatever the card renders for, the result
+      // suppresses for, one predicate, both branches.
+      if (routeFamily(currentProvider, tu.name) === 'command') {
+        const paired = toolResultIndex.get(tu.id) ?? null
+        return <CommandCard vm={commandFromCommitted(tu, paired, currentProvider)} />
+      }
+
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
       // Shared fallback is the generic JSON tool row (residue plan P1):
       // it degrades to the old ToolUseRow look for headline-only inputs
@@ -199,6 +215,13 @@ export const Block = memo(function Block({
         }
       }
       const sourceTool = toolUseIndex.get(tr.tool_use_id)
+      // Command-family results are consumed into the CommandCard on the
+      // tool_use row (output + exit code) — painting them again here
+      // duplicates the output below the card. Same predicate as the
+      // tool_use branch (see the #442 note there).
+      if (sourceTool && routeFamily(currentProvider, sourceTool.name) === 'command') {
+        return null
+      }
       // #442 finding-C2: an answered AskUserQuestion renders the picked answer
       // inside AskUserQuestionAnsweredRow on the tool_use row (it reads the
       // paired tool_result). Painting the tool_result again here shows the same

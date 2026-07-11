@@ -5,9 +5,7 @@ import { memo } from 'react'
 
 import {
   CodexApplyPatchRow,
-  CodexExecCommandRow,
   CodexToolRow,
-  CodexWriteStdinRow,
 } from '@providers/codex/renderer/rows/CodexRows'
 import {
   EditRow,
@@ -22,6 +20,8 @@ import {
 } from '@renderer/session-runtime/state'
 
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
+import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
+import { commandFromLive } from '@renderer/features/feed/ui/resolve/fromLive'
 import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -269,11 +269,12 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     if (liveTool.name === 'apply_patch') {
       return <CodexApplyPatchRow block={liveTool} />
     }
-    if (liveTool.name === 'exec_command') {
-      return <CodexExecCommandRow block={liveTool} />
-    }
-    if (liveTool.name === 'write_stdin') {
-      return <CodexWriteStdinRow block={liveTool} />
+    // Command family — the SAME CommandCard the committed plane renders
+    // (spec §6 convergence). Live output streams into the card as
+    // tool_output_delta accumulates on the block; exit tint arrives via
+    // resultIsError on tool_completed.
+    if (liveTool.name === 'exec_command' || liveTool.name === 'write_stdin') {
+      return <CommandCard vm={commandFromLive(block, toolState, 'codex')} />
     }
     // Parse-gated convergence with the committed fallback (residue plan
     // P1): a fully-parsed live payload renders through the same shared
@@ -357,25 +358,10 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   }
 
   if (block.kind === 'local_shell_call') {
-    const shell = block.localShellCall
-    const command = shell?.command.join(' ') ?? '(no command)'
-    return (
-      <MarkerRow marker="⏺">
-        <div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
-            <span className="text-accent font-semibold">$ Shell</span>
-            <span className="text-muted text-[11px] uppercase tracking-wider">
-              {shell?.status ?? block.status ?? 'running'}
-            </span>
-          </div>
-          <MarkerRow marker="⎿" tone="muted">
-            <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
-              {command}
-            </pre>
-          </MarkerRow>
-        </div>
-      </MarkerRow>
-    )
+    // Same CommandCard as committed local_shell rows — the bespoke
+    // "$ Shell" chip this replaces was live-only and drifted from the
+    // committed rendering (audit gap #3).
+    return <CommandCard vm={commandFromLive(block, toolState, 'codex')} />
   }
 
   if (block.kind === 'tool_search_call') {
@@ -446,6 +432,15 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
           <MultiEditRow block={liveBlock} />
         )
       }
+    }
+
+    // Claude live Bash — same CommandCard as its committed row. The
+    // command string appears once its JSON literal closes (partial
+    // buffers keep the streaming placeholder); the git-intent widget is
+    // a committed-plane concern (detectGitIntent needs the full
+    // command; by the time a git card matters the committed row owns it).
+    if (block.toolName === 'Bash') {
+      return <CommandCard vm={commandFromLive(block, toolState, 'claude')} />
     }
 
     const todos =

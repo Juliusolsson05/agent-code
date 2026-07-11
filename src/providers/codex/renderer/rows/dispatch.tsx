@@ -3,10 +3,8 @@ import type { ReactNode } from 'react'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import {
   CodexApplyPatchRow,
-  CodexExecCommandRow,
   CodexToolResultRow,
   CodexToolRow,
-  CodexWriteStdinRow,
 } from '@providers/codex/renderer/rows/CodexRows'
 
 export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
@@ -15,8 +13,9 @@ export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
   // has provider-specific headline extraction for arguments/raw patches. The
   // shared fallback remains for providers that do not claim a tool name.
   if (block.name === 'apply_patch') return <CodexApplyPatchRow block={block} />
-  if (block.name === 'exec_command') return <CodexExecCommandRow block={block} />
-  if (block.name === 'write_stdin') return <CodexWriteStdinRow block={block} />
+  // exec_command / write_stdin no longer route here: the command family
+  // is intercepted upstream in Block.tsx (routeFamily → CommandCard)
+  // before provider dispatch runs, for every provider.
   // Unknown names deliberately fall through to the SHARED fallback
   // (JsonToolRow via Block.tsx) — the residue-plan P1 convergence. Codex
   // used to claim everything with CodexToolRow, which is why its MCP /
