@@ -21,15 +21,6 @@ import { renderOpencodeReadResult } from '@providers/opencode/renderer/rows/Open
 // are plain path/pattern/command payloads the generic rows present fine.
 // Specialized rows (diff-style edit rendering etc.) should be added here one
 // evidence-backed tool at a time, not speculatively.
-export function renderOpencodeToolUse(block: ToolUseBlock): ReactNode | undefined {
-  // todowrite routes upstream through the todo family now (TodoCard
-  // takes a `label`, so the header still names the tool the agent
-  // actually called). Nothing OpenCode-specific remains on the
-  // tool_use side.
-  void block
-  return undefined
-}
-
 export function renderOpencodeToolResult(
   block: ToolResultBlock,
   context: { sourceTool?: ToolUseBlock | null },

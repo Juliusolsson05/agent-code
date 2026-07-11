@@ -3,24 +3,6 @@ import type { ReactNode } from 'react'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { CodexToolResultRow } from '@providers/codex/renderer/rows/CodexRows'
 
-export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
-  // WHY Codex falls back to CodexToolRow here instead of shared ToolUseRow:
-  // the Codex row understands Codex's function-call payload conventions and
-  // has provider-specific headline extraction for arguments/raw patches. The
-  // shared fallback remains for providers that do not claim a tool name.
-  // apply_patch / exec_command / write_stdin no longer route here: the
-  // file-edit and command families are intercepted upstream in Block.tsx
-  // (routeFamily → DiffCard / CommandCard) before provider dispatch
-  // runs, for every provider.
-  // Unknown names deliberately fall through to the SHARED fallback
-  // (JsonToolRow via Block.tsx) — the residue-plan P1 convergence. Codex
-  // used to claim everything with CodexToolRow, which is why its MCP /
-  // orchestration tools drifted into "name + one headline over a raw
-  // blob" while claude's fell to a different fallback with different
-  // gaps. One fallback, one behavior, all providers.
-  return undefined
-}
-
 export function renderCodexToolResult(
   block: ToolResultBlock,
   context: { sourceTool?: ToolUseBlock | null },

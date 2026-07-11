@@ -24,9 +24,7 @@ import { TextProse } from '@renderer/features/feed/ui/markdown'
 import { ImageBlockRow } from '@renderer/features/feed/ui/rows/ImageBlockRow'
 import { UserBand } from '@renderer/features/feed/ui/rows/primitives'
 import { ToolResultRow } from '@renderer/features/feed/ui/rows/ToolResultRow'
-import { ToolUseRow } from '@renderer/features/feed/ui/rows/ToolUseRow'
 import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
-import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
 import {
@@ -74,9 +72,8 @@ import {
 //   - text under role='assistant' → TextProse with `⏺` marker
 //   - thinking → collapsed <details> if non-empty, else nothing
 //   - image → ImageBlockRow
-//   - tool_use → provider-specific renderer (Claude: Edit/MultiEdit/
-//     Write/TodoWrite rich rows; Codex: CodexToolRow; everything else:
-//     generic ToolUseRow). Plus the git-widget interception.
+//   - tool_use → routeFamily → the family's artifact card (see
+//     ui/resolve/registry.ts). Plus the git-widget interception.
 //   - tool_result → provider-specific result renderer, with the git
 //     widget suppression mirrored here.
 // #442 finding-21: the git-widget card renders for a shell tool_use, and the
@@ -205,10 +202,14 @@ export const Block = memo(function Block({
       // branch below suppresses it with the same routeFamily predicate —
       // the #442 lesson: whatever the card renders for, the result
       // suppresses for, one predicate, both branches.
-      // Legacy provider claims (opencode read/todowrite) bypass the
-      // family cards entirely — see isLegacyProviderClaimed's WHY.
-      const legacyClaimed = isLegacyProviderClaimed(currentProvider, tu.name)
-      const family = legacyClaimed ? null : routeFamily(currentProvider, tu.name)
+      // Legacy provider claims (opencode read): the tool_use side gets
+      // the generic card WITHOUT consuming the paired result — the
+      // provider's renderToolResult (OpencodeReadResult tag-soup
+      // parser) still owns the result row. See isLegacyProviderClaimed.
+      if (isLegacyProviderClaimed(currentProvider, tu.name)) {
+        return <GenericToolCard vm={genericFromCommitted(tu, null, currentProvider)} />
+      }
+      const family = routeFamily(currentProvider, tu.name)
       if (family === 'command') {
         const paired = toolResultIndex.get(tu.id) ?? null
         return <CommandCard vm={commandFromCommitted(tu, paired, currentProvider)} />
@@ -267,11 +268,12 @@ export const Block = memo(function Block({
         return <ImageGenCard vm={imageGenFromCommitted(tu, paired, currentProvider)} />
       }
 
-      const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
-      // Families whose dedicated card hasn't landed yet (file-read/
-      // file-edit/file-write/todo/web — spec §8 migration state) keep
-      // the legacy path: provider dispatch, else the old JSON tool row.
-      return providerRow !== undefined ? providerRow : <JsonToolRow block={tu} />
+      // Unreachable in practice — every family above has a landed card
+      // and routeFamily is total — but a silent non-render on a future
+      // family addition would be the #239 class, so fall back loudly
+      // to the generic card.
+      const paired = toolResultIndex.get(tu.id) ?? null
+      return <GenericToolCard vm={genericFromCommitted(tu, paired, currentProvider)} />
     }
     case 'tool_result': {
       const tr = block as ToolResultBlock

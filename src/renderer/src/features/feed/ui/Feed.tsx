@@ -260,7 +260,7 @@ type Props = {
 //      compare bails the entire subtree out. Zero markdown work happens.
 //
 //   2. Every row component (`EntryRow`, `ConversationRow`, `TextProse`,
-//      `ToolUseRow`, `ToolResultRow`) is individually memoized. Even when
+//      artifact cards, `ToolResultRow`) is individually memoized. Even when
 //      Feed DOES need to re-render (new entry lands, streaming frame
 //      ticks), existing rows receive the exact same entry/block/text
 //      reference they had last time and skip. Only the genuinely new
@@ -625,7 +625,7 @@ function FeedImpl({
 //
 // The entire row surface (LazyEntry, EntryRow, ConversationRow, Block,
 // ImageBlockRow, CompactBoundaryRow, CompactSummaryRow, SystemRow,
-// ToolUseRow, ToolResultRow, UserBand,
+// ToolResultRow, UserBand,
 // plus the EAGER_TAIL constant) moved to ./rows/. Each component lives
 // in its own file, and the long WHY comments (lazy mount rationale,
 // the "CRITICAL: don't wrap tool_results in UserBand" gotcha, the

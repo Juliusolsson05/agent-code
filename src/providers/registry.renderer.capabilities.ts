@@ -6,11 +6,9 @@ import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
 import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
 import {
   renderClaudeToolResult,
-  renderClaudeToolUse,
 } from '@providers/claude/renderer/rows/dispatch'
 import {
   renderCodexToolResult,
-  renderCodexToolUse,
 } from '@providers/codex/renderer/rows/dispatch'
 import type { SemanticFoldPolicy, TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { CLAUDE_SEMANTIC_FOLD_POLICY } from '@providers/claude/renderer/semanticFoldPolicy'
@@ -29,7 +27,6 @@ import {
 } from '@providers/opencode/renderer/transcript/mapper'
 import { opencodeComposerSubmit } from '@providers/opencode/renderer/composerSubmit'
 import {
-  renderOpencodeToolUse,
   renderOpencodeToolResult,
 } from '@providers/opencode/renderer/rows/dispatch'
 import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
@@ -66,7 +63,6 @@ export type RendererProviderCapabilities = {
    */
   splitShortcutKey?: string
   conditionViews: Record<string, ConditionView>
-  renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
   renderToolResult?: (
     block: ToolResultBlock,
     context: { sourceTool?: ToolUseBlock | null },
@@ -193,7 +189,6 @@ const claudeCapabilities: RendererProviderCapabilities = {
   name: 'Claude Code',
   ...CLAUDE_IDENTITY,
   conditionViews: CLAUDE_VIEWS,
-  renderToolUse: renderClaudeToolUse,
   renderToolResult: renderClaudeToolResult,
   // Claude fanout: `Agent` tool_use, plus MCP-orchestrated spawns that arrive
   // prefixed. The bare `orchestration_create_agent` is codex's (see below), so
@@ -217,7 +212,6 @@ const codexCapabilities: RendererProviderCapabilities = {
   name: 'Codex',
   ...CODEX_IDENTITY,
   conditionViews: CODEX_VIEWS,
-  renderToolUse: renderCodexToolUse,
   renderToolResult: renderCodexToolResult,
   // Codex fanout: `spawn_agent` function_call, plus the MCP orchestration spawn
   // whose `mcp__` prefix codex strips on the wire (so it arrives bare).
@@ -239,7 +233,6 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   conditionViews: OPENCODE_VIEWS,
   // Evidence-backed rows only (live probe 2026-07-06): todowrite renders as
   // a real todo list; everything else falls through to the generic rows.
-  renderToolUse: renderOpencodeToolUse,
   renderToolResult: renderOpencodeToolResult,
   // opencode has no subagent-spawn tool yet (no fleet fanout on this backend).
   isSpawnTool: () => false,

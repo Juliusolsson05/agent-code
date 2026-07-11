@@ -221,7 +221,6 @@ export type RendererProviderConfig = {
    * it impossible for Block.tsx to distinguish "fall back" from "intentionally
    * consumed".
    */
-  renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
   renderToolResult?: (
     block: ToolResultBlock,
     context: { sourceTool?: ToolUseBlock | null },
