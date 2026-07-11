@@ -1,11 +1,6 @@
 import { SLAB_MAX_CHARS } from '@providers/shared/renderer/rows/JsonToolRow'
 import { memo } from 'react'
 
-import { CodexApplyPatchRow } from '@providers/codex/renderer/rows/CodexRows'
-import {
-  EditRow,
-  MultiEditRow,
-} from '@providers/claude/renderer/rows/ClaudeRows'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { parseJsonRecord } from '@shared/lib/asRecord'
 import {
@@ -15,6 +10,10 @@ import {
 
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
 import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
+import {
+  DiffCard,
+  fileEditFromLive,
+} from '@renderer/features/feed/ui/artifacts/fileEdit'
 import { GenericToolCard } from '@renderer/features/feed/ui/artifacts/generic'
 import {
   commandFromLive,
@@ -29,159 +28,12 @@ import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
 
-// [#285] Extract a CLOSED top-level JSON string field from a partial inputJson
-// buffer — i.e. one whose closing quote has already streamed. The regex body
-// `(?:[^"\\]|\\.)*` tolerates escaped quotes and embedded newlines, so it only
-// matches a fully-arrived value. Used ONLY during the brief streaming window
-// before the whole object is JSON-parseable; the moment `parseJsonRecord`
-// succeeds (below) the authoritative parse takes over. A value that literally
-// contains the key text mid-stream could mis-match transiently, but it
-// self-corrects on the next delta / final parse — strictly better than the raw
-// JSON blob this replaces.
-function extractClosedJsonString(raw: string, key: string): string | null {
-  const re = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`)
-  const m = re.exec(raw)
-  if (!m) return null
-  try {
-    return JSON.parse(`"${m[1]}"`) as string
-  } catch {
-    return null
-  }
-}
-
 // Cap any pretty-printed JSON slab on the LIVE path the same way JsonToolRow
-// caps its committed slabs. WHY: these two call sites stringify tool output /
-// parsed input straight into the DOM every render while the block streams. An
-// unbounded payload (a whole-file read result, a giant orchestration graph) is
-// the O(bytes²) highlight/paint trap on the hottest path in the feed. We reuse
-// JsonToolRow's exported SLAB_MAX_CHARS instead of a fresh magic number so the
-// live and committed previews truncate identically (they used to only be
-// capped on the committed side, so a live row could balloon).
+// caps its committed slabs — the live and committed previews must truncate
+// identically (they used to drift; see SLAB_MAX_CHARS' rationale).
 function cappedJson(value: unknown): string {
   const json = JSON.stringify(value, null, 2)
   return json.length > SLAB_MAX_CHARS ? `${json.slice(0, SLAB_MAX_CHARS)}\n…` : json
-}
-
-// [#285] Build the committed Edit/MultiEdit input object from a live semantic
-// block, so the streaming path can render the SAME rich EditRow/MultiEditRow
-// (FileToolHeader + line-level DiffSlab) the committed transcript uses —
-// mirroring how Codex reuses its committed rows on the live path (see the
-// function_call branch below). Returns null until at least `file_path` has
-// streamed so we never flash an empty "Edit · (no changes)" card; the caller
-// then falls through to the raw preview until the path arrives.
-function claudeLiveEditInput(
-  block: SemanticLiveTurn['blocks'][number],
-): Record<string, unknown> | null {
-  if (block.parsedInput) return block.parsedInput
-  const raw = block.inputJson ?? ''
-  const full = raw ? parseJsonRecord(raw) : null
-  if (full) return full
-  if (!raw) return null
-  const filePath = extractClosedJsonString(raw, 'file_path')
-  if (!filePath) return null
-  if (block.toolName === 'MultiEdit') {
-    // The `edits` array can't be reliably half-parsed; show the header now
-    // (file path) and let the authoritative parse above fill in the per-edit
-    // diff chunks the instant the whole object completes.
-    return { file_path: filePath, edits: [] }
-  }
-  return {
-    file_path: filePath,
-    old_string: extractClosedJsonString(raw, 'old_string') ?? '',
-    new_string: extractClosedJsonString(raw, 'new_string') ?? '',
-  }
-}
-
-const SIMPLE_JSON_ESCAPES: Record<string, string> = {
-  '"': '"',
-  '\\': '\\',
-  '/': '/',
-  b: '\b',
-  f: '\f',
-  n: '\n',
-  r: '\r',
-  t: '\t',
-}
-
-function decodePartialJsonStringBody(raw: string, start: number): string {
-  let out = ''
-  let i = start
-  while (i < raw.length) {
-    const ch = raw[i]
-    if (ch === '"') return out
-    if (ch === '\\') {
-      if (i + 1 >= raw.length) return out
-      const esc = raw[i + 1]
-      if (esc === 'u') {
-        const hex = raw.slice(i + 2, i + 6)
-        if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) return out
-        out += String.fromCharCode(parseInt(hex, 16))
-        i += 6
-        continue
-      }
-      out += SIMPLE_JSON_ESCAPES[esc] ?? esc
-      i += 2
-      continue
-    }
-    out += ch
-    i += 1
-  }
-  return out
-}
-
-function extractPartialJsonStringMember(raw: string, keys: string[]): string | null {
-  for (const key of keys) {
-    const marker = `"${key}"`
-    const keyAt = raw.indexOf(marker)
-    if (keyAt === -1) continue
-    const colonAt = raw.indexOf(':', keyAt + marker.length)
-    if (colonAt === -1) continue
-    let valueAt = colonAt + 1
-    while (valueAt < raw.length && /\s/.test(raw[valueAt] ?? '')) valueAt += 1
-    if (raw[valueAt] !== '"') continue
-    return decodePartialJsonStringBody(raw, valueAt + 1)
-  }
-  return null
-}
-
-function partialApplyPatchInput(raw: string): Record<string, unknown> {
-  if (raw.includes('*** Begin Patch')) return { raw }
-  const patch = extractPartialJsonStringMember(raw, [
-    'cmd',
-    'patch',
-    'input',
-    'raw',
-    'arguments',
-  ])
-  return patch && patch.includes('*** Begin Patch') ? { raw: patch } : { raw, arguments: raw }
-}
-
-function codexLiveToolInput(block: SemanticLiveTurn['blocks'][number]): unknown {
-  const raw = block.argumentsJson ?? block.inputJson ?? ''
-  if (block.parsedInput) return block.parsedInput
-  const parsed = raw ? parseJsonRecord(raw) : null
-  if (parsed) return parsed
-
-  // WHY apply_patch keeps a raw fallback:
-  // Codex can surface patch application as a custom/freeform tool
-  // call where the payload is the patch grammar itself, not a JSON
-  // object. The committed Codex renderer already knows how to parse
-  // `{ raw: "*** Begin Patch..." }`; feeding the live block through
-  // the same shape gives streaming patch calls the same file/diff
-  // card as committed transcript rows instead of showing a giant raw
-  // preformatted argument blob.
-  if (block.toolName === 'apply_patch' && raw) return partialApplyPatchInput(raw)
-
-  return raw ? { raw, arguments: raw } : {}
-}
-
-function codexLiveToolUseBlock(block: SemanticLiveTurn['blocks'][number]): ToolUseBlock {
-  return {
-    type: 'tool_use',
-    id: block.callId ?? block.toolUseId ?? block.itemId ?? `live:${block.blockIndex}`,
-    name: block.toolName ?? block.kind,
-    input: codexLiveToolInput(block),
-  }
 }
 
 // Single live-block renderer — this is the big dispatch for the
@@ -254,7 +106,6 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   // gap. Ordered from highest-frequency (function_call) to lowest.
 
   if (block.kind === 'function_call' || block.kind === 'custom_tool_call') {
-    const liveTool = codexLiveToolUseBlock(block)
 
     // WHY live Codex calls reuse committed Codex row renderers:
     // The broken 18:54 transcript showed the live plane rendering
@@ -265,14 +116,19 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // ToolUseBlock shape the committed transcript uses, then delegate
     // to the committed Codex card. Streaming now means "same card
     // with partial input" instead of a separate raw-JSON UI.
-    if (liveTool.name === 'apply_patch') {
-      return <CodexApplyPatchRow block={liveTool} />
+    if (block.toolName === 'apply_patch') {
+      return (
+        <DiffCard
+          vm={fileEditFromLive(block, toolState, 'codex')}
+          toolName="apply_patch"
+        />
+      )
     }
     // Command family — the SAME CommandCard the committed plane renders
     // (spec §6 convergence). Live output streams into the card as
     // tool_output_delta accumulates on the block; exit tint arrives via
     // resultIsError on tool_completed.
-    if (liveTool.name === 'exec_command' || liveTool.name === 'write_stdin') {
+    if (block.toolName === 'exec_command' || block.toolName === 'write_stdin') {
       return <CommandCard vm={commandFromLive(block, toolState, 'codex')} />
     }
     // Everything else — the SAME GenericToolCard the committed plane
@@ -398,33 +254,18 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // are one unit of work. Nesting the result here preserves that
     // mental model during live streaming and avoids another round of
     // "find the matching tool later in the feed" bookkeeping.
-    // [#285] Live Edit / MultiEdit reuse the COMMITTED renderers (rich
-    // FileToolHeader + line-level DiffSlab) instead of dumping raw JSON — the
-    // exact convergence Codex already does in the function_call branch above.
-    // We return the committed row directly (no live wrapper / status badge) so
-    // the streaming card is visually identical to its committed form, and the
-    // diff fills in as old_string/new_string stream. Until `file_path` has
-    // arrived, claudeLiveEditInput returns null and we fall through to the
-    // existing raw preview — never worse than before.
+    // Live Edit / MultiEdit — the SAME DiffCard the committed plane
+    // renders ([#285] convergence, now VM-driven). The path shows the
+    // moment its JSON literal closes; the diff fills in as old/new
+    // stream; until the path arrives the raw input streams in the card
+    // body — never worse than before.
     if (block.toolName === 'Edit' || block.toolName === 'MultiEdit') {
-      const liveEditInput = claudeLiveEditInput(block)
-      if (liveEditInput) {
-        const liveBlock: ToolUseBlock = {
-          type: 'tool_use',
-          id:
-            block.toolUseId ??
-            block.callId ??
-            block.itemId ??
-            `live:${block.blockIndex}`,
-          name: block.toolName,
-          input: liveEditInput,
-        }
-        return block.toolName === 'Edit' ? (
-          <EditRow block={liveBlock} />
-        ) : (
-          <MultiEditRow block={liveBlock} />
-        )
-      }
+      return (
+        <DiffCard
+          vm={fileEditFromLive(block, toolState, 'claude')}
+          toolName={block.toolName}
+        />
+      )
     }
 
     // Claude live Bash — same CommandCard as its committed row. The

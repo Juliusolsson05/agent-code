@@ -2,8 +2,6 @@ import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import {
-  EditRow,
-  MultiEditRow,
   TodoRow,
   WriteRow,
 } from '@providers/claude/renderer/rows/ClaudeRows'
@@ -14,10 +12,8 @@ export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined 
   // row components makes adding/removing a Claude tool a provider-local change
   // and lets the shared feed keep one generic fallback for unknown tools.
   switch (block.name) {
-    case 'Edit':
-      return <EditRow block={block} />
-    case 'MultiEdit':
-      return <MultiEditRow block={block} />
+    // Edit / MultiEdit no longer route here: the file-edit family is
+    // intercepted upstream in Block.tsx (routeFamily → DiffCard).
     case 'Write':
       return <WriteRow block={block} />
     case 'TodoWrite':

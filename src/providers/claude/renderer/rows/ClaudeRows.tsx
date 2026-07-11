@@ -11,30 +11,13 @@
 
 import { memo, useContext, useMemo } from 'react'
 
-import { diffLines } from '@shared/parsers/lineDiff'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
-import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 
 /* ---------- Shared helpers ---------- */
-
-/** Pull a file path and old/new strings out of a shape we don't fully
- *  trust — the transcript typing is `unknown`. Missing fields become
- *  empty strings so the diff still renders (as "everything added"
- *  or "everything removed") without crashing. */
-function editInput(
-  block: ToolUseBlock,
-): { filePath: string; oldString: string; newString: string } {
-  const input = (block.input ?? {}) as Record<string, unknown>
-  return {
-    filePath: typeof input.file_path === 'string' ? input.file_path : '',
-    oldString: typeof input.old_string === 'string' ? input.old_string : '',
-    newString: typeof input.new_string === 'string' ? input.new_string : '',
-  }
-}
 
 /** Header row for file-tool blocks: "⏺ Edit  <path>"
  *
@@ -90,92 +73,6 @@ function FileToolHeader({
     </div>
   )
 }
-
-/* ---------- Edit ---------- */
-
-export const EditRow = memo(function EditRow({ block }: { block: ToolUseBlock }) {
-  const { filePath, oldString, newString } = editInput(block)
-  const lines = useMemo(
-    () => diffLines(oldString, newString),
-    [oldString, newString],
-  )
-  return (
-    <MarkerRow marker="⏺">
-      <div className="flex flex-col gap-1">
-        <FileToolHeader name="Edit" filePath={filePath} />
-        <DiffSlab lines={lines} filePath={filePath} emptyLabel="(no changes)" />
-      </div>
-    </MarkerRow>
-  )
-})
-
-/* ---------- MultiEdit ---------- */
-
-export const MultiEditRow = memo(function MultiEditRow({
-  block,
-}: {
-  block: ToolUseBlock
-}) {
-  const input = (block.input ?? {}) as Record<string, unknown>
-  const filePath =
-    typeof input.file_path === 'string' ? input.file_path : ''
-  const edits = Array.isArray(input.edits)
-    ? (input.edits as Array<Record<string, unknown>>)
-    : []
-  const normalized = edits.map(e => ({
-    oldString: typeof e.old_string === 'string' ? e.old_string : '',
-    newString: typeof e.new_string === 'string' ? e.new_string : '',
-  }))
-  return (
-    <MarkerRow marker="⏺">
-      <div className="flex flex-col gap-1">
-        <FileToolHeader
-          name="MultiEdit"
-          filePath={filePath}
-          extra={`${normalized.length} change${normalized.length === 1 ? '' : 's'}`}
-        />
-        <div className="flex flex-col gap-2">
-          {normalized.map((e, i) => (
-            <MultiEditChunk
-              key={i}
-              index={i}
-              total={normalized.length}
-              filePath={filePath}
-              edit={e}
-            />
-          ))}
-        </div>
-      </div>
-    </MarkerRow>
-  )
-})
-
-const MultiEditChunk = memo(function MultiEditChunk({
-  index,
-  total,
-  filePath,
-  edit,
-}: {
-  index: number
-  total: number
-  filePath: string
-  edit: { oldString: string; newString: string }
-}) {
-  const lines = useMemo(
-    () => diffLines(edit.oldString, edit.newString),
-    [edit.oldString, edit.newString],
-  )
-  return (
-    <div>
-      {total > 1 && (
-        <div className="text-muted text-[10px] uppercase tracking-wider mb-0.5 select-none">
-          change {index + 1} / {total}
-        </div>
-      )}
-      <DiffSlab lines={lines} filePath={filePath} emptyLabel="(no changes)" />
-    </div>
-  )
-})
 
 /* ---------- Write ---------- */
 

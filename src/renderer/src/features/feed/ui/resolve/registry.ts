@@ -49,6 +49,7 @@ export const CARD_LANDED_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   'command',
   'generic',
   'mcp',
+  'file-edit',
 ] satisfies ArtifactFamily[])
 
 /** Families whose committed card CONSUMES the paired tool_result
@@ -61,4 +62,8 @@ export const RESULT_CONSUMING_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   'command',
   'generic',
   'mcp',
+  // DiffCard consumes edit results: success stubs vanish (the diff is
+  // the story, ✓ is the confirmation), errors render inside the card —
+  // including Codex patch failures' tinted unified_diffs.
+  'file-edit',
 ] satisfies ArtifactFamily[])

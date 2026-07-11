@@ -55,3 +55,89 @@ export function parseLocalCommandStdout(text: string): string | null {
 export function isSlashCommandText(text: string): boolean {
   return text.includes('<command-name>') || text.includes('<local-command-stdout>')
 }
+
+// ---------------------------------------------------------------------------
+// Edit / MultiEdit / Write input extraction (committed + live-partial)
+// ---------------------------------------------------------------------------
+
+import { parseJsonRecord } from '@shared/lib/asRecord'
+
+/** Committed Edit input — missing fields become empty strings so the
+ *  diff still renders (as all-added / all-removed) without crashing.
+ *  Moved from ClaudeRows.tsx editInput. */
+export function editInput(input: unknown): {
+  filePath: string
+  oldString: string
+  newString: string
+} {
+  const rec = (input ?? {}) as Record<string, unknown>
+  return {
+    filePath: typeof rec.file_path === 'string' ? rec.file_path : '',
+    oldString: typeof rec.old_string === 'string' ? rec.old_string : '',
+    newString: typeof rec.new_string === 'string' ? rec.new_string : '',
+  }
+}
+
+export function multiEditInput(input: unknown): {
+  filePath: string
+  edits: Array<{ oldString: string; newString: string }>
+} {
+  const rec = (input ?? {}) as Record<string, unknown>
+  const edits = Array.isArray(rec.edits) ? (rec.edits as Array<Record<string, unknown>>) : []
+  return {
+    filePath: typeof rec.file_path === 'string' ? rec.file_path : '',
+    edits: edits.map(e => ({
+      oldString: typeof e.old_string === 'string' ? e.old_string : '',
+      newString: typeof e.new_string === 'string' ? e.new_string : '',
+    })),
+  }
+}
+
+// [#285] Extract a CLOSED top-level JSON string field from a partial
+// inputJson buffer — one whose closing quote has already streamed. The
+// regex body `(?:[^"\\]|\\.)*` tolerates escaped quotes and embedded
+// newlines, so it only matches a fully-arrived value. Used ONLY during
+// the brief streaming window before the whole object is JSON-parseable;
+// the moment parseJsonRecord succeeds the authoritative parse takes
+// over. A value literally containing the key text mid-stream could
+// mis-match transiently, but it self-corrects on the next delta.
+// Moved from BlockRow.tsx.
+export function extractClosedJsonString(raw: string, key: string): string | null {
+  const re = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`)
+  const m = re.exec(raw)
+  if (!m) return null
+  try {
+    return JSON.parse(`"${m[1]}"`) as string
+  } catch {
+    return null
+  }
+}
+
+// [#285] Build the committed Edit/MultiEdit input object from a live
+// partial buffer, so the streaming path renders the SAME diff card the
+// committed transcript uses. Returns null until at least file_path has
+// streamed — never flash an empty "(no changes)" card. Moved from
+// BlockRow.tsx claudeLiveEditInput.
+export function partialEditInput(
+  raw: string,
+  parsed: Record<string, unknown> | null,
+  toolName: string,
+): Record<string, unknown> | null {
+  if (parsed) return parsed
+  const full = raw ? parseJsonRecord(raw) : null
+  if (full) return full
+  if (!raw) return null
+  const filePath = extractClosedJsonString(raw, 'file_path')
+  if (!filePath) return null
+  if (toolName === 'MultiEdit') {
+    // The edits array can't be reliably half-parsed; show the header
+    // now (file path) and let the authoritative parse fill in the
+    // per-edit diff chunks the instant the whole object completes.
+    return { file_path: filePath, edits: [] }
+  }
+  return {
+    file_path: filePath,
+    old_string: extractClosedJsonString(raw, 'old_string') ?? '',
+    new_string: extractClosedJsonString(raw, 'new_string') ?? '',
+  }
+}

@@ -29,6 +29,10 @@ import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
+import {
+  DiffCard,
+  fileEditFromCommitted,
+} from '@renderer/features/feed/ui/artifacts/fileEdit'
 import { GenericToolCard } from '@renderer/features/feed/ui/artifacts/generic'
 import {
   SlashCommandRow,
@@ -220,6 +224,15 @@ export const Block = memo(function Block({
       if (family === 'generic' || family === 'mcp') {
         const paired = toolResultIndex.get(tu.id) ?? null
         return <GenericToolCard vm={genericFromCommitted(tu, paired, currentProvider)} />
+      }
+      if (family === 'file-edit') {
+        const paired = toolResultIndex.get(tu.id) ?? null
+        return (
+          <DiffCard
+            vm={fileEditFromCommitted(tu, paired, currentProvider)}
+            toolName={tu.name}
+          />
+        )
       }
 
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
