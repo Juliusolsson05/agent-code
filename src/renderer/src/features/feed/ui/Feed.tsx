@@ -1046,7 +1046,7 @@ function FeedImpl({
 //
 // The entire row surface (LazyEntry, EntryRow, ConversationRow, Block,
 // ImageBlockRow, CompactBoundaryRow, CompactSummaryRow, SystemRow,
-// ToolUseRow, ToolResultRow, TruncatedOutputRow, UserBand,
+// ToolUseRow, ToolResultRow, UserBand,
 // plus the EAGER_TAIL constant) moved to ./rows/. Each component lives
 // in its own file, and the long WHY comments (lazy mount rationale,
 // the "CRITICAL: don't wrap tool_results in UserBand" gotcha, the

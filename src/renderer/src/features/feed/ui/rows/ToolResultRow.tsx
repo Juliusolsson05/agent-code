@@ -10,7 +10,7 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
-import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
+import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
 
@@ -185,5 +185,6 @@ export const ToolResultRow = memo(function ToolResultRow({
   // claude-code's OutputLine + renderTruncatedContent (MAX_LINES_TO_SHOW
   // = 3). The collapsed view keeps the feed dense so a long `find .`
   // or noisy test run doesn't push the assistant's next message off.
-  return <TruncatedOutputRow content={trimmed} isError={isError} />
+  // OutputWell is the kit successor — same behavior, ANSI-aware.
+  return <OutputWell text={trimmed} isError={isError} ansi />
 })

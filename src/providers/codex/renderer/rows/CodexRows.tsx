@@ -11,6 +11,7 @@ import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { asRecord } from '@shared/lib/asRecord'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
+import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 // WHY the import switch matters here: the local copy this replaced
 // did NOT exclude arrays — it returned `value as Record<...>` for
 // any non-null object including arrays. The shared helper rejects
@@ -178,7 +179,6 @@ function headlineForTool(block: ToolUseBlock): string | null {
 
 const MAX_COMMAND_DISPLAY_LINES = 2
 const MAX_COMMAND_DISPLAY_CHARS = 160
-const RESULT_MAX_LINES = 3
 
 type ExecCommandInput = {
   command: string
@@ -362,49 +362,6 @@ function ExpandableCodeResult({
           </div>
         ) : null}
       </details>
-    </MarkerRow>
-  )
-}
-
-function TruncatedOutputRow({
-  content,
-  isError,
-}: {
-  content: string
-  isError: boolean
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const lines = content.length === 0 ? [] : content.split('\n')
-  const needsTruncation = lines.length > RESULT_MAX_LINES
-  const shown = expanded || !needsTruncation
-    ? content
-    : lines.slice(0, RESULT_MAX_LINES).join('\n')
-  const hiddenCount = needsTruncation ? lines.length - RESULT_MAX_LINES : 0
-
-  return (
-    <MarkerRow marker="⎿" tone="muted">
-      <div className="min-w-0">
-        <pre
-          className={`
-            font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-            ${expanded ? 'max-h-[360px] overflow-auto' : ''}
-            ${isError ? 'text-danger' : 'text-ink-dim'}
-          `}
-        >
-          {shown || '(no output)'}
-        </pre>
-        {needsTruncation && (
-          <button
-            type="button"
-            onClick={() => setExpanded(prev => !prev)}
-            className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
-          >
-            {expanded
-              ? 'collapse'
-              : `… +${hiddenCount} ${hiddenCount === 1 ? 'line' : 'lines'} (click to expand)`}
-          </button>
-        )}
-      </div>
     </MarkerRow>
   )
 }
@@ -616,5 +573,5 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
     return <JsonResultSlab value={parsedJson} isError={isError} />
   }
 
-  return <TruncatedOutputRow content={text} isError={isError} />
+  return <OutputWell text={text} isError={isError} ansi />
 })

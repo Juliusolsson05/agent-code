@@ -22,6 +22,7 @@ import {
 } from '@renderer/session-runtime/state'
 
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
+import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
@@ -303,13 +304,9 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         : raw === undefined
           ? '(no output)'
           : cappedJson(raw)
-    return (
-      <MarkerRow marker="⎿" tone="muted">
-        <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 max-h-[360px] overflow-auto">
-          {outputText}
-        </pre>
-      </MarkerRow>
-    )
+    // OutputWell so live function output matches the committed result
+    // surface — ANSI-aware, collapsed to 3 lines, loud truncation.
+    return <OutputWell text={outputText} isError={false} ansi />
   }
 
   if (block.kind === 'web_search_call') {
@@ -576,17 +573,11 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
                 return <JsonResultSlab value={parsed} isError={block.resultIsError === true} />
               }
               return (
-                <MarkerRow marker="⎿" tone="muted">
-                  <pre
-                    className={`
-                      font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-                      max-h-[360px] overflow-auto
-                      ${block.resultIsError ? 'text-danger' : 'text-ink-dim'}
-                    `}
-                  >
-                    {block.resultContent || '(empty result)'}
-                  </pre>
-                </MarkerRow>
+                <OutputWell
+                  text={block.resultContent || '(empty result)'}
+                  isError={block.resultIsError === true}
+                  ansi
+                />
               )
             })()
           ) : null}
