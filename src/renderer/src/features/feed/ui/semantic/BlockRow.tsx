@@ -202,6 +202,20 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     if (block.toolName === 'TodoWrite') {
       return <TodoCard vm={todoFromLive(block, toolState, 'claude')} />
     }
+
+    // Live Write — the SAME FileWriteCard as committed, and the point
+    // of the whole streaming exercise: the tool input is PARTIAL,
+    // unparseable JSON until the last delta, so fileWriteFromLive runs
+    // extractStreamingWriteInput's single-pass scanner to pull the
+    // file_path (once its string literal closes) and the JSON-unescaped
+    // content-so-far out of the incomplete buffer — the file visibly
+    // takes shape, highlighted line by line. Returns null until the
+    // path has closed; fall through to the generic card's raw preview
+    // until then — never a blank Write card.
+    if (block.toolName === 'Write') {
+      const writeVm = fileWriteFromLive(block, toolState, 'claude')
+      if (writeVm) return <FileWriteCard vm={writeVm} />
+    }
     // Live Read/Grep/Glob/LS with real output — the same ReadCard as
     // committed. (Most live lookups collapse into the churn receipt via
     // groupSemanticActivity; only finished-with-output ones reach here.)
