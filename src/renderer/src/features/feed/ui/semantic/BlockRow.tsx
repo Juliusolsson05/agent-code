@@ -8,18 +8,20 @@ import {
   type SemanticLiveTurn,
 } from '@renderer/session-runtime/state'
 
-import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
 import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
 import {
   DiffCard,
   fileEditFromLive,
 } from '@renderer/features/feed/ui/artifacts/fileEdit'
+import {
+  FileWriteCard,
+  fileWriteFromLive,
+} from '@renderer/features/feed/ui/artifacts/fileWrite'
 import { GenericToolCard } from '@renderer/features/feed/ui/artifacts/generic'
 import {
   commandFromLive,
   genericFromLive,
 } from '@renderer/features/feed/ui/resolve/fromLive'
-import { StreamingCodeBlock } from '@renderer/features/feed/ui/kit/StreamingCodeBlock'
 import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -281,17 +283,166 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
       block.toolName === 'TodoWrite'
         ? parseSemanticTodos(block.parsedInput)
         : []
-    // Live `Write` preview. While a Write tool_use streams, the only
-    // data we have is `block.inputJson` — partial, unparseable JSON.
-    // `extractStreamingWriteInput` does a single linear scan of that
-    // buffer and pulls out the path + the in-flight content, decoded.
-    // (Dedicated FileWriteCard lands in the phase-4 task; until then
-    // this preview keeps its shape, now on StreamingCodeBlock so the
-    // growing content is line-by-line highlighted instead of plain.)
-    const writeStream =
-      block.toolName === 'Write'
-        ? extractStreamingWriteInput(block.inputJson ?? '')
-        : null
+    // Live Write — the SAME FileWriteCard as committed, highlighted
+    // line-by-line as content streams (spec §6 / streaming decision B).
+    // fileWriteFromLive returns null until file_path has closed; fall
+    // through to the generic card's raw preview until then — never a
+    // blank Write card.
+    if (block.toolName === 'Write') {
+      const writeVm = fileWriteFromLive(block, toolState, 'claude')
+      if (writeVm) return <FileWriteCard vm={writeVm} />
+    }
+
+    // Everything else — the SAME GenericToolCard the committed plane
+    // renders (spec §6). Partial JSON streams as growing highlighted
+    // params inside the card; the structured slab takes over on parse.
+    return <GenericToolCard vm={genericFromLive(block, toolState, 'codex')} />
+  }
+
+  if (
+    block.kind === 'function_call_output' ||
+    block.kind === 'custom_tool_call_output' ||
+    block.kind === 'tool_search_output'
+  ) {
+    // Output blocks land as separate output_items on the SSE wire
+    // (the function_call emits one item, the function_call_output
+    // emits another — paired only by call_id). Render as a
+    // standalone output row; downstream Feed rendering can associate
+    // it with the call via the shared callId if the renderer wants to.
+    const raw = block.output
+    const outputText =
+      typeof raw === 'string'
+        ? raw
+        : raw === undefined
+          ? '(no output)'
+          : cappedJson(raw)
+    // OutputWell so live function output matches the committed result
+    // surface — ANSI-aware, collapsed to 3 lines, loud truncation.
+    return <OutputWell text={outputText} isError={false} ansi />
+  }
+
+  if (block.kind === 'web_search_call') {
+    const action = block.webSearchAction
+    const label =
+      action?.kind === 'search'
+        ? `Search: ${action.query ?? action.queries?.join(', ') ?? '…'}`
+        : action?.kind === 'open_page'
+          ? `Open: ${action.url ?? '?'}`
+          : action?.kind === 'find_in_page'
+            ? `Find "${action.pattern ?? '?'}" in ${action.url ?? '?'}`
+            : 'Web search'
+    return (
+      <MarkerRow marker="⏺">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+          <span className="text-accent font-semibold">🌐 {label}</span>
+          {block.status ? (
+            <span className="text-muted text-[11px] uppercase tracking-wider">
+              {block.status.replace(/_/g, ' ')}
+            </span>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  if (block.kind === 'image_generation_call') {
+    const img = block.imageGeneration
+    return (
+      <MarkerRow marker="⏺">
+        <div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+            <span className="text-accent font-semibold">🖼 Image generation</span>
+            <span className="text-muted text-[11px] uppercase tracking-wider">
+              {img?.status ?? block.status ?? 'running'}
+            </span>
+          </div>
+          {img?.revisedPrompt ? (
+            <MarkerRow marker="⎿" tone="muted">
+              <div className="text-ink-dim text-[12px] leading-[1.55] italic">
+                {img.revisedPrompt}
+              </div>
+            </MarkerRow>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  if (block.kind === 'local_shell_call') {
+    // Same CommandCard as committed local_shell rows — the bespoke
+    // "$ Shell" chip this replaces was live-only and drifted from the
+    // committed rendering (audit gap #3).
+    return <CommandCard vm={commandFromLive(block, toolState, 'codex')} />
+  }
+
+  if (block.kind === 'tool_search_call') {
+    const label = block.toolName ?? 'Tool search'
+    return (
+      <MarkerRow marker="⏺">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+          <span className="text-accent font-semibold">🔎 {label}</span>
+          {block.status ? (
+            <span className="text-muted text-[11px] uppercase tracking-wider">
+              {block.status.replace(/_/g, ' ')}
+            </span>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  // AskUserQuestion gets a dedicated native picker BEFORE the generic
+  // tool_use handler. An unresolved AskUserQuestion block (`!resultAt`)
+  // is a LIVE picker blocking the agent on user input; rendering it as
+  // the usual "AskUserQuestion · running" tool row (with a raw-JSON
+  // input dump) left the user no way to answer except via the terminal.
+  // The guard mirrors BlockRow's route-in condition exactly: once the
+  // tool_result lands and sets `resultAt`, we fall through to the normal
+  // tool_use branch so the answered question renders as a plain
+  // committed-style row instead of a stale clickable picker.
+  if (block.toolName === 'AskUserQuestion' && !block.resultAt) {
+    return <AskUserQuestionRow block={block} />
+  }
+
+  if (
+    block.kind === 'tool_use' ||
+    block.kind === 'server_tool_use' ||
+    block.kind === 'mcp_tool_use'
+  ) {
+    // WHY keep tool results nested under the tool row:
+    //
+    // Claude's transcript wire format splits tool_use and tool_result
+    // across assistant/user turns, but from a reading standpoint they
+    // are one unit of work. Nesting the result here preserves that
+    // mental model during live streaming and avoids another round of
+    // "find the matching tool later in the feed" bookkeeping.
+    // Live Edit / MultiEdit — the SAME DiffCard the committed plane
+    // renders ([#285] convergence, now VM-driven). The path shows the
+    // moment its JSON literal closes; the diff fills in as old/new
+    // stream; until the path arrives the raw input streams in the card
+    // body — never worse than before.
+    if (block.toolName === 'Edit' || block.toolName === 'MultiEdit') {
+      return (
+        <DiffCard
+          vm={fileEditFromLive(block, toolState, 'claude')}
+          toolName={block.toolName}
+        />
+      )
+    }
+
+    // Claude live Bash — same CommandCard as its committed row. The
+    // command string appears once its JSON literal closes (partial
+    // buffers keep the streaming placeholder); the git-intent widget is
+    // a committed-plane concern (detectGitIntent needs the full
+    // command; by the time a git card matters the committed row owns it).
+    if (block.toolName === 'Bash') {
+      return <CommandCard vm={commandFromLive(block, toolState, 'claude')} />
+    }
+
+    const todos =
+      block.toolName === 'TodoWrite'
+        ? parseSemanticTodos(block.parsedInput)
+        : []
     if (block.toolName === 'TodoWrite') {
       return (
         <MarkerRow marker="⏺">
@@ -304,30 +455,6 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         </MarkerRow>
       )
     }
-    if (writeStream && writeStream.filePath) {
-      return (
-        <MarkerRow marker="⏺">
-          <div>
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
-              <span className="text-accent font-semibold">Write</span>
-            </div>
-            <div className="mt-1 flex flex-col gap-1">
-              <MarkerRow marker="⎿" tone="muted">
-                <span className="font-code text-[12px] leading-[1.55] text-ink-dim break-all">
-                  {writeStream.filePath}
-                </span>
-              </MarkerRow>
-              <StreamingCodeBlock
-                code={writeStream.partialContent ?? ''}
-                path={writeStream.filePath}
-                blockKey={`write-live:${block.blockIndex}`}
-              />
-            </div>
-          </div>
-        </MarkerRow>
-      )
-    }
-
     // Everything else — the SAME GenericToolCard the committed plane
     // renders. This replaces the hand-rolled live card that dumped raw
     // partial inputJson into a <pre> (audit finding 7).

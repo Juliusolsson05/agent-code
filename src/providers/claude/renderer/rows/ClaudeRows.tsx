@@ -74,37 +74,6 @@ function FileToolHeader({
   )
 }
 
-/* ---------- Write ---------- */
-
-export const WriteRow = memo(function WriteRow({ block }: { block: ToolUseBlock }) {
-  const input = (block.input ?? {}) as Record<string, unknown>
-  const filePath = typeof input.file_path === 'string' ? input.file_path : ''
-  const content = typeof input.content === 'string' ? input.content : ''
-  const codeContext = useContext(CodeRenderContext)
-  const lineCount = useMemo(() => {
-    if (!content) return 0
-    const normalized = content.endsWith('\n') ? content.slice(0, -1) : content
-    return normalized === '' ? 0 : normalized.split('\n').length
-  }, [content])
-  return (
-    <MarkerRow marker="⏺">
-      <div className="flex flex-col gap-1">
-        <FileToolHeader
-          name="Write"
-          filePath={filePath}
-          extra={`${lineCount} line${lineCount === 1 ? '' : 's'}`}
-        />
-        <CodeBlock
-          code={content}
-          path={filePath}
-          workspaceRoot={codeContext.workspaceRoot}
-          codeId={`write:${block.id}`}
-        />
-      </div>
-    </MarkerRow>
-  )
-})
-
 /* ---------- TodoWrite ---------- */
 
 type TodoItem = {

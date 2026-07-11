@@ -33,6 +33,10 @@ import {
   DiffCard,
   fileEditFromCommitted,
 } from '@renderer/features/feed/ui/artifacts/fileEdit'
+import {
+  FileWriteCard,
+  fileWriteFromCommitted,
+} from '@renderer/features/feed/ui/artifacts/fileWrite'
 import { GenericToolCard } from '@renderer/features/feed/ui/artifacts/generic'
 import {
   SlashCommandRow,
@@ -233,6 +237,10 @@ export const Block = memo(function Block({
             toolName={tu.name}
           />
         )
+      }
+      if (family === 'file-write') {
+        const paired = toolResultIndex.get(tu.id) ?? null
+        return <FileWriteCard vm={fileWriteFromCommitted(tu, paired, currentProvider)} />
       }
 
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)

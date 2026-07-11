@@ -50,6 +50,7 @@ export const CARD_LANDED_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   'generic',
   'mcp',
   'file-edit',
+  'file-write',
 ] satisfies ArtifactFamily[])
 
 /** Families whose committed card CONSUMES the paired tool_result
@@ -66,4 +67,5 @@ export const RESULT_CONSUMING_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   // the story, ✓ is the confirmation), errors render inside the card —
   // including Codex patch failures' tinted unified_diffs.
   'file-edit',
+  'file-write',
 ] satisfies ArtifactFamily[])
