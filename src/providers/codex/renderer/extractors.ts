@@ -50,6 +50,27 @@ export function codexResultMeta(result: ToolResultBlock | null): {
   }
 }
 
+/** Codex's exec classifier: parsed_cmd[0].type marks a command as a
+ *  file read or search (the meta the old ExpandableCodeResult summary
+ *  keyed on). */
+export function parsedReadFromResult(
+  result: ToolResultBlock | null,
+): { kind: 'read' | 'search'; path: string | null } | null {
+  const meta = asRecord(result?.codex)
+  const parsedCmd = meta?.parsedCmd
+  if (!Array.isArray(parsedCmd)) return null
+  const first = asRecord(parsedCmd[0])
+  const kind = first?.type
+  if (kind !== 'read' && kind !== 'search') return null
+  const path =
+    typeof first?.path === 'string'
+      ? first.path
+      : typeof first?.name === 'string'
+        ? first.name
+        : null
+  return { kind, path }
+}
+
 // ---------------------------------------------------------------------------
 // apply_patch — Codex's `*** Begin Patch` grammar (NOT unified diff)
 // ---------------------------------------------------------------------------

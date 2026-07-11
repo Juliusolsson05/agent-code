@@ -34,6 +34,10 @@ import {
   fileEditFromCommitted,
 } from '@renderer/features/feed/ui/artifacts/fileEdit'
 import {
+  ReadCard,
+  readFromCommitted,
+} from '@renderer/features/feed/ui/artifacts/fileRead'
+import {
   FileWriteCard,
   fileWriteFromCommitted,
 } from '@renderer/features/feed/ui/artifacts/fileWrite'
@@ -48,6 +52,7 @@ import {
 } from '@renderer/features/feed/ui/resolve/fromCommitted'
 import {
   RESULT_CONSUMING_FAMILIES,
+  isLegacyProviderClaimed,
   routeFamily,
 } from '@renderer/features/feed/ui/resolve/registry'
 
@@ -214,7 +219,10 @@ export const Block = memo(function Block({
       // branch below suppresses it with the same routeFamily predicate —
       // the #442 lesson: whatever the card renders for, the result
       // suppresses for, one predicate, both branches.
-      const family = routeFamily(currentProvider, tu.name)
+      // Legacy provider claims (opencode read/todowrite) bypass the
+      // family cards entirely — see isLegacyProviderClaimed's WHY.
+      const legacyClaimed = isLegacyProviderClaimed(currentProvider, tu.name)
+      const family = legacyClaimed ? null : routeFamily(currentProvider, tu.name)
       if (family === 'command') {
         const paired = toolResultIndex.get(tu.id) ?? null
         return <CommandCard vm={commandFromCommitted(tu, paired, currentProvider)} />
@@ -241,6 +249,10 @@ export const Block = memo(function Block({
       if (family === 'file-write') {
         const paired = toolResultIndex.get(tu.id) ?? null
         return <FileWriteCard vm={fileWriteFromCommitted(tu, paired, currentProvider)} />
+      }
+      if (family === 'file-read') {
+        const paired = toolResultIndex.get(tu.id) ?? null
+        return <ReadCard vm={readFromCommitted(tu, paired, currentProvider)} />
       }
 
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
@@ -274,6 +286,7 @@ export const Block = memo(function Block({
       // cards — suppressing a result whose card hasn't landed is data loss.
       if (
         sourceTool &&
+        !isLegacyProviderClaimed(currentProvider, sourceTool.name) &&
         RESULT_CONSUMING_FAMILIES.has(routeFamily(currentProvider, sourceTool.name))
       ) {
         return null

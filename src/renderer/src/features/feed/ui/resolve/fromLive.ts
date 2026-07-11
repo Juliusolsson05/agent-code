@@ -107,6 +107,8 @@ export function commandFromLive(
       block.toolName === 'write_stdin' && typeof parsed?.chars === 'string'
         ? [parsed.chars]
         : [],
+    // parsed_cmd classification only exists on committed result meta.
+    parsedRead: null,
   }
 }
 

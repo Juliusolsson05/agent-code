@@ -14,6 +14,10 @@ import {
   fileEditFromLive,
 } from '@renderer/features/feed/ui/artifacts/fileEdit'
 import {
+  ReadCard,
+  readFromLive,
+} from '@renderer/features/feed/ui/artifacts/fileRead'
+import {
   FileWriteCard,
   fileWriteFromLive,
 } from '@renderer/features/feed/ui/artifacts/fileWrite'
@@ -455,6 +459,19 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
         </MarkerRow>
       )
     }
+    // Live Read/Grep/Glob/LS with real output — the same ReadCard as
+    // committed. (Most live lookups collapse into the churn receipt via
+    // groupSemanticActivity; only finished-with-output ones reach here.)
+    if (
+      block.toolName === 'Read' ||
+      block.toolName === 'FileRead' ||
+      block.toolName === 'Grep' ||
+      block.toolName === 'Glob' ||
+      block.toolName === 'LS'
+    ) {
+      return <ReadCard vm={readFromLive(block, toolState, 'claude')} />
+    }
+
     // Everything else — the SAME GenericToolCard the committed plane
     // renders. This replaces the hand-rolled live card that dumped raw
     // partial inputJson into a <pre> (audit finding 7).

@@ -72,6 +72,10 @@ export type CommandArtifact = ArtifactBase & {
   maxOutputTokens: number | null
   /** Codex write_stdin payloads attached to this command surface. */
   stdinWrites: string[]
+  /** Codex classified this exec as a file read / search (parsed_cmd
+   *  meta) — the card shows a "Read N lines from <path>" summary with
+   *  expandable source instead of a raw OutputWell. */
+  parsedRead: { kind: 'read' | 'search'; path: string | null } | null
 }
 
 export type FileEditArtifact = ArtifactBase & {

@@ -2,7 +2,10 @@ import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
-import { codexResultMeta } from '@providers/codex/renderer/extractors'
+import {
+  codexResultMeta,
+  parsedReadFromResult,
+} from '@providers/codex/renderer/extractors'
 import {
   prettifyToolName,
   smartHeadline,
@@ -90,6 +93,7 @@ export function commandFromCommitted(
         ? input.max_output_tokens
         : null,
     stdinWrites: stdin,
+    parsedRead: parsedReadFromResult(result),
   }
 }
 

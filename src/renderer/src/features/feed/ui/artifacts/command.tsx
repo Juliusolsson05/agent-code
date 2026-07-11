@@ -1,9 +1,14 @@
 import { memo, useState } from 'react'
 
+import { useContext } from 'react'
+import { formatToolFilePath } from '@shared/paths/displayPath'
+import { CodeRenderContext } from '@renderer/features/feed/context'
 import { truncateBashCommand } from '@renderer/features/feed/lib/helpers'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { ExpandSection } from '@renderer/features/feed/ui/kit/ExpandSection'
 import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 import { StatusBadge } from '@renderer/features/feed/ui/kit/StatusBadge'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 
 import type { CommandArtifact } from './types'
 
@@ -29,6 +34,7 @@ import type { CommandArtifact } from './types'
 
 export const CommandCard = memo(function CommandCard({ vm }: { vm: CommandArtifact }) {
   const [showFull, setShowFull] = useState(false)
+  const { workspaceRoot } = useContext(CodeRenderContext)
 
   // Empty write_stdin renders NOTHING — preserved verbatim from the
   // CodexWriteStdinRow this card replaced. Codex emits empty stdin
@@ -77,7 +83,39 @@ export const CommandCard = memo(function CommandCard({ vm }: { vm: CommandArtifa
             {chars.length > 120 ? '…' : ''}
           </div>
         ))}
-        {vm.output ? (
+        {vm.output && vm.parsedRead ? (
+          // Codex classified this exec as a file read/search — a
+          // one-line summary with the source behind a lazy expand reads
+          // far better than N raw lines (ported from the old
+          // ExpandableCodeResult; Monaco stays first-open gated).
+          <MarkerRow marker="⎿" tone="muted">
+            <ExpandSection
+              summary={(() => {
+                const lineCount = vm.output.trim() ? vm.output.split('\n').length : 0
+                const noun = lineCount === 1 ? 'line' : 'lines'
+                const displayPath = vm.parsedRead.path
+                  ? formatToolFilePath(vm.parsedRead.path, workspaceRoot)
+                  : null
+                return vm.parsedRead.kind === 'read'
+                  ? displayPath
+                    ? `Read ${lineCount} ${noun} from ${displayPath}`
+                    : `Read ${lineCount} ${noun}`
+                  : displayPath
+                    ? `Search results: ${lineCount} ${noun} in ${displayPath}`
+                    : `Search results: ${lineCount} ${noun}`
+              })()}
+            >
+              <CodeBlock
+                code={vm.output}
+                path={vm.parsedRead.path}
+                workspaceRoot={workspaceRoot}
+                codeId={`cmd-read:${vm.id}`}
+                engine="monaco"
+                allowAutoDetect
+              />
+            </ExpandSection>
+          </MarkerRow>
+        ) : vm.output ? (
           <OutputWell text={vm.output} isError={vm.status === 'error'} ansi />
         ) : null}
       </div>

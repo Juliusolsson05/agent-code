@@ -28,6 +28,21 @@ const WRITE_TOOLS = new Set(['Write'])
 const TODO_TOOLS = new Set(['TodoWrite', 'todowrite'])
 const WEB_TOOLS = new Set(['WebSearch', 'WebFetch', 'web_search', 'web_search_call', 'tool_search_call'])
 
+/** Tool names a provider's LEGACY dispatch still claims with bespoke
+ *  parsing the family cards don't replicate. OpenCode's `read` result
+ *  is <path>/<content> tag soup parsed by OpencodeReadResult; its
+ *  `todowrite` reuses TodoRow. Family routing + result suppression
+ *  must skip these or the tag soup paints raw (the exact regression
+ *  the GenericToolCard cutover briefly introduced for opencode reads).
+ *  Scope note: OpenCode gets no dedicated cards this rewrite (spec §1.2)
+ *  — this carve-out IS its integration. */
+export function isLegacyProviderClaimed(
+  provider: AgentProviderKind,
+  toolName: string,
+): boolean {
+  return provider === 'opencode' && (toolName === 'read' || toolName === 'todowrite')
+}
+
 export function routeFamily(
   _provider: AgentProviderKind,
   toolName: string,
@@ -51,6 +66,7 @@ export const CARD_LANDED_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   'mcp',
   'file-edit',
   'file-write',
+  'file-read',
 ] satisfies ArtifactFamily[])
 
 /** Families whose committed card CONSUMES the paired tool_result
@@ -68,4 +84,5 @@ export const RESULT_CONSUMING_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   // including Codex patch failures' tinted unified_diffs.
   'file-edit',
   'file-write',
+  'file-read',
 ] satisfies ArtifactFamily[])
