@@ -31,6 +31,10 @@ import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow
 import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
 import { GenericToolCard } from '@renderer/features/feed/ui/artifacts/generic'
 import {
+  SlashCommandRow,
+  isSlashCommandText,
+} from '@renderer/features/feed/ui/artifacts/slashCommand'
+import {
   commandFromCommitted,
   genericFromCommitted,
 } from '@renderer/features/feed/ui/resolve/fromCommitted'
@@ -79,6 +83,15 @@ export const Block = memo(function Block({
   const customRendering = useAppStore(state => state.settings.customRendering)
   switch (block.type) {
     case 'text': {
+      const text = (block as { text: string }).text
+      // Slash-command surface: an invocation envelope or a
+      // local-command-stdout record renders through SlashCommandRow
+      // (name pill + output well) instead of painting the raw
+      // <command-name>… tag soup into the prompt. Cheap string gate so
+      // ordinary prompts never pay the regex cost.
+      if (role === 'user' && isSlashCommandText(text)) {
+        return <SlashCommandRow text={text} />
+      }
       // Only text blocks under a user role represent an actual user
       // prompt. A sibling tool_result block in the same message is
       // NOT a user prompt (it's tool output), and must not get the
@@ -86,7 +99,7 @@ export const Block = memo(function Block({
       // the whole ConversationRow.
       const row = (
         <MarkerRow marker={role === 'user' ? '❯' : '⏺'}>
-          <TextProse text={(block as { text: string }).text} />
+          <TextProse text={text} />
         </MarkerRow>
       )
       return role === 'user' ? <UserBand>{row}</UserBand> : row

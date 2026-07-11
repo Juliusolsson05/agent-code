@@ -280,7 +280,12 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       )
       const exitCode =
         typeof payload.exit_code === 'number' ? payload.exit_code : 0
-      if (!output.trim() && exitCode === 0) return []
+      // Silent successes (exit 0, no output) used to be dropped here,
+      // which made them INVISIBLE in the feed — no record the command
+      // ran at all. The CommandCard now renders a compact header-only
+      // "$ cmd ✓" row from exactly this result (spec §6), so emit the
+      // normal tool_result with empty content and the exit meta instead
+      // of returning [].
       return [
         codexToolResultEntry(
           uuid,
