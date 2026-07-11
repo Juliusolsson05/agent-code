@@ -21,9 +21,8 @@ import {
   type SemanticLiveTurn,
 } from '@renderer/session-runtime/state'
 
-import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
-import { StreamingCodeBlock } from '@renderer/features/feed/ui/kit/StreamingCodeBlock'
+import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
@@ -596,36 +595,23 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     )
   }
 
+  // Streaming assistant text — prose AND code fences, open or closed.
+  // SegmentedMarkdown owns the whole surface: the sealed prefix (through
+  // the last CLOSED fence) parses once, the tail streams cheaply, and an
+  // open fence in the tail paints highlighted line-by-line through
+  // StreamingCodeBlock (which replaced the per-delta Monaco remount that
+  // used to live right here — see kit/StreamingCodeBlock.tsx for the
+  // full history). The old whole-message StreamingProse call re-parsed
+  // the entire markdown AST on every delta: O(len²) per message.
   const text = block.text ?? ''
-  const fence = text ? splitStreamingCodeFence(text) : null
-  if (fence) {
-    return (
-      <MarkerRow marker="⏺">
-        <div className="flex flex-col gap-2">
-          {fence.prose ? <StreamingProse text={fence.prose} /> : null}
-          {/* Live open fence — sealed-line streaming highlight. The old
-              path mounted a Monaco CodeBlock whose effect listed `code`
-              in its deps, so EVERY streaming delta disposed and rebuilt
-              the editor+model+LSP; its key also embedded the fence
-              language, which usually arrives a delta after the ``` and
-              remounted the block a second time. StreamingCodeBlock
-              appends highlighted sealed lines instead, and its blockKey
-              deliberately excludes the language. */}
-          <StreamingCodeBlock
-            code={fence.code}
-            language={fence.language}
-            blockKey={`live-fence:${block.blockIndex}`}
-          />
-        </div>
-      </MarkerRow>
-    )
-  }
 
   if (block.citations && block.citations.length > 0) {
     return (
       <MarkerRow marker="⏺">
         <div className="flex flex-col gap-2">
-          {text ? <StreamingProse text={text} /> : null}
+          {text ? (
+            <SegmentedMarkdown text={text} blockKey={`live-text:${block.blockIndex}`} />
+          ) : null}
           <div className="text-muted text-[11px] uppercase tracking-wider">
             {block.citations.length} citation{block.citations.length === 1 ? '' : 's'}
           </div>
@@ -636,7 +622,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
 
   return (
     <MarkerRow marker="⏺">
-      <StreamingProse text={text} />
+      <SegmentedMarkdown text={text} blockKey={`live-text:${block.blockIndex}`} />
     </MarkerRow>
   )
 })

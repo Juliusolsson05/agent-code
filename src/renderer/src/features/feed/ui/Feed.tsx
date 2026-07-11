@@ -51,7 +51,7 @@ import {
   SemanticCollapsedActivityRow,
 } from '@renderer/features/feed/ui/semantic'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
-import { StreamingProse } from '@renderer/features/feed/ui/markdown'
+import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { semanticTurnScrollSignal } from '@renderer/session-runtime/semantic/helpers'
 import {
   EAGER_TAIL,
@@ -947,9 +947,11 @@ function FeedImpl({
         return <SemanticCollapsedActivityRow key={item.key} unit={item.unit} />
       case 'semantic-text':
         // Blockless Codex/opencode turn text — the legacy no-blocks path.
+        // SegmentedMarkdown so a growing turn doesn't re-parse its whole
+        // markdown per delta and open fences stream highlighted.
         return (
           <MarkerRow key={item.key} marker="⏺">
-            <StreamingProse text={item.text} />
+            <SegmentedMarkdown text={item.text} blockKey={`sem-text:${item.turnId}`} />
           </MarkerRow>
         )
       case 'work':
