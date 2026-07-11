@@ -40,7 +40,10 @@ export function isLegacyProviderClaimed(
   provider: AgentProviderKind,
   toolName: string,
 ): boolean {
-  return provider === 'opencode' && (toolName === 'read' || toolName === 'todowrite')
+  // todowrite left this list when TodoCard landed (it takes a label,
+  // so the cross-provider reuse survives); `read` stays until someone
+  // teaches a card to parse OpenCode's <path>/<content> envelope.
+  return provider === 'opencode' && toolName === 'read'
 }
 
 export function routeFamily(
@@ -67,6 +70,7 @@ export const CARD_LANDED_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   'file-edit',
   'file-write',
   'file-read',
+  'todo',
 ] satisfies ArtifactFamily[])
 
 /** Families whose committed card CONSUMES the paired tool_result
@@ -85,4 +89,5 @@ export const RESULT_CONSUMING_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   'file-edit',
   'file-write',
   'file-read',
+  'todo',
 ] satisfies ArtifactFamily[])

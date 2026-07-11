@@ -36,18 +36,6 @@ export const ToolResultRow = memo(function ToolResultRow({
   const isError = block.is_error === true
   const trimmed = text.replace(/\s+$/, '')
 
-  // File-write tools AND TodoWrite: the rendered diff/content/checklist
-  // on the preceding tool_use row already tells the story. The result
-  // in all four cases is a stub success string that would just clutter
-  // the feed. Errors still fall through to the normal result renderer
-  // so failures remain visible.
-  // Edit/MultiEdit/Write stubs are suppressed upstream now (their
-  // families consume results into cards); TodoWrite keeps its stub
-  // suppression here until the todo family card lands.
-  if (!isError && sourceTool === 'TodoWrite') {
-    return null
-  }
-
   // NOTE: the Read and Grep special branches that lived here are GONE
   // on purpose — the file-read family is suppressed upstream in
   // Block.tsx and rendered by ReadCard (one card owns both halves).

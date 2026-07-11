@@ -46,6 +46,7 @@ import {
   SlashCommandRow,
   isSlashCommandText,
 } from '@renderer/features/feed/ui/artifacts/slashCommand'
+import { TodoCard, todoFromCommitted } from '@renderer/features/feed/ui/artifacts/todo'
 import {
   commandFromCommitted,
   genericFromCommitted,
@@ -253,6 +254,15 @@ export const Block = memo(function Block({
       if (family === 'file-read') {
         const paired = toolResultIndex.get(tu.id) ?? null
         return <ReadCard vm={readFromCommitted(tu, paired, currentProvider)} />
+      }
+      if (family === 'todo') {
+        const paired = toolResultIndex.get(tu.id) ?? null
+        return (
+          <TodoCard
+            vm={todoFromCommitted(tu, paired, currentProvider)}
+            label={tu.name}
+          />
+        )
       }
 
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)

@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import { TodoRow } from '@providers/claude/renderer/rows/ClaudeRows'
 import { renderOpencodeReadResult } from '@providers/opencode/renderer/rows/OpencodeReadResult'
 
 // OpenCode committed/live tool rows.
@@ -23,12 +22,12 @@ import { renderOpencodeReadResult } from '@providers/opencode/renderer/rows/Open
 // Specialized rows (diff-style edit rendering etc.) should be added here one
 // evidence-backed tool at a time, not speculatively.
 export function renderOpencodeToolUse(block: ToolUseBlock): ReactNode | undefined {
-  switch (block.name) {
-    case 'todowrite':
-      return <TodoRow block={block} label="todowrite" />
-    default:
-      return undefined
-  }
+  // todowrite routes upstream through the todo family now (TodoCard
+  // takes a `label`, so the header still names the tool the agent
+  // actually called). Nothing OpenCode-specific remains on the
+  // tool_use side.
+  void block
+  return undefined
 }
 
 export function renderOpencodeToolResult(
@@ -36,10 +35,6 @@ export function renderOpencodeToolResult(
   context: { sourceTool?: ToolUseBlock | null },
 ): ReactNode | undefined {
   const source = context.sourceTool?.name
-  // todowrite results echo the JSON checklist that TodoRow ALREADY
-  // rendered from the tool_use above — painting it again is the raw-blob
-  // noise the 07-06 bundle shows. State lives in the row; drop the echo.
-  if (source === 'todowrite') return null
   // read results are a tagged text document (<path>/<type>/<content>
   // soup). Parse and present as a code slab with the real path; fall
   // through to the generic row when the shape doesn't match.
