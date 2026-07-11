@@ -4,7 +4,6 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import {
   CodexApplyPatchRow,
   CodexToolResultRow,
-  CodexToolRow,
 } from '@providers/codex/renderer/rows/CodexRows'
 
 export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {

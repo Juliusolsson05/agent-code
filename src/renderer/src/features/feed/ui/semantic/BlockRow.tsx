@@ -1,19 +1,13 @@
-import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
-import { JsonToolRow, SLAB_MAX_CHARS } from '@providers/shared/renderer/rows/JsonToolRow'
-import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
+import { SLAB_MAX_CHARS } from '@providers/shared/renderer/rows/JsonToolRow'
 import { memo } from 'react'
 
-import {
-  CodexApplyPatchRow,
-  CodexToolRow,
-} from '@providers/codex/renderer/rows/CodexRows'
+import { CodexApplyPatchRow } from '@providers/codex/renderer/rows/CodexRows'
 import {
   EditRow,
   MultiEditRow,
 } from '@providers/claude/renderer/rows/ClaudeRows'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { parseJsonRecord } from '@shared/lib/asRecord'
-import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import {
   parseSemanticTodos,
   type SemanticLiveTurn,
@@ -21,7 +15,12 @@ import {
 
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
 import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
-import { commandFromLive } from '@renderer/features/feed/ui/resolve/fromLive'
+import { GenericToolCard } from '@renderer/features/feed/ui/artifacts/generic'
+import {
+  commandFromLive,
+  genericFromLive,
+} from '@renderer/features/feed/ui/resolve/fromLive'
+import { StreamingCodeBlock } from '@renderer/features/feed/ui/kit/StreamingCodeBlock'
 import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -276,16 +275,10 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     if (liveTool.name === 'exec_command' || liveTool.name === 'write_stdin') {
       return <CommandCard vm={commandFromLive(block, toolState, 'codex')} />
     }
-    // Parse-gated convergence with the committed fallback (residue plan
-    // P1): a fully-parsed live payload renders through the same shared
-    // JsonToolRow the committed row will use; raw/partial payloads keep
-    // CodexToolRow's degraded look until the JSON completes. THIN glue on
-    // purpose — this whole bypass dies at Stage 3.
-    const liveInput = liveTool.input as Record<string, unknown> | null
-    if (liveInput && !('raw' in liveInput)) {
-      return <JsonToolRow block={liveTool} live />
-    }
-    return <CodexToolRow block={liveTool} />
+    // Everything else — the SAME GenericToolCard the committed plane
+    // renders (spec §6). Partial JSON streams as growing highlighted
+    // params inside the card; the structured slab takes over on parse.
+    return <GenericToolCard vm={genericFromLive(block, toolState, 'codex')} />
   }
 
   if (
@@ -447,138 +440,57 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
       block.toolName === 'TodoWrite'
         ? parseSemanticTodos(block.parsedInput)
         : []
-    const hasResult = block.resultAt != null || block.resultContent != null
-
     // Live `Write` preview. While a Write tool_use streams, the only
     // data we have is `block.inputJson` — partial, unparseable JSON.
-    // Dumping it raw means the user watches a 200-line file scroll by
-    // as one escaped JSON blob (`{"file_path":"…","content":"# …\n\n…`).
     // `extractStreamingWriteInput` does a single linear scan of that
     // buffer and pulls out the path + the in-flight content, decoded.
-    // When it yields a filePath we render the path + a plain code
-    // preview of the content as it arrives.
-    //
-    // This is a LIVE preview, deliberately NOT pixel-identical to the
-    // committed WriteRow that replaces it once the block finalizes:
-    //   - the committed row uses `FileToolHeader` with a line count;
-    //     the live row shows just the path on a `⎿` marker line.
-    //   - the live preview passes `highlight={false}` (see below);
-    //     the committed row is syntax-highlighted.
-    // So there IS a one-time visual change at the commit boundary —
-    // the header gains a line count and the code gains highlighting.
-    // The content text is identical across the transition; the goal
-    // here is "show the file taking shape", not a frozen final card.
-    //
-    // If the buffer doesn't match Write's expected shape the
-    // extractor returns nulls and we fall through to the raw <pre> —
-    // never worse than the pre-feature behaviour.
+    // (Dedicated FileWriteCard lands in the phase-4 task; until then
+    // this preview keeps its shape, now on StreamingCodeBlock so the
+    // growing content is line-by-line highlighted instead of plain.)
     const writeStream =
       block.toolName === 'Write'
         ? extractStreamingWriteInput(block.inputJson ?? '')
         : null
-    return (
-      <MarkerRow marker="⏺">
-        <div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
-            <span className="text-accent font-semibold">
-              {block.toolName ?? block.kind}
-            </span>
-            {toolState ? (
-              <span
-                className={
-                  toolState.status === 'error'
-                    ? 'text-danger text-[11px] uppercase tracking-wider'
-                    : 'text-muted text-[11px] uppercase tracking-wider'
-                }
-              >
-                {toolState.status === 'in_progress'
-                  ? 'running'
-                  : toolState.status === 'error'
-                    ? 'failed'
-                    : 'done'}
-              </span>
-            ) : null}
-          </div>
-          {block.toolName === 'TodoWrite' ? (
+    if (block.toolName === 'TodoWrite') {
+      return (
+        <MarkerRow marker="⏺">
+          <div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+              <span className="text-accent font-semibold">TodoWrite</span>
+            </div>
             <SemanticTodoList todos={todos} />
-          ) : writeStream && writeStream.filePath ? (
+          </div>
+        </MarkerRow>
+      )
+    }
+    if (writeStream && writeStream.filePath) {
+      return (
+        <MarkerRow marker="⏺">
+          <div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
+              <span className="text-accent font-semibold">Write</span>
+            </div>
             <div className="mt-1 flex flex-col gap-1">
               <MarkerRow marker="⎿" tone="muted">
                 <span className="font-code text-[12px] leading-[1.55] text-ink-dim break-all">
                   {writeStream.filePath}
                 </span>
               </MarkerRow>
-              {/*
-                `highlight={false}` is load-bearing for performance.
-                highlight.js re-highlights the WHOLE code string on
-                every change; this CodeBlock is fed a growing buffer
-                that re-renders on every `input_json_delta`, so
-                highlighting here would cost O(streamed bytes²) over
-                a long write. The plain preview is cheap; the
-                committed WriteRow does the one-shot highlight after
-                the stream ends. `codeId` is keyed by blockIndex so
-                the component stays mounted across the many delta
-                re-renders rather than remounting.
-              */}
-              <CodeBlock
+              <StreamingCodeBlock
                 code={writeStream.partialContent ?? ''}
                 path={writeStream.filePath}
-                codeId={`write-live:${block.blockIndex}`}
-                highlight={false}
+                blockKey={`write-live:${block.blockIndex}`}
               />
             </div>
-          ) : block.parsedInput && block.inputJsonValid !== false ? (
-            // Parse-gated pretty params (residue plan P1). Partial JSON
-            // keeps the raw stream below — pretty-printing half a JSON
-            // string is worse than showing it verbatim.
-            <MarkerRow marker="⎿" tone="muted">
-              <details className="text-[12px]">
-                <summary className="cursor-pointer text-ink-dim select-none">
-                  {Object.keys(block.parsedInput).length} param
-                  {Object.keys(block.parsedInput).length === 1 ? '' : 's'}
-                </summary>
-                <div className="mt-1">
-                  <CodeBlock
-                    code={cappedJson(block.parsedInput)}
-                    language="json"
-                    codeId={`live-tool-input:${block.blockIndex}`}
-                    highlight={false}
-                  />
-                </div>
-              </details>
-            </MarkerRow>
-          ) : (
-            <MarkerRow marker="⎿" tone="muted">
-              <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
-                {block.inputJson || '(waiting for input…)'}
-              </pre>
-            </MarkerRow>
-          )}
-          {block.parseError ? (
-            <MarkerRow marker="⎿" tone="muted">
-              <div className="text-danger text-[12px] leading-[1.55]">
-                invalid tool input: {block.parseError}
-              </div>
-            </MarkerRow>
-          ) : null}
-          {hasResult ? (
-            (() => {
-              const parsed = block.resultContent ? tryExtractJson(block.resultContent) : null
-              if (parsed !== null && typeof parsed === 'object') {
-                return <JsonResultSlab value={parsed} isError={block.resultIsError === true} />
-              }
-              return (
-                <OutputWell
-                  text={block.resultContent || '(empty result)'}
-                  isError={block.resultIsError === true}
-                  ansi
-                />
-              )
-            })()
-          ) : null}
-        </div>
-      </MarkerRow>
-    )
+          </div>
+        </MarkerRow>
+      )
+    }
+
+    // Everything else — the SAME GenericToolCard the committed plane
+    // renders. This replaces the hand-rolled live card that dumped raw
+    // partial inputJson into a <pre> (audit finding 7).
+    return <GenericToolCard vm={genericFromLive(block, toolState, 'claude')} />
   }
 
   // Streaming assistant text — prose AND code fences, open or closed.

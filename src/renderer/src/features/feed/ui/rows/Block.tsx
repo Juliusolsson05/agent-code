@@ -29,8 +29,15 @@ import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
-import { commandFromCommitted } from '@renderer/features/feed/ui/resolve/fromCommitted'
-import { routeFamily } from '@renderer/features/feed/ui/resolve/registry'
+import { GenericToolCard } from '@renderer/features/feed/ui/artifacts/generic'
+import {
+  commandFromCommitted,
+  genericFromCommitted,
+} from '@renderer/features/feed/ui/resolve/fromCommitted'
+import {
+  RESULT_CONSUMING_FAMILIES,
+  routeFamily,
+} from '@renderer/features/feed/ui/resolve/registry'
 
 /* ---------- Block dispatcher ---------- */
 
@@ -186,16 +193,26 @@ export const Block = memo(function Block({
       // branch below suppresses it with the same routeFamily predicate —
       // the #442 lesson: whatever the card renders for, the result
       // suppresses for, one predicate, both branches.
-      if (routeFamily(currentProvider, tu.name) === 'command') {
+      const family = routeFamily(currentProvider, tu.name)
+      if (family === 'command') {
         const paired = toolResultIndex.get(tu.id) ?? null
         return <CommandCard vm={commandFromCommitted(tu, paired, currentProvider)} />
       }
+      // generic + mcp go straight to the one fallback card (no provider
+      // dispatch ever claimed these names — verified across all three
+      // dispatch.tsx files at the time of the rewrite). The card
+      // consumes the paired result (suppressed below via
+      // RESULT_CONSUMING_FAMILIES), so live and committed MCP/unknown
+      // tools finally render identically.
+      if (family === 'generic' || family === 'mcp') {
+        const paired = toolResultIndex.get(tu.id) ?? null
+        return <GenericToolCard vm={genericFromCommitted(tu, paired, currentProvider)} />
+      }
 
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
-      // Shared fallback is the generic JSON tool row (residue plan P1):
-      // it degrades to the old ToolUseRow look for headline-only inputs
-      // (Bash keeps its 2-line cap) and gives MCP/orchestration payloads
-      // a real rendering instead of a bare name over raw JSON.
+      // Families whose dedicated card hasn't landed yet (file-read/
+      // file-edit/file-write/todo/web — spec §8 migration state) keep
+      // the legacy path: provider dispatch, else the old JSON tool row.
       return providerRow !== undefined ? providerRow : <JsonToolRow block={tu} />
     }
     case 'tool_result': {
@@ -215,11 +232,16 @@ export const Block = memo(function Block({
         }
       }
       const sourceTool = toolUseIndex.get(tr.tool_use_id)
-      // Command-family results are consumed into the CommandCard on the
-      // tool_use row (output + exit code) — painting them again here
-      // duplicates the output below the card. Same predicate as the
-      // tool_use branch (see the #442 note there).
-      if (sourceTool && routeFamily(currentProvider, sourceTool.name) === 'command') {
+      // Results consumed INTO a card on the tool_use row (command output,
+      // generic/mcp result slots) — painting them again here duplicates
+      // the output below the card. Same routing table as the tool_use
+      // branch (the #442 lesson: one predicate, both branches).
+      // RESULT_CONSUMING_FAMILIES is deliberately a subset of the landed
+      // cards — suppressing a result whose card hasn't landed is data loss.
+      if (
+        sourceTool &&
+        RESULT_CONSUMING_FAMILIES.has(routeFamily(currentProvider, sourceTool.name))
+      ) {
         return null
       }
       // #442 finding-C2: an answered AskUserQuestion renders the picked answer
