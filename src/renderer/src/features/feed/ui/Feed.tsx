@@ -6,11 +6,8 @@ import { TaskNotificationsContext } from '@renderer/features/feed/context'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,
-  useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
-  useState,
 } from 'react'
 
 import {
@@ -36,11 +33,9 @@ import {
   type ScrollInfo,
   type DebugVisibleRow,
 } from '@renderer/features/feed/types'
-import { scrollPositions } from '@renderer/features/feed/scroll'
 import {
   buildToolUseIndex,
   buildToolResultIndex,
-  debugLabelForEntry,
 } from '@renderer/features/feed/lib/helpers'
 import {
   feedRenderModelFromItems,
@@ -53,6 +48,9 @@ import {
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { semanticTurnScrollSignal } from '@renderer/session-runtime/semantic/helpers'
+import { useFeedDebugEmission } from '@renderer/features/feed/ui/hooks/useFeedDebugEmission'
+import { usePickerAutoScroll } from '@renderer/features/feed/ui/hooks/usePickerAutoScroll'
+import { useScrollFeedBehaviors } from '@renderer/features/feed/ui/hooks/useScrollFeedBehaviors'
 import {
   EAGER_TAIL,
   EntryRow,
@@ -61,7 +59,6 @@ import {
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
-import * as perf from '@renderer/performance/client'
 
 // Re-export — many external callers import these types from Feed
 // directly rather than reaching into ../types/../context. Keep the
@@ -121,7 +118,7 @@ export type { AgentProvider, ScrollInfo } from '@renderer/features/feed/types'
 type Props = {
   /** Session identity — used as the key for per-session scroll
    *  position persistence across Feed unmount/remount (tab switches).
-   *  See `scrollPositions` below. */
+   *  See ui/hooks/useScrollFeedBehaviors.ts (`scrollPositions`). */
   sessionId: string
   /** Which provider's row renderers to use. Default 'claude'. */
   provider?: AgentProvider
@@ -312,420 +309,47 @@ function FeedImpl({
   onDebugLog,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
-  // sticky-bottom logic below can own its own scroll listener without
+  // sticky-bottom logic can own its own scroll listener without
   // reaching up the tree. TileLeaf's wrapper is just a flex cell and
   // no longer sets overflow-auto; see TileLeaf.tsx for the pair.
   //
-  // Why this is load-bearing: active semantic turns can update many
-  // times per second. A naive "scroll to bottom on every render" effect
-  // yanks the viewport down whenever text/tool deltas arrive, making it
-  // impossible for the user to scroll up and read earlier content.
-  // Worth preserving the original production diagnosis: "scrolling
-  // doesn't even work, it snaps me back to the bottom super glitchly."
-  // That's exactly the behavior the old unconditional effect produced.
-  //
-  // The fix is two-part:
-  //   1. Track "is the user near the bottom right now" in a ref
-  //      that's updated by a scroll listener. "Near" = within 48px
-  //      of the bottom; the pad absorbs sub-pixel rounding and the
-  //      natural momentum overshoot when new rows land.
-  //   2. Only auto-scroll when the ref is true. If the user has
-  //      scrolled up, stickyBottom becomes false, and subsequent
-  //      updates stop forcing the viewport down. When the user
-  //      scrolls back to the bottom, the ref flips true again and
-  //      auto-scroll resumes.
-  //
-  // Using a ref (not state) for stickyBottom is deliberate: we don't
-  // want a React re-render on every scroll tick, only a read in the
-  // auto-scroll effect. Scroll events fire on EVERY pixel, so this
-  // matters.
+  // The scarred scroll/picker behaviors (sticky-bottom follow, mount
+  // restore, older-history load, bootstrap pin-once, scroll-to-latest,
+  // both picker tweens) are PORTED VERBATIM into ui/hooks/ — see
+  // useScrollFeedBehaviors.ts and usePickerAutoScroll.ts for every
+  // original WHY comment. Feed owns only the refs the JSX needs.
   const scrollerRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
-  // Restore stickyBottom from the persisted map on first render so
-  // the auto-scroll effect below makes the right decision without
-  // needing to wait for the scroll listener to run. Defaults to
-  // true for brand-new sessions (no saved position yet).
-  const stickyBottomRef = useRef(
-    scrollPositions.get(sessionId)?.stickyBottom ?? true,
-  )
-  const loadingOlderRef = useRef(false)
-  // Was there an existing saved scroll position for this session when
-  // this Feed instance mounted? Used to distinguish "restore the
-  // user's deliberate scrolled-up position" from "brand-new/resumed
-  // session should land at latest content even if stickyBottom got
-  // transiently knocked false during bootstrap."
-  const hadSavedPositionOnMountRef = useRef(scrollPositions.has(sessionId))
-  // Previous scrollTop, used to distinguish "the user started
-  // scrolling upward" from incidental near-bottom jitter. This is
-  // load-bearing during active turns: with the old "gap < 48"
-  // heuristic alone, a tiny upward wheel tick still counted as
-  // sticky, and the next ~60 Hz screen update snapped the feed right
-  // back down before the user could accumulate enough distance to
-  // escape. Any real upward movement should break follow
-  // immediately; re-follow only when the user intentionally returns
-  // near the bottom.
-  const lastScrollTopRef = useRef(0)
 
-  // Restore the saved scroll position on mount — synchronously, via
-  // useLayoutEffect, so the browser never paints the scroller at
-  // scrollTop=0 before we restore. Using useEffect here would flash
-  // the top of the feed for one frame before the restore landed.
-  //
-  // Three cases:
-  //   1. No saved entry → this is the first time we've mounted for
-  //      this session (or the map was just cleared). Default to
-  //      "stuck at bottom" — for a freshly-opened feed the user
-  //      wants to see the most recent content, just like opening a
-  //      terminal or a chat window.
-  //   2. Saved stickyBottom: true → the user was at the bottom when
-  //      they left. Content may have grown while we were unmounted
-  //      (new entries appended to runtime.entries even though Feed
-  //      wasn't rendering), so we pin to the NEW scrollHeight, not
-  //      the old scrollTop.
-  //   3. Saved stickyBottom: false → restore the exact saved
-  //      scrollTop. Content height on remount matches save time
-  //      (because unmount freezes new entries from growing the
-  //      unmounted scroller) so this is pixel-accurate.
-  //
-  // The sessionId dep is load-bearing: if the user resumes a
-  // different session in the same pane slot, we need to re-restore
-  // from the new key. Today it's effectively a mount-only effect.
-  useLayoutEffect(() => {
-    const el = scrollerRef.current
-    if (!el) return
-    hadSavedPositionOnMountRef.current = scrollPositions.has(sessionId)
-    if (tailMode) {
-      el.scrollTop = el.scrollHeight
-      stickyBottomRef.current = true
-      lastScrollTopRef.current = el.scrollTop
-      return
-    }
-    const saved = scrollPositions.get(sessionId)
-    if (!saved || saved.stickyBottom) {
-      // Case 1 or 2: pin to bottom. We do this synchronously in
-      // useLayoutEffect so the browser commits the scrollTop change
-      // in the SAME paint as the initial content render. Without
-      // that, the first paint shows scrollTop=0 (top) and the next
-      // tick scrolls down — visibly a "starts at top, jumps to
-      // bottom" flash on every tab switch, which is the exact bug
-      // the user flagged.
-      el.scrollTop = el.scrollHeight
-      stickyBottomRef.current = true
-      lastScrollTopRef.current = el.scrollTop
-    } else {
-      // Case 3: restore exact position.
-      el.scrollTop = saved.scrollTop
-      stickyBottomRef.current = false
-      lastScrollTopRef.current = el.scrollTop
-    }
-  }, [sessionId, tailMode])
-
-  // One scroll listener for the container. Updates stickyBottomRef
-  // imperatively AND persists the position into the module-level
-  // map so a later unmount/remount can restore it.
-  //
-  // CRITICAL: we DO NOT call onScroll() synchronously on mount.
-  // That was the original bug — at mount time the scroller has
-  // scrollTop=0 and scrollHeight=full-content, so gap > 48 and the
-  // handler would stamp stickyBottom=false INTO THE REF AND THE
-  // PERSISTED MAP before the layout effect above had a chance to
-  // scroll to the bottom. Then the auto-scroll effect below would
-  // see stickyBottom=false and skip, leaving the viewport stuck at
-  // the top. The layout effect sets stickyBottomRef explicitly, so
-  // the scroll listener only needs to react to actual user scrolls.
-  useEffect(() => {
-    const el = scrollerRef.current
-    if (!el) return
-    const onScroll = () => {
-      if (tailMode) {
-        el.scrollTop = el.scrollHeight
-        stickyBottomRef.current = true
-        lastScrollTopRef.current = el.scrollTop
-        scrollPositions.set(sessionId, {
-          scrollTop: el.scrollTop,
-          stickyBottom: true,
-        })
-        if (onScrollInfo) onScrollInfo({ fraction: 0 })
-        return
-      }
-      const gap = el.scrollHeight - (el.scrollTop + el.clientHeight)
-      const scrollingUp = el.scrollTop < lastScrollTopRef.current
-      const nearBottom = gap < 48
-      stickyBottomRef.current =
-        scrollingUp && gap > 0 ? false : nearBottom
-      lastScrollTopRef.current = el.scrollTop
-      scrollPositions.set(sessionId, {
-        scrollTop: el.scrollTop,
-        stickyBottom: stickyBottomRef.current,
-      })
-      // Push scroll position to parent for the scroll indicator.
-      // fraction=0 at bottom, fraction=1 at top.
-      if (onScrollInfo) {
-        const maxScroll = el.scrollHeight - el.clientHeight
-        const fraction = maxScroll > 0
-          ? 1 - (el.scrollTop / maxScroll)
-          : 0
-        onScrollInfo({ fraction })
-      }
-
-      if (
-        el.scrollTop < 160 &&
-        hasOlderHistory &&
-        !loadingOlderHistory &&
-        !loadingOlderRef.current &&
-        !tailMode &&
-        onLoadOlderHistory
-      ) {
-        loadingOlderRef.current = true
-        const beforeHeight = el.scrollHeight
-        const beforeTop = el.scrollTop
-        void onLoadOlderHistory()
-          .then(() => {
-            requestAnimationFrame(() => {
-              const next = scrollerRef.current
-              if (!next) return
-              const delta = next.scrollHeight - beforeHeight
-              next.scrollTop = beforeTop + Math.max(0, delta)
-              lastScrollTopRef.current = next.scrollTop
-            })
-          })
-          .finally(() => {
-            loadingOlderRef.current = false
-          })
-      }
-    }
-    el.addEventListener('scroll', onScroll, { passive: true })
-    return () => el.removeEventListener('scroll', onScroll)
-  }, [
-    sessionId,
-    onScrollInfo,
-    tailMode,
-    hasOlderHistory,
-    loadingOlderHistory,
-    onLoadOlderHistory,
-  ])
-
-  // Auto-scroll on content changes, but ONLY when sticky. The effect
-  // runs on every change that would grow the feed (a new committed
-  // entry) or move the semantic streaming tail. If the
-  // user is scrolled up, we skip — they're reading earlier content
-  // and we don't want to yank them back.
-  //
-  // Include cheap fingerprints of the current semantic turn and
-  // bounded semantic history so the effect re-runs when semantic
-  // deltas land, not only when committed entries append.
-  // WHY semanticTurnScrollSignal and not just turnId:text.length:blockCount
-  // (feed audit Finding 2): the old signal missed per-block streaming growth
-  // (tool output / thinking / reasoning deltas inside an existing block), so the
-  // sticky-bottom effect below would not re-pin while a row visibly grew. The
-  // helper folds in each block's content lengths and status so this effect fires
-  // on the common streaming path. It is a scroll-invalidation token only.
+  // Cheap fingerprints of the current semantic turn and bounded
+  // semantic history so the sticky-bottom effect re-runs when semantic
+  // deltas land, not only when committed entries append (feed audit
+  // Finding 2 — per-block growth folded in via semanticTurnScrollSignal).
   const semanticTurnSignal = semanticTurn ? semanticTurnScrollSignal(semanticTurn) : ''
   const semanticHistorySignal = semanticHistory
     .map(semanticTurnScrollSignal)
     .join('|')
-  useEffect(() => {
-    // During a bulk bootstrap burst we skip per-append auto-scroll.
-    // The pin-once-on-transition effect below lands us at the bottom
-    // in a single operation after the burst ends — otherwise every
-    // entry appended during the burst would pin-scroll and wake up
-    // the LazyEntry observer cascade. See docs/superpowers/plans/
-    // 2026-04-15-bootstrap-replay-perf.md.
-    if (bootstrapping) return
-    if (!tailMode && !stickyBottomRef.current) return
-    // scrollTop = scrollHeight pins to bottom without the smooth-scroll
-    // overshoot scrollIntoView sometimes produces. Direct, instant,
-    // no animation frames.
-    const el = scrollerRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [entries.length, tailMode, semanticTurnSignal, semanticHistorySignal, bootstrapping])
 
-  // Pin-once on the bootstrap → live transition. Runs exactly once per
-  // transition thanks to the previous-value ref: we read the prior
-  // value, compare, pin if we just left bootstrap mode, then store the
-  // new value for next time. No dependency on `entries.length` so the
-  // effect does not fire on subsequent live appends — those go
-  // through the regular auto-scroll effect above.
-  const prevBootstrappingRef = useRef(false)
-  useEffect(() => {
-    if (prevBootstrappingRef.current && !bootstrapping) {
-      const el = scrollerRef.current
-      // Fresh/resumed sessions with no saved scroll position should
-      // ALWAYS land on the latest content after the bootstrap burst.
-      // Relying purely on stickyBottomRef here is fragile because the
-      // initial mount/placeholder/lazy-load sequence can transiently
-      // mark the feed non-sticky before the first real user scroll.
-      // That leaves the viewport stranded above the eager tail: the
-      // exact "blank until I scroll down a couple pages" symptom.
-      const shouldForceInitialBottom =
-        !hadSavedPositionOnMountRef.current && !tailMode
-      if (el && (tailMode || stickyBottomRef.current || shouldForceInitialBottom)) {
-        el.scrollTop = el.scrollHeight
-        stickyBottomRef.current = true
-        lastScrollTopRef.current = el.scrollTop
-        scrollPositions.set(sessionId, {
-          scrollTop: el.scrollTop,
-          stickyBottom: true,
-        })
-        if (onScrollInfo) onScrollInfo({ fraction: 0 })
-      }
-    }
-    prevBootstrappingRef.current = bootstrapping
-  }, [bootstrapping, onScrollInfo, sessionId, tailMode])
-
-  // When the picker selection changes, smoothly tween the scroller
-  // so the highlighted entry centers in the viewport.
-  //
-  // We do NOT use native scrollIntoView({behavior:'smooth'}) because:
-  //   - With block:'nearest' it no-ops when the target is already on
-  //     screen, so rapid arrow presses after a manual scroll land on
-  //     already-visible entries and produce zero motion (user report:
-  //     "my arrow key does nothing after I scroll").
-  //   - With block:'center' native smooth scroll was observably shaky
-  //     here — the feed's own scroll listener fires on every frame of
-  //     the animation and was fighting the browser's scroll queue.
-  //
-  // A custom rAF tween is ~20 lines, interrupt-safe (new target
-  // cancels any in-flight animation), and completely independent of
-  // whatever the scroll listener is doing.
-  const scrollAnimFrameRef = useRef<number | null>(null)
-  useEffect(() => {
-    if (!pickerSelectedUuid) return
-    const root = scrollerRef.current
-    if (!root) return
-    const target = root.querySelector(
-      `[data-entry-uuid="${pickerSelectedUuid}"]`,
-    ) as HTMLElement | null
-    if (!target) return
-
-    // Compute desired scrollTop so the target's vertical center aligns
-    // with the scroller's vertical center. Clamp to the scroller's
-    // scrollable range so we don't try to scroll past start/end.
-    const targetCenter = target.offsetTop + target.offsetHeight / 2
-    const desired = targetCenter - root.clientHeight / 2
-    const maxScroll = root.scrollHeight - root.clientHeight
-    const to = Math.max(0, Math.min(maxScroll, desired))
-    const from = root.scrollTop
-    const distance = to - from
-    if (Math.abs(distance) < 1) return
-
-    // Cancel any in-flight animation so rapid Up/Down presses don't
-    // compound into a runaway scroll.
-    if (scrollAnimFrameRef.current !== null) {
-      cancelAnimationFrame(scrollAnimFrameRef.current)
-      scrollAnimFrameRef.current = null
-    }
-
-    const duration = 180
-    const startTime = performance.now()
-    const ease = (t: number) => 1 - Math.pow(1 - t, 3) // easeOutCubic
-
-    const step = (now: number) => {
-      const elapsed = now - startTime
-      const t = Math.min(1, elapsed / duration)
-      root.scrollTop = from + distance * ease(t)
-      if (t < 1) {
-        scrollAnimFrameRef.current = requestAnimationFrame(step)
-      } else {
-        scrollAnimFrameRef.current = null
-      }
-    }
-    scrollAnimFrameRef.current = requestAnimationFrame(step)
-
-    return () => {
-      if (scrollAnimFrameRef.current !== null) {
-        cancelAnimationFrame(scrollAnimFrameRef.current)
-        scrollAnimFrameRef.current = null
-      }
-    }
-  }, [pickerSelectedUuid])
-
-  // Copy Code Block picker — highlight + scroll the selected block.
-  //
-  // WHY a separate effect from the assistant-entry one above, and why
-  // the outline is applied imperatively here rather than as a JSX
-  // class: the assistant picker highlights an ENTRY, and Feed already
-  // renders a wrapper <div data-entry-uuid> per entry that it can add
-  // an outline class to in JSX. A code block is a `CodeBlock` buried
-  // deep inside rendered markdown / tool rows — there is no per-block
-  // wrapper Feed controls. So we locate the block by its
-  // `data-code-block-id` and toggle the outline classes on the node
-  // directly; the cleanup removes them.
-  //
-  // The outline class list is the SAME tokens the entry picker uses
-  // (line ~881) — keeping them identical means Tailwind's static
-  // scan already emits the CSS, so `classList.add` is safe.
-  //
-  // Shares `scrollAnimFrameRef` with the assistant-picker scroll so a
-  // tween from one picker is cancelled if the other starts; only one
-  // picker is ever active at a time, so they never genuinely race.
-  useEffect(() => {
-    if (!codeBlockSelectedId) return
-    const root = scrollerRef.current
-    if (!root) return
-    const target = root.querySelector(
-      `[data-code-block-id="${codeBlockSelectedId}"]`,
-    ) as HTMLElement | null
-    if (!target) return
-
-    const outline = ['outline', 'outline-2', 'outline-accent', 'outline-offset-2']
-    target.classList.add(...outline)
-
-    // Center the block in the scroller — same rAF tween as the
-    // assistant-picker scroll effect (native smooth-scroll fought the
-    // feed's own scroll listener; see the long note on that effect).
-    const targetCenter = target.offsetTop + target.offsetHeight / 2
-    const desired = targetCenter - root.clientHeight / 2
-    const maxScroll = root.scrollHeight - root.clientHeight
-    const to = Math.max(0, Math.min(maxScroll, desired))
-    const from = root.scrollTop
-    const distance = to - from
-    if (Math.abs(distance) >= 1) {
-      if (scrollAnimFrameRef.current !== null) {
-        cancelAnimationFrame(scrollAnimFrameRef.current)
-        scrollAnimFrameRef.current = null
-      }
-      const duration = 180
-      const startTime = performance.now()
-      const ease = (t: number) => 1 - Math.pow(1 - t, 3)
-      const step = (now: number) => {
-        const t = Math.min(1, (now - startTime) / duration)
-        root.scrollTop = from + distance * ease(t)
-        if (t < 1) {
-          scrollAnimFrameRef.current = requestAnimationFrame(step)
-        } else {
-          scrollAnimFrameRef.current = null
-        }
-      }
-      scrollAnimFrameRef.current = requestAnimationFrame(step)
-    }
-
-    return () => {
-      target.classList.remove(...outline)
-      if (scrollAnimFrameRef.current !== null) {
-        cancelAnimationFrame(scrollAnimFrameRef.current)
-        scrollAnimFrameRef.current = null
-      }
-    }
-  }, [codeBlockSelectedId])
-
-  useEffect(() => {
-    if (scrollToLatestRequest === 0) return
-    const el = scrollerRef.current
-    if (!el) return
-    if (scrollAnimFrameRef.current !== null) {
-      cancelAnimationFrame(scrollAnimFrameRef.current)
-      scrollAnimFrameRef.current = null
-    }
-    el.scrollTop = el.scrollHeight
-    stickyBottomRef.current = true
-    lastScrollTopRef.current = el.scrollTop
-    scrollPositions.set(sessionId, {
-      scrollTop: el.scrollTop,
-      stickyBottom: true,
-    })
-    if (onScrollInfo) onScrollInfo({ fraction: 0 })
-  }, [onScrollInfo, scrollToLatestRequest, sessionId])
+  const { cancelTween } = usePickerAutoScroll({
+    scrollerRef,
+    pickerSelectedUuid,
+    codeBlockSelectedId,
+  })
+  useScrollFeedBehaviors({
+    scrollerRef,
+    sessionId,
+    tailMode,
+    bootstrapping,
+    entriesLength: entries.length,
+    semanticTurnSignal,
+    semanticHistorySignal,
+    hasOlderHistory,
+    loadingOlderHistory,
+    onLoadOlderHistory,
+    onScrollInfo,
+    scrollToLatestRequest,
+    cancelPickerTween: cancelTween,
+  })
 
   // Index EVERY tool_use block (not just the visible set) so tool_result
   // lookups still resolve even when some synthetic entries have been
@@ -827,7 +451,6 @@ function FeedImpl({
     }
     return ids
   }, [renderItems])
-  const renderedSemanticHistorySignature = renderedSemanticHistoryTurnIds.join('\u0000')
   // The current live turn IS rendered iff any block item carries owner
   // 'semantic-current'. WorkIndicator's tool-hint reads the full turn, which
   // Feed already has as the `semanticTurn` prop — return that when present.
@@ -842,62 +465,18 @@ function FeedImpl({
     return currentOnScreen ? semanticTurn : null
   }, [renderItems, semanticTurn])
 
-  const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
-  const previousRenderDebugSignatureRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (!onDebugLog) return
-    const previous = previousRenderedRowsRef.current
-    const renderDebugSignature = JSON.stringify({
-      entryCount: entries.length,
-      visibleEntryCount,
-      itemKeys: renderedRows.map(row => row.key),
-      semanticTurnId: semanticTurn?.turnId ?? null,
-      semanticHistoryTurnIds: renderedSemanticHistoryTurnIds,
-      streamPhase,
-    })
-    const prevKeys = new Set(previous?.map(row => row.key) ?? [])
-    const nextKeys = new Set(renderedRows.map(row => row.key))
-    const added = renderedRows.filter(row => !prevKeys.has(row.key))
-    const removed = (previous ?? []).filter(row => !nextKeys.has(row.key))
-    const hidden = visibleDecisions
-      .filter(item => !item.visible)
-      .slice(-12)
-      .map(item => ({
-        key: item.key,
-        label: debugLabelForEntry(item.entry),
-        reason: item.reason,
-      }))
-    const changed =
-      previous === null ||
-      previousRenderDebugSignatureRef.current !== renderDebugSignature ||
-      added.length > 0 ||
-      removed.length > 0 ||
-      previous.length !== renderedRows.length ||
-      previous.some((row, index) => row.key !== renderedRows[index]?.key)
-    if (!changed) return
-    onDebugLog({
-      layer: 'RENDER',
-      kind: 'visible_rows',
-      summary:
-        previous === null
-          ? `initial rows ${renderedRows.length}`
-          : `rows ${previous.length} -> ${renderedRows.length} (+${added.length} -${removed.length})`,
-      data: {
-        rows: renderedRows,
-        added,
-        removed,
-        hidden,
-        entryCount: entries.length,
-        visibleEntryCount,
-        semanticTurnId: semanticTurn?.turnId ?? null,
-        semanticHistoryTurnIds: renderedSemanticHistoryTurnIds,
-        streamPhase,
-      },
-    })
-    previousRenderedRowsRef.current = renderedRows
-    previousRenderDebugSignatureRef.current = renderDebugSignature
-  }, [entries.length, onDebugLog, renderedRows, renderedSemanticHistorySignature, renderedSemanticHistoryTurnIds, semanticTurn?.turnId, streamPhase, visibleDecisions, visibleEntryCount])
+  // Feed-debug emission — the "debug == paint" half of the painter,
+  // ported verbatim into ui/hooks/useFeedDebugEmission.ts.
+  useFeedDebugEmission({
+    onDebugLog,
+    entriesLength: entries.length,
+    visibleEntryCount,
+    renderedRows,
+    visibleDecisions,
+    semanticTurnId: semanticTurn?.turnId ?? null,
+    renderedSemanticHistoryTurnIds,
+    streamPhase,
+  })
 
   const renderFeedItem = (item: FeedRenderItem) => {
     switch (item.type) {
