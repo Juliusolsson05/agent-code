@@ -136,7 +136,7 @@ Two mechanisms, both surviving the cutover (they don't need the deleted legacy r
 - ...use `streamPhase` as a submit-ownership signal — ownership is renderable *content* (§7 rule 10).
 
 **Always:**
-- Treat the ledger as the *single* decision point. If you find yourself deciding visibility in a feed component, stop — that decision belongs upstream, and putting it in the painter recreates the distributed-ownership bug class the ledger was built to end.
+- Treat the ledger as the *single* decision point. If you find yourself deciding visibility in a feed component, stop — that decision belongs upstream, and putting it in the painter recreates the distributed-ownership bug class the ledger was built to end. The 2026-07 painter rewrite added an artifact layer (`features/feed/ui/resolve/` + `ui/artifacts/` — see `rendering-system.md` §5 and `docs/superpowers/specs/2026-07-11-feed-render-layer-rewrite-design.md`); that layer is *derivation*, not decision — resolvers must stay pure and total (never hide, never throw), and a card must never branch on `plane`.
 - Prefer showing-and-explaining over hiding.
 - Fix stale documentation you touch. The pipeline has a history of comments outliving the code they describe (`SemanticStreamingTurn`, `AGENT_CODE_RENDER_SHADOW`, `AGENT_CODE_RENDER_PIPELINE`, `deriveFeedRenderModel` are all **deleted** but still referenced in stray comments). A stale comment about a *rendering* decision is how the next person reintroduces the old model.
 
