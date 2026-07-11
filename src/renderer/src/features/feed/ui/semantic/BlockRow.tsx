@@ -29,6 +29,11 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
 import { TodoCard, todoFromLive } from '@renderer/features/feed/ui/artifacts/todo'
+import { WebCard, webFromLive } from '@renderer/features/feed/ui/artifacts/web'
+import {
+  ImageGenCard,
+  imageGenFromLive,
+} from '@renderer/features/feed/ui/artifacts/imageGen'
 
 import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
 
@@ -164,50 +169,14 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   }
 
   if (block.kind === 'web_search_call') {
-    const action = block.webSearchAction
-    const label =
-      action?.kind === 'search'
-        ? `Search: ${action.query ?? action.queries?.join(', ') ?? '…'}`
-        : action?.kind === 'open_page'
-          ? `Open: ${action.url ?? '?'}`
-          : action?.kind === 'find_in_page'
-            ? `Find "${action.pattern ?? '?'}" in ${action.url ?? '?'}`
-            : 'Web search'
-    return (
-      <MarkerRow marker="⏺">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
-          <span className="text-accent font-semibold">🌐 {label}</span>
-          {block.status ? (
-            <span className="text-muted text-[11px] uppercase tracking-wider">
-              {block.status.replace(/_/g, ' ')}
-            </span>
-          ) : null}
-        </div>
-      </MarkerRow>
-    )
+    // Same WebCard as the committed rollout-synthesized web_search row
+    // — the bespoke live chip this replaces was audit gap #3's poster
+    // child (nice live, generic committed).
+    return <WebCard vm={webFromLive(block, toolState, 'codex')} />
   }
 
   if (block.kind === 'image_generation_call') {
-    const img = block.imageGeneration
-    return (
-      <MarkerRow marker="⏺">
-        <div>
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
-            <span className="text-accent font-semibold">🖼 Image generation</span>
-            <span className="text-muted text-[11px] uppercase tracking-wider">
-              {img?.status ?? block.status ?? 'running'}
-            </span>
-          </div>
-          {img?.revisedPrompt ? (
-            <MarkerRow marker="⎿" tone="muted">
-              <div className="text-ink-dim text-[12px] leading-[1.55] italic">
-                {img.revisedPrompt}
-              </div>
-            </MarkerRow>
-          ) : null}
-        </div>
-      </MarkerRow>
-    )
+    return <ImageGenCard vm={imageGenFromLive(block, toolState, 'codex')} />
   }
 
   if (block.kind === 'local_shell_call') {
@@ -218,30 +187,9 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   }
 
   if (block.kind === 'tool_search_call') {
-    const label = block.toolName ?? 'Tool search'
-    return (
-      <MarkerRow marker="⏺">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[1.65]">
-          <span className="text-accent font-semibold">🔎 {label}</span>
-          {block.status ? (
-            <span className="text-muted text-[11px] uppercase tracking-wider">
-              {block.status.replace(/_/g, ' ')}
-            </span>
-          ) : null}
-        </div>
-      </MarkerRow>
-    )
+    return <WebCard vm={webFromLive(block, toolState, 'codex')} toolLabel="Tool search" />
   }
 
-  // AskUserQuestion gets a dedicated native picker BEFORE the generic
-  // tool_use handler. An unresolved AskUserQuestion block (`!resultAt`)
-  // is a LIVE picker blocking the agent on user input; rendering it as
-  // the usual "AskUserQuestion · running" tool row (with a raw-JSON
-  // input dump) left the user no way to answer except via the terminal.
-  // The guard mirrors BlockRow's route-in condition exactly: once the
-  // tool_result lands and sets `resultAt`, we fall through to the normal
-  // tool_use branch so the answered question renders as a plain
-  // committed-style row instead of a stale clickable picker.
   if (block.toolName === 'AskUserQuestion' && !block.resultAt) {
     return <AskUserQuestionRow block={block} />
   }

@@ -21,12 +21,15 @@ import type { ArtifactFamily } from '@renderer/features/feed/ui/artifacts/types'
 // while the migration is in flight — delete the gate when the last
 // card lands.
 
-const COMMAND_TOOLS = new Set(['Bash', 'bash', 'exec_command', 'local_shell_call', 'write_stdin'])
+// 'local_shell' is the rollout-synthesized COMMITTED name for the live
+// 'local_shell_call' kind — both are the command family.
+const COMMAND_TOOLS = new Set(['Bash', 'bash', 'exec_command', 'local_shell_call', 'local_shell', 'write_stdin'])
 const READ_TOOLS = new Set(['Read', 'FileRead', 'Grep', 'Glob', 'LS'])
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'apply_patch'])
 const WRITE_TOOLS = new Set(['Write'])
 const TODO_TOOLS = new Set(['TodoWrite', 'todowrite'])
-const WEB_TOOLS = new Set(['WebSearch', 'WebFetch', 'web_search', 'web_search_call', 'tool_search_call'])
+const WEB_TOOLS = new Set(['WebSearch', 'WebFetch', 'web_search', 'web_search_call', 'tool_search', 'tool_search_call'])
+const IMAGE_GEN_TOOLS = new Set(['image_generation', 'image_generation_call'])
 
 /** Tool names a provider's LEGACY dispatch still claims with bespoke
  *  parsing the family cards don't replicate. OpenCode's `read` result
@@ -56,6 +59,7 @@ export function routeFamily(
   if (WRITE_TOOLS.has(toolName)) return 'file-write'
   if (TODO_TOOLS.has(toolName)) return 'todo'
   if (WEB_TOOLS.has(toolName)) return 'web'
+  if (IMAGE_GEN_TOOLS.has(toolName)) return 'image-gen'
   if (toolName.startsWith('mcp__')) return 'mcp'
   return 'generic'
 }
@@ -71,6 +75,8 @@ export const CARD_LANDED_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   'file-write',
   'file-read',
   'todo',
+  'web',
+  'image-gen',
 ] satisfies ArtifactFamily[])
 
 /** Families whose committed card CONSUMES the paired tool_result
@@ -90,4 +96,6 @@ export const RESULT_CONSUMING_FAMILIES: ReadonlySet<ArtifactFamily> = new Set([
   'file-write',
   'file-read',
   'todo',
+  'web',
+  'image-gen',
 ] satisfies ArtifactFamily[])

@@ -47,6 +47,11 @@ import {
   isSlashCommandText,
 } from '@renderer/features/feed/ui/artifacts/slashCommand'
 import { TodoCard, todoFromCommitted } from '@renderer/features/feed/ui/artifacts/todo'
+import { WebCard, webFromCommitted } from '@renderer/features/feed/ui/artifacts/web'
+import {
+  ImageGenCard,
+  imageGenFromCommitted,
+} from '@renderer/features/feed/ui/artifacts/imageGen'
 import {
   commandFromCommitted,
   genericFromCommitted,
@@ -263,6 +268,23 @@ export const Block = memo(function Block({
             label={tu.name}
           />
         )
+      }
+      if (family === 'web') {
+        const paired = toolResultIndex.get(tu.id) ?? null
+        return (
+          <WebCard
+            vm={webFromCommitted(tu, paired, currentProvider)}
+            toolLabel={
+              tu.name === 'tool_search' || tu.name === 'tool_search_call'
+                ? 'Tool search'
+                : undefined
+            }
+          />
+        )
+      }
+      if (family === 'image-gen') {
+        const paired = toolResultIndex.get(tu.id) ?? null
+        return <ImageGenCard vm={imageGenFromCommitted(tu, paired, currentProvider)} />
       }
 
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
