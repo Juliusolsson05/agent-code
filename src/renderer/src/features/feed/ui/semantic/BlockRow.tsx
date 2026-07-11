@@ -28,6 +28,7 @@ import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkd
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
+import { ThinkingBlock } from '@renderer/features/feed/ui/artifacts/thinking'
 import { TodoCard, todoFromLive } from '@renderer/features/feed/ui/artifacts/todo'
 import { WebCard, webFromLive } from '@renderer/features/feed/ui/artifacts/web'
 import {
@@ -64,55 +65,24 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   block: SemanticLiveTurn['blocks'][number]
   toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
 }) {
+  if (block.kind === 'redacted_thinking') {
+    return <ThinkingBlock text="" redacted />
+  }
+
   if (block.kind === 'thinking' || block.kind === 'reasoning') {
     // Live thinking — for Claude this is the ONLY time the plaintext is
     // available (`thinking` is stripped on the final message before
-    // persisting; only signature ciphertext survives). For Codex the
-    // `reasoning` block works similarly, and plaintext is frequently
-    // empty because ChatGPT delivers reasoning encrypted.
-    //
-    // Design (2026-04-18 rework):
-    //   - Empty thinking → render NOTHING. The WorkIndicator at the
-    //     foot of the feed already shows "Thinking · Ns" with a
-    //     pulsing dot, so the old static `∴ Thinking…` row was
-    //     redundant noise that actively looked "hung" when encrypted.
-    //   - Non-empty thinking → collapsed `<details>` (closed by
-    //     default). Users who want to read reasoning click to expand;
-    //     nobody sees a flood of italic prose they didn't ask for.
-    //
-    // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
+    // persisting; only signature ciphertext survives). Codex `reasoning`
+    // may carry a summary track, a full track, or neither (encrypted).
+    // Both tracks show when distinct — summary first, full below it.
+    const summary = block.reasoningSummary ?? ''
+    const full = block.thinking || block.reasoningText || ''
     const text =
-      block.thinking ||
-      block.reasoningSummary ||
-      block.reasoningText ||
-      ''
-    if (!text) return null
-    const isStreaming = !block.finalized
-    return (
-      <MarkerRow marker="⏺" tone="muted">
-        <details className="italic text-muted text-[12px] opacity-80">
-          <summary className="cursor-pointer select-none">
-            ∴ Thinking{isStreaming ? '…' : ''}
-            <span className="ml-2 not-italic text-ink-dim opacity-70">
-              (click to expand)
-            </span>
-          </summary>
-          <div className="mt-2 text-ink-dim opacity-90 not-italic">
-            <StreamingProse text={text} />
-          </div>
-        </details>
-      </MarkerRow>
-    )
+      summary && full && summary !== full
+        ? `${summary}\n\n---\n\n${full}`
+        : full || summary
+    return <ThinkingBlock text={text} streaming={!block.finalized} />
   }
-
-  // Codex-specific variants — minimal first-class rendering so tool
-  // calls, searches, shell commands, and image generations show up
-  // live from the proxy stream instead of waiting for rollout to
-  // catch up. Each variant shows what it IS (tool name / command /
-  // query / status) without trying to reinvent the full rollout-
-  // rendered card; rollout's reducer writes the canonical final
-  // version to the feed, and these live rows fill in the "right now"
-  // gap. Ordered from highest-frequency (function_call) to lowest.
 
   if (block.kind === 'function_call' || block.kind === 'custom_tool_call') {
 

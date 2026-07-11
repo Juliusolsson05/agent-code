@@ -198,7 +198,11 @@ const claudeCapabilities: RendererProviderCapabilities = {
   // Claude fanout: `Agent` tool_use, plus MCP-orchestrated spawns that arrive
   // prefixed. The bare `orchestration_create_agent` is codex's (see below), so
   // the fleet-row union still covers it.
-  isSpawnTool: (name) => name === 'Agent' || isMcpOrchestrationCreateAgent(name),
+  // 'Agent' is what this CLI generation records (verified: 184 hits in
+  // recent local transcripts, zero 'Task'); 'Task' is the newer upstream
+  // vocabulary for the same subagent fanout — accept both so a CLI
+  // update can't silently kill every subagent card again.
+  isSpawnTool: (name) => name === 'Agent' || name === 'Task' || isMcpOrchestrationCreateAgent(name),
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
   composerSubmit: claudeComposerSubmit,

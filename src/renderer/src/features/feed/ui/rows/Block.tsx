@@ -46,6 +46,7 @@ import {
   SlashCommandRow,
   isSlashCommandText,
 } from '@renderer/features/feed/ui/artifacts/slashCommand'
+import { ThinkingBlock } from '@renderer/features/feed/ui/artifacts/thinking'
 import { TodoCard, todoFromCommitted } from '@renderer/features/feed/ui/artifacts/todo'
 import { WebCard, webFromCommitted } from '@renderer/features/feed/ui/artifacts/web'
 import {
@@ -124,36 +125,15 @@ export const Block = memo(function Block({
       return role === 'user' ? <UserBand>{row}</UserBand> : row
     }
     case 'thinking': {
-      // Persisted thinking block. Anthropic strips the plaintext from
-      // the final message (only `signature` ciphertext survives), so
-      // text is ALMOST ALWAYS empty in committed transcripts. Old
-      // behaviour was to render a placeholder `∴ Thinking` row; now
-      // we render nothing and let the WorkIndicator (while live) and
-      // the absence of content (after the fact) speak for themselves.
-      //
-      // Non-empty thinking on a committed block does still exist
-      // (older sessions, non-Opus-4 models, synthetic entries). Keep
-      // the expandable surface for those — aligned with the live
-      // branch above, `<details>` closed by default.
-      //
-      // See docs/superpowers/plans/2026-04-18-thinking-indicator-rework.md.
+      // Persisted thinking is ALMOST ALWAYS empty (Anthropic strips the
+      // plaintext; only signature ciphertext survives) — ThinkingBlock
+      // renders nothing for empty text. Non-empty committed thinking
+      // (older sessions, synthetic entries) keeps the collapsed details.
       const text = (block as { thinking?: string }).thinking ?? ''
-      if (!text) return null
-      return (
-        <MarkerRow marker="⏺" tone="muted">
-          <details className="text-muted text-[12px]">
-            <summary className="cursor-pointer select-none italic">
-              ∴ Thinking
-              <span className="ml-2 not-italic text-ink-dim opacity-70">
-                (click to expand)
-              </span>
-            </summary>
-            <div className="mt-1.5 text-ink-dim opacity-80">
-              <TextProse text={text} />
-            </div>
-          </details>
-        </MarkerRow>
-      )
+      return <ThinkingBlock text={text} />
+    }
+    case 'redacted_thinking': {
+      return <ThinkingBlock text="" redacted />
     }
     case 'image': {
       return <ImageBlockRow block={block} role={role} />
