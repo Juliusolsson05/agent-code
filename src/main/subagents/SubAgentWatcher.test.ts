@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { SubAgentState } from '@preload/api/types.js'
-import { SubAgentWatcher } from './SubAgentWatcher'
+import { SubAgentWatcher } from './SubAgentWatcher.js'
 
 const tmpDirs: string[] = []
 

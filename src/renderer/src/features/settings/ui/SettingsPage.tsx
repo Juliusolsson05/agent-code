@@ -3,12 +3,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_SCHEMA_JSON,
-  type CustomAppearanceColors,
   parseCustomAppearanceJson,
   stringifyCustomAppearance,
 } from '@renderer/app-state/settings/customAppearance'
+import type { CustomAppearanceColors } from '@renderer/app-state/settings/customAppearance'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
+import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import { getSettingsRegistry, matchesSettingQuery } from '@renderer/features/settings/lib/settingsRegistry'
 import { SettingsList } from '@renderer/features/settings/ui/SettingsList'
 import { SettingsSearch } from '@renderer/features/settings/ui/SettingsSearch'

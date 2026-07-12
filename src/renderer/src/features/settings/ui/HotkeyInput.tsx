@@ -8,8 +8,8 @@ import {
   isModifierKey,
   modifierOnlyBinding,
   updateHeldModifier,
-  type HeldModifiers,
 } from '@renderer/lib/hotkeyBinding'
+import type { HeldModifiers } from '@renderer/lib/hotkeyBinding'
 
 type Props = {
   value: string

@@ -1,4 +1,5 @@
-import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
+import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 
 type Props = {
   selectedCategory: SettingCategoryId | 'all'

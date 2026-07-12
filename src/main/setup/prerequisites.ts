@@ -4,10 +4,8 @@ import type {
   SetupToolStatus,
 } from '@shared/types/setup.js'
 import { isExecutable, resolveToolPath } from '@main/setup/binaryResolver.js'
-import {
-  isBundledArchiveAvailable,
-  type BundledToolId,
-} from '@main/setup/runtimeTools.js'
+import { isBundledArchiveAvailable } from '@main/setup/runtimeTools.js'
+import type { BundledToolId } from '@main/setup/runtimeTools.js'
 import { loadSetupState, updateToolPaths } from '@main/setup/setupState.js'
 import { listProviderSetupDescriptors } from '@providers/registry.setup.js'
 import { AGENT_PROVIDER_KINDS } from '@shared/types/providerKind.js'

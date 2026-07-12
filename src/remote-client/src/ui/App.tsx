@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import {
-  WebSocketSessionFeed,
-  type ConnectionState,
-} from '../WebSocketSessionFeed'
+import { WebSocketSessionFeed } from '../WebSocketSessionFeed'
+import type { ConnectionState } from '../WebSocketSessionFeed'
 import { TranscriptStore } from '../transcript/store'
 import {
   clearToken,
@@ -15,11 +13,8 @@ import {
 } from '../pairing'
 import { PairScreen } from './PairScreen'
 import { SessionList } from './SessionList'
-import {
-  EMPTY_MOBILE_COMPOSER_STATE,
-  SessionView,
-  type MobileComposerState,
-} from './SessionView'
+import { EMPTY_MOBILE_COMPOSER_STATE, SessionView } from './SessionView'
+import type { MobileComposerState } from './SessionView'
 
 // Phone app shell. Three states, one screen each:
 //   no token            → PairScreen (QR hash auto-redeem or manual code)

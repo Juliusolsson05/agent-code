@@ -1,9 +1,9 @@
 import { ipcRenderer } from 'electron'
-import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
+import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git.js'
 import type {
   WorktreeActivityIndexStatus,
   WorktreeActivitySummary,
-} from '@preload/api/types'
+} from '@preload/api/types.js'
 // Single source of truth for the GitBar `git:status` payload. The main handler
 // (`src/main/ipc/git.ts`) annotates its return with the same type, so a field
 // change there is a compile error here and in the renderer rather than a silent

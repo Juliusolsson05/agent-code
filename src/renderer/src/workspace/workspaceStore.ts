@@ -8,7 +8,8 @@
 //
 // Prefer importing from './hook' directly in new code.
 
-export { useWorkspace, type Workspace } from '@renderer/workspace/hook'
+export { useWorkspace } from '@renderer/workspace/hook'
+export type { Workspace } from '@renderer/workspace/hook'
 
 // -----------------------------------------------------------------------------
 // Backward-compat re-exports.

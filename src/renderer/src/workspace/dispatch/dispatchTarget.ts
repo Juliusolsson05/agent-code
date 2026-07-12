@@ -1,8 +1,8 @@
 import {
   buildVisibleDispatchRows,
   selectVisibleDispatchRow,
-  type DispatchAgentRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import type { SessionId, TabId, WorkspaceState } from '@renderer/workspace/types'
 
 export type DispatchVisualTarget = {

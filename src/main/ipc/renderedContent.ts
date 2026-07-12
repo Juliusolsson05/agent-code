@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 
-import { openAllowedExternalUrl, type ExternalOpenResult } from '@main/window/externalNavigation.js'
+import { openAllowedExternalUrl } from '@main/window/externalNavigation.js'
+import type { ExternalOpenResult } from '@main/window/externalNavigation.js'
 
 export function registerRenderedContentIpc(): void {
   ipcMain.handle(

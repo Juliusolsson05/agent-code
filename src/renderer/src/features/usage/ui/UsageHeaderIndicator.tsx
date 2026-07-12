@@ -5,9 +5,8 @@ import {
   headerTooltip,
   toHeaderProviders,
   worstAcross,
-  type HeaderProvider,
-  type HeaderRow,
 } from '@renderer/features/usage/model/headerRows'
+import type { HeaderProvider, HeaderRow } from '@renderer/features/usage/model/headerRows'
 import {
   formatPercent,
   formatResetShort,

@@ -6,7 +6,8 @@
 
 import type { ComponentType } from 'react'
 import type { RendererProviderConfig } from '@shared/types/providerConfig'
-import { type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
+import { isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { TileLeaf } from '@renderer/workspace/tile-tree/TileLeaf'
 import type { TileLeafProps } from '@shared/types/providerConfig'
 import {

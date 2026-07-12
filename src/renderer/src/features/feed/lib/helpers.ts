@@ -1,11 +1,11 @@
-import {
-  isConversationEntry,
-  type CompactSummaryEntry,
-  type ContentBlock,
-  type ConversationEntry,
-  type Entry,
-  type ToolResultBlock,
-  type ToolUseBlock,
+import { isConversationEntry } from '@shared/types/transcript'
+import type {
+  CompactSummaryEntry,
+  ContentBlock,
+  ConversationEntry,
+  Entry,
+  ToolResultBlock,
+  ToolUseBlock,
 } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import { asRecord } from '@shared/lib/asRecord'

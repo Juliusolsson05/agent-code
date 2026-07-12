@@ -1,4 +1,5 @@
-import { useMemo, useRef, type MutableRefObject } from 'react'
+import { useMemo, useRef } from 'react'
+import type { MutableRefObject } from 'react'
 
 import { UndoCloseStack } from '@renderer/lib/undoClose'
 import type { SessionRuntime } from '@renderer/session-runtime/state'

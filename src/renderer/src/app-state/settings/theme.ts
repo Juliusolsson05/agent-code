@@ -1,9 +1,5 @@
-import {
-  ACCENTS,
-  FONT_FAMILIES,
-  isDarkThemeMode,
-  type Settings,
-} from '@renderer/app-state/settings/types'
+import { ACCENTS, FONT_FAMILIES, isDarkThemeMode } from '@renderer/app-state/settings/types'
+import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_COLOR_KEYS,
   CUSTOM_APPEARANCE_CSS_VARS,

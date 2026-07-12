@@ -8,10 +8,8 @@ import { ComposerInput } from '@renderer/workspace/tile-tree/TileLeaf/ComposerIn
 import { useComposerAutoGrow } from '@renderer/workspace/tile-tree/TileLeaf/useComposerAutoGrow'
 import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
-import {
-  conditionStateByKind,
-  type ClaudeAskUserQuestionState,
-} from '@shared/types/providerConditions'
+import { conditionStateByKind } from '@shared/types/providerConditions'
+import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
 import { ConditionOutlet } from '@shared/conditions-core/ConditionOutlet'
 import type { ConditionAction, ConditionSnapshot } from '@shared/conditions-core/contract'

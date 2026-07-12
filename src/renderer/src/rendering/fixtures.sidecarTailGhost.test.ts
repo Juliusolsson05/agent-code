@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { collectCommittedCandidates } from '@renderer/rendering/observations/committed'
-import {
-  createSessionLedger,
-  type GhostLedgerCandidate,
-  type LedgerInput,
-} from '@renderer/rendering/model/ledger'
+import { createSessionLedger } from '@renderer/rendering/model/ledger'
+import type { GhostLedgerCandidate, LedgerInput } from '@renderer/rendering/model/ledger'
 import type { GhostPredicateContext } from '@renderer/rendering/model/ghostPredicate'
 import type { RenderCandidate } from '@renderer/rendering/model/types'
 

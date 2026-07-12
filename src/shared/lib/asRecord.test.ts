@@ -5,7 +5,7 @@ import {
   asRecordArray,
   isRecord,
   parseJsonRecord,
-} from '@shared/lib/asRecord'
+} from '@shared/lib/asRecord.js'
 
 describe('asRecord helpers', () => {
   it('accepts plain objects and rejects null, primitives, and arrays', () => {

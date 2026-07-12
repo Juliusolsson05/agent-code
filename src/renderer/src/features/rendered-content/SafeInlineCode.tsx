@@ -1,4 +1,5 @@
-import { useCallback, useContext, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useContext } from 'react'
+import type { MouseEvent, ReactNode } from 'react'
 
 import { classifyInlineCodeFileTarget } from '@shared/renderedContent/targets'
 

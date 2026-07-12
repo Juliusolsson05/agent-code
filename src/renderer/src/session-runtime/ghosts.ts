@@ -80,11 +80,13 @@ import {
   orphanGhost as orphanGhostRecord,
   supersedeGhost,
   updateGhost,
-  type ClaudeContentBlock,
-  type ClaudeToolUseBlock,
-  type ClaudeTextBlock,
-  type ClaudeThinkingBlock,
-  type GhostEntry,
+} from 'agent-transcript-parser/ghost'
+import type {
+  ClaudeContentBlock,
+  ClaudeToolUseBlock,
+  ClaudeTextBlock,
+  ClaudeThinkingBlock,
+  GhostEntry,
 } from 'agent-transcript-parser/ghost'
 
 import type { Entry } from '@shared/types/transcript'

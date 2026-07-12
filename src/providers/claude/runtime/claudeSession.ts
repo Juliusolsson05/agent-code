@@ -12,19 +12,18 @@ import type {
   PromptAcceptanceOutcome,
   PromptAcceptanceWaiter,
 } from '@shared/types/session.js'
-import {
-  ClaudeCodeHeadless,
-  createProxyServer,
-  type ClaudeConditionSnapshot,
-  type ConditionCustomAction,
-  type CompactionState,
-  type DriveResult,
-  type JsonlEntry,
-  type PermissionPromptState,
-  type ProxyServer,
-  type ResumePromptState,
-  type SemanticEvent,
-  type TrustDialogState,
+import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
+import type {
+  ClaudeConditionSnapshot,
+  ConditionCustomAction,
+  CompactionState,
+  DriveResult,
+  JsonlEntry,
+  PermissionPromptState,
+  ProxyServer,
+  ResumePromptState,
+  SemanticEvent,
+  TrustDialogState,
 } from 'claude-code-headless'
 
 export type ClaudeSessionOptions = {
@@ -778,7 +777,7 @@ export class ClaudeSession extends EventEmitter {
   }
 
   private resolvePromptAcceptance(entry: JsonlEntry, cursor: number): void {
-    const value = entry as unknown as Record<string, unknown>
+    const value = entry as Record<string, unknown>
     let kind: 'user' | 'queue' | null = null
     let content: string | null = null
     let entryId: string | undefined

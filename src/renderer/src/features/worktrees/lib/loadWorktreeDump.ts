@@ -1,4 +1,5 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { WorktreeActivityIndexStatus, WorktreeActivitySummary } from '@preload/index'
 import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
 import { matchWorktree } from '@shared/work-context/matching'

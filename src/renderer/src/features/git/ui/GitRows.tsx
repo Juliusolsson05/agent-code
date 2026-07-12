@@ -41,9 +41,8 @@ import {
   parseGitStatus,
   parseUnifiedDiff,
   stripAnsi,
-  type GitDiffFile,
-  type GitDiffLine,
 } from '@shared/git/gitParse'
+import type { GitDiffFile, GitDiffLine } from '@shared/git/gitParse'
 
 // ---------------------------------------------------------------------------
 // Shared chrome

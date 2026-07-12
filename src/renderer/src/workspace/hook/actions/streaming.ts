@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'
 import {

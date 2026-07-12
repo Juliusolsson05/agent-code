@@ -5,17 +5,14 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import {
-  createLedgerInputAdapter,
-  type RuntimeLedgerSlices,
-  type RuntimeSemanticTurn,
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import type {
+  RuntimeLedgerSlices,
+  RuntimeSemanticTurn,
 } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
-import {
-  parseRecording,
-  replayRecording,
-  type ReplayItemsProjection,
-} from '@renderer/rendering/replay/recordedSession'
+import { parseRecording, replayRecording } from '@renderer/rendering/replay/recordedSession'
+import type { ReplayItemsProjection } from '@renderer/rendering/replay/recordedSession'
 import {
   ledgerFeedContextFromRuntime,
   ledgerToFeedItems,
@@ -29,13 +26,8 @@ import {
 const projectItems: ReplayItemsProjection = (ledger, view, provider) =>
   ledgerToFeedItems(ledger, ledgerFeedContextFromRuntime(view, provider))
 import type { GhostLike } from '@renderer/rendering/observations/ghosts'
-import {
-  diffShadowUnits,
-  ledgerUnits,
-  unitKey,
-  type ShadowDivergence,
-  type ShadowUnit,
-} from '@renderer/rendering/shadow/shadowDiff'
+import { diffShadowUnits, ledgerUnits, unitKey } from '@renderer/rendering/shadow/shadowDiff'
+import type { ShadowDivergence, ShadowUnit } from '@renderer/rendering/shadow/shadowDiff'
 import type { RecordingEvent } from '@renderer/rendering/replay/redact'
 
 // ---------------------------------------------------------------------------

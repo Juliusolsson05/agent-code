@@ -1,9 +1,7 @@
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { AgentViewModeOverride, SessionKind } from '@renderer/workspace/types'
-import {
-  isAgentProviderKind,
-  type AgentProviderKind,
-} from '@shared/types/providerKind'
+import { isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type {
   RenderedViewLeaseFeature,
   SessionRuntime,

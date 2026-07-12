@@ -15,12 +15,8 @@ import type { AgentProviderKind } from '@shared/types/providerKind.js'
 // the `agent-transcript-parser` package so the parser stays
 // browser-buildable and has no Node dependencies.
 
-import {
-  rewindClaudeTranscript,
-  rewindCodexRollout,
-  type RewindClaudeAnchor,
-  type RewindCodexAnchor,
-} from 'agent-transcript-parser'
+import { rewindClaudeTranscript, rewindCodexRollout } from 'agent-transcript-parser'
+import type { RewindClaudeAnchor, RewindCodexAnchor } from 'agent-transcript-parser'
 import type {
   ClaudeEntry,
   CodexRolloutLine,

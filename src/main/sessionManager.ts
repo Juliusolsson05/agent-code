@@ -35,12 +35,8 @@ import type {
   ConditionCustomAction,
   ProviderConditionSnapshot,
 } from '@shared/types/providerConditions.js'
-import {
-  DEFAULT_PROVIDER,
-  isAgentProviderKind,
-  type AgentProviderKind,
-  type SessionKind,
-} from '@shared/types/providerKind.js'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'

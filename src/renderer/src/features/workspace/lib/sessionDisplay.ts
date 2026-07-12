@@ -1,4 +1,5 @@
-import { isAgentProviderKind, type SessionKind } from '@shared/types/providerKind'
+import { isAgentProviderKind } from '@shared/types/providerKind'
+import type { SessionKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 // Small display helpers shared by the workspace's search and
 // activity modals (PromptSearchModal, AgentActivityModal).

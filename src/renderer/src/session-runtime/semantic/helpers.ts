@@ -1,11 +1,11 @@
-import {
-  parseSemanticTodos,
-  type SemanticLiveTurn,
-  type SemanticRuntimeState,
-  type SemanticTodoItem,
-  type SessionRuntime,
-  type SessionStatus,
-  type SessionStatusSource,
+import { parseSemanticTodos } from '@renderer/session-runtime/state'
+import type {
+  SemanticLiveTurn,
+  SemanticRuntimeState,
+  SemanticTodoItem,
+  SessionRuntime,
+  SessionStatus,
+  SessionStatusSource,
 } from '@renderer/session-runtime/state'
 
 // ---------------------------------------------------------------------------

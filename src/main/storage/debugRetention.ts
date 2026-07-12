@@ -14,11 +14,8 @@ import {
   STATE_DIR,
 } from '@main/storage/paths.js'
 import { ghostLogDir } from '@main/ghostJournal.js'
-import {
-  DEBUG_BUNDLE_LOG_FILE,
-  isAutosaveDebugBundleReason,
-  type DebugBundleLogEntry,
-} from '@main/storage/debugBundleLog.js'
+import { DEBUG_BUNDLE_LOG_FILE, isAutosaveDebugBundleReason } from '@main/storage/debugBundleLog.js'
+import type { DebugBundleLogEntry } from '@main/storage/debugBundleLog.js'
 
 const GIB = 1024 * 1024 * 1024
 const DEFAULT_TTL_HOURS = 48

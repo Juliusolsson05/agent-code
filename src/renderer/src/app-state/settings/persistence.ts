@@ -6,10 +6,12 @@ import {
   THEME_MODES,
   USAGE_HEADER_LEVELS,
   WORKSPACE_MODES,
-  type AccentId,
-  type FontFamilyId,
-  type Settings,
-  type UsageHeaderLevel,
+} from '@renderer/app-state/settings/types'
+import type {
+  AccentId,
+  FontFamilyId,
+  Settings,
+  UsageHeaderLevel,
 } from '@renderer/app-state/settings/types'
 import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'

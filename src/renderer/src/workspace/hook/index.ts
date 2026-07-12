@@ -24,7 +24,8 @@ import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
 import { useAutoSave } from '@renderer/workspace/hook/persistence/useAutoSave'
-import { useBootstrap, type WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
+import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
+import type { WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
 import { useFeedDebugPersist } from '@renderer/workspace/hook/persistence/useFeedDebugPersist'
 import {
   usePickerSanity,

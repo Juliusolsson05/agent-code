@@ -1,11 +1,8 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
-import {
-  buildPreviewModel,
-  countUserTurns,
-  type PreviewModel,
-} from '@renderer/features/session-preview/previewModel'
+import { buildPreviewModel, countUserTurns } from '@renderer/features/session-preview/previewModel'
+import type { PreviewModel } from '@renderer/features/session-preview/previewModel'
 import { PreviewTranscript } from '@renderer/features/session-preview/ui/PreviewTranscript'
 
 // SessionPreviewPane — the right-hand "you see the conversation before

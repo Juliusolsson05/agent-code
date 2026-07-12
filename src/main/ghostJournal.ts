@@ -57,7 +57,8 @@ import { createRequire } from 'node:module'
 import { createInterface } from 'node:readline'
 import { dirname, join } from 'node:path'
 
-import { isGhost, type GhostEntry } from 'agent-transcript-parser/ghost'
+import { isGhost } from 'agent-transcript-parser/ghost'
+import type { GhostEntry } from 'agent-transcript-parser/ghost'
 
 import { STATE_DIR } from '@main/storage/paths.js'
 

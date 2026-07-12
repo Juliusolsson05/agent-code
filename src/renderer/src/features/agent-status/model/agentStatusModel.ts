@@ -1,4 +1,5 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { normalizeSessionBuiltInMcpDomains } from '@renderer/workspace/mcpDomains'
 import {
   buildVisibleDispatchRows,

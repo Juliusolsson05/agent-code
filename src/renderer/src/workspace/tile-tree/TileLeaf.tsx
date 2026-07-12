@@ -1,9 +1,9 @@
-import {
-  conditionStateByKind,
-  type ClaudeAskUserQuestionState,
-} from '@shared/types/providerConditions'
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { conditionStateByKind } from '@shared/types/providerConditions'
+import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useGlobalToast } from '@renderer/ui/GlobalToast'

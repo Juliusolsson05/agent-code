@@ -21,13 +21,13 @@
 
 import { EventEmitter } from 'events'
 
-import {
-  OpencodeHeadless,
-  type CommittedEntryEvent,
-  type ScreenActivityEvent,
-  type ScreenPermissionEvent,
-  type ScreenQuestionEvent,
-  type SemanticEvent,
+import { OpencodeHeadless } from 'opencode-headless'
+import type {
+  CommittedEntryEvent,
+  ScreenActivityEvent,
+  ScreenPermissionEvent,
+  ScreenQuestionEvent,
+  SemanticEvent,
 } from 'opencode-headless'
 import type {
   AgentSession,

@@ -5,10 +5,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import {
-  createLedgerInputAdapter,
-  type RuntimeLedgerSlices,
-} from '@renderer/rendering/adapter/collectLedgerInput'
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { GhostLike } from '@renderer/rendering/observations/ghosts'
 import {
@@ -16,9 +14,11 @@ import {
   ledgerUnits,
   legacyUnits,
   unitKey,
-  type LegacyItemLike,
-  type ShadowDivergence,
-  type ShadowUnit,
+} from '@renderer/rendering/shadow/shadowDiff'
+import type {
+  LegacyItemLike,
+  ShadowDivergence,
+  ShadowUnit,
 } from '@renderer/rendering/shadow/shadowDiff'
 
 // ---------------------------------------------------------------------------

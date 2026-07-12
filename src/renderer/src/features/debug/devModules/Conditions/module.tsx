@@ -28,10 +28,10 @@ import type {
   SemanticLiveBlock,
   SemanticLiveTurn,
 } from '@renderer/session-runtime/state'
-import {
-  conditionStateByKind,
-  type ClaudeAskUserQuestionState,
-  type ProviderConditionSnapshot,
+import { conditionStateByKind } from '@shared/types/providerConditions'
+import type {
+  ClaudeAskUserQuestionState,
+  ProviderConditionSnapshot,
 } from '@shared/types/providerConditions'
 
 export const conditionsDebugModule: DevDebugModule = {

@@ -10,11 +10,8 @@ import { STATE_DIR } from '@main/storage/paths.js'
 import { detectCliInstallMethod } from '@main/setup/cliInstallMethod.js'
 import { queryLatestVersion } from '@main/setup/cliLatestVersion.js'
 import { compareSemver, readInstalledVersion, severity } from '@main/setup/cliVersion.js'
-import {
-  loadSetupState,
-  updateCliUpdateCache,
-  type CliUpdateCacheEntry,
-} from '@main/setup/setupState.js'
+import { loadSetupState, updateCliUpdateCache } from '@main/setup/setupState.js'
+import type { CliUpdateCacheEntry } from '@main/setup/setupState.js'
 import { runShellCommand } from '@main/setup/shell.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import type { SessionManager } from '@main/sessionManager.js'
