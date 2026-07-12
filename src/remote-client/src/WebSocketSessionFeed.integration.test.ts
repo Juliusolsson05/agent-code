@@ -147,6 +147,26 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     expect(manager.write).not.toHaveBeenCalled()
   })
 
+  it('preserves retry-unsafe delivery metadata across the WebSocket reply', async () => {
+    manager.deliverPromptToAgent = vi.fn(async () => ({
+      ok: false as const,
+      stage: 'after-enter' as const,
+      code: 'acceptance-timeout' as const,
+      message: 'uncertain',
+      retrySafe: false,
+      promptWritten: true,
+      enterWritten: true,
+    }))
+    const f = makeFeed()
+    await waitForOpen(f)
+    await expect(f.deliverPrompt('s1', 'maybe')).resolves.toMatchObject({
+      ok: false,
+      code: 'acceptance-timeout',
+      retrySafe: false,
+      promptWritten: true,
+    })
+  })
+
   it('sendInput translates submit/interrupt/paste and rejects raw bytes', async () => {
     const f = makeFeed()
     await waitForOpen(f)

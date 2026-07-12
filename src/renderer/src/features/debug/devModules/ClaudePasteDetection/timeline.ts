@@ -82,9 +82,9 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
         ? 'error'
         : timedOut
           ? 'pending'
-          : submitCr || singleWrite || mainEnter
+          : submitCr || singleWrite
         ? 'submitted'
-        : enter
+        : enter || mainEnter
           ? 'pending'
           : 'unknown'
 

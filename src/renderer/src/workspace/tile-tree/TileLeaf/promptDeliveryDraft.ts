@@ -9,3 +9,10 @@
 export function draftAfterAcceptance(current: string, submitted: string): string {
   return current === submitted ? '' : current
 }
+
+export function imagesAfterAcceptance<T extends { id: string }>(
+  current: T[],
+  submittedIds: ReadonlySet<string>,
+): T[] {
+  return current.filter(image => !submittedIds.has(image.id))
+}

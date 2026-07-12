@@ -55,4 +55,37 @@ describe('ClaudeSession prompt acceptance', () => {
     resolve(5)
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
   })
+
+  it('does not acknowledge image-only delivery from an unrelated empty tool-result user entry', async () => {
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance('', { requiresImage: true })
+    const resolve = (entry: unknown, cursor: number): void => {
+      ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+        .resolvePromptAcceptance(entry, cursor)
+    }
+    resolve({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', content: 'done' }] },
+    }, 1)
+    resolve({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'image', source: {} }] },
+    }, 2)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  it('rejects an identical entry timestamped before the waiter armed', async () => {
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance('continue')
+    const resolve = (timestamp: string, cursor: number): void => {
+      ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+        .resolvePromptAcceptance({
+          type: 'user', timestamp,
+          message: { role: 'user', content: 'continue' },
+        }, cursor)
+    }
+    resolve('2000-01-01T00:00:00.000Z', 1)
+    resolve(new Date(Date.now() + 1).toISOString(), 2)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
 })

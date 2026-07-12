@@ -404,7 +404,12 @@ export class WebSocketSessionFeed implements SessionFeed {
         if (!pending) return
         this.pending.delete(frame.id)
         clearTimeout(pending.timer)
-        pending.resolve({ ok: frame.ok, error: frame.error, result: frame.result })
+        pending.resolve({
+          ok: frame.ok,
+          error: frame.error,
+          result: frame.result,
+          delivery: frame.delivery,
+        })
         return
       }
       case 'hello': {

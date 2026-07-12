@@ -26,6 +26,8 @@ describe('SessionManager prompt delivery reservation', () => {
     })
 
     const first = manager.deliverPromptToAgent('s1', 'first')
+    expect(manager.write('s1', '.')).toBe(false)
+    expect(manager.write('s1', '\x1b[200~other\x1b[201~\r')).toBe(false)
     const second = await manager.deliverPromptToAgent('s1', 'second')
 
     expect(second).toMatchObject({
@@ -87,7 +89,7 @@ describe('SessionManager prompt delivery reservation', () => {
       kind: 'claude', session,
     })
     await expect(manager.deliverPromptToAgent('s1', 'first')).resolves.toMatchObject({
-      ok: false, retrySafe: false,
+      ok: false, retrySafe: true, promptWritten: false, enterWritten: false,
     })
     await expect(manager.deliverPromptToAgent('s1', 'second')).resolves.toMatchObject({ ok: true })
   })

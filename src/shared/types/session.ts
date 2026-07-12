@@ -302,8 +302,12 @@ export interface AgentSession extends AgentSessionEmitter {
    */
   armPromptAcceptance?(
     prompt: string,
-    opts?: { timeoutMs?: number; aliases?: string[] },
+    opts?: { timeoutMs?: number; aliases?: string[]; requiresImage?: boolean },
   ): PromptAcceptanceWaiter
+
+  /** Claude's bootstrap JSONL replay must quiesce before a new waiter can be
+   * armed, otherwise a historical identical entry can acknowledge new bytes. */
+  isPromptAcceptanceReady?(): boolean
 
   /** Optional (Codex today): wait for the composer to be ready to
    *  accept a prompt (past the startup/trust chrome). See

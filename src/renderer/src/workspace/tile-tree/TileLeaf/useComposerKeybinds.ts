@@ -21,7 +21,7 @@ import { hasActionCondition } from '@renderer/workspace/conditions/selectors'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig'
-import { draftAfterAcceptance } from './promptDeliveryDraft'
+import { draftAfterAcceptance, imagesAfterAcceptance } from './promptDeliveryDraft'
 
 // The big onKeyDown handler for the composer textarea.
 //
@@ -132,6 +132,7 @@ export function useComposerKeybinds({
     hasModifier = false,
   ) => {
     const draftImages = runtime.draftImages
+    const submittedImageIds = new Set(draftImages.map(image => image.id))
     if (draftImages.length === 0 && isLocalUsageCommand()) {
       await openLocalUsageCommand(false)
       return
@@ -239,7 +240,13 @@ export function useComposerKeybinds({
       }
       workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
       if (caps.supportsImageAttachments && draftImages.length > 0) {
-        workspace.setDraftImages(sessionId, [])
+        workspace.setDraftImages(
+          sessionId,
+          imagesAfterAcceptance(
+            workspace.getRuntime(sessionId).draftImages,
+            submittedImageIds,
+          ),
+        )
       }
       // OUTCOME marks the end of the submit flow from the renderer's
       // POV. A real reader of the dump can compare this against

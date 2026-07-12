@@ -40,6 +40,13 @@ export async function deliverClaudePrompt(
       message: `Claude session ${io.sessionId} cannot observe prompt acceptance`,
     })
   }
+  if (io.session.isPromptAcceptanceReady?.() === false) {
+    return failure({
+      stage: 'before-write', code: 'not-ready', retrySafe: true,
+      promptWritten: false, enterWritten: false,
+      message: `Claude session ${io.sessionId} transcript replay has not quiesced`,
+    })
+  }
 
   if (io.imagePaths && io.imagePaths.length > 0) {
     return deliverClaudeImagePrompt(io)
@@ -135,6 +142,7 @@ async function deliverClaudeImagePrompt(
   const acceptance = io.session.armPromptAcceptance!(io.prompt, {
     timeoutMs: ACCEPTANCE_TIMEOUT_MS,
     aliases: [rawComposer],
+    requiresImage: io.prompt.length === 0,
   })
   io.record?.('acceptance-armed', { imageCount: imagePaths.length })
 

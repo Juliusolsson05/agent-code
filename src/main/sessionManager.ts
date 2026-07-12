@@ -952,7 +952,7 @@ export class SessionManager extends EventEmitter {
     // delivery state machine owns that composer, accepting Enter from a slash
     // path, remote submit, or raw terminal would let one operation submit
     // another's bytes. Provider-owned writes use writeReserved below.
-    if (data === '\r' && this.promptDeliveriesInFlight.has(sessionId)) return false
+    if (this.promptDeliveriesInFlight.has(sessionId)) return false
     const entry = this.sessions.get(sessionId)
     if (!entry) {
       // A silent miss here is brutal to debug from the renderer: the composer
@@ -1155,13 +1155,22 @@ export class SessionManager extends EventEmitter {
     }
     this.promptDeliveriesInFlight.add(sessionId)
     record?.('reserved')
+    let promptWritten = false
+    let enterWritten = false
     try {
       return await getMainProvider(entry.kind).deliverPrompt({
         session: entry.session,
         // WHY identity-check every delayed write: provider protocols await
         // absorption/readiness. A same-ID wake must never receive Enter from a
         // delivery that began against the process which just exited.
-        write: data => this.writeReserved(sessionId, entry, data),
+        write: data => {
+          const wrote = this.writeReserved(sessionId, entry, data)
+          if (wrote) {
+            if (data === '\r' || data.endsWith('\r')) enterWritten = true
+            if (data !== '\r') promptWritten = true
+          }
+          return wrote
+        },
         sessionId,
         prompt,
         imagePaths,
@@ -1171,16 +1180,16 @@ export class SessionManager extends EventEmitter {
       record?.('uncertain', { reason: 'provider-threw' })
       return {
         ok: false,
-        stage: 'after-enter',
+        stage: promptWritten || enterWritten ? 'after-enter' : 'before-write',
         code: 'transport-failed',
         message: `Prompt delivery failed unexpectedly: ${
           err instanceof Error ? err.message : String(err)
         }`,
         // The coordinator cannot know how far provider code progressed before
         // throwing. Conservatively forbid automatic retry.
-        retrySafe: false,
-        promptWritten: true,
-        enterWritten: true,
+        retrySafe: !promptWritten && !enterWritten,
+        promptWritten,
+        enterWritten,
       }
     } finally {
       this.promptDeliveriesInFlight.delete(sessionId)
