@@ -49,6 +49,8 @@ export type {
   SessionInfo,
   WorktreeActivityIndexStatus,
   WorktreeActivitySummary,
+  DictationApiKeyStatus,
+  DictationApiKeySetResult,
   DictationProvider,
   DictationHotkeyConfigureResult,
   DictationStartResult,

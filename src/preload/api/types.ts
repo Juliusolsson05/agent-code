@@ -93,6 +93,24 @@ export type DictationHotkeyConfigureResult =
   | { ok: true; binding: string; native: boolean }
   | { ok: false; binding: string; native: boolean; message?: string }
 
+/** UI-facing snapshot of the persisted Deepgram API key. The raw key is
+ *  NEVER returned across IPC — only enough metadata for the settings row
+ *  to render an accurate state. `hint` is the last-four characters when
+ *  present. See src/main/dictation/apiKeyStore.ts. */
+export type DictationApiKeyStatus = {
+  available: boolean
+  configured: boolean
+  source: 'settings' | 'env' | null
+  hint: string | null
+}
+
+/** Result of {@link Api.setDictationApiKey}. Failure carries the reason
+ *  so the settings row can render an inline error instead of pretending
+ *  success. */
+export type DictationApiKeySetResult =
+  | { ok: true; status: DictationApiKeyStatus }
+  | { ok: false; message: string }
+
 export type DictationStreamTranscriptEvent = {
   id: string
   text: string

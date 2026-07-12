@@ -684,7 +684,20 @@ async function startApp(): Promise<void> {
 
 app.on('window-all-closed', () => {
   void manager?.killAll()
-  void builtInMcpHost.stop()
+  // WHY we do NOT stop the built-in MCP host on macOS here (packaged-app fix):
+  //
+  // On macOS, closing the last window does not quit the app — Electron keeps
+  // the process alive so `activate` can create a fresh window (Dock icon
+  // click, reopen from Cmd-Tab, etc.). We previously called
+  // `builtInMcpHost.stop()` here unconditionally, which nulled the internal
+  // HTTP server. The next session:spawn on the reborn window then threw
+  // "Built-in MCP host must be started before registering a session" from
+  // BuiltInMcpHttpHost.registerSession, which cascaded into a partial
+  // workspace restore and the AUTOSAVE-OFF banner. There is no equivalent
+  // teardown path that restarts the host, so on macOS we simply keep it
+  // running while the process is alive; `before-quit` still stops it on
+  // real shutdown. On non-macOS platforms we're about to quit anyway, so
+  // stopping here is redundant with the `before-quit` handler.
   void remoteController?.dispose()
   void lspManager.dispose()
   // WHY we release caffeinate here even though macOS keeps the app process

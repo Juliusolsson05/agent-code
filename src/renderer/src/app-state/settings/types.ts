@@ -339,7 +339,22 @@ export const DEFAULT_SETTINGS: Settings = {
   useProxyStreaming: false,
   dictationEnabled: false,
   dictationProvider: 'deepgram',
-  dictationShortcut: 'Fn',
+  // WHY the default binding is Cmd+Shift+D and not Fn (packaged-mode fix):
+  // the Fn key can only be captured on macOS via a CGEventTap, which
+  // requires the app to hold the Accessibility permission — an OS-level
+  // prompt every user gets on first launch. Wispr Flow's own docs confirm
+  // the same constraint and use Ctrl+Opt as their fallback for exactly
+  // this reason. Shipping Fn as the default meant every packaged Agent
+  // Code launch nagged for Accessibility before the user had chosen to
+  // enable dictation at all. Cmd+Shift+D is a plain keyboard accelerator
+  // that main can register via Electron globalShortcut with NO OS prompt
+  // at all; power users can still switch to Fn from Settings, which
+  // re-arms the Accessibility-gated CGEventTap helper. The literal string
+  // matches the hotkeyBinding.ts vocabulary (see modifierParts + the
+  // `mod-shift-d -> Cmd+Shift+D` alias in coerceHotkeyBinding) so it
+  // round-trips through the settings persistence layer without any
+  // special-casing.
+  dictationShortcut: 'Cmd+Shift+D',
   aggressiveDebugPersistence: false,
   defaultWorkspaceMode: 'grid',
   agentViewMode: 'agent',
