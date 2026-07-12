@@ -28,8 +28,8 @@ components/
   ui/
     button.tsx
     dialog.tsx
-    field.tsx
     input.tsx
+    label.tsx
     textarea.tsx
 ```
 
@@ -74,8 +74,8 @@ not created merely because shadcn has one or because it might be useful later.
   `PromptSearchModal`, or `ComposerInput` do not move here. They should compose
   primitives from this directory.
 - Non-visual coordination that multiple input paths must query synchronously
-  belongs in `lib/`, not inside a visual component. For example, the planned
-  modal input-ownership guard should be a small shared module consumed by
+  belongs in `lib/`, not inside a visual component. The app interaction
+  ownership guard in `lib/interaction-ownership.ts` is consumed by
   `dialog.tsx`, global keybindings, composer routing, native-menu dispatch, and
   dictation.
 
@@ -111,7 +111,7 @@ solely to avoid editing locally owned code.
 
 ## Dialog-specific rule
 
-`dialog.tsx` will be based on the shadcn/Radix compound-component shape, but it
+`dialog.tsx` is based on the shadcn/Radix compound-component shape, but it
 also owns Agent Code's app-modal contract:
 
 - portal mounting;
@@ -160,10 +160,33 @@ For a new component:
 6. Remove generated infrastructure that is not needed here.
 7. Add interaction tests for behavior-bearing components.
 
-A root `components.json` should be added only when the first real CLI-assisted
-component lands and its aliases/token behavior have been verified. The config
-is operational tooling, not a badge proving that the directory follows the
-model.
+The root `components.json` points the shadcn CLI at this directory, the
+renderer aliases, and `styles.css`. Treat the config as operational tooling,
+not permission to run `shadcn init`: additions still require a concrete
+consumer and a reviewed diff.
+
+## Interaction ownership
+
+Every app-wide `DialogContent` automatically mounts
+`data-agent-code-interaction-owner="app"`. Global input ingress checks that
+marker synchronously before it can mutate a pane:
+
+- type-to-focus and paste-to-focus;
+- Enter-to-submit routing;
+- workspace shortcuts and native menu commands;
+- native dictation hotkey starts.
+
+Do not copy the marker into feature dialogs. The primitive owns it for exactly
+the same lifetime as its portal and focus trap. Full-screen application
+takeovers that are intentionally not dialogs (setup and new-agent placement)
+may mount the marker directly because they still own the app interaction turn.
+
+Pane-local provider strips are not dialogs and must not mount this marker.
+They receive the TileLeaf's `interactionActive` state through the condition
+outlet, focus their own root only for the active pane, and keep keyboard
+handlers on that root. A document-global listener in an inline strip can make
+a background approval answer the wrong agent and is therefore a contract
+violation.
 
 ## Anti-overengineering guardrails
 

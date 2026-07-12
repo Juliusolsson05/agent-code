@@ -11,6 +11,12 @@ import {
 } from 'react'
 import ReactMarkdown from 'react-markdown'
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import {
   buildHistoryScoreMap,
@@ -36,6 +42,7 @@ import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPic
 import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 // Canonical session listing shape. This was a local copy that DROPPED
@@ -93,6 +100,15 @@ export function CommandPalette() {
   } | null>(null)
 
   useEffect(() => window.api.onMenuCommand(commandId => {
+    // Native-menu IPC bypasses Radix's DOM focus trap and inert background.
+    // Check the same synchronous ownership marker as keyboard, paste, Enter,
+    // and dictation before mounting the heavy command implementation. Without
+    // this guard a File-menu click could mutate workspace state underneath an
+    // unrelated confirmation dialog even though every DOM input path was
+    // correctly blocked. When the command palette itself is open it also owns
+    // this marker, so menu commands wait instead of competing with its current
+    // search/navigation turn.
+    if (hasAppInteractionOwner()) return
     // WHY a native menu command temporarily mounts the open implementation:
     // command definitions need live workspace actions, but keeping that entire
     // registry subscribed while the palette is closed made every session delta
@@ -849,35 +865,6 @@ function OpenCommandPalette({
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (
-          mode === 'resume' ||
-          mode === 'buried' ||
-          mode === 'kill-buried' ||
-          mode === 'prompt-template' ||
-          mode === 'save-prompt-template' ||
-          mode === 'ai-workspace-open' ||
-          mode === 'ai-workspace-create' ||
-          mode === 'ai-workspace-clear'
-        ) {
-          setMode('commands')
-          setPromptTemplateForm({ id: null, title: '', body: '' })
-          setQuery('')
-          setSelectedIndex(0)
-          return
-        }
-        if (mode === 'edit-prompt-template') {
-          setMode('prompt-template')
-          setPromptTemplateForm({ id: null, title: '', body: '' })
-          setQuery('')
-          setSelectedIndex(0)
-          return
-        }
-        onClose()
-        return
-      }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setSelectedIndex(prev => Math.min(prev + 1, filteredLength - 1))
@@ -936,7 +923,6 @@ function OpenCommandPalette({
       clearAiWorkspace,
       openAiWorkspace,
       savePromptTemplateForm,
-      onClose,
     ],
   )
 
@@ -967,15 +953,15 @@ function OpenCommandPalette({
   })()
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-center"
-      onClick={onClose}
-      role="dialog"
-      aria-label="Command palette"
+    <Dialog
+      open
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
+      }}
     >
-      <div
+      <DialogContent
         className={`
-          mt-[12vh] flex flex-col
+          top-[12vh] translate-y-0 flex flex-col p-0
           bg-popover-bg border border-popover-border
           shadow-[0_16px_48px_var(--theme-shadow-color)]
           overflow-hidden
@@ -983,8 +969,27 @@ function OpenCommandPalette({
             ? 'w-[min(1180px,95vw)] max-h-[80vh]'
             : 'w-[min(900px,92vw)] max-h-[60vh]'}
         `}
-        onClick={e => e.stopPropagation()}
+        onEscapeKeyDown={event => {
+          // The palette has nested navigation modes. Escape first backs out
+          // of a mode; only the top-level command list dismisses the Dialog.
+          // Preventing Radix's close for those inner transitions preserves the
+          // established keyboard model without reimplementing global Escape.
+          if (mode === 'commands') return
+          event.preventDefault()
+          if (mode === 'edit-prompt-template') {
+            setMode('prompt-template')
+          } else {
+            setMode('commands')
+          }
+          setPromptTemplateForm({ id: null, title: '', body: '' })
+          setQuery('')
+          setSelectedIndex(0)
+        }}
       >
+        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogDescription className="sr-only">
+          Search application commands and related session workflows.
+        </DialogDescription>
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
           {mode === 'resume' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
@@ -1432,8 +1437,8 @@ function OpenCommandPalette({
             </aside>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
