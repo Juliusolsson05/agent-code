@@ -1,7 +1,7 @@
 import type { StateCreator } from 'zustand'
 
 import { applyTheme } from '@renderer/app-state/settings/theme'
-import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
+import { DEFAULT_SETTINGS, USAGE_HEADER_LEVELS } from '@renderer/app-state/settings/types'
 import type { AppStore, SettingsSlice } from '@renderer/app-state/types'
 
 // WHY this is seeded with defaults instead of reading a separate
@@ -61,4 +61,30 @@ export const createSettingsSlice: StateCreator<
       applyTheme(next)
       return { settings: next }
     }, false, 'settings/toggleWorktreeBadges'),
+  toggleUsageHeader: () =>
+    set(state => {
+      const next = {
+        ...state.settings,
+        usageHeaderEnabled: !state.settings.usageHeaderEnabled,
+      }
+      applyTheme(next)
+      return { settings: next }
+    }, false, 'settings/toggleUsageHeader'),
+  cycleUsageHeaderLevel: () =>
+    set(state => {
+      const index = USAGE_HEADER_LEVELS.indexOf(state.settings.usageHeaderLevel)
+      const next = {
+        ...state.settings,
+        // Circular walk of the canonical order (types.ts owns it).
+        usageHeaderLevel:
+          USAGE_HEADER_LEVELS[(index + 1) % USAGE_HEADER_LEVELS.length],
+        // Cycling while hidden also enables the header: a user reaching
+        // for "more usage detail" obviously wants the widget visible —
+        // silently rotating an invisible setting would look like the
+        // command does nothing.
+        usageHeaderEnabled: true,
+      }
+      applyTheme(next)
+      return { settings: next }
+    }, false, 'settings/cycleUsageHeaderLevel'),
 })
