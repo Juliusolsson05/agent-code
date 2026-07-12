@@ -252,7 +252,13 @@ function extractPartialJsonStringMember(raw: string, keys: string[]): string | n
  *  `{ raw: <patch grammar> }` shape parseApplyPatch understands —
  *  bare grammar, complete JSON wrapper, or partial JSON wrapper. */
 export function partialApplyPatchInput(raw: string): Record<string, unknown> {
-  if (raw.includes('*** Begin Patch')) return { raw }
+  // Bare grammar ONLY when the buffer actually starts with the patch
+  // header. `includes` alone fires on a JSON wrapper whose ESCAPED
+  // patch contains the marker literally (`{"cmd": "*** Begin Patch\n…`),
+  // returning the escaped buffer — whose newlines are two-char \n
+  // sequences parseApplyPatch can't split on — and making the partial
+  // string-member decode below unreachable (found by PR524 review).
+  if (raw.trimStart().startsWith('*** Begin Patch')) return { raw }
   const patch = extractPartialJsonStringMember(raw, [
     'cmd',
     'patch',
@@ -261,4 +267,130 @@ export function partialApplyPatchInput(raw: string): Record<string, unknown> {
     'arguments',
   ])
   return patch && patch.includes('*** Begin Patch') ? { raw: patch } : { raw, arguments: raw }
+}
+
+// ---------------------------------------------------------------------------
+// Unified exec — Codex's modern `exec` tool (custom_tool_call, name "exec")
+// ---------------------------------------------------------------------------
+// The input is not JSON: it is a JavaScript SCRIPT the model writes, e.g.
+//   const r = await tools.exec_command({"cmd":"sed -n '1,40p' x.ts", ...});
+//   text(r.output);
+// or
+//   const patch = "*** Begin Patch\n*** Update File: x.ts\n@@\n-a\n+b\n*** End Patch";
+//   text(await tools.apply_patch(patch));
+// Codex's own TUI renders the script's INTENT ("Edited x.ts (+7 -3)");
+// rendering the raw script as a generic card is exactly the regression a
+// 2026-07-12 debug bundle caught. This classifier extracts the intent so
+// the artifact layer can route to DiffCard / CommandCard. It must be
+// PARTIAL-SAFE: the script streams, so the embedded string literal /
+// JSON argument may be unterminated at any prefix.
+
+export type UnifiedExecAction =
+  | { kind: 'apply_patch'; patchText: string }
+  | { kind: 'exec_command'; input: ExecCommandInput }
+  | { kind: 'write_stdin'; chars: string }
+  | null
+
+/** Decode a JS double-quoted string literal starting just AFTER the
+ *  opening quote, tolerating an unterminated (still-streaming) tail.
+ *  JS escapes overlap JSON's for everything models emit here. */
+function decodeJsStringLiteral(script: string, start: number): string {
+  return decodePartialJsonStringBody(script, start)
+}
+
+/** Extract the first balanced {...} JSON object argument following
+ *  `marker` in the script. Returns the parsed object when complete;
+ *  null while the braces are still streaming (caller falls back to
+ *  partial string-member extraction). Brace matching skips string
+ *  literals so a "}" inside a cmd string can't end the scan early. */
+function jsonObjectArgAfter(script: string, marker: string): Record<string, unknown> | null {
+  const at = script.indexOf(marker)
+  if (at === -1) return null
+  const open = script.indexOf('{', at + marker.length)
+  if (open === -1) return null
+  let depth = 0
+  let inString = false
+  for (let i = open; i < script.length; i++) {
+    const ch = script[i]
+    if (inString) {
+      if (ch === '\\') i += 1
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') inString = true
+    else if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) {
+        try {
+          return JSON.parse(script.slice(open, i + 1)) as Record<string, unknown>
+        } catch {
+          return null
+        }
+      }
+    }
+  }
+  return null
+}
+
+export function classifyUnifiedExecScript(script: string): UnifiedExecAction {
+  if (!script) return null
+
+  // apply_patch first: an edit is the story even if the script also
+  // echoes output. The patch text lives in a string literal (either
+  // inline in the call or bound to a const) — find the literal that
+  // contains the patch header and decode it, partial-safe.
+  if (script.includes('tools.apply_patch')) {
+    const headerAt = script.indexOf('*** Begin Patch')
+    if (headerAt !== -1) {
+      const quoteAt = script.lastIndexOf('"', headerAt)
+      if (quoteAt !== -1) {
+        const patchText = decodeJsStringLiteral(script, quoteAt + 1)
+        if (patchText.includes('*** Begin Patch')) {
+          return { kind: 'apply_patch', patchText }
+        }
+      }
+    }
+    // Header hasn't streamed in yet — signal apply_patch with an empty
+    // patch so the card can show its header instead of a raw script.
+    return { kind: 'apply_patch', patchText: '' }
+  }
+
+  if (script.includes('tools.write_stdin')) {
+    const arg = jsonObjectArgAfter(script, 'tools.write_stdin')
+    const chars =
+      typeof arg?.chars === 'string'
+        ? arg.chars
+        : extractPartialJsonStringMember(script, ['chars']) ?? ''
+    return { kind: 'write_stdin', chars }
+  }
+
+  if (script.includes('tools.exec_command')) {
+    const arg = jsonObjectArgAfter(script, 'tools.exec_command')
+    const input = arg ? execCommandInput(arg) : null
+    if (input) return { kind: 'exec_command', input }
+    // Partial braces: pull what has streamed so far (cmd is the one
+    // that matters for the header; the metadata chips fill in later).
+    const cmd = extractPartialJsonStringMember(script, ['cmd', 'command'])
+    if (cmd !== null) {
+      return {
+        kind: 'exec_command',
+        input: { command: cmd, workdir: null, yieldTimeMs: null, maxOutputTokens: null },
+      }
+    }
+    return { kind: 'exec_command', input: { command: '…', workdir: null, yieldTimeMs: null, maxOutputTokens: null } }
+  }
+
+  return null
+}
+
+/** The unified-exec script text from a tool input, both planes:
+ *  committed rollout synthesis wraps the non-JSON script as { raw };
+ *  the live plane hands the raw argumentsJson buffer straight in. */
+export function unifiedExecScript(input: unknown): string {
+  if (typeof input === 'string') return input
+  const rec = asRecord(input)
+  if (typeof rec?.raw === 'string') return rec.raw
+  if (typeof rec?.input === 'string') return rec.input
+  return ''
 }

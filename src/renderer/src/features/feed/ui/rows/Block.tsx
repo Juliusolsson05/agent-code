@@ -58,8 +58,13 @@ import {
 import {
   RESULT_CONSUMING_FAMILIES,
   isLegacyProviderClaimed,
+  isUnifiedExecTool,
   routeFamily,
 } from '@renderer/features/feed/ui/resolve/registry'
+import {
+  classifyUnifiedExecScript,
+  unifiedExecScript,
+} from '@providers/codex/renderer/extractors'
 
 /* ---------- Block dispatcher ---------- */
 

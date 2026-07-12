@@ -122,8 +122,15 @@ export function collapseCarriageReturns(text: string): string {
   return text
     .split('\n')
     .map(line => {
-      const at = line.lastIndexOf('\r')
-      return at === -1 ? line : line.slice(at + 1)
+      // CRLF line endings: the \r is a line TERMINATOR, not a rewrite —
+      // strip it instead of collapsing, or every CRLF line (curl
+      // headers, Windows-origin output) collapses to the empty string
+      // after it (PR524 review, HIGH-1). Likewise a line that ENDS in
+      // \r mid-stream is a rewrite that hasn't arrived yet — keep the
+      // text before it visible, as a real terminal would.
+      const trimmed = line.endsWith('\r') ? line.slice(0, -1) : line
+      const at = trimmed.lastIndexOf('\r')
+      return at === -1 ? trimmed : trimmed.slice(at + 1)
     })
     .join('\n')
 }

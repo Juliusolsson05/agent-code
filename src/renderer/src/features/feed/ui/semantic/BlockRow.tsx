@@ -23,6 +23,7 @@ import {
   commandFromLive,
   genericFromLive,
 } from '@renderer/features/feed/ui/resolve/fromLive'
+import { classifyUnifiedExecScript } from '@providers/codex/renderer/extractors'
 import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
@@ -95,6 +96,29 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // ToolUseBlock shape the committed transcript uses, then delegate
     // to the committed Codex card. Streaming now means "same card
     // with partial input" instead of a separate raw-JSON UI.
+    // Modern Codex unified `exec`: the streaming input is a JS script —
+    // classify its intent so an edit paints the SAME DiffCard (growing
+    // as the patch literal streams) and a command paints the CommandCard,
+    // exactly like the classic tool names. Raw-script fallback only for
+    // unrecognized shapes.
+    if (block.toolName === 'exec') {
+      const action = classifyUnifiedExecScript(
+        block.argumentsJson ?? block.inputJson ?? '',
+      )
+      if (action?.kind === 'apply_patch') {
+        return (
+          <DiffCard
+            vm={fileEditFromLive(block, toolState, 'codex')}
+            toolName="apply_patch"
+          />
+        )
+      }
+      if (action) {
+        return <CommandCard vm={commandFromLive(block, toolState, 'codex')} />
+      }
+      return <GenericToolCard vm={genericFromLive(block, toolState, 'codex')} />
+    }
+
     if (block.toolName === 'apply_patch') {
       return (
         <DiffCard

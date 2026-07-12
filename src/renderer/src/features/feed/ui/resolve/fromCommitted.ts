@@ -3,8 +3,10 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
 import {
+  classifyUnifiedExecScript,
   codexResultMeta,
   parsedReadFromResult,
+  unifiedExecScript,
 } from '@providers/codex/renderer/extractors'
 import {
   prettifyToolName,
@@ -48,6 +50,40 @@ export function commandFromCommitted(
   result: ToolResultBlock | null,
   provider: AgentProviderKind,
 ): CommandArtifact {
+  // Codex unified `exec`: the input is a JS script; the command (or
+  // stdin write) lives inside it. Classify once and synthesize the
+  // same VM a plain exec_command would produce — the card must not
+  // know the wire changed.
+  if (tu.name === 'exec') {
+    const action = classifyUnifiedExecScript(unifiedExecScript(tu.input))
+    const { exitCode, cwd: metaCwd } = codexResultMeta(result)
+    const exec = action?.kind === 'exec_command' ? action.input : null
+    return {
+      family: 'command',
+      id: `cmd:${tu.id}`,
+      provider,
+      status: committedStatus(result, exitCode),
+      plane: 'committed',
+      toolUseId: tu.id,
+      startedAt: null,
+      endedAt: null,
+      command:
+        action?.kind === 'write_stdin'
+          ? '(stdin)'
+          : exec?.command ?? '(no command)',
+      cwd: metaCwd ?? exec?.workdir ?? null,
+      description: null,
+      sourceTool: action?.kind === 'write_stdin' ? 'write_stdin' : 'exec_command',
+      output: result ? toolResultText(result) : null,
+      exitCode,
+      durationMs: null,
+      yieldTimeMs: exec?.yieldTimeMs ?? null,
+      maxOutputTokens: exec?.maxOutputTokens ?? null,
+      stdinWrites: action?.kind === 'write_stdin' ? [action.chars] : [],
+      parsedRead: parsedReadFromResult(result),
+    }
+  }
+
   const input = asRecord(tu.input)
   const { exitCode, cwd: metaCwd } = codexResultMeta(result)
   const stdin =

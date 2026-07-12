@@ -11,9 +11,11 @@ import {
   partialEditInput,
 } from '@providers/claude/renderer/extractors'
 import {
+  classifyUnifiedExecScript,
   parseApplyPatch,
   partialApplyPatchInput,
   patchChangesFromResult,
+  unifiedExecScript,
 } from '@providers/codex/renderer/extractors'
 
 import { CodeRenderContext } from '@renderer/features/feed/context'
@@ -77,8 +79,16 @@ export function fileEditFromCommitted(
     filePath = input.filePath || null
     diffs = input.edits.map(e => diffLines(e.oldString, e.newString))
   } else {
-    // apply_patch
-    patchFiles = parseApplyPatch(tu.input).map(f => ({
+    // apply_patch — either the classic tool or a unified-exec script
+    // wrapping tools.apply_patch("*** Begin Patch…") (modern Codex).
+    const source =
+      tu.name === 'exec'
+        ? (() => {
+            const action = classifyUnifiedExecScript(unifiedExecScript(tu.input))
+            return action?.kind === 'apply_patch' ? { raw: action.patchText } : tu.input
+          })()
+        : tu.input
+    patchFiles = parseApplyPatch(source).map(f => ({
       path: f.path,
       action: f.action.toLowerCase() as 'add' | 'update' | 'delete',
       movedTo: f.movedTo ?? null,
@@ -133,14 +143,22 @@ export function fileEditFromLive(
   let patchFiles: FileEditArtifact['patchFiles'] = []
   let rawStreamingInput: string | null = null
 
-  if (name === 'apply_patch') {
+  if (name === 'apply_patch' || name === 'exec') {
     // The payload may be the grammar directly or a JSON wrapper around
     // it; parseApplyPatch handles both via applyPatchText. A partial
     // grammar parses to however many complete file sections have
     // arrived — the card grows file by file.
-    patchFiles = parseApplyPatch(
-      block.parsedInput ?? partialApplyPatchInput(raw),
-    ).map(f => ({
+    // Unified exec: pull the patch literal out of the streaming JS
+    // script (partial-safe — the diff grows file by file as the
+    // literal streams). Classic apply_patch keeps the wrapper decode.
+    const source =
+      name === 'exec'
+        ? (() => {
+            const action = classifyUnifiedExecScript(raw)
+            return action?.kind === 'apply_patch' ? { raw: action.patchText } : { raw: '' }
+          })()
+        : block.parsedInput ?? partialApplyPatchInput(raw)
+    patchFiles = parseApplyPatch(source).map(f => ({
       path: f.path,
       action: f.action.toLowerCase() as 'add' | 'update' | 'delete',
       movedTo: f.movedTo ?? null,

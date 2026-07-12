@@ -49,6 +49,16 @@ export function isLegacyProviderClaimed(
   return provider === 'opencode' && toolName === 'read'
 }
 
+/** Modern Codex `exec` (unified script tool): the family depends on
+ *  what the SCRIPT does, not the tool name — tools.apply_patch inside
+ *  the script is a file edit, tools.exec_command/write_stdin are
+ *  commands. Codex's own TUI renders the intent ("Edited x (+7 -3)");
+ *  routing by name alone painted every edit as a raw-script card (the
+ *  2026-07-12 debug-bundle regression). */
+export function isUnifiedExecTool(toolName: string): boolean {
+  return toolName === 'exec'
+}
+
 export function routeFamily(
   _provider: AgentProviderKind,
   toolName: string,

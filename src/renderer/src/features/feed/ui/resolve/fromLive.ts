@@ -1,7 +1,10 @@
 import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
-import { execCommandInput } from '@providers/codex/renderer/extractors'
+import {
+  classifyUnifiedExecScript,
+  execCommandInput,
+} from '@providers/codex/renderer/extractors'
 import {
   prettifyToolName,
   smartHeadline,
@@ -65,7 +68,18 @@ export function commandFromLive(
   //   - Codex local_shell_call: block.localShellCall metadata (argv
   //     array + workingDirectory), no JSON input at all
   const shell = block.localShellCall
-  const exec = parsed ? execCommandInput(parsed) : null
+  // Unified `exec` (modern Codex): the streaming buffer is a JS script,
+  // not JSON — classify it for the embedded exec_command/write_stdin.
+  const unified =
+    block.toolName === 'exec'
+      ? classifyUnifiedExecScript(block.argumentsJson ?? block.inputJson ?? '')
+      : null
+  const exec =
+    unified?.kind === 'exec_command'
+      ? unified.input
+      : parsed
+        ? execCommandInput(parsed)
+        : null
   const command =
     shell?.command?.join(' ') ??
     exec?.command ??
@@ -91,7 +105,7 @@ export function commandFromLive(
     sourceTool:
       block.kind === 'local_shell_call'
         ? 'local_shell_call'
-        : block.toolName === 'write_stdin'
+        : block.toolName === 'write_stdin' || unified?.kind === 'write_stdin'
           ? 'write_stdin'
           : block.toolName === 'Bash'
             ? 'Bash'
@@ -104,9 +118,11 @@ export function commandFromLive(
     yieldTimeMs: exec?.yieldTimeMs ?? null,
     maxOutputTokens: exec?.maxOutputTokens ?? null,
     stdinWrites:
-      block.toolName === 'write_stdin' && typeof parsed?.chars === 'string'
-        ? [parsed.chars]
-        : [],
+      unified?.kind === 'write_stdin'
+        ? [unified.chars]
+        : block.toolName === 'write_stdin' && typeof parsed?.chars === 'string'
+          ? [parsed.chars]
+          : [],
     // parsed_cmd classification only exists on committed result meta.
     parsedRead: null,
   }
