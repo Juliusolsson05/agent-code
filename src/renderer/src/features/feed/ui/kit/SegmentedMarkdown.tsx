@@ -1,7 +1,7 @@
 import { memo } from 'react'
 
 import {
-  countFenceMarkers,
+  lastClosedCodeFenceEnd,
   splitStreamingCodeFence,
 } from '@renderer/features/feed/lib/helpers'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
@@ -38,28 +38,12 @@ import { StreamingCodeBlock } from './StreamingCodeBlock'
 // always safe.
 //
 // Fence detection intentionally mirrors splitStreamingCodeFence's
-// conservative triple-backtick-only heuristic (no ~~~ fences, no
-// indented fences) so the two agree on what is "open". If that helper
-// evolves, this must evolve with it — they share countFenceMarkers.
+// conservative backtick-only heuristic (no ~~~ fences) so the two agree on
+// what is "open". Both consume the same line-aware scanner in helpers.ts.
 
 export function splitSealedPrefix(text: string): { sealed: string; tail: string } {
-  const fences = countFenceMarkers(text)
-  if (fences < 2) return { sealed: '', tail: text }
-  const closedFences = fences % 2 === 0 ? fences : fences - 1
-  // Index just past the Nth ``` marker (N = closedFences). The walk
-  // must advance by a FULL marker (+3), not +1 — overlapping search
-  // finds two "markers" inside one ````-run while the counting regex
-  // sees one, desynchronizing the seal boundary (PR524 review: a
-  // 4-backtick fence rendered its whole body as prose).
-  let idx = -1
-  for (let n = 0; n < closedFences; n++) {
-    idx = text.indexOf('```', idx === -1 ? 0 : idx + 3)
-  }
-  // Seal through the end of the closing fence's line so the fence's
-  // trailing newline stays inside the sealed segment (a closing ```
-  // may be followed by an info-string-less newline or EOF).
-  const lineEnd = text.indexOf('\n', idx + 3)
-  const sealedEnd = lineEnd === -1 ? text.length : lineEnd + 1
+  const sealedEnd = lastClosedCodeFenceEnd(text)
+  if (sealedEnd === 0) return { sealed: '', tail: text }
   return { sealed: text.slice(0, sealedEnd), tail: text.slice(sealedEnd) }
 }
 

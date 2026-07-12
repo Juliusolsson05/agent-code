@@ -430,12 +430,6 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       typeof parsed?.output === 'string' ? parsed.output : unwrapped
     const metadata = parsed?.metadata
     const exitCode = numberField(asRecord(metadata), 'exit_code') ?? 0
-    if (
-      typeof normalized === 'string' &&
-      normalized.startsWith('Success. Updated the following files:')
-    ) {
-      return []
-    }
     return [
       codexToolResultEntry(
         uuid,

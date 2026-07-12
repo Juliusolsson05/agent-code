@@ -162,37 +162,96 @@ export function debugLabelForEntry(entry: Entry): string {
   return entry.type
 }
 
-/** Count ``` fence markers in a string. Used to decide whether the
- *  streaming text currently has an odd number of fences (i.e. is
- *  mid-fence and should split into prose + code halves). */
+type BacktickFenceScan = {
+  markerCount: number
+  lastClosedEnd: number
+  open: {
+    start: number
+    contentStart: number
+    language: string | null
+    markerLength: number
+  } | null
+}
+
+/**
+ * Scan CommonMark-shaped backtick fence lines once and retain the state both
+ * streaming consumers need. Raw `/```/g` parity is not a fence parser: a
+ * four-backtick fence may legally contain a three-backtick line, and inline
+ * code may contain triple runs without opening a block. Treating either as a
+ * close made SegmentedMarkdown seal the wrong prefix and paint the remainder as
+ * prose until commit.
+ *
+ * We deliberately support only backtick fences here (the historical contract),
+ * but honor the important CommonMark invariants: 3+ opening ticks at line start
+ * (after at most three spaces), no backticks in the info string, and a closing
+ * run at least as long as its opener with whitespace only after it.
+ */
+function scanBacktickFences(text: string): BacktickFenceScan {
+  let markerCount = 0
+  let lastClosedEnd = 0
+  let open: BacktickFenceScan['open'] = null
+  let lineStart = 0
+
+  while (lineStart <= text.length) {
+    const newlineAt = text.indexOf('\n', lineStart)
+    const lineEnd = newlineAt === -1 ? text.length : newlineAt
+    const line = text.slice(lineStart, lineEnd)
+    const nextLineStart = newlineAt === -1 ? text.length + 1 : newlineAt + 1
+
+    if (open === null) {
+      const opening = /^( {0,3})(`{3,})([^`]*)$/.exec(line)
+      if (opening) {
+        markerCount += 1
+        open = {
+          start: lineStart,
+          contentStart: newlineAt === -1 ? text.length : newlineAt + 1,
+          language: opening[3]?.trim() || null,
+          markerLength: opening[2]?.length ?? 3,
+        }
+      }
+    } else {
+      const closing = /^( {0,3})(`{3,})[\t ]*$/.exec(line)
+      if (closing && (closing[2]?.length ?? 0) >= open.markerLength) {
+        markerCount += 1
+        lastClosedEnd = newlineAt === -1 ? text.length : newlineAt + 1
+        open = null
+      }
+    }
+
+    if (newlineAt === -1) break
+    lineStart = nextLineStart
+  }
+
+  return { markerCount, lastClosedEnd, open }
+}
+
+/** Number of syntactically meaningful opening/closing backtick fence lines. */
 export function countFenceMarkers(text: string): number {
-  const matches = text.match(/```/g)
-  return matches ? matches.length : 0
+  return scanBacktickFences(text).markerCount
+}
+
+/** End offset immediately after the latest genuinely closed fence line. */
+export function lastClosedCodeFenceEnd(text: string): number {
+  return scanBacktickFences(text).lastClosedEnd
 }
 
 /** Split streaming text at the LAST ``` marker when the total count
  *  is odd (i.e. the fence hasn't closed yet). Returns the prose
  *  before the open fence, the partial code content after it, and
  *  the detected language (empty trimmed info-string → null).
- *  Returns null when the text has no fence or an even count
+ *  Returns null when no syntactically open fence remains
  *  (fully-closed fences go through normal markdown rendering). */
 export function splitStreamingCodeFence(text: string): {
   prose: string
   code: string
   language: string | null
 } | null {
-  const lastFence = text.lastIndexOf('```')
-  if (lastFence === -1) return null
-  if (countFenceMarkers(text) % 2 === 0) return null
-
-  const openingLine = text.slice(lastFence).split('\n', 1)[0] ?? ''
-  const language = openingLine.slice(3).trim() || null
-  const code = text.slice(lastFence + openingLine.length)
-    .replace(/^\n/, '')
+  const { open } = scanBacktickFences(text)
+  if (!open) return null
   return {
-    prose: text.slice(0, lastFence).trimEnd(),
-    code,
-    language,
+    prose: text.slice(0, open.start).trimEnd(),
+    code: text.slice(open.contentStart),
+    language: open.language,
   }
 }
 
