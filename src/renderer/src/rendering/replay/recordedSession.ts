@@ -209,6 +209,16 @@ export function parseRecording(input: {
       // pipeline — the 9-channel allowlist is a hard contract on replay too.
       continue
     }
+    if (typeof obj.t !== 'number' || typeof obj.wall !== 'number') {
+      // `t` orders the replay and `wall` drives the injected fold clock
+      // (ReplayOptions.onBeforeFold); a line missing either can't be replayed
+      // meaningfully, only mis-ordered. The recorder always writes both, so
+      // this catches hand-edited or corrupted recordings — dropped for the
+      // same reason as unknown channels above. `payload` is NOT checked: the
+      // RecordedLine type declares it `unknown`, so absence is a legal value
+      // the pipeline reducers must already tolerate.
+      continue
+    }
     lines.push(obj as RecordedLine)
   }
 
