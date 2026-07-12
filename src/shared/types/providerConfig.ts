@@ -317,11 +317,56 @@ export type PromptDeliveryIo = {
   write: (data: string) => boolean
   sessionId: string
   prompt: string
+  /** Prepared local attachment paths. Only Claude desktop supplies these;
+   * saving happens before main reserves/writes so filesystem failure remains
+   * cleanly retry-safe. */
+  imagePaths?: string[]
+  /** Non-blocking forensic sink. Correctness must never await or depend on it. */
+  record?: (event: string, data?: Record<string, unknown>) => void
 }
 
+export type PromptAcceptance =
+  | { kind: 'user'; acceptedAt: number; entryId?: string }
+  | { kind: 'queue'; acceptedAt: number }
+  | { kind: 'transport'; acceptedAt: number }
+
+export type PromptDeliveryFailureStage =
+  | 'reservation'
+  | 'before-write'
+  | 'absorption'
+  | 'after-enter'
+  | 'session-exit'
+
+export type PromptDeliveryFailureCode =
+  | 'delivery-in-flight'
+  | 'missing-capability'
+  | 'not-ready'
+  | 'write-failed'
+  | 'absorption-timeout'
+  | 'acceptance-timeout'
+  | 'session-exited'
+  | 'transport-failed'
+
+/**
+ * Finished-prompt delivery result.
+ *
+ * WHY this is richer than the old `{ok,message}` boolean: once prompt bytes or
+ * Enter have reached a PTY, retrying is no longer automatically safe. The old
+ * shape forced every caller to treat an uncertain post-write timeout like a
+ * clean pre-write rejection, which is how a delayed first attempt became two
+ * duplicate Claude queue entries in the July 11 production failure.
+ */
 export type PromptDeliveryResult =
-  | { ok: true }
-  | { ok: false; message: string }
+  | { ok: true; acceptance: PromptAcceptance }
+  | {
+      ok: false
+      stage: PromptDeliveryFailureStage
+      code: PromptDeliveryFailureCode
+      message: string
+      retrySafe: boolean
+      promptWritten: boolean
+      enterWritten: boolean
+    }
 
 // The combined `ProviderConfig = RendererProviderConfig & MainProviderConfig`
 // type used to live here. It was only ever used by

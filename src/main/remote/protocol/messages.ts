@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 // Wire schemas for the remote mobile companion's WebSocket protocol.
 //
@@ -180,5 +181,12 @@ export type OutboundFrame =
         | 'removed'
       payload: unknown
     }
-  | { type: 'reply'; id?: string; ok: boolean; error?: string; result?: unknown }
+  | {
+      type: 'reply'
+      id?: string
+      ok: boolean
+      error?: string
+      result?: unknown
+      delivery?: PromptDeliveryResult
+    }
   | { type: 'error'; error: string }

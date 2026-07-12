@@ -30,7 +30,12 @@ export async function deliverCodexPrompt(
   if (typeof io.session.awaitReadyForPrompt !== 'function') {
     return {
       ok: false,
+      stage: 'before-write',
+      code: 'missing-capability',
       message: `Codex session ${io.sessionId} has no readiness probe (headless unavailable?)`,
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
     }
   }
   const ready = await io.session.awaitReadyForPrompt({
@@ -40,14 +45,24 @@ export async function deliverCodexPrompt(
   if (ready.kind !== 'ready') {
     return {
       ok: false,
+      stage: 'before-write',
+      code: 'not-ready',
       message: `Codex session ${io.sessionId} was not ready for prompt delivery (${ready.kind})`,
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
     }
   }
   if (!io.write(`\x1b[200~${io.prompt}\x1b[201~\r`)) {
     return {
       ok: false,
+      stage: 'before-write',
+      code: 'write-failed',
       message: `Could not submit orchestration prompt to Codex session ${io.sessionId}`,
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
     }
   }
-  return { ok: true }
+  return { ok: true, acceptance: { kind: 'transport', acceptedAt: Date.now() } }
 }

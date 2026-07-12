@@ -64,6 +64,12 @@ export type ClaudeDraftImage = {
   filename: string
 }
 
+export type PromptDeliveryUiState =
+  | { kind: 'idle' }
+  | { kind: 'sending'; prompt: string; startedAt: number }
+  | { kind: 'failed-safe'; message: string }
+  | { kind: 'uncertain'; prompt: string; message: string; failedAt: number }
+
 export type PendingRewindUndo = {
   createdAt: number
   provider: AgentProviderKind
@@ -348,6 +354,15 @@ export type SessionRuntime = {
   conditions: ProviderConditionSnapshot | null
   draftInput: string
   draftImages: ClaudeDraftImage[]
+  /**
+   * WHY uncertainty survives TileLeaf remounts: a local hook ref disappears
+   * when tabs/panes remount and would immediately make an already-written
+   * prompt resendable. Runtime is the pane's stable ownership boundary. An
+   * uncertain copy is retained for manual recovery, but ordinary Enter is
+   * blocked until authoritative transcript activity or an explicit future
+   * recovery action resolves it.
+   */
+  promptDelivery: PromptDeliveryUiState
   /** Ephemeral next-prompt suggestion offered by the model (issue #174).
    *  Lives on the per-session runtime (not a global uiShell slice) because
    *  each pane has its own suggestion and it must survive tab switches.
@@ -680,6 +695,7 @@ export function emptyRuntime(): SessionRuntime {
     conditions: null,
     draftInput: '',
     draftImages: [],
+    promptDelivery: { kind: 'idle' },
     promptSuggestion: null,
     pendingRewindUndo: null,
     activityStatus: null,

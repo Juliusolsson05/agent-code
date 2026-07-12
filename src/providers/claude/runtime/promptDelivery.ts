@@ -1,107 +1,251 @@
-// Claude prompt-delivery protocol (#394 phase 2c). Extracted from the
-// inline `if (kind === 'claude')` branch of MCP's submitPrompt so the
-// protocol lives with the provider that owns it.
-//
-// WHY bracketed paste instead of plain keystrokes: prompts can be long,
-// markdown-heavy, or multi-line. Raw keystrokes would let the TUI interpret
-// newlines/escapes as interactive input. Bracketed paste is the same
-// terminal-level contract the composer uses for large prompts.
-//
-// WHY Claude waits AFTER the paste (unlike Codex, which gates BEFORE):
-// Claude's known race is paste-commit ordering — the composer is present, but
-// Enter can arrive before Claude's ~100ms paste accumulator has committed the
-// payload, so the `\r` is swallowed as more paste content and the prompt just
-// sits in the composer. We send Enter only once the composer VISIBLY committed
-// the paste. The delivery boundary the caller relies on: `ok: true` means the
-// prompt was pasted, confirmed, and submitted.
-//
-// WHY the confirm is placeholder-OR-inline (this file's bug history):
-// Claude reflects a committed paste two ways and which one depends on size —
-// COLLAPSE into a `[Pasted text #N]` placeholder (only big pastes: single-line
-// >~800 chars, or multiline >=~4 lines), or INLINE as raw text with NO
-// placeholder (everything smaller). This module used to wait for the
-// placeholder ONLY (awaitPastePlaceholder). That was fine while its only
-// caller was orchestration sending long markdown bootstraps that always
-// collapse — but the remote/mobile companion routes ARBITRARY, mostly SHORT
-// prompts here, and every dictated prompt is multi-line (the <stt>…</stt>
-// wrapper adds newlines → always the paste route). Those inline with no
-// placeholder, so the old probe timed out unconfirmed ("did not confirm pasted
-// prompt before submit") and the message stuck in the composer — the
-// never-ending "remote send doesn't work" bug. We now use the SAME
-// content-match the desktop composer uses: placeholder OR inline tail, from the
-// shared detector. Characterized against a real `claude` PTY in tmp/paste-repro.
-
 import type {
   PromptDeliveryIo,
   PromptDeliveryResult,
 } from '@shared/types/providerConfig.js'
-import { isPasteLike, pollPasteAbsorbed } from '@shared/claude/pasteConfirm.js'
+import {
+  isPasteLike,
+  pollClaudeImagesAbsorbed,
+  pollPasteAbsorbed,
+} from '@shared/claude/pasteConfirm.js'
+import type { PromptAcceptanceOutcome } from '@shared/types/session.js'
 
-// Detection bound. The inline tail / new placeholder appears in ~10–30ms
-// (measured), so this is only a safety floor for the pathological case where
-// NEITHER signal ever materializes (a future Claude UI change) — we fail
-// visibly rather than hang. snapshotScreen is a synchronous in-process read, so
-// polling is cheap.
 const CONFIRM_TIMEOUT_MS = 2000
 const CONFIRM_POLL_INTERVAL_MS = 10
+const IMAGE_CONFIRM_TIMEOUT_MS = 5_000
+// Longer than JsonlTailer's 15s watchdog so a recoverable watcher stall gets a
+// chance to self-heal before we classify an already-written Enter as uncertain.
+const ACCEPTANCE_TIMEOUT_MS = 20_000
 
+const failure = (
+  fields: Omit<Extract<PromptDeliveryResult, { ok: false }>, 'ok'>,
+): PromptDeliveryResult => ({ ok: false, ...fields })
+
+/**
+ * Main-owned Claude delivery state machine.
+ *
+ * WHY success waits for JSONL rather than screen disappearance: the screen is
+ * an observation of terminal rendering, while Claude's user/queue JSONL entry
+ * is the durable statement that Enter was actually accepted. The July 11 bug
+ * passed the old visual paste check yet left the prompt editable; a later key
+ * then submitted mutated text and overlapping retries produced duplicate queue
+ * entries. Bytes-written and accepted are deliberately separate states here.
+ */
 export async function deliverClaudePrompt(
   io: PromptDeliveryIo,
 ): Promise<PromptDeliveryResult> {
-  // Plain fast path: short single-line text can't engage Claude's paste
-  // accumulator, so text + Enter in ONE write is safe — there is no paste to
-  // race. `isPasteLike` is the shared routing predicate (was duplicated here;
-  // now one source with the desktop composer).
-  if (!isPasteLike(io.prompt)) {
-    if (!io.write(`${io.prompt}\r`)) {
-      return {
-        ok: false,
-        message: `Could not write prompt to session ${io.sessionId}`,
-      }
-    }
-    return { ok: true }
+  if (typeof io.session.armPromptAcceptance !== 'function') {
+    return failure({
+      stage: 'before-write', code: 'missing-capability', retrySafe: true,
+      promptWritten: false, enterWritten: false,
+      message: `Claude session ${io.sessionId} cannot observe prompt acceptance`,
+    })
+  }
+  if (io.session.isPromptAcceptanceReady?.() === false) {
+    return failure({
+      stage: 'before-write', code: 'not-ready', retrySafe: true,
+      promptWritten: false, enterWritten: false,
+      message: `Claude session ${io.sessionId} transcript replay has not quiesced`,
+    })
   }
 
-  // Paste route. Capture the composer screen BEFORE the paste so the detector
-  // keys on the *transition* (a NEW placeholder / the tail NEWLY inlined) — and
-  // so a SECOND paste in the session ignores the first paste's stale
-  // `[Pasted text #1]` placeholder instead of false-confirming on it.
-  //
-  // snapshotScreen is a typed optional on AgentSession; a Claude runtime build
-  // that loses it degrades to a visible delivery failure here, not a TypeError.
-  if (typeof io.session.snapshotScreen !== 'function') {
-    return {
-      ok: false,
-      message: `Claude session ${io.sessionId} has no screen snapshot (headless unavailable?)`,
+  if (io.imagePaths && io.imagePaths.length > 0) {
+    return deliverClaudeImagePrompt(io)
+  }
+
+  if (!isPasteLike(io.prompt)) {
+    const acceptance = io.session.armPromptAcceptance(io.prompt, {
+      timeoutMs: ACCEPTANCE_TIMEOUT_MS,
+    })
+    io.record?.('acceptance-armed')
+    if (!io.write(`${io.prompt}\r`)) {
+      acceptance.cancel()
+      return failure({
+        stage: 'before-write', code: 'write-failed', retrySafe: true,
+        promptWritten: false, enterWritten: false,
+        message: `Could not write prompt to session ${io.sessionId}`,
+      })
     }
+    io.record?.('prompt-and-enter-written')
+    return acceptanceResult(await acceptance.promise, io.sessionId, true, true, io.record)
+  }
+
+  if (typeof io.session.snapshotScreen !== 'function') {
+    return failure({
+      stage: 'before-write', code: 'missing-capability', retrySafe: true,
+      promptWritten: false, enterWritten: false,
+      message: `Claude session ${io.sessionId} has no direct screen snapshot`,
+    })
   }
   const baselineScreen = io.session.snapshotScreen()
-
+  // Arm before any prompt bytes. Raw-terminal/manual Enter and legacy writers
+  // are not supposed to interleave, but if one does, its durable acceptance
+  // must not race past the observer and turn into a second Enter plus timeout.
+  const acceptance = io.session.armPromptAcceptance(io.prompt, {
+    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
+  })
+  io.record?.('acceptance-armed')
   if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
-    return {
-      ok: false,
+    acceptance.cancel()
+    return failure({
+      stage: 'before-write', code: 'write-failed', retrySafe: true,
+      promptWritten: false, enterWritten: false,
       message: `Could not write paste to session ${io.sessionId}`,
-    }
+    })
   }
+  io.record?.('paste-written')
 
-  const outcome = await pollPasteAbsorbed(
+  const absorbed = await pollPasteAbsorbed(
     () => io.session.snapshotScreen?.() ?? '',
     baselineScreen,
     io.prompt,
     { timeoutMs: CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
   )
-  if (outcome.kind !== 'absorbed') {
-    return {
-      ok: false,
-      message: `Claude session ${io.sessionId} did not confirm pasted prompt before submit (${outcome.kind})`,
+  if (absorbed.kind !== 'absorbed') {
+    acceptance.cancel()
+    // Prompt bytes are already editable in Claude even when our detector times
+    // out. Automatic retry is unsafe: it would append/duplicate those bytes.
+    return failure({
+      stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+      promptWritten: true, enterWritten: false,
+      message: `Claude session ${io.sessionId} did not visibly absorb the paste`,
+    })
+  }
+  io.record?.('paste-absorbed', { via: absorbed.via, waitedMs: absorbed.waitedMs })
+
+  // Arm synchronously before Enter. This ordering is the acceptance analogue
+  // of installing an event listener before starting the operation it observes.
+  if (!io.write('\r')) {
+    acceptance.cancel()
+    return failure({
+      stage: 'after-enter', code: 'write-failed', retrySafe: false,
+      promptWritten: true, enterWritten: false,
+      message: `Could not submit prompt to session ${io.sessionId}`,
+    })
+  }
+  io.record?.('enter-written')
+  return acceptanceResult(await acceptance.promise, io.sessionId, true, true, io.record)
+}
+
+async function deliverClaudeImagePrompt(
+  io: PromptDeliveryIo,
+): Promise<PromptDeliveryResult> {
+  if (typeof io.session.snapshotScreen !== 'function') {
+    return failure({
+      stage: 'before-write', code: 'missing-capability', retrySafe: true,
+      promptWritten: false, enterWritten: false,
+      message: `Claude session ${io.sessionId} has no direct screen snapshot`,
+    })
+  }
+  const imagePaths = io.imagePaths ?? []
+  const separator = io.prompt.length > 0 && !/\s$/.test(io.prompt) ? ' ' : ''
+  const rawComposer = `${io.prompt}${separator}${imagePaths.join('\n')}`
+
+  if (io.prompt.length > 0) {
+    if (isPasteLike(io.prompt)) {
+      const textBaseline = io.session.snapshotScreen()
+      if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
+        return failure({
+          stage: 'before-write', code: 'write-failed', retrySafe: true,
+          promptWritten: false, enterWritten: false,
+          message: `Could not write image prompt text to session ${io.sessionId}`,
+        })
+      }
+      const textAbsorbed = await pollPasteAbsorbed(
+        () => io.session.snapshotScreen?.() ?? '', textBaseline, io.prompt,
+        { timeoutMs: CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
+      )
+      if (textAbsorbed.kind !== 'absorbed') {
+        return failure({
+          stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+          promptWritten: true, enterWritten: false,
+          message: `Claude session ${io.sessionId} did not absorb image prompt text`,
+        })
+      }
+    } else if (!io.write(io.prompt)) {
+      return failure({
+        stage: 'before-write', code: 'write-failed', retrySafe: true,
+        promptWritten: false, enterWritten: false,
+        message: `Could not write image prompt text to session ${io.sessionId}`,
+      })
+    }
+    if (separator && !io.write(separator)) {
+      return failure({
+        stage: 'absorption', code: 'write-failed', retrySafe: false,
+        promptWritten: true, enterWritten: false,
+        message: `Could not separate image paths in session ${io.sessionId}`,
+      })
     }
   }
 
-  if (!io.write('\r')) {
-    return {
-      ok: false,
-      message: `Could not submit prompt to session ${io.sessionId}`,
-    }
+  const imageBaseline = io.session.snapshotScreen()
+  if (!io.write(`\x1b[200~${imagePaths.join('\n')}\x1b[201~`)) {
+    return failure({
+      stage: io.prompt.length > 0 ? 'absorption' : 'before-write',
+      code: 'write-failed', retrySafe: io.prompt.length === 0,
+      promptWritten: io.prompt.length > 0, enterWritten: false,
+      message: `Could not paste image paths to session ${io.sessionId}`,
+    })
   }
-  return { ok: true }
+  const imagesAbsorbed = await pollClaudeImagesAbsorbed(
+    () => io.session.snapshotScreen?.() ?? '', imageBaseline, imagePaths.length,
+    { timeoutMs: IMAGE_CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
+  )
+  if (imagesAbsorbed.kind !== 'absorbed') {
+    return failure({
+      stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+      promptWritten: true, enterWritten: false,
+      message: `Claude session ${io.sessionId} did not render all image attachments`,
+    })
+  }
+  io.record?.('images-absorbed', {
+    imageCount: imagePaths.length,
+    waitedMs: imagesAbsorbed.waitedMs,
+  })
+  // Image/text absorption can legitimately consume seven seconds. Starting
+  // the 20-second waiter before that work left less than JsonlTailer's 15-second
+  // watchdog window after Enter. Main's reservation now blocks every external
+  // writer, so arming at this exact pre-Enter boundary is race-free and gives
+  // durable acceptance the full recovery window without exceeding the remote
+  // transport's 30-second request timeout.
+  const acceptance = io.session.armPromptAcceptance!(io.prompt, {
+    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
+    aliases: [rawComposer],
+    requiresImage: io.prompt.length === 0,
+    expectedImageCount: imagePaths.length,
+  })
+  io.record?.('acceptance-armed', { imageCount: imagePaths.length })
+  if (!io.write('\r')) {
+    acceptance.cancel()
+    return failure({
+      stage: 'after-enter', code: 'write-failed', retrySafe: false,
+      promptWritten: true, enterWritten: false,
+      message: `Could not submit image prompt to session ${io.sessionId}`,
+    })
+  }
+  io.record?.('enter-written')
+  return acceptanceResult(await acceptance.promise, io.sessionId, true, true, io.record)
+}
+
+function acceptanceResult(
+  outcome: PromptAcceptanceOutcome,
+  sessionId: string,
+  promptWritten: boolean,
+  enterWritten: boolean,
+  record?: PromptDeliveryIo['record'],
+): PromptDeliveryResult {
+  if (outcome.kind === 'user' || outcome.kind === 'queue') {
+    record?.(`acceptance-${outcome.kind}`, { acceptedAt: outcome.acceptedAt })
+    return { ok: true, acceptance: outcome }
+  }
+  record?.('uncertain', { outcome: outcome.kind })
+  return failure({
+    stage: outcome.kind === 'session-exited' ? 'session-exit' : 'after-enter',
+    code: outcome.kind === 'session-exited' ? 'session-exited' : 'acceptance-timeout',
+    retrySafe: false,
+    promptWritten,
+    enterWritten,
+    message: outcome.kind === 'session-exited'
+      ? `Claude session ${sessionId} exited before accepting the prompt`
+      : `Claude session ${sessionId} did not record prompt acceptance`,
+  })
 }

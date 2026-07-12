@@ -44,6 +44,7 @@ import type {
   SessionSpawnOptions,
   SessionSpawnResult,
 } from '@preload/api/types.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -234,6 +235,11 @@ function appendCappedBuffer(prev: string, data: string, cap: number): string {
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly spawningSessionIds = new Set<string>()
+  // WHY main owns this reservation: renderer guards disappear on reload and
+  // remote/MCP callers never share renderer state. PTY prompt delivery is a
+  // per-session critical section; without it, Enter from attempt A can submit
+  // paste B and turn a slow operation into duplicate queue entries.
+  private readonly promptDeliveriesInFlight = new Set<string>()
   private readonly lastActivityAt = new Map<string, number>()
   // Latest per-session UI-state snapshots, cached at the emit sites below.
   // WHY: consumers that attach mid-flight (the remote mobile companion's
@@ -403,7 +409,11 @@ export class SessionManager extends EventEmitter {
   async spawn(options: SessionSpawnOptions): Promise<SessionSpawnResult> {
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
     const sessionId = options.preferredSessionId ?? randomUUID()
-    if (this.sessions.has(sessionId) || this.spawningSessionIds.has(sessionId)) {
+    if (
+      this.sessions.has(sessionId) ||
+      this.spawningSessionIds.has(sessionId) ||
+      this.promptDeliveriesInFlight.has(sessionId)
+    ) {
       throw new Error(`Session ${sessionId} is already live`)
     }
     // WHY reserve before any provider/tmux await: restored sessions can be
@@ -934,6 +944,11 @@ export class SessionManager extends EventEmitter {
    * the renderer queueing input and the main process handling it.
    */
   write(sessionId: string, data: string): boolean {
+    // A raw Enter is globally meaningful to a TUI composer. While the provider
+    // delivery state machine owns that composer, accepting Enter from a slash
+    // path, remote submit, or raw terminal would let one operation submit
+    // another's bytes. Provider-owned writes use writeReserved below.
+    if (this.promptDeliveriesInFlight.has(sessionId)) return false
     const entry = this.sessions.get(sessionId)
     if (!entry) {
       // A silent miss here is brutal to debug from the renderer: the composer
@@ -964,6 +979,22 @@ export class SessionManager extends EventEmitter {
       return false
     }
     entry.session.write(data)
+    return true
+  }
+
+  private writeReserved(
+    sessionId: string,
+    expectedEntry: RegistryEntry,
+    data: string,
+    onWriteAttempt?: () => void,
+  ): boolean {
+    if (this.sessions.get(sessionId) !== expectedEntry) return false
+    // node-pty's write boundary is not transactional: an exception does not
+    // prove zero bytes reached the child. Mark the stage immediately before
+    // crossing it so the outer coordinator never labels a thrown write safe to
+    // retry. The identity rejection above remains genuinely pre-write.
+    onWriteAttempt?.()
+    expectedEntry.session.write(data)
     return true
   }
 
@@ -1025,6 +1056,18 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult> {
+    // Provider condition resolvers synthesize PTY keystrokes internally and
+    // cannot use writeReserved. Letting one answer a dialog while prompt
+    // delivery owns the composer can splice bytes into the paste or consume
+    // its Enter. Rejecting is safe: condition state remains visible and the
+    // caller can retry after the bounded delivery finishes.
+    if (this.promptDeliveriesInFlight.has(sessionId)) {
+      return {
+        ok: false,
+        reason: 'aborted',
+        failedAtStep: 'prompt delivery in progress',
+      }
+    }
     const entry = this.sessions.get(sessionId)
     // ANY agent kind may carry a resolver now (#394 phase 3) — the
     // old `entry.kind !== 'claude'` gate meant a provider that
@@ -1090,7 +1133,7 @@ export class SessionManager extends EventEmitter {
    * state. MCP (and any future caller — composer flows, dispatch)
    * gets one provider-agnostic entry point; the per-provider
    * discipline (Codex readiness-gate + atomic paste+Enter, Claude
-   * paste → placeholder confirm → Enter) lives in
+   * paste/image absorption → Enter → durable acceptance) lives in
    * providers/<kind>/runtime/promptDelivery.ts.
    *
    * An unknown/non-agent kind is a LOUD failure — the predecessor
@@ -1101,7 +1144,17 @@ export class SessionManager extends EventEmitter {
   async deliverPromptToAgent(
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    imagePaths?: string[],
+    record?: (event: string, data?: Record<string, unknown>) => void,
+  ): Promise<PromptDeliveryResult> {
+    if (this.promptDeliveriesInFlight.has(sessionId)) {
+      record?.('duplicate-blocked')
+      return {
+        ok: false, stage: 'reservation', code: 'delivery-in-flight',
+        retrySafe: true, promptWritten: false, enterWritten: false,
+        message: `A prompt delivery is already in flight for session ${sessionId}`,
+      }
+    }
     const entry = this.sessions.get(sessionId)
     // `=== 'terminal'` rather than !isAgentProviderKind: TypeScript
     // only discriminates the RegistryEntry union on literal kind
@@ -1109,16 +1162,60 @@ export class SessionManager extends EventEmitter {
     // AgentSession for the registry call below.
     if (!entry || entry.kind === 'terminal') {
       return {
-        ok: false,
+        ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+        promptWritten: false, enterWritten: false,
         message: `Cannot deliver prompt: ${sessionId} is not a live agent session`,
       }
     }
-    return getMainProvider(entry.kind).deliverPrompt({
-      session: entry.session,
-      write: data => this.write(sessionId, data),
-      sessionId,
-      prompt,
-    })
+    this.promptDeliveriesInFlight.add(sessionId)
+    record?.('reserved')
+    let promptWritten = false
+    let enterWritten = false
+    try {
+      return await getMainProvider(entry.kind).deliverPrompt({
+        session: entry.session,
+        // WHY identity-check every delayed write: provider protocols await
+        // absorption/readiness. A same-ID wake must never receive Enter from a
+        // delivery that began against the process which just exited.
+        write: data => {
+          const wrote = this.writeReserved(sessionId, entry, data, () => {
+            if (data === '\r' || data.endsWith('\r')) enterWritten = true
+            if (data !== '\r') promptWritten = true
+          })
+          return wrote
+        },
+        sessionId,
+        prompt,
+        imagePaths,
+        record,
+      })
+    } catch (err) {
+      record?.('uncertain', { reason: 'provider-threw' })
+      return {
+        ok: false,
+        stage: enterWritten ? 'after-enter' : promptWritten ? 'absorption' : 'before-write',
+        code: 'transport-failed',
+        message: `Prompt delivery failed unexpectedly: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        // The coordinator cannot know how far provider code progressed before
+        // throwing. Conservatively forbid automatic retry.
+        retrySafe: !promptWritten && !enterWritten,
+        promptWritten,
+        enterWritten,
+      }
+    } finally {
+      this.promptDeliveriesInFlight.delete(sessionId)
+      record?.('released')
+    }
+  }
+
+  /** Submit staged composer content only when no finished-prompt transaction
+   * owns the session. Remote's legacy `submit` command cannot be allowed to
+   * inject Enter during paste absorption. */
+  submitStagedPrompt(sessionId: string): boolean {
+    if (this.promptDeliveriesInFlight.has(sessionId)) return false
+    return this.write(sessionId, '\r')
   }
 
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */

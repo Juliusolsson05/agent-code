@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
@@ -7,6 +8,10 @@ import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import type {
+  PromptAcceptanceOutcome,
+  PromptAcceptanceWaiter,
+} from '@shared/types/session.js'
 import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
 import type {
   ClaudeConditionSnapshot,
@@ -135,7 +140,17 @@ export class ClaudeSession extends EventEmitter {
    *  because a real streaming turn always has a longer gap between
    *  the committed entry and the prior bootstrap burst. */
   private readyForLiveBridge = false
+  private transcriptTailAttached = false
   private liveBridgeTimer: NodeJS.Timeout | null = null
+  private readonly promptAcceptanceWaiters = new Set<{
+    prompts: ReadonlySet<string>
+    afterCursor: number
+    armedAt: number
+    requiresImage: boolean
+    expectedImageCount?: number
+    finish: (outcome: PromptAcceptanceOutcome) => void
+  }>()
+  private promptAcceptanceIngestCursor = 0
 
   private readonly cwd: string
   private readonly cols: number
@@ -144,6 +159,9 @@ export class ClaudeSession extends EventEmitter {
   private readonly env: Record<string, string | undefined>
   private readonly snapshotIntervalMs: number
   private readonly resumeSessionId: string | null
+  /** Exact Claude transcript id. Fresh sessions receive this through
+   *  `--session-id`; resumed sessions already have an authoritative id. */
+  private readonly transcriptSessionId: string
   private readonly dangerousMode: boolean
   private readonly useProxy: boolean
   private readonly shellSessionId: string | null
@@ -156,6 +174,7 @@ export class ClaudeSession extends EventEmitter {
     this.rows = options.rows ?? 40
     this.binary = options.binary ?? 'claude'
     this.resumeSessionId = options.resumeSessionId ?? null
+    this.transcriptSessionId = this.resumeSessionId ?? randomUUID()
     this.dangerousMode = options.dangerousMode === true
     // Fallback matches sessionManager's explicit 100ms (~10Hz) — see
     // the WHY comment there (#390). Keeping this default in sync
@@ -197,6 +216,7 @@ export class ClaudeSession extends EventEmitter {
       }))
     }
     if (this.resumeSessionId) args.push('--resume', this.resumeSessionId)
+    else args.push('--session-id', this.transcriptSessionId)
     if (this.dangerousMode) args.push('--dangerously-skip-permissions')
 
     const cleanEnv: Record<string, string> = {}
@@ -218,19 +238,6 @@ export class ClaudeSession extends EventEmitter {
     // injected trust-store-REPLACING CA vars — see #281 — and silently dropped
     // options.env). Both cases now share one inline env so resume args and CA
     // policy live in exactly one place.
-    // WHY this timestamp is captured before the PTY exists:
-    //
-    // Claude can create its root JSONL transcript almost immediately
-    // after spawn. The headless layer needs an IPty instance before it
-    // can be constructed, so there is an unavoidable spawn -> tailer
-    // wiring window. Passing this timestamp down lets the tailer treat
-    // a just-created file as the fresh session transcript even if it
-    // already exists by the time the directory watcher snapshots the
-    // project dir. Without this, the renderer can receive proxy
-    // semantic events forever while committed JSONL stays at zero and
-    // providerSessionId is never persisted.
-    const freshSessionStartedAtMs = this.resumeSessionId ? null : Date.now()
-
     if (this.useProxy) {
       // WHY proxy runtime storage must not live under `cwd`:
       //
@@ -375,8 +382,15 @@ export class ClaudeSession extends EventEmitter {
       cols: this.cols,
       rows: this.rows,
       snapshotIntervalMs: this.snapshotIntervalMs,
-      resumeSessionId: this.resumeSessionId ?? undefined,
-      freshSessionStartedAtMs: freshSessionStartedAtMs ?? undefined,
+      // Claude supports assigning fresh UUIDs. Binding both the process and
+      // tailer to this exact id removes the old "newest file in cwd" race where
+      // two concurrently spawned agents could acknowledge each other's prompt.
+      // In the headless package this option identifies the exact transcript
+      // file to tail; it does not drive Claude's CLI. Passing our assigned
+      // fresh id here is therefore correct even though the process itself was
+      // launched with --session-id rather than --resume. The file cannot
+      // preexist for a fresh random UUID, so its bounded bootstrap is empty.
+      resumeSessionId: this.transcriptSessionId,
       // Enabling proxy on the headless instance is what flips the
       // semantic source of truth from screen to proxy inside
       // ClaudeCodeHeadless. Even without this, subscribing to
@@ -461,9 +475,15 @@ export class ClaudeSession extends EventEmitter {
       })
     })
 
-    this.headless.on('jsonl-entry', (entry, file) =>
-      this.emit('jsonl-entry', entry, file),
-    )
+    this.headless.on('jsonl-entry', (entry, file) => {
+      // WHY inspect before forwarding: the tailer callback is synchronous and
+      // is our first durable evidence that Claude accepted Enter. Resolving
+      // here prevents renderer scheduling, IPC batching, or transcript mapping
+      // from becoming part of the delivery correctness boundary.
+      this.promptAcceptanceIngestCursor += 1
+      this.resolvePromptAcceptance(entry, this.promptAcceptanceIngestCursor)
+      this.emit('jsonl-entry', entry, file)
+    })
     this.headless.on('jsonl-error', err =>
       this.emit('jsonl-error', err),
     )
@@ -503,6 +523,7 @@ export class ClaudeSession extends EventEmitter {
     )
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
+      this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
       this.emit('exit', { exitCode, signal })
     })
 
@@ -596,6 +617,11 @@ export class ClaudeSession extends EventEmitter {
     this.headless.committed.on('entry', () => {
       this.armLiveBridgeReady()
     })
+    // start() owns the durable replay boundary. Arming here used to let this
+    // 250 ms timer expire while getProjectDirForCwd/tailer discovery was still
+    // in flight, after which an unread historical entry could acknowledge a
+    // brand-new identical prompt. armLiveBridgeReady intentionally no-ops
+    // until headless.start() has synchronously consumed the resume bootstrap.
     this.armLiveBridgeReady()
 
     // If headless.start() throws we are in the same leak shape as a
@@ -611,6 +637,14 @@ export class ClaudeSession extends EventEmitter {
       await this.rollbackStart()
       throw err
     }
+    // FileTailer parses the resume bootstrap synchronously before start()
+    // returns and begins live appends from the captured EOF. This transition is
+    // therefore the durable ingest boundary timestamps could not provide: no
+    // waiter can arm before every byte durable at attachment time was either
+    // emitted or placed behind the tailer's EOF cursor.
+    this.transcriptTailAttached = true
+    this.readyForLiveBridge = false
+    this.armLiveBridgeReady()
     this.emit('started', {
       projectDir,
       proxyUrl: this.proxyServer?.info.proxyUrl,
@@ -682,6 +716,7 @@ export class ClaudeSession extends EventEmitter {
    * flips to true — the gate never goes back down.
    */
   private armLiveBridgeReady(): void {
+    if (!this.transcriptTailAttached) return
     if (this.readyForLiveBridge) return
     if (this.liveBridgeTimer) clearTimeout(this.liveBridgeTimer)
     this.liveBridgeTimer = setTimeout(() => {
@@ -690,11 +725,153 @@ export class ClaudeSession extends EventEmitter {
     }, 250)
   }
 
+  armPromptAcceptance(
+    prompt: string,
+    opts: {
+      timeoutMs?: number
+      aliases?: string[]
+      requiresImage?: boolean
+      expectedImageCount?: number
+    } = {},
+  ): PromptAcceptanceWaiter {
+    const canonicalPrompt = canonicalizeAcceptedPrompt(prompt)
+    let settled = false
+    let resolvePromise!: (outcome: PromptAcceptanceOutcome) => void
+    const promise = new Promise<PromptAcceptanceOutcome>(resolve => {
+      resolvePromise = resolve
+    })
+    const waiter = {
+      prompts: new Set([
+        canonicalPrompt,
+        ...(opts.aliases ?? []).map(canonicalizeAcceptedPrompt),
+      ]),
+      afterCursor: this.promptAcceptanceIngestCursor,
+      armedAt: Date.now(),
+      requiresImage: opts.requiresImage === true,
+      expectedImageCount: opts.expectedImageCount,
+      finish: (outcome: PromptAcceptanceOutcome): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        this.promptAcceptanceWaiters.delete(waiter)
+        resolvePromise(outcome)
+      },
+    }
+    // WHY register before creating/returning the public handle: callers arm
+    // immediately before writing Enter, and a very fast local JSONL append can
+    // otherwise beat an asynchronously registered listener.
+    this.promptAcceptanceWaiters.add(waiter)
+    const timer = setTimeout(
+      () => waiter.finish({ kind: 'timeout' }),
+      opts.timeoutMs ?? 10_000,
+    )
+    if (this.exited) waiter.finish({ kind: 'session-exited' })
+    return {
+      promise,
+      cancel: () => waiter.finish({ kind: 'cancelled' }),
+    }
+  }
+
+  isPromptAcceptanceReady(): boolean {
+    return this.readyForLiveBridge && !this.exited
+  }
+
+  private resolvePromptAcceptance(entry: JsonlEntry, cursor: number): void {
+    const value = entry as Record<string, unknown>
+    let kind: 'user' | 'queue' | null = null
+    let content: string | null = null
+    let entryId: string | undefined
+    let hasImageContent = false
+    let imageContentCount = 0
+
+    if (value.type === 'queue-operation' && value.operation === 'enqueue') {
+      kind = 'queue'
+      content = typeof value.content === 'string' ? value.content : null
+    } else if (value.type === 'user') {
+      const message = value.message as Record<string, unknown> | undefined
+      if (message?.role === 'user') {
+        kind = 'user'
+        if (typeof message.content === 'string') {
+          content = message.content
+        } else if (Array.isArray(message.content)) {
+          // Claude may serialize structured user content as text blocks. Only
+          // text participates: tool/image metadata must never make a near-match
+          // look like acceptance of a different prompt.
+          content = message.content
+            .filter((block): block is Record<string, unknown> =>
+              typeof block === 'object' && block !== null,
+            )
+            .filter(block => block.type === 'text' && typeof block.text === 'string')
+            .map(block => block.text as string)
+            .join('')
+          hasImageContent = message.content.some(block =>
+            typeof block === 'object' &&
+            block !== null &&
+            ((block as Record<string, unknown>).type === 'image' ||
+              (block as Record<string, unknown>).type === 'image_url'),
+          )
+          imageContentCount = message.content.filter(block =>
+            typeof block === 'object' &&
+            block !== null &&
+            ((block as Record<string, unknown>).type === 'image' ||
+              (block as Record<string, unknown>).type === 'image_url'),
+          ).length
+        }
+        entryId = typeof value.uuid === 'string' ? value.uuid : undefined
+      }
+    }
+    if (!kind || content === null) return
+
+    const canonicalContent = canonicalizeAcceptedPrompt(content)
+    const entryTimestamp = typeof value.timestamp === 'string'
+      ? Date.parse(value.timestamp)
+      : typeof value.timestamp === 'number' ? value.timestamp : Number.NaN
+    for (const waiter of [...this.promptAcceptanceWaiters]) {
+      if (cursor <= waiter.afterCursor) continue
+      // The ingest cursor orders callbacks, while timestamp rejects a record
+      // that was already durable but unread when the waiter armed. Claude's
+      // transcript timestamps are generated by the same local process.
+      if (Number.isFinite(entryTimestamp) && entryTimestamp < waiter.armedAt) continue
+      if (waiter.requiresImage && kind === 'user' && !hasImageContent) continue
+      if (
+        waiter.expectedImageCount !== undefined &&
+        kind === 'user' &&
+        imageContentCount !== waiter.expectedImageCount
+      ) continue
+      // Claude 2.1.207's durable user entry does not retain the pasted file
+      // path in its prompt text. It appends `[Image #N]` pills and stores the
+      // actual images as structured blocks; queue-operation entries have the
+      // same pills but no structured blocks. The waiter carries the submitted
+      // image count so we strip exactly that many suffixes, preserving any
+      // pill-looking text the user deliberately wrote before them.
+      const imageCountForEntry = kind === 'user'
+        ? imageContentCount
+        : waiter.expectedImageCount ?? 0
+      const withoutImagePills = imageCountForEntry > 0
+        ? stripTrailingClaudeImagePills(content, imageCountForEntry)
+        : null
+      const matches = waiter.prompts.has(canonicalContent) || (
+        withoutImagePills !== null &&
+        waiter.prompts.has(canonicalizeAcceptedPrompt(withoutImagePills))
+      )
+      if (!matches) continue
+      waiter.finish(kind === 'queue'
+        ? { kind: 'queue', acceptedAt: Date.now() }
+        : { kind: 'user', acceptedAt: Date.now(), entryId })
+    }
+  }
+
+  private finishPromptAcceptanceWaiters(outcome: PromptAcceptanceOutcome): void {
+    for (const waiter of [...this.promptAcceptanceWaiters]) waiter.finish(outcome)
+  }
+
   async stop(): Promise<void> {
     if (this.liveBridgeTimer) {
       clearTimeout(this.liveBridgeTimer)
       this.liveBridgeTimer = null
     }
+    this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
+    this.transcriptTailAttached = false
     await this.headless?.stop()
     try { this.pty?.kill() } catch { /* already gone */ }
     this.pty = null
@@ -758,4 +935,28 @@ export class ClaudeSession extends EventEmitter {
     // the proxy-event handler that would otherwise pin it.
     this.headless = null
   }
+}
+
+/**
+ * Claude's composer cannot preserve terminal-significant CR bytes and trims
+ * whitespace at the editable buffer's end when committing a turn. Mirroring
+ * that narrow normalization prevents a successfully submitted trailing newline
+ * from becoming a false acceptance timeout. Interior whitespace remains exact:
+ * collapsing it could acknowledge a different prompt.
+ */
+function canonicalizeAcceptedPrompt(value: string): string {
+  return value.replace(/\r\n?/g, '\n').replace(/\s+$/u, '')
+}
+
+function stripTrailingClaudeImagePills(value: string, count: number): string | null {
+  let stripped = value
+  for (let i = 0; i < count; i += 1) {
+    const next = stripped.replace(/\s*\[Image #\d+\]\s*$/u, '')
+    // A partial strip would create a candidate Claude never committed. Return
+    // no candidate unless the transcript contains exactly enough generated
+    // suffixes to account for every image in this reserved delivery.
+    if (next === stripped) return null
+    stripped = next
+  }
+  return stripped
 }

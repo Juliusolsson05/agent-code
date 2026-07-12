@@ -13,7 +13,8 @@ import {
 } from '../pairing'
 import { PairScreen } from './PairScreen'
 import { SessionList } from './SessionList'
-import { SessionView } from './SessionView'
+import { EMPTY_MOBILE_COMPOSER_STATE, SessionView } from './SessionView'
+import type { MobileComposerState } from './SessionView'
 
 // Phone app shell. Three states, one screen each:
 //   no token            → PairScreen (QR hash auto-redeem or manual code)
@@ -36,6 +37,10 @@ export function App(): React.JSX.Element {
   const [autoPairing, setAutoPairing] = useState(false)
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null)
   const [connection, setConnection] = useState<ConnectionState>('connecting')
+  // Per-session composer/delivery state intentionally outlives SessionView.
+  // Back navigation unmounts that screen; keeping an unsafe-delivery guard in
+  // component state made Back → reopen an accidental duplicate-resend escape.
+  const [composerStates, setComposerStates] = useState<Record<string, MobileComposerState>>({})
 
   // QR flow: the desktop QR is `${url}/#code=…`; if we land with a code and
   // no token yet, redeem it immediately — the user's only gesture is the scan.
@@ -80,6 +85,7 @@ export function App(): React.JSX.Element {
     // device list. Clearing the token here just makes THIS phone forget.
     clearToken()
     setSelectedSessionId(null)
+    setComposerStates({})
     setToken(null)
   }
 
@@ -123,6 +129,15 @@ export function App(): React.JSX.Element {
       sessionId={selectedSessionId}
       token={token}
       onBack={() => setSelectedSessionId(null)}
+      composerState={composerStates[selectedSessionId] ?? EMPTY_MOBILE_COMPOSER_STATE}
+      updateComposerState={updater => {
+        setComposerStates(current => ({
+          ...current,
+          [selectedSessionId]: updater(
+            current[selectedSessionId] ?? EMPTY_MOBILE_COMPOSER_STATE,
+          ),
+        }))
+      }}
     />
   )
 }

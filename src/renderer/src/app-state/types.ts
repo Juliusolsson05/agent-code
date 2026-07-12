@@ -16,6 +16,8 @@ export type SettingsSlice = {
   toggleCustomRendering: () => void
   toggleStatusMode: () => void
   toggleWorktreeBadges: () => void
+  toggleUsageHeader: () => void
+  cycleUsageHeaderLevel: () => void
 }
 
 export type UiShellSlice = UiShellState & {

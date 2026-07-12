@@ -1,6 +1,7 @@
 import { AppearanceMenu } from '@renderer/features/feed/AppearanceMenu'
 import { PerformancePanel } from '@renderer/features/performance/ui/PerformancePanel'
 import { SystemPerfHeader } from '@renderer/features/system-perf/ui/SystemPerfHeader'
+import { UsageHeaderIndicator } from '@renderer/features/usage/ui/UsageHeaderIndicator'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
@@ -27,6 +28,12 @@ export function SettingsBar() {
       "
     >
       <div className="flex items-center gap-2 [-webkit-app-region:no-drag]">
+        {/* Gating the MOUNT here (not inside the widget) is deliberate:
+            unmounting is what tears down the widget's polling interval,
+            so the disabled feature costs zero IPC. */}
+        {settings.usageHeaderEnabled ? (
+          <UsageHeaderIndicator level={settings.usageHeaderLevel} />
+        ) : null}
         <AppearanceMenu settings={settings} onChange={setSettings} />
         <button
           type="button"

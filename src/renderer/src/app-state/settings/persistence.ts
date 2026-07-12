@@ -4,9 +4,15 @@ import {
   DEFAULT_SETTINGS,
   FONT_FAMILIES,
   THEME_MODES,
+  USAGE_HEADER_LEVELS,
   WORKSPACE_MODES,
 } from '@renderer/app-state/settings/types'
-import type { AccentId, FontFamilyId, Settings } from '@renderer/app-state/settings/types'
+import type {
+  AccentId,
+  FontFamilyId,
+  Settings,
+  UsageHeaderLevel,
+} from '@renderer/app-state/settings/types'
 import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 
@@ -50,6 +56,17 @@ export function coerceSettings(value: unknown): Settings {
     // turns autosend off. Fresh installs / older workspace.json blobs (no
     // such key) get the on-by-default behavior.
     autoSendPromptSuggestion: parsed.autoSendPromptSuggestion !== false,
+    // `!== false` → on by default; only an explicit persisted `false`
+    // disables the header widget (same pattern as showWorktreeBadges).
+    usageHeaderEnabled: parsed.usageHeaderEnabled !== false,
+    // Membership check, same philosophy as accent/fontFamily: a typo or
+    // a level removed by a future release must fall back to 'all', not
+    // crash the header or persist garbage forward.
+    usageHeaderLevel: USAGE_HEADER_LEVELS.includes(
+      parsed.usageHeaderLevel as UsageHeaderLevel,
+    )
+      ? (parsed.usageHeaderLevel as UsageHeaderLevel)
+      : DEFAULT_SETTINGS.usageHeaderLevel,
     // WHY membership check via WORKSPACE_MODES rather than a literal
     // === 'dispatch': keeps the source of truth in one array so adding
     // a new mode label later (if ever) only requires editing types.ts.

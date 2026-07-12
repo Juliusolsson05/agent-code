@@ -23,7 +23,12 @@ const noop: SessionFeed = {
   onSessionSubAgents: () => () => {},
   onSessionExit: () => () => {},
   sendInput: async () => true,
-  deliverPrompt: async () => ({ ok: true }),
+  // Mirrors PR #525's PromptDeliveryResult widening: `acceptance` became part
+  // of the deliverPrompt contract, so the lock must exercise the new shape.
+  deliverPrompt: async () => ({
+    ok: true,
+    acceptance: { kind: 'transport', acceptedAt: 123 },
+  }),
   resolveCondition: async () => ({ ok: true }),
 }
 

@@ -206,6 +206,14 @@ export const FONT_FAMILIES: FontFamilyMeta[] = [
   },
 ]
 
+/** Detail levels for the header usage indicator, ordered from least to
+ *  most detail. The ORDER is load-bearing: the `usage.cycle-header-level`
+ *  palette command advances through this array circularly, and the
+ *  settings-page select lists options in this order. Add new levels in
+ *  display order, never alphabetically. */
+export const USAGE_HEADER_LEVELS = ['minimal', 'providers', 'all', 'detailed'] as const
+export type UsageHeaderLevel = (typeof USAGE_HEADER_LEVELS)[number]
+
 export type Settings = {
   mode: ThemeMode
   contrast: boolean
@@ -325,6 +333,17 @@ export type Settings = {
    *  registry, the single picker-list chokepoint. It NEVER affects
    *  `run()` or keybindings — hiding is list-only. */
   commandVisibilityOverrides: Record<string, boolean>
+  /** Ambient provider-quota indicator in the SettingsBar header row.
+   *  On by default: quota headroom is a planning input for dispatching
+   *  agent fleets, and the whole point of the feature is ambient
+   *  visibility. The widget is fully unmounted when off (its polling
+   *  hook lives inside the component), so the off state costs nothing. */
+  usageHeaderEnabled: boolean
+  /** How much of the usage snapshot the header shows. 'all' (every
+   *  active limit row, compact labels) is the default per the design
+   *  spec — an aggregate-only number was explicitly rejected as not
+   *  enough. See docs/superpowers/specs/2026-07-12-usage-header-indicator-design.md §3. */
+  usageHeaderLevel: UsageHeaderLevel
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -350,4 +369,6 @@ export const DEFAULT_SETTINGS: Settings = {
   // command. This keeps the whole feature purely additive — fresh
   // installs and existing users see the exact same picker they do today.
   commandVisibilityOverrides: {},
+  usageHeaderEnabled: true,
+  usageHeaderLevel: 'all',
 }

@@ -15,6 +15,7 @@ import type {
 import { applyTheme } from '@renderer/app-state/settings/theme'
 import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
 import type { Settings } from '@renderer/app-state/settings/types'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig'
 
 import type {
   FeedChannel,
@@ -51,7 +52,10 @@ function applyRemoteThemeSettings(settings: Record<string, unknown> | null | und
 // state, so listeners self-heal without a client-side resync protocol.
 
 const BRACKETED_PASTE = /^\x1b\[200~([\s\S]*)\x1b\[201~$/
-const REQUEST_TIMEOUT_MS = 10_000
+// WHY this exceeds the provider protocol: Claude may spend 2s proving paste
+// absorption and then wait through the JSONL tailer's 15s recovery window.
+// Transport cannot time out before main returns retry safety.
+const REQUEST_TIMEOUT_MS = 30_000
 const RECONNECT_BASE_MS = 1_000
 const RECONNECT_CAP_MS = 10_000
 
@@ -76,9 +80,11 @@ export type WebSocketSessionFeedOptions = {
 }
 
 type Pending = {
-  resolve: (frame: { ok: boolean; error?: string; result?: unknown }) => void
+  resolve: (frame: RemoteReply) => void
   timer: ReturnType<typeof setTimeout>
 }
+
+type RemoteReply = Omit<Extract<OutboundFrame, { type: 'reply' }>, 'type' | 'id'>
 
 export class WebSocketSessionFeed implements SessionFeed {
   private readonly listeners: Record<FeedChannel | 'sub-agents', Set<(e: never) => void>> = {
@@ -215,9 +221,46 @@ export class WebSocketSessionFeed implements SessionFeed {
   async deliverPrompt(
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    imagePaths?: string[],
+    _deliveryId?: string,
+  ): Promise<PromptDeliveryResult> {
+    if (imagePaths && imagePaths.length > 0) {
+      return {
+        ok: false, stage: 'before-write', code: 'missing-capability',
+        message: 'Remote image-path delivery is not supported', retrySafe: true,
+        promptWritten: false, enterWritten: false,
+      }
+    }
     const reply = await this.request({ type: 'send-prompt', sessionId, text: prompt })
-    return reply.ok ? { ok: true } : { ok: false, message: reply.error ?? 'delivery failed' }
+    if (reply.delivery) return reply.delivery
+    // A locally rejected request has crossed no transport boundary. Treating
+    // this like an after-Enter timeout would lock the phone's composer behind
+    // the manual transcript-verification escape hatch even though no server —
+    // much less Claude's PTY — ever saw the prompt. Keep the conservative
+    // fallback below for replies whose provenance is ambiguous; this exact
+    // sentinel is owned by request() and therefore proves a pre-write failure.
+    if (!reply.ok && reply.error === 'not connected') {
+      return {
+        ok: false,
+        stage: 'before-write',
+        code: 'transport-failed',
+        message: reply.error,
+        retrySafe: true,
+        promptWritten: false,
+        enterWritten: false,
+      }
+    }
+    return reply.ok
+      ? { ok: true, acceptance: { kind: 'transport', acceptedAt: Date.now() } }
+      : {
+          ok: false,
+          stage: 'after-enter',
+          code: 'transport-failed',
+          message: reply.error ?? 'delivery failed',
+          retrySafe: false,
+          promptWritten: true,
+          enterWritten: true,
+        }
   }
 
   async resolveCondition(
@@ -379,7 +422,12 @@ export class WebSocketSessionFeed implements SessionFeed {
         if (!pending) return
         this.pending.delete(frame.id)
         clearTimeout(pending.timer)
-        pending.resolve({ ok: frame.ok, error: frame.error, result: frame.result })
+        pending.resolve({
+          ok: frame.ok,
+          error: frame.error,
+          result: frame.result,
+          delivery: frame.delivery,
+        })
         return
       }
       case 'hello': {
@@ -404,7 +452,7 @@ export class WebSocketSessionFeed implements SessionFeed {
 
   private request(
     message: InboundMessage,
-  ): Promise<{ ok: boolean; error?: string; result?: unknown }> {
+  ): Promise<RemoteReply> {
     const socket = this.socket
     if (!socket || socket.readyState !== 1 /* OPEN */) {
       return Promise.resolve({ ok: false, error: 'not connected' })

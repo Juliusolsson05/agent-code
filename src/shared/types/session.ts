@@ -288,6 +288,32 @@ export interface AgentSession extends AgentSessionEmitter {
    *  headless instance isn't up yet. */
   snapshotScreen?(): string
 
+  /**
+   * Optional (Claude today): arm an authoritative prompt-acceptance waiter
+   * BEFORE Enter is written. Claude acknowledges a finished prompt through
+   * either a `type: "user"` JSONL entry (new turn) or a
+   * `queue-operation/enqueue` entry (Claude was already working). Keeping the
+   * arm synchronous closes the fastest possible race: a local JSONL append can
+   * arrive immediately after the PTY consumes Enter, before an `await` resumes.
+   *
+   * The returned cancel function is load-bearing on absorption failure. A
+   * paste that never reaches the Enter phase must not leave a content-bearing
+   * waiter alive to accidentally match a later manual submission.
+   */
+  armPromptAcceptance?(
+    prompt: string,
+    opts?: {
+      timeoutMs?: number
+      aliases?: string[]
+      requiresImage?: boolean
+      expectedImageCount?: number
+    },
+  ): PromptAcceptanceWaiter
+
+  /** Claude's bootstrap JSONL replay must quiesce before a new waiter can be
+   * armed, otherwise a historical identical entry can acknowledge new bytes. */
+  isPromptAcceptanceReady?(): boolean
+
   /** Optional (Codex today): wait for the composer to be ready to
    *  accept a prompt (past the startup/trust chrome). See
    *  sessionManager.ts:987. */
@@ -307,6 +333,18 @@ export interface AgentSession extends AgentSessionEmitter {
    *  paste PTY writes. Throws on transport failure so the delivery
    *  protocol can report ok:false and the composer keeps the draft. */
   deliverPromptText?(text: string): Promise<void>
+}
+
+export type PromptAcceptanceOutcome =
+  | { kind: 'user'; acceptedAt: number; entryId?: string }
+  | { kind: 'queue'; acceptedAt: number }
+  | { kind: 'timeout' }
+  | { kind: 'cancelled' }
+  | { kind: 'session-exited' }
+
+export type PromptAcceptanceWaiter = {
+  promise: Promise<PromptAcceptanceOutcome>
+  cancel: () => void
 }
 
 

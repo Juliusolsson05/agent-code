@@ -472,17 +472,23 @@ function registerOrchestrationTools(
           let cleanupAttempted = false
           let agentClosed = false
           let cleanupError: string | undefined
-          try {
-            cleanupAttempted = true
-            const cleanup = await bridge.closeAgent({
-              parentSessionId: scope.sessionId,
-              sessionId: agent.sessionId,
-            })
-            agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
-          } catch (err) {
-            cleanupError = err instanceof Error && err.message.length > 0
-              ? err.message
-              : 'Unknown orchestration cleanup failure.'
+          // WHY cleanup only a retry-safe rejection: after any prompt/Enter
+          // bytes were written, a timeout means acceptance is UNKNOWN, not
+          // absent. Closing that child can kill a correctly submitted turn and
+          // encourages callers to create a duplicate replacement agent.
+          if (delivery.retrySafe) {
+            try {
+              cleanupAttempted = true
+              const cleanup = await bridge.closeAgent({
+                parentSessionId: scope.sessionId,
+                sessionId: agent.sessionId,
+              })
+              agentClosed = cleanup.closedSessionIds.includes(agent.sessionId)
+            } catch (err) {
+              cleanupError = err instanceof Error && err.message.length > 0
+                ? err.message
+                : 'Unknown orchestration cleanup failure.'
+            }
           }
           dependencies.appRunJournal?.recordIncident({
             kind: 'orchestration.prompt_delivery_failed',
@@ -491,6 +497,11 @@ function registerOrchestrationTools(
             context: {
               sessionId: agent.sessionId,
               message: delivery.message,
+              stage: delivery.stage,
+              code: delivery.code,
+              retrySafe: delivery.retrySafe,
+              promptWritten: delivery.promptWritten,
+              enterWritten: delivery.enterWritten,
               cleanupAttempted,
               agentClosed,
               cleanupError,
@@ -500,6 +511,7 @@ function registerOrchestrationTools(
             ok: false,
             error: 'prompt_delivery_failed',
             message: delivery.message,
+            retrySafe: delivery.retrySafe,
             // WHY omit the live agent object on bootstrap failure:
             // `create_agent` is a two-step operation. By this point the
             // renderer has already created a real provider session with PTY,
@@ -508,12 +520,18 @@ function registerOrchestrationTools(
             // the full agent here made that half-created child look usable while
             // leaving cleanup to memory and luck. The failure result now reports
             // the session id plus cleanup outcome, and the child is best-effort
-            // closed before the error crosses the MCP boundary.
+            // closed before the error crosses the MCP boundary only when no
+            // bytes were written and the result explicitly says retry is safe.
             sessionId: agent.sessionId,
             cleanupAttempted,
             agentClosed,
             cleanupError,
-            promptSubmitted: false,
+            // `false` is only truthful when no bytes crossed the boundary.
+            // Omit it for uncertainty so an orchestrator cannot interpret a
+            // late acknowledgement as permission to duplicate the task.
+            ...(delivery.retrySafe
+              ? { promptSubmitted: false }
+              : { promptSubmission: 'uncertain' as const }),
           })
         }
         bridge.notePromptSubmitted(agent.sessionId)
@@ -632,12 +650,26 @@ function registerOrchestrationTools(
           kind: 'orchestration.prompt_delivery_failed',
           severity: 'error',
           reason: 'send_prompt',
-          context: { sessionId: args.sessionId, message: delivery.message },
+          context: {
+            sessionId: args.sessionId,
+            message: delivery.message,
+            stage: delivery.stage,
+            code: delivery.code,
+            retrySafe: delivery.retrySafe,
+            promptWritten: delivery.promptWritten,
+            enterWritten: delivery.enterWritten,
+          },
         })
         return toolText({
           ok: false,
           error: 'prompt_delivery_failed',
           message: delivery.message,
+          retrySafe: delivery.retrySafe,
+          stage: delivery.stage,
+          code: delivery.code,
+          promptWritten: delivery.promptWritten,
+          enterWritten: delivery.enterWritten,
+          promptSubmission: delivery.retrySafe ? 'not-submitted' : 'uncertain',
           sessionId: args.sessionId,
         })
       }
@@ -1078,7 +1110,7 @@ function sleep(ms: number): Promise<void> {
 // manager.deliverPromptToAgent → getMainProvider(kind).deliverPrompt →
 // providers/<kind>/runtime/promptDelivery.ts. The per-provider WHY
 // blocks (Codex readiness-before-paste + atomic paste+Enter; Claude
-// paste → placeholder confirm → separate Enter) moved with the code.
+// paste/image absorption → Enter → durable acceptance) moved with the code.
 // The inline `if codex … if claude …` that lived here let a third
 // provider fall through to a protocol-free paste (#394 §4.2).
 
