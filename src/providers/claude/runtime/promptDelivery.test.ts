@@ -34,7 +34,13 @@ function makeIo(prompt: string, afterPaste: string): {
       writes.push(data)
       return true
     },
-    session: { snapshotScreen },
+    session: {
+      snapshotScreen,
+      armPromptAcceptance: () => ({
+        promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+        cancel: vi.fn(),
+      }),
+    },
   } as unknown as PromptDeliveryIo
   return { io, writes, snapshotScreen }
 }
@@ -47,7 +53,7 @@ describe('deliverClaudePrompt routing', () => {
   it('short single-line prompts go plain text+\\r — no paste, no screen poll', async () => {
     const { io, writes, snapshotScreen } = makeIo('fix the bug', '')
     const result = await deliverClaudePrompt(io)
-    expect(result).toEqual({ ok: true })
+    expect(result).toMatchObject({ ok: true, acceptance: { kind: 'user' } })
     expect(writes).toEqual(['fix the bug\r'])
     expect(snapshotScreen).not.toHaveBeenCalled()
   })
@@ -58,7 +64,7 @@ describe('deliverClaudePrompt routing', () => {
     // text in the composer. The tail must be findable in the screen.
     const { io, writes } = makeIo(prompt, '❯ line one line two')
     const result = await deliverClaudePrompt(io)
-    expect(result).toEqual({ ok: true })
+    expect(result).toMatchObject({ ok: true, acceptance: { kind: 'user' } })
     // Paste, then Enter — Enter only AFTER the inline tail confirmed.
     expect(writes).toEqual([`\x1b[200~${prompt}\x1b[201~`, '\r'])
   })
@@ -67,7 +73,7 @@ describe('deliverClaudePrompt routing', () => {
     const long = 'x'.repeat(150)
     const { io, writes } = makeIo(long, '❯ [Pasted text #1]')
     const result = await deliverClaudePrompt(io)
-    expect(result).toEqual({ ok: true })
+    expect(result).toMatchObject({ ok: true, acceptance: { kind: 'user' } })
     expect(writes).toEqual([`\x1b[200~${long}\x1b[201~`, '\r'])
   })
 
@@ -86,10 +92,16 @@ describe('deliverClaudePrompt routing', () => {
     const io = {
       sessionId: 's1', prompt,
       write: (d: string) => { writes.push(d); return true },
-      session: { snapshotScreen },
+      session: {
+        snapshotScreen,
+        armPromptAcceptance: () => ({
+          promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+          cancel: vi.fn(),
+        }),
+      },
     } as unknown as PromptDeliveryIo
     const result = await deliverClaudePrompt(io)
-    expect(result).toEqual({ ok: true })
+    expect(result).toMatchObject({ ok: true, acceptance: { kind: 'user' } })
     expect(writes).toEqual([`\x1b[200~${prompt}\x1b[201~`, '\r'])
     // It did NOT confirm on the first post-paste read (stale #1 only); it kept polling.
     expect(snapshotScreen.mock.calls.length).toBeGreaterThanOrEqual(3)
@@ -111,10 +123,40 @@ describe('deliverClaudePrompt routing', () => {
     const io = {
       sessionId: 's1', prompt: 'line one\nline two',
       write: (d: string) => { writes.push(d); return true },
-      session: {},
+      session: {
+        armPromptAcceptance: () => ({
+          promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+          cancel: vi.fn(),
+        }),
+      },
     } as unknown as PromptDeliveryIo
     const result = await deliverClaudePrompt(io)
     expect(result.ok).toBe(false)
     expect(writes).toEqual([]) // nothing pasted if we can't confirm
+  })
+
+  it('reports post-Enter acceptance timeout as unsafe to retry', async () => {
+    const writes: string[] = []
+    const io = {
+      sessionId: 's1', prompt: 'hello',
+      write: (data: string) => { writes.push(data); return true },
+      session: {
+        armPromptAcceptance: () => ({
+          promise: Promise.resolve({ kind: 'timeout' as const }),
+          cancel: vi.fn(),
+        }),
+      },
+    } as unknown as PromptDeliveryIo
+
+    const result = await deliverClaudePrompt(io)
+    expect(result).toMatchObject({
+      ok: false,
+      stage: 'after-enter',
+      code: 'acceptance-timeout',
+      retrySafe: false,
+      promptWritten: true,
+      enterWritten: true,
+    })
+    expect(writes).toEqual(['hello\r'])
   })
 })

@@ -602,7 +602,8 @@ export class RemoteServer extends EventEmitter {
       case 'send-prompt': {
         // EVERY agent kind goes through SessionManager.deliverPromptToAgent —
         // the registry routes to the provider's own prompt-delivery module
-        // (Claude: paste, await the [Pasted text #N] placeholder, THEN Enter;
+        // (Claude: paste, confirm active-composer absorption, Enter, then await
+        // durable user/queue JSONL acceptance;
         // Codex: readiness gate + atomic paste+Enter; opencode: HTTP prompt).
         // A hand-rolled bare bracketed-paste write here reintroduced the
         // exact swallowed-Enter bugs those modules exist to prevent: the

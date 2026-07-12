@@ -45,6 +45,39 @@ export function isPasteLike(text: string): boolean {
 
 const PASTE_PLACEHOLDER_RE = /\[Pasted text #\d+/g
 
+/**
+ * Return only Claude's currently active composer region.
+ *
+ * WHY the whole screen is unsafe: `recent` intentionally includes scrollback,
+ * so a previous user message can contain the same tail (or an old paste
+ * placeholder) forever. Delivery confirmation is about a transition in the
+ * editable composer, not whether the bytes appeared anywhere in terminal
+ * history. Claude marks that region with the final `❯` prompt and closes it at
+ * the horizontal status separator. Falling back to the final viewport lines
+ * preserves compatibility with startup variants that have not drawn `❯` yet,
+ * while still refusing to search an unbounded transcript.
+ */
+export function extractActiveClaudeComposer(screen: string): string {
+  const lines = screen.split('\n')
+  let start = -1
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (/^\s*❯(?:\s|$)/u.test(lines[i] ?? '')) {
+      start = i
+      break
+    }
+  }
+  if (start < 0) return lines.slice(-12).join('\n')
+
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^\s*[─━-]{8,}/u.test(lines[i] ?? '')) {
+      end = i
+      break
+    }
+  }
+  return lines.slice(start, end).join('\n')
+}
+
 export function placeholderCount(screen: string): number {
   const matches = screen.match(PASTE_PLACEHOLDER_RE)
   return matches ? matches.length : 0
@@ -110,12 +143,16 @@ export function pollPasteAbsorbed(
   opts: { timeoutMs: number; pollIntervalMs: number },
 ): Promise<PasteAbsorbedOutcome> {
   const tail = pasteTailNeedle(payload)
-  const baseCount = placeholderCount(baselineScreen)
-  const tailAlreadyPresent = tail ? normalizeWhitespace(baselineScreen).includes(tail) : false
+  const baselineComposer = extractActiveClaudeComposer(baselineScreen)
+  const baseCount = placeholderCount(baselineComposer)
+  const tailAlreadyPresent = tail
+    ? normalizeWhitespace(baselineComposer).includes(tail)
+    : false
   const startedAt = Date.now()
   return new Promise(resolve => {
     const tick = (): void => {
-      const via = pasteAbsorbedVia(getScreen() ?? '', tail, baseCount, tailAlreadyPresent)
+      const composer = extractActiveClaudeComposer(getScreen() ?? '')
+      const via = pasteAbsorbedVia(composer, tail, baseCount, tailAlreadyPresent)
       if (via) {
         resolve({ kind: 'absorbed', waitedMs: Date.now() - startedAt, via })
         return

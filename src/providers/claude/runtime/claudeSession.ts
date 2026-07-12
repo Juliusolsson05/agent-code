@@ -7,6 +7,10 @@ import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import type {
+  PromptAcceptanceOutcome,
+  PromptAcceptanceWaiter,
+} from '@shared/types/session.js'
 import {
   ClaudeCodeHeadless,
   createProxyServer,
@@ -137,6 +141,10 @@ export class ClaudeSession extends EventEmitter {
    *  the committed entry and the prior bootstrap burst. */
   private readyForLiveBridge = false
   private liveBridgeTimer: NodeJS.Timeout | null = null
+  private readonly promptAcceptanceWaiters = new Set<{
+    prompt: string
+    finish: (outcome: PromptAcceptanceOutcome) => void
+  }>()
 
   private readonly cwd: string
   private readonly cols: number
@@ -462,9 +470,14 @@ export class ClaudeSession extends EventEmitter {
       })
     })
 
-    this.headless.on('jsonl-entry', (entry, file) =>
-      this.emit('jsonl-entry', entry, file),
-    )
+    this.headless.on('jsonl-entry', (entry, file) => {
+      // WHY inspect before forwarding: the tailer callback is synchronous and
+      // is our first durable evidence that Claude accepted Enter. Resolving
+      // here prevents renderer scheduling, IPC batching, or transcript mapping
+      // from becoming part of the delivery correctness boundary.
+      this.resolvePromptAcceptance(entry)
+      this.emit('jsonl-entry', entry, file)
+    })
     this.headless.on('jsonl-error', err =>
       this.emit('jsonl-error', err),
     )
@@ -504,6 +517,7 @@ export class ClaudeSession extends EventEmitter {
     )
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
+      this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
       this.emit('exit', { exitCode, signal })
     })
 
@@ -691,11 +705,92 @@ export class ClaudeSession extends EventEmitter {
     }, 250)
   }
 
+  armPromptAcceptance(
+    prompt: string,
+    opts: { timeoutMs?: number } = {},
+  ): PromptAcceptanceWaiter {
+    const canonicalPrompt = prompt.replace(/\r\n?/g, '\n')
+    let settled = false
+    let resolvePromise!: (outcome: PromptAcceptanceOutcome) => void
+    const promise = new Promise<PromptAcceptanceOutcome>(resolve => {
+      resolvePromise = resolve
+    })
+    const waiter = {
+      prompt: canonicalPrompt,
+      finish: (outcome: PromptAcceptanceOutcome): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        this.promptAcceptanceWaiters.delete(waiter)
+        resolvePromise(outcome)
+      },
+    }
+    // WHY register before creating/returning the public handle: callers arm
+    // immediately before writing Enter, and a very fast local JSONL append can
+    // otherwise beat an asynchronously registered listener.
+    this.promptAcceptanceWaiters.add(waiter)
+    const timer = setTimeout(
+      () => waiter.finish({ kind: 'timeout' }),
+      opts.timeoutMs ?? 10_000,
+    )
+    if (this.exited) waiter.finish({ kind: 'session-exited' })
+    return {
+      promise,
+      cancel: () => waiter.finish({ kind: 'cancelled' }),
+    }
+  }
+
+  private resolvePromptAcceptance(entry: JsonlEntry): void {
+    const value = entry as unknown as Record<string, unknown>
+    let kind: 'user' | 'queue' | null = null
+    let content: string | null = null
+    let entryId: string | undefined
+
+    if (value.type === 'queue-operation' && value.operation === 'enqueue') {
+      kind = 'queue'
+      content = typeof value.content === 'string' ? value.content : null
+    } else if (value.type === 'user') {
+      const message = value.message as Record<string, unknown> | undefined
+      if (message?.role === 'user') {
+        kind = 'user'
+        if (typeof message.content === 'string') {
+          content = message.content
+        } else if (Array.isArray(message.content)) {
+          // Claude may serialize structured user content as text blocks. Only
+          // text participates: tool/image metadata must never make a near-match
+          // look like acceptance of a different prompt.
+          content = message.content
+            .filter((block): block is Record<string, unknown> =>
+              typeof block === 'object' && block !== null,
+            )
+            .filter(block => block.type === 'text' && typeof block.text === 'string')
+            .map(block => block.text as string)
+            .join('')
+        }
+        entryId = typeof value.uuid === 'string' ? value.uuid : undefined
+      }
+    }
+    if (!kind || content === null) return
+
+    const canonicalContent = content.replace(/\r\n?/g, '\n')
+    for (const waiter of [...this.promptAcceptanceWaiters]) {
+      if (waiter.prompt !== canonicalContent) continue
+      waiter.finish(kind === 'queue'
+        ? { kind: 'queue', acceptedAt: Date.now() }
+        : { kind: 'user', acceptedAt: Date.now(), entryId })
+    }
+  }
+
+  private finishPromptAcceptanceWaiters(outcome: PromptAcceptanceOutcome): void {
+    for (const waiter of [...this.promptAcceptanceWaiters]) waiter.finish(outcome)
+  }
+
   async stop(): Promise<void> {
     if (this.liveBridgeTimer) {
       clearTimeout(this.liveBridgeTimer)
       this.liveBridgeTimer = null
     }
+    this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
     await this.headless?.stop()
     try { this.pty?.kill() } catch { /* already gone */ }
     this.pty = null

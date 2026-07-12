@@ -1,5 +1,5 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { extractAssistantInProgress } from '@shared/parsers/extractAssistant'
 
@@ -19,6 +19,7 @@ import {
 } from '@shared/types/providerKind'
 import { hasActionCondition } from '@renderer/workspace/conditions/selectors'
 import { useAppStore } from '@renderer/app-state/hooks'
+import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
 
 // The big onKeyDown handler for the composer textarea.
 //
@@ -76,6 +77,8 @@ export function useComposerKeybinds({
   endHistoryCycle,
 }: UseComposerKeybindsArgs) {
   const openUsageModal = useAppStore(state => state.openUsageModal)
+  const feed = useSessionFeed()
+  const submitInFlightRef = useRef(false)
   // True while we're forwarding keystrokes to the PTY for a slash
   // command. Controls key routing in onKeyDown and render of the
   // picker dropdown (we still render the dropdown from
@@ -132,6 +135,12 @@ export function useComposerKeybinds({
       return
     }
     if (input.trim().length === 0 && draftImages.length === 0) return
+    // WHY keep a renderer guard even though main has the authoritative lock:
+    // repeated Enter keydowns should not create noisy rejected IPC calls or
+    // optimistic bubbles. Correctness does not depend on this ref (reloads can
+    // erase it); it is a synchronous UX guard in front of main's reservation.
+    if (submitInFlightRef.current) return
+    submitInFlightRef.current = true
     // WHY submit does not stop at the renderer readiness flag:
     //
     // After an app restart a pane can have valid persisted SessionMeta and a
@@ -200,6 +209,7 @@ export function useComposerKeybinds({
         input,
         draftImages: caps.supportsImageAttachments ? draftImages : [],
         send,
+        deliverPrompt: prompt => feed.deliverPrompt(sessionId, prompt),
         pasteId,
         getScreen: () => workspace.latestScreenRef.current[sessionId],
       })
@@ -223,6 +233,10 @@ export function useComposerKeybinds({
       if (caps.usesOptimisticUserEcho) {
         workspace.removeOptimisticCodexUserEntry(sessionId, input)
       }
+      workspace.showPaneToast(
+        sessionId,
+        err instanceof Error ? err.message : 'Prompt delivery failed; draft preserved',
+      )
       console.warn('[TileLeaf] submit failed', err)
       window.api.recordPasteDebugEvent(pasteId, {
         layer: 'ERROR',
@@ -230,6 +244,7 @@ export function useComposerKeybinds({
         data: { message: err instanceof Error ? err.message : String(err) },
       })
     }
+    submitInFlightRef.current = false
     // Any submit exits history cycling — the prompt is
     // committed and the next Up should start a fresh walk from
     // the (now updated) newest entry, not continue from

@@ -17,7 +17,7 @@
 import type { ComposerSubmitIo } from '@providers/registry.renderer.capabilities'
 
 export async function opencodeComposerSubmit(io: ComposerSubmitIo): Promise<void> {
-  const result = await window.api.deliverPrompt(io.sessionId, io.input)
+  const result = await io.deliverPrompt(io.input)
   if (!result.ok) {
     throw new Error(result.message)
   }

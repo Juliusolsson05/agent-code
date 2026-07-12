@@ -26,18 +26,28 @@ export async function deliverOpencodePrompt(
   if (typeof io.session.deliverPromptText !== 'function') {
     return {
       ok: false,
+      stage: 'before-write',
+      code: 'missing-capability',
       message: `opencode session ${io.sessionId} has no HTTP prompt delivery (runtime not started?)`,
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
     }
   }
   try {
     await io.session.deliverPromptText(io.prompt)
-    return { ok: true }
+    return { ok: true, acceptance: { kind: 'transport', acceptedAt: Date.now() } }
   } catch (err) {
     return {
       ok: false,
+      stage: 'before-write',
+      code: 'transport-failed',
       message: `opencode prompt delivery failed for session ${io.sessionId}: ${
         err instanceof Error ? err.message : String(err)
       }`,
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
     }
   }
 }

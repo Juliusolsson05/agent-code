@@ -5,27 +5,23 @@
 // not "simplify" the delays or the event-driven wait without reading
 // docs/superpowers/plans/2026-05-11-paste-submit-*.md and #279/#90.
 //
-// Three routes:
+// Two routes:
 //   images     — save drafts to disk, send text (with separator),
 //                paste the file paths with the LONG 750 ms fallback
 //                timer (image expansion is its own TUI animation and
 //                the text-paste placeholder never shows up for it —
 //                event-driven detection is disabled on purpose).
-//   paste-like — multiline or >threshold text goes bracketed-paste
-//                first, then Enter only after the TUI visibly
-//                committed the paste (placeholder OR inlined text),
-//                via the live screen snapshot. Sending \r in the same
-//                PTY chunk races Claude's paste accumulator and
-//                leaves the prompt sitting in the composer (#90).
-//   plain      — raw text + \r in one write; the overwhelmingly
-//                common fast path.
+//   text       — every text-only prompt delegates to main's serialized,
+//                direct-snapshot, JSONL-acknowledged delivery state machine.
+//
+// The image timer remains provider-specific because Claude converts pasted
+// filesystem paths into image pills asynchronously; that is a different
+// acknowledgement surface from the text paste accumulator fixed here.
 
 import type { ComposerSubmitIo } from '@providers/registry.renderer.capabilities'
 import {
   buildClaudeImagePastePayload,
   CLAUDE_IMAGE_PATH_SUBMIT_DELAY_MS,
-  CLAUDE_PASTE_SUBMIT_DELAY_MS,
-  CLAUDE_PASTE_THRESHOLD,
   sendBracketedPasteThenSubmit,
   sendClaudeDraftText,
 } from '@renderer/workspace/tile-tree/TileLeaf/claudePaste'
@@ -67,35 +63,16 @@ export async function claudeComposerSubmit(io: ComposerSubmitIo): Promise<void> 
     return
   }
 
-  const isPasteLike =
-    input.includes('\n') || input.length > CLAUDE_PASTE_THRESHOLD
-  if (isPasteLike) {
-    window.api.recordPasteDebugEvent(pasteId, {
-      layer: 'RENDER',
-      event: 'route:claude-paste-like',
-      data: {
-        inputLen: input.length,
-        hasNewline: input.includes('\n'),
-        eventDriven: true,
-      },
-    })
-    await sendBracketedPasteThenSubmit(send, input, CLAUDE_PASTE_SUBMIT_DELAY_MS, {
-      pasteId,
-      // Content-match submit: confirm Claude's composer actually
-      // shows the paste before sending Enter, via the live screen
-      // snapshot. No clock as the primary path. See #279 / #90.
-      eventDriven: {
-        enabled: true,
-        getScreen: io.getScreen,
-      },
-    })
-    return
-  }
-
   window.api.recordPasteDebugEvent(pasteId, {
     layer: 'RENDER',
-    event: 'route:claude-plain-text',
+    event: 'route:claude-main-delivery',
     data: { inputLen: input.length },
   })
-  await send(input + '\r', pasteId)
+  // WHY desktop text takes the same main path as remote/MCP: a renderer can be
+  // paused for seconds by Chromium. Any confirmation, timer, or overlapping
+  // operation owned here inherits that pause. Main has the live headless
+  // snapshot, the PTY write, the per-session reservation, and durable JSONL
+  // acceptance, so it is the only process able to enforce the protocol.
+  const result = await io.deliverPrompt(input)
+  if (!result.ok) throw new Error(result.message)
 }

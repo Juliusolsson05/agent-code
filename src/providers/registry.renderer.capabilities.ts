@@ -176,6 +176,7 @@ export type ComposerSubmitIo = {
   input: string
   draftImages: Array<{ base64Data: string; mediaType: string; filename?: string }>
   send: (data: string, pasteId?: string) => Promise<void>
+  deliverPrompt: (prompt: string) => Promise<{ ok: true } | { ok: false; message: string }>
   pasteId: string
   getScreen: () => string | undefined
 }

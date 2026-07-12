@@ -48,6 +48,7 @@ import type {
   SessionSpawnOptions,
   SessionSpawnResult,
 } from '@preload/api/types.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -238,6 +239,11 @@ function appendCappedBuffer(prev: string, data: string, cap: number): string {
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
   private readonly spawningSessionIds = new Set<string>()
+  // WHY main owns this reservation: renderer guards disappear on reload and
+  // remote/MCP callers never share renderer state. PTY prompt delivery is a
+  // per-session critical section; without it, Enter from attempt A can submit
+  // paste B and turn a slow operation into duplicate queue entries.
+  private readonly promptDeliveriesInFlight = new Set<string>()
   private readonly lastActivityAt = new Map<string, number>()
   // Latest per-session UI-state snapshots, cached at the emit sites below.
   // WHY: consumers that attach mid-flight (the remote mobile companion's
@@ -1105,7 +1111,14 @@ export class SessionManager extends EventEmitter {
   async deliverPromptToAgent(
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }> {
+  ): Promise<PromptDeliveryResult> {
+    if (this.promptDeliveriesInFlight.has(sessionId)) {
+      return {
+        ok: false, stage: 'reservation', code: 'delivery-in-flight',
+        retrySafe: true, promptWritten: false, enterWritten: false,
+        message: `A prompt delivery is already in flight for session ${sessionId}`,
+      }
+    }
     const entry = this.sessions.get(sessionId)
     // `=== 'terminal'` rather than !isAgentProviderKind: TypeScript
     // only discriminates the RegistryEntry union on literal kind
@@ -1113,16 +1126,22 @@ export class SessionManager extends EventEmitter {
     // AgentSession for the registry call below.
     if (!entry || entry.kind === 'terminal') {
       return {
-        ok: false,
+        ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+        promptWritten: false, enterWritten: false,
         message: `Cannot deliver prompt: ${sessionId} is not a live agent session`,
       }
     }
-    return getMainProvider(entry.kind).deliverPrompt({
-      session: entry.session,
-      write: data => this.write(sessionId, data),
-      sessionId,
-      prompt,
-    })
+    this.promptDeliveriesInFlight.add(sessionId)
+    try {
+      return await getMainProvider(entry.kind).deliverPrompt({
+        session: entry.session,
+        write: data => this.write(sessionId, data),
+        sessionId,
+        prompt,
+      })
+    } finally {
+      this.promptDeliveriesInFlight.delete(sessionId)
+    }
   }
 
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */
