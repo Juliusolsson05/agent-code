@@ -1,4 +1,4 @@
-import { memo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 
@@ -39,14 +39,19 @@ export const OutputWell = memo(function OutputWell({
 }) {
   const [expanded, setExpanded] = useState(false)
 
-  let capped = text
-  let cappedNotice: string | null = null
-  if (text.length > MAX_RENDER_CHARS) {
-    const cut = text.slice(0, MAX_RENDER_CHARS)
+  // Memoized: slicing + line-counting the dropped remainder of an
+  // over-cap payload is O(dropped bytes) — running it on EVERY render
+  // (including per-delta live renders) was a review perf finding.
+  const { capped, cappedNotice } = useMemo(() => {
+    if (text.length <= MAX_RENDER_CHARS) {
+      return { capped: text, cappedNotice: null as string | null }
+    }
     const dropped = text.slice(MAX_RENDER_CHARS).split('\n').length
-    capped = cut
-    cappedNotice = `… output truncated (${dropped} more ${dropped === 1 ? 'line' : 'lines'})`
-  }
+    return {
+      capped: text.slice(0, MAX_RENDER_CHARS),
+      cappedNotice: `… output truncated (${dropped} more ${dropped === 1 ? 'line' : 'lines'})`,
+    }
+  }, [text])
 
   const lines = capped.length === 0 ? [] : capped.split('\n')
   const needsTruncation = lines.length > previewLines

@@ -141,6 +141,11 @@ export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
       current.lines.push({ kind: '-', text: rawLine.slice(1) })
     } else if (rawLine.startsWith(' ')) {
       current.lines.push({ kind: 'ctx', text: rawLine.slice(1) })
+    } else if (rawLine === '') {
+      // Models frequently emit blank context lines WITHOUT the leading
+      // space; dropping them visually compressed rendered patches
+      // (PR524 review).
+      current.lines.push({ kind: 'ctx', text: '' })
     }
   }
 
@@ -158,8 +163,13 @@ export function unifiedDiffToLines(diff: string): DiffLine[] {
     if (
       line.startsWith('diff --git') ||
       line.startsWith('index ') ||
-      line.startsWith('+++') ||
-      line.startsWith('---') ||
+      // Header forms carry a space (`+++ b/x`) — matching the bare
+      // prefix dropped real content lines like a deletion of `--flag`
+      // (arrives as `---flag`; PR524 review).
+      line.startsWith('+++ ') ||
+      line.startsWith('--- ') ||
+      line === '+++' ||
+      line === '---' ||
       line.startsWith('@@')
     ) {
       continue

@@ -151,7 +151,12 @@ export const GenericToolCard = memo(function GenericToolCard({
                     code={nestedJson}
                     language="json"
                     codeId={`generic-tool:${vm.id}`}
-                    highlight={vm.plane === 'committed'}
+                    // Always highlight: nestedJson only exists once the
+                    // input parsed, i.e. it is stable — and branching on
+                    // vm.plane here violated the card contract (PR524
+                    // review: live MCP params were plain, committed
+                    // highlighted — a visible provenance seam).
+                    highlight
                   />
                 )}
               </div>

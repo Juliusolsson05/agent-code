@@ -48,12 +48,19 @@ export const ANSI_INITIAL_STYLE: AnsiStyle = {
 }
 
 // CSI sequences: keep SGR (final byte `m`), strip everything else
-// (cursor movement, erase, etc.). OSC sequences (`\x1b]…\x07` or
-// `\x1b]…\x1b\\`) — window titles and hyperlinks — are stripped whole.
+// (cursor movement, erase, etc.). The param class includes private-mode
+// and extension bytes (`?=><:`) so `\x1b[?25l` (cursor hide — spinners
+// emit it constantly) and colon-form SGR (`38:5:196`, ITU T.416) are
+// STRIPPED instead of surviving as literal garbage (PR524 review).
+// Colon/private params never reach applySgr — strip-only. OSC sequences
+// (window titles, hyperlinks) strip whole; `\x1b(B`-style charset
+// designators (tput sgr0 emits them) strip too — the `(B` was visible.
 // eslint-disable-next-line no-control-regex
-const CSI_RE = /\x1b\[([0-9;]*)([a-zA-Z])/g
+const CSI_RE = /\x1b\[([0-9;:?=><]*)([a-zA-Z])/g
 // eslint-disable-next-line no-control-regex
 const OSC_RE = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
+// eslint-disable-next-line no-control-regex
+const CHARSET_RE = /\x1b[()][A-Za-z0-9]/g
 
 /** xterm 256-color index → palette index (0-15) or '#rrggbb'.
  *  16-231 is the 6×6×6 color cube; 232-255 the grayscale ramp. */
@@ -135,19 +142,29 @@ export function collapseCarriageReturns(text: string): string {
     .join('\n')
 }
 
+// DOM-span ceiling: adjacent-escape payloads (`x\x1b[m` repeated) can
+// mint one span per character — ~50k spans under the byte cap froze the
+// renderer in review testing. Past the ceiling, the tail renders as one
+// unstyled span: content always survives, only styling degrades.
+const MAX_SPANS = 4000
+
 export function parseAnsi(
   text: string,
   initial: AnsiStyle = ANSI_INITIAL_STYLE,
 ): { spans: AnsiSpan[]; endStyle: AnsiStyle } {
-  const cleaned = collapseCarriageReturns(text).replace(OSC_RE, '')
+  const cleaned = collapseCarriageReturns(text).replace(OSC_RE, '').replace(CHARSET_RE, '')
   const spans: AnsiSpan[] = []
   let style = initial
   let last = 0
   CSI_RE.lastIndex = 0
   let m: RegExpExecArray | null
   while ((m = CSI_RE.exec(cleaned)) !== null) {
+    if (spans.length >= MAX_SPANS) {
+      spans.push({ text: cleaned.slice(last).replace(CSI_RE, ''), style: ANSI_INITIAL_STYLE })
+      return { spans, endStyle: style }
+    }
     if (m.index > last) spans.push({ text: cleaned.slice(last, m.index), style })
-    if (m[2] === 'm') {
+    if (m[2] === 'm' && !/[?:=><]/.test(m[1])) {
       const params = m[1] === '' ? [0] : m[1].split(';').map(n => Number(n) || 0)
       style = applySgr(style, params)
     }

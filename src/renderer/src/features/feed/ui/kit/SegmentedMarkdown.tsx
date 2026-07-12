@@ -46,9 +46,15 @@ export function splitSealedPrefix(text: string): { sealed: string; tail: string 
   const fences = countFenceMarkers(text)
   if (fences < 2) return { sealed: '', tail: text }
   const closedFences = fences % 2 === 0 ? fences : fences - 1
-  // Index just past the Nth ``` marker (N = closedFences).
+  // Index just past the Nth ``` marker (N = closedFences). The walk
+  // must advance by a FULL marker (+3), not +1 — overlapping search
+  // finds two "markers" inside one ````-run while the counting regex
+  // sees one, desynchronizing the seal boundary (PR524 review: a
+  // 4-backtick fence rendered its whole body as prose).
   let idx = -1
-  for (let n = 0; n < closedFences; n++) idx = text.indexOf('```', idx + 1)
+  for (let n = 0; n < closedFences; n++) {
+    idx = text.indexOf('```', idx === -1 ? 0 : idx + 3)
+  }
   // Seal through the end of the closing fence's line so the fence's
   // trailing newline stays inside the sealed segment (a closing ```
   // may be followed by an info-string-less newline or EOF).

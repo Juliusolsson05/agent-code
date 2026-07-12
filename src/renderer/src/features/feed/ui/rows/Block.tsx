@@ -305,6 +305,13 @@ export const Block = memo(function Block({
       // cards — suppressing a result whose card hasn't landed is data loss.
       if (
         sourceTool &&
+        // Spawn results carry the subagent's FINAL REPORT (Claude) or the
+        // join payload (Codex). TaskSubagentRow renders neither, so family
+        // suppression here silently destroyed Claude subagent reports
+        // (PR524 review, HIGH). Spawns fall through to provider dispatch:
+        // Codex drops its join-payload noise there on purpose; Claude's
+        // report renders via the generic result row, as pre-rewrite.
+        !isAgentSpawnToolName(sourceTool.name) &&
         !isLegacyProviderClaimed(currentProvider, sourceTool.name) &&
         RESULT_CONSUMING_FAMILIES.has(routeFamily(currentProvider, sourceTool.name))
       ) {
