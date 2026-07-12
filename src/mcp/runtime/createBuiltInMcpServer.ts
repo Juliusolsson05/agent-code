@@ -526,7 +526,12 @@ function registerOrchestrationTools(
             cleanupAttempted,
             agentClosed,
             cleanupError,
-            promptSubmitted: false,
+            // `false` is only truthful when no bytes crossed the boundary.
+            // Omit it for uncertainty so an orchestrator cannot interpret a
+            // late acknowledgement as permission to duplicate the task.
+            ...(delivery.retrySafe
+              ? { promptSubmitted: false }
+              : { promptSubmission: 'uncertain' as const }),
           })
         }
         bridge.notePromptSubmitted(agent.sessionId)
@@ -1092,7 +1097,7 @@ function sleep(ms: number): Promise<void> {
 // manager.deliverPromptToAgent → getMainProvider(kind).deliverPrompt →
 // providers/<kind>/runtime/promptDelivery.ts. The per-provider WHY
 // blocks (Codex readiness-before-paste + atomic paste+Enter; Claude
-// paste → placeholder confirm → separate Enter) moved with the code.
+// paste/image absorption → Enter → durable acceptance) moved with the code.
 // The inline `if codex … if claude …` that lived here let a third
 // provider fall through to a protocol-free paste (#394 §4.2).
 

@@ -1,10 +1,16 @@
 # Claude Prompt Delivery State Machine — Implementation Plan
 
-Status: Ready for implementation
+Status: Implemented on PR #525; awaiting post-amendment review
 
 Date: 2026-07-12
 
 Branch: `fix/claude-paste-delivery-state-machine-plan`
+
+Implementation update (2026-07-12): the initial review found that rich retry
+semantics, images, session generations, remote deadlines, diagnostics, and
+several adversarial inputs were still incomplete. The PR was amended to cover
+those paths. The checklists below remain the historical implementation plan;
+the regression suite and PR diff are the current source of truth.
 
 ## Goal
 

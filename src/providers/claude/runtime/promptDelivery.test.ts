@@ -159,4 +159,58 @@ describe('deliverClaudePrompt routing', () => {
     })
     expect(writes).toEqual(['hello\r'])
   })
+
+  it('waits for image pills before Enter and then requires JSONL acceptance', async () => {
+    const writes: string[] = []
+    let snapshots = 0
+    const io = {
+      sessionId: 's1', prompt: '', imagePaths: ['/tmp/a.png'],
+      write: (data: string) => { writes.push(data); return true },
+      session: {
+        snapshotScreen: () => snapshots++ === 0 ? '❯' : '❯ [Image #1]',
+        armPromptAcceptance: () => ({
+          promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+          cancel: vi.fn(),
+        }),
+      },
+    } as unknown as PromptDeliveryIo
+    await expect(deliverClaudePrompt(io)).resolves.toMatchObject({ ok: true })
+    expect(writes).toEqual(['\x1b[200~/tmp/a.png\x1b[201~', '\r'])
+  })
+
+  it('keeps text and image writes in one acknowledged main-owned transaction', async () => {
+    const writes: string[] = []
+    const screens = [
+      '❯',
+      '❯ line one line two',
+      '❯ line one line two',
+      '❯ line one line two [Image #1]',
+    ]
+    const io = {
+      sessionId: 's1', prompt: 'line one\nline two', imagePaths: ['/tmp/a.png'],
+      write: (data: string) => { writes.push(data); return true },
+      session: {
+        snapshotScreen: () => screens.shift() ?? '❯ line one line two [Image #1]',
+        armPromptAcceptance: () => ({
+          promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+          cancel: vi.fn(),
+        }),
+      },
+    } as unknown as PromptDeliveryIo
+    await expect(deliverClaudePrompt(io)).resolves.toMatchObject({ ok: true })
+    expect(writes).toEqual([
+      '\x1b[200~line one\nline two\x1b[201~',
+      ' ',
+      '\x1b[200~/tmp/a.png\x1b[201~',
+      '\r',
+    ])
+  })
+
+  it('does not await a diagnostic sink before writing', async () => {
+    const never = new Promise<void>(() => {})
+    const { io, writes } = makeIo('hello', '')
+    io.record = () => never
+    await expect(deliverClaudePrompt(io)).resolves.toMatchObject({ ok: true })
+    expect(writes).toEqual(['hello\r'])
+  })
 })

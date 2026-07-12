@@ -133,8 +133,23 @@ export function registerSessionIpc(
   // composer chooses between them per provider capability, not per keypress.
   ipcMain.handle(
     'session:deliver-prompt',
-    async (_evt, sessionId: string, prompt: string) => {
-      return await manager.deliverPromptToAgent(sessionId, prompt)
+    async (
+      _evt,
+      sessionId: string,
+      prompt: string,
+      imagePaths?: string[],
+      deliveryId?: string,
+    ) => {
+      const record = typeof deliveryId === 'string' && deliveryId.length > 0
+        ? (event: string, data?: Record<string, unknown>) => {
+            pasteDebugJournals.get(deliveryId).append({
+              layer: 'PTY',
+              event: `delivery:${event}`,
+              data: { sessionId, ...data },
+            })
+          }
+        : undefined
+      return await manager.deliverPromptToAgent(sessionId, prompt, imagePaths, record)
     },
   )
 

@@ -302,7 +302,7 @@ export interface AgentSession extends AgentSessionEmitter {
    */
   armPromptAcceptance?(
     prompt: string,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; aliases?: string[] },
   ): PromptAcceptanceWaiter
 
   /** Optional (Codex today): wait for the composer to be ready to

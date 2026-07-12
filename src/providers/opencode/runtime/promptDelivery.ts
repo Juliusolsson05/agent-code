@@ -40,13 +40,15 @@ export async function deliverOpencodePrompt(
   } catch (err) {
     return {
       ok: false,
-      stage: 'before-write',
+      // Once the HTTP request was dispatched, a network exception cannot tell
+      // us whether the server accepted it before the connection failed.
+      stage: 'after-enter',
       code: 'transport-failed',
       message: `opencode prompt delivery failed for session ${io.sessionId}: ${
         err instanceof Error ? err.message : String(err)
       }`,
-      retrySafe: true,
-      promptWritten: false,
+      retrySafe: false,
+      promptWritten: true,
       enterWritten: false,
     }
   }

@@ -31,8 +31,12 @@ function makeManager(): FakeManager {
   emitter.getSpawnCwd = vi.fn(() => null)
   emitter.getLastActivityAt = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
+  emitter.submitStagedPrompt = vi.fn(sessionId => emitter.write(sessionId, '\r'))
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const, state: { done: true } }))
-  emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
+  emitter.deliverPromptToAgent = vi.fn(async () => ({
+    ok: true as const,
+    acceptance: { kind: 'transport' as const, acceptedAt: 123 },
+  }))
   emitter.getSessionKind = vi.fn(() => 'claude' as const)
   return emitter
 }
@@ -136,7 +140,7 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     await waitForOpen(f)
 
     const result = await f.deliverPrompt('s1', 'hello from the phone')
-    expect(result).toEqual({ ok: true })
+    expect(result).toMatchObject({ ok: true, acceptance: { kind: 'transport' } })
     // Through the provider prompt-delivery discipline — NOT a bare paste
     // write (see RemoteServer's send-prompt handler for the WHY).
     expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('s1', 'hello from the phone')

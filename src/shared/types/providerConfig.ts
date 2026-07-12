@@ -317,6 +317,12 @@ export type PromptDeliveryIo = {
   write: (data: string) => boolean
   sessionId: string
   prompt: string
+  /** Prepared local attachment paths. Only Claude desktop supplies these;
+   * saving happens before main reserves/writes so filesystem failure remains
+   * cleanly retry-safe. */
+  imagePaths?: string[]
+  /** Non-blocking forensic sink. Correctness must never await or depend on it. */
+  record?: (event: string, data?: Record<string, unknown>) => void
 }
 
 export type PromptAcceptance =

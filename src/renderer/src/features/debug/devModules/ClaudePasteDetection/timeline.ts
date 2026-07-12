@@ -55,6 +55,8 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
   // Content-match events (#279 fix) with back-compat to the older
   // placeholder-only event names so historical journals still read.
   const appeared =
+    find(ev, 'PTY', 'delivery:paste-absorbed') ??
+    find(ev, 'PTY', 'delivery:images-absorbed') ??
     find(ev, 'SCREEN', 'paste:absorbed') ?? find(ev, 'SCREEN', 'placeholder:appeared')
   const timedOut =
     find(ev, 'SCREEN', 'paste:absorb-timeout') ??
@@ -62,6 +64,11 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
     find(ev, 'SCREEN', 'placeholder:no-session')
   const submitCr = find(ev, 'IPC', 'write:submit-cr')
   const singleWrite = find(ev, 'IPC', 'write:paste-and-submit-single')
+  const accepted =
+    find(ev, 'PTY', 'delivery:acceptance-user') ??
+    find(ev, 'PTY', 'delivery:acceptance-queue')
+  const mainEnter = find(ev, 'PTY', 'delivery:enter-written')
+  const uncertain = find(ev, 'PTY', 'delivery:uncertain')
   const threw = ev.find(e => e.layer === 'ERROR')
 
   // Outcome precedence: a thrown submit is the worst, then a placeholder that
@@ -69,9 +76,13 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
   // that actually went out, else we only saw the keypress.
   const outcome: SubmitOutcome = threw
     ? 'error'
-    : timedOut
-      ? 'stuck'
-      : submitCr || singleWrite
+    : accepted
+      ? 'submitted'
+      : uncertain
+        ? 'error'
+        : timedOut
+          ? 'pending'
+          : submitCr || singleWrite || mainEnter
         ? 'submitted'
         : enter
           ? 'pending'
@@ -86,7 +97,9 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
     startedAt: session.startedAt,
     issuedToDetectedMs: enter && appeared ? appeared.ts - enter.ts : null,
     waitedMs: num(appeared?.data, 'waitedMs'),
-    detectedToSubmitMs: appeared && submitCr ? submitCr.ts - appeared.ts : null,
+    detectedToSubmitMs: appeared && (submitCr ?? mainEnter)
+      ? (submitCr ?? mainEnter)!.ts - appeared.ts
+      : null,
     outcome,
     composerLen: num(enter?.data, 'composerLen'),
     strategy,

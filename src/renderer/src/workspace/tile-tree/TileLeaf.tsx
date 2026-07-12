@@ -641,6 +641,10 @@ export function TileLeaf({
         onDismissSuggestion={() =>
           workspace.updateRuntime(sessionId, { promptSuggestion: null })
         }
+        promptDelivery={runtime.promptDelivery}
+        onResolveUncertainDelivery={() =>
+          workspace.updateRuntime(sessionId, { promptDelivery: { kind: 'idle' } })
+        }
       />
     </div>
   )

@@ -142,9 +142,11 @@ export class ClaudeSession extends EventEmitter {
   private readyForLiveBridge = false
   private liveBridgeTimer: NodeJS.Timeout | null = null
   private readonly promptAcceptanceWaiters = new Set<{
-    prompt: string
+    prompts: ReadonlySet<string>
+    afterCursor: number
     finish: (outcome: PromptAcceptanceOutcome) => void
   }>()
+  private promptAcceptanceIngestCursor = 0
 
   private readonly cwd: string
   private readonly cols: number
@@ -475,7 +477,8 @@ export class ClaudeSession extends EventEmitter {
       // is our first durable evidence that Claude accepted Enter. Resolving
       // here prevents renderer scheduling, IPC batching, or transcript mapping
       // from becoming part of the delivery correctness boundary.
-      this.resolvePromptAcceptance(entry)
+      this.promptAcceptanceIngestCursor += 1
+      this.resolvePromptAcceptance(entry, this.promptAcceptanceIngestCursor)
       this.emit('jsonl-entry', entry, file)
     })
     this.headless.on('jsonl-error', err =>
@@ -707,16 +710,20 @@ export class ClaudeSession extends EventEmitter {
 
   armPromptAcceptance(
     prompt: string,
-    opts: { timeoutMs?: number } = {},
+    opts: { timeoutMs?: number; aliases?: string[] } = {},
   ): PromptAcceptanceWaiter {
-    const canonicalPrompt = prompt.replace(/\r\n?/g, '\n')
+    const canonicalPrompt = canonicalizeAcceptedPrompt(prompt)
     let settled = false
     let resolvePromise!: (outcome: PromptAcceptanceOutcome) => void
     const promise = new Promise<PromptAcceptanceOutcome>(resolve => {
       resolvePromise = resolve
     })
     const waiter = {
-      prompt: canonicalPrompt,
+      prompts: new Set([
+        canonicalPrompt,
+        ...(opts.aliases ?? []).map(canonicalizeAcceptedPrompt),
+      ]),
+      afterCursor: this.promptAcceptanceIngestCursor,
       finish: (outcome: PromptAcceptanceOutcome): void => {
         if (settled) return
         settled = true
@@ -740,7 +747,7 @@ export class ClaudeSession extends EventEmitter {
     }
   }
 
-  private resolvePromptAcceptance(entry: JsonlEntry): void {
+  private resolvePromptAcceptance(entry: JsonlEntry, cursor: number): void {
     const value = entry as unknown as Record<string, unknown>
     let kind: 'user' | 'queue' | null = null
     let content: string | null = null
@@ -772,9 +779,10 @@ export class ClaudeSession extends EventEmitter {
     }
     if (!kind || content === null) return
 
-    const canonicalContent = content.replace(/\r\n?/g, '\n')
+    const canonicalContent = canonicalizeAcceptedPrompt(content)
     for (const waiter of [...this.promptAcceptanceWaiters]) {
-      if (waiter.prompt !== canonicalContent) continue
+      if (cursor <= waiter.afterCursor) continue
+      if (!waiter.prompts.has(canonicalContent)) continue
       waiter.finish(kind === 'queue'
         ? { kind: 'queue', acceptedAt: Date.now() }
         : { kind: 'user', acceptedAt: Date.now(), entryId })
@@ -854,4 +862,15 @@ export class ClaudeSession extends EventEmitter {
     // the proxy-event handler that would otherwise pin it.
     this.headless = null
   }
+}
+
+/**
+ * Claude's composer cannot preserve terminal-significant CR bytes and trims
+ * whitespace at the editable buffer's end when committing a turn. Mirroring
+ * that narrow normalization prevents a successfully submitted trailing newline
+ * from becoming a false acceptance timeout. Interior whitespace remains exact:
+ * collapsing it could acknowledge a different prompt.
+ */
+function canonicalizeAcceptedPrompt(value: string): string {
+  return value.replace(/\r\n?/g, '\n').replace(/\s+$/u, '')
 }

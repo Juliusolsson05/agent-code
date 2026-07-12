@@ -28,8 +28,12 @@ function makeManager(): FakeManager {
   emitter.getSpawnCwd = vi.fn(() => null)
   emitter.getLastActivityAt = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
+  emitter.submitStagedPrompt = vi.fn(sessionId => emitter.write(sessionId, '\r'))
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const }))
-  emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
+  emitter.deliverPromptToAgent = vi.fn(async () => ({
+    ok: true as const,
+    acceptance: { kind: 'transport' as const, acceptedAt: 123 },
+  }))
   emitter.getSessionKind = vi.fn(() => 'claude' as const)
   return emitter
 }
@@ -254,7 +258,7 @@ describe('inbound scope enforcement on a live socket', () => {
     ws.send(JSON.stringify({ token, id: 'a', message: { type: 'submit', sessionId: 's1' } }))
     ws.send(JSON.stringify({ token, id: 'b', message: { type: 'interrupt', sessionId: 's1' } }))
     await waitFor(frames, f => framesOfType(f, 'reply').length >= 2)
-    expect(manager.write).toHaveBeenCalledWith('s1', '\r')
+    expect(manager.submitStagedPrompt).toHaveBeenCalledWith('s1')
     expect(manager.write).toHaveBeenCalledWith('s1', '\x1b')
     ws.close()
   })

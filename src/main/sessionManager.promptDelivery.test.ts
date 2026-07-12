@@ -40,4 +40,55 @@ describe('SessionManager prompt delivery reservation', () => {
     resolveAcceptance({ kind: 'user', acceptedAt: 123 })
     await expect(first).resolves.toMatchObject({ ok: true })
   })
+
+  it('never sends delayed Enter into a replacement session with the same id', async () => {
+    const oldWrite = vi.fn()
+    const oldSession = {
+      write: oldWrite,
+      isExited: () => false,
+      snapshotScreen: vi.fn()
+        .mockReturnValueOnce('❯')
+        .mockReturnValue('❯ line one line two'),
+      armPromptAcceptance: () => ({
+        promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+        cancel: vi.fn(),
+      }),
+    }
+    const replacementWrite = vi.fn()
+    const replacement = { write: replacementWrite, isExited: () => false }
+    const manager = new SessionManager()
+    const sessions = (manager as unknown as { sessions: Map<string, unknown> }).sessions
+    sessions.set('s1', { kind: 'claude', session: oldSession })
+
+    const delivery = manager.deliverPromptToAgent('s1', 'line one\nline two')
+    sessions.set('s1', { kind: 'claude', session: replacement })
+    const result = await delivery
+
+    expect(result).toMatchObject({ ok: false, code: 'write-failed' })
+    expect(replacementWrite).not.toHaveBeenCalled()
+  })
+
+  it('releases the reservation when provider setup throws', async () => {
+    let attempts = 0
+    const session = {
+      write: vi.fn(),
+      isExited: () => false,
+      armPromptAcceptance: () => {
+        attempts += 1
+        if (attempts === 1) throw new Error('probe failed')
+        return {
+          promise: Promise.resolve({ kind: 'user' as const, acceptedAt: 123 }),
+          cancel: vi.fn(),
+        }
+      },
+    }
+    const manager = new SessionManager()
+    ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', {
+      kind: 'claude', session,
+    })
+    await expect(manager.deliverPromptToAgent('s1', 'first')).resolves.toMatchObject({
+      ok: false, retrySafe: false,
+    })
+    await expect(manager.deliverPromptToAgent('s1', 'second')).resolves.toMatchObject({ ok: true })
+  })
 })

@@ -2,12 +2,19 @@ import type {
   PromptDeliveryIo,
   PromptDeliveryResult,
 } from '@shared/types/providerConfig.js'
-import { isPasteLike, pollPasteAbsorbed } from '@shared/claude/pasteConfirm.js'
+import {
+  isPasteLike,
+  pollClaudeImagesAbsorbed,
+  pollPasteAbsorbed,
+} from '@shared/claude/pasteConfirm.js'
 import type { PromptAcceptanceOutcome } from '@shared/types/session.js'
 
 const CONFIRM_TIMEOUT_MS = 2000
 const CONFIRM_POLL_INTERVAL_MS = 10
-const ACCEPTANCE_TIMEOUT_MS = 10_000
+const IMAGE_CONFIRM_TIMEOUT_MS = 5_000
+// Longer than JsonlTailer's 15s watchdog so a recoverable watcher stall gets a
+// chance to self-heal before we classify an already-written Enter as uncertain.
+const ACCEPTANCE_TIMEOUT_MS = 20_000
 
 const failure = (
   fields: Omit<Extract<PromptDeliveryResult, { ok: false }>, 'ok'>,
@@ -34,10 +41,15 @@ export async function deliverClaudePrompt(
     })
   }
 
+  if (io.imagePaths && io.imagePaths.length > 0) {
+    return deliverClaudeImagePrompt(io)
+  }
+
   if (!isPasteLike(io.prompt)) {
     const acceptance = io.session.armPromptAcceptance(io.prompt, {
       timeoutMs: ACCEPTANCE_TIMEOUT_MS,
     })
+    io.record?.('acceptance-armed')
     if (!io.write(`${io.prompt}\r`)) {
       acceptance.cancel()
       return failure({
@@ -46,7 +58,8 @@ export async function deliverClaudePrompt(
         message: `Could not write prompt to session ${io.sessionId}`,
       })
     }
-    return acceptanceResult(await acceptance.promise, io.sessionId, true, true)
+    io.record?.('prompt-and-enter-written')
+    return acceptanceResult(await acceptance.promise, io.sessionId, true, true, io.record)
   }
 
   if (typeof io.session.snapshotScreen !== 'function') {
@@ -57,13 +70,22 @@ export async function deliverClaudePrompt(
     })
   }
   const baselineScreen = io.session.snapshotScreen()
+  // Arm before any prompt bytes. Raw-terminal/manual Enter and legacy writers
+  // are not supposed to interleave, but if one does, its durable acceptance
+  // must not race past the observer and turn into a second Enter plus timeout.
+  const acceptance = io.session.armPromptAcceptance(io.prompt, {
+    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
+  })
+  io.record?.('acceptance-armed')
   if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
+    acceptance.cancel()
     return failure({
       stage: 'before-write', code: 'write-failed', retrySafe: true,
       promptWritten: false, enterWritten: false,
       message: `Could not write paste to session ${io.sessionId}`,
     })
   }
+  io.record?.('paste-written')
 
   const absorbed = await pollPasteAbsorbed(
     () => io.session.snapshotScreen?.() ?? '',
@@ -72,6 +94,7 @@ export async function deliverClaudePrompt(
     { timeoutMs: CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
   )
   if (absorbed.kind !== 'absorbed') {
+    acceptance.cancel()
     // Prompt bytes are already editable in Claude even when our detector times
     // out. Automatic retry is unsafe: it would append/duplicate those bytes.
     return failure({
@@ -80,12 +103,10 @@ export async function deliverClaudePrompt(
       message: `Claude session ${io.sessionId} did not visibly absorb the paste`,
     })
   }
+  io.record?.('paste-absorbed', { via: absorbed.via, waitedMs: absorbed.waitedMs })
 
   // Arm synchronously before Enter. This ordering is the acceptance analogue
   // of installing an event listener before starting the operation it observes.
-  const acceptance = io.session.armPromptAcceptance(io.prompt, {
-    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
-  })
   if (!io.write('\r')) {
     acceptance.cancel()
     return failure({
@@ -94,7 +115,106 @@ export async function deliverClaudePrompt(
       message: `Could not submit prompt to session ${io.sessionId}`,
     })
   }
-  return acceptanceResult(await acceptance.promise, io.sessionId, true, true)
+  io.record?.('enter-written')
+  return acceptanceResult(await acceptance.promise, io.sessionId, true, true, io.record)
+}
+
+async function deliverClaudeImagePrompt(
+  io: PromptDeliveryIo,
+): Promise<PromptDeliveryResult> {
+  if (typeof io.session.snapshotScreen !== 'function') {
+    return failure({
+      stage: 'before-write', code: 'missing-capability', retrySafe: true,
+      promptWritten: false, enterWritten: false,
+      message: `Claude session ${io.sessionId} has no direct screen snapshot`,
+    })
+  }
+  const imagePaths = io.imagePaths ?? []
+  const separator = io.prompt.length > 0 && !/\s$/.test(io.prompt) ? ' ' : ''
+  const rawComposer = `${io.prompt}${separator}${imagePaths.join('\n')}`
+  const acceptance = io.session.armPromptAcceptance!(io.prompt, {
+    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
+    aliases: [rawComposer],
+  })
+  io.record?.('acceptance-armed', { imageCount: imagePaths.length })
+
+  if (io.prompt.length > 0) {
+    if (isPasteLike(io.prompt)) {
+      const textBaseline = io.session.snapshotScreen()
+      if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
+        acceptance.cancel()
+        return failure({
+          stage: 'before-write', code: 'write-failed', retrySafe: true,
+          promptWritten: false, enterWritten: false,
+          message: `Could not write image prompt text to session ${io.sessionId}`,
+        })
+      }
+      const textAbsorbed = await pollPasteAbsorbed(
+        () => io.session.snapshotScreen?.() ?? '', textBaseline, io.prompt,
+        { timeoutMs: CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
+      )
+      if (textAbsorbed.kind !== 'absorbed') {
+        acceptance.cancel()
+        return failure({
+          stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+          promptWritten: true, enterWritten: false,
+          message: `Claude session ${io.sessionId} did not absorb image prompt text`,
+        })
+      }
+    } else if (!io.write(io.prompt)) {
+      acceptance.cancel()
+      return failure({
+        stage: 'before-write', code: 'write-failed', retrySafe: true,
+        promptWritten: false, enterWritten: false,
+        message: `Could not write image prompt text to session ${io.sessionId}`,
+      })
+    }
+    if (separator && !io.write(separator)) {
+      acceptance.cancel()
+      return failure({
+        stage: 'absorption', code: 'write-failed', retrySafe: false,
+        promptWritten: true, enterWritten: false,
+        message: `Could not separate image paths in session ${io.sessionId}`,
+      })
+    }
+  }
+
+  const imageBaseline = io.session.snapshotScreen()
+  if (!io.write(`\x1b[200~${imagePaths.join('\n')}\x1b[201~`)) {
+    acceptance.cancel()
+    return failure({
+      stage: io.prompt.length > 0 ? 'absorption' : 'before-write',
+      code: 'write-failed', retrySafe: io.prompt.length === 0,
+      promptWritten: io.prompt.length > 0, enterWritten: false,
+      message: `Could not paste image paths to session ${io.sessionId}`,
+    })
+  }
+  const imagesAbsorbed = await pollClaudeImagesAbsorbed(
+    () => io.session.snapshotScreen?.() ?? '', imageBaseline, imagePaths.length,
+    { timeoutMs: IMAGE_CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
+  )
+  if (imagesAbsorbed.kind !== 'absorbed') {
+    acceptance.cancel()
+    return failure({
+      stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
+      promptWritten: true, enterWritten: false,
+      message: `Claude session ${io.sessionId} did not render all image attachments`,
+    })
+  }
+  io.record?.('images-absorbed', {
+    imageCount: imagePaths.length,
+    waitedMs: imagesAbsorbed.waitedMs,
+  })
+  if (!io.write('\r')) {
+    acceptance.cancel()
+    return failure({
+      stage: 'after-enter', code: 'write-failed', retrySafe: false,
+      promptWritten: true, enterWritten: false,
+      message: `Could not submit image prompt to session ${io.sessionId}`,
+    })
+  }
+  io.record?.('enter-written')
+  return acceptanceResult(await acceptance.promise, io.sessionId, true, true, io.record)
 }
 
 function acceptanceResult(
@@ -102,10 +222,13 @@ function acceptanceResult(
   sessionId: string,
   promptWritten: boolean,
   enterWritten: boolean,
+  record?: PromptDeliveryIo['record'],
 ): PromptDeliveryResult {
   if (outcome.kind === 'user' || outcome.kind === 'queue') {
+    record?.(`acceptance-${outcome.kind}`, { acceptedAt: outcome.acceptedAt })
     return { ok: true, acceptance: outcome }
   }
+  record?.('uncertain', { outcome: outcome.kind })
   return failure({
     stage: outcome.kind === 'session-exited' ? 'session-exit' : 'after-enter',
     code: outcome.kind === 'session-exited' ? 'session-exited' : 'acceptance-timeout',

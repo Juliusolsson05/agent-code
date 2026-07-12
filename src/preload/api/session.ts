@@ -95,8 +95,10 @@ export const sessionApi = {
   deliverPrompt: (
     sessionId: string,
     prompt: string,
+    imagePaths?: string[],
+    deliveryId?: string,
   ): Promise<PromptDeliveryResult> =>
-    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt),
+    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId),
 
   resolveCondition: (
     sessionId: string,

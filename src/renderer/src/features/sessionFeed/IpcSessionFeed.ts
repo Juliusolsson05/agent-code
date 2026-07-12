@@ -34,6 +34,7 @@ export const ipcSessionFeed: SessionFeed = {
   onSessionSubAgents: cb => window.api.onSessionSubAgents(cb),
   onSessionExit: cb => window.api.onSessionExit(cb),
   sendInput: (sessionId, data, pasteId) => window.api.sendInput(sessionId, data, pasteId),
-  deliverPrompt: (sessionId, prompt) => window.api.deliverPrompt(sessionId, prompt),
+  deliverPrompt: (sessionId, prompt, imagePaths, deliveryId) =>
+    window.api.deliverPrompt(sessionId, prompt, imagePaths, deliveryId),
   resolveCondition: (sessionId, action) => window.api.resolveCondition(sessionId, action),
 }

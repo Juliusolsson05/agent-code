@@ -40,10 +40,11 @@ export const CLAUDE_PASTE_THRESHOLD = 100
 /** The routing predicate: does this text need the bracketed-paste + confirm
  *  protocol, or can it take the plain `text\r` fast path? */
 export function isPasteLike(text: string): boolean {
-  return text.includes('\n') || text.length > CLAUDE_PASTE_THRESHOLD
+  return /[\r\n]/.test(text) || text.length > CLAUDE_PASTE_THRESHOLD
 }
 
 const PASTE_PLACEHOLDER_RE = /\[Pasted text #\d+/g
+const IMAGE_PLACEHOLDER_RE = /\[Image #\d+\]/g
 
 /**
  * Return only Claude's currently active composer region.
@@ -59,18 +60,44 @@ const PASTE_PLACEHOLDER_RE = /\[Pasted text #\d+/g
  */
 export function extractActiveClaudeComposer(screen: string): string {
   const lines = screen.split('\n')
+  const isDivider = (line: string): boolean => {
+    // Keep this aligned with claude-code-headless ScreenParser's proven chrome
+    // predicate. ASCII Markdown rules are user content, not Claude chrome.
+    const dividerChars = (line.match(/[─━═▔]/gu) ?? []).length
+    const nonSpace = line.replace(/\s/gu, '').length
+    return dividerChars >= 10 && dividerChars >= nonSpace * 0.8
+  }
   let start = -1
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (/^\s*❯(?:\s|$)/u.test(lines[i] ?? '')) {
-      start = i
-      break
+  // Normal Claude geometry has a chrome divider immediately before the input
+  // box. Within that bounded segment choose the FIRST ❯: later `❯ quoted`
+  // lines can be literal pasted content and must not rebase the composer.
+  for (let divider = lines.length - 1; divider >= 0; divider -= 1) {
+    if (!isDivider(lines[divider] ?? '')) continue
+    const nextDivider = lines.findIndex((line, i) => i > divider && isDivider(line))
+    const segmentEnd = nextDivider < 0 ? lines.length : nextDivider
+    for (let i = divider + 1; i < segmentEnd; i += 1) {
+      if (/^\s*❯(?:\s|$)/u.test(lines[i] ?? '')) {
+        start = i
+        break
+      }
+    }
+    if (start >= 0) break
+  }
+  // Sanitized/unit screens and older Claude layouts may omit the upper chrome
+  // divider. Preserve the old fallback there, bounded to the viewport tail.
+  if (start < 0) {
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (/^\s*❯(?:\s|$)/u.test(lines[i] ?? '')) {
+        start = i
+        break
+      }
     }
   }
   if (start < 0) return lines.slice(-12).join('\n')
 
   let end = lines.length
   for (let i = start + 1; i < lines.length; i += 1) {
-    if (/^\s*[─━-]{8,}/u.test(lines[i] ?? '')) {
+    if (isDivider(lines[i] ?? '')) {
       end = i
       break
     }
@@ -81,6 +108,37 @@ export function extractActiveClaudeComposer(screen: string): string {
 export function placeholderCount(screen: string): number {
   const matches = screen.match(PASTE_PLACEHOLDER_RE)
   return matches ? matches.length : 0
+}
+
+export function imagePlaceholderCount(screen: string): number {
+  return screen.match(IMAGE_PLACEHOLDER_RE)?.length ?? 0
+}
+
+export async function pollClaudeImagesAbsorbed(
+  getScreen: () => string | undefined,
+  baselineScreen: string,
+  expectedIncrease: number,
+  opts: { timeoutMs: number; pollIntervalMs: number },
+): Promise<PasteAbsorbedOutcome> {
+  const baseline = imagePlaceholderCount(extractActiveClaudeComposer(baselineScreen))
+  const startedAt = Date.now()
+  return new Promise(resolve => {
+    const tick = (): void => {
+      const current = imagePlaceholderCount(
+        extractActiveClaudeComposer(getScreen() ?? ''),
+      )
+      if (current >= baseline + expectedIncrease) {
+        resolve({ kind: 'absorbed', waitedMs: Date.now() - startedAt, via: 'placeholder' })
+        return
+      }
+      if (Date.now() - startedAt >= opts.timeoutMs) {
+        resolve({ kind: 'timeout' })
+        return
+      }
+      setTimeout(tick, opts.pollIntervalMs)
+    }
+    tick()
+  })
 }
 
 export function normalizeWhitespace(s: string): string {

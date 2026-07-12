@@ -413,7 +413,11 @@ export class SessionManager extends EventEmitter {
   async spawn(options: SessionSpawnOptions): Promise<SessionSpawnResult> {
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
     const sessionId = options.preferredSessionId ?? randomUUID()
-    if (this.sessions.has(sessionId) || this.spawningSessionIds.has(sessionId)) {
+    if (
+      this.sessions.has(sessionId) ||
+      this.spawningSessionIds.has(sessionId) ||
+      this.promptDeliveriesInFlight.has(sessionId)
+    ) {
       throw new Error(`Session ${sessionId} is already live`)
     }
     // WHY reserve before any provider/tmux await: restored sessions can be
@@ -944,6 +948,11 @@ export class SessionManager extends EventEmitter {
    * the renderer queueing input and the main process handling it.
    */
   write(sessionId: string, data: string): boolean {
+    // A raw Enter is globally meaningful to a TUI composer. While the provider
+    // delivery state machine owns that composer, accepting Enter from a slash
+    // path, remote submit, or raw terminal would let one operation submit
+    // another's bytes. Provider-owned writes use writeReserved below.
+    if (data === '\r' && this.promptDeliveriesInFlight.has(sessionId)) return false
     const entry = this.sessions.get(sessionId)
     if (!entry) {
       // A silent miss here is brutal to debug from the renderer: the composer
@@ -974,6 +983,16 @@ export class SessionManager extends EventEmitter {
       return false
     }
     entry.session.write(data)
+    return true
+  }
+
+  private writeReserved(
+    sessionId: string,
+    expectedEntry: RegistryEntry,
+    data: string,
+  ): boolean {
+    if (this.sessions.get(sessionId) !== expectedEntry) return false
+    expectedEntry.session.write(data)
     return true
   }
 
@@ -1100,7 +1119,7 @@ export class SessionManager extends EventEmitter {
    * state. MCP (and any future caller — composer flows, dispatch)
    * gets one provider-agnostic entry point; the per-provider
    * discipline (Codex readiness-gate + atomic paste+Enter, Claude
-   * paste → placeholder confirm → Enter) lives in
+   * paste/image absorption → Enter → durable acceptance) lives in
    * providers/<kind>/runtime/promptDelivery.ts.
    *
    * An unknown/non-agent kind is a LOUD failure — the predecessor
@@ -1111,8 +1130,11 @@ export class SessionManager extends EventEmitter {
   async deliverPromptToAgent(
     sessionId: string,
     prompt: string,
+    imagePaths?: string[],
+    record?: (event: string, data?: Record<string, unknown>) => void,
   ): Promise<PromptDeliveryResult> {
     if (this.promptDeliveriesInFlight.has(sessionId)) {
+      record?.('duplicate-blocked')
       return {
         ok: false, stage: 'reservation', code: 'delivery-in-flight',
         retrySafe: true, promptWritten: false, enterWritten: false,
@@ -1132,16 +1154,46 @@ export class SessionManager extends EventEmitter {
       }
     }
     this.promptDeliveriesInFlight.add(sessionId)
+    record?.('reserved')
     try {
       return await getMainProvider(entry.kind).deliverPrompt({
         session: entry.session,
-        write: data => this.write(sessionId, data),
+        // WHY identity-check every delayed write: provider protocols await
+        // absorption/readiness. A same-ID wake must never receive Enter from a
+        // delivery that began against the process which just exited.
+        write: data => this.writeReserved(sessionId, entry, data),
         sessionId,
         prompt,
+        imagePaths,
+        record,
       })
+    } catch (err) {
+      record?.('uncertain', { reason: 'provider-threw' })
+      return {
+        ok: false,
+        stage: 'after-enter',
+        code: 'transport-failed',
+        message: `Prompt delivery failed unexpectedly: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        // The coordinator cannot know how far provider code progressed before
+        // throwing. Conservatively forbid automatic retry.
+        retrySafe: false,
+        promptWritten: true,
+        enterWritten: true,
+      }
     } finally {
       this.promptDeliveriesInFlight.delete(sessionId)
+      record?.('released')
     }
+  }
+
+  /** Submit staged composer content only when no finished-prompt transaction
+   * owns the session. Remote's legacy `submit` command cannot be allowed to
+   * inject Enter during paste absorption. */
+  submitStagedPrompt(sessionId: string): boolean {
+    if (this.promptDeliveriesInFlight.has(sessionId)) return false
+    return this.write(sessionId, '\r')
   }
 
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */

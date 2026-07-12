@@ -68,6 +68,7 @@ export function SessionView({
 
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [deliveryUncertain, setDeliveryUncertain] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // The session's cwd for the real PaneHeader title strip. Self-subscribed
   // here rather than threaded App→SessionList so the header stays
@@ -149,20 +150,24 @@ export function SessionView({
 
   const sendPrompt = useCallback(() => {
     const text = draft.trim()
-    if (!text || sending) return
+    if (!text || sending || deliveryUncertain) return
     setSending(true)
     setError(null)
     void feed
       .deliverPrompt(sessionId, text)
       .then(result => {
         if (!result.ok) {
-          setError(result.message)
+          setDeliveryUncertain(!result.retrySafe)
+          setError(!result.retrySafe
+            ? `${result.message}. It may already be submitted; resend is blocked.`
+            : result.message)
           return
         }
-        setDraft('')
+        setDeliveryUncertain(false)
+        setDraft(current => current.trim() === text ? '' : current)
       })
       .finally(() => setSending(false))
-  }, [draft, feed, sending, sessionId])
+  }, [deliveryUncertain, draft, feed, sending, sessionId])
 
   const interrupt = useCallback(() => {
     void feed.sendInput(sessionId, '\x1b').then(ok => {
@@ -323,7 +328,17 @@ export function SessionView({
           </div>
         )}
 
-        {error && <div className="working" style={{ color: 'var(--danger)' }}>{error}</div>}
+        {error && <div className="working" style={{ color: 'var(--danger)' }}>
+          {error}
+          {deliveryUncertain ? (
+            <button type="button" onClick={() => {
+              setDeliveryUncertain(false)
+              setError(null)
+            }}>
+              I verified the transcript — allow sending again
+            </button>
+          ) : null}
+        </div>}
 
         {/* The REAL desktop composer shell — pixel-identical ❯ chevron,
             focus-accent border, auto-grow, dictation slot. Driven by a phone
@@ -355,6 +370,18 @@ export function SessionView({
             promptSuggestion={null}
             onApplySuggestion={() => {}}
             onDismissSuggestion={() => {}}
+            promptDelivery={deliveryUncertain
+              ? {
+                  kind: 'uncertain',
+                  prompt: draft,
+                  message: error ?? 'Delivery uncertain',
+                  failedAt: Date.now(),
+                }
+              : { kind: 'idle' }}
+            onResolveUncertainDelivery={() => {
+              setDeliveryUncertain(false)
+              setError(null)
+            }}
           />
           <div className="composer-actions">
             {/* Explicit tap mic button — the desktop starts dictation from the
@@ -396,7 +423,7 @@ export function SessionView({
                 Stop
               </button>
             ) : null}
-            <button disabled={!draft.trim() || sending || transcript.exited} onClick={sendPrompt}>
+            <button disabled={!draft.trim() || sending || deliveryUncertain || transcript.exited} onClick={sendPrompt}>
               {sending ? '…' : 'Send'}
             </button>
           </div>

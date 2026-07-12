@@ -12,7 +12,11 @@ import {
   renderCodexToolResult,
   renderCodexToolUse,
 } from '@providers/codex/renderer/rows/dispatch'
-import type { SemanticFoldPolicy, TranscriptEntryMapper } from '@shared/types/providerConfig'
+import type {
+  PromptDeliveryResult,
+  SemanticFoldPolicy,
+  TranscriptEntryMapper,
+} from '@shared/types/providerConfig'
 import { CLAUDE_SEMANTIC_FOLD_POLICY } from '@providers/claude/renderer/semanticFoldPolicy'
 import { CODEX_SEMANTIC_FOLD_POLICY } from '@providers/codex/renderer/semanticFoldPolicy'
 import { OPENCODE_SEMANTIC_FOLD_POLICY } from '@providers/opencode/renderer/semanticFoldPolicy'
@@ -105,7 +109,8 @@ export type RendererProviderCapabilities = {
   /**
    * Composer submit protocol (#394 phase 2c-4). Owns the provider's
    * paste/submit discipline (Codex: one atomic bracketed-paste+Enter;
-   * Claude: three routes with paste-commit race guards — see
+   * Claude: prepares attachments, then delegates every finished prompt to the
+   * main-owned delivery state machine — see
    * providers/claude/renderer/composerSubmit.ts). The call site keeps
    * the kind-agnostic machinery: pasteId minting, streaming-baseline
    * capture, composer clearing, draft preservation on throw.
@@ -176,7 +181,7 @@ export type ComposerSubmitIo = {
   input: string
   draftImages: Array<{ base64Data: string; mediaType: string; filename?: string }>
   send: (data: string, pasteId?: string) => Promise<void>
-  deliverPrompt: (prompt: string) => Promise<{ ok: true } | { ok: false; message: string }>
+  deliverPrompt: (prompt: string, imagePaths?: string[]) => Promise<PromptDeliveryResult>
   pasteId: string
   getScreen: () => string | undefined
 }

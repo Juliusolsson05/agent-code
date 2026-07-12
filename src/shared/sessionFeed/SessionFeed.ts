@@ -12,6 +12,7 @@ import type {
   SessionSubAgentsEvent,
   Unsub,
 } from '@shared/sessionFeed/types.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 // Convenience re-export: implementations import the contract and its return
 // type from one module (types.ts stays the declaration home).
@@ -80,7 +81,9 @@ export interface SessionFeed {
   deliverPrompt(
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }>
+    imagePaths?: string[],
+    deliveryId?: string,
+  ): Promise<PromptDeliveryResult>
 
   /** Resolve a live provider condition (permission prompt, trust dialog,
    *  AskUserQuestion, codex approval) with a custom action. */
