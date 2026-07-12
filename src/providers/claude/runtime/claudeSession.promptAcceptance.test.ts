@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { ClaudeSession } from './claudeSession.js'
 
 describe('ClaudeSession prompt acceptance', () => {
+  it('assigns distinct exact transcript ids to concurrent fresh sessions', () => {
+    const first = new ClaudeSession()
+    const second = new ClaudeSession()
+    const transcriptId = (session: ClaudeSession): string =>
+      (session as unknown as { transcriptSessionId: string }).transcriptSessionId
+    expect(transcriptId(first)).not.toBe(transcriptId(second))
+    expect(transcriptId(new ClaudeSession({ resumeSessionId: 'resume-id' }))).toBe('resume-id')
+  })
+
   it('matches only an exact future user or queue JSONL payload', async () => {
     const session = new ClaudeSession()
     const waiter = session.armPromptAcceptance('line one\r\nline two')

@@ -123,4 +123,27 @@ describe('SessionManager prompt delivery reservation', () => {
     })
     release({ kind: 'cancelled' })
   })
+
+  it('reports a thrown pre-Enter paste write at the absorption stage', async () => {
+    const session = {
+      write: vi.fn(() => { throw new Error('pty boundary failed') }),
+      isExited: () => false,
+      snapshotScreen: () => '❯',
+      armPromptAcceptance: () => ({
+        promise: Promise.resolve({ kind: 'cancelled' as const }),
+        cancel: vi.fn(),
+      }),
+    }
+    const manager = new SessionManager()
+    ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', {
+      kind: 'claude', session,
+    })
+    await expect(manager.deliverPromptToAgent('s1', 'line one\nline two')).resolves.toMatchObject({
+      ok: false,
+      stage: 'absorption',
+      retrySafe: false,
+      promptWritten: true,
+      enterWritten: false,
+    })
+  })
 })

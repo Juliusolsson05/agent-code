@@ -28,6 +28,20 @@ import { useMobileDictation } from '../dictation/mobileDictation'
 // each render would defeat the adapter's by-reference plane memoization.
 const NO_GHOSTS: ReadonlyMap<string, GhostEntry> = new Map()
 
+export type MobileComposerState = {
+  draft: string
+  sending: boolean
+  deliveryUncertain: boolean
+  error: string | null
+}
+
+export const EMPTY_MOBILE_COMPOSER_STATE: MobileComposerState = {
+  draft: '',
+  sending: false,
+  deliveryUncertain: false,
+  error: null,
+}
+
 // One session, desktop-grade: this mounts the REAL desktop Feed component
 // (see the alias table in ../vite.config.ts — the phone renders the same
 // component tree the desktop does, with four documented stub
@@ -51,6 +65,8 @@ export function SessionView({
   sessionId,
   token,
   onBack,
+  composerState,
+  updateComposerState,
 }: {
   feed: WebSocketSessionFeed
   store: TranscriptStore
@@ -59,6 +75,10 @@ export function SessionView({
   /** The device token — sent as the Authorization bearer on /dictate. */
   token: string
   onBack: () => void
+  composerState: MobileComposerState
+  updateComposerState: (
+    updater: (current: MobileComposerState) => MobileComposerState,
+  ) => void
 }): React.JSX.Element {
   const subscribe = useCallback(
     (cb: () => void) => store.subscribe(sessionId, cb),
@@ -66,10 +86,19 @@ export function SessionView({
   )
   const transcript = useSyncExternalStore(subscribe, () => store.getSnapshot(sessionId))
 
-  const [draft, setDraft] = useState('')
-  const [sending, setSending] = useState(false)
-  const [deliveryUncertain, setDeliveryUncertain] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const { draft, sending, deliveryUncertain, error } = composerState
+  // Delivery state lives in App, not this navigable screen. An unsafe result
+  // must keep blocking resend after Back → reopen, and an in-flight promise
+  // must still publish its verdict after this component unmounts.
+  const setDraft = useCallback((next: string | ((current: string) => string)) => {
+    updateComposerState(current => ({
+      ...current,
+      draft: typeof next === 'function' ? next(current.draft) : next,
+    }))
+  }, [updateComposerState])
+  const setError = useCallback((next: string | null) => {
+    updateComposerState(current => ({ ...current, error: next }))
+  }, [updateComposerState])
   // The session's cwd for the real PaneHeader title strip. Self-subscribed
   // here rather than threaded App→SessionList so the header stays
   // self-contained; cwd is effectively static per session, but onSessionList
@@ -149,25 +178,33 @@ export function SessionView({
   )
 
   const sendPrompt = useCallback(() => {
-    const text = draft.trim()
+    const submittedDraft = draft
+    const text = submittedDraft.trim()
     if (!text || sending || deliveryUncertain) return
-    setSending(true)
-    setError(null)
+    updateComposerState(current => ({ ...current, sending: true, error: null }))
     void feed
       .deliverPrompt(sessionId, text)
       .then(result => {
         if (!result.ok) {
-          setDeliveryUncertain(!result.retrySafe)
-          setError(!result.retrySafe
-            ? `${result.message}. It may already be submitted; resend is blocked.`
-            : result.message)
+          updateComposerState(current => ({
+            ...current,
+            deliveryUncertain: !result.retrySafe,
+            error: !result.retrySafe
+              ? `${result.message}. It may already be submitted; resend is blocked.`
+              : result.message,
+          }))
           return
         }
-        setDeliveryUncertain(false)
-        setDraft(current => current.trim() === text ? '' : current)
+        updateComposerState(current => ({
+          ...current,
+          deliveryUncertain: false,
+          // Whitespace is user input too. Comparing normalized transport text
+          // erased next-draft whitespace edits made during acknowledgement.
+          draft: current.draft === submittedDraft ? '' : current.draft,
+        }))
       })
-      .finally(() => setSending(false))
-  }, [deliveryUncertain, draft, feed, sending, sessionId])
+      .finally(() => updateComposerState(current => ({ ...current, sending: false })))
+  }, [deliveryUncertain, draft, feed, sending, sessionId, updateComposerState])
 
   const interrupt = useCallback(() => {
     void feed.sendInput(sessionId, '\x1b').then(ok => {
@@ -332,8 +369,11 @@ export function SessionView({
           {error}
           {deliveryUncertain ? (
             <button type="button" onClick={() => {
-              setDeliveryUncertain(false)
-              setError(null)
+              updateComposerState(current => ({
+                ...current,
+                deliveryUncertain: false,
+                error: null,
+              }))
             }}>
               I verified the transcript — allow sending again
             </button>
@@ -379,8 +419,11 @@ export function SessionView({
                 }
               : { kind: 'idle' }}
             onResolveUncertainDelivery={() => {
-              setDeliveryUncertain(false)
-              setError(null)
+              updateComposerState(current => ({
+                ...current,
+                deliveryUncertain: false,
+                error: null,
+              }))
             }}
           />
           <div className="composer-actions">

@@ -650,13 +650,26 @@ function registerOrchestrationTools(
           kind: 'orchestration.prompt_delivery_failed',
           severity: 'error',
           reason: 'send_prompt',
-          context: { sessionId: args.sessionId, message: delivery.message },
+          context: {
+            sessionId: args.sessionId,
+            message: delivery.message,
+            stage: delivery.stage,
+            code: delivery.code,
+            retrySafe: delivery.retrySafe,
+            promptWritten: delivery.promptWritten,
+            enterWritten: delivery.enterWritten,
+          },
         })
         return toolText({
           ok: false,
           error: 'prompt_delivery_failed',
           message: delivery.message,
           retrySafe: delivery.retrySafe,
+          stage: delivery.stage,
+          code: delivery.code,
+          promptWritten: delivery.promptWritten,
+          enterWritten: delivery.enterWritten,
+          promptSubmission: delivery.retrySafe ? 'not-submitted' : 'uncertain',
           sessionId: args.sessionId,
         })
       }

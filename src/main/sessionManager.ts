@@ -1197,7 +1197,7 @@ export class SessionManager extends EventEmitter {
       record?.('uncertain', { reason: 'provider-threw' })
       return {
         ok: false,
-        stage: promptWritten || enterWritten ? 'after-enter' : 'before-write',
+        stage: enterWritten ? 'after-enter' : promptWritten ? 'absorption' : 'before-write',
         code: 'transport-failed',
         message: `Prompt delivery failed unexpectedly: ${
           err instanceof Error ? err.message : String(err)

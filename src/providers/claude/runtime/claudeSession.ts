@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events'
+import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
@@ -159,6 +160,9 @@ export class ClaudeSession extends EventEmitter {
   private readonly env: Record<string, string | undefined>
   private readonly snapshotIntervalMs: number
   private readonly resumeSessionId: string | null
+  /** Exact Claude transcript id. Fresh sessions receive this through
+   *  `--session-id`; resumed sessions already have an authoritative id. */
+  private readonly transcriptSessionId: string
   private readonly dangerousMode: boolean
   private readonly useProxy: boolean
   private readonly shellSessionId: string | null
@@ -171,6 +175,7 @@ export class ClaudeSession extends EventEmitter {
     this.rows = options.rows ?? 40
     this.binary = options.binary ?? 'claude'
     this.resumeSessionId = options.resumeSessionId ?? null
+    this.transcriptSessionId = this.resumeSessionId ?? randomUUID()
     this.dangerousMode = options.dangerousMode === true
     // Fallback matches sessionManager's explicit 100ms (~10Hz) — see
     // the WHY comment there (#390). Keeping this default in sync
@@ -212,6 +217,7 @@ export class ClaudeSession extends EventEmitter {
       }))
     }
     if (this.resumeSessionId) args.push('--resume', this.resumeSessionId)
+    else args.push('--session-id', this.transcriptSessionId)
     if (this.dangerousMode) args.push('--dangerously-skip-permissions')
 
     const cleanEnv: Record<string, string> = {}
@@ -233,19 +239,6 @@ export class ClaudeSession extends EventEmitter {
     // injected trust-store-REPLACING CA vars — see #281 — and silently dropped
     // options.env). Both cases now share one inline env so resume args and CA
     // policy live in exactly one place.
-    // WHY this timestamp is captured before the PTY exists:
-    //
-    // Claude can create its root JSONL transcript almost immediately
-    // after spawn. The headless layer needs an IPty instance before it
-    // can be constructed, so there is an unavoidable spawn -> tailer
-    // wiring window. Passing this timestamp down lets the tailer treat
-    // a just-created file as the fresh session transcript even if it
-    // already exists by the time the directory watcher snapshots the
-    // project dir. Without this, the renderer can receive proxy
-    // semantic events forever while committed JSONL stays at zero and
-    // providerSessionId is never persisted.
-    const freshSessionStartedAtMs = this.resumeSessionId ? null : Date.now()
-
     if (this.useProxy) {
       // WHY proxy runtime storage must not live under `cwd`:
       //
@@ -390,8 +383,15 @@ export class ClaudeSession extends EventEmitter {
       cols: this.cols,
       rows: this.rows,
       snapshotIntervalMs: this.snapshotIntervalMs,
-      resumeSessionId: this.resumeSessionId ?? undefined,
-      freshSessionStartedAtMs: freshSessionStartedAtMs ?? undefined,
+      // Claude supports assigning fresh UUIDs. Binding both the process and
+      // tailer to this exact id removes the old "newest file in cwd" race where
+      // two concurrently spawned agents could acknowledge each other's prompt.
+      // In the headless package this option identifies the exact transcript
+      // file to tail; it does not drive Claude's CLI. Passing our assigned
+      // fresh id here is therefore correct even though the process itself was
+      // launched with --session-id rather than --resume. The file cannot
+      // preexist for a fresh random UUID, so its bounded bootstrap is empty.
+      resumeSessionId: this.transcriptSessionId,
       // Enabling proxy on the headless instance is what flips the
       // semantic source of truth from screen to proxy inside
       // ClaudeCodeHeadless. Even without this, subscribing to

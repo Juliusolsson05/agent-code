@@ -139,19 +139,11 @@ async function deliverClaudeImagePrompt(
   const imagePaths = io.imagePaths ?? []
   const separator = io.prompt.length > 0 && !/\s$/.test(io.prompt) ? ' ' : ''
   const rawComposer = `${io.prompt}${separator}${imagePaths.join('\n')}`
-  const acceptance = io.session.armPromptAcceptance!(io.prompt, {
-    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
-    aliases: [rawComposer],
-    requiresImage: io.prompt.length === 0,
-    expectedImageCount: imagePaths.length,
-  })
-  io.record?.('acceptance-armed', { imageCount: imagePaths.length })
 
   if (io.prompt.length > 0) {
     if (isPasteLike(io.prompt)) {
       const textBaseline = io.session.snapshotScreen()
       if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
-        acceptance.cancel()
         return failure({
           stage: 'before-write', code: 'write-failed', retrySafe: true,
           promptWritten: false, enterWritten: false,
@@ -163,7 +155,6 @@ async function deliverClaudeImagePrompt(
         { timeoutMs: CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
       )
       if (textAbsorbed.kind !== 'absorbed') {
-        acceptance.cancel()
         return failure({
           stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
           promptWritten: true, enterWritten: false,
@@ -171,7 +162,6 @@ async function deliverClaudeImagePrompt(
         })
       }
     } else if (!io.write(io.prompt)) {
-      acceptance.cancel()
       return failure({
         stage: 'before-write', code: 'write-failed', retrySafe: true,
         promptWritten: false, enterWritten: false,
@@ -179,7 +169,6 @@ async function deliverClaudeImagePrompt(
       })
     }
     if (separator && !io.write(separator)) {
-      acceptance.cancel()
       return failure({
         stage: 'absorption', code: 'write-failed', retrySafe: false,
         promptWritten: true, enterWritten: false,
@@ -190,7 +179,6 @@ async function deliverClaudeImagePrompt(
 
   const imageBaseline = io.session.snapshotScreen()
   if (!io.write(`\x1b[200~${imagePaths.join('\n')}\x1b[201~`)) {
-    acceptance.cancel()
     return failure({
       stage: io.prompt.length > 0 ? 'absorption' : 'before-write',
       code: 'write-failed', retrySafe: io.prompt.length === 0,
@@ -203,7 +191,6 @@ async function deliverClaudeImagePrompt(
     { timeoutMs: IMAGE_CONFIRM_TIMEOUT_MS, pollIntervalMs: CONFIRM_POLL_INTERVAL_MS },
   )
   if (imagesAbsorbed.kind !== 'absorbed') {
-    acceptance.cancel()
     return failure({
       stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
       promptWritten: true, enterWritten: false,
@@ -214,6 +201,19 @@ async function deliverClaudeImagePrompt(
     imageCount: imagePaths.length,
     waitedMs: imagesAbsorbed.waitedMs,
   })
+  // Image/text absorption can legitimately consume seven seconds. Starting
+  // the 20-second waiter before that work left less than JsonlTailer's 15-second
+  // watchdog window after Enter. Main's reservation now blocks every external
+  // writer, so arming at this exact pre-Enter boundary is race-free and gives
+  // durable acceptance the full recovery window without exceeding the remote
+  // transport's 30-second request timeout.
+  const acceptance = io.session.armPromptAcceptance!(io.prompt, {
+    timeoutMs: ACCEPTANCE_TIMEOUT_MS,
+    aliases: [rawComposer],
+    requiresImage: io.prompt.length === 0,
+    expectedImageCount: imagePaths.length,
+  })
+  io.record?.('acceptance-armed', { imageCount: imagePaths.length })
   if (!io.write('\r')) {
     acceptance.cancel()
     return failure({
