@@ -93,4 +93,34 @@ describe('SessionManager prompt delivery reservation', () => {
     })
     await expect(manager.deliverPromptToAgent('s1', 'second')).resolves.toMatchObject({ ok: true })
   })
+
+  it('treats a throwing PTY write as potentially written and blocks condition interleaving', async () => {
+    let release!: (value: PromptAcceptanceOutcome) => void
+    const acceptance = new Promise<PromptAcceptanceOutcome>(resolve => { release = resolve })
+    const resolveCondition = vi.fn(async () => ({ ok: true as const }))
+    const session = {
+      write: vi.fn(() => { throw new Error('pty boundary failed') }),
+      isExited: () => false,
+      resolveCondition,
+      armPromptAcceptance: () => ({ promise: acceptance, cancel: vi.fn() }),
+    }
+    const manager = new SessionManager()
+    ;(manager as unknown as { sessions: Map<string, unknown> }).sessions.set('s1', {
+      kind: 'claude', session,
+    })
+
+    const delivery = manager.deliverPromptToAgent('s1', 'possibly written')
+    await expect(manager.resolveCondition('s1', {} as never)).resolves.toMatchObject({
+      ok: false,
+      reason: 'aborted',
+    })
+    expect(resolveCondition).not.toHaveBeenCalled()
+    await expect(delivery).resolves.toMatchObject({
+      ok: false,
+      retrySafe: false,
+      promptWritten: true,
+      enterWritten: true,
+    })
+    release({ kind: 'cancelled' })
+  })
 })

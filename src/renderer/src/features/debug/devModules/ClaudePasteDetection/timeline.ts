@@ -71,20 +71,20 @@ export function buildLifecycle(session: PasteDebugSession): SubmitLifecycle {
   const uncertain = find(ev, 'PTY', 'delivery:uncertain')
   const threw = ev.find(e => e.layer === 'ERROR')
 
-  // Outcome precedence: a thrown submit is the worst, then a placeholder that
-  // never rendered (the racy stuck case #90 chases), then any CR/single write
-  // that actually went out, else we only saw the keypress.
-  const outcome: SubmitOutcome = threw
-    ? 'error'
-    : accepted
-      ? 'submitted'
+  // Durable acceptance outranks renderer bookkeeping: a late UI error cannot
+  // undo a user/queue entry Claude already committed. Conversely, historical
+  // CR/single-write events prove only that bytes were attempted, not that the
+  // TUI consumed Enter; retaining them as "submitted" would preserve the exact
+  // false-success diagnosis this state machine was added to eliminate.
+  const outcome: SubmitOutcome = accepted
+    ? 'submitted'
+    : threw
+      ? 'error'
       : uncertain
         ? 'error'
         : timedOut
           ? 'pending'
-          : submitCr || singleWrite
-        ? 'submitted'
-        : enter || mainEnter
+          : enter || mainEnter || submitCr || singleWrite
           ? 'pending'
           : 'unknown'
 

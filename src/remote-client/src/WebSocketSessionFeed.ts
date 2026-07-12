@@ -232,6 +232,23 @@ export class WebSocketSessionFeed implements SessionFeed {
     }
     const reply = await this.request({ type: 'send-prompt', sessionId, text: prompt })
     if (reply.delivery) return reply.delivery
+    // A locally rejected request has crossed no transport boundary. Treating
+    // this like an after-Enter timeout would lock the phone's composer behind
+    // the manual transcript-verification escape hatch even though no server —
+    // much less Claude's PTY — ever saw the prompt. Keep the conservative
+    // fallback below for replies whose provenance is ambiguous; this exact
+    // sentinel is owned by request() and therefore proves a pre-write failure.
+    if (!reply.ok && reply.error === 'not connected') {
+      return {
+        ok: false,
+        stage: 'before-write',
+        code: 'transport-failed',
+        message: reply.error,
+        retrySafe: true,
+        promptWritten: false,
+        enterWritten: false,
+      }
+    }
     return reply.ok
       ? { ok: true, acceptance: { kind: 'transport', acceptedAt: Date.now() } }
       : {

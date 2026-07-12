@@ -249,7 +249,11 @@ export function TileLeaf({
         throw err
       }
       if (!ok) {
-        const message = 'Agent backend is unavailable; draft preserved'
+        // `false` also means main deliberately rejected input while a
+        // provider-owned prompt delivery holds the composer reservation. Do
+        // not diagnose that healthy safety gate as a dead backend; both cases
+        // have the same useful action here—preserve the draft and retry later.
+        const message = 'Agent input is temporarily unavailable; draft preserved'
         workspace.showPaneToast(sessionId, message)
         throw new Error(message)
       }

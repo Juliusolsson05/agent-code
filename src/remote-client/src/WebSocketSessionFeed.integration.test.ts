@@ -277,6 +277,14 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     await waitForOpen(f)
     f.dispose()
     const result = await f.deliverPrompt('s1', 'too late')
-    expect(result.ok).toBe(false)
+    // The request was rejected locally, so preserving the draft is enough:
+    // retrying after reconnect cannot duplicate anything in Claude.
+    expect(result).toMatchObject({
+      ok: false,
+      stage: 'before-write',
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
+    })
   })
 })

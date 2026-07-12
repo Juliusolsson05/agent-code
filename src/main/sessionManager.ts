@@ -990,8 +990,14 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     expectedEntry: RegistryEntry,
     data: string,
+    onWriteAttempt?: () => void,
   ): boolean {
     if (this.sessions.get(sessionId) !== expectedEntry) return false
+    // node-pty's write boundary is not transactional: an exception does not
+    // prove zero bytes reached the child. Mark the stage immediately before
+    // crossing it so the outer coordinator never labels a thrown write safe to
+    // retry. The identity rejection above remains genuinely pre-write.
+    onWriteAttempt?.()
     expectedEntry.session.write(data)
     return true
   }
@@ -1054,6 +1060,18 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult> {
+    // Provider condition resolvers synthesize PTY keystrokes internally and
+    // cannot use writeReserved. Letting one answer a dialog while prompt
+    // delivery owns the composer can splice bytes into the paste or consume
+    // its Enter. Rejecting is safe: condition state remains visible and the
+    // caller can retry after the bounded delivery finishes.
+    if (this.promptDeliveriesInFlight.has(sessionId)) {
+      return {
+        ok: false,
+        reason: 'aborted',
+        failedAtStep: 'prompt delivery in progress',
+      }
+    }
     const entry = this.sessions.get(sessionId)
     // ANY agent kind may carry a resolver now (#394 phase 3) — the
     // old `entry.kind !== 'claude'` gate meant a provider that
@@ -1164,11 +1182,10 @@ export class SessionManager extends EventEmitter {
         // absorption/readiness. A same-ID wake must never receive Enter from a
         // delivery that began against the process which just exited.
         write: data => {
-          const wrote = this.writeReserved(sessionId, entry, data)
-          if (wrote) {
+          const wrote = this.writeReserved(sessionId, entry, data, () => {
             if (data === '\r' || data.endsWith('\r')) enterWritten = true
             if (data !== '\r') promptWritten = true
-          }
+          })
           return wrote
         },
         sessionId,

@@ -58,7 +58,10 @@ describe('ClaudeSession prompt acceptance', () => {
 
   it('does not acknowledge image-only delivery from an unrelated empty tool-result user entry', async () => {
     const session = new ClaudeSession()
-    const waiter = session.armPromptAcceptance('', { requiresImage: true })
+    const waiter = session.armPromptAcceptance('', {
+      requiresImage: true,
+      expectedImageCount: 1,
+    })
     const resolve = (entry: unknown, cursor: number): void => {
       ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
         .resolvePromptAcceptance(entry, cursor)
@@ -69,9 +72,43 @@ describe('ClaudeSession prompt acceptance', () => {
     }, 1)
     resolve({
       type: 'user',
-      message: { role: 'user', content: [{ type: 'image', source: {} }] },
+      // Captured from a real Claude 2.1.207 PTY submission. Claude replaces
+      // the pasted path with this pill plus the structured base64 block.
+      imagePasteIds: [1],
+      message: { role: 'user', content: [
+        { type: 'text', text: '[Image #1]' },
+        { type: 'image', source: { type: 'base64' } },
+      ] },
     }, 2)
     await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  it('matches the real Claude text-plus-image JSONL shape without weakening exact text matching', async () => {
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance('describe briefly', { expectedImageCount: 1 })
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'user',
+        imagePasteIds: [2],
+        message: { role: 'user', content: [
+          { type: 'text', text: 'describe briefly [Image #2]' },
+          { type: 'image', source: { type: 'base64' } },
+        ] },
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'user' })
+  })
+
+  it('matches the real Claude busy-session image queue shape', async () => {
+    const session = new ClaudeSession()
+    const waiter = session.armPromptAcceptance('inspect', { expectedImageCount: 1 })
+    ;(session as unknown as { resolvePromptAcceptance(value: unknown, cursor: number): void })
+      .resolvePromptAcceptance({
+        type: 'queue-operation',
+        operation: 'enqueue',
+        // Captured from the same real PTY while `sleep 12` kept Claude busy.
+        content: 'inspect [Image #3]',
+      }, 1)
+    await expect(waiter.promise).resolves.toMatchObject({ kind: 'queue' })
   })
 
   it('rejects an identical entry timestamped before the waiter armed', async () => {

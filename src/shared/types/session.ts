@@ -302,7 +302,12 @@ export interface AgentSession extends AgentSessionEmitter {
    */
   armPromptAcceptance?(
     prompt: string,
-    opts?: { timeoutMs?: number; aliases?: string[]; requiresImage?: boolean },
+    opts?: {
+      timeoutMs?: number
+      aliases?: string[]
+      requiresImage?: boolean
+      expectedImageCount?: number
+    },
   ): PromptAcceptanceWaiter
 
   /** Claude's bootstrap JSONL replay must quiesce before a new waiter can be

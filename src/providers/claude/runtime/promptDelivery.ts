@@ -143,6 +143,7 @@ async function deliverClaudeImagePrompt(
     timeoutMs: ACCEPTANCE_TIMEOUT_MS,
     aliases: [rawComposer],
     requiresImage: io.prompt.length === 0,
+    expectedImageCount: imagePaths.length,
   })
   io.record?.('acceptance-armed', { imageCount: imagePaths.length })
 
