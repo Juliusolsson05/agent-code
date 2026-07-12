@@ -37,6 +37,8 @@
     "audit:production": "npm audit --omit=dev --audit-level=high",
     "verify:package:mac": "node scripts/verify-packaged-mac.mjs",
     "smoke:package:mac": "node scripts/smoke-packaged-mac.mjs",
+    "smoke:tmux": "node scripts/tmux-smoke.mjs",
+    "smoke:tmux:minimal": "node scripts/tmux-smoke.mjs --minimal-env",
     "fixture:audit": "node scripts/audit-rendering-fixture.mjs",
     "runtime:fetch:mitmproxy": "node scripts/runtime-tools/fetch-mitmproxy.mjs",
     "runtime:verify:mitmproxy": "node scripts/runtime-tools/verify-mitmproxy.mjs",
