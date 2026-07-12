@@ -44,9 +44,18 @@ export function shortRowLabel(label: string): string {
       ? 'wk'
       : week[1].toLowerCase().split(/\s+/)[0].slice(0, 6)
   }
-  const hours = label.match(/^(\d+)\s*h/i)
-  if (hours) return `${hours[1]}h`
-  if (/^week/i.test(label)) return 'wk'
+  // Codex labels are "<base> <window>" — e.g. "Codex 5h", "Codex weekly",
+  // "Additional limit 3d" (codexRowsFromRateLimit appends describeWindow's
+  // suffix). The window token is the discriminating part, so search for it
+  // ANYWHERE in the label, not anchored at the start: the first cut used
+  // /^(\d+)h/ and /^week/, which never matched the prefixed labels and
+  // collapsed "Codex 5h" and "Codex weekly" both to "codex" (caught in
+  // review, PR #528). If two different base labels share a window (e.g.
+  // "Codex 5h" + "Additional limit 5h") the chips do collide as "5h" —
+  // the tooltip carries the full labels, which is enough at header density.
+  if (/\bweekly\b|^week/i.test(label)) return 'wk'
+  const window = label.match(/\b(\d+\s*[hdm])\b/i)
+  if (window) return window[1].replace(/\s+/g, '').toLowerCase()
   return label.toLowerCase().split(/\s+/)[0].slice(0, 6)
 }
 

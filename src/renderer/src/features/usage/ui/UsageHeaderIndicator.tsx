@@ -47,8 +47,16 @@ function ProviderChip({
   provider: HeaderProvider
   level: UsageHeaderLevel
 }) {
-  const rows = level === 'providers' ? (provider.worst ? [provider.worst] : []) : provider.rows
-  if (rows.length === 0) return null
+  // `worst` is null when every active row has percent: null (unknown can't
+  // win "most constrained"). Falling back to the first row — which RowCell
+  // renders as "?%" — instead of an empty array matters for layout too:
+  // returning null here would leave the parent's "│" separator dangling
+  // next to a missing chip (caught in review, PR #528). toHeaderProviders
+  // guarantees rows is non-empty, so this chip always renders something.
+  const rows =
+    level === 'providers'
+      ? [provider.worst ?? provider.rows[0]]
+      : provider.rows
   return (
     <span className="inline-flex items-center gap-1.5">
       <span className="font-semibold text-ink">{provider.code}</span>
