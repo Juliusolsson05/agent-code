@@ -10,6 +10,7 @@ import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind } from '@shared/types/providerKind.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import type { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
@@ -21,6 +22,8 @@ import {
   loadOlderHistoryChunkFromFile,
 } from '@main/sessions/historyLoader.js'
 import type { RemoteTransport } from '@main/remote/transport/RemoteTransport.js'
+
+type RemoteReply = Omit<Extract<OutboundFrame, { type: 'reply' }>, 'type' | 'id'>
 
 // RemoteServer — the HTTP+WS host that makes Agent Code controllable from a
 // phone. Modeled on BuiltInMcpHttpHost (same construct-in-index lifecycle,
@@ -62,6 +65,7 @@ export type RemoteSessionControl = {
   getSpawnCwd(sessionId: string): string | null
   getLastActivityAt(sessionId: string): number | null
   write(sessionId: string, data: string): boolean
+  submitStagedPrompt(sessionId: string): boolean
   resolveCondition(
     sessionId: string,
     action: ConditionCustomAction,
@@ -69,7 +73,7 @@ export type RemoteSessionControl = {
   deliverPromptToAgent(
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }>
+  ): Promise<PromptDeliveryResult>
   getSessionKind(sessionId: string): SessionKind | null
 }
 
@@ -112,7 +116,6 @@ export type RemoteServerDeps = {
   isSttAvailable?: () => boolean
 }
 
-const SUBMIT_BYTES = '\r'
 const INTERRUPT_BYTES = '\x1b'
 
 const PAIR_BODY_LIMIT_BYTES = 16 * 1024
@@ -583,7 +586,7 @@ export class RemoteServer extends EventEmitter {
     // error must become a structured reply, not an unhandled rejection that
     // leaves the phone's request waiting out its 10s timeout (review
     // finding). Never echo raw error internals to an untrusted socket.
-    let result: { ok: boolean; error?: string; result?: unknown }
+    let result: RemoteReply
     try {
       result = await this.apply(frame)
     } catch (err) {
@@ -593,7 +596,7 @@ export class RemoteServer extends EventEmitter {
     this.send(ws, { type: 'reply', id: frame.id, ...result })
   }
 
-  private async apply(frame: InboundFrame): Promise<{ ok: boolean; error?: string; result?: unknown }> {
+  private async apply(frame: InboundFrame): Promise<RemoteReply> {
     const msg = frame.message
     switch (msg.type) {
       case 'ping':
@@ -602,7 +605,8 @@ export class RemoteServer extends EventEmitter {
       case 'send-prompt': {
         // EVERY agent kind goes through SessionManager.deliverPromptToAgent —
         // the registry routes to the provider's own prompt-delivery module
-        // (Claude: paste, await the [Pasted text #N] placeholder, THEN Enter;
+        // (Claude: paste, confirm active-composer absorption, Enter, then await
+        // durable user/queue JSONL acceptance;
         // Codex: readiness gate + atomic paste+Enter; opencode: HTTP prompt).
         // A hand-rolled bare bracketed-paste write here reintroduced the
         // exact swallowed-Enter bugs those modules exist to prevent: the
@@ -610,11 +614,13 @@ export class RemoteServer extends EventEmitter {
         // the composer. delivery INCLUDES the submit, so the phone client
         // sends no separate '\r' frame after this (see SessionView.sendPrompt).
         const delivered = await this.deps.manager.deliverPromptToAgent(msg.sessionId, msg.text)
-        return delivered.ok ? { ok: true } : { ok: false, error: delivered.message }
+        return delivered.ok
+          ? { ok: true, delivery: delivered }
+          : { ok: false, error: delivered.message, delivery: delivered }
       }
 
       case 'submit': {
-        const wrote = this.deps.manager.write(msg.sessionId, SUBMIT_BYTES)
+        const wrote = this.deps.manager.submitStagedPrompt(msg.sessionId)
         return wrote ? { ok: true } : { ok: false, error: 'session not writable' }
       }
 

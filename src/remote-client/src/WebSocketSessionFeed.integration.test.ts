@@ -31,8 +31,12 @@ function makeManager(): FakeManager {
   emitter.getSpawnCwd = vi.fn(() => null)
   emitter.getLastActivityAt = vi.fn(() => null)
   emitter.write = vi.fn(() => true)
+  emitter.submitStagedPrompt = vi.fn(sessionId => emitter.write(sessionId, '\r'))
   emitter.resolveCondition = vi.fn(async () => ({ ok: true as const, state: { done: true } }))
-  emitter.deliverPromptToAgent = vi.fn(async () => ({ ok: true as const }))
+  emitter.deliverPromptToAgent = vi.fn(async () => ({
+    ok: true as const,
+    acceptance: { kind: 'transport' as const, acceptedAt: 123 },
+  }))
   emitter.getSessionKind = vi.fn(() => 'claude' as const)
   return emitter
 }
@@ -136,11 +140,31 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     await waitForOpen(f)
 
     const result = await f.deliverPrompt('s1', 'hello from the phone')
-    expect(result).toEqual({ ok: true })
+    expect(result).toMatchObject({ ok: true, acceptance: { kind: 'transport' } })
     // Through the provider prompt-delivery discipline — NOT a bare paste
     // write (see RemoteServer's send-prompt handler for the WHY).
     expect(manager.deliverPromptToAgent).toHaveBeenCalledWith('s1', 'hello from the phone')
     expect(manager.write).not.toHaveBeenCalled()
+  })
+
+  it('preserves retry-unsafe delivery metadata across the WebSocket reply', async () => {
+    manager.deliverPromptToAgent = vi.fn(async () => ({
+      ok: false as const,
+      stage: 'after-enter' as const,
+      code: 'acceptance-timeout' as const,
+      message: 'uncertain',
+      retrySafe: false,
+      promptWritten: true,
+      enterWritten: true,
+    }))
+    const f = makeFeed()
+    await waitForOpen(f)
+    await expect(f.deliverPrompt('s1', 'maybe')).resolves.toMatchObject({
+      ok: false,
+      code: 'acceptance-timeout',
+      retrySafe: false,
+      promptWritten: true,
+    })
   })
 
   it('sendInput translates submit/interrupt/paste and rejects raw bytes', async () => {
@@ -253,6 +277,14 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
     await waitForOpen(f)
     f.dispose()
     const result = await f.deliverPrompt('s1', 'too late')
-    expect(result.ok).toBe(false)
+    // The request was rejected locally, so preserving the draft is enough:
+    // retrying after reconnect cannot duplicate anything in Claude.
+    expect(result).toMatchObject({
+      ok: false,
+      stage: 'before-write',
+      retrySafe: true,
+      promptWritten: false,
+      enterWritten: false,
+    })
   })
 })

@@ -1,5 +1,6 @@
 import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 import { subscribe } from '@preload/api/ipc.js'
 import type {
@@ -94,8 +95,10 @@ export const sessionApi = {
   deliverPrompt: (
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }> =>
-    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt),
+    imagePaths?: string[],
+    deliveryId?: string,
+  ): Promise<PromptDeliveryResult> =>
+    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId),
 
   resolveCondition: (
     sessionId: string,

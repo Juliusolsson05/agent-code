@@ -19,7 +19,10 @@ const noop: SessionFeed = {
   onSessionSubAgents: () => () => {},
   onSessionExit: () => () => {},
   sendInput: async () => true,
-  deliverPrompt: async () => ({ ok: true }),
+  deliverPrompt: async () => ({
+    ok: true,
+    acceptance: { kind: 'transport', acceptedAt: 123 },
+  }),
   resolveCondition: async () => ({ ok: true }),
 }
 
