@@ -129,6 +129,8 @@ export function CommandPalette() {
   const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
   const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
   const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
+  const toggleUsageHeader = useAppStore(state => state.toggleUsageHeader)
+  const cycleUsageHeaderLevel = useAppStore(state => state.cycleUsageHeaderLevel)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
@@ -163,6 +165,8 @@ export function CommandPalette() {
   const showHiddenCommands = SHOW_HIDDEN_COMMANDS
   const statusModeEnabled = settings.showStatusMode
   const worktreeBadgesEnabled = settings.showWorktreeBadges
+  const usageHeaderEnabled = settings.usageHeaderEnabled
+  const usageHeaderLevel = settings.usageHeaderLevel
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
@@ -382,6 +386,8 @@ export function CommandPalette() {
         toggleCustomRendering,
         toggleStatusMode,
         toggleWorktreeBadges,
+        toggleUsageHeader,
+        cycleUsageHeaderLevel,
         setDangerousAgentsEnabled,
         setAggressiveDebugPersistence,
         enterResumeMode,
@@ -398,6 +404,8 @@ export function CommandPalette() {
         customRenderingEnabled,
         statusModeEnabled,
         worktreeBadgesEnabled,
+        usageHeaderEnabled,
+        usageHeaderLevel,
         dangerousAgentsEnabled,
         aggressiveDebugPersistenceEnabled,
         gitBarOpen,
@@ -462,6 +470,8 @@ export function CommandPalette() {
       toggleCustomRendering,
       toggleStatusMode,
       toggleWorktreeBadges,
+      toggleUsageHeader,
+      cycleUsageHeaderLevel,
       setDangerousAgentsEnabled,
       setAggressiveDebugPersistence,
       enterResumeMode,
@@ -476,6 +486,8 @@ export function CommandPalette() {
       customRenderingEnabled,
       statusModeEnabled,
       worktreeBadgesEnabled,
+      usageHeaderEnabled,
+      usageHeaderLevel,
       dangerousAgentsEnabled,
       aggressiveDebugPersistenceEnabled,
       gitBarOpen,
