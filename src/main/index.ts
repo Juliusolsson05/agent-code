@@ -133,6 +133,34 @@ let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
 
+// A packaged release needs one executable-level smoke test that stops before
+// touching the user's real workspace, process lock, provider CLIs, or network.
+// Merely inspecting app.asar cannot prove Electron can load the main bundle and
+// node-pty on the target architecture. CI launches the finished .app with this
+// private flag; reaching this point already proves all top-level native imports
+// loaded, then these resource probes prove the renderer/phone/runtime payloads
+// survived packaging. Normal users never see or depend on this path.
+const packagingSmoke = process.argv.includes('--packaging-smoke')
+
+async function runPackagingSmoke(): Promise<void> {
+  const required = [
+    join(app.getAppPath(), 'out', 'preload', 'index.mjs'),
+    join(app.getAppPath(), 'out', 'renderer', 'index.html'),
+    join(app.getAppPath(), 'out', 'remote-client', 'index.html'),
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'tmux', 'manifest.json'),
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'mitmproxy', 'manifest.json'),
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'cloudflared', 'manifest.json'),
+  ]
+  const missing = required.filter(path => !existsSync(path))
+  if (!app.isPackaged || missing.length > 0) {
+    console.error('[packaging-smoke] failed', { isPackaged: app.isPackaged, missing })
+    app.exit(1)
+    return
+  }
+  console.log('[packaging-smoke] OK', process.arch, app.getVersion())
+  app.exit(0)
+}
+
 // WHY Agent Code is intentionally single-primary-process:
 //
 // The renderer persists the whole workspace as one `workspace.json` snapshot,
@@ -151,9 +179,14 @@ let appRunJournal: AppRunJournal | null = null
 // shared. If that lock ever feels too strict, the storage model must be changed
 // first; deleting the guard alone would make last-writer-wins corruption
 // possible again.
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const hasSingleInstanceLock = packagingSmoke || app.requestSingleInstanceLock()
 
-if (!hasSingleInstanceLock) {
+if (packagingSmoke) {
+  void app.whenReady().then(runPackagingSmoke).catch(err => {
+    console.error('[packaging-smoke] startup failed', err)
+    app.exit(1)
+  })
+} else if (!hasSingleInstanceLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {

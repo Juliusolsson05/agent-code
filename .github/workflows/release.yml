@@ -14,11 +14,11 @@ on:
       release_tag:
         description: "Beta release tag to create when publish_release is true"
         required: true
-        default: "beta-0.0.2"
+        default: "v0.0.2-beta.1"
       release_name:
         description: "Release name to create when publish_release is true"
         required: true
-        default: "Agent Code 0.0.2 Beta"
+        default: "Agent Code 0.0.2 Beta 1"
 
 concurrency:
   group: release-macos
@@ -28,10 +28,14 @@ jobs:
   validate-release:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Validate release secrets
         env:
           PUBLISH_RELEASE: ${{ github.event.inputs.publish_release }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -42,11 +46,24 @@ jobs:
 
           missing=()
           [ -z "${CSC_LINK:-}" ] && missing+=(CSC_LINK)
+          [ -z "${CSC_KEY_PASSWORD:-}" ] && missing+=(CSC_KEY_PASSWORD)
           [ -z "${APPLE_ID:-}" ] && missing+=(APPLE_ID)
           [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
           [ -z "${APPLE_TEAM_ID:-}" ] && missing+=(APPLE_TEAM_ID)
           if [ "${#missing[@]}" -gt 0 ]; then
             printf 'Cannot publish a macOS release without signing/notarization secrets: %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+      - name: Validate release identity
+        if: ${{ github.event.inputs.publish_release == 'true' }}
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          expected="v${version}"
+          if [ "$RELEASE_TAG" != "$expected" ]; then
+            printf 'Release tag must match package.json exactly: expected %s, got %s\n' "$expected" "$RELEASE_TAG"
             exit 1
           fi
 
@@ -110,11 +127,20 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies
         run: npm ci --include=dev
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Audit production dependencies
+        run: npm run audit:production
 
       - name: Prepare bundled runtime tools
         # WHY this belongs in build-app, not package-macos: `npm run build`
@@ -139,6 +165,11 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: write
+    env:
+      # GitHub intentionally disallows direct secrets.* reads in an `if:`
+      # expression. Materialize only the boolean here; the certificate itself
+      # remains available solely to the packaging step below.
+      HAS_SIGNING_IDENTITY: ${{ secrets.CSC_LINK != '' }}
 
     steps:
       - name: Checkout
@@ -194,7 +225,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Cache Electron packages
@@ -234,6 +265,36 @@ jobs:
         # npm scripts in the first place.
         run: npm run package:mac
 
+      - name: Verify packaged app contents and architectures
+        run: |
+          npm run verify:package:mac
+          npm run smoke:package:mac
+
+      - name: Verify signed apps and notarization tickets
+        if: ${{ env.HAS_SIGNING_IDENTITY == 'true' }}
+        run: |
+          found_app=0
+          while IFS= read -r -d '' app_path; do
+            found_app=1
+            codesign --verify --deep --strict --verbose=2 "$app_path"
+            spctl --assess --type execute --verbose=2 "$app_path"
+            xcrun stapler validate "$app_path"
+          done < <(find release -type d -name 'Agent Code.app' -print0)
+          if [ "$found_app" -ne 1 ]; then
+            echo 'No packaged Agent Code.app bundles found for signature verification'
+            exit 1
+          fi
+
+          found_dmg=0
+          while IFS= read -r -d '' dmg_path; do
+            found_dmg=1
+            hdiutil verify "$dmg_path"
+          done < <(find release -maxdepth 1 -type f -name '*.dmg' -print0)
+          if [ "$found_dmg" -ne 1 ]; then
+            echo 'No DMGs found for notarization-ticket validation'
+            exit 1
+          fi
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -246,11 +307,12 @@ jobs:
           # guarantees CSC_LINK via the validate-release job, so every
           # published artifact is named macos-release, and everything
           # unsigned is unmistakably macos-unsigned-dev.
-          name: ${{ secrets.CSC_LINK != '' && 'macos-release' || 'macos-unsigned-dev' }}
+          name: ${{ env.HAS_SIGNING_IDENTITY == 'true' && 'macos-release' || 'macos-unsigned-dev' }}
           path: |
             release/*.dmg
             release/*.zip
             release/*.blockmap
+            release/*.yml
           if-no-files-found: error
 
       - name: Create GitHub Release
@@ -264,3 +326,4 @@ jobs:
             release/*.dmg
             release/*.zip
             release/*.blockmap
+            release/*.yml
