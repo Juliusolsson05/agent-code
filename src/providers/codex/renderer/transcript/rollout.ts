@@ -9,6 +9,7 @@ import {
   isCodexExecWrapperOutput,
   parseCodexJson,
   stripCodexExecWrapper,
+  stripUnifiedExecWrapper,
 } from '@providers/codex/renderer/transcript/entries'
 
 // Codex rollout → feed entry mapping.
@@ -311,17 +312,41 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       const stdout = typeof payload.stdout === 'string' ? payload.stdout : ''
       const stderr = typeof payload.stderr === 'string' ? payload.stderr : ''
       const content = stdout || stderr
+      // `changes` has TWO observed wire shapes: the protocol source
+      // (vendor/codex-src protocol.rs PatchApplyEndEvent) declares a
+      // HashMap<path, FileChange{unified_diff|content}> — but real
+      // 2026-07 binaries emit a plain ARRAY of file paths. Normalize to
+      // { files: string[], diffs: Record<path, unified_diff> } so the
+      // renderer can paint "Edited <path> (+N −M)" when diffs exist and
+      // a path list when they don't. NOTE: since unified-exec, this
+      // event's call_id is a fresh `exec-<uuid>` pairing with NO
+      // tool_use — it renders as a standalone patch-result row.
+      const files: string[] = []
+      const diffs: Record<string, string> = {}
+      if (Array.isArray(payload.changes)) {
+        for (const f of payload.changes) {
+          if (typeof f === 'string') files.push(f)
+        }
+      } else {
+        const rec = asRecord(payload.changes)
+        for (const [path, change] of Object.entries(rec ?? {})) {
+          files.push(path)
+          const c = asRecord(change)
+          if (typeof c?.unified_diff === 'string') diffs[path] = c.unified_diff
+        }
+      }
       return [
         codexToolResultEntry(
           uuid,
           timestamp,
           payload.call_id,
           content,
-          payload.success !== true,
+          payload.success !== true && payload.status !== 'completed',
           {
             kind: 'patch_apply_end',
-            success: payload.success === true,
-            changes: asRecord(payload.changes) ?? {},
+            success: payload.success === true || payload.status === 'completed',
+            files,
+            diffs,
           },
         ),
       ]
@@ -395,10 +420,14 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
   }
 
   if (payload.type === 'custom_tool_call_output' && typeof payload.call_id === 'string') {
-    const output = codexOutputText(payload.output)
-    const parsed = parseCodexJson(output)
+    const raw = codexOutputText(payload.output)
+    // Unified-exec scripts wrap real output in a "Script completed /
+    // Wall time / Output:" preamble — strip it so the collapsed preview
+    // shows OUTPUT, and keep the wall time as structured duration.
+    const { output: unwrapped, durationMs, scriptFailed } = stripUnifiedExecWrapper(raw)
+    const parsed = parseCodexJson(unwrapped)
     const normalized =
-      typeof parsed?.output === 'string' ? parsed.output : output
+      typeof parsed?.output === 'string' ? parsed.output : unwrapped
     const metadata = parsed?.metadata
     const exitCode = numberField(asRecord(metadata), 'exit_code') ?? 0
     if (
@@ -413,8 +442,8 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
         timestamp,
         payload.call_id,
         normalized,
-        exitCode !== 0,
-        { kind: 'custom_tool_call_output' },
+        scriptFailed || exitCode !== 0,
+        { kind: 'custom_tool_call_output', durationMs },
       ),
     ]
   }

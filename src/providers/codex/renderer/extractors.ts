@@ -41,13 +41,40 @@ export function execCommandInput(input: unknown): ExecCommandInput | null {
 export function codexResultMeta(result: ToolResultBlock | null): {
   exitCode: number | null
   cwd: string | null
+  durationMs: number | null
 } {
   const meta = asRecord(result?.codex)
-  if (!meta) return { exitCode: null, cwd: null }
+  if (!meta) return { exitCode: null, cwd: null, durationMs: null }
   return {
     exitCode: typeof meta.exitCode === 'number' ? meta.exitCode : null,
     cwd: typeof meta.cwd === 'string' ? meta.cwd : null,
+    // Unified-exec wall time, captured when the output wrapper was
+    // stripped (entries.ts stripUnifiedExecWrapper).
+    durationMs: typeof meta.durationMs === 'number' ? meta.durationMs : null,
   }
+}
+
+/** Standalone patch_apply_end meta (unified-exec era: its call_id pairs
+ *  with no tool_use — see rollout.ts). */
+export function patchResultMeta(result: ToolResultBlock): {
+  isPatchResult: boolean
+  success: boolean
+  files: string[]
+  diffs: Record<string, string>
+} {
+  const meta = asRecord(result.codex)
+  if (meta?.kind !== 'patch_apply_end') {
+    return { isPatchResult: false, success: false, files: [], diffs: {} }
+  }
+  const files = Array.isArray(meta.files)
+    ? meta.files.filter((f): f is string => typeof f === 'string')
+    : []
+  const diffsRec = asRecord(meta.diffs) ?? {}
+  const diffs: Record<string, string> = {}
+  for (const [k, v] of Object.entries(diffsRec)) {
+    if (typeof v === 'string') diffs[k] = v
+  }
+  return { isPatchResult: true, success: meta.success === true, files, diffs }
 }
 
 /** Codex's exec classifier: parsed_cmd[0].type marks a command as a

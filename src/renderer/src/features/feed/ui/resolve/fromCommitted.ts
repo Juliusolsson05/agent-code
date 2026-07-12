@@ -56,7 +56,7 @@ export function commandFromCommitted(
   // know the wire changed.
   if (tu.name === 'exec') {
     const action = classifyUnifiedExecScript(unifiedExecScript(tu.input))
-    const { exitCode, cwd: metaCwd } = codexResultMeta(result)
+    const { exitCode, cwd: metaCwd, durationMs } = codexResultMeta(result)
     const exec = action?.kind === 'exec_command' ? action.input : null
     return {
       family: 'command',
@@ -76,7 +76,7 @@ export function commandFromCommitted(
       sourceTool: action?.kind === 'write_stdin' ? 'write_stdin' : 'exec_command',
       output: result ? toolResultText(result) : null,
       exitCode,
-      durationMs: null,
+      durationMs,
       yieldTimeMs: exec?.yieldTimeMs ?? null,
       maxOutputTokens: exec?.maxOutputTokens ?? null,
       stdinWrites: action?.kind === 'write_stdin' ? [action.chars] : [],
@@ -85,7 +85,7 @@ export function commandFromCommitted(
   }
 
   const input = asRecord(tu.input)
-  const { exitCode, cwd: metaCwd } = codexResultMeta(result)
+  const { exitCode, cwd: metaCwd, durationMs } = codexResultMeta(result)
   const stdin =
     tu.name === 'write_stdin' && typeof input?.chars === 'string'
       ? [input.chars]
@@ -121,7 +121,7 @@ export function commandFromCommitted(
       : 'Bash') as CommandArtifact['sourceTool'],
     output: result ? toolResultText(result) : null,
     exitCode,
-    durationMs: null,
+    durationMs,
     yieldTimeMs:
       typeof input?.yield_time_ms === 'number' ? input.yield_time_ms : null,
     maxOutputTokens:

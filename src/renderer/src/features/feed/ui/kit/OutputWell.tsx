@@ -54,12 +54,17 @@ export const OutputWell = memo(function OutputWell({
   }, [text])
 
   const lines = capped.length === 0 ? [] : capped.split('\n')
-  const needsTruncation = lines.length > previewLines
-  const shown =
-    expanded || !needsTruncation
-      ? capped
-      : lines.slice(0, previewLines).join('\n')
-  const hiddenCount = needsTruncation ? lines.length - previewLines : 0
+  // Head+tail preview, matching Codex's native output clipping
+  // (exec_cell/render.rs output_lines): the START shows what ran and
+  // the END shows how it finished — the tail is usually the part that
+  // matters (test summary, error, exit line). Head-only previews hid
+  // exactly that. Collapse only when it hides at least one line beyond
+  // the head+tail window.
+  const needsTruncation = lines.length > previewLines * 2 + 1
+  const head = needsTruncation ? lines.slice(0, previewLines).join('\n') : capped
+  const tail = needsTruncation ? lines.slice(-previewLines).join('\n') : ''
+  const shown = expanded || !needsTruncation ? capped : head
+  const hiddenCount = needsTruncation ? lines.length - previewLines * 2 : 0
 
   return (
     <MarkerRow marker="⎿" tone="muted">
@@ -75,15 +80,32 @@ export const OutputWell = memo(function OutputWell({
           <span className="text-muted">{`\n${cappedNotice}`}</span>
         ) : null}
       </pre>
-      {needsTruncation && (
+      {needsTruncation && !expanded && (
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="my-0.5 text-[11px] text-muted hover:text-ink cursor-pointer block"
+          >
+            … +{hiddenCount} {hiddenCount === 1 ? 'line' : 'lines'} (click to expand)
+          </button>
+          <pre
+            className={`
+              font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
+              ${isError ? 'text-danger' : 'text-ink-dim'}
+            `}
+          >
+            {ansi ? <AnsiText text={tail} /> : tail}
+          </pre>
+        </>
+      )}
+      {needsTruncation && expanded && (
         <button
           type="button"
-          onClick={() => setExpanded(e => !e)}
+          onClick={() => setExpanded(false)}
           className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
         >
-          {expanded
-            ? 'collapse'
-            : `… +${hiddenCount} ${hiddenCount === 1 ? 'line' : 'lines'} (click to expand)`}
+          collapse
         </button>
       )}
     </MarkerRow>

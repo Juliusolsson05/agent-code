@@ -29,6 +29,7 @@ import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow
 import { CommandCard } from '@renderer/features/feed/ui/artifacts/command'
 import {
   DiffCard,
+  PatchResultCard,
   fileEditFromCommitted,
 } from '@renderer/features/feed/ui/artifacts/fileEdit'
 import {
@@ -63,6 +64,7 @@ import {
 } from '@renderer/features/feed/ui/resolve/registry'
 import {
   classifyUnifiedExecScript,
+  patchResultMeta,
   unifiedExecScript,
 } from '@providers/codex/renderer/extractors'
 
@@ -295,6 +297,20 @@ export const Block = memo(function Block({
         ) {
           return null
         }
+      }
+      // Standalone patch confirmations (unified-exec patch_apply_end —
+      // its call_id pairs with nothing) paint the Codex-native
+      // "Edited path" row instead of a floating raw-output well.
+      const patchMeta = patchResultMeta(tr)
+      if (patchMeta.isPatchResult) {
+        return (
+          <PatchResultCard
+            files={patchMeta.files}
+            diffs={patchMeta.diffs}
+            success={patchMeta.success}
+            stderr={toolResultText(tr)}
+          />
+        )
       }
       const sourceTool = toolUseIndex.get(tr.tool_use_id)
       // Results consumed INTO a card on the tool_use row (command output,

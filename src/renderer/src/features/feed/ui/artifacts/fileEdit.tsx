@@ -15,6 +15,7 @@ import {
   parseApplyPatch,
   partialApplyPatchInput,
   patchChangesFromResult,
+  unifiedDiffToLines,
   unifiedExecScript,
 } from '@providers/codex/renderer/extractors'
 
@@ -273,6 +274,20 @@ export const DiffCard = memo(function DiffCard({
               {vm.patchFiles.length} files
             </span>
           ) : null}
+          {(() => {
+            // Codex-native (+N −M) header totals (diff_render.rs
+            // render_line_count_summary): green adds, red removes.
+            const all = [...vm.diffs.flat(), ...vm.patchFiles.flatMap(f => f.lines)]
+            const added = all.filter(l => l.kind === '+').length
+            const removed = all.filter(l => l.kind === '-').length
+            if (added === 0 && removed === 0) return null
+            return (
+              <span className="text-[11px] flex-shrink-0 tabular-nums">
+                (<span className="text-diff-add-fg">+{added}</span>{' '}
+                <span className="text-diff-remove-fg">−{removed}</span>)
+              </span>
+            )
+          })()}
           <StatusBadge status={vm.status} />
         </div>
         {vm.rawStreamingInput !== null ? (
@@ -293,6 +308,86 @@ export const DiffCard = memo(function DiffCard({
         )}
         {vm.resultError ? (
           <OutputWell text={vm.resultError} isError ansi />
+        ) : null}
+      </div>
+    </MarkerRow>
+  )
+})
+
+// PatchResultCard — the standalone "Edited …" confirmation row for a
+// unified-exec-era patch_apply_end event. Its call_id pairs with NO
+// tool_use (fresh `exec-<uuid>`; the DiffCard for the same edit renders
+// from the SCRIPT's patch text on the exec tool_use), so this event
+// paints Codex-native style: `• Edited <path> (+N −M)` with the tinted
+// diff when the event carried per-file unified_diffs, or a compact
+// per-file list when the binary only sent paths — and a loud
+// `✘ Failed to apply patch` + stderr on failure (mirrors codex TUI
+// patches.rs). Committed-plane only by nature.
+export const PatchResultCard = memo(function PatchResultCard({
+  files,
+  diffs,
+  success,
+  stderr,
+}: {
+  files: string[]
+  diffs: Record<string, string>
+  success: boolean
+  stderr: string
+}) {
+  const { workspaceRoot } = useContext(CodeRenderContext)
+  const diffFiles: DiffViewFile[] = Object.entries(diffs).map(([path, diff]) => ({
+    path,
+    action: 'update' as const,
+    movedTo: null,
+    lines: unifiedDiffToLines(diff),
+  }))
+
+  if (!success) {
+    return (
+      <MarkerRow marker="⏺">
+        <div className="flex flex-col gap-1">
+          <span className="text-danger font-semibold text-[13px] leading-[1.65]">
+            ✘ Failed to apply patch
+          </span>
+          {diffFiles.length > 0 ? <DiffView files={diffFiles} /> : null}
+          {stderr ? <OutputWell text={stderr} isError ansi /> : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  return (
+    <MarkerRow marker="⏺">
+      <div className="flex flex-col gap-1">
+        <div className="text-[13px] leading-[1.65] flex items-baseline gap-2 min-w-0">
+          <span className="text-accent font-semibold flex-shrink-0">Edited</span>
+          {files.length === 1 ? (
+            <span
+              className="text-ink-dim font-code text-[12px] truncate min-w-0"
+              style={{ direction: 'rtl', textAlign: 'left' }}
+              title={files[0]}
+            >
+              {formatToolFilePath(files[0], workspaceRoot)}
+            </span>
+          ) : (
+            <span className="text-ink-dim text-[12px] flex-shrink-0">
+              {files.length} files
+            </span>
+          )}
+          <StatusBadge status="complete" />
+        </div>
+        {diffFiles.length > 0 ? (
+          <DiffView files={diffFiles} />
+        ) : files.length > 1 ? (
+          <MarkerRow marker="⎿" tone="muted">
+            <div className="font-code text-[12px] leading-[1.55] text-ink-dim">
+              {files.map(f => (
+                <div key={f} className="break-all" title={f}>
+                  {formatToolFilePath(f, workspaceRoot)}
+                </div>
+              ))}
+            </div>
+          </MarkerRow>
         ) : null}
       </div>
     </MarkerRow>
