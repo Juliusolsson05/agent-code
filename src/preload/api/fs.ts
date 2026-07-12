@@ -15,7 +15,7 @@ export const fsApi = {
   ): Promise<
     | { ok: true; path: string }
     | { ok: false; error: string; resolvedPath?: string }
-  > => ipcRenderer.invoke('fs:expandCwd', raw),
+  > => ipcRenderer.invoke('fs:expand-cwd', raw),
 
   // Create a directory the user typed in the path picker. Mirrors
   // expandCwd's expansion + result shape so the caller can branch on
@@ -26,7 +26,7 @@ export const fsApi = {
   createDirectory: (
     raw: string,
   ): Promise<{ ok: true; path: string } | { ok: false; error: string }> =>
-    ipcRenderer.invoke('fs:createDirectory', raw),
+    ipcRenderer.invoke('fs:create-directory', raw),
 
   // Directory listing (used by PathInput for completion). Returns up
   // to ~thousands of entries for a given directory. Renderer filters
@@ -41,8 +41,8 @@ export const fsApi = {
         expanded: string
       }
     | { ok: false; error: string }
-  > => ipcRenderer.invoke('fs:listDirectory', rawPath, opts),
+  > => ipcRenderer.invoke('fs:list-directory', rawPath, opts),
 
   saveClaudeImage: (params: SaveClaudeImageParams): Promise<SavedClaudeImage> =>
-    ipcRenderer.invoke('fs:saveClaudeImage', params),
+    ipcRenderer.invoke('fs:save-claude-image', params),
 }

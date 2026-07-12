@@ -10,9 +10,11 @@ import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
 import { SessionFeedSource } from '@main/remote/SessionFeedSource.js'
 import { LanTransport } from '@main/remote/transport/LanTransport.js'
-import { RemoteServer, type RemoteSessionControl } from '@main/remote/RemoteServer.js'
+import { RemoteServer } from '@main/remote/RemoteServer.js'
+import type { RemoteSessionControl } from '@main/remote/RemoteServer.js'
 
-import { WebSocketSessionFeed, type WebSocketLike } from './WebSocketSessionFeed'
+import { WebSocketSessionFeed } from './WebSocketSessionFeed'
+import type { WebSocketLike } from './WebSocketSessionFeed'
 import { TranscriptStore } from './transcript/store'
 
 // The drift-catcher: real WebSocketSessionFeed against real RemoteServer over

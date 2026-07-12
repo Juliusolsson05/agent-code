@@ -1,4 +1,5 @@
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind.js'
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
 
 import { subscribe } from '@preload/api/ipc.js'

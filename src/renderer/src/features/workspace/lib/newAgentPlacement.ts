@@ -1,4 +1,5 @@
-import { buildLeafGeometries, sliceRect, type Rect } from '@renderer/workspace/tile-tree/geometry'
+import { buildLeafGeometries, sliceRect } from '@renderer/workspace/tile-tree/geometry'
+import type { Rect } from '@renderer/workspace/tile-tree/geometry'
 import type { SessionId, SplitDirection, TileNode } from '@renderer/workspace/types'
 
 export type PlacementTarget =

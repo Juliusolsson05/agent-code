@@ -6,11 +6,8 @@ import type { PasteDebugJournalRegistry } from '@main/pasteDebugJournal.js'
 import { sha8FromDigestBytes } from '@shared/code/sha8.js'
 import type { ConditionCustomAction } from '@shared/types/providerConditions.js'
 import { getMainProvider } from '@providers/registry.main.js'
-import {
-  AGENT_PROVIDER_KINDS,
-  DEFAULT_PROVIDER,
-  type AgentProviderKind,
-} from '@shared/types/providerKind.js'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import {
   loadInitialHistoryChunk,
   loadOlderHistoryChunk,

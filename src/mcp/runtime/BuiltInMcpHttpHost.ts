@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer } from 'node:http'
+import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { performance } from 'node:perf_hooks'
 
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -11,11 +12,11 @@ import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridg
 import type { SessionManager } from '@main/sessionManager.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
-import {
-  normalizeBuiltInMcpDomains,
-  type BuiltInMcpDomain,
-  type BuiltInMcpServerConfig,
-  type McpSessionScope,
+import { normalizeBuiltInMcpDomains } from '@mcp/shared/types.js'
+import type {
+  BuiltInMcpDomain,
+  BuiltInMcpServerConfig,
+  McpSessionScope,
 } from '@mcp/shared/types.js'
 
 type SessionRegistration = {

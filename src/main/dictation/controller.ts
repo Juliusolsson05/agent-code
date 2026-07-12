@@ -16,12 +16,8 @@
 // where Agent Code's needs *intentionally* differ from flow-electron's gets
 // a comment explaining why.
 
-import {
-  createDeepgramStreamingProvider,
-  transcribeDeepgram,
-  type SpeechTraceEvent,
-  type SpeechTranscript,
-} from 'agent-voice-dictation/speech'
+import { createDeepgramStreamingProvider, transcribeDeepgram } from 'agent-voice-dictation/speech'
+import type { SpeechTraceEvent, SpeechTranscript } from 'agent-voice-dictation/speech'
 import type { DictationProvider } from '@shared/types/dictation.js'
 
 export type { DictationProvider }

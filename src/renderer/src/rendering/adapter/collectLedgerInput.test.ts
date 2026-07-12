@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  createLedgerInputAdapter,
-  type RuntimeLedgerSlices,
-  type RuntimeSemanticTurn,
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import type {
+  RuntimeLedgerSlices,
+  RuntimeSemanticTurn,
 } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { GhostLike } from '@renderer/rendering/observations/ghosts'

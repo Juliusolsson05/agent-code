@@ -5,10 +5,8 @@ import {
   FONT_FAMILIES,
   THEME_MODES,
   WORKSPACE_MODES,
-  type AccentId,
-  type FontFamilyId,
-  type Settings,
 } from '@renderer/app-state/settings/types'
+import type { AccentId, FontFamilyId, Settings } from '@renderer/app-state/settings/types'
 import { coerceCustomAppearanceJson } from '@renderer/app-state/settings/customAppearance'
 import { coerceHotkeyBinding } from '@renderer/lib/hotkeyBinding'
 

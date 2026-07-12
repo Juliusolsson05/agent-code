@@ -4,19 +4,20 @@ import {
   FONT_FAMILIES,
   THEME_MODES,
   WORKSPACE_MODES,
-  type AccentId,
-  type AgentViewMode,
-  type FontFamilyId,
-  type Settings,
-  type ThemeMode,
-  type WorkspaceModeId,
+} from '@renderer/app-state/settings/types'
+import type {
+  AccentId,
+  AgentViewMode,
+  FontFamilyId,
+  Settings,
+  ThemeMode,
+  WorkspaceModeId,
 } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
-import {
-  listPickerCommandMeta,
-  type PickerCommandMeta,
-} from '@renderer/features/command-palette/registry'
+import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
+import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import { listPickerCommandMeta } from '@renderer/features/command-palette/registry'
+import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
 
 export type SettingActionContext = {
   workspace: Workspace

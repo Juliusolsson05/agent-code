@@ -1,5 +1,5 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
-import { type Entry } from '@shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 
 import type {
   SemanticLiveTurn,

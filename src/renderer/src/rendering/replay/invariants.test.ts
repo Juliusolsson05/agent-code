@@ -3,14 +3,13 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { RenderCandidate, RenderLedger, RenderRow, OwnershipDecision } from '@renderer/rendering/model/types'
 import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
-import {
-  parseRecording,
-  replayRecording,
-  type RecordingHeader,
-  type RecordedLine,
-  type ReplayItemsProjection,
-  type ReplayResult,
-  type ReplayTick,
+import { parseRecording, replayRecording } from '@renderer/rendering/replay/recordedSession'
+import type {
+  RecordingHeader,
+  RecordedLine,
+  ReplayItemsProjection,
+  ReplayResult,
+  ReplayTick,
 } from '@renderer/rendering/replay/recordedSession'
 import {
   ledgerFeedContextFromRuntime,

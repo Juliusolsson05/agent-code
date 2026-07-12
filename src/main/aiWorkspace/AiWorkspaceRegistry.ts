@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { constants, type Stats } from 'node:fs'
+import { constants } from 'node:fs'
+import type { Stats } from 'node:fs'
 import { access, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 import { execFile } from 'node:child_process'

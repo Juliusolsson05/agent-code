@@ -2,7 +2,7 @@
 // (the provider-agnostic source of truth for the registry framework). We
 // import them here so the provider condition unions below can keep referencing
 // `ConditionAction`, AND re-export them so every existing import of these names
-// from '@shared/types/providerConditions' keeps working byte-for-byte — this
+// from '@shared/types/providerConditions.js' keeps working byte-for-byte — this
 // file remains the home of the provider-SPECIFIC state shapes + condition
 // unions below. A bare `export type { … } from` would NOT bind these names into
 // this module's local scope, so the unions below (which use `ConditionAction`)
@@ -12,8 +12,8 @@ import type {
   ConditionPtyAction,
   ConditionCustomAction,
   ConditionAction,
-} from '@shared/conditions-core/contract'
-import type { AgentProviderKind } from '@shared/types/providerKind'
+} from '@shared/conditions-core/contract.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export type { ConditionPtyAction, ConditionCustomAction, ConditionAction }
 

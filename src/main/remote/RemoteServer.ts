@@ -1,10 +1,12 @@
 import { EventEmitter } from 'node:events'
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer } from 'node:http'
+import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import { createReadStream, existsSync } from 'node:fs'
 import { extname, join, normalize, sep } from 'node:path'
 import type { Duplex } from 'node:stream'
 
-import { WebSocketServer, type WebSocket } from 'ws'
+import { WebSocketServer } from 'ws'
+import type { WebSocket } from 'ws'
 
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'

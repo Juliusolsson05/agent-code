@@ -1,7 +1,5 @@
-import {
-  BUILT_IN_MCP_DOMAINS,
-  type BuiltInMcpDomain,
-} from '@mcp/shared/types'
+import { BUILT_IN_MCP_DOMAINS } from '@mcp/shared/types'
+import type { BuiltInMcpDomain } from '@mcp/shared/types'
 
 const BUILT_IN_MCP_DOMAIN_SET = new Set<string>(BUILT_IN_MCP_DOMAINS)
 

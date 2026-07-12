@@ -15,11 +15,8 @@
 // The descriptors are pure literals so this file is importable from
 // anywhere in main without dragging in node-pty, proxies, or fs.
 
-import {
-  AGENT_PROVIDER_KINDS,
-  isAgentProviderKind,
-  type AgentProviderKind,
-} from '@shared/types/providerKind.js'
+import { AGENT_PROVIDER_KINDS, isAgentProviderKind } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export type ProviderSetupDescriptor = {
   /** The executable name resolved on PATH and cached by toolchain.

@@ -1,18 +1,16 @@
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import { isAgentProviderKind } from '@shared/types/providerKind'
 import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
-import {
-  createLedgerInputAdapter,
-  type RuntimeLedgerSlices,
-} from '@renderer/rendering/adapter/collectLedgerInput'
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import type { RenderLedger, OwnershipDecision } from '@renderer/rendering/model/types'
 import {
   applyFeedEvent,
   createReplayFoldState,
   slicesFromState,
-  type FeedChannel,
 } from '@renderer/rendering/replay/reconstructSlices'
+import type { FeedChannel } from '@renderer/rendering/replay/reconstructSlices'
 
 // ---------------------------------------------------------------------------
 // Slice 4 — the replay harness. Reads a Session Recording (meta.json +
@@ -211,7 +209,7 @@ export function parseRecording(input: {
       // pipeline — the 9-channel allowlist is a hard contract on replay too.
       continue
     }
-    lines.push(obj as unknown as RecordedLine)
+    lines.push(obj as RecordedLine)
   }
 
   return { header: input.header, lines }

@@ -10,8 +10,8 @@ import type { RenderCandidate } from '@renderer/rendering/model/types'
 import {
   collectCommittedCandidates,
   normalizeTextKey,
-  type RawCommittedEntry,
 } from '@renderer/rendering/observations/committed'
+import type { RawCommittedEntry } from '@renderer/rendering/observations/committed'
 
 // Fixture times are explicit ISO strings — entry.timestamp is producer
 // wall-clock and the collector must parse it, never substitute Date.now().

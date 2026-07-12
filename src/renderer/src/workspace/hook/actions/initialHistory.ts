@@ -1,6 +1,7 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { Entry } from '@shared/types/transcript'
-import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'

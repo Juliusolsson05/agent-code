@@ -6,10 +6,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
-import {
-  SessionPreviewPane,
-  type PreviewTarget,
-} from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 
 // PromptSearchModal — cross-session prompt search.
 //

@@ -1,4 +1,5 @@
-import { useEffect, type RefObject } from 'react'
+import { useEffect } from 'react'
+import type { RefObject } from 'react'
 
 import type { SessionId } from '@renderer/workspace/types'
 import type { ImagePasteResult } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { sanitizeCodexRolloutForResume } from './codexResumeSanitizer'
+import { sanitizeCodexRolloutForResume } from './codexResumeSanitizer.js'
 
 // CodexRolloutLine is a type-only import in the module under test (erased at
 // runtime), so the tests build plain line objects and cast through unknown.

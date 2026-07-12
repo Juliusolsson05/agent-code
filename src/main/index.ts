@@ -22,7 +22,8 @@ import {
   pruneOldPasteDebugLogs,
 } from '@main/pasteDebugJournal.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
-import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
+import { reconcile } from '@main/tmux/tmuxRecovery.js'
+import type { PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import {
@@ -31,7 +32,8 @@ import {
   setLiveRecordingDirsProvider,
 } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
-import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
+import { acquireStateProcessLock } from '@main/storage/processLock.js'
+import type { StateProcessLock } from '@main/storage/processLock.js'
 import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'

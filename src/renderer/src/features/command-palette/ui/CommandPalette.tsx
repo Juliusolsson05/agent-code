@@ -1,4 +1,5 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
@@ -16,18 +17,16 @@ import {
   loadCustomPromptTemplates,
   saveCustomPromptTemplate,
   updateCustomPromptTemplate,
-  type PromptTemplate,
 } from '@renderer/features/prompt-templates/templates'
+import type { PromptTemplate } from '@renderer/features/prompt-templates/templates'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
-import {
-  SessionPreviewPane,
-  type PreviewTarget,
-} from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'

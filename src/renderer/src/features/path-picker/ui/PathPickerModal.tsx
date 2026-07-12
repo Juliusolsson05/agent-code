@@ -1,4 +1,5 @@
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useEffect, useRef, useState } from 'react'
 

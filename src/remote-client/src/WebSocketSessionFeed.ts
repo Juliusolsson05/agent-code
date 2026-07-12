@@ -13,7 +13,8 @@ import type {
   SessionSubAgentsEvent,
 } from '@shared/sessionFeed/types'
 import { applyTheme } from '@renderer/app-state/settings/theme'
-import { DEFAULT_SETTINGS, type Settings } from '@renderer/app-state/settings/types'
+import { DEFAULT_SETTINGS } from '@renderer/app-state/settings/types'
+import type { Settings } from '@renderer/app-state/settings/types'
 
 import type {
   FeedChannel,
@@ -275,7 +276,7 @@ export class WebSocketSessionFeed implements SessionFeed {
     const url = `${this.opts.url}?token=${encodeURIComponent(this.opts.token)}`
     const factory =
       this.opts.createSocket ??
-      ((u: string) => new WebSocket(u) as unknown as WebSocketLike)
+      ((u: string) => new WebSocket(u) as WebSocketLike)
     let socket: WebSocketLike
     try {
       socket = factory(url)

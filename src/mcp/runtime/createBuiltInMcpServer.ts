@@ -22,8 +22,8 @@ import {
   AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
   isAgentProviderKind,
-  type AgentProviderKind,
 } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,

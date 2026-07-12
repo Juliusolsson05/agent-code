@@ -6,14 +6,8 @@ import { spawn as ptySpawn } from 'node-pty'
 import type { SlashPickerState } from '@preload/index.js'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
-import {
-  CodexHeadless,
-  CodexResponsesAdapter,
-  ResponsesProxy,
-  type CodexConditionSnapshot,
-  type CodexRolloutLine,
-  type CodexSemanticEvent,
-} from 'codex-headless'
+import { CodexHeadless, CodexResponsesAdapter, ResponsesProxy } from 'codex-headless'
+import type { CodexConditionSnapshot, CodexRolloutLine, CodexSemanticEvent } from 'codex-headless'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'

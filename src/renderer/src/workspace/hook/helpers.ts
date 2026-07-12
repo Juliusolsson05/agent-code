@@ -1,15 +1,10 @@
 import { useCallback } from 'react'
 
-import {
-  emptyRuntime,
-  type RenderedViewLeaseFeature,
-  type SessionRuntime,
-} from '@renderer/session-runtime/state'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { RenderedViewLeaseFeature, SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
-import {
-  appendFeedDebugLog,
-  type FeedDebugInput,
-} from '@renderer/session-runtime/feedDebug'
+import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
+import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import { withDerivedSessionStatus } from '@renderer/session-runtime/semantic/helpers'
 
 import type {

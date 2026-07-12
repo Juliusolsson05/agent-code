@@ -62,8 +62,8 @@ import {
   placeholderCount,
   pasteTailNeedle,
   pollPasteAbsorbed,
-  type PasteAbsorbedOutcome,
 } from '@shared/claude/pasteConfirm'
+import type { PasteAbsorbedOutcome } from '@shared/claude/pasteConfirm'
 
 // The paste-commit DETECTION (placeholder-or-inline) now lives in the shared
 // module that BOTH this desktop composer and the runtime delivery path consume
@@ -96,7 +96,7 @@ const sha8 = sha8Web
 
 export type ClaudePasteSendFn = (data: string, pasteId?: string) => Promise<void>
 
-export type ClaudePasteOpts = {
+export type ClaudePasteOptions = {
   /** Renderer-minted UUID for the per-paste debug journal. When set,
    *  every PTY write in this paste emits an IPC:write event to the
    *  journal. */
@@ -111,7 +111,7 @@ export type ClaudePasteOpts = {
 export async function sendBracketedPaste(
   send: ClaudePasteSendFn,
   payload: string,
-  opts?: ClaudePasteOpts,
+  opts?: ClaudePasteOptions,
 ): Promise<void> {
   const pasteId = opts?.pasteId
   if (pasteId) {
@@ -128,7 +128,7 @@ export async function sendBracketedPasteThenSubmit(
   send: ClaudePasteSendFn,
   payload: string,
   delayMs = 0,
-  opts?: ClaudePasteOpts,
+  opts?: ClaudePasteOptions,
 ): Promise<void> {
   const pasteId = opts?.pasteId
   const eventDriven = opts?.eventDriven
@@ -200,7 +200,7 @@ export async function sendBracketedPasteThenSubmit(
 export async function sendClaudeDraftText(
   send: ClaudePasteSendFn,
   text: string,
-  opts?: ClaudePasteOpts,
+  opts?: ClaudePasteOptions,
 ): Promise<void> {
   if (text.length === 0) return
   const isPasteLike = text.includes('\n') || text.length > CLAUDE_PASTE_THRESHOLD

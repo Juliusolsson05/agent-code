@@ -1,7 +1,7 @@
-import {
-  conditionStateByKind,
-  type ClaudeSlashPickerState,
-  type ProviderConditionSnapshot,
+import { conditionStateByKind } from '@shared/types/providerConditions'
+import type {
+  ClaudeSlashPickerState,
+  ProviderConditionSnapshot,
 } from '@shared/types/providerConditions'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { SessionRuntime } from '@renderer/session-runtime/state'

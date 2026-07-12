@@ -10,7 +10,8 @@ import { DevicePairing } from './auth/DevicePairing.js'
 import { DeviceRegistry } from './auth/deviceRegistry.js'
 import { SessionFeedSource } from './SessionFeedSource.js'
 import { LanTransport } from './transport/LanTransport.js'
-import { RemoteServer, type RemoteSessionControl } from './RemoteServer.js'
+import { RemoteServer } from './RemoteServer.js'
+import type { RemoteSessionControl } from './RemoteServer.js'
 
 // End-to-end over real sockets: pairing over HTTP, authenticated WS,
 // feed fan-out, and the scope gate applied to a live connection. The

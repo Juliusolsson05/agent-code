@@ -2,8 +2,8 @@ import {
   AGENT_PROVIDER_KINDS,
   DEFAULT_PROVIDER,
   isAgentProviderKind,
-  type AgentProviderKind,
 } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
@@ -11,8 +11,10 @@ import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 import { isCompactSummaryEntry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
-import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
-import { appendFeedDebugLog, type FeedDebugInput } from '@renderer/session-runtime/feedDebug'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
+import { appendFeedDebugLog } from '@renderer/session-runtime/feedDebug'
+import type { FeedDebugInput } from '@renderer/session-runtime/feedDebug'
 import type { SessionId } from '@renderer/workspace/types'
 import {
   hasPendingSemanticTools,
@@ -59,16 +61,16 @@ import {
 import { applyClaudeQueueDequeue } from '@renderer/session-runtime/claudeQueueReconstruction'
 import { shouldClearIdleQueuedMessages } from '@renderer/session-runtime/queueInvariants'
 import type { StreamPhase } from '@renderer/session-runtime/state'
-import {
-  conditionStateByKind,
-  type ClaudeCompactionState,
-  type ClaudePermissionPromptState,
-  type ClaudeResumePromptState,
-  type ClaudeSlashPickerState,
-  type ClaudeTrustDialogState,
-  type CodexApprovalState,
-  type CodexTrustDialogState,
-  type ProviderConditionSnapshot,
+import { conditionStateByKind } from '@shared/types/providerConditions'
+import type {
+  ClaudeCompactionState,
+  ClaudePermissionPromptState,
+  ClaudeResumePromptState,
+  ClaudeSlashPickerState,
+  ClaudeTrustDialogState,
+  CodexApprovalState,
+  CodexTrustDialogState,
+  ProviderConditionSnapshot,
 } from '@shared/types/providerConditions'
 import {
   clearConditionRuntimeState,
@@ -95,8 +97,8 @@ import {
   decideJsonlProviderBurst,
   resumableProviderSessionId,
   shouldMarkProviderSessionDisconnected,
-  type JsonlProviderStreamState,
 } from '@renderer/workspace/providerSessionIdentity'
+import type { JsonlProviderStreamState } from '@renderer/workspace/providerSessionIdentity'
 
 // Codex rollout is delivered as many small IPC bursts, but `turn_context`
 // is only one line near the beginning of the task. The bundle that

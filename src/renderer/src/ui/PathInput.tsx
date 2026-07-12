@@ -1,11 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 
 // PathInput — a generic path-with-completion input for anywhere in Agent Code
 // that needs the user to type a filesystem path (PathPickerModal today,

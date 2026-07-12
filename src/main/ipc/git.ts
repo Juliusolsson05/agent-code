@@ -4,7 +4,7 @@ import { promisify } from 'util'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { stat } from 'fs/promises'
-import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git'
+import type { GitWorktreeStatus, WorktreeIdentity } from '@shared/types/git.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 // GitBar IPC contract + numstat parser are shared so preload/renderer can't
 // drift from this producer. See @shared/types/gitStatus and @shared/git/numstat.

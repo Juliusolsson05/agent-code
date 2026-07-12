@@ -1,4 +1,5 @@
-import { isConversationEntry, type Entry } from '@shared/types/transcript'
+import { isConversationEntry } from '@shared/types/transcript'
+import type { Entry } from '@shared/types/transcript'
 import type { GhostEntry } from 'agent-transcript-parser/ghost'
 
 import type { SemanticRuntimeState } from '@renderer/session-runtime/state'

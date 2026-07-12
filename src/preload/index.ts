@@ -1,6 +1,7 @@
 import { contextBridge } from 'electron'
 
-import { api, type Api } from '@preload/api/index.js'
+import { api } from '@preload/api/index.js'
+import type { Api } from '@preload/api/index.js'
 
 // Preload bridge — multi-session API.
 //

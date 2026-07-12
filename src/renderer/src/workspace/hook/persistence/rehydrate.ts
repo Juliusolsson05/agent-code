@@ -1,5 +1,6 @@
 import { DEFAULT_PROVIDER, isSessionKind } from '@shared/types/providerKind'
-import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { TileTabsState } from '@renderer/workspace/types'
 import type {
   BuriedPaneRecord,

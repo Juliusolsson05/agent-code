@@ -3,11 +3,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import {
-  deepgramStreaming,
-  transcribeBatch,
-  type DictationProvider,
-} from '@main/dictation/index.js'
+import { deepgramStreaming, transcribeBatch } from '@main/dictation/index.js'
+import type { DictationProvider } from '@main/dictation/index.js'
 import {
   configureDictationHotkey,
   unregisterDictationHotkey,

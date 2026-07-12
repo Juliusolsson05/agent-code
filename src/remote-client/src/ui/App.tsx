@@ -1,9 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
-import {
-  WebSocketSessionFeed,
-  type ConnectionState,
-} from '../WebSocketSessionFeed'
+import { WebSocketSessionFeed } from '../WebSocketSessionFeed'
+import type { ConnectionState } from '../WebSocketSessionFeed'
 import { TranscriptStore } from '../transcript/store'
 import {
   clearToken,

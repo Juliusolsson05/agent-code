@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest'
 import {
   decideGhostCandidate,
   SIDECAR_GHOST_TEXT_MAX,
-  type GhostPredicateContext,
-  type GhostPredicateInput,
+} from '@renderer/rendering/model/ghostPredicate'
+import type {
+  GhostPredicateContext,
+  GhostPredicateInput,
 } from '@renderer/rendering/model/ghostPredicate'
 
 // The canonical 10-case matrix from the 2026-05-07 predicate plan, plus the

@@ -1,7 +1,7 @@
 import type {
   WorkContextConfidence,
   WorktreeActivityKind,
-} from '@shared/work-context/types'
+} from '@shared/work-context/types.js'
 
 export const confidenceRank: Record<WorkContextConfidence, number> = {
   fallback: 0,

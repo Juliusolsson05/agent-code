@@ -1,7 +1,8 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import { useCallback, useRef } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import { clearLiveEntryWindowSession } from '@renderer/session-runtime/liveEntryWindow'
 import type { SessionId, SessionKind, SessionMeta, TileNode } from '@renderer/workspace/types'
 import type { BuiltInMcpDomain } from '@mcp/shared/types'

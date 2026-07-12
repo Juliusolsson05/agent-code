@@ -7,19 +7,18 @@ import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
-import {
-  ClaudeCodeHeadless,
-  createProxyServer,
-  type ClaudeConditionSnapshot,
-  type ConditionCustomAction,
-  type CompactionState,
-  type DriveResult,
-  type JsonlEntry,
-  type PermissionPromptState,
-  type ProxyServer,
-  type ResumePromptState,
-  type SemanticEvent,
-  type TrustDialogState,
+import { ClaudeCodeHeadless, createProxyServer } from 'claude-code-headless'
+import type {
+  ClaudeConditionSnapshot,
+  ConditionCustomAction,
+  CompactionState,
+  DriveResult,
+  JsonlEntry,
+  PermissionPromptState,
+  ProxyServer,
+  ResumePromptState,
+  SemanticEvent,
+  TrustDialogState,
 } from 'claude-code-headless'
 
 export type ClaudeSessionOptions = {

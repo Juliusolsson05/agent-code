@@ -6,7 +6,8 @@ import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/ses
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind'
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 
 // Switch Agents modal — bulk provider switch + remembered-batch return.
 //

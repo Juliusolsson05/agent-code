@@ -1,4 +1,4 @@
-import type { WorktreeActivityState } from '@shared/work-context/types'
+import type { WorktreeActivityState } from '@shared/work-context/types.js'
 
 export function summarizeWorktreeActivity(
   state: WorktreeActivityState | null,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { render } from '@testing-library/react'
 import { act } from 'react'
-import { useRef, type MutableRefObject } from 'react'
+import { useRef } from 'react'
+import type { MutableRefObject } from 'react'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
