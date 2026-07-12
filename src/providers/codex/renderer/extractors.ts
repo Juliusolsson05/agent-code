@@ -326,6 +326,8 @@ export type UnifiedExecAction =
   | { kind: 'apply_patch'; patchText: string }
   | { kind: 'exec_command'; input: ExecCommandInput }
   | { kind: 'write_stdin'; chars: string }
+  /** tools.wait(...) — waiting on a background terminal session. */
+  | { kind: 'wait' }
   | null
 
 /** Decode a JS double-quoted string literal starting just AFTER the
@@ -336,12 +338,17 @@ function decodeJsStringLiteral(script: string, start: number): string {
 }
 
 /** Extract the first balanced {...} JSON object argument following
- *  `marker` in the script. Returns the parsed object when complete;
- *  null while the braces are still streaming (caller falls back to
- *  partial string-member extraction). Brace matching skips string
- *  literals so a "}" inside a cmd string can't end the scan early. */
-function jsonObjectArgAfter(script: string, marker: string): Record<string, unknown> | null {
-  const at = script.indexOf(marker)
+ *  `marker` in the script, searching from `from`. Returns the parsed
+ *  object when complete; null while the braces are still streaming
+ *  (caller falls back to partial string-member extraction). Brace
+ *  matching skips string literals so a "}" inside a cmd string can't
+ *  end the scan early. */
+function jsonObjectArgAfter(
+  script: string,
+  marker: string,
+  from = 0,
+): Record<string, unknown> | null {
+  const at = script.indexOf(marker, from)
   if (at === -1) return null
   const open = script.indexOf('{', at + marker.length)
   if (open === -1) return null
@@ -393,19 +400,50 @@ export function classifyUnifiedExecScript(script: string): UnifiedExecAction {
     return { kind: 'apply_patch', patchText: '' }
   }
 
+  if (script.includes('tools.wait(')) {
+    return { kind: 'wait' }
+  }
+
   if (script.includes('tools.write_stdin')) {
     const arg = jsonObjectArgAfter(script, 'tools.write_stdin')
     const chars =
       typeof arg?.chars === 'string'
         ? arg.chars
         : extractPartialJsonStringMember(script, ['chars']) ?? ''
+    // Empty stdin IS a wait: Codex polls a background terminal with
+    // chars:"" while output drains, and its native TUI renders exactly
+    // these as "Waited for background terminal".
+    if (chars === '') return { kind: 'wait' }
     return { kind: 'write_stdin', chars }
   }
 
   if (script.includes('tools.exec_command')) {
-    const arg = jsonObjectArgAfter(script, 'tools.exec_command')
-    const input = arg ? execCommandInput(arg) : null
-    if (input) return { kind: 'exec_command', input }
+    // Collect EVERY exec_command call in the script — Promise.all
+    // fan-outs run several commands from one script, and the native
+    // TUI shows one cell per inner call. We render them as command
+    // lines in one card (the rollout gives us one tool_use to hang
+    // them on), which reads the same.
+    const inputs: ExecCommandInput[] = []
+    let from = 0
+    for (;;) {
+      const at = script.indexOf('tools.exec_command', from)
+      if (at === -1) break
+      const arg = jsonObjectArgAfter(script, 'tools.exec_command', at)
+      const parsed = arg ? execCommandInput(arg) : null
+      if (parsed) inputs.push(parsed)
+      from = at + 'tools.exec_command'.length
+    }
+    if (inputs.length > 0) {
+      const first = inputs[0]
+      const input: ExecCommandInput =
+        inputs.length === 1
+          ? first
+          : {
+              ...first,
+              command: inputs.map(i => i.command).join('\n'),
+            }
+      return { kind: 'exec_command', input }
+    }
     // Partial braces: pull what has streamed so far (cmd is the one
     // that matters for the header; the metadata chips fill in later).
     const cmd = extractPartialJsonStringMember(script, ['cmd', 'command'])

@@ -89,18 +89,20 @@ export function stripCodexExecWrapper(output: string): string {
  *  Strip it and surface the wall time as structured duration so the
  *  CommandCard shows it as a chip instead. */
 const SCRIPT_WRAPPER_RE =
-  /^Script (completed|failed[^\n]*)\nWall time ([0-9.]+) seconds\nOutput:\n?/
+  /^Script (completed|failed[^\n]*|running with cell ID \d+)\nWall time ([0-9.]+) seconds\nOutput:\n?/
 export function stripUnifiedExecWrapper(output: string): {
   output: string
   durationMs: number | null
   scriptFailed: boolean
+  stillRunning: boolean
 } {
   const m = SCRIPT_WRAPPER_RE.exec(output)
-  if (!m) return { output, durationMs: null, scriptFailed: false }
+  if (!m) return { output, durationMs: null, scriptFailed: false, stillRunning: false }
   return {
     output: output.slice(m[0].length),
     durationMs: Math.round(parseFloat(m[2]) * 1000),
-    scriptFailed: m[1] !== 'completed',
+    scriptFailed: m[1].startsWith('failed'),
+    stillRunning: m[1].startsWith('running'),
   }
 }
 

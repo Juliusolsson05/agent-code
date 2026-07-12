@@ -81,9 +81,11 @@ export function commandFromLive(
         ? execCommandInput(parsed)
         : null
   const command =
-    shell?.command?.join(' ') ??
-    exec?.command ??
-    (typeof parsed?.command === 'string' ? parsed.command : null)
+    unified?.kind === 'wait'
+      ? 'Waited for background terminal'
+      : shell?.command?.join(' ') ??
+        exec?.command ??
+        (typeof parsed?.command === 'string' ? parsed.command : null)
 
   // Live output: tool_output_delta accumulates into block.resultContent
   // (foldEvent tool_output_delta branch), and the lookup snapshot
@@ -103,13 +105,15 @@ export function commandFromLive(
     cwd: shell?.workingDirectory ?? exec?.workdir ?? null,
     description: typeof parsed?.description === 'string' ? parsed.description : null,
     sourceTool:
-      block.kind === 'local_shell_call'
-        ? 'local_shell_call'
-        : block.toolName === 'write_stdin' || unified?.kind === 'write_stdin'
-          ? 'write_stdin'
-          : block.toolName === 'Bash'
-            ? 'Bash'
-            : 'exec_command',
+      unified?.kind === 'wait'
+        ? 'wait'
+        : block.kind === 'local_shell_call'
+          ? 'local_shell_call'
+          : block.toolName === 'write_stdin' || unified?.kind === 'write_stdin'
+            ? 'write_stdin'
+            : block.toolName === 'Bash'
+              ? 'Bash'
+              : 'exec_command',
     output,
     // Live exit code is not stored on the block (tool_completed folds
     // it into resultIsError only) — the committed row adds the number.

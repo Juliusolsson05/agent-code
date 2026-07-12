@@ -62,7 +62,7 @@ export type CommandArtifact = ArtifactBase & {
   description: string | null
   /** Which wire-level tool produced this — display metadata (the $ card
    *  is identical for all of them), kept for debugging provenance. */
-  sourceTool: 'Bash' | 'exec_command' | 'local_shell_call' | 'bash' | 'write_stdin'
+  sourceTool: 'Bash' | 'exec_command' | 'local_shell_call' | 'bash' | 'write_stdin' | 'wait'
   /** Raw output, ANSI escapes preserved (OutputWell renders them). */
   output: string | null
   exitCode: number | null

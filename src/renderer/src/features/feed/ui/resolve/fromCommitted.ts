@@ -68,12 +68,19 @@ export function commandFromCommitted(
       startedAt: null,
       endedAt: null,
       command:
-        action?.kind === 'write_stdin'
-          ? '(stdin)'
-          : exec?.command ?? '(no command)',
+        action?.kind === 'wait'
+          ? 'Waited for background terminal'
+          : action?.kind === 'write_stdin'
+            ? '(stdin)'
+            : exec?.command ?? '(no command)',
       cwd: metaCwd ?? exec?.workdir ?? null,
       description: null,
-      sourceTool: action?.kind === 'write_stdin' ? 'write_stdin' : 'exec_command',
+      sourceTool:
+        action?.kind === 'wait'
+          ? 'wait'
+          : action?.kind === 'write_stdin'
+            ? 'write_stdin'
+            : 'exec_command',
       output: result ? toolResultText(result) : null,
       exitCode,
       durationMs,

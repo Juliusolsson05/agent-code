@@ -1,4 +1,5 @@
-import { memo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
+import hljs from 'highlight.js'
 
 import { useContext } from 'react'
 import { formatToolFilePath } from '@shared/paths/displayPath'
@@ -42,7 +43,10 @@ export const CommandCard = memo(function CommandCard({ vm }: { vm: CommandArtifa
   // they carry no user-visible content. renderUnits.ts's
   // isInvisibleWriteStdinBlock mirrors this so the render model and
   // the DOM agree the block owns no screen real estate — if you change
-  // this, change that selector in the same commit.
+  // this, change that selector in the same commit. (Unified-exec
+  // scripts polling with chars:"" classify as 'wait' instead and DO
+  // render — see below — matching the native "Waited for background
+  // terminal" rows; that path never enters this selector.)
   if (vm.sourceTool === 'write_stdin' && vm.stdinWrites.every(s => s.length === 0)) {
     return null
   }
@@ -50,18 +54,66 @@ export const CommandCard = memo(function CommandCard({ vm }: { vm: CommandArtifa
   const truncated = truncateBashCommand(vm.command)
   const isTruncated = truncated !== vm.command
   const cwdBase = vm.cwd ? vm.cwd.split('/').filter(Boolean).pop() ?? vm.cwd : null
+  const shown = showFull ? vm.command : truncated
+
+  // Bash-highlight the command line, like the native TUI's
+  // highlight_bash_to_lines — a shell pipeline reads far better with
+  // its strings/flags tinted. Memoized on the shown text; commands are
+  // short so this is micro-cost. Falls back to plain text on hljs
+  // failure or for the wait pseudo-command.
+  const commandHtml = useMemo(() => {
+    if (vm.sourceTool === 'wait') return null
+    try {
+      return hljs.highlight(shown, { language: 'bash', ignoreIllegals: true }).value
+    } catch {
+      return null
+    }
+  }, [shown, vm.sourceTool])
+
+  // Native-style slim wait row: "• Waited for background terminal"
+  // (codex history_cell/exec.rs) — dim, no output well, duration chip
+  // when known. These are frequent while long commands drain; a full
+  // command card per poll would drown the feed.
+  if (vm.sourceTool === 'wait') {
+    return (
+      <MarkerRow marker="⏺" tone="muted">
+        <div className="flex flex-wrap items-baseline gap-x-2 text-[13px] leading-[1.65]">
+          <span className="text-ink-dim font-semibold">Waited for background terminal</span>
+          {vm.durationMs != null && vm.durationMs > 0 ? (
+            <span className="text-muted text-[11px]">
+              {(vm.durationMs / 1000).toFixed(1)}s
+            </span>
+          ) : null}
+        </div>
+      </MarkerRow>
+    )
+  }
+
+  // Verb header, native vocabulary: Running while the input streams /
+  // awaits a result, Ran when done (exec_cell/render.rs). The ✓/exit
+  // badge still carries success; the verb carries tense.
+  const verb = vm.status === 'streaming' || vm.status === 'running' ? 'Running' : 'Ran'
 
   return (
     <MarkerRow marker="⏺">
       <div>
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="text-accent font-semibold text-[13px] leading-[1.55] select-none">
+            {verb}
+          </span>
           <pre
-            className={`font-code text-[13px] leading-[1.55] text-ink m-0 whitespace-pre-wrap break-all inline ${isTruncated ? 'cursor-pointer' : ''}`}
+            className={`font-code text-[13px] leading-[1.55] text-ink m-0 whitespace-pre-wrap break-all inline min-w-0 ${isTruncated ? 'cursor-pointer' : ''}`}
             onClick={() => isTruncated && setShowFull(v => !v)}
             title={isTruncated && !showFull ? 'click to expand full command' : undefined}
           >
-            <span className="text-accent select-none">$ </span>
-            {showFull ? vm.command : truncated}
+            {commandHtml !== null ? (
+              <code
+                className="hljs language-bash"
+                dangerouslySetInnerHTML={{ __html: commandHtml }}
+              />
+            ) : (
+              shown
+            )}
           </pre>
           <StatusBadge
             status={vm.status}
