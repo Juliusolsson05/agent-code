@@ -3,67 +3,34 @@ import { createContext } from 'react'
 
 import type {
   ToolResultBlock,
-  ToolUseBlock,
 } from '@shared/types/transcript'
 
-import type { AgentProvider } from '@renderer/features/feed/types'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
 
 // ---------------------------------------------------------------------------
 // Feed contexts.
 //
-// Four contexts propagate state down from the Feed container to the
-// per-row renderers without prop-drilling through every level of the
-// tree:
+// The pure presentation projection now carries provider identity and paired
+// tool evidence structurally. Context remains only for genuinely session-wide
+// state a leaf cannot own:
 //
-//   ProviderContext         — which provider's row renderers to use.
-//   ToolUseIndexContext     — tool_use_id → ToolUseBlock. Used by
-//                             ToolResultRow to look up the originating
-//                             tool for richer rendering (Read →
-//                             syntax-highlighted code; Bash → plain
-//                             pre; …).
-//   ToolResultIndexContext  — reverse of the above. Used by the
-//                             tool_use dispatcher when a single
-//                             combined widget wants to render command
-//                             + output on one row (git widgets).
+//   ToolResultIndexContext  — durable completion evidence used by a pruned
+//                             TaskSubagentRow.
 //   CodeRenderContext       — sessionId + workspaceRoot, passed to
 //                             fenced code blocks inside prose so the
 //                             CodeBlock can mint stable codeIds and
 //                             wire LSP against the right root.
 //
-// Why side-channel maps instead of passing props structurally:
-//   tool_use blocks live in an ASSISTANT entry and tool_result blocks
-//   live in the NEXT USER entry. ConversationRow only sees one entry
-//   at a time, so it can't pair them without reaching across entries.
-//   The Feed level (which DOES have every entry) builds the maps and
-//   hands them down through context.
-//
-// Memo / invalidation behavior (feed audit Finding 1): the runtime maintains
-// these maps INCREMENTALLY and mutates them in place behind a stable reference,
-// so — unlike what an earlier version of this comment claimed — the map
-// reference does NOT change on every `entries` change. A contents-only mutation
-// is invisible to React context (identity is unchanged), which would leave an
-// already-mounted tool_use row (e.g. a git card) painting stale state after its
-// paired tool_result lands in a LATER entry. Feed therefore clones the map into
-// a fresh identity whenever the runtime's `toolIndexVersion` token bumps (and
-// only then), giving consumers a real invalidation signal without an O(N²)
-// per-append rebuild. We still do NOT include the maps in row memo keys;
-// equality on the maps themselves would be expensive and the interesting work
-// (markdown parsing) is cached inside TextProse by text string.
+// The runtime maintains indexes incrementally behind stable Map references.
+// Feed clones them only when `toolIndexVersion` bumps: that fresh identity
+// invalidates the pure projector (so a later result enriches its OperationVM)
+// and this narrow TaskSubagent context, without rebuilding indexes on unrelated
+// entry renders. Ordinary operations receive paired evidence structurally and
+// do not read these maps through React context.
 
-export const ProviderContext = createContext<AgentProvider>('claude')
-
-export const ToolUseIndexContext = createContext<Map<string, ToolUseBlock>>(new Map())
-
-// Reverse of ToolUseIndexContext — lets the tool_use dispatcher peek
-// at the paired result block, so a single combined widget can render
-// both sides (command + output) on one row. Needed for the git
-// widgets: the result content lives on a later entry but the widget
-// wants it available when the tool_use row mounts. When the result
-// hasn't arrived yet the map returns undefined and the widget renders
-// a "running…" placeholder; on the next entry wave it re-renders
-// with the real output.
+// TaskSubagentRow consults this map after its live watcher state has been
+// pruned. Other operations receive paired results directly from the projector.
 export const ToolResultIndexContext =
   createContext<Map<string, ToolResultBlock>>(new Map())
 

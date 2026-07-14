@@ -1,40 +1,34 @@
-import { memo } from 'react'
+import { memo, useMemo } from 'react'
 
-import type { Entry } from '@shared/types/transcript'
 import type { AgentProvider } from '@renderer/features/feed/types'
 import {
   CodeRenderContext,
-  ProviderContext,
   ToolResultIndexContext,
-  ToolUseIndexContext,
 } from '@renderer/features/feed/context'
-import { EntryRow } from '@renderer/features/feed/ui/rows'
+import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
+import { projectFeedPresentation } from '@renderer/features/feed/presentation/projectFeed'
+import { PresentationRow } from '@renderer/features/feed/ui/operations/PresentationRow'
 
 import type { PreviewModel } from '@renderer/features/session-preview/previewModel'
 
-// PreviewTranscript — renders a transcript tail using the REAL feed row
-// components, not a bespoke renderer.
+// PreviewTranscript — renders a transcript tail through the REAL feed
+// presentation projection, not a bespoke or legacy block dispatcher.
 //
-// WHY reuse `EntryRow` instead of a hand-rolled renderer:
-//   `EntryRow` → `ConversationRow` → `Block` already does markdown
-//   (TextProse), syntax-highlighted code (CodeBlock), user-prompt
-//   highlight bands (UserBand), and every provider-specific tool row.
-//   The earlier hand-rolled plain-text renderer reimplemented a
-//   fraction of that, badly. Rendering the same rows the feed renders
-//   means the preview is faithful for free and stays in sync as the
-//   feed evolves.
+// WHY project the static entries into FeedRenderItems here: the live Feed gets
+// those items from the ownership ledger, but a preview is already a filtered,
+// immutable transcript tail and owns no SessionRuntime. Synthesizing only the
+// ledger's frozen entry-shaped contract lets both surfaces share the exact
+// post-clean-event projector and OperationRow without mounting live machinery.
 //
 // WHY this still isn't "just mount <Feed>":
 //   <Feed> carries live-session machinery a static preview must not
 //   inherit — scroll-position persistence keyed by sessionId (would
 //   fight the real feed's scroll state for the same session), lazy
 //   m/unmount, the semantic live turn, work indicators, older-history
-//   pagination. We want the ROWS, not the shell. So we render the rows
-//   directly and supply, by hand, the four React contexts `Feed` would
-//   otherwise provide (see src/renderer/src/features/feed/context.tsx):
-//   provider, the two tool-pairing index maps, and the code-render
-//   context. Those four are the entire contract between Feed and its
-//   rows — supply them and the rows behave exactly as in the feed.
+//   pagination. We want the projected ROWS, not the shell. So we render them
+//   directly and supply the result and code contexts used by durable subagent
+//   status and code rendering. Provider identity and tool pairing are already
+//   structural fields on the projection.
 //
 // Performance note: CodeBlock defaults to `engine: 'static'`
 // (highlight.js), NOT Monaco — so a code-heavy preview re-rendering on
@@ -54,29 +48,55 @@ export const PreviewTranscript = memo(function PreviewTranscript({
   sessionId: string
   workspaceRoot: string | null
 }) {
+  const presentation = useMemo(() => {
+    const items: FeedRenderItem[] = model.entries.map((entry, index) => ({
+      type: 'entry',
+      key: `preview:${typeof entry.uuid === 'string' ? entry.uuid : index}`,
+      entry,
+      entryOrdinal: index,
+      visibleDecision: {
+        key: `preview:${typeof entry.uuid === 'string' ? entry.uuid : index}`,
+        entry,
+        visible: true,
+        reason: 'conversation',
+      },
+      order: {
+        phase: 'content',
+        timeMs: typeof entry.timestamp === 'string'
+          ? Date.parse(entry.timestamp)
+          : null,
+        sequence: index,
+        source: 'session-preview',
+      },
+    }))
+    return projectFeedPresentation({
+      items,
+      provider,
+      toolUseIndex: model.toolUseIndex,
+      toolResultIndex: model.toolResultIndex,
+    })
+  }, [model.entries, model.toolResultIndex, model.toolUseIndex, provider])
+
   return (
-    <ProviderContext.Provider value={provider}>
-      <ToolUseIndexContext.Provider value={model.toolUseIndex}>
-        <ToolResultIndexContext.Provider value={model.toolResultIndex}>
-          <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
-            {/* `px-8` is load-bearing, not cosmetic: UserBand pulls
-                itself edge-to-edge with `-mx-8 px-8`, assuming an
-                8-unit gutter. Match it here or user prompt bands
-                overflow. Mirrors the feed column's own `px-8`
-                (Feed.tsx). */}
-            <div className="px-8 py-5 flex flex-col gap-4">
-              {model.entries.map((entry, i) => {
-                const uuid = (entry as { uuid?: string }).uuid
-                return (
-                  <div key={uuid ?? `i${i}`}>
-                    <EntryRow entry={entry} />
-                  </div>
-                )
-              })}
+    <ToolResultIndexContext.Provider value={model.toolResultIndex}>
+      <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
+        {/* `px-8` is load-bearing, not cosmetic: UserBand pulls
+            itself edge-to-edge with `-mx-8 px-8`, assuming an
+            8-unit gutter. Match it here or user prompt bands
+            overflow. Mirrors the feed column's own `px-8`
+            (Feed.tsx). */}
+        <div className="px-8 py-5 flex flex-col gap-4">
+          {presentation.nodes.map(node => (
+            <div key={node.id}>
+              <PresentationRow
+                node={node}
+                turnStartedAt={null}
+                toolHint={null}
+              />
             </div>
-          </CodeRenderContext.Provider>
-        </ToolResultIndexContext.Provider>
-      </ToolUseIndexContext.Provider>
-    </ProviderContext.Provider>
+          ))}
+        </div>
+      </CodeRenderContext.Provider>
+    </ToolResultIndexContext.Provider>
   )
 })

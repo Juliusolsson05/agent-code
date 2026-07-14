@@ -3,6 +3,12 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import {
   buildHistoryScoreMap,
@@ -28,6 +34,7 @@ import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPic
 import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 // Canonical session listing shape. This was a local copy that DROPPED
@@ -663,12 +670,10 @@ export function CommandPalette() {
   // the id over `menu:command` and we resolve + run it here, where `commands`
   // (the resolved registry) and `commandContext` are in scope.
   //
-  // WHY this effect sits ABOVE the `if (!open) return null` early return at the
-  // bottom of this component: the File menu must work whether or not the palette
-  // is open. If this subscription lived below the early return, React would
-  // never register it while the palette is closed (the common case), and the
-  // menu items would silently do nothing. Hooks must be unconditional, so the
-  // listener is attached at mount and stays attached regardless of `open`.
+  // WHY this effect remains unconditional even though DialogContent only mounts
+  // while open: the File menu must work while the palette is closed (the common
+  // case). The listener belongs to the always-mounted command feature, not to
+  // the transient portal content.
   //
   // We resolve against the SAME `commands` memo the palette renders, so a menu
   // item and its palette row run byte-identical logic. Unknown ids are ignored
@@ -677,6 +682,11 @@ export function CommandPalette() {
   // and when the palette is closed there is nothing to close.
   useEffect(() => {
     const unsub = window.api.onMenuCommand(commandId => {
+      // Native menu IPC does not originate from the modal DOM, so neither
+      // Radix inertness nor event propagation can stop it. Treat it like every
+      // other background input ingress: while an app-owned surface is asking
+      // the user for input, File-menu workspace mutations wait.
+      if (hasAppInteractionOwner()) return
       const command = commands.find(c => c.id === commandId)
       if (command) void command.run(commandContext)
     })
@@ -808,35 +818,6 @@ export function CommandPalette() {
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (
-          mode === 'resume' ||
-          mode === 'buried' ||
-          mode === 'kill-buried' ||
-          mode === 'prompt-template' ||
-          mode === 'save-prompt-template' ||
-          mode === 'ai-workspace-open' ||
-          mode === 'ai-workspace-create' ||
-          mode === 'ai-workspace-clear'
-        ) {
-          setMode('commands')
-          setPromptTemplateForm({ id: null, title: '', body: '' })
-          setQuery('')
-          setSelectedIndex(0)
-          return
-        }
-        if (mode === 'edit-prompt-template') {
-          setMode('prompt-template')
-          setPromptTemplateForm({ id: null, title: '', body: '' })
-          setQuery('')
-          setSelectedIndex(0)
-          return
-        }
-        onClose()
-        return
-      }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setSelectedIndex(prev => Math.min(prev + 1, filteredLength - 1))
@@ -895,7 +876,6 @@ export function CommandPalette() {
       clearAiWorkspace,
       openAiWorkspace,
       savePromptTemplateForm,
-      onClose,
     ],
   )
 
@@ -925,18 +905,16 @@ export function CommandPalette() {
     }
   })()
 
-  if (!open) return null
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-center"
-      onClick={onClose}
-      role="dialog"
-      aria-label="Command palette"
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
+      }}
     >
-      <div
+      <DialogContent
         className={`
-          mt-[12vh] flex flex-col
+          top-[12vh] translate-y-0 flex flex-col p-0
           bg-popover-bg border border-popover-border
           shadow-[0_16px_48px_var(--theme-shadow-color)]
           overflow-hidden
@@ -944,8 +922,27 @@ export function CommandPalette() {
             ? 'w-[min(1180px,95vw)] max-h-[80vh]'
             : 'w-[min(900px,92vw)] max-h-[60vh]'}
         `}
-        onClick={e => e.stopPropagation()}
+        onEscapeKeyDown={event => {
+          // The palette has nested navigation modes. Escape first backs out
+          // of a mode; only the top-level command list dismisses the Dialog.
+          // Preventing Radix's close for those inner transitions preserves the
+          // established keyboard model without reimplementing global Escape.
+          if (mode === 'commands') return
+          event.preventDefault()
+          if (mode === 'edit-prompt-template') {
+            setMode('prompt-template')
+          } else {
+            setMode('commands')
+          }
+          setPromptTemplateForm({ id: null, title: '', body: '' })
+          setQuery('')
+          setSelectedIndex(0)
+        }}
       >
+        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogDescription className="sr-only">
+          Search application commands and related session workflows.
+        </DialogDescription>
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
           {mode === 'resume' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
@@ -1393,8 +1390,8 @@ export function CommandPalette() {
             </aside>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

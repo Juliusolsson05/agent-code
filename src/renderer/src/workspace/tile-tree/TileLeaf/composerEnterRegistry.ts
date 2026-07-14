@@ -1,3 +1,5 @@
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+
 export type ComposerEnterTargetHandle = {
   focused: boolean
   hovered: boolean
@@ -51,9 +53,10 @@ function isDispatchRowTarget(target: EventTarget | null): boolean {
 }
 
 function hasOpenKeyboardOwner(): boolean {
+  if (hasAppInteractionOwner()) return true
   return Boolean(
     document.querySelector(
-      '[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"]',
+      '[role="menu"],[role="listbox"]',
     ),
   )
 }

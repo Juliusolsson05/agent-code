@@ -63,6 +63,11 @@ const exclude = [
   // belongs to the package. App-level dictation integration can still add
   // colocated tests under src/ when it has an Agent Code invariant to protect.
   'packages/agent-voice-dictation/src/**/*.test.ts',
+  // The submodule's standalone Electron demo uses node:test rather than
+  // Vitest. Collecting it through the root `packages/**/*.test.ts` glob makes
+  // hundreds of healthy Agent Code tests end in a false-red "No test suite
+  // found". The demo owns that suite; Agent Code owns its integration surface.
+  'packages/agent-voice-dictation/apps/**/*.test.ts',
 ]
 
 export default defineConfig({
@@ -75,6 +80,12 @@ export default defineConfig({
   // not defined". Projects make the environment part of the test file contract,
   // so every entry point sees the same layer split.
   test: {
+    // Filesystem-polling tests can miss a single 100 ms watch tick when all
+    // three projects saturate a small CI runner. A one-time CI retry preserves
+    // the value of the assertion (a persistent regression still fails) while
+    // preventing release signing from being held hostage by scheduler jitter.
+    // Local runs stay retry-free so developers still see flakes immediately.
+    retry: process.env.CI ? 1 : 0,
     projects: [
       {
         extends: true,
@@ -98,6 +109,14 @@ export default defineConfig({
         test: {
           name: 'integration',
           environment: 'node',
+          // Electron 43 validates/downloads its binary lazily from index.js
+          // when an integration import reaches `electron`. Starting several
+          // fresh project workers at the same instant can make those workers
+          // race the same dist extraction and fail with EEXIST even though the
+          // installed binary is healthy. Integration files are few and mostly
+          // I/O-bound; serial files remove that package-installer race without
+          // slowing the large pure-unit/renderer suites.
+          fileParallelism: false,
           include: [
             'src/**/*.integration.test.ts',
             'packages/**/*.integration.test.ts',

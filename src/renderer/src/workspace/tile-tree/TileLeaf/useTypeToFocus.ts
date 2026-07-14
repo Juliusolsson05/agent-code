@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { RefObject } from 'react'
 
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { SessionId } from '@renderer/workspace/types'
 
 // Type-to-focus: when the user starts typing anywhere in the
@@ -35,9 +36,10 @@ import type { SessionId } from '@renderer/workspace/types'
 //   - Target is already an input / textarea / contentEditable: the
 //     character is already going somewhere legitimate; don't
 //     intercept it and double-type.
-//   - A modal with role="dialog" is open: PathPickerModal,
-//     TrustDialogModal, or any future modal. Those own keyboard
-//     focus while visible.
+//   - An explicit app interaction owner is mounted: dialogs and
+//     full-screen takeovers own the input turn while visible. This
+//     deliberately does not infer ownership from an ARIA role; semantic
+//     accessibility and application routing are separate contracts.
 //
 // Injection path: we write directly to SessionRuntime.draftInput
 // via setDraftInput (same setter the composer's onChange uses),
@@ -71,7 +73,7 @@ export function useTypeToFocus({
         if (tag === 'INPUT' || tag === 'TEXTAREA') return
         if (target.isContentEditable) return
       }
-      if (document.querySelector('[role="dialog"]')) return
+      if (hasAppInteractionOwner()) return
 
       const el = inputRef.current
       if (!el) return

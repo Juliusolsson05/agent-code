@@ -149,12 +149,14 @@ export function normalizeWhitespace(s: string): string {
  * A distinctive needle from the END of the paste. The paste's tail lands at
  * the composer cursor, so it's the most reliable contiguous substring to find
  * when Claude inlines a paste (no placeholder). Whitespace-normalized so the
- * TUI's reflow/wrapping doesn't defeat the match. Null for pastes too short to
- * fingerprint — those take the plain `text + \r` route and never reach here.
+ * TUI's reflow/wrapping doesn't defeat the match. Short prompts use their full
+ * normalized value. They used to bypass this detector through an unsafe atomic
+ * `text + \r` write; now even a one-character prompt must visibly enter the
+ * active composer before Enter is allowed to follow.
  */
 export function pasteTailNeedle(payload: string): string | null {
   const norm = normalizeWhitespace(payload).trim()
-  return norm.length >= 8 ? norm.slice(-24) : null
+  return norm.length > 0 ? norm.slice(-24) : null
 }
 
 export type PasteAbsorbedOutcome =
