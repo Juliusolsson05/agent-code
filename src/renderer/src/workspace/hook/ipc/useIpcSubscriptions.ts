@@ -8,6 +8,7 @@ import { useEffect } from 'react'
 
 import type { Entry } from '@shared/types/transcript'
 import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
+import type { SessionSemanticEvent } from '@shared/sessionFeed/types'
 import { isCompactSummaryEntry } from '@shared/types/transcript'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
@@ -99,6 +100,7 @@ import {
   shouldMarkProviderSessionDisconnected,
 } from '@renderer/workspace/providerSessionIdentity'
 import type { JsonlProviderStreamState } from '@renderer/workspace/providerSessionIdentity'
+import { SemanticEventBackpressureQueue } from '@renderer/workspace/hook/ipc/semanticEventBackpressure'
 
 // Codex rollout is delivered as many small IPC bursts, but `turn_context`
 // is only one line near the beginning of the task. The bundle that
@@ -185,6 +187,18 @@ const GHOST_SUPERSEDED_GC_MS = 5000
 // enough that the sampling stringify work is noise and fast enough to catch
 // growth trends inside a single debugging session.
 const MEMORY_GAUGE_INTERVAL_MS = 30_000
+
+// WHY semantic deltas render at 10 Hz instead of transport speed:
+// Claude/Codex publish cumulative text, thinking, and tool-input snapshots so
+// the renderer can recover from a missed prefix. Folding every prefix threw
+// that advantage away: four busy agents produced 100+ React/ghost/debug/perf
+// pipelines per second, and the input/paint queue then sat behind seconds (or
+// minutes) of obsolete work even while JS heap stayed flat. A 100 ms preview
+// cadence matches the existing transcript and ghost journal batches, remains
+// visually live for text, and puts a hard per-owner ceiling on renderer work.
+// Structural semantic events bypass this delay and first flush the latest
+// queued snapshots, preserving block/turn completion ordering.
+const SEMANTIC_DELTA_FLUSH_MS = 100
 
 // WHY this quiet-window exists (Codex queued-message idle reconciliation):
 // The three edge-site clears (onSessionProcessState, onSessionSemanticEvent,
@@ -742,6 +756,7 @@ export function useIpcSubscriptions(
     // a second IPC channel that races the bulk one.
 
     const offErr = feed.onSessionJsonlError(({ sessionId, message }) => {
+      flushSemanticEventQueue()
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
       updateRuntime(sessionId, {
@@ -751,6 +766,7 @@ export function useIpcSubscriptions(
     })
 
     const offExit = feed.onSessionExit(({ sessionId, exitCode }) => {
+      flushSemanticEventQueue()
       recentWorkContextRawBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
       jsonlProviderStreamBySession.delete(sessionId)
@@ -815,6 +831,7 @@ export function useIpcSubscriptions(
     // too.
     const offProcessState = feed.onSessionProcessState(
       ({ sessionId, active, status }) => {
+        flushSemanticEventQueue()
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
           const sessionKind = refs.stateRef.current.sessions[sessionId]?.kind
@@ -862,13 +879,16 @@ export function useIpcSubscriptions(
       },
     )
 
-    const offSemantic = feed.onSessionSemanticEvent(({ sessionId, event }) => {
+    const handleSemanticEvent = (
+      { sessionId, event }: SessionSemanticEvent,
+      rawEventCount = 1,
+    ): void => {
       const span = perf.span('workspace.ipc.semantic.fold', { sessionId })
       let spanClosed = false
       const closeSpan = (data: Record<string, unknown>) => {
         if (spanClosed) return
         spanClosed = true
-        span.end(data)
+        span.end({ ...data, rawEventCount })
       }
       const semanticEvent = asRecord(event) ?? {}
       const observedProvider = providerSessionObservedEvent(event)
@@ -1121,8 +1141,43 @@ export function useIpcSubscriptions(
       closeSpan({
         sessionId,
         eventType: typeof semanticEvent.type === 'string' ? semanticEvent.type : 'semantic',
-        scheduled: true,
+        processed: true,
       })
+    }
+
+    const semanticEventQueue = new SemanticEventBackpressureQueue()
+    let semanticFlushTimer: number | null = null
+    const flushSemanticEventQueue = (): void => {
+      if (semanticFlushTimer !== null) {
+        window.clearTimeout(semanticFlushTimer)
+        semanticFlushTimer = null
+      }
+      for (const pending of semanticEventQueue.drain()) {
+        handleSemanticEvent(pending.message, pending.rawEventCount)
+      }
+    }
+    const scheduleSemanticEventFlush = (): void => {
+      if (semanticFlushTimer !== null) return
+      semanticFlushTimer = window.setTimeout(() => {
+        semanticFlushTimer = null
+        for (const pending of semanticEventQueue.drain()) {
+          handleSemanticEvent(pending.message, pending.rawEventCount)
+        }
+      }, SEMANTIC_DELTA_FLUSH_MS)
+    }
+    const offSemantic = feed.onSessionSemanticEvent(message => {
+      if (semanticEventQueue.tryPush(message)) {
+        scheduleSemanticEventFlush()
+        return
+      }
+
+      // WHY structural events flush first: delaying only deltas is safe because
+      // their snapshots supersede one another. Delaying block_completed,
+      // tool_result, turn_completed, or error boundaries would reorder them
+      // against process/JSONL channels and could resurrect already-finished
+      // turns. Flush the compact latest state, then fold the boundary now.
+      flushSemanticEventQueue()
+      handleSemanticEvent(message)
     })
 
     const offConditions = feed.onSessionConditions(({ sessionId, snapshot }) => {
@@ -1191,6 +1246,13 @@ export function useIpcSubscriptions(
     //   6. Optimistic-Codex-user reconciliation against the head row.
     const offEntries = feed.onSessionJsonlEntries(({ sessionId, entries }) => {
       if (!entries || entries.length === 0) return
+      // JSONL/process/exit live on sibling SessionFeed channels but still form
+      // ordering boundaries with semantic state. Letting a queued delta cross
+      // one would make committed reconciliation or process shutdown observe an
+      // older semantic turn, then apply the stale preview afterward. The queue
+      // is already compact, so boundary flush cost is proportional to active
+      // semantic owners rather than raw transport events.
+      flushSemanticEventQueue()
       const span = perf.span('workspace.ipc.jsonl.bulk', {
         sessionId,
         burstSize: entries.length,
@@ -2135,6 +2197,8 @@ export function useIpcSubscriptions(
     return () => {
       window.clearInterval(orphanSweepTimer)
       window.clearInterval(memoryGaugeTimer)
+      if (semanticFlushTimer !== null) window.clearTimeout(semanticFlushTimer)
+      semanticEventQueue.drain()
       offStarted()
       offScreen()
       // No singular offEntry() — see the deleted-handler comment

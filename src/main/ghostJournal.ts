@@ -81,7 +81,16 @@ const require = createRequire(import.meta.url)
  * queue before `app.exit`.
  */
 export class GhostJournal {
-  private queue: string[] = []
+  // WHY pending writes are keyed by uuid instead of being a plain FIFO:
+  // a streaming ghost update contains the ENTIRE provisional entry, and the
+  // reader's contract is last-write-wins by uuid. Keeping every intermediate
+  // cumulative tool-input/text snapshot until the 100 ms drain therefore adds
+  // no recovery information; it only serializes and writes increasingly large
+  // copies of the same ghost. Under four active agents that amplification grew
+  // ghost logs by tens of MB in minutes and competed with renderer IPC. A Map
+  // preserves distinct ghosts while bounding pending work to one latest
+  // snapshot per uuid per flush window.
+  private queue = new Map<string, GhostEntry>()
   private timer: NodeJS.Timeout | null = null
   private ensuredDir = false
   /**
@@ -102,7 +111,12 @@ export class GhostJournal {
    * durability barrier should call `flush()`.
    */
   append(ghost: GhostEntry): void {
-    this.queue.push(JSON.stringify(ghost) + '\n')
+    // Delete before set so iteration order reflects the latest observation.
+    // File order is irrelevant across different uuids for reduction, but this
+    // keeps forensic tail inspection chronologically intuitive at no extra
+    // asymptotic cost.
+    this.queue.delete(ghost.uuid)
+    this.queue.set(ghost.uuid, ghost)
     this.scheduleDrain()
   }
 
@@ -129,17 +143,23 @@ export class GhostJournal {
 
   private async drain(): Promise<void> {
     if (this.draining) return
-    if (this.queue.length === 0) return
+    if (this.queue.size === 0) return
     this.draining = true
     try {
-      const batch = this.queue.splice(0).join('')
+      // Serialize only the surviving snapshots, inside the async drain rather
+      // than the ghost:append IPC handler. Storing pre-serialized strings here
+      // would still pay JSON cost for every update we intentionally replace.
+      const batch = [...this.queue.values()]
+        .map(ghost => `${JSON.stringify(ghost)}\n`)
+        .join('')
+      this.queue.clear()
       await this.appendRaw(batch)
     } finally {
       this.draining = false
     }
     // A write that arrived during the drain may have armed the timer;
     // if not, arm it now so late arrivals get picked up.
-    if (this.queue.length > 0 && !this.timer) this.scheduleDrain()
+    if (this.queue.size > 0 && !this.timer) this.scheduleDrain()
   }
 
   private async appendRaw(content: string): Promise<void> {
