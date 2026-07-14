@@ -100,7 +100,7 @@ a running session can move mid-task from Claude Code to Codex or back.
 
 ## Getting started
 
-Requires Node 22.12+ (CI builds on 24 — see `.nvmrc`), plus `claude` and `codex`
+Requires Node 20+ (CI builds on 20 — see `.nvmrc`), plus `claude` and `codex`
 on `PATH`. The headless runtimes live as git submodules, so clone with them
 included:
 
@@ -125,18 +125,17 @@ checked out. All submodule repos are public; no special access is needed
 (CI's `SUBMODULE_PAT`/`SUBMODULE_SSH_KEY` plumbing predates them being
 public and is kept for private forks).
 
-To build distributable macOS DMG and ZIP artifacts for Apple Silicon and Intel:
+To build a distributable macOS app, first fetch the bundled runtime artifacts
+(tmux, mitmproxy), then package:
 
 ```bash
+npm run runtime:prepare:mac
 npm run dist:mac
 ```
 
-`dist:mac` fetches and verifies the pinned runtime tools before building, then
-checks out unsigned development artifacts when no Developer ID identity is
-configured. Public releases use `.github/workflows/release.yml`, which requires
-a Developer ID Application certificate and Apple notarization credentials and
-verifies both thin app bundles before upload. For day-to-day development, use
-`npm run dev`.
+`dist:mac` is shaky in this early beta stage — packaging edge cases around
+bundled binaries and code signing are still being ironed out. For day-to-day
+use, run Agent Code with `npm run dev` instead.
 
 ## Companion packages
 

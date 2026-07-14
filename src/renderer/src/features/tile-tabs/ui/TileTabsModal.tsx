@@ -1,14 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
 import type { TabId } from '@renderer/workspace/types'
 
 type TileTabOption = {
@@ -52,20 +43,26 @@ export function TileTabsModal({
 
   const selectedSet = useMemo(() => new Set(selected), [selected])
 
+  if (!open) return null
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={nextOpen => {
-        if (!nextOpen) onCancel()
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-canvas/80 backdrop-blur-sm"
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) onCancel()
       }}
     >
-      <DialogContent className="flex max-h-[80vh] w-[540px] max-w-[calc(100vw-64px)] flex-col">
-        <DialogHeader>
-          <DialogTitle className="font-semibold">Tiled Tabs</DialogTitle>
-          <DialogDescription>Select two or more tabs to show side by side.</DialogDescription>
-        </DialogHeader>
+      <div className="w-[540px] max-w-[calc(100vw-64px)] bg-surface border border-border-hi p-6 max-h-[80vh] flex flex-col">
+        <div className="text-[13px] font-semibold text-ink mb-2 flex-shrink-0">
+          Tiled Tabs
+        </div>
+        <div className="text-[11px] text-muted mb-4 flex-shrink-0">
+          Select two or more tabs to show side by side.
+        </div>
 
-        <div className="mx-4 my-4 min-h-0 flex-1 overflow-auto border border-border bg-canvas">
+        <div className="flex-1 min-h-0 overflow-auto border border-border bg-canvas">
           {tabs.map(tab => {
             const checked = selectedSet.has(tab.id)
             return (
@@ -90,23 +87,24 @@ export function TileTabsModal({
           })}
         </div>
 
-        <DialogFooter>
-          <Button
+        <div className="flex justify-end gap-2 mt-4 flex-shrink-0">
+          <button
             type="button"
             onClick={onCancel}
-            variant="outline"
+            className="px-4 py-1.5 text-[12px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
           >
             Cancel
-          </Button>
-          <Button
+          </button>
+          <button
             type="button"
             onClick={() => onConfirm(selected)}
             disabled={selected.length < 2}
+            className="px-4 py-1.5 text-[12px] bg-accent text-accent-fg border border-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Open Tiled Tabs
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

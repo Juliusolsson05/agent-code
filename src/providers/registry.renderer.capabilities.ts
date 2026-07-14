@@ -1,7 +1,17 @@
+import type { ReactNode } from 'react'
 import type { ConditionView } from '@shared/conditions-core/view'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { AGENT_PROVIDER_KINDS, type AgentProviderKind, isAgentProviderKind } from '@shared/types/providerKind'
 import { CLAUDE_VIEWS } from '@providers/claude/renderer/conditions/views'
 import { CODEX_VIEWS } from '@providers/codex/renderer/conditions/views'
+import {
+  renderClaudeToolResult,
+  renderClaudeToolUse,
+} from '@providers/claude/renderer/rows/dispatch'
+import {
+  renderCodexToolResult,
+  renderCodexToolUse,
+} from '@providers/codex/renderer/rows/dispatch'
 import type {
   PromptDeliveryResult,
   SemanticFoldPolicy,
@@ -22,6 +32,10 @@ import {
   extractOpencodeProviderSessionId,
 } from '@providers/opencode/renderer/transcript/mapper'
 import { opencodeComposerSubmit } from '@providers/opencode/renderer/composerSubmit'
+import {
+  renderOpencodeToolUse,
+  renderOpencodeToolResult,
+} from '@providers/opencode/renderer/rows/dispatch'
 import { codexComposerSubmit } from '@providers/codex/renderer/composerSubmit'
 import { CODEX_IDENTITY } from '@providers/codex/renderer/identity'
 import {
@@ -56,6 +70,11 @@ export type RendererProviderCapabilities = {
    */
   splitShortcutKey?: string
   conditionViews: Record<string, ConditionView>
+  renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
+  renderToolResult?: (
+    block: ToolResultBlock,
+    context: { sourceTool?: ToolUseBlock | null },
+  ) => ReactNode | undefined
   /**
    * Does this tool_use name spawn a subagent the fleet row should own?
    * Provider-owned because the spawn vocabulary is provider-specific and
@@ -180,14 +199,12 @@ const claudeCapabilities: RendererProviderCapabilities = {
   name: 'Claude Code',
   ...CLAUDE_IDENTITY,
   conditionViews: CLAUDE_VIEWS,
+  renderToolUse: renderClaudeToolUse,
+  renderToolResult: renderClaudeToolResult,
   // Claude fanout: `Agent` tool_use, plus MCP-orchestrated spawns that arrive
   // prefixed. The bare `orchestration_create_agent` is codex's (see below), so
   // the fleet-row union still covers it.
-  // 'Agent' is what this CLI generation records (verified: 184 hits in
-  // recent local transcripts, zero 'Task'); 'Task' is the newer upstream
-  // vocabulary for the same subagent fanout — accept both so a CLI
-  // update can't silently kill every subagent card again.
-  isSpawnTool: (name) => name === 'Agent' || name === 'Task' || isMcpOrchestrationCreateAgent(name),
+  isSpawnTool: (name) => name === 'Agent' || isMcpOrchestrationCreateAgent(name),
   createTranscriptEntryMapper: () => createClaudeTranscriptEntryMapper(),
   extractProviderSessionId: extractClaudeProviderSessionId,
   composerSubmit: claudeComposerSubmit,
@@ -202,6 +219,8 @@ const codexCapabilities: RendererProviderCapabilities = {
   name: 'Codex',
   ...CODEX_IDENTITY,
   conditionViews: CODEX_VIEWS,
+  renderToolUse: renderCodexToolUse,
+  renderToolResult: renderCodexToolResult,
   // Codex fanout: `spawn_agent` function_call, plus the MCP orchestration spawn
   // whose `mcp__` prefix codex strips on the wire (so it arrives bare).
   isSpawnTool: (name) => name === 'spawn_agent' || name === 'orchestration_create_agent',
@@ -220,6 +239,10 @@ const opencodeCapabilities: RendererProviderCapabilities = {
   name: 'OpenCode',
   ...OPENCODE_IDENTITY,
   conditionViews: OPENCODE_VIEWS,
+  // Evidence-backed rows only (live probe 2026-07-06): todowrite renders as
+  // a real todo list; everything else falls through to the generic rows.
+  renderToolUse: renderOpencodeToolUse,
+  renderToolResult: renderOpencodeToolResult,
   // opencode has no subagent-spawn tool yet (no fleet fanout on this backend).
   isSpawnTool: () => false,
   createTranscriptEntryMapper: () => createOpencodeTranscriptEntryMapper(),
@@ -239,12 +262,11 @@ const rendererProviderCapabilities: Record<AgentProviderKind, RendererProviderCa
 
 export function getRendererProviderCapabilities(id: string): RendererProviderCapabilities {
   // WHY this file exists separately from registry.renderer.ts:
-  // the feed and transcript collectors need small provider-owned facts, while
-  // registry.renderer.ts also imports TileLeaf so TileTree can mount panes.
-  // Feed -> registry.renderer -> TileLeaf -> Feed is a runtime cycle. Keeping
-  // these facts in a capability-only module lets classification, empty-state
-  // labels, and spawn correlation stay provider-aware without reviving the
-  // deleted provider-specific React dispatch trees.
+  // feed rows need provider row dispatch, but registry.renderer.ts also imports
+  // TileLeaf so TileTree can mount panes. Feed -> registry.renderer -> TileLeaf
+  // -> Feed is a runtime cycle. This capability-only registry contains the
+  // provider renderer tables that do not need TileLeaf, so hot feed paths can
+  // route through provider-owned dispatch without depending on pane mounting.
   if (!isAgentProviderKind(id)) throw new Error(`Unknown provider: ${id}`)
   const provider = rendererProviderCapabilities[id]
   if (!provider) throw new Error(`Unknown provider: ${id}`)

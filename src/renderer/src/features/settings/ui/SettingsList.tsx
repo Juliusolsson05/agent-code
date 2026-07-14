@@ -6,7 +6,6 @@ import type {
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
 import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
-import { DictationApiKeyRow } from '@renderer/features/voice-dictation/DictationApiKeyRow'
 
 type Props = {
   definitions: SettingDefinition[]
@@ -217,12 +216,6 @@ function SettingRow({
               in the renderer Settings store. See
               features/cli-updates/CliUpdateBehaviorRow.tsx. */}
           {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
-
-          {/* Voice-dictation API key — same self-subscribing marker-row
-              pattern as CLI updates: the ciphertext lives in
-              safeStorage-backed main state, so the row owns the IPC
-              round-trip. See features/voice-dictation/DictationApiKeyRow.tsx. */}
-          {control.type === 'dictation-api-key' ? <DictationApiKeyRow /> : null}
         </div>
       </div>
     </div>

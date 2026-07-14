@@ -203,7 +203,7 @@ function isInvisibleEmptyReasoningBlock(block: SemanticLiveTurn['blocks'][number
     block.reasoningText ||
     ''
   // WHY this belongs in the render-unit selector:
-  // The presentation projector intentionally paints no row for empty
+  // SemanticLiveBlockRow intentionally returns null for empty
   // reasoning/thinking because WorkIndicator is the real "agent is
   // thinking" surface. If this selector still emits a block unit, an
   // archived proxy turn with only empty finalized reasoning can keep a

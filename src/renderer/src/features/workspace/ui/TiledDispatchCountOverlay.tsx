@@ -1,15 +1,5 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
-import { Input } from '@renderer/components/ui/input'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import {
   clampTileCount,
@@ -47,6 +37,11 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
   )
   const inputRef = useRef<HTMLInputElement | null>(null)
 
+  useEffect(() => {
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+
   const commit = useCallback(() => {
     const count = clampTileCount(Number(value))
     if (workspace.state.dispatchMode?.tiled) {
@@ -62,31 +57,34 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
       if (e.key === 'Enter') {
         e.preventDefault()
         commit()
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
       }
     },
     [commit, onClose],
   )
 
   return (
-    <Dialog open onOpenChange={nextOpen => {
-      if (!nextOpen) onClose()
-    }}>
-      <DialogContent
-        className="w-[320px]"
-        onOpenAutoFocus={event => {
-          event.preventDefault()
-          inputRef.current?.focus()
-          inputRef.current?.select()
-        }}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onMouseDown={onClose}
+    >
+      <div
+        className="w-[320px] border border-border bg-surface p-4 shadow-xl"
+        onMouseDown={e => e.stopPropagation()}
       >
-        <DialogHeader>
-          <DialogTitle>How many dispatch tiles?</DialogTitle>
-          <DialogDescription className="text-[10px]">
-            {MIN_DISPATCH_TILES}–{MAX_DISPATCH_TILES} lanes. The first lane is the
-            full agent index; each other lane gets its own selector.
-          </DialogDescription>
-        </DialogHeader>
-        <Input
+        <label
+          htmlFor="tiled-dispatch-count"
+          className="block text-[12px] text-ink"
+        >
+          How many dispatch tiles?
+        </label>
+        <p className="mt-1 text-[10px] text-muted">
+          {MIN_DISPATCH_TILES}–{MAX_DISPATCH_TILES} lanes. The first lane is the
+          full agent index; each other lane gets its own selector.
+        </p>
+        <input
           id="tiled-dispatch-count"
           ref={inputRef}
           type="number"
@@ -95,24 +93,25 @@ export function TiledDispatchCountOverlay({ workspace, onClose }: Props) {
           value={value}
           onChange={e => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          className="mx-4 my-4 w-auto bg-canvas text-[13px] tabular-nums"
+          className="mt-3 w-full border border-border bg-canvas px-2 py-1 text-[13px] text-ink tabular-nums outline-none focus:border-accent"
         />
-        <DialogFooter>
-          <Button
+        <div className="mt-4 flex justify-end gap-2 text-[12px]">
+          <button
             type="button"
             onClick={onClose}
-            variant="ghost"
+            className="px-3 py-1 text-muted hover:text-ink"
           >
             Cancel
-          </Button>
-          <Button
+          </button>
+          <button
             type="button"
             onClick={commit}
+            className="border border-accent bg-accent/15 px-3 py-1 text-accent hover:bg-accent/25"
           >
             Open
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

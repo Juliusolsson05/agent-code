@@ -41,12 +41,6 @@ export type ConditionViewProps<S> = {
   state: S
   actions: ConditionAction[]
   dispatch: (action: ConditionAction) => Promise<void>
-  // Pane-local strips may bind keyboard navigation only while their TileLeaf
-  // owns workspace focus. Full-screen modal views ignore this because Radix
-  // owns focus independently. Threading the fact through the generic outlet
-  // avoids document-global listeners that let a condition in pane A consume
-  // input intended for pane B.
-  interactionActive: boolean
 }
 
 export type ConditionView<K extends string = string, S = unknown> = {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 type Props = {
   prompt: {
@@ -7,7 +7,6 @@ type Props = {
     selectedIndex?: number
   } | null
   onSend: (data: string) => Promise<void>
-  interactionActive: boolean
 }
 
 const DEFAULT_OPTIONS = [
@@ -22,11 +21,8 @@ function moveSelection(current: number, target: number): string {
   return step.repeat(Math.abs(target - current)) + '\r'
 }
 
-export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) {
+export function ResumePromptModal({ prompt, onSend }: Props) {
   const [localSelected, setLocalSelected] = useState(0)
-  const stripRef = useRef<HTMLDivElement>(null)
-  const interactionActiveRef = useRef(interactionActive)
-  interactionActiveRef.current = interactionActive
 
   useEffect(() => {
     if (prompt?.selectedIndex != null) {
@@ -49,59 +45,47 @@ export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) 
   }, [onSend])
 
   useEffect(() => {
-    if (!prompt || !interactionActive) return
-    const frame = requestAnimationFrame(() => {
-      // A pane switch can commit between scheduling and paint. The ref check
-      // prevents an old strip from reclaiming DOM focus after ownership moved.
-      if (interactionActiveRef.current) stripRef.current?.focus()
-    })
-    return () => cancelAnimationFrame(frame)
-    // Object identity is intentionally absent: the condition adapter builds a
-    // fresh presentation object from every provider snapshot. Only a newly
-    // visible prompt or ownership transition should request focus; selection
-    // ticks must not continually steal it back from controls in the pane.
-  }, [interactionActive, prompt?.sessionAgeText, prompt?.tokenCountText])
+    if (!prompt) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        e.stopPropagation()
+        void onSend('\x1b[A')
+        setLocalSelected(prev => Math.max(0, prev - 1))
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        e.stopPropagation()
+        void onSend('\x1b[B')
+        setLocalSelected(prev => Math.min(options.length - 1, prev + 1))
+        return
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        confirm()
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        cancel()
+      }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [prompt, options.length, confirm, cancel, onSend])
 
   if (!prompt) return null
 
   return (
-    <div
-      ref={stripRef}
-      tabIndex={-1}
-      role="group"
-      aria-label="Resume session options"
-      onKeyDown={e => {
-        // WHY this listener is pane-local: several TileLeaves can keep a
-        // resume strip mounted simultaneously. A document capture listener
-        // let an unfocused pane consume arrows/Enter meant for another pane.
-        if (!interactionActive) return
-        if (e.key === 'ArrowUp') {
-          e.preventDefault()
-          e.stopPropagation()
-          void onSend('\x1b[A')
-          setLocalSelected(prev => Math.max(0, prev - 1))
-        } else if (e.key === 'ArrowDown') {
-          e.preventDefault()
-          e.stopPropagation()
-          void onSend('\x1b[B')
-          setLocalSelected(prev => Math.min(options.length - 1, prev + 1))
-        } else if (e.key === 'Enter') {
-          e.preventDefault()
-          e.stopPropagation()
-          confirm()
-        } else if (e.key === 'Escape') {
-          e.preventDefault()
-          e.stopPropagation()
-          cancel()
-        }
-      }}
-      className="
+    <div className="
       flex-shrink-0
       border-t border-border
       bg-surface
       px-5 py-3
       font-code text-[12px] leading-[1.65]
-      outline-none
     ">
       <div className="text-ink font-semibold mb-2">
         This session is {prompt.sessionAgeText ?? 'older'} old and {prompt.tokenCountText ?? 'many'} tokens.

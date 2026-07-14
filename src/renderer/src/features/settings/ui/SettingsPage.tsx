@@ -1,14 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
-import { Textarea } from '@renderer/components/ui/textarea'
-import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_SCHEMA_JSON,
@@ -56,10 +47,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   }, [registry])
 
   return (
-    <div
-      {...{ [APP_INTERACTION_OWNER_ATTRIBUTE]: 'app' }}
-      className="h-full min-h-0 min-w-0 bg-canvas"
-    >
+    <div className="h-full min-h-0 min-w-0 bg-canvas">
       <div className="flex h-full min-h-0 min-w-0 border-t border-panel-border">
         <SettingsSidebar
           selectedCategory={selectedCategory}
@@ -131,6 +119,19 @@ function CustomAppearanceModal({
   const [draft, setDraft] = useState(raw)
   const [view, setView] = useState<'json' | 'schema'>('json')
   const [error, setError] = useState<string | null>(null)
+  const textAreaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    textAreaRef.current?.focus()
+  }, [])
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   const save = () => {
     try {
@@ -141,53 +142,54 @@ function CustomAppearanceModal({
   }
 
   return (
-    <Dialog
-      open
-      onOpenChange={nextOpen => {
-        if (!nextOpen) onClose()
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="custom-appearance-title"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onClose()
       }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay-scrim px-6 py-6"
     >
-      <DialogContent className="flex h-[calc(100vh-3rem)] max-h-[760px] w-[calc(100vw-3rem)] max-w-4xl flex-col border-popover-border bg-popover-bg p-0">
+      <div className="flex h-full max-h-[760px] w-full max-w-4xl flex-col border border-popover-border bg-popover-bg shadow-[0_16px_48px_var(--theme-shadow-color)]">
         <div className="flex items-center justify-between border-b border-panel-border bg-panel-header-bg px-4 py-3">
           <div>
-            <DialogTitle>
+            <div id="custom-appearance-title" className="text-[13px] text-ink">
               Custom Appearance
-            </DialogTitle>
-            <DialogDescription>
+            </div>
+            <div className="mt-1 text-[11px] text-muted">
               Define the application color tokens as validated JSON.
-            </DialogDescription>
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
+            <button
               type="button"
               onClick={() => setView(view === 'json' ? 'schema' : 'json')}
-              variant="secondary"
-              size="sm"
+              className="border border-control-border bg-control-bg px-2.5 py-1.5 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
             >
               {view === 'json' ? 'Show Schema' : 'Show JSON'}
-            </Button>
-            <Button
+            </button>
+            <button
               type="button"
               onClick={onClose}
-              variant="secondary"
-              size="sm"
+              className="border border-control-border bg-control-bg px-2.5 py-1.5 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
             >
               Close
-            </Button>
+            </button>
           </div>
         </div>
 
         <div className="min-h-0 flex-1 px-4 py-4">
           {view === 'json' ? (
-            <Textarea
-              autoFocus
+            <textarea
+              ref={textAreaRef}
               value={draft}
               onChange={event => {
                 setDraft(event.target.value)
                 setError(null)
               }}
               spellCheck={false}
-              className="h-full min-h-[420px] resize-none bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink"
+              className="h-full min-h-[420px] w-full resize-none border border-input-border bg-code-bg px-3 py-3 font-code text-[12px] leading-5 text-code-ink outline-none focus:border-input-border-focus"
             />
           ) : (
             <pre className="h-full min-h-[420px] overflow-auto border border-input-border bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink">
@@ -198,14 +200,15 @@ function CustomAppearanceModal({
 
         <div className="flex items-center justify-between border-t border-panel-border bg-panel-header-bg px-4 py-3">
           <div className="min-w-0 text-[11px] text-danger">{error ?? ''}</div>
-          <Button
+          <button
             type="button"
             onClick={save}
+            className="border border-control-active-bg bg-control-active-bg px-3 py-2 text-[12px] text-control-active-fg"
           >
             Save Custom Appearance
-          </Button>
+          </button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }

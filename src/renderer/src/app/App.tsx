@@ -16,8 +16,6 @@ import { GlobalOverlays } from '@renderer/app/surfaces/GlobalOverlays'
 import { SidePanels } from '@renderer/app/surfaces/SidePanels'
 import { MainSurface } from '@renderer/app/shell/MainSurface'
 import { RestoreBanner } from '@renderer/app/shell/RestoreBanner'
-import { ConfigureDictationCard } from '@renderer/features/voice-dictation/ConfigureDictationCard'
-import { DictationGuideModal } from '@renderer/features/voice-dictation/DictationGuideModal'
 import { SettingsBar } from '@renderer/app/shell/SettingsBar'
 import { SetupGate } from '@renderer/features/setup/ui/SetupGate'
 import { CliUpdateBanner } from '@renderer/features/cli-updates/CliUpdateBanner'
@@ -83,10 +81,6 @@ export default function App() {
             RestoreBanner's header comment names. Renders as null when
             neither CLI has anything to report. */}
         <CliUpdateBanner />
-        {/* Voice dictation configuration nudge — soft banner that
-            disappears once a Deepgram key exists or the user dismisses
-            it. Renders null unless the API key is unconfigured. */}
-        <ConfigureDictationCard />
         <TabBar workspace={workspace} onNewTabRequest={onNewTabRequest} />
         <SettingsBar />
         <div className="flex-1 min-h-0 min-w-0 flex overflow-hidden">
@@ -103,12 +97,6 @@ export default function App() {
             index — see app/surfaces/registry.tsx. Do not swap these. */}
         <GlobalOverlays />
         <GlobalModals />
-        {/* Voice-dictation guide modal, opened by the "Configure Voice
-            Dictation" nudge and by a future command-palette entry. Sits
-            after GlobalModals in DOM order so it paints on top of the
-            other overlay stacks without competing with the modalSurfaces
-            registry — the guide is entirely local, no z-index tricks. */}
-        <DictationGuideModal />
       </div>
     </WorkspaceProvider>
   )

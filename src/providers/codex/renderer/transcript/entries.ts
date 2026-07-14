@@ -82,30 +82,6 @@ export function stripCodexExecWrapper(output: string): string {
   return output.slice(idx + marker.length)
 }
 
-/** Codex's unified-exec (`exec` code-mode tool) wraps its output as
- *  "Script completed\nWall time {N} seconds\nOutput:\n{real output}".
- *  The wrapper burned the entire collapsed preview (the user saw three
- *  lines of boilerplate and never the output — 2026-07-12 bundle).
- *  Strip it and surface the wall time as structured duration so the
- *  CommandCard shows it as a chip instead. */
-const SCRIPT_WRAPPER_RE =
-  /^Script (completed|failed[^\n]*|running with cell ID \d+)\nWall time ([0-9.]+) seconds\nOutput:\n?/
-export function stripUnifiedExecWrapper(output: string): {
-  output: string
-  durationMs: number | null
-  scriptFailed: boolean
-  stillRunning: boolean
-} {
-  const m = SCRIPT_WRAPPER_RE.exec(output)
-  if (!m) return { output, durationMs: null, scriptFailed: false, stillRunning: false }
-  return {
-    output: output.slice(m[0].length),
-    durationMs: Math.round(parseFloat(m[2]) * 1000),
-    scriptFailed: m[1].startsWith('failed'),
-    stillRunning: m[1].startsWith('running'),
-  }
-}
-
 /** True when the output is ONLY the exec wrapper with a trailing
  *  "Process exited with code …" line and nothing else — i.e. no
  *  stdout/stderr worth surfacing. Callers filter these out so the

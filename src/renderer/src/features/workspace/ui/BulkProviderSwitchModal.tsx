@@ -1,12 +1,6 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 import { resolveTabSessions } from '@renderer/workspace/queries'
@@ -220,34 +214,38 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
     onClose()
   }, [busy, onClose])
 
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        requestClose()
+      }
+    },
+    [requestClose],
+  )
+
+  if (!open) return null
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={nextOpen => {
-        if (!nextOpen) requestClose()
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Switch Agents to Another Provider"
+      className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/30"
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) requestClose()
       }}
+      onKeyDown={onKeyDown}
     >
-      <DialogContent
-        className="flex max-h-[86vh] w-[min(860px,94vw)] flex-col overflow-hidden"
-        onEscapeKeyDown={event => {
-          if (busy) event.preventDefault()
-        }}
-        onPointerDownOutside={event => {
-          // WHY an in-flight batch cannot be dismissed: the old overlay kept
-          // this single-flight operation visible until it settled. Preventing
-          // Radix's outside close preserves that contract while still letting
-          // the primitive own all normal dismissal behavior.
-          if (busy) event.preventDefault()
-        }}
-      >
+      <div className="w-[min(860px,94vw)] max-h-[86vh] overflow-hidden bg-surface border border-border-hi flex flex-col">
         <div className="flex-shrink-0 border-b border-border px-4 py-3">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <DialogTitle>Switch Agents to Another Provider</DialogTitle>
-              <DialogDescription>
+              <div className="text-[13px] text-ink">Switch Agents to Another Provider</div>
+              <div className="mt-1 text-[11px] text-muted">
                 Move a batch of agents between Claude and Codex — e.g. when you hit a usage
                 limit. History is translated; the originals stay on disk.
-              </DialogDescription>
+              </div>
             </div>
             <button
               type="button"
@@ -486,7 +484,7 @@ export function BulkProviderSwitchModal({ open, workspace, onClose }: Props) {
             </button>
           </div>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }

@@ -64,9 +64,8 @@ import {
 // WHY the row disappears on its own after answering:
 //   An UNRESOLVED block (`!block.resultAt`) means the picker is LIVE and
 //   awaiting the user. When the tool_result lands, `resultAt` is set and
-//   OperationRow switches to the durable answered surface, so this control row
-//   unmounts. We never hide ourselves manually — lifecycle is decided by the
-//   presentation operation above us.
+//   BlockRow stops routing to this component, so the row unmounts. We
+//   never hide ourselves manually — ownership is decided one level up.
 
 type SemanticLiveBlock = SemanticLiveTurn['blocks'][number]
 
@@ -90,8 +89,9 @@ export function AskUserQuestionRow({ block }: { block: SemanticLiveBlock }) {
   // sessionId is obtained the SAME way every other feed row gets it: via
   // CodeRenderContext, which Feed.tsx wraps the entire render-item list
   // in (`<CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>`).
-  // PresentationRow → OperationRow → this row all render inside that provider,
-  // so the context value is the live session, not the empty default.
+  // SemanticStreamingTurn → SemanticLiveBlockRow → this row all render
+  // inside that provider, so the context value is the live session, not
+  // the empty default.
   const { sessionId } = useContext(CodeRenderContext)
   const liveAskUserQuestion = useContext(AskUserQuestionConditionContext)
   // Session input goes through the injected SessionFeed (not window.api):

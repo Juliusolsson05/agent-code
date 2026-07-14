@@ -1,10 +1,4 @@
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
+import { useEffect } from 'react'
 
 type PermissionPromptState = {
   title?: string
@@ -20,6 +14,21 @@ type Props = {
 }
 
 export function PermissionPromptModal({ state, onSend }: Props) {
+  useEffect(() => {
+    if (!state) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        void onSend('\r')
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        void onSend('3\r')
+      }
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [onSend, state])
+
   if (!state) return null
 
   const approve = () => { void onSend('\r') }
@@ -27,30 +36,30 @@ export function PermissionPromptModal({ state, onSend }: Props) {
   const title = state.title ?? 'Claude is requesting permission'
 
   return (
-    <Dialog
-      open
-      onOpenChange={nextOpen => {
-        if (!nextOpen) deny()
-      }}
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="
+        modal-fade
+        fixed inset-0 z-[1000]
+        flex items-center justify-center
+        bg-canvas/80 backdrop-blur-sm
+      "
     >
-      <DialogContent
-        className="modal-pop w-[520px] max-w-[calc(100vw-64px)] p-6"
-        onPointerDownOutside={event => {
-          // A permission decision must be explicit. Escape is a documented
-          // deny shortcut, but an accidental backdrop click must not send a
-          // destructive PTY choice on the user's behalf.
-          event.preventDefault()
-        }}
+      <div
+        className="
+          modal-pop
+          w-[520px] max-w-[calc(100vw-64px)]
+          bg-surface border border-border-hi
+          p-6
+        "
       >
         <div className="flex items-start gap-3 mb-4">
           <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
           <div>
-            <DialogTitle className="text-[14px] font-semibold leading-[1.3]">
+            <div className="text-[14px] font-semibold text-ink leading-[1.3]">
               {title}
-            </DialogTitle>
-            <DialogDescription className="sr-only">
-              Review the requested tool and choose whether Claude may continue.
-            </DialogDescription>
+            </div>
             {state.toolName && (
               <div className="mt-1 text-[11px] uppercase tracking-[0.14em] text-muted">
                 {state.toolName}
@@ -80,22 +89,35 @@ export function PermissionPromptModal({ state, onSend }: Props) {
         </div>
 
         <div className="flex justify-end gap-2 mt-6 pl-6">
-          <Button
+          <button
             type="button"
             onClick={deny}
-            variant="outline"
+            className="
+              px-4 py-1.5 text-[12px]
+              bg-transparent text-ink-dim
+              border border-border
+              hover:border-border-hi hover:text-ink
+              transition-colors duration-120
+            "
           >
             deny
-          </Button>
-          <Button
+          </button>
+          <button
             type="button"
             onClick={approve}
             autoFocus
+            className="
+              px-4 py-1.5 text-[12px] font-semibold
+              bg-accent text-accent-fg
+              border border-accent
+              hover:brightness-110
+              transition-all duration-120
+            "
           >
             approve
-          </Button>
+          </button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }

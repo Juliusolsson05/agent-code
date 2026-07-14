@@ -12,9 +12,8 @@ import type { ReactNode } from 'react'
  * UserBand — a horizontal highlight band that sits behind a *user
  * prompt* so real user turns are easy to spot when scanning a long
  * feed. Only ever wraps text content that originated as a user prompt.
- * Never wraps tool_result output (even though tool_result blocks live under
- * role='user' on the wire). The projector assigns role only to real message
- * nodes; operation/result nodes remain outside this band.
+ * Never wraps tool_result output (even though tool_result blocks live
+ * under role='user' on the wire) — see the comment in ConversationRow.
  */
 export function UserBand({ children }: { children: ReactNode }) {
   return (

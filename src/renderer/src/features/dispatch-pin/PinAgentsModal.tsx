@@ -1,9 +1,5 @@
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
+import { useEffect, useRef } from 'react'
+
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { SessionId } from '@renderer/workspace/types'
 
@@ -54,32 +50,49 @@ export function PinAgentsModal({
   onCancel,
   onConfirm,
 }: Props) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+
   const { selectedIds, focusedIndex, setFocusedIndex, toggle, onKeyDown } =
     usePinAgentsKeybinds({
       rows,
       initialSelectedIds,
       open,
       onCommit: onConfirm,
+      onCancel,
     })
+
+  // Focus the dialog on open so keybinds work without a click.
+  // requestAnimationFrame matches ReorderTabsModal's approach: the
+  // ref isn't reliably attached during the same tick the parent
+  // flips `open` to true, so deferring to the next frame is the
+  // simplest portable fix.
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(() => dialogRef.current?.focus())
+  }, [open])
+
+  if (!open) return null
 
   const selectedSet = new Set(selectedIds)
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={nextOpen => {
-        if (!nextOpen) onCancel()
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-canvas/80 backdrop-blur-sm"
+      onMouseDown={event => {
+        if (event.target === event.currentTarget) onCancel()
       }}
     >
-      <DialogContent
+      <div
+        ref={dialogRef}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        className="flex max-h-[80vh] w-[520px] max-w-[calc(100vw-64px)] flex-col p-5"
+        className="w-[520px] max-w-[calc(100vw-64px)] max-h-[80vh] bg-surface border border-border-hi p-5 flex flex-col outline-none"
       >
-        <DialogTitle className="mb-1 flex-shrink-0 font-semibold">Pin Agents</DialogTitle>
-        <DialogDescription className="sr-only">
-          Choose the agents pinned in Dispatch. Space toggles and Enter commits.
-        </DialogDescription>
+        <div className="text-[13px] font-semibold text-ink mb-4 flex-shrink-0">
+          Pin Agents
+        </div>
 
         <div className="flex-1 min-h-0 overflow-auto border border-border bg-canvas">
           {rows.length === 0 ? (
@@ -151,7 +164,7 @@ export function PinAgentsModal({
             <span><kbd>Esc</kbd> cancel</span>
           </span>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }

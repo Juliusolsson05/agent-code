@@ -1,5 +1,3 @@
-import { decodePartialJsonStringBody } from '@shared/lib/partialJsonString'
-
 // Incremental extractor for a still-streaming `Write` tool call.
 //
 // WHY this exists:
@@ -19,43 +17,34 @@ import { decodePartialJsonStringBody } from '@shared/lib/partialJsonString'
 //   instead of literal `\n` `\t` pairs. This module does exactly
 //   that and nothing more.
 //
-// WHY a bounded scanner instead of a cache or partial-JSON dependency:
-//   1. Write's useful live shape is tiny: a path plus the beginning of one
-//      string. A general recovery parser adds ambiguity without improving that
-//      contract.
-//   2. `inputJson` is the WHOLE accumulated payload on every delta. Re-decoding
-//      an unbounded content tail therefore turns a long Write into O(total²)
-//      work over its lifetime. This scanner examines a fixed header window and
-//      a fixed encoded-content window on every call, so one render has a hard
-//      upper bound independent of the eventual file size.
-//   3. A module-global memo would hide the repeated work but grow with every
-//      operation and complicate replay/cleanup. The bounded pure function is
-//      deterministic, naturally garbage-collected with its caller, and still
-//      lets the authoritative finalized parse replace the preview exactly.
+// WHY a hand-rolled scanner instead of a partial-JSON dependency:
+//   1. Write's input shape is fixed and trivial — two known string
+//      keys, `file_path` then `content`, in that order. Verified
+//      against real proxy dumps: every one of 16 Write calls in a
+//      single heavy session matched `{"file_path": "...",
+//      "content": "..."}` with whitespace after the colons. A
+//      ~150-line targeted scanner is easier to audit than wedging a
+//      general partial-JSON parser into the build and trusting its
+//      recovery heuristics.
+//   2. This runs on every `input_json_delta` — hundreds of times a
+//      second on a long write. A single linear pass with no
+//      allocation beyond the result keeps it off the profiler.
+//   3. The only fiddly part is JSON-string unescape, and that's a
+//      fixed spec table we can inline.
 //
 // WHAT MAKES IT WRONG (invariants):
-//   - Object members may arrive in either order, but both the key/path and the
-//     start of content must appear inside the bounded header window. If a model
-//     emits a giant unrelated member first, the result explicitly reports a
-//     truncated preview and the exact finalized parse remains the fallback.
+//   - Assumes key order `file_path` then `content`. If the model
+//     ever emits them reversed, `extractStreamingWriteInput` returns
+//     `{ filePath: null, partialContent: null }` and the caller
+//     falls back to the raw-JSON `<pre>`. It must never throw and
+//     must never return a half-unescaped string.
 //   - `partialContent` is intentionally returned WITHOUT requiring
 //     the closing quote — the whole point is to show the in-flight
-//     value. It is a PREVIEW, never the source of truth.
-
-/**
- * Hard live-preview bounds. The raw-character cap is intentionally expressed
- * in encoded JSON characters: slicing before decode guarantees the shared
- * decoder cannot inspect an arbitrarily growing tail. Decoded output is never
- * larger than that encoded prefix. The line cap separately prevents a payload
- * made entirely of `\n` escapes from creating thousands of React rows inside a
- * small character budget.
- */
-export const STREAMING_WRITE_HEADER_SCAN_CHARS = 4 * 1024
-export const STREAMING_WRITE_PREVIEW_RAW_CHARS = 16 * 1024
-export const STREAMING_WRITE_PREVIEW_LINES = 400
+//     value. Once the block finalizes, the committed WriteRow
+//     renderer takes over and this code is no longer on the path.
 
 export type StreamingWriteInput = {
-  /** The `file_path`/`filePath`/`path` value, or null if its string literal has not
+  /** The `file_path` value, or null if its string literal has not
    *  finished streaming yet (or the buffer didn't match the
    *  expected shape). */
   filePath: string | null
@@ -64,16 +53,74 @@ export type StreamingWriteInput = {
    *  string. Empty string is a valid value — it means `content`
    *  has started but no bytes have arrived. */
   partialContent: string | null
-  /** True when a safety bound, rather than the network boundary, stopped the
-   *  preview. The UI must say this loudly because a frozen prefix otherwise
-   *  looks like the agent stopped writing. */
-  previewTruncated: boolean
 }
 
-const EMPTY: StreamingWriteInput = {
-  filePath: null,
-  partialContent: null,
-  previewTruncated: false,
+const EMPTY: StreamingWriteInput = { filePath: null, partialContent: null }
+
+// JSON single-char escapes (the `\X` forms other than `\uXXXX`).
+const SIMPLE_ESCAPES: Record<string, string> = {
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+}
+
+// Decode a JSON string body starting at `start` (the index just
+// AFTER the opening quote). Stops at the first unescaped `"` OR at
+// end-of-buffer — whichever comes first. Returns the decoded text
+// and whether the closing quote was actually seen.
+//
+// WHY tolerate end-of-buffer: a streaming value's closing quote
+// hasn't arrived yet; we still want the bytes decoded so far. If the
+// buffer ends mid-escape (a lone trailing `\`, or `\u` with fewer
+// than 4 hex digits) we drop that incomplete tail rather than emit
+// garbage — the next delta will carry the rest. Real proxy dumps
+// show the API does not actually split mid-escape, but relying on
+// that would be a latent bug if it ever changed.
+function decodeJsonStringBody(
+  raw: string,
+  start: number,
+): { text: string; closed: boolean; end: number } {
+  let out = ''
+  let i = start
+  while (i < raw.length) {
+    const ch = raw[i]
+    if (ch === '"') {
+      return { text: out, closed: true, end: i + 1 }
+    }
+    if (ch === '\\') {
+      // Need at least one char after the backslash to know the
+      // escape. If it's not here yet, stop — drop the lone `\`.
+      if (i + 1 >= raw.length) {
+        return { text: out, closed: false, end: i }
+      }
+      const esc = raw[i + 1]
+      if (esc === 'u') {
+        // \uXXXX needs 4 hex digits. If fewer have arrived, stop
+        // before the `\u` so the partial escape isn't shown raw.
+        const hex = raw.slice(i + 2, i + 6)
+        if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) {
+          return { text: out, closed: false, end: i }
+        }
+        out += String.fromCharCode(parseInt(hex, 16))
+        i += 6
+        continue
+      }
+      const mapped = SIMPLE_ESCAPES[esc]
+      // Unknown escape: keep the literal char (lenient — a malformed
+      // escape from the model shouldn't blank the whole preview).
+      out += mapped ?? esc
+      i += 2
+      continue
+    }
+    out += ch
+    i += 1
+  }
+  return { text: out, closed: false, end: i }
 }
 
 // Advance past JSON whitespace.
@@ -88,14 +135,9 @@ export function extractStreamingWriteInput(inputJson: string): StreamingWriteInp
   const raw = inputJson
   if (!raw) return EMPTY
 
-  // All structural walking uses this bounded prefix. Content gets its own
-  // larger, still-fixed window once its opening quote is located.
-  const headerEnd = Math.min(raw.length, STREAMING_WRITE_HEADER_SCAN_CHARS)
-  const header = raw.slice(0, headerEnd)
-
   // `{`
-  let i = skipWs(header, 0)
-  if (header[i] !== '{') return EMPTY
+  let i = skipWs(raw, 0)
+  if (raw[i] !== '{') return EMPTY
   i += 1
 
   // Walk object members in WHATEVER ORDER they arrive. The earlier
@@ -110,12 +152,11 @@ export function extractStreamingWriteInput(inputJson: string): StreamingWriteInp
   // simply ignored.
   let filePath: string | null = null
   let partialContent: string | null = null
-  let previewTruncated = false
 
-  while (i < header.length) {
-    i = skipWs(header, i)
-    if (i >= header.length) break
-    const ch = header[i]
+  while (i < raw.length) {
+    i = skipWs(raw, i)
+    if (i >= raw.length) break
+    const ch = raw[i]
     if (ch === '}') break
     // Tolerate the comma between members (and a stray leading one).
     if (ch === ',') {
@@ -127,85 +168,39 @@ export function extractStreamingWriteInput(inputJson: string): StreamingWriteInp
     // point yet. Stop; the next delta will carry more.
     if (ch !== '"') break
 
-    const key = decodePartialJsonStringBody(header, i + 1)
+    const key = decodeJsonStringBody(raw, i + 1)
     // Key literal still streaming → can't know what member this is.
     if (!key.closed) break
     i = key.end
 
-    i = skipWs(header, i)
-    if (header[i] !== ':') break
+    i = skipWs(raw, i)
+    if (raw[i] !== ':') break
     i += 1
-    i = skipWs(header, i)
+    i = skipWs(raw, i)
 
     // Write's only two args (`file_path`, `content`) are both
     // strings, so a value that doesn't open with `"` is either not
     // here yet or a key we don't care about with a non-string
     // value. Either way we can't reliably skip an arbitrary JSON
     // value with this minimal scanner — stop.
-    if (header[i] !== '"') break
+    if (raw[i] !== '"') break
 
-    if (key.value === 'content') {
-      const valueStart = i + 1
-      const contentEnd = Math.min(
-        raw.length,
-        valueStart + STREAMING_WRITE_PREVIEW_RAW_CHARS,
-      )
-      // Slice from zero so decoder.end remains an absolute index and a short,
-      // closed content-first value can continue to a following path member.
-      const boundedInput = raw.slice(0, contentEnd)
-      const value = decodePartialJsonStringBody(boundedInput, valueStart)
-      const capped = capPreviewLines(value.value)
-      partialContent = capped.content
-      previewTruncated =
-        capped.truncated || (!value.closed && raw.length > contentEnd)
-
-      // A capped/open content value may have gigabytes after `contentEnd`; never
-      // search that tail for another member. A short closed value can continue
-      // only while it remains inside the structural header window.
-      if (!value.closed || value.end >= header.length) break
-      i = value.end
-      continue
-    }
-
-    const value = decodePartialJsonStringBody(header, i + 1)
-    if (key.value === 'file_path' || key.value === 'filePath' || key.value === 'path') {
-      // A path is only surfaced once its literal is fully closed
+    const value = decodeJsonStringBody(raw, i + 1)
+    if (key.text === 'file_path') {
+      // file_path is only surfaced once its literal is fully closed
       // — a half path would flicker in the header on every delta.
-      if (value.closed) filePath = value.value
+      if (value.closed) filePath = value.text
+    } else if (key.text === 'content') {
+      // content is surfaced PARTIAL on purpose — the in-flight value
+      // is the whole point of the live preview.
+      partialContent = value.text
     }
 
-    // An unterminated non-content value at the end of the bounded header may
-    // continue far beyond it. Report the cap instead of silently presenting a
-    // normal-looking empty preview.
-    if (!value.closed) {
-      previewTruncated = raw.length > headerEnd
-      break
-    }
+    // Value still streaming → it's the last member in the buffer;
+    // nothing after it to scan.
+    if (!value.closed) break
     i = value.end
   }
 
-  if (i >= header.length && raw.length > headerEnd && partialContent === null) {
-    previewTruncated = true
-  }
-
-  return { filePath, partialContent, previewTruncated }
-}
-
-function capPreviewLines(content: string): {
-  content: string
-  truncated: boolean
-} {
-  let newlineCount = 0
-  for (let index = 0; index < content.length; index += 1) {
-    if (content[index] !== '\n') continue
-    newlineCount += 1
-    if (newlineCount === STREAMING_WRITE_PREVIEW_LINES) {
-      const end = index + 1
-      return {
-        content: content.slice(0, end),
-        truncated: end < content.length,
-      }
-    }
-  }
-  return { content, truncated: false }
+  return { filePath, partialContent }
 }

@@ -383,7 +383,6 @@ export function NewAgentPlacementOverlay({
   return (
     <div
       ref={overlayRef}
-      data-agent-code-interaction-owner="app"
       className="absolute inset-0 z-40 bg-black/20"
     >
       {selectedKind && placementTarget && (

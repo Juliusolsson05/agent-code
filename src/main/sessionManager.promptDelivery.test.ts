@@ -9,14 +9,10 @@ describe('SessionManager prompt delivery reservation', () => {
     const acceptance = new Promise<PromptAcceptanceOutcome>(resolve => {
       resolveAcceptance = resolve
     })
-    let screen = '❯'
-    const write = vi.fn((data: string) => {
-      if (data !== '\r') screen = `❯ ${data}`
-    })
+    const write = vi.fn()
     const session = {
       write,
       isExited: () => false,
-      snapshotScreen: () => screen,
       armPromptAcceptance: () => ({ promise: acceptance, cancel: vi.fn() }),
     }
     const manager = new SessionManager()
@@ -40,12 +36,8 @@ describe('SessionManager prompt delivery reservation', () => {
       retrySafe: true,
       promptWritten: false,
     })
-    // WHY two writes: current Claude swallows a CR coalesced with prompt bytes
-    // in some long-lived sessions. Delivery must prove the prompt reached the
-    // active composer before crossing the separate Enter boundary.
-    expect(write).toHaveBeenCalledTimes(2)
-    expect(write).toHaveBeenNthCalledWith(1, 'first')
-    expect(write).toHaveBeenNthCalledWith(2, '\r')
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write).toHaveBeenCalledWith('first\r')
 
     resolveAcceptance({ kind: 'user', acceptedAt: 123 })
     await expect(first).resolves.toMatchObject({ ok: true })
@@ -80,13 +72,9 @@ describe('SessionManager prompt delivery reservation', () => {
 
   it('releases the reservation when provider setup throws', async () => {
     let attempts = 0
-    let screen = '❯'
     const session = {
-      write: vi.fn((data: string) => {
-        if (data !== '\r') screen = `❯ ${data}`
-      }),
+      write: vi.fn(),
       isExited: () => false,
-      snapshotScreen: () => screen,
       armPromptAcceptance: () => {
         attempts += 1
         if (attempts === 1) throw new Error('probe failed')
@@ -113,7 +101,6 @@ describe('SessionManager prompt delivery reservation', () => {
     const session = {
       write: vi.fn(() => { throw new Error('pty boundary failed') }),
       isExited: () => false,
-      snapshotScreen: () => '❯',
       resolveCondition,
       armPromptAcceptance: () => ({ promise: acceptance, cancel: vi.fn() }),
     }
@@ -132,10 +119,7 @@ describe('SessionManager prompt delivery reservation', () => {
       ok: false,
       retrySafe: false,
       promptWritten: true,
-      // The first prompt write itself threw, so Enter was never attempted.
-      // It is still unsafe to retry because node-pty cannot tell us whether
-      // some prompt bytes crossed the native boundary before the exception.
-      enterWritten: false,
+      enterWritten: true,
     })
     release({ kind: 'cancelled' })
   })

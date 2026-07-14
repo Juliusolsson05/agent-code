@@ -598,7 +598,6 @@ export function TileLeaf({
         conditions={runtime.conditions}
         onSend={send}
         onResolveCustom={(action) => feed.resolveCondition(sessionId, action)}
-        interactionActive={focused}
       />
 
       <PaneToast message={runtime.paneToast} />
