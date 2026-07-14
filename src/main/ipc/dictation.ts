@@ -9,11 +9,6 @@ import {
   configureDictationHotkey,
   unregisterDictationHotkey,
 } from '@main/dictation/hotkey.js'
-import {
-  getDeepgramApiKeyStatus,
-  readDeepgramApiKeyForRuntime,
-  setDeepgramApiKey,
-} from '@main/dictation/apiKeyStore.js'
 import { sendToMainWindow } from '@main/window/mainWindow.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
 import type { DictationDebugJournalRegistry } from '@main/dictationJournal.js'
@@ -86,27 +81,6 @@ export function registerDictationIpc(deps: {
       .append({ layer, event, ...(data !== undefined ? { data } : {}) })
   }
 
-  // Voice-dictation API key management. Reads never return the raw key —
-// only a masked hint — so IPC transcripts and dev tooling never leak the
-// credential even when logging is verbose. Writes go through safeStorage
-// via apiKeyStore.ts; see that file for the full storage rationale.
-  ipcMain.handle('dictation:api-key-status', async () => getDeepgramApiKeyStatus())
-  ipcMain.handle('dictation:api-key-set', async (_evt, params: { key?: string }) => {
-    try {
-      const status = await setDeepgramApiKey(params.key ?? '')
-      return { ok: true, status }
-    } catch (err) {
-      // Same pattern as hotkey-configure: bubble the reason back to the
-      // renderer so the settings row can render an inline error instead of
-      // pretending success.
-      return {
-        ok: false,
-        message:
-          err instanceof Error ? err.message : 'Could not store the Deepgram API key.',
-      }
-    }
-  })
-
   ipcMain.handle('dictation:hotkey-configure', async (_evt, params: { binding?: string }) => {
     try {
       const result = await configureDictationHotkey(params.binding ?? '')
@@ -168,15 +142,14 @@ export function registerDictationIpc(deps: {
         return { kind: 'error', message: 'Only Deepgram streaming is wired in Agent Code v1.' }
       }
 
-      const apiKey = await readDeepgramApiKeyForRuntime()
+      const apiKey = readDeepgramApiKey()
       if (!apiKey) {
         emit(debugSessionId, 'ERROR', 'stream-start:rejected', {
           reason: 'missing-api-key',
         })
         return {
           kind: 'error',
-          message:
-            'No Deepgram API key configured. Open Settings → Voice Dictation and paste a key.',
+          message: 'Missing DEEPGRAM_API_KEY. Add it to Agent Code .env or the shell environment.',
         }
       }
 
@@ -484,10 +457,7 @@ export function cleanupDictationIpcResources(): void {
   activeSessions.clear()
 }
 
-// WHY the old readDeepgramApiKey() env-only helper is gone:
-//
-// Prior to safeStorage backing, packaged Agent Code silently failed
-// dictation because Finder-launched apps do not inherit a shell PATH or
-// exported env. Settings-configured keys now live in
-// src/main/dictation/apiKeyStore.ts; env is honoured first only as a dev
-// override. All call sites go through readDeepgramApiKeyForRuntime.
+function readDeepgramApiKey(): string | null {
+  const value = process.env.DEEPGRAM_API_KEY?.trim()
+  return value ? value : null
+}

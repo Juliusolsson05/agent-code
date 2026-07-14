@@ -1,14 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
 import type { AgentViewMode } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { AgentViewModeOverride, SessionId } from '@renderer/workspace/types'
@@ -76,9 +67,12 @@ export function AgentViewModePickerModal({
   useEffect(() => {
     if (open && !wasOpenRef.current) {
       setCursor(currentValue)
+      requestAnimationFrame(() => dialogRef.current?.focus())
     }
     wasOpenRef.current = open
   }, [currentValue, open])
+
+  if (!open) return null
 
   const cursorIndex = Math.max(0, options.findIndex(option => option.value === cursor))
   const pick = (value: PickerValue) => {
@@ -110,20 +104,23 @@ export function AgentViewModePickerModal({
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={nextOpen => {
-        if (!nextOpen) onClose()
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-canvas/80 backdrop-blur-sm"
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) onClose()
       }}
     >
-      <DialogContent
+      <div
         ref={dialogRef}
         tabIndex={-1}
-        onOpenAutoFocus={event => {
-          event.preventDefault()
-          dialogRef.current?.focus()
-        }}
         onKeyDown={e => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            onClose()
+            return
+          }
           if (e.key === 'ArrowUp') {
             e.preventDefault()
             moveCursor(-1)
@@ -139,18 +136,18 @@ export function AgentViewModePickerModal({
             pick(cursor)
           }
         }}
-        className="w-[500px] max-w-[calc(100vw-64px)]"
+        className="w-[500px] max-w-[calc(100vw-64px)] bg-surface border border-border-hi p-5 outline-none"
       >
-        <DialogHeader>
-          <DialogTitle className="font-semibold">Agent View Mode</DialogTitle>
-          <DialogDescription>
-            {isAgent
-              ? `${provider.name} session`
-              : 'Only agent sessions can override the view mode.'}
-          </DialogDescription>
-        </DialogHeader>
+        <div className="text-[13px] font-semibold text-ink mb-1">
+          Agent View Mode
+        </div>
+        <div className="text-[11px] text-muted mb-4">
+          {isAgent
+            ? `${provider.name} session`
+            : 'Only agent sessions can override the view mode.'}
+        </div>
 
-        <div className="mx-4 my-4 border border-border bg-canvas">
+        <div className="border border-border bg-canvas">
           {options.map(option => {
             const selected = option.value === currentValue
             const focused = option.value === cursor
@@ -186,17 +183,17 @@ export function AgentViewModePickerModal({
           })}
         </div>
 
-        <DialogFooter>
-          <Button
+        <div className="flex justify-end gap-2 mt-4">
+          <button
             type="button"
             onClick={onClose}
-            variant="outline"
+            className="px-4 py-1.5 text-[12px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
           >
             Cancel
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

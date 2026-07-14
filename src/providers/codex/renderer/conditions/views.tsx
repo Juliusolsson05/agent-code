@@ -52,7 +52,7 @@ export const approvalView = defineView<'codex.approval', CodexApprovalState>({
   // Approval is an action-demanding prompt → ACTION, matching selectors.ts
   // (codex.approval → 'ACTION').
   attention: () => 'ACTION',
-  Component: ({ state, dispatch, interactionActive }) => (
+  Component: ({ state, dispatch }) => (
     <CodexApprovalModal
       approval={
         state
@@ -69,7 +69,6 @@ export const approvalView = defineView<'codex.approval', CodexApprovalState>({
           : null
       }
       onSend={(data) => dispatch(raw(data))}
-      interactionActive={interactionActive}
     />
   ),
 })

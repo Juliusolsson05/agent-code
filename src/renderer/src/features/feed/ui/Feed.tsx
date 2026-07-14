@@ -3,10 +3,14 @@ import {
   type TaskNotification,
 } from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
+import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,
+  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react'
 
 import {
@@ -17,8 +21,11 @@ import type {
   SemanticLiveTurn,
   StreamPhase,
 } from '@renderer/session-runtime/state'
+import { WorkIndicator } from '@renderer/features/feed/WorkIndicator'
 import { toolHintFromTurn } from '@renderer/features/feed/workIndicatorHints'
 import {
+  ProviderContext,
+  ToolUseIndexContext,
   ToolResultIndexContext,
   CodeRenderContext,
   SubAgentsContext,
@@ -29,27 +36,32 @@ import {
   type ScrollInfo,
   type DebugVisibleRow,
 } from '@renderer/features/feed/types'
+import { scrollPositions } from '@renderer/features/feed/scroll'
 import {
   buildToolUseIndex,
   buildToolResultIndex,
+  debugLabelForEntry,
 } from '@renderer/features/feed/lib/helpers'
 import {
   feedRenderModelFromItems,
   type FeedRenderItem,
 } from '@renderer/features/feed/model/renderModel'
+import {
+  SemanticLiveBlockRow,
+  SemanticCollapsedActivityRow,
+} from '@renderer/features/feed/ui/semantic'
+import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import { semanticTurnScrollSignal } from '@renderer/session-runtime/semantic/helpers'
-import { useFeedDebugEmission } from '@renderer/features/feed/ui/hooks/useFeedDebugEmission'
-import { usePickerAutoScroll } from '@renderer/features/feed/ui/hooks/usePickerAutoScroll'
-import { useScrollFeedBehaviors } from '@renderer/features/feed/ui/hooks/useScrollFeedBehaviors'
 import {
   EAGER_TAIL,
+  EntryRow,
   LazyEntry,
 } from '@renderer/features/feed/ui/rows'
-import { projectFeedPresentation } from '@renderer/features/feed/presentation/projectFeed'
-import { PresentationRow } from '@renderer/features/feed/ui/operations/PresentationRow'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
+import * as perf from '@renderer/performance/client'
 
 // Re-export — many external callers import these types from Feed
 // directly rather than reaching into ../types/../context. Keep the
@@ -88,10 +100,11 @@ export type { AgentProvider, ScrollInfo } from '@renderer/features/feed/types'
 // creep back under the marker. Standard hanging-indent pattern.
 // -----------------------------------------------------------------------------
 
-// Session-wide result/subagent/question/code metadata lives in context.tsx.
-// Provider identity, source pairing, and operation family are structural fields
-// on the pure presentation projection; putting those back in context would
-// recreate the implicit two-plane dispatch this rewrite removed.
+// COMPLETED_REMARK / STREAMING_REMARK moved to ../lib/remark-plugins.ts
+// ProviderContext + ToolUseIndexContext + ToolResultIndexContext +
+// CodeRenderContext moved to ../context.tsx — see those files for
+// the full rationale. Feed.tsx re-exports CodeRenderContext above
+// to keep external import paths stable.
 
 // MarkdownPre / MarkdownCode / MARKDOWN_COMPONENTS moved to
 // ./markdown/MarkdownComponents.tsx. TextProse and StreamingProse
@@ -108,7 +121,7 @@ export type { AgentProvider, ScrollInfo } from '@renderer/features/feed/types'
 type Props = {
   /** Session identity — used as the key for per-session scroll
    *  position persistence across Feed unmount/remount (tab switches).
-   *  See ui/hooks/useScrollFeedBehaviors.ts (`scrollPositions`). */
+   *  See `scrollPositions` below. */
   sessionId: string
   /** Which provider's row renderers to use. Default 'claude'. */
   provider?: AgentProvider
@@ -249,21 +262,23 @@ type Props = {
 //      and semantic-turn references, and React.memo's default shallow
 //      compare bails the entire subtree out. Zero markdown work happens.
 //
-//   2. Expensive leaves (`TextProse`, artifact bodies, code surfaces) remain
-//      memoized, and PresentationRow uses a semantic comparator rather than
-//      trusting the projector to preserve object identity. The projector is a
-//      pure derivation, so it intentionally returns fresh VMs; comparing their
-//      stable source evidence keeps old committed rows cold while one live
-//      operation advances. This matters because the feed can contain hundreds
-//      of restored rows beside one token-level stream.
+//   2. Every row component (`EntryRow`, `ConversationRow`, `TextProse`,
+//      `ToolUseRow`, `ToolResultRow`) is individually memoized. Even when
+//      Feed DOES need to re-render (new entry lands, streaming frame
+//      ticks), existing rows receive the exact same entry/block/text
+//      reference they had last time and skip. Only the genuinely new
+//      row does parse work. This matters because entries are appended,
+//      not replaced — we spread `[...current.entries, newOne]`, so the
+//      array reference is fresh but every existing element is stable.
 //
 // TextProse/StreamingProse are the hottest leaf; memoizing them by the
 // `text` string is the single biggest win because ReactMarkdown itself
 // has no memo and re-parses on every call.
 //
-// Live semantic evidence remains separate until the frozen ownership layer
-// hands it to the presentation projector. Only the advancing projected node
-// should invalidate; committed siblings must not inherit stream cadence.
+// Live semantic rows are not flattened into committed entries on purpose.
+// They re-render when the semantic reducer changes the active/history
+// turns, but the markdown leaf (`StreamingProse`) is still memoed by
+// text so identical consecutive semantic ticks are cheap.
 
 export const Feed = memo(FeedImpl)
 
@@ -297,47 +312,420 @@ function FeedImpl({
   onDebugLog,
 }: Props) {
   // Scroll container owned by Feed itself — not by TileLeaf — so the
-  // sticky-bottom logic can own its own scroll listener without
+  // sticky-bottom logic below can own its own scroll listener without
   // reaching up the tree. TileLeaf's wrapper is just a flex cell and
   // no longer sets overflow-auto; see TileLeaf.tsx for the pair.
   //
-  // The scarred scroll/picker behaviors (sticky-bottom follow, mount
-  // restore, older-history load, bootstrap pin-once, scroll-to-latest,
-  // both picker tweens) are PORTED VERBATIM into ui/hooks/ — see
-  // useScrollFeedBehaviors.ts and usePickerAutoScroll.ts for every
-  // original WHY comment. Feed owns only the refs the JSX needs.
+  // Why this is load-bearing: active semantic turns can update many
+  // times per second. A naive "scroll to bottom on every render" effect
+  // yanks the viewport down whenever text/tool deltas arrive, making it
+  // impossible for the user to scroll up and read earlier content.
+  // Worth preserving the original production diagnosis: "scrolling
+  // doesn't even work, it snaps me back to the bottom super glitchly."
+  // That's exactly the behavior the old unconditional effect produced.
+  //
+  // The fix is two-part:
+  //   1. Track "is the user near the bottom right now" in a ref
+  //      that's updated by a scroll listener. "Near" = within 48px
+  //      of the bottom; the pad absorbs sub-pixel rounding and the
+  //      natural momentum overshoot when new rows land.
+  //   2. Only auto-scroll when the ref is true. If the user has
+  //      scrolled up, stickyBottom becomes false, and subsequent
+  //      updates stop forcing the viewport down. When the user
+  //      scrolls back to the bottom, the ref flips true again and
+  //      auto-scroll resumes.
+  //
+  // Using a ref (not state) for stickyBottom is deliberate: we don't
+  // want a React re-render on every scroll tick, only a read in the
+  // auto-scroll effect. Scroll events fire on EVERY pixel, so this
+  // matters.
   const scrollerRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  // Restore stickyBottom from the persisted map on first render so
+  // the auto-scroll effect below makes the right decision without
+  // needing to wait for the scroll listener to run. Defaults to
+  // true for brand-new sessions (no saved position yet).
+  const stickyBottomRef = useRef(
+    scrollPositions.get(sessionId)?.stickyBottom ?? true,
+  )
+  const loadingOlderRef = useRef(false)
+  // Was there an existing saved scroll position for this session when
+  // this Feed instance mounted? Used to distinguish "restore the
+  // user's deliberate scrolled-up position" from "brand-new/resumed
+  // session should land at latest content even if stickyBottom got
+  // transiently knocked false during bootstrap."
+  const hadSavedPositionOnMountRef = useRef(scrollPositions.has(sessionId))
+  // Previous scrollTop, used to distinguish "the user started
+  // scrolling upward" from incidental near-bottom jitter. This is
+  // load-bearing during active turns: with the old "gap < 48"
+  // heuristic alone, a tiny upward wheel tick still counted as
+  // sticky, and the next ~60 Hz screen update snapped the feed right
+  // back down before the user could accumulate enough distance to
+  // escape. Any real upward movement should break follow
+  // immediately; re-follow only when the user intentionally returns
+  // near the bottom.
+  const lastScrollTopRef = useRef(0)
 
-  // Cheap fingerprints of the current semantic turn and bounded
-  // semantic history so the sticky-bottom effect re-runs when semantic
-  // deltas land, not only when committed entries append (feed audit
-  // Finding 2 — per-block growth folded in via semanticTurnScrollSignal).
+  // Restore the saved scroll position on mount — synchronously, via
+  // useLayoutEffect, so the browser never paints the scroller at
+  // scrollTop=0 before we restore. Using useEffect here would flash
+  // the top of the feed for one frame before the restore landed.
+  //
+  // Three cases:
+  //   1. No saved entry → this is the first time we've mounted for
+  //      this session (or the map was just cleared). Default to
+  //      "stuck at bottom" — for a freshly-opened feed the user
+  //      wants to see the most recent content, just like opening a
+  //      terminal or a chat window.
+  //   2. Saved stickyBottom: true → the user was at the bottom when
+  //      they left. Content may have grown while we were unmounted
+  //      (new entries appended to runtime.entries even though Feed
+  //      wasn't rendering), so we pin to the NEW scrollHeight, not
+  //      the old scrollTop.
+  //   3. Saved stickyBottom: false → restore the exact saved
+  //      scrollTop. Content height on remount matches save time
+  //      (because unmount freezes new entries from growing the
+  //      unmounted scroller) so this is pixel-accurate.
+  //
+  // The sessionId dep is load-bearing: if the user resumes a
+  // different session in the same pane slot, we need to re-restore
+  // from the new key. Today it's effectively a mount-only effect.
+  useLayoutEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    hadSavedPositionOnMountRef.current = scrollPositions.has(sessionId)
+    if (tailMode) {
+      el.scrollTop = el.scrollHeight
+      stickyBottomRef.current = true
+      lastScrollTopRef.current = el.scrollTop
+      return
+    }
+    const saved = scrollPositions.get(sessionId)
+    if (!saved || saved.stickyBottom) {
+      // Case 1 or 2: pin to bottom. We do this synchronously in
+      // useLayoutEffect so the browser commits the scrollTop change
+      // in the SAME paint as the initial content render. Without
+      // that, the first paint shows scrollTop=0 (top) and the next
+      // tick scrolls down — visibly a "starts at top, jumps to
+      // bottom" flash on every tab switch, which is the exact bug
+      // the user flagged.
+      el.scrollTop = el.scrollHeight
+      stickyBottomRef.current = true
+      lastScrollTopRef.current = el.scrollTop
+    } else {
+      // Case 3: restore exact position.
+      el.scrollTop = saved.scrollTop
+      stickyBottomRef.current = false
+      lastScrollTopRef.current = el.scrollTop
+    }
+  }, [sessionId, tailMode])
+
+  // One scroll listener for the container. Updates stickyBottomRef
+  // imperatively AND persists the position into the module-level
+  // map so a later unmount/remount can restore it.
+  //
+  // CRITICAL: we DO NOT call onScroll() synchronously on mount.
+  // That was the original bug — at mount time the scroller has
+  // scrollTop=0 and scrollHeight=full-content, so gap > 48 and the
+  // handler would stamp stickyBottom=false INTO THE REF AND THE
+  // PERSISTED MAP before the layout effect above had a chance to
+  // scroll to the bottom. Then the auto-scroll effect below would
+  // see stickyBottom=false and skip, leaving the viewport stuck at
+  // the top. The layout effect sets stickyBottomRef explicitly, so
+  // the scroll listener only needs to react to actual user scrolls.
+  useEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    const onScroll = () => {
+      if (tailMode) {
+        el.scrollTop = el.scrollHeight
+        stickyBottomRef.current = true
+        lastScrollTopRef.current = el.scrollTop
+        scrollPositions.set(sessionId, {
+          scrollTop: el.scrollTop,
+          stickyBottom: true,
+        })
+        if (onScrollInfo) onScrollInfo({ fraction: 0 })
+        return
+      }
+      const gap = el.scrollHeight - (el.scrollTop + el.clientHeight)
+      const scrollingUp = el.scrollTop < lastScrollTopRef.current
+      const nearBottom = gap < 48
+      stickyBottomRef.current =
+        scrollingUp && gap > 0 ? false : nearBottom
+      lastScrollTopRef.current = el.scrollTop
+      scrollPositions.set(sessionId, {
+        scrollTop: el.scrollTop,
+        stickyBottom: stickyBottomRef.current,
+      })
+      // Push scroll position to parent for the scroll indicator.
+      // fraction=0 at bottom, fraction=1 at top.
+      if (onScrollInfo) {
+        const maxScroll = el.scrollHeight - el.clientHeight
+        const fraction = maxScroll > 0
+          ? 1 - (el.scrollTop / maxScroll)
+          : 0
+        onScrollInfo({ fraction })
+      }
+
+      if (
+        el.scrollTop < 160 &&
+        hasOlderHistory &&
+        !loadingOlderHistory &&
+        !loadingOlderRef.current &&
+        !tailMode &&
+        onLoadOlderHistory
+      ) {
+        loadingOlderRef.current = true
+        const beforeHeight = el.scrollHeight
+        const beforeTop = el.scrollTop
+        void onLoadOlderHistory()
+          .then(() => {
+            requestAnimationFrame(() => {
+              const next = scrollerRef.current
+              if (!next) return
+              const delta = next.scrollHeight - beforeHeight
+              next.scrollTop = beforeTop + Math.max(0, delta)
+              lastScrollTopRef.current = next.scrollTop
+            })
+          })
+          .finally(() => {
+            loadingOlderRef.current = false
+          })
+      }
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [
+    sessionId,
+    onScrollInfo,
+    tailMode,
+    hasOlderHistory,
+    loadingOlderHistory,
+    onLoadOlderHistory,
+  ])
+
+  // Auto-scroll on content changes, but ONLY when sticky. The effect
+  // runs on every change that would grow the feed (a new committed
+  // entry) or move the semantic streaming tail. If the
+  // user is scrolled up, we skip — they're reading earlier content
+  // and we don't want to yank them back.
+  //
+  // Include cheap fingerprints of the current semantic turn and
+  // bounded semantic history so the effect re-runs when semantic
+  // deltas land, not only when committed entries append.
+  // WHY semanticTurnScrollSignal and not just turnId:text.length:blockCount
+  // (feed audit Finding 2): the old signal missed per-block streaming growth
+  // (tool output / thinking / reasoning deltas inside an existing block), so the
+  // sticky-bottom effect below would not re-pin while a row visibly grew. The
+  // helper folds in each block's content lengths and status so this effect fires
+  // on the common streaming path. It is a scroll-invalidation token only.
   const semanticTurnSignal = semanticTurn ? semanticTurnScrollSignal(semanticTurn) : ''
   const semanticHistorySignal = semanticHistory
     .map(semanticTurnScrollSignal)
     .join('|')
+  useEffect(() => {
+    // During a bulk bootstrap burst we skip per-append auto-scroll.
+    // The pin-once-on-transition effect below lands us at the bottom
+    // in a single operation after the burst ends — otherwise every
+    // entry appended during the burst would pin-scroll and wake up
+    // the LazyEntry observer cascade. See docs/superpowers/plans/
+    // 2026-04-15-bootstrap-replay-perf.md.
+    if (bootstrapping) return
+    if (!tailMode && !stickyBottomRef.current) return
+    // scrollTop = scrollHeight pins to bottom without the smooth-scroll
+    // overshoot scrollIntoView sometimes produces. Direct, instant,
+    // no animation frames.
+    const el = scrollerRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [entries.length, tailMode, semanticTurnSignal, semanticHistorySignal, bootstrapping])
 
-  const { cancelTween } = usePickerAutoScroll({
-    scrollerRef,
-    pickerSelectedUuid,
-    codeBlockSelectedId,
-  })
-  useScrollFeedBehaviors({
-    scrollerRef,
-    sessionId,
-    tailMode,
-    bootstrapping,
-    entriesLength: entries.length,
-    semanticTurnSignal,
-    semanticHistorySignal,
-    hasOlderHistory,
-    loadingOlderHistory,
-    onLoadOlderHistory,
-    onScrollInfo,
-    scrollToLatestRequest,
-    cancelPickerTween: cancelTween,
-  })
+  // Pin-once on the bootstrap → live transition. Runs exactly once per
+  // transition thanks to the previous-value ref: we read the prior
+  // value, compare, pin if we just left bootstrap mode, then store the
+  // new value for next time. No dependency on `entries.length` so the
+  // effect does not fire on subsequent live appends — those go
+  // through the regular auto-scroll effect above.
+  const prevBootstrappingRef = useRef(false)
+  useEffect(() => {
+    if (prevBootstrappingRef.current && !bootstrapping) {
+      const el = scrollerRef.current
+      // Fresh/resumed sessions with no saved scroll position should
+      // ALWAYS land on the latest content after the bootstrap burst.
+      // Relying purely on stickyBottomRef here is fragile because the
+      // initial mount/placeholder/lazy-load sequence can transiently
+      // mark the feed non-sticky before the first real user scroll.
+      // That leaves the viewport stranded above the eager tail: the
+      // exact "blank until I scroll down a couple pages" symptom.
+      const shouldForceInitialBottom =
+        !hadSavedPositionOnMountRef.current && !tailMode
+      if (el && (tailMode || stickyBottomRef.current || shouldForceInitialBottom)) {
+        el.scrollTop = el.scrollHeight
+        stickyBottomRef.current = true
+        lastScrollTopRef.current = el.scrollTop
+        scrollPositions.set(sessionId, {
+          scrollTop: el.scrollTop,
+          stickyBottom: true,
+        })
+        if (onScrollInfo) onScrollInfo({ fraction: 0 })
+      }
+    }
+    prevBootstrappingRef.current = bootstrapping
+  }, [bootstrapping, onScrollInfo, sessionId, tailMode])
+
+  // When the picker selection changes, smoothly tween the scroller
+  // so the highlighted entry centers in the viewport.
+  //
+  // We do NOT use native scrollIntoView({behavior:'smooth'}) because:
+  //   - With block:'nearest' it no-ops when the target is already on
+  //     screen, so rapid arrow presses after a manual scroll land on
+  //     already-visible entries and produce zero motion (user report:
+  //     "my arrow key does nothing after I scroll").
+  //   - With block:'center' native smooth scroll was observably shaky
+  //     here — the feed's own scroll listener fires on every frame of
+  //     the animation and was fighting the browser's scroll queue.
+  //
+  // A custom rAF tween is ~20 lines, interrupt-safe (new target
+  // cancels any in-flight animation), and completely independent of
+  // whatever the scroll listener is doing.
+  const scrollAnimFrameRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!pickerSelectedUuid) return
+    const root = scrollerRef.current
+    if (!root) return
+    const target = root.querySelector(
+      `[data-entry-uuid="${pickerSelectedUuid}"]`,
+    ) as HTMLElement | null
+    if (!target) return
+
+    // Compute desired scrollTop so the target's vertical center aligns
+    // with the scroller's vertical center. Clamp to the scroller's
+    // scrollable range so we don't try to scroll past start/end.
+    const targetCenter = target.offsetTop + target.offsetHeight / 2
+    const desired = targetCenter - root.clientHeight / 2
+    const maxScroll = root.scrollHeight - root.clientHeight
+    const to = Math.max(0, Math.min(maxScroll, desired))
+    const from = root.scrollTop
+    const distance = to - from
+    if (Math.abs(distance) < 1) return
+
+    // Cancel any in-flight animation so rapid Up/Down presses don't
+    // compound into a runaway scroll.
+    if (scrollAnimFrameRef.current !== null) {
+      cancelAnimationFrame(scrollAnimFrameRef.current)
+      scrollAnimFrameRef.current = null
+    }
+
+    const duration = 180
+    const startTime = performance.now()
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3) // easeOutCubic
+
+    const step = (now: number) => {
+      const elapsed = now - startTime
+      const t = Math.min(1, elapsed / duration)
+      root.scrollTop = from + distance * ease(t)
+      if (t < 1) {
+        scrollAnimFrameRef.current = requestAnimationFrame(step)
+      } else {
+        scrollAnimFrameRef.current = null
+      }
+    }
+    scrollAnimFrameRef.current = requestAnimationFrame(step)
+
+    return () => {
+      if (scrollAnimFrameRef.current !== null) {
+        cancelAnimationFrame(scrollAnimFrameRef.current)
+        scrollAnimFrameRef.current = null
+      }
+    }
+  }, [pickerSelectedUuid])
+
+  // Copy Code Block picker — highlight + scroll the selected block.
+  //
+  // WHY a separate effect from the assistant-entry one above, and why
+  // the outline is applied imperatively here rather than as a JSX
+  // class: the assistant picker highlights an ENTRY, and Feed already
+  // renders a wrapper <div data-entry-uuid> per entry that it can add
+  // an outline class to in JSX. A code block is a `CodeBlock` buried
+  // deep inside rendered markdown / tool rows — there is no per-block
+  // wrapper Feed controls. So we locate the block by its
+  // `data-code-block-id` and toggle the outline classes on the node
+  // directly; the cleanup removes them.
+  //
+  // The outline class list is the SAME tokens the entry picker uses
+  // (line ~881) — keeping them identical means Tailwind's static
+  // scan already emits the CSS, so `classList.add` is safe.
+  //
+  // Shares `scrollAnimFrameRef` with the assistant-picker scroll so a
+  // tween from one picker is cancelled if the other starts; only one
+  // picker is ever active at a time, so they never genuinely race.
+  useEffect(() => {
+    if (!codeBlockSelectedId) return
+    const root = scrollerRef.current
+    if (!root) return
+    const target = root.querySelector(
+      `[data-code-block-id="${codeBlockSelectedId}"]`,
+    ) as HTMLElement | null
+    if (!target) return
+
+    const outline = ['outline', 'outline-2', 'outline-accent', 'outline-offset-2']
+    target.classList.add(...outline)
+
+    // Center the block in the scroller — same rAF tween as the
+    // assistant-picker scroll effect (native smooth-scroll fought the
+    // feed's own scroll listener; see the long note on that effect).
+    const targetCenter = target.offsetTop + target.offsetHeight / 2
+    const desired = targetCenter - root.clientHeight / 2
+    const maxScroll = root.scrollHeight - root.clientHeight
+    const to = Math.max(0, Math.min(maxScroll, desired))
+    const from = root.scrollTop
+    const distance = to - from
+    if (Math.abs(distance) >= 1) {
+      if (scrollAnimFrameRef.current !== null) {
+        cancelAnimationFrame(scrollAnimFrameRef.current)
+        scrollAnimFrameRef.current = null
+      }
+      const duration = 180
+      const startTime = performance.now()
+      const ease = (t: number) => 1 - Math.pow(1 - t, 3)
+      const step = (now: number) => {
+        const t = Math.min(1, (now - startTime) / duration)
+        root.scrollTop = from + distance * ease(t)
+        if (t < 1) {
+          scrollAnimFrameRef.current = requestAnimationFrame(step)
+        } else {
+          scrollAnimFrameRef.current = null
+        }
+      }
+      scrollAnimFrameRef.current = requestAnimationFrame(step)
+    }
+
+    return () => {
+      target.classList.remove(...outline)
+      if (scrollAnimFrameRef.current !== null) {
+        cancelAnimationFrame(scrollAnimFrameRef.current)
+        scrollAnimFrameRef.current = null
+      }
+    }
+  }, [codeBlockSelectedId])
+
+  useEffect(() => {
+    if (scrollToLatestRequest === 0) return
+    const el = scrollerRef.current
+    if (!el) return
+    if (scrollAnimFrameRef.current !== null) {
+      cancelAnimationFrame(scrollAnimFrameRef.current)
+      scrollAnimFrameRef.current = null
+    }
+    el.scrollTop = el.scrollHeight
+    stickyBottomRef.current = true
+    lastScrollTopRef.current = el.scrollTop
+    scrollPositions.set(sessionId, {
+      scrollTop: el.scrollTop,
+      stickyBottom: true,
+    })
+    if (onScrollInfo) onScrollInfo({ fraction: 0 })
+  }, [onScrollInfo, scrollToLatestRequest, sessionId])
 
   // Index EVERY tool_use block (not just the visible set) so tool_result
   // lookups still resolve even when some synthetic entries have been
@@ -351,9 +739,9 @@ function FeedImpl({
   // reference. Returning that reference straight through means the context
   // Provider value identity never changes when only a cross-entry pairing moves
   // (a tool_result landing in a later entry for a tool_use row mounted earlier),
-  // so the presentation useMemo would otherwise keep a stale OperationVM.
-  // Cloning into a fresh Map invalidates the projector and the one durable
-  // TaskSubagent context consumer. The clone is O(N) but the dependency is
+  // so memoized rows like GitCardRow keep painting their stale running/empty
+  // state. Cloning into a fresh Map gives the context a new identity that forces
+  // those consumers to re-read. The clone is O(N) but the dependency is
   // `toolIndexVersion` (bumped only on a REAL map change), NOT `entries`, so it
   // runs once per actual tool change — not once per append. That preserves the
   // bootstrap-burst performance win this incremental index was built for.
@@ -416,64 +804,7 @@ function FeedImpl({
 
   const visibleDecisions = renderModel.visibleDecisions
   const renderItems = renderModel.items
-  // The ledger above remains the sole owner/visibility/order authority. This
-  // second pure projection is intentionally presentation-only: it pairs the
-  // already-approved live/committed evidence into stable user-intent rows and
-  // produces receipts for debug accountability. It owns no store and performs
-  // no IO, so a saved FeedRenderItem fixture reproduces the exact UI model.
-  const presentation = useMemo(
-    () => projectFeedPresentation({
-      items: renderItems,
-      provider,
-      toolUseIndex,
-      toolResultIndex,
-    }),
-    [provider, renderItems, toolResultIndex, toolUseIndex],
-  )
-  const renderedRows = useMemo<DebugVisibleRow[]>(
-    () => presentation.nodes.map(node => {
-      const slot: DebugVisibleRow['slot'] =
-        node.kind === 'system' && node.system.type === 'work'
-          ? 'work'
-          : node.kind === 'system' && node.system.type === 'empty'
-            ? 'empty'
-            : node.entryOrdinal !== null
-              ? 'entry'
-              : 'semantic'
-      const label = (() => {
-        switch (node.kind) {
-          case 'operation':
-            return `${node.operation.family} · ${node.operation.toolName} · ${node.operation.lifecycle}`
-          case 'operation-group':
-            return `collaboration · ${node.operationIds.length} agents`
-          case 'message':
-            return `${node.role} message${node.streaming ? ' (streaming)' : ''}`
-          case 'thinking':
-            return node.redacted ? 'thinking (redacted)' : `thinking${node.streaming ? ' (streaming)' : ''}`
-          case 'image':
-            return `${node.role} image`
-          case 'activity':
-            return `worked · ${node.unit.count} operations`
-          case 'fallback':
-            return `fallback · ${node.label}`
-          case 'system':
-            return node.system.type === 'entry'
-              ? `system · ${node.system.entry.type}`
-              : node.system.type === 'work'
-                ? `work · ${node.system.phase}`
-                : `waiting for ${node.system.provider}`
-        }
-      })()
-      return {
-        key: node.id,
-        slot,
-        label,
-        itemType: `presentation:${node.kind}`,
-        order: node.order,
-      }
-    }),
-    [presentation.nodes],
-  )
+  const renderedRows = renderModel.debugRows
   const visibleEntryCount = renderItems.filter(item => item.type === 'entry').length
   // #491: semantic items are now block-level (semantic-block/-collapsed-activity/
   // -text), each tagged with its turn's owner. Derive the same debug signals the
@@ -496,6 +827,7 @@ function FeedImpl({
     }
     return ids
   }, [renderItems])
+  const renderedSemanticHistorySignature = renderedSemanticHistoryTurnIds.join('\u0000')
   // The current live turn IS rendered iff any block item carries owner
   // 'semantic-current'. WorkIndicator's tool-hint reads the full turn, which
   // Feed already has as the `semanticTurn` prop — return that when present.
@@ -510,72 +842,158 @@ function FeedImpl({
     return currentOnScreen ? semanticTurn : null
   }, [renderItems, semanticTurn])
 
-  // Feed-debug emission — the "debug == paint" half of the painter,
-  // ported verbatim into ui/hooks/useFeedDebugEmission.ts.
-  useFeedDebugEmission({
-    onDebugLog,
-    entriesLength: entries.length,
-    visibleEntryCount,
-    renderedRows,
-    visibleDecisions,
-    semanticTurnId: semanticTurn?.turnId ?? null,
-    renderedSemanticHistoryTurnIds,
-    streamPhase,
-    projectionReceipts: presentation.receipts,
-  })
+  const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
+  const previousRenderDebugSignatureRef = useRef<string | null>(null)
 
-  const renderPresentationNode = (node: (typeof presentation.nodes)[number]) => {
-    // Every node uses LazyEntry, including ephemeral semantic nodes. WHY: an
-    // operation can switch from semantic evidence (no entry ordinal) to a
-    // committed entry while retaining its correlation key. Keeping the wrapper
-    // component type constant prevents that hand-off from remounting the
-    // OperationRow and losing expansion/scroll state. Semantic/work nodes are
-    // eager, so they still render immediately.
-    const eager =
-      node.entryOrdinal === null ||
-      node.entryOrdinal >= visibleEntryCount - EAGER_TAIL
-    const work = node.kind === 'system' && node.system.type === 'work'
-      ? node.system
-      : null
-    return (
-      <div
-        key={node.id}
-        data-entry-uuid={node.entryUuid ?? undefined}
-        data-presentation-kind={node.kind}
-      >
-        <LazyEntry
-          eager={eager}
-          suspended={bootstrapping}
-          scrollerRef={scrollerRef}
-        >
-          <PresentationRow
-            node={node}
-            turnStartedAt={turnStartedAt}
-            toolHint={work
-              ? toolHintFromTurn(renderedSemanticTurn, work.toolUseId)
-              : null}
+  useEffect(() => {
+    if (!onDebugLog) return
+    const previous = previousRenderedRowsRef.current
+    const renderDebugSignature = JSON.stringify({
+      entryCount: entries.length,
+      visibleEntryCount,
+      itemKeys: renderedRows.map(row => row.key),
+      semanticTurnId: semanticTurn?.turnId ?? null,
+      semanticHistoryTurnIds: renderedSemanticHistoryTurnIds,
+      streamPhase,
+    })
+    const prevKeys = new Set(previous?.map(row => row.key) ?? [])
+    const nextKeys = new Set(renderedRows.map(row => row.key))
+    const added = renderedRows.filter(row => !prevKeys.has(row.key))
+    const removed = (previous ?? []).filter(row => !nextKeys.has(row.key))
+    const hidden = visibleDecisions
+      .filter(item => !item.visible)
+      .slice(-12)
+      .map(item => ({
+        key: item.key,
+        label: debugLabelForEntry(item.entry),
+        reason: item.reason,
+      }))
+    const changed =
+      previous === null ||
+      previousRenderDebugSignatureRef.current !== renderDebugSignature ||
+      added.length > 0 ||
+      removed.length > 0 ||
+      previous.length !== renderedRows.length ||
+      previous.some((row, index) => row.key !== renderedRows[index]?.key)
+    if (!changed) return
+    onDebugLog({
+      layer: 'RENDER',
+      kind: 'visible_rows',
+      summary:
+        previous === null
+          ? `initial rows ${renderedRows.length}`
+          : `rows ${previous.length} -> ${renderedRows.length} (+${added.length} -${removed.length})`,
+      data: {
+        rows: renderedRows,
+        added,
+        removed,
+        hidden,
+        entryCount: entries.length,
+        visibleEntryCount,
+        semanticTurnId: semanticTurn?.turnId ?? null,
+        semanticHistoryTurnIds: renderedSemanticHistoryTurnIds,
+        streamPhase,
+      },
+    })
+    previousRenderedRowsRef.current = renderedRows
+    previousRenderDebugSignatureRef.current = renderDebugSignature
+  }, [entries.length, onDebugLog, renderedRows, renderedSemanticHistorySignature, renderedSemanticHistoryTurnIds, semanticTurn?.turnId, streamPhase, visibleDecisions, visibleEntryCount])
+
+  const renderFeedItem = (item: FeedRenderItem) => {
+    switch (item.type) {
+      case 'entry': {
+        const e = item.entry
+        const uuid = e.uuid
+        const selected =
+          pickerSelectedUuid != null && uuid === pickerSelectedUuid
+        // WHY eager rendering keys off committed-entry ordinal, not
+        // render-item index: semantic/work rows now live in the
+        // same ordered list, but markdown parse cost still belongs to
+        // committed entries. Counting non-entry rows here would make a
+        // busy turn accidentally lazy-mount the newest committed prompt.
+        const eager = item.entryOrdinal >= visibleEntryCount - EAGER_TAIL
+        return (
+          <div
+            key={item.key}
+            data-entry-uuid={uuid ?? undefined}
+            className={
+              selected
+                ? 'outline outline-2 outline-accent outline-offset-2 transition-[outline-color] duration-150'
+                : undefined
+            }
+          >
+            <LazyEntry
+              eager={eager}
+              suspended={bootstrapping}
+              scrollerRef={scrollerRef}
+            >
+              <EntryRow entry={e} />
+            </LazyEntry>
+          </div>
+        )
+      }
+      case 'semantic-block':
+        // #491: the ledger already decided this block is visible; the row is a
+        // pure drawer (no suppression). SemanticLiveBlockRow renders the exact
+        // per-kind streaming affordances it always did.
+        return (
+          <SemanticLiveBlockRow
+            key={item.key}
+            block={item.block}
+            toolState={item.toolState}
           />
-        </LazyEntry>
-      </div>
-    )
+        )
+      case 'semantic-collapsed-activity':
+        return <SemanticCollapsedActivityRow key={item.key} unit={item.unit} />
+      case 'semantic-text':
+        // Blockless Codex/opencode turn text — the legacy no-blocks path.
+        return (
+          <MarkerRow key={item.key} marker="⏺">
+            <StreamingProse text={item.text} />
+          </MarkerRow>
+        )
+      case 'work':
+        return (
+          <WorkIndicator
+            key={item.key}
+            phase={item.phase}
+            turnStartedAt={turnStartedAt}
+            toolName={item.toolName}
+            toolHint={toolHintFromTurn(renderedSemanticTurn, item.toolUseId)}
+          />
+        )
+      case 'empty':
+        return (
+          <div
+            key={item.key}
+            className="flex min-h-[240px] flex-1 items-center justify-center"
+          >
+            <div className="text-muted text-[12px]">
+              {`waiting for ${getRendererProviderCapabilities(item.provider).name}…`}
+            </div>
+          </div>
+        )
+    }
   }
 
   return (
+    <ProviderContext.Provider value={provider}>
+    <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
-      <SubAgentsContext.Provider value={subAgents}>
-        <TaskNotificationsContext.Provider value={taskNotifications}>
-          <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
-            <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
-              <div
-                ref={scrollerRef}
-                className="relative h-full overflow-auto @container"
-                onWheel={() => {
-                  onUserEngagement?.()
-                }}
-                onPointerDown={() => {
-                  onUserEngagement?.()
-                }}
-              >
+    <SubAgentsContext.Provider value={subAgents}>
+    <TaskNotificationsContext.Provider value={taskNotifications}>
+    <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
+    <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
+      <div
+        ref={scrollerRef}
+        className="h-full overflow-auto @container"
+        onWheel={() => {
+          onUserEngagement?.()
+        }}
+        onPointerDown={() => {
+          onUserEngagement?.()
+        }}
+      >
         {/* Container-query responsive (mobile-feed-rewrite Part A). This node
          *  is SHARED with the desktop and with narrow tiled panes, so the
          *  WIDEST step (@min-[768px]) restores the historical desktop classes
@@ -585,7 +1003,7 @@ function FeedImpl({
          *  screen. The scroller above carries `@container` so these variants
          *  respond to the FEED's own width, not the viewport — which is why a
          *  narrow desktop tile benefits identically to a phone. */}
-                <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
+        <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
           {/* ONE owner rule for every visible feed surface.
            *
            * The old JSX rendered separate buckets in a fixed order:
@@ -599,23 +1017,41 @@ function FeedImpl({
            * eagerness all share one render contract. Queued prompts
            * remain composer-adjacent because they are pending input,
            * not transcript history. */}
-                  {presentation.nodes.map(renderPresentationNode)}
-                  <div ref={endRef} />
-                </div>
-                {/* The assistant picker spans several flattened nodes without
-                    wrapping/reparenting them. This empty host is deliberately
-                    outside the keyed row list; the hook owns its one transient
-                    overlay and cleans it on selection change. */}
-                <div
-                  data-entry-selection-layer
-                  aria-hidden="true"
-                  className="pointer-events-none absolute inset-0 z-10"
-                />
-              </div>
-            </CodeRenderContext.Provider>
-          </AskUserQuestionConditionContext.Provider>
-        </TaskNotificationsContext.Provider>
-      </SubAgentsContext.Provider>
+          {renderItems.map(renderFeedItem)}
+          <div ref={endRef} />
+        </div>
+      </div>
+    </CodeRenderContext.Provider>
+    </AskUserQuestionConditionContext.Provider>
+    </TaskNotificationsContext.Provider>
+    </SubAgentsContext.Provider>
     </ToolResultIndexContext.Provider>
+    </ToolUseIndexContext.Provider>
+    </ProviderContext.Provider>
   )
 }
+
+// Semantic streaming section moved to ./semantic/ — see those files for the
+// full rationale on each component. Feed.tsx now imports only
+// SemanticStreamingTurn (the orchestrator) via ./semantic/index.ts.
+// SemanticTaskSummary + SemanticTurnFooter were deleted in the
+// 2026-04-18 thinking-indicator rework (dead code; see the comment
+// inside StreamingTurn.tsx for why).
+
+// ---------------------------------------------------------------------------
+// Row components moved to ./rows/
+// ---------------------------------------------------------------------------
+//
+// The entire row surface (LazyEntry, EntryRow, ConversationRow, Block,
+// ImageBlockRow, CompactBoundaryRow, CompactSummaryRow, SystemRow,
+// ToolUseRow, ToolResultRow, TruncatedOutputRow, UserBand,
+// plus the EAGER_TAIL constant) moved to ./rows/. Each component lives
+// in its own file, and the long WHY comments (lazy mount rationale,
+// the "CRITICAL: don't wrap tool_results in UserBand" gotcha, the
+// Read/Grep/Edit result-rendering taxonomy, the bash headline cap,
+// etc.) travelled with the code. Feed.tsx now imports EAGER_TAIL +
+// EntryRow + LazyEntry through ./rows/index.ts — the rest are internal
+// to the rows tree. The "Streaming row REMOVED" + "Activity indicator
+// REMOVED" rationale blocks that used to live at the tail of this
+// file are folded into ./semantic/StreamingTurn.tsx + ./WorkIndicator.tsx
+// where those replacements actually live.

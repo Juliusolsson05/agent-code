@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import type { RefObject } from 'react'
 
-import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { SessionId } from '@renderer/workspace/types'
 import type { ImagePasteResult } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 import { clipboardHasImageCandidate } from '@renderer/workspace/tile-tree/TileLeaf/claudeImages'
@@ -33,9 +32,8 @@ import { clipboardHasImageCandidate } from '@renderer/workspace/tile-tree/TileLe
 //     composer's own textarea `onPaste` handles that case — if we
 //     also handled it here the image path would run twice and text
 //     would be appended on top of the browser's native insert.
-//   - An explicit app interaction owner is mounted: it owns the
-//     keyboard/clipboard turn while visible. This is separate from ARIA
-//     dialog semantics so a missing role cannot re-enable agent input.
+//   - A `role="dialog"` modal is open: it owns keyboard/clipboard
+//     focus while visible.
 //
 // Payload routing — the order here is deliberate:
 //
@@ -122,7 +120,7 @@ export function usePasteToFocus({
         if (tag === 'INPUT' || tag === 'TEXTAREA') return
         if (target.isContentEditable) return
       }
-      if (hasAppInteractionOwner()) return
+      if (document.querySelector('[role="dialog"]')) return
 
       const el = inputRef.current
       if (!el) return

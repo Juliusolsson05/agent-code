@@ -1,15 +1,6 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useEffect, useMemo, useRef } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
 import { extractLatestUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
@@ -69,41 +60,41 @@ export function ViewPromptsModal({
     workspace,
   ])
 
-  if (!meta || !runtime) return null
+  useEffect(() => {
+    if (!open) return
+    requestAnimationFrame(() => scrollerRef.current?.focus())
+  }, [open])
+
+  if (!open || !meta || !runtime) return null
 
   const cwdBase = meta.cwd.split('/').filter(Boolean).pop() ?? meta.cwd
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={nextOpen => {
-        if (!nextOpen) onClose()
+    <div
+      className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/30"
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) onClose()
       }}
     >
-      <DialogContent
-        className="flex max-h-[82vh] w-[min(760px,92vw)] flex-col overflow-hidden"
-        onOpenAutoFocus={event => {
-          // WHY focus the scroll region instead of the first footer button:
-          // this surface is primarily a reading/scrolling tool. Radix still
-          // owns trapping/restoration; we only select the useful initial node.
-          event.preventDefault()
-          scrollerRef.current?.focus()
-        }}
-      >
-        <DialogHeader>
-          <DialogTitle>Latest User Prompts</DialogTitle>
-          <DialogDescription asChild>
-            <div>
-              <div>{meta.kind ?? DEFAULT_PROVIDER} · {cwdBase}</div>
-              <div className="mt-0.5 truncate text-[10px]">{meta.cwd}</div>
-            </div>
-          </DialogDescription>
-        </DialogHeader>
+      <div className="w-[min(760px,92vw)] max-h-[82vh] overflow-hidden bg-surface border border-border-hi">
+        <div className="border-b border-border px-4 py-3">
+          <div className="text-[13px] text-ink">Latest User Prompts</div>
+          <div className="mt-1 text-[11px] text-muted">
+            {meta.kind ?? DEFAULT_PROVIDER} · {cwdBase}
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted truncate">{meta.cwd}</div>
+        </div>
 
         <div
           ref={scrollerRef}
           tabIndex={-1}
-          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none"
+          onKeyDown={e => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              onClose()
+            }
+          }}
+          className="max-h-[calc(82vh-112px)] overflow-y-auto px-4 py-3 outline-none"
         >
           {prompts.length === 0 ? (
             <div className="py-8 text-center text-[12px] text-muted">
@@ -126,21 +117,21 @@ export function ViewPromptsModal({
           )}
         </div>
 
-        <DialogFooter className="justify-between">
+        <div className="border-t border-border px-4 py-3 flex items-center justify-between gap-3">
           <div className="text-[11px] text-muted">
             {runtime.loadingOlderHistory && prompts.length < PROMPT_LIMIT
               ? 'Loading older prompts…'
               : `Showing the latest ${Math.min(PROMPT_LIMIT, prompts.length)} prompts`}
           </div>
-          <Button
+          <button
             type="button"
             onClick={onClose}
-            variant="outline"
+            className="px-3 py-1.5 text-[12px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
           >
             Close
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

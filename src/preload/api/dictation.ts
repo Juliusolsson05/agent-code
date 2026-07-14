@@ -2,8 +2,6 @@ import { ipcRenderer } from 'electron'
 
 import { subscribe } from '@preload/api/ipc.js'
 import type {
-  DictationApiKeyStatus,
-  DictationApiKeySetResult,
   DictationHotkeyConfigureResult,
   DictationProvider,
   DictationStartResult,
@@ -13,12 +11,6 @@ import type {
 } from '@preload/api/types.js'
 
 export const dictationApi = {
-  getDictationApiKeyStatus: (): Promise<DictationApiKeyStatus> =>
-    ipcRenderer.invoke('dictation:api-key-status'),
-
-  setDictationApiKey: (params: { key: string }): Promise<DictationApiKeySetResult> =>
-    ipcRenderer.invoke('dictation:api-key-set', params),
-
   configureDictationHotkey: (params: {
     binding: string
   }): Promise<DictationHotkeyConfigureResult> =>

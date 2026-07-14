@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 // CodexApprovalPane — inline approval prompt rendered inside the pane,
 // matching how Codex's TUI draws it in the bottom pane.
@@ -27,7 +27,6 @@ type Props = {
     selectedIndex?: number
   } | null
   onSend: (data: string) => Promise<void>
-  interactionActive: boolean
 }
 
 // Fallback options when screen parsing doesn't extract them.
@@ -43,11 +42,8 @@ const DEFAULT_HINTS = ['y', 'p', 'esc']
 // Index 0 = Enter (confirm default), 1 = 'p', 2 = Esc.
 const OPTION_KEYS = ['\r', 'p', '\x1b']
 
-export function CodexApprovalModal({ approval, onSend, interactionActive }: Props) {
+export function CodexApprovalModal({ approval, onSend }: Props) {
   const [localSelected, setLocalSelected] = useState(0)
-  const stripRef = useRef<HTMLDivElement>(null)
-  const interactionActiveRef = useRef(interactionActive)
-  interactionActiveRef.current = interactionActive
 
   // Sync local selection from screen-parsed selection state.
   // The screen parser tracks which option has the `›` marker.
@@ -76,59 +72,58 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
     void onSend('\x1b')
   }, [onSend])
 
+  // Capture keyboard while approval is visible. Uses capture phase
+  // so we intercept before the composer's onKeyDown.
   useEffect(() => {
-    if (!approval || !interactionActive) return
-    const frame = requestAnimationFrame(() => {
-      if (interactionActiveRef.current) stripRef.current?.focus()
-    })
-    return () => cancelAnimationFrame(frame)
-    // Provider snapshots rebuild `approval` as a fresh object. Key on the
-    // approval's semantic identity so an unrelated snapshot/selection update
-    // cannot keep pulling focus back to this strip.
-  }, [approval?.callId, approval?.command.join('\0'), interactionActive])
+    if (!approval) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        e.stopPropagation()
+        // Send arrow key to PTY so Codex also moves its selection.
+        void onSend('\x1b[A')
+        setLocalSelected(prev => Math.max(0, prev - 1))
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        e.stopPropagation()
+        void onSend('\x1b[B')
+        setLocalSelected(prev => Math.min(options.length - 1, prev + 1))
+        return
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        e.stopPropagation()
+        confirm()
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        cancel()
+        return
+      }
+      // Shortcut keys
+      if (e.key === 'y') { e.preventDefault(); e.stopPropagation(); void onSend('\r'); return }
+      if (e.key === 'p') { e.preventDefault(); e.stopPropagation(); void onSend('p'); return }
+      if (e.key === 'n') { e.preventDefault(); e.stopPropagation(); void onSend('\x1b'); return }
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [approval, options.length, confirm, cancel, onSend])
 
   if (!approval) return null
 
   const command = approval.command.join(' ').trim()
 
   return (
-    <div
-      ref={stripRef}
-      tabIndex={-1}
-      role="group"
-      aria-label="Codex command approval options"
-      onKeyDown={e => {
-        // Pane-local ownership is load-bearing: an approval can remain visible
-        // in a background split, but it must never capture another pane's
-        // Enter/shortcut keys through a document listener.
-        if (!interactionActive) return
-        if (e.key === 'ArrowUp') {
-          e.preventDefault(); e.stopPropagation()
-          void onSend('\x1b[A')
-          setLocalSelected(prev => Math.max(0, prev - 1))
-        } else if (e.key === 'ArrowDown') {
-          e.preventDefault(); e.stopPropagation()
-          void onSend('\x1b[B')
-          setLocalSelected(prev => Math.min(options.length - 1, prev + 1))
-        } else if (e.key === 'Enter') {
-          e.preventDefault(); e.stopPropagation(); confirm()
-        } else if (e.key === 'Escape') {
-          e.preventDefault(); e.stopPropagation(); cancel()
-        } else if (e.key === 'y') {
-          e.preventDefault(); e.stopPropagation(); void onSend('\r')
-        } else if (e.key === 'p') {
-          e.preventDefault(); e.stopPropagation(); void onSend('p')
-        } else if (e.key === 'n') {
-          e.preventDefault(); e.stopPropagation(); void onSend('\x1b')
-        }
-      }}
-      className="
+    <div className="
       flex-shrink-0
       border-t border-border
       bg-surface
       px-5 py-3
       font-code text-[12px] leading-[1.65]
-      outline-none
     ">
       {/* Title */}
       <div className="text-ink font-semibold mb-2">

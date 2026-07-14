@@ -49,7 +49,7 @@ const args = process.argv.slice(2)
 
 function usage() {
   console.log(`Usage:
-  node scripts/audit-rendering-fixture.mjs [--json|--markdown] <fixture.json|bundle-dir>
+  node scripts/audit-rendering-fixture.mjs [--json|--markdown] [--max-preview N] <fixture.json|bundle-dir>
 
 Exit codes: 0 LIKELY_SAFE, 2 REVIEW, 3 BLOCKED, 1 usage/IO error.
 
@@ -66,8 +66,12 @@ if (args.includes('--help') || args.includes('-h')) {
 
 const jsonMode = args.includes('--json')
 const markdownMode = args.includes('--markdown')
-const inputArg = args.find(arg => {
+const maxPreviewIdx = args.indexOf('--max-preview')
+const maxPreview =
+  maxPreviewIdx >= 0 ? Number(args[maxPreviewIdx + 1]) : 400
+const inputArg = args.find((arg, i) => {
   if (arg.startsWith('--')) return false
+  if (args[i - 1] === '--max-preview') return false
   return true
 })
 
@@ -350,6 +354,11 @@ function sha(value) {
   return createHash('sha256').update(value).digest('hex').slice(0, 12)
 }
 
+function preview(value, limit = maxPreview) {
+  const text = String(value).replace(/\s+/g, ' ').trim()
+  return text.length > limit ? `${text.slice(0, limit)}...` : text
+}
+
 function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -376,77 +385,6 @@ function walk(value, visit, path = '$', source = '<input>') {
 
 function asRecord(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null
-}
-
-// Metadata is capture provenance, not trusted presentation data. In particular,
-// bundle notes and source locations are commonly free-form strings copied from
-// a developer's machine. Copying `meta` wholesale into the audit report made
-// the safety tool itself a plaintext exfiltration path: a secret correctly
-// detected below could still be echoed by `--json` or the human report. Keep a
-// deliberately tiny semantic allow-list and retain only non-reversible evidence
-// for identifiers/free text that remain useful when correlating an audit.
-const SAFE_META_LITERAL_VALUES = new Map([
-  ['fixtureKind', new Set(['feed-presentation-operation-evidence'])],
-  ['redaction', new Set(['hand-authored'])],
-  ['kind', new Set(['claude', 'codex', 'opencode'])],
-  ['provider', new Set(['claude', 'codex', 'opencode'])],
-])
-
-const SAFE_META_NUMBER_KEYS = new Set([
-  'capturedAt',
-  'entriesTruncatedTo',
-  'visibleRowsAtTMs',
-])
-
-const HASHED_META_KEYS = new Set([
-  'bundleId',
-  'note',
-  'sessionId',
-  'entriesSource',
-  'projectDir',
-  'cwd',
-])
-
-function safeMetaForReport(value) {
-  const meta = asRecord(value)
-  if (!meta) return {}
-
-  const out = {}
-  for (const [key, rawValue] of Object.entries(meta)) {
-    const literals = SAFE_META_LITERAL_VALUES.get(key)
-    if (typeof rawValue === 'string' && literals?.has(rawValue)) {
-      out[key] = rawValue
-      continue
-    }
-    if (typeof rawValue === 'number' && Number.isFinite(rawValue) && SAFE_META_NUMBER_KEYS.has(key)) {
-      out[key] = rawValue
-      continue
-    }
-    if (
-      key === 'capturedAtIso' &&
-      typeof rawValue === 'string' &&
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(rawValue) &&
-      !Number.isNaN(Date.parse(rawValue))
-    ) {
-      out[key] = rawValue
-      continue
-    }
-    if (
-      !HASHED_META_KEYS.has(key) &&
-      !SAFE_META_LITERAL_VALUES.has(key) &&
-      !SAFE_META_NUMBER_KEYS.has(key) &&
-      key !== 'capturedAtIso'
-    ) continue
-    if (rawValue === null || rawValue === undefined) continue
-
-    // Even an allow-listed KEY is not permission to publish arbitrary content.
-    // Unknown provider spellings and malformed timestamps are hashed so a
-    // caller cannot smuggle a secret through a semantically trusted field.
-    const serialized =
-      typeof rawValue === 'string' ? rawValue : JSON.stringify(rawValue) ?? String(rawValue)
-    out[key] = { chars: serialized.length, hash: sha(serialized) }
-  }
-  return out
 }
 
 function tryParseJsonText(value) {
@@ -507,18 +445,10 @@ function isSensitivePath(path) {
   return SENSITIVE_BASENAME_RE.test(normalized) || PRIVATE_TRANSCRIPT_PATH_RE.test(normalized)
 }
 
-function extractPatchPaths(text, { sealedLinesOnly = false } = {}) {
+function extractPatchPaths(text) {
   const out = []
-  const source = String(text)
-  const lines = source.split('\n')
-  for (let index = 0; index < lines.length; index += 1) {
-    // A cumulative live prefix may end halfway through
-    // `*** Update File: src/exam`. Reporting every intermediate spelling as a
-    // distinct touched file is actively misleading. A newline is the only
-    // provider-independent proof that the header line is sealed; completed
-    // direct patch payloads keep the legacy permissive behavior.
-    if (sealedLinesOnly && index === lines.length - 1 && !source.endsWith('\n')) continue
-    const line = lines[index]
+  const lines = String(text).split('\n')
+  for (const line of lines) {
     let m = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(line)
     if (m) {
       out.push(m[1].trim())
@@ -552,255 +482,7 @@ function commandKind(command) {
   return 'command'
 }
 
-function normalizedToolName(name) {
-  return String(name ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
-}
-
-function hasDeclaredPatchLiteral(script) {
-  if (typeof script !== 'string') return false
-  // WHY this is narrower than looking for the patch marker anywhere: a Bash
-  // command can grep docs for "*** Begin Patch" and must remain a command.
-  // A declaration containing only the marker is also ordinary data; wait for
-  // the first Add/Update/Delete header, which is the earliest structural proof
-  // that the value is an apply_patch program. That still precedes the trailing
-  // `tools.apply_patch(...)` invocation in captured Codex streams.
-  const patch = declaredPatchText(script)
-  return patch !== null && /^\*\*\* (?:Add|Update|Delete) File: .+$/m.test(patch)
-}
-
-function declaredPatchText(script) {
-  if (typeof script !== 'string') return null
-  const declaration = /\b(?:const|let|var)\s+[$A-Z_a-z][$\w]*\s*=\s*(["'`])(?=\*\*\* Begin Patch)/.exec(script)
-  if (!declaration || declaration.index == null) return null
-  const quote = declaration[1]
-  const bodyStart = declaration.index + declaration[0].length
-  let bodyEnd = script.length
-  let escaped = false
-  for (let i = bodyStart; i < script.length; i += 1) {
-    const char = script[i]
-    if (escaped) {
-      escaped = false
-      continue
-    }
-    if (char === '\\') {
-      escaped = true
-      continue
-    }
-    if (char === quote) {
-      bodyEnd = i
-      break
-    }
-  }
-  const body = script.slice(bodyStart, bodyEnd)
-  // Only the line structure is needed for file-path extraction. Decoding the
-  // common escaped newlines also works on an UNFINISHED quoted literal, where
-  // JSON.parse cannot: early live prefixes are expected to be syntactically
-  // incomplete by definition.
-  return body.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\n')
-}
-
-function unifiedExecFamily(script) {
-  if (typeof script !== 'string' || !script.trim()) return 'preparing'
-  if (hasDeclaredPatchLiteral(script) || /\btools\.apply_patch\s*\(/.test(script)) {
-    return 'file-change'
-  }
-  if (/\btools\.exec_command\s*\(/.test(script)) return 'command'
-  if (/\btools\.(?:write_stdin|wait)\s*\(/.test(script)) return 'terminal-interaction'
-  if (/\btools\.(?:web__run|web_search|web_fetch)\s*\(/.test(script)) return 'web'
-  if (/\btools\.(?:spawn_agent|send_message|followup_task|wait_agent|list_agents|close_agent)\s*\(/.test(script)) {
-    return 'collaboration'
-  }
-  if (/\btools\.(?:update_plan|create_goal|update_goal)\s*\(/.test(script)) return 'task-plan'
-  if (/\btools\.request_user_input\s*\(/.test(script)) return 'question'
-  if (/\btools\.(?:image_gen__imagegen|view_image)\s*\(/.test(script)) return 'image'
-  if (/\btools\.mcp__/.test(script)) return 'mcp'
-  return 'preparing'
-}
-
-function operationFamily(toolName, input) {
-  const normalized = normalizedToolName(toolName)
-  const script = typeof input === 'string' ? input : null
-
-  // Codex's unified exec deliberately carries the real action in generated
-  // JavaScript. Treating every `exec` as a shell command is the precise reason
-  // an early apply_patch appeared as raw JS until completion.
-  if (normalized === 'exec' || normalized === 'unifiedexec') return unifiedExecFamily(script)
-
-  const lowerName = String(toolName).toLowerCase()
-  // Agent Code's orchestration server is MCP transport but collaboration user
-  // intent. Keep this precedence identical to the production classifier so the
-  // fixture report cannot call a spawn "generic MCP" while React calls it an
-  // agent operation.
-  if (/(?:^|__)orchestration_(?:create|read|send|wait|list|close)_?agents?$/.test(lowerName)) {
-    return 'collaboration'
-  }
-  if (lowerName.startsWith('mcp__')) return 'mcp'
-  if (['edit', 'editfile', 'multiedit', 'write', 'writefile', 'patch', 'applypatch'].includes(normalized)) return 'file-change'
-  if (
-    [
-      'bash',
-      'shell',
-      'powershell',
-      'execcommand',
-      'localshell',
-      'localshellcall',
-    ].includes(normalized)
-  ) return 'command'
-  if (['writestdin', 'wait', 'waitterminal'].includes(normalized)) return 'terminal-interaction'
-  if (
-    [
-      'read',
-      'fileread',
-      'readfile',
-    ].includes(normalized)
-  ) return 'read'
-  if (
-    ['grep', 'glob', 'ls', 'listfiles', 'toolsearch', 'toolsearchcall', 'searchtranscript', 'readtranscript', 'searchfiles'].includes(normalized)
-  ) return 'search'
-  if (['webrun', 'websearch', 'websearchcall', 'webfetch', 'web', 'openpage', 'findinpage'].includes(normalized)) return 'web'
-  if (
-    [
-      'agent',
-      'task',
-      'spawnagent',
-      'sendmessage',
-      'followuptask',
-      'waitagent',
-      'listagents',
-      'closeagent',
-      'orchestration',
-      'teamcreate',
-      'teamdelete',
-    ].includes(normalized)
-  ) return 'collaboration'
-  if (
-    [
-      'todowrite',
-      'updateplan',
-      'taskcreate',
-      'taskupdate',
-      'tasklist',
-      'taskget',
-      'taskoutput',
-      'taskstop',
-      'schedulewakeup',
-      'sleep',
-      'creategoal',
-      'updategoal',
-      'getgoal',
-    ].includes(normalized)
-  ) return 'task-plan'
-  if (['askuserquestion', 'requestuserinput'].includes(normalized)) return 'question'
-  if (['imagegeneration', 'imagegenerationcall', 'imagegen', 'imagegenimagegen', 'viewimage'].includes(normalized)) return 'image'
-  if (['readmcpresource', 'listmcpresources', 'listmcpresourcetemplates'].includes(normalized)) return 'mcp'
-  if (normalized === 'notebookedit') return 'notebook'
-  if (
-    ['lsp', 'gotodefinition', 'findreferences', 'documentsymbols'].includes(normalized) ||
-    normalized.startsWith('lsp')
-  ) return 'code-intelligence'
-  if (['skill', 'workflow', 'artifact', 'reportfindings', 'monitor', 'listavailablepluginstoinstall', 'requestplugininstall'].includes(normalized)) {
-    return 'skill-workflow'
-  }
-  if (
-    normalized.startsWith('aiworkspace') ||
-    ['enterworktree', 'exitworktree', 'config', 'enterplanmode', 'exitplanmode'].includes(normalized)
-  ) return 'workspace'
-  return 'generic'
-}
-
-function providerForRoot(root) {
-  const rec = asRecord(root)
-  const candidate = String(
-    asRecord(rec?.meta)?.provider ??
-      asRecord(rec?.meta)?.kind ??
-      asRecord(rec?.input)?.provider ??
-      rec?.provider ??
-      'unknown',
-  )
-  if (['claude', 'codex', 'opencode'].includes(candidate.toLowerCase())) return candidate
-  // A raw bundle manifest has top-level `kind`, while semantic events also use
-  // `kind` for block discriminators. Only accept known provider values here so
-  // a `kind: tool_use` event never becomes a bogus provider label.
-  const rootKind = String(rec?.kind ?? '')
-  return ['claude', 'codex', 'opencode'].includes(rootKind.toLowerCase())
-    ? rootKind
-    : 'unknown'
-}
-
-function looksLikeToolActivity(rec) {
-  const type = String(rec.type ?? rec.kind ?? '').toLowerCase()
-  const name = String(rec.name ?? rec.toolName ?? rec.tool ?? '')
-  if (
-    type === 'tool_use' ||
-    type === 'tool' ||
-    type === 'function_call' ||
-    type === 'custom_tool_call'
-  ) {
-    // Diagnostics snapshots also use `kind: custom_tool_call` but carry only
-    // booleans/counts — no tool name or input. They describe another record;
-    // counting them as generic operations duplicates every real call.
-    return Boolean(name)
-  }
-  if (type === 'tool_input_delta') {
-    // feed-debug's outer row also has `kind: tool_input_delta`, but the actual
-    // tool name/prefix live in `data.event`. Requiring both prevents one bogus
-    // generic operation per envelope alongside the real nested operation.
-    return Boolean(name && typeof rec.inputJsonSoFar === 'string')
-  }
-  if (typeof rec.inputJsonSoFar === 'string' && name) return true
-  // Some provider snapshots omit a `type` at the presentation-evidence layer.
-  // Require both identity and payload so an innocent `{name: "project"}`
-  // metadata object cannot inflate operation-family counts.
-  const hasIdentity = rec.toolUseId != null || rec.callId != null || rec.callID != null || rec.itemId != null
-  const hasPayload = rec.input != null || rec.argumentsJson != null || rec.inputJson != null || rec.state != null
-  return Boolean(name && hasIdentity && hasPayload)
-}
-
-function mergeOperationEvidence(operations) {
-  const merged = new Map()
-  for (const operation of operations) {
-    const key = `${operation.provider}\0${operation.id}`
-    const existing = merged.get(key)
-    if (!existing) {
-      merged.set(key, {
-        ...operation,
-        stages: [operation.stage],
-        evidenceCount: 1,
-      })
-      continue
-    }
-    existing.evidenceCount += 1
-    if (!existing.stages.includes(operation.stage)) existing.stages.push(operation.stage)
-    // Prefixes begin as `preparing`; a later byte can reveal a real family.
-    // Keep the most specific classification while retaining every observed
-    // stage so the report explains that this was one evolving operation, not
-    // several unrelated tool calls.
-    if (
-      (existing.family === 'preparing' || existing.family === 'generic') &&
-      operation.family !== 'preparing' &&
-      operation.family !== 'generic'
-    ) {
-      existing.family = operation.family
-      existing.tool = operation.tool
-      existing.inputHash = operation.inputHash
-    }
-  }
-  return [...merged.values()]
-}
-
-function mergeCommandEvidence(commands) {
-  const merged = new Map()
-  for (const command of commands) {
-    const key = `${command.provider}\0${command.operationId}\0${command.kind}`
-    const existing = merged.get(key)
-    if (!existing || command.inputLength > existing.inputLength) merged.set(key, command)
-  }
-  return [...merged.values()]
-}
-
-function discoverToolActivity(root, source, report, providerHint) {
-  const ownProvider = providerForRoot(root)
-  const rootProvider = ownProvider === 'unknown' ? providerHint : ownProvider
+function discoverToolActivity(root, source, report) {
   walk(root, (value, path) => {
     const rec = asRecord(value)
     if (!rec) return
@@ -808,62 +490,38 @@ function discoverToolActivity(root, source, report, providerHint) {
     const type = String(rec.type ?? rec.kind ?? '')
     const name = String(rec.name ?? rec.toolName ?? rec.tool ?? '')
     const lowerName = name.toLowerCase()
-    if (!looksLikeToolActivity(rec)) return
+    const isTool =
+      type.includes('tool') ||
+      type === 'function_call' ||
+      type === 'custom_tool_call' ||
+      lowerName.length > 0
+    if (!isTool) return
 
-    const state = asRecord(rec.state)
     const input =
       rec.input ??
-      state?.input ??
       rec.parsedInput ??
       tryParseJsonText(rec.argumentsJson) ??
       tryParseJsonText(rec.inputJson) ??
-      rec.inputJsonSoFar ??
       rec.argumentsJson ??
       rec.inputJson ??
       null
-
-    const provider = String(rec.provider ?? rootProvider)
-    const operationId = String(
-      rec.toolUseId ??
-        rec.tool_use_id ??
-        rec.callId ??
-        rec.callID ??
-        rec.call_id ??
-        rec.itemId ??
-        rec.id ??
-        path,
-    )
-    const stage = String((rec.stage ?? rec.status ?? state?.status ?? type) || 'observed')
-    report.operations.push({
-      provider,
-      id: operationId,
-      tool: name || type || 'tool',
-      family: operationFamily(name || type, input),
-      stage,
-      inputHash: input == null ? null : sha(typeof input === 'string' ? input : JSON.stringify(input)),
-      source,
-      path,
-    })
 
     const rawCommand =
       commandText(rec.command) ??
       commandText(rec.cmd) ??
       commandText(asRecord(input)?.command) ??
       commandText(asRecord(input)?.cmd) ??
-      commandText(asRecord(input)?.argv) ??
-      (['exec', 'unifiedexec'].includes(normalizedToolName(name)) ? commandText(input) : null)
+      commandText(asRecord(input)?.argv)
 
     if (rawCommand) {
       const kind = commandKind(rawCommand)
       report.commands.push({
-        provider,
-        operationId,
         source,
         path,
         tool: name || type || 'command',
         kind,
-        inputLength: rawCommand.length,
         hash: sha(rawCommand),
+        preview: preview(rawCommand),
       })
       for (const p of extractPathsFromString(rawCommand)) {
         addFileActivity(report, kind === 'delete' ? 'deleted' : kind === 'write' ? 'written' : kind === 'patch' ? 'patched' : 'mentioned', p, source, path)
@@ -888,7 +546,6 @@ function discoverToolActivity(root, source, report, providerHint) {
         : inputRecord
           ? Object.values(inputRecord).filter(v => typeof v === 'string')
           : []
-    const decodedDeclaredPatch = declaredPatchText(input)
     if (lowerName === 'apply_patch' || patchTexts.some(t => t.includes('*** Begin Patch'))) {
       // Sweep every string field rather than guessing the envelope key
       // (`raw` today, but the audit should not bake in one provider's arg
@@ -896,11 +553,6 @@ function discoverToolActivity(root, source, report, providerHint) {
       // fields are harmless.
       for (const text of patchTexts) {
         for (const p of extractPatchPaths(text)) addFileActivity(report, 'patched', p, source, path)
-      }
-      if (decodedDeclaredPatch) {
-        for (const p of extractPatchPaths(decodedDeclaredPatch, { sealedLinesOnly: true })) {
-          addFileActivity(report, 'patched', p, source, path)
-        }
       }
     }
 
@@ -933,7 +585,7 @@ function addFileActivity(report, category, file, source, path) {
       kind: 'sensitive-file-reference',
       source,
       path,
-      detail: `${normalized.length} chars sha=${sha(normalized)} (redacted)`,
+      detail: normalized,
     })
   }
 }
@@ -960,8 +612,6 @@ function audit(input) {
     },
     paths: [],
     commands: [],
-    operations: [],
-    operationFamilies: {},
     fileActivity: {
       read: [],
       written: [],
@@ -1023,17 +673,9 @@ function audit(input) {
     })
   }
 
-  // Directory audits load each JSON/JSONL file as a separate root. The provider
-  // lives in manifest.json, while live prefixes live in feed-debug.jsonl; find
-  // the directory-wide hint once so those events are still reported as Codex,
-  // Claude, or OpenCode instead of "unknown" merely due to file boundaries.
-  const providerHint =
-    input.roots.map(root => providerForRoot(root.value)).find(provider => provider !== 'unknown') ??
-    'unknown'
-
   for (const { source, value } of input.roots) {
     if (value?.meta && typeof value.meta === 'object') {
-      report.meta = { ...report.meta, ...safeMetaForReport(value.meta) }
+      report.meta = { ...report.meta, ...value.meta }
     }
     if (value?.input && typeof value.input === 'object') {
       report.counts.entries += Array.isArray(value.input.entries) ? value.input.entries.length : 0
@@ -1047,7 +689,7 @@ function audit(input) {
     }
     if (Array.isArray(value?.triage)) report.counts.triageItems += value.triage.length
 
-    discoverToolActivity(value, source, report, providerHint)
+    discoverToolActivity(value, source, report)
 
     walk(value, (node, path) => {
       if (Array.isArray(node)) {
@@ -1080,11 +722,7 @@ function audit(input) {
           source,
           path,
           hash: sha(node),
-          // An audit finding proves that the value is suspicious. Printing even
-          // a "review" preview turns the safety report/CI log into a copy of the
-          // material it is warning about. Hash + exact JSON path is sufficient
-          // to inspect the local source deliberately.
-          preview: '[redacted]',
+          preview: pattern.severity === 'block' ? '[redacted]' : preview(node),
         })
       }
 
@@ -1094,6 +732,7 @@ function audit(input) {
           path,
           chars: node.length,
           hash: sha(node),
+          preview: preview(node),
         })
         if (node.length >= HUGE_STRING_BLOCK) {
           report.findings.push({
@@ -1109,19 +748,10 @@ function audit(input) {
   }
 
   report.paths = uniqueItems(report.paths, p => `${p.value}\0${p.source}\0${p.path}`)
-  report.operations = mergeOperationEvidence(report.operations)
-  report.commands = mergeCommandEvidence(report.commands)
-  for (const operation of report.operations) {
-    report.operationFamilies[operation.family] =
-      (report.operationFamilies[operation.family] ?? 0) + 1
-  }
   for (const key of Object.keys(report.fileActivity)) {
     report.fileActivity[key] = uniqueItems(
       report.fileActivity[key],
-      // A cumulative live prefix can mention the same path hundreds of times.
-      // Keep the first source location as a pointer, but count the file once
-      // per captured source; the audit is an inventory, not a delta log.
-      item => `${item.file}\0${item.source}`,
+      item => `${item.file}\0${item.source}\0${item.path}`,
     )
   }
   report.largeStrings.sort((a, b) => b.chars - a.chars)
@@ -1137,8 +767,7 @@ function audit(input) {
   // prevent). The path is still LISTED in the paths section with its
   // sensitive-path risk label; it just doesn't move the verdict. A transcript
   // path appearing anywhere ELSE (a command, a tool result, prose) is real
-  // signal and still forces REVIEW. Paths are hashed before the report leaves
-  // audit(), so this internal plaintext is never copied into JSON or stdout.
+  // signal and still forces REVIEW.
   const PROVENANCE_JSON_PATHS = new Set(['$.meta.entriesSource'])
   for (const p of report.paths) {
     if (!p.risk.includes('sensitive') && !p.risk.includes('ssh')) continue
@@ -1148,7 +777,7 @@ function audit(input) {
       kind: 'sensitive-path',
       source: p.source,
       path: p.path,
-      detail: `${p.value.length} chars sha=${sha(p.value)} (redacted)`,
+      detail: p.value,
     })
   }
 
@@ -1160,8 +789,6 @@ function audit(input) {
   report.summary = {
     absolutePathCount,
     sensitivePathCount,
-    operationCount: report.operations.length,
-    operationFamilyCount: Object.keys(report.operationFamilies).length,
     commandCount: report.commands.length,
     touchedFileCount: Object.values(report.fileActivity).reduce((sum, items) => sum + items.length, 0),
     largeStringCount: report.largeStrings.length,
@@ -1175,8 +802,8 @@ function audit(input) {
   // they are the content the renderer renders. With them verdict-moving,
   // 46/48 committed fixtures came out REVIEW and the verdict carried no
   // information; reviewers stop reading a signal that always fires. Both
-  // stay fully REPORTED as JSON locations plus hashes/lengths (paths section,
-  // largest-strings section, summary counts) — they are info, not alarms. The
+  // stay fully REPORTED (paths section, largest-strings section, summary
+  // counts) as evidence for a human — they are info, not alarms. The
   // escalation ladder that still moves the verdict:
   //   - secret-shaped content / key-based survivors → block or review
   //   - sensitive path references outside fixture provenance → review
@@ -1184,23 +811,6 @@ function audit(input) {
   //     pipeline's own 8000-char text cap) → review
   //   - anything the scanner could not read (parse error, oversized) → review
   report.verdict = blockCount > 0 ? 'BLOCKED' : reviewCount > 0 ? 'REVIEW' : 'LIKELY_SAFE'
-
-  // The scanner needs plaintext transiently to classify/deduplicate paths,
-  // but the report is often pasted into CI logs or review threads. A hash and
-  // exact source JSON location preserve correlation without turning a
-  // privacy audit into a second copy of usernames, worktrees, or filenames.
-  report.paths = report.paths.map(({ value, ...item }) => ({
-    ...item,
-    chars: value.length,
-    hash: sha(value),
-  }))
-  for (const key of Object.keys(report.fileActivity)) {
-    report.fileActivity[key] = report.fileActivity[key].map(({ file, ...item }) => ({
-      ...item,
-      chars: file.length,
-      hash: sha(file),
-    }))
-  }
 
   return report
 }
@@ -1222,31 +832,10 @@ function printHuman(report) {
   lines.push(`Files scanned: ${report.input.fileCount} (${formatBytes(report.input.totalBytes)})`)
   lines.push('')
   lines.push(`## Metadata`)
-  const metaKeys = [
-    'fixtureKind',
-    'redaction',
-    'kind',
-    'provider',
-    'bundleId',
-    'note',
-    'sessionId',
-    'capturedAt',
-    'capturedAtIso',
-    'entriesSource',
-    'projectDir',
-    'cwd',
-    'entriesTruncatedTo',
-    'visibleRowsAtTMs',
-  ]
+  const metaKeys = ['bundleId', 'note', 'kind', 'sessionId', 'capturedAtIso', 'entriesSource', 'projectDir', 'cwd']
   for (const key of metaKeys) {
     if (report.meta[key] !== undefined && report.meta[key] !== null) {
-      const value = report.meta[key]
-      const redacted = asRecord(value)
-      lines.push(
-        redacted && typeof redacted.chars === 'number' && typeof redacted.hash === 'string'
-          ? `- ${key}: ${redacted.chars} chars sha=${redacted.hash} (redacted)`
-          : `- ${key}: ${String(value)}`,
-      )
+      lines.push(`- ${key}: ${String(report.meta[key])}`)
     }
   }
   lines.push(`- entries: ${report.counts.entries}`)
@@ -1269,7 +858,7 @@ function printHuman(report) {
   lines.push(`## Paths`)
   for (const [risk, items] of [...byRisk.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     lines.push(`### ${risk} (${items.length})`)
-    lines.push(...renderList(items, p => `- ${p.chars} chars sha=${p.hash} (${p.source}:${p.path})`, 20))
+    lines.push(...renderList(items, p => `- ${p.value} (${p.source}:${p.path})`, 20))
   }
   if (report.paths.length === 0) lines.push('  none')
   lines.push('')
@@ -1277,34 +866,16 @@ function printHuman(report) {
   lines.push(`## File Activity`)
   for (const [category, items] of Object.entries(report.fileActivity)) {
     lines.push(`### ${category} (${items.length})`)
-    lines.push(...renderList(items, item => `- ${item.chars} chars sha=${item.hash} (${item.source}:${item.path})`, 20))
+    lines.push(...renderList(items, item => `- ${item.file} (${item.source}:${item.path})`, 20))
   }
-  lines.push('')
-
-  lines.push(`## Operation Families (${report.operations.length})`)
-  for (const [family, count] of Object.entries(report.operationFamilies).sort((a, b) => a[0].localeCompare(b[0]))) {
-    lines.push(`### ${family} (${count})`)
-    lines.push(...renderList(
-      report.operations.filter(operation => operation.family === family),
-      operation =>
-        `- ${operation.provider}:${operation.tool} id=${operation.id} ` +
-        `stages=${operation.stages.join(',')} (${operation.source}:${operation.path})`,
-      30,
-    ))
-  }
-  if (report.operations.length === 0) lines.push('  none')
   lines.push('')
 
   lines.push(`## Commands (${report.commands.length})`)
-  lines.push(...renderList(
-    report.commands,
-    c => `- [${c.kind}] ${c.tool}: ${c.inputLength} chars sha=${c.hash} (${c.source}:${c.path})`,
-    30,
-  ))
+  lines.push(...renderList(report.commands, c => `- [${c.kind}] ${c.tool}: ${c.preview} (${c.source}:${c.path})`, 30))
   lines.push('')
 
   lines.push(`## Largest Strings`)
-  lines.push(...renderList(report.largeStrings, s => `- ${s.chars} chars sha=${s.hash} at ${s.source}:${s.path}`, 15))
+  lines.push(...renderList(report.largeStrings, s => `- ${s.chars} chars sha=${s.hash} at ${s.source}:${s.path} - ${s.preview}`, 15))
   lines.push('')
 
   lines.push(`## Summary`)
@@ -1326,9 +897,4 @@ if (jsonMode) {
 // or "found secret material" for success. 2/3 chosen over 1 so operational
 // failures (bad args, unreadable input, gate infrastructure down) stay
 // distinguishable from audit outcomes.
-//
-// WHY exitCode instead of process.exit(): JSON reports for real bundles easily
-// exceed Node's first 64 KiB stdout write. A forced exit can terminate before
-// the pipe drains, returning syntactically truncated JSON even though the audit
-// itself succeeded. Setting the code lets the event loop flush stdout first.
-process.exitCode = report.verdict === 'BLOCKED' ? 3 : report.verdict === 'REVIEW' ? 2 : 0
+process.exit(report.verdict === 'BLOCKED' ? 3 : report.verdict === 'REVIEW' ? 2 : 0)

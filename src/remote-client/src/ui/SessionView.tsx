@@ -359,10 +359,6 @@ export function SessionView({
               snapshot={transcript.conditions as ConditionSnapshot}
               registry={getRendererProviderCapabilities(transcript.conditions.provider).conditionViews}
               dispatch={dispatch}
-              // The phone renders exactly one selected SessionView, unlike the
-              // desktop's split-pane tree. Its inline condition is therefore
-              // always the active keyboard owner while this view is mounted.
-              interactionActive
             />
           </div>
         )}

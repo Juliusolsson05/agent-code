@@ -53,21 +53,6 @@ export function diffLines(oldText: string, newText: string): DiffLine[] {
   const m = a.length
   const n = b.length
 
-  // Empty-side replacements need no alignment at all. More importantly, the
-  // old `m * n` matrix guard evaluated to zero when either side was empty, then
-  // still allocated `(m + 1) * (n + 1)` cells. A generated file compared with
-  // an empty string could therefore bypass the safety policy by definition.
-  if (m === 0) return b.map(text => ({ kind: '+' as const, text }))
-  if (n === 0) return a.map(text => ({ kind: '-' as const, text }))
-
-  // LCS is excellent for the normal short Edit payload, but its matrix grows
-  // with the ACTUAL `(m+1)*(n+1)` allocation below. A provider can replace a
-  // generated file with another generated file and turn an innocent render
-  // into hundreds of millions of cells. Above this bound, keep an honest red/
-  // green diff using common edges rather than risking the renderer process for
-  // a more minimal middle alignment.
-  if ((m + 1) * (n + 1) > 2_000_000) return linearDiffFromLines(a, b, true)
-
   // lcs[i][j] = length of the longest common subsequence of a[0..i) and
   // b[0..j). Row i=0 / col j=0 are the base case: empty prefix vs
   // anything is LCS 0. The table lives in a single Int32Array to avoid
@@ -121,49 +106,6 @@ export function diffLines(oldText: string, newText: string): DiffLine[] {
 
   out.reverse()
   return out
-}
-
-/**
- * Linear provisional diff for a still-growing Edit/MultiEdit payload.
- *
- * A partial `new_string` has no stable suffix, so running the O(m*n) LCS on
- * every token is both expensive and visually self-defeating. Shared prefix
- * lines are already proven context; the remaining old/new prefixes are honest
- * removals/additions. Once input finalizes, `diffLines` upgrades to the minimal
- * LCS result (or its bounded large-file fallback).
- */
-export function streamingDiffLines(oldText: string, newText: string): DiffLine[] {
-  return linearDiffFromLines(splitLines(oldText), splitLines(newText), false)
-}
-
-function linearDiffFromLines(
-  oldLines: string[],
-  newLines: string[],
-  includeStableSuffix: boolean,
-): DiffLine[] {
-  const limit = Math.min(oldLines.length, newLines.length)
-  let prefix = 0
-  while (prefix < limit && oldLines[prefix] === newLines[prefix]) prefix += 1
-
-  let oldEnd = oldLines.length
-  let newEnd = newLines.length
-  if (includeStableSuffix) {
-    while (
-      oldEnd > prefix &&
-      newEnd > prefix &&
-      oldLines[oldEnd - 1] === newLines[newEnd - 1]
-    ) {
-      oldEnd -= 1
-      newEnd -= 1
-    }
-  }
-
-  return [
-    ...oldLines.slice(0, prefix).map(text => ({ kind: 'ctx' as const, text })),
-    ...oldLines.slice(prefix, oldEnd).map(text => ({ kind: '-' as const, text })),
-    ...newLines.slice(prefix, newEnd).map(text => ({ kind: '+' as const, text })),
-    ...oldLines.slice(oldEnd).map(text => ({ kind: 'ctx' as const, text })),
-  ]
 }
 
 /**

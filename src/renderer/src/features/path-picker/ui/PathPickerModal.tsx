@@ -3,14 +3,7 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useEffect, useRef, useState } from 'react'
 
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
-import { PathInput } from '@renderer/features/path-picker/ui/PathInput'
+import { PathInput } from '@renderer/ui/PathInput'
 import { relativeTime } from '@renderer/lib/relativeTime'
 // Canonical session listing shape — was a local duplicate of the preload
 // SessionInfo. The renderer tsconfig already includes `src/shared/types/**`,
@@ -139,6 +132,8 @@ export function PathPickerModal({
     return () => clearTimeout(t)
   }, [value, open, provider])
 
+  if (!open) return null
+
   const submit = async () => {
     if (busy) return
     setBusy(true)
@@ -207,21 +202,31 @@ export function PathPickerModal({
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={nextOpen => {
-        if (!nextOpen) onCancel()
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="
+        modal-fade
+        fixed inset-0 z-[1000]
+        flex items-center justify-center
+        bg-canvas/80 backdrop-blur-sm
+      "
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) onCancel()
       }}
     >
-      <DialogContent
-        className="modal-pop flex max-h-[80vh] w-[620px] max-w-[calc(100vw-64px)] flex-col p-6"
+      <div
+        className="
+          modal-pop
+          w-[620px] max-w-[calc(100vw-64px)]
+          bg-surface border border-border-hi
+          p-6
+          max-h-[80vh] flex flex-col
+        "
       >
-        <DialogTitle className="mb-3 flex-shrink-0 font-semibold">
+        <div className="text-[13px] font-semibold text-ink mb-3 flex-shrink-0">
           New tab — working directory
-        </DialogTitle>
-        <DialogDescription className="sr-only">
-          Choose a provider and working directory, then start or resume a session.
-        </DialogDescription>
+        </div>
 
         {/* Provider toggle: Claude / Codex */}
         <div className="flex gap-2 mb-3 flex-shrink-0">
@@ -304,24 +309,39 @@ export function PathPickerModal({
         />
 
         <div className="flex justify-end gap-2 mt-4 flex-shrink-0">
-          <Button
+          <button
             type="button"
             onClick={onCancel}
             disabled={busy}
-            variant="outline"
+            className="
+              px-4 py-1.5 text-[12px]
+              bg-transparent text-ink-dim
+              border border-border
+              hover:border-border-hi hover:text-ink
+              transition-colors duration-120
+              disabled:opacity-50
+            "
           >
             cancel
-          </Button>
-          <Button
+          </button>
+          <button
             type="button"
             onClick={() => void submit()}
             disabled={busy || value.trim() === ''}
+            className="
+              px-4 py-1.5 text-[12px] font-semibold
+              bg-accent text-accent-fg
+              border border-accent
+              hover:brightness-110
+              transition-all duration-120
+              disabled:opacity-50
+            "
           >
             {pendingCreatePath ? 'create & open' : 'new session'}
-          </Button>
+          </button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }
 

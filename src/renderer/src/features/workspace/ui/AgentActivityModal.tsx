@@ -2,12 +2,6 @@ import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { SessionKind } from '@shared/types/providerKind'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 import type { SessionId, Tab } from '@renderer/workspace/types'
@@ -311,6 +305,11 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+        return
+      }
       if (rows.length === 0) return
       if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
         e.preventDefault()
@@ -358,6 +357,8 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
     },
     [rows, selectedIdx, onClose, focusRow, closeRow, buryRow],
   )
+
+  if (!open) return null
 
   function renderRow(row: Row, idx: number) {
     const selected = idx === selectedIdx
@@ -458,22 +459,25 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={nextOpen => {
-        if (!nextOpen) onClose()
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Agent Activity"
+      className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/30"
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) onClose()
       }}
     >
-      <DialogContent className="flex max-h-[82vh] w-[min(760px,92vw)] flex-col overflow-hidden">
+      <div className="w-[min(760px,92vw)] max-h-[82vh] overflow-hidden bg-surface border border-border-hi flex flex-col">
         <div className="flex-shrink-0 border-b border-border px-4 py-3">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <DialogTitle>Agent Activity</DialogTitle>
-              <DialogDescription>
+              <div className="text-[13px] text-ink">Agent Activity</div>
+              <div className="mt-1 text-[11px] text-muted">
                 {rows.length === 0
                   ? 'No panes open.'
                   : `${rows.length} pane${rows.length === 1 ? '' : 's'} across ${new Set(rows.map(r => r.tabId)).size} tab${new Set(rows.map(r => r.tabId)).size === 1 ? '' : 's'}`}
-              </DialogDescription>
+              </div>
             </div>
             <div className="text-[10px] uppercase tracking-wider text-muted">
               Enter focus · Del close · B bury · Esc dismiss
@@ -550,7 +554,7 @@ export function AgentActivityModal({ open, workspace, onClose }: Props) {
             Close
           </button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   )
 }

@@ -1,16 +1,4 @@
-import { useEffect, useState } from 'react'
-
-import { Button } from '@renderer/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@renderer/components/ui/dialog'
-import { Label } from '@renderer/components/ui/label'
-import { Textarea } from '@renderer/components/ui/textarea'
+import { useEffect, useRef, useState } from 'react'
 
 type Props = {
   open: boolean
@@ -28,73 +16,83 @@ export function BuryPanePrompt({
   onConfirm,
 }: Props) {
   const [note, setNote] = useState('')
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
     if (!open) return
     setNote('')
+    requestAnimationFrame(() => inputRef.current?.focus())
   }, [open])
 
+  if (!open) return null
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={nextOpen => {
-        if (!nextOpen) onCancel()
+    <div
+      className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/30"
+      onMouseDown={e => {
+        if (e.target === e.currentTarget) onCancel()
       }}
     >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Bury Pane</DialogTitle>
-          <DialogDescription asChild>
-            <div>
-              <div>{title}</div>
-              <div className="mt-0.5 truncate text-[10px]">{description}</div>
-            </div>
-          </DialogDescription>
-        </DialogHeader>
+      <div className="w-[min(520px,92vw)] bg-surface border border-border-hi">
+        <div className="border-b border-border px-4 py-3">
+          <div className="text-[13px] text-ink">Bury Pane</div>
+          <div className="text-[11px] text-muted mt-1">{title}</div>
+          <div className="text-[10px] text-muted mt-0.5 truncate">{description}</div>
+        </div>
 
         <div className="px-4 py-4">
-          <Label htmlFor="bury-pane-note" className="mb-2 block">
+          <label className="block text-[11px] text-muted mb-2">
             Optional note
-          </Label>
-          <Textarea
-            id="bury-pane-note"
-            autoFocus
+          </label>
+          <textarea
+            ref={inputRef}
             rows={3}
             value={note}
             onChange={e => setNote(e.target.value)}
             onKeyDown={e => {
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                onCancel()
+                return
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
                 onConfirm(note)
               }
             }}
-            className="min-h-0 resize-none bg-canvas"
+            className="
+              w-full bg-canvas border border-border
+              text-ink text-[12px] font-code
+              px-3 py-2 outline-none
+              placeholder:text-muted resize-none
+            "
             placeholder="Why did you bury this pane?"
           />
         </div>
 
-        <DialogFooter>
-          <Button
+        <div className="border-t border-border px-4 py-3 flex items-center justify-end gap-2">
+          <button
             type="button"
             onClick={onCancel}
-            variant="outline"
+            className="px-3 py-1.5 text-[12px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
           >
             Cancel
-          </Button>
+          </button>
           {/* One confirm button. An empty textarea is the "skip the
               note" path — the store trims whitespace to undefined
               anyway. A separate "Skip Note" button that forced ''
               used to exist but did exactly the same thing as Bury
               with an empty field; users were just guessing which
               one to press. */}
-          <Button
+          <button
             type="button"
             onClick={() => onConfirm(note)}
+            className="px-3 py-1.5 text-[12px] border border-accent bg-accent text-accent-fg hover:brightness-110"
           >
             Bury
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
