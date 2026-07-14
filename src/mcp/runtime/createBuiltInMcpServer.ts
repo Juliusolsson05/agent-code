@@ -24,6 +24,7 @@ import {
   isAgentProviderKind,
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import { registerWorkflowMcpTools } from 'workflow-mcp'
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
@@ -80,6 +81,23 @@ export function createBuiltInMcpServer(
 
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
+  }
+
+  if (scope.domains.includes('workflows')) {
+    // WHY the service is injected while registration stays request-scoped:
+    // BuiltInMcpHttpHost deliberately constructs a fresh McpServer for every
+    // POST so a provider's long-lived GET stream cannot wedge tool calls. The
+    // workflow service, however, owns active AbortControllers, durable cursors,
+    // and the one-writer guarantee for events.jsonl. Recreating that service
+    // with the protocol server would split run ownership and make cancel,
+    // idempotency, and resume racy. A cheap registrar over one app-owned
+    // service preserves both lifetimes.
+    if (dependencies.workflowService) {
+      registerWorkflowMcpTools(server, dependencies.workflowService, {
+        cwd: scope.cwd,
+        clientId: scope.sessionId,
+      })
+    }
   }
 
   return server
@@ -434,7 +452,13 @@ function registerOrchestrationTools(
             'Pass all required context in the prompt until the inheritance path is redesigned.',
           ].join(' '),
         ),
-        builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'])).optional(),
+        builtInMcpDomains: z.array(z.enum([
+          'ping',
+          'orchestration',
+          'ai_workspace',
+          'agent_transcripts',
+          'workflows',
+        ])).optional(),
       },
     },
     async args => {

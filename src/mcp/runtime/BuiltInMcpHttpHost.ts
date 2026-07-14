@@ -11,6 +11,7 @@ import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import type { WorkflowService } from 'workflow-mcp'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { normalizeBuiltInMcpDomains } from '@mcp/shared/types.js'
 import type {
@@ -36,6 +37,7 @@ export type BuiltInMcpDependencies = {
   openAiWorkspace?: (workspaceId: string) => void
   sessionManager?: SessionManager
   appRunJournal?: AppRunJournal
+  workflowService?: WorkflowService
 }
 
 const MCP_REQUEST_SLOW_MS = 1000
@@ -234,6 +236,11 @@ export class BuiltInMcpHttpHost {
       return
     }
 
+    if (!this.isAllowedOrigin(req)) {
+      this.writeJson(res, 403, { error: 'forbidden_origin' })
+      return
+    }
+
     const registration = this.registrationForRequest(req, url)
     if (!registration) {
       this.writeJson(res, 401, { error: 'unauthorized' })
@@ -395,6 +402,33 @@ export class BuiltInMcpHttpHost {
     if (!token) return null
     const registration = this.registrations.get(token) ?? null
     return registration && !registration.revoked ? registration : null
+  }
+
+  private isAllowedOrigin(req: IncomingMessage): boolean {
+    const origin = req.headers.origin
+    // WHY an absent Origin is accepted: Claude and Codex are native MCP
+    // clients, not browser pages, and native HTTP stacks normally omit this
+    // header. Requiring it would lock out the exact trusted clients this host
+    // exists for. When a browser DOES send Origin, accepting only this
+    // process's loopback endpoint prevents a hostile web page from using DNS
+    // rebinding to drive a credentialed local MCP server.
+    if (origin === undefined) return true
+    if (typeof origin !== 'string' || this.port === null) return false
+
+    try {
+      const parsed = new URL(origin)
+      if (parsed.protocol !== 'http:') return false
+      if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+        return false
+      }
+      const isLoopback =
+        parsed.hostname === '127.0.0.1' ||
+        parsed.hostname === 'localhost' ||
+        parsed.hostname === '[::1]'
+      return isLoopback && parsed.port === String(this.port)
+    } catch {
+      return false
+    }
   }
 
   private writeJson(res: ServerResponse, statusCode: number, payload: unknown): void {

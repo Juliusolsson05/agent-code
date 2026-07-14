@@ -491,6 +491,63 @@ export const sessionCommands: CommandDef[] = [
     },
   },
   {
+    id: 'enable-workflow-mcp',
+    surface: 'session',
+    title: 'Workflow MCP',
+    description: '**What it does:** Reloads the focused **Claude or Codex agent** with Agent Code workflow MCP tools on or off.\n\n**Use when:** You want this agent to discover, start, inspect, cancel, or resume portable multi-agent workflows.\n\n**Notes:** Workflow execution is app-owned and survives renderer reloads; changing MCP capabilities still requires replacing the provider process.',
+    keywords: ['mcp', 'workflow', 'workflows', 'pipeline', 'agents', 'resume', 'enable', 'disable', 'reload', 'claude', 'codex'],
+    when: ({ workspace }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return false
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      // Workflow MCP is verified only through Claude's --mcp-config and
+      // Codex's mcp_servers launch configuration in this implementation.
+      // OpenCode is an agent provider too, but advertising a toggle before its
+      // runtime injects the built-in server would create a control that appears
+      // to work while the model never receives the tools.
+      return kind === 'claude' || kind === 'codex'
+    },
+    getState: ctx => builtInMcpDomainState(ctx, 'workflows'),
+    run: async ({ workspace, ui }) => {
+      const sessionId = commandTargetSessionId(workspace)
+      if (!sessionId) return
+      const meta = workspace.state.sessions[sessionId]
+      const kind = meta?.kind ?? DEFAULT_PROVIDER
+      if ((kind !== 'claude' && kind !== 'codex') || !meta) return
+
+      ui.closePalette()
+      try {
+        const nextDomains = toggleBuiltInMcpDomain(meta.builtInMcpDomains, 'workflows')
+        // WHY replace the agent instead of mutating the running registration:
+        // both Claude and Codex receive their MCP configuration at process
+        // launch. Updating renderer metadata alone would display an enabled
+        // toggle while the provider still had a cached tools/list response
+        // from the old scope. Replacement keeps the visible state and the
+        // actual model-visible capability atomic.
+        const newSessionId = await workspace.replaceSession(meta.cwd, {
+          kind,
+          resumeSessionId: meta.providerSessionId,
+          builtInMcpDomains: nextDomains,
+        })
+        if (newSessionId) {
+          workspace.showPaneToast(
+            newSessionId,
+            nextDomains.includes('workflows')
+              ? 'Reloaded with Workflow MCP'
+              : 'Reloaded without Workflow MCP',
+          )
+        }
+      } catch (err) {
+        const message =
+          err instanceof Error && err.message.length > 0
+            ? err.message
+            : 'Workflow MCP reload failed'
+        workspace.showPaneToast(sessionId, message)
+      }
+    },
+  },
+  {
     id: 'reload-agent',
     surface: 'session',
     title: 'Reload Agent',

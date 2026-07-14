@@ -13,6 +13,8 @@ import 'monaco-editor/min/vs/editor/editor.main.css'
 import '@xterm/xterm/css/xterm.css'
 import { initializePerformance, mark } from '@renderer/performance/client'
 import { AppErrorBoundary } from '@renderer/app/AppErrorBoundary'
+import { WorkflowClientProvider } from '@renderer/features/workflows/client/WorkflowClientContext'
+import { ipcWorkflowClient } from '@renderer/features/workflows/client/IpcWorkflowClient'
 
 void initializePerformance().then(() => {
   mark('app.renderer.reactRenderCalled')
@@ -75,12 +77,14 @@ createRoot(document.getElementById('root')!).render(
         IPC transport" is decided. The remote client's entry point mounts
         the same provider with its WebSocket feed; nothing below the
         provider knows which transport it is on. */}
-    <SessionFeedProvider value={ipcSessionFeed}>
-      <GlobalToastProvider>
-        <AppErrorBoundary>
-          <App />
-        </AppErrorBoundary>
-      </GlobalToastProvider>
-    </SessionFeedProvider>
+    <WorkflowClientProvider value={ipcWorkflowClient}>
+      <SessionFeedProvider value={ipcSessionFeed}>
+        <GlobalToastProvider>
+          <AppErrorBoundary>
+            <App />
+          </AppErrorBoundary>
+        </GlobalToastProvider>
+      </SessionFeedProvider>
+    </WorkflowClientProvider>
   </React.StrictMode>
 )

@@ -61,6 +61,9 @@ import {
   PREVIOUS_RUN_CLASSIFIER_VERSION,
 } from '@main/incident/previousRunClassifier.js'
 import { getBuildInfo } from '@main/buildInfo.js'
+import { createWorkflowService } from '@main/workflows/createWorkflowService.js'
+import { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
+import type { WorkflowService } from 'workflow-mcp'
 
 // Main process — thin Electron host.
 //
@@ -134,6 +137,10 @@ let remoteController: RemoteController | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
+let workflowService: WorkflowService | null = null
+let workflowBridge: WorkflowBridge | null = null
+let workflowShutdownPromise: Promise<void> | null = null
+let workflowShutdownComplete = false
 
 // WHY Agent Code is intentionally single-primary-process:
 //
@@ -430,6 +437,20 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('toolchain.error', err)
     throw err
   }
+  appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.start' })
+  try {
+    workflowService = await createWorkflowService()
+    workflowBridge = new WorkflowBridge(workflowService)
+    workflowBridge.start()
+    appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.ready' })
+  } catch (err) {
+    // Workflow persistence is part of the execution contract, not a cosmetic
+    // renderer enhancement. Starting the MCP host without its durable service
+    // would advertise a toggle that either loses runs or fails every tool call;
+    // fail startup explicitly so the incident journal records the real cause.
+    appRunJournal.recordError('workflow_service.error', err)
+    throw err
+  }
   await cleanupClaudeImageCacheDir().catch(err => {
     console.warn('[images] failed to clean Claude image cache:', err)
     performanceService.error('app.main.imageCache.cleanup.error', err)
@@ -583,6 +604,15 @@ async function startApp(): Promise<void> {
       return existsSync(devCache) ? devCache : null
     },
   })
+  const activeWorkflowService = workflowService
+  const activeWorkflowBridge = workflowBridge
+  if (!activeWorkflowService || !activeWorkflowBridge) {
+    // This should be unreachable because workflow initialization is awaited
+    // above. Keep the assertion at the composition boundary so a future
+    // optional/lazy startup refactor cannot accidentally register half a
+    // workflow surface (MCP without IPC, or IPC without a durable owner).
+    throw new Error('Workflow service was not initialized before app composition')
+  }
   builtInMcpHost.setDependencies({
     orchestrationBridge,
     aiWorkspaceRegistry,
@@ -599,6 +629,7 @@ async function startApp(): Promise<void> {
     },
     sessionManager: manager,
     appRunJournal,
+    workflowService: activeWorkflowService,
   })
   performanceService.mark('app.main.sessionManager.created')
 
@@ -629,6 +660,7 @@ async function startApp(): Promise<void> {
     caffeinateController,
     appRunJournal,
     cliUpdateOrchestrator,
+    workflowBridge: activeWorkflowBridge,
   })
   // Boot probe runs after the IPC is wired so its first `state` push
   // has a live subscriber to receive it on the renderer side.
@@ -666,7 +698,32 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  // WHY Electron quit is gated on WorkflowService.stop(): the durable service
+  // promises that every published event was appended first, but cancellation
+  // and the terminal/interrupted marker still require asynchronous file I/O.
+  // A fire-and-forget stop here would let Electron tear main down between
+  // those writes, leaving a healthy user-initiated quit indistinguishable from
+  // a crash. Prevent exactly the first quit, drain once, then re-enter quit
+  // with the completion flag set so the ordinary lifecycle can finish.
+  if (workflowService && !workflowShutdownComplete) {
+    event.preventDefault()
+    if (!workflowShutdownPromise) {
+      workflowBridge?.dispose()
+      workflowShutdownPromise = workflowService
+        .stop('Agent Code is quitting')
+        .catch(err => {
+          console.warn('[workflows] graceful shutdown failed:', err)
+          appRunJournal?.recordError('workflow_service.stop.error', err)
+        })
+        .then(() => {
+          workflowShutdownComplete = true
+          workflowBridge = null
+          workflowService = null
+          app.quit()
+        })
+    }
+  }
   appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')
   void manager?.killAll()

@@ -78,6 +78,16 @@ export type {
   UsageSnapshot,
   UsageSnapshotRequest,
   UsageSpend,
+  WorkflowCancelRequest,
+  WorkflowCancelResult,
+  WorkflowEventsBatch,
+  WorkflowGetSnapshotRequest,
+  WorkflowGetSnapshotResult,
+  WorkflowReadEventsRequest,
+  WorkflowReadEventsResult,
+  WorkflowResumeRequest,
+  WorkflowResumeResult,
+  WorkflowRunIpcScope,
 } from '@preload/api/types.js'
 export type {
   OrchestrationAgentRecord,
