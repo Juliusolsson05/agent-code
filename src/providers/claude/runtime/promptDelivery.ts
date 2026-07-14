@@ -52,23 +52,6 @@ export async function deliverClaudePrompt(
     return deliverClaudeImagePrompt(io)
   }
 
-  if (!isPasteLike(io.prompt)) {
-    const acceptance = io.session.armPromptAcceptance(io.prompt, {
-      timeoutMs: ACCEPTANCE_TIMEOUT_MS,
-    })
-    io.record?.('acceptance-armed')
-    if (!io.write(`${io.prompt}\r`)) {
-      acceptance.cancel()
-      return failure({
-        stage: 'before-write', code: 'write-failed', retrySafe: true,
-        promptWritten: false, enterWritten: false,
-        message: `Could not write prompt to session ${io.sessionId}`,
-      })
-    }
-    io.record?.('prompt-and-enter-written')
-    return acceptanceResult(await acceptance.promise, io.sessionId, true, true, io.record)
-  }
-
   if (typeof io.session.snapshotScreen !== 'function') {
     return failure({
       stage: 'before-write', code: 'missing-capability', retrySafe: true,
@@ -84,15 +67,27 @@ export async function deliverClaudePrompt(
     timeoutMs: ACCEPTANCE_TIMEOUT_MS,
   })
   io.record?.('acceptance-armed')
-  if (!io.write(`\x1b[200~${io.prompt}\x1b[201~`)) {
+  const pasteLike = isPasteLike(io.prompt)
+  const promptBytes = pasteLike
+    ? `\x1b[200~${io.prompt}\x1b[201~`
+    : io.prompt
+  // Claude 2.1.209 invalidated the old "short text + Enter in one PTY write"
+  // optimization. In affected long-lived sessions the text appeared in the
+  // composer but the coalesced CR was swallowed, leaving a perfectly formed
+  // prompt visibly stranded while our durable-acceptance waiter timed out.
+  // Every prompt now crosses the same observable boundary: write text first,
+  // prove its tail (or collapsed paste placeholder) reached the ACTIVE
+  // composer, and only then send Enter as a separate write. The normal path is
+  // still tens of milliseconds; the invariant is worth more than one syscall.
+  if (!io.write(promptBytes)) {
     acceptance.cancel()
     return failure({
       stage: 'before-write', code: 'write-failed', retrySafe: true,
       promptWritten: false, enterWritten: false,
-      message: `Could not write paste to session ${io.sessionId}`,
+      message: `Could not write prompt to session ${io.sessionId}`,
     })
   }
-  io.record?.('paste-written')
+  io.record?.(pasteLike ? 'paste-written' : 'prompt-written')
 
   const absorbed = await pollPasteAbsorbed(
     () => io.session.snapshotScreen?.() ?? '',
@@ -107,10 +102,13 @@ export async function deliverClaudePrompt(
     return failure({
       stage: 'absorption', code: 'absorption-timeout', retrySafe: false,
       promptWritten: true, enterWritten: false,
-      message: `Claude session ${io.sessionId} did not visibly absorb the paste`,
+      message: `Claude session ${io.sessionId} did not visibly absorb the prompt`,
     })
   }
-  io.record?.('paste-absorbed', { via: absorbed.via, waitedMs: absorbed.waitedMs })
+  io.record?.(pasteLike ? 'paste-absorbed' : 'prompt-absorbed', {
+    via: absorbed.via,
+    waitedMs: absorbed.waitedMs,
+  })
 
   // Arm synchronously before Enter. This ordering is the acceptance analogue
   // of installing an event listener before starting the operation it observes.

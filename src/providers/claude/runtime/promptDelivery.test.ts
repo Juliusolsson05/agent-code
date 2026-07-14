@@ -50,12 +50,12 @@ afterEach(() => {
 })
 
 describe('deliverClaudePrompt routing', () => {
-  it('short single-line prompts go plain text+\\r — no paste, no screen poll', async () => {
-    const { io, writes, snapshotScreen } = makeIo('fix the bug', '')
+  it('short single-line prompts prove composer absorption before a separate Enter', async () => {
+    const { io, writes, snapshotScreen } = makeIo('fix the bug', '❯ fix the bug')
     const result = await deliverClaudePrompt(io)
     expect(result).toMatchObject({ ok: true, acceptance: { kind: 'user' } })
-    expect(writes).toEqual(['fix the bug\r'])
-    expect(snapshotScreen).not.toHaveBeenCalled()
+    expect(writes).toEqual(['fix the bug', '\r'])
+    expect(snapshotScreen).toHaveBeenCalled()
   })
 
   it('short MULTILINE prompts (incl. dictated <stt>) confirm via the INLINE tail — the fix', async () => {
@@ -141,6 +141,10 @@ describe('deliverClaudePrompt routing', () => {
       sessionId: 's1', prompt: 'hello',
       write: (data: string) => { writes.push(data); return true },
       session: {
+        snapshotScreen: (() => {
+          let calls = 0
+          return () => calls++ === 0 ? '❯' : '❯ hello'
+        })(),
         armPromptAcceptance: () => ({
           promise: Promise.resolve({ kind: 'timeout' as const }),
           cancel: vi.fn(),
@@ -157,7 +161,7 @@ describe('deliverClaudePrompt routing', () => {
       promptWritten: true,
       enterWritten: true,
     })
-    expect(writes).toEqual(['hello\r'])
+    expect(writes).toEqual(['hello', '\r'])
   })
 
   it('waits for image pills before Enter and then requires JSONL acceptance', async () => {
@@ -208,9 +212,9 @@ describe('deliverClaudePrompt routing', () => {
 
   it('does not await a diagnostic sink before writing', async () => {
     const never = new Promise<void>(() => {})
-    const { io, writes } = makeIo('hello', '')
+    const { io, writes } = makeIo('hello', '❯ hello')
     io.record = () => never
     await expect(deliverClaudePrompt(io)).resolves.toMatchObject({ ok: true })
-    expect(writes).toEqual(['hello\r'])
+    expect(writes).toEqual(['hello', '\r'])
   })
 })
