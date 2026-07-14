@@ -13,10 +13,9 @@
 // builds MainProviderConfig, `registry.renderer.ts` builds
 // RendererProviderConfig, and nothing re-joins them.
 
-import type { ComponentType, ReactNode } from 'react'
+import type { ComponentType } from 'react'
 import type { SessionOptions, SessionInfo, AgentSession } from '@shared/types/session.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
-import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript.js'
 
 export type TileLeafRelatedAgentTab = {
   sessionId: string
@@ -211,21 +210,6 @@ export type RendererProviderConfig = {
    * one real renderer capability instead of another ad hoc binary fallback.
    */
   conditionViews: RendererConditionViewRegistry
-  /**
-   * Provider-owned committed transcript row dispatch.
-   *
-   * WHY `undefined` means "no provider opinion" but `null` means "render
-   * nothing": generic rows are still the shared fallback for unknown Claude
-   * tools, while Codex has a few result rows (notably spawn_agent join payloads)
-   * whose correct UI is suppression. Collapsing both cases to `null` would make
-   * it impossible for Block.tsx to distinguish "fall back" from "intentionally
-   * consumed".
-   */
-  renderToolUse?: (block: ToolUseBlock) => ReactNode | undefined
-  renderToolResult?: (
-    block: ToolResultBlock,
-    context: { sourceTool?: ToolUseBlock | null },
-  ) => ReactNode | undefined
   /** The pane component the shell mounts inside TileTree. */
   TileLeaf: ComponentType<TileLeafProps>
 }

@@ -9,6 +9,7 @@ import {
   isCodexExecWrapperOutput,
   parseCodexJson,
   stripCodexExecWrapper,
+  stripUnifiedExecWrapper,
 } from '@providers/codex/renderer/transcript/entries'
 
 // Codex rollout → feed entry mapping.
@@ -280,7 +281,12 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       )
       const exitCode =
         typeof payload.exit_code === 'number' ? payload.exit_code : 0
-      if (!output.trim() && exitCode === 0) return []
+      // Silent successes (exit 0, no output) used to be dropped here,
+      // which made them INVISIBLE in the feed — no record the command
+      // ran at all. The CommandCard now renders a compact header-only
+      // "$ cmd ✓" row from exactly this result (spec §6), so emit the
+      // normal tool_result with empty content and the exit meta instead
+      // of returning [].
       return [
         codexToolResultEntry(
           uuid,
@@ -306,17 +312,41 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       const stdout = typeof payload.stdout === 'string' ? payload.stdout : ''
       const stderr = typeof payload.stderr === 'string' ? payload.stderr : ''
       const content = stdout || stderr
+      // `changes` has TWO observed wire shapes: the protocol source
+      // (vendor/codex-src protocol.rs PatchApplyEndEvent) declares a
+      // HashMap<path, FileChange{unified_diff|content}> — but real
+      // 2026-07 binaries emit a plain ARRAY of file paths. Normalize to
+      // { files: string[], diffs: Record<path, unified_diff> } so the
+      // renderer can paint "Edited <path> (+N −M)" when diffs exist and
+      // a path list when they don't. NOTE: since unified-exec, this
+      // event's call_id is a fresh `exec-<uuid>` pairing with NO
+      // tool_use — it renders as a standalone patch-result row.
+      const files: string[] = []
+      const diffs: Record<string, string> = {}
+      if (Array.isArray(payload.changes)) {
+        for (const f of payload.changes) {
+          if (typeof f === 'string') files.push(f)
+        }
+      } else {
+        const rec = asRecord(payload.changes)
+        for (const [path, change] of Object.entries(rec ?? {})) {
+          files.push(path)
+          const c = asRecord(change)
+          if (typeof c?.unified_diff === 'string') diffs[path] = c.unified_diff
+        }
+      }
       return [
         codexToolResultEntry(
           uuid,
           timestamp,
           payload.call_id,
           content,
-          payload.success !== true,
+          payload.success !== true && payload.status !== 'completed',
           {
             kind: 'patch_apply_end',
-            success: payload.success === true,
-            changes: asRecord(payload.changes) ?? {},
+            success: payload.success === true || payload.status === 'completed',
+            files,
+            diffs,
           },
         ),
       ]
@@ -390,42 +420,35 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
   }
 
   if (payload.type === 'custom_tool_call_output' && typeof payload.call_id === 'string') {
-    const output = codexOutputText(payload.output)
-    const parsed = parseCodexJson(output)
+    const raw = codexOutputText(payload.output)
+    // Unified-exec scripts wrap real output in a "Script completed /
+    // Wall time / Output:" preamble — strip it so the collapsed preview
+    // shows OUTPUT, and keep the wall time as structured duration.
+    const { output: unwrapped, durationMs, scriptFailed } = stripUnifiedExecWrapper(raw)
+    const parsed = parseCodexJson(unwrapped)
     const normalized =
-      typeof parsed?.output === 'string' ? parsed.output : output
+      typeof parsed?.output === 'string' ? parsed.output : unwrapped
     const metadata = parsed?.metadata
     const exitCode = numberField(asRecord(metadata), 'exit_code') ?? 0
-    if (
-      typeof normalized === 'string' &&
-      normalized.startsWith('Success. Updated the following files:')
-    ) {
-      return []
-    }
     return [
       codexToolResultEntry(
         uuid,
         timestamp,
         payload.call_id,
         normalized,
-        exitCode !== 0,
-        { kind: 'custom_tool_call_output' },
+        scriptFailed || exitCode !== 0,
+        { kind: 'custom_tool_call_output', durationMs },
       ),
     ]
   }
 
-  // Codex response_item kinds that used to fall through to `return []`
-  // even though `SemanticLiveBlockRow` has explicit live UI for each.
-  // Without committed counterparts these blocks vanish the moment the
-  // turn seals (the semantic turn unmounts) and are gone entirely on
-  // a session reload. Minimum-viable mapping: synthesize Claude-shaped
-  // tool_use / tool_result entries so the existing `CodexToolRow` /
-  // `CodexToolResultRow` dispatcher paints a row. The headlines may
-  // not match the live BlockRow UI exactly (web_search emoji, image
-  // generation chip, shell command prefix) — consider a dedicated
-  // `CodexSpecialToolRow` in a follow-up — but the block no longer
-  // disappears on commit, and the data still round-trips through disk
-  // so a reload sees the same row.
+  // Codex response_item kinds that once fell through to `return []` even
+  // though the semantic plane could show them live. Without committed
+  // counterparts they vanish at turn seal and on reload. Synthesize the
+  // common tool_use/tool_result transcript shape here; the post-ledger
+  // presentation projector then correlates live and committed evidence into
+  // the same OperationVM. Provider transcript code preserves information but
+  // deliberately does not choose a React component.
 
   if (payload.type === 'web_search_call') {
     const callId =
@@ -437,9 +460,9 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       stringField(action, 'url')
     const kind =
       stringField(action, 'type') ?? 'search'
-    // `description` is the field headlineForTool falls back to when
-    // the tool has no `command` / `path` / `arguments`. Pack a
-    // human-readable label so CodexToolRow shows something useful.
+    // Preserve a human-readable description in the common input shape. The
+    // presentation projector classifies this as web work and its shared card
+    // can show useful intent without understanding the rollout action object.
     const description =
       kind === 'search' && query
         ? `Search: ${query}`
@@ -501,28 +524,60 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
 
   if (payload.type === 'tool_search_call') {
     const callId =
-      typeof payload.id === 'string' ? payload.id : `tool_search:${uuid}`
+      // Client-executed tool search is correlated by call_id in Codex's actual
+      // ResponseItem schema. `id` is an optional/legacy server-item identity and
+      // is commonly absent, so preferring it (and otherwise inventing a uuid)
+      // guaranteed the later tool_search_output could not join this operation.
+      // Keep `id` only as a compatibility fallback for older server payloads.
+      stringField(payload, 'call_id') ??
+      stringField(payload, 'id') ??
+      `tool_search:${uuid}`
     const status =
       stringField(payload, 'status') ?? 'unknown'
+    const execution = stringField(payload, 'execution')
+    const argumentsRecord = asRecord(payload.arguments)
+    // Preserve the searched query/namespace/limit as the operation's real input.
+    // The old synthetic description discarded precisely the intent users need
+    // from a structured tool-search row. Protocol lifecycle fields are folded in
+    // beside (not instead of) those arguments so restored status remains total.
+    const input: Record<string, unknown> = {
+      ...(argumentsRecord ?? (
+        payload.arguments === undefined ? {} : { arguments: payload.arguments }
+      )),
+      status,
+      ...(execution ? { execution } : {}),
+    }
     return [
-      codexToolUseEntry(uuid, timestamp, callId, 'tool_search', {
-        description: `Tool search (${status})`,
-        status,
-      }),
+      codexToolUseEntry(uuid, timestamp, callId, 'tool_search', input),
     ]
   }
 
   if (payload.type === 'tool_search_output' && typeof payload.call_id === 'string') {
-    const output = codexOutputText(payload.output)
-    if (!output.trim()) return []
+    const status = stringField(payload, 'status') ?? 'completed'
+    const execution = stringField(payload, 'execution')
+    const hasProtocolTools = Array.isArray(payload.tools)
+    const output = payload.output !== undefined
+      ? codexOutputText(payload.output)
+      : hasProtocolTools
+        // ToolSearchOutput's real wire field is `tools`, not `output`. Preserve
+        // even an empty list: `[]` is still the explicit terminal receipt that
+        // stops the paired search card from spinning forever after reload.
+        ? JSON.stringify(payload.tools, null, 2)
+        : ''
+    if (!output.trim() && !hasProtocolTools) return []
     return [
       codexToolResultEntry(
         uuid,
         timestamp,
         payload.call_id,
         output,
-        false,
-        { kind: 'tool_search_output' },
+        status === 'error' || status === 'failed' || status === 'failure',
+        {
+          kind: 'tool_search_output',
+          status,
+          execution,
+          ...(hasProtocolTools ? { tools: payload.tools } : {}),
+        },
       ),
     ]
   }

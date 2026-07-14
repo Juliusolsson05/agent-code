@@ -5,6 +5,15 @@ import type {
   UsageSnapshot,
   UsageSpend,
 } from '@preload/index'
+import { Button } from '@renderer/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import {
   formatMoney,
   formatPercent,
@@ -152,58 +161,39 @@ export function UsageModal({ open, onClose }: Props) {
     void refresh(false)
   }, [open])
 
-  useEffect(() => {
-    if (!open) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, open])
-
-  if (!open) return null
-
   return (
-    <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-canvas/80 p-4">
-      <button
-        type="button"
-        aria-label="Close usage modal"
-        className="absolute inset-0 cursor-default"
-        onClick={onClose}
-      />
-      <div className="relative flex max-h-[88vh] w-full max-w-[760px] flex-col border border-border bg-surface shadow-2xl">
-        <header className="flex items-center justify-between gap-4 border-b border-border px-4 py-3">
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
+      }}
+    >
+      <DialogContent className="flex max-h-[88vh] w-[min(760px,calc(100vw-2rem))] flex-col">
+        <DialogHeader className="flex-row items-center justify-between gap-4">
           <div>
-            <div className="text-[13px] font-semibold text-ink">Usage</div>
-            <div className="mt-0.5 text-[10px] text-muted">
+            <DialogTitle className="font-semibold">Usage</DialogTitle>
+            <DialogDescription className="mt-0.5 text-[10px]">
               {fetchedLabel ?? 'Claude and Codex provider quotas'}
-            </div>
+            </DialogDescription>
           </div>
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
               disabled={loading}
               onClick={() => void refresh(true)}
-              className="
-                border border-border bg-surface-hi px-2.5 py-1
-                text-[11px] text-ink transition-colors
-                hover:border-accent disabled:cursor-wait disabled:text-muted
-              "
+              variant="secondary"
+              size="sm"
+              className="disabled:cursor-wait"
             >
               refresh
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="
-                border border-border bg-surface-hi px-2.5 py-1
-                text-[11px] text-muted transition-colors hover:text-ink
-              "
-            >
-              close
-            </button>
+            </Button>
+            <DialogClose asChild>
+              <Button type="button" variant="secondary" size="sm">
+                close
+              </Button>
+            </DialogClose>
           </div>
-        </header>
+        </DialogHeader>
 
         <div className="overflow-auto p-4">
           {error ? (
@@ -217,7 +207,7 @@ export function UsageModal({ open, onClose }: Props) {
             ))}
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

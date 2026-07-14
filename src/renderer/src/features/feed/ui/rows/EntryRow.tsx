@@ -3,13 +3,11 @@ import { memo } from 'react'
 import {
   isCompactBoundaryEntry,
   isCompactSummaryEntry,
-  isConversationEntry,
   type Entry,
 } from '@shared/types/transcript'
 
 import { CompactBoundaryRow } from '@renderer/features/feed/ui/rows/CompactBoundaryRow'
 import { CompactSummaryRow } from '@renderer/features/feed/ui/rows/CompactSummaryRow'
-import { ConversationRow } from '@renderer/features/feed/ui/rows/ConversationRow'
 import { taskNotificationFromEntry } from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationRow } from '@renderer/features/feed/ui/rows/TaskNotificationRow'
 import { SystemRow } from '@renderer/features/feed/ui/rows/SystemRow'
@@ -18,11 +16,11 @@ import { SystemRow } from '@renderer/features/feed/ui/rows/SystemRow'
 // never mutate), so shallow compare by entry reference skips re-render
 // for every row that didn't itself change.
 //
-// This is the per-entry dispatcher called by Feed's render loop. It
-// picks the right row component based on the entry's shape. Order
-// matters slightly: compact-boundary and compact-summary entries are
-// also "conversation-like" in the broad sense, so the type-guard
-// checks happen in most-specific-first order.
+// This dispatcher now owns ONLY entry-level system products. Ordinary
+// conversation content is flattened by projectFeedPresentation so its tools can
+// converge with live semantic calls under one stable OperationRow. Keeping a
+// conversation fallback here would silently resurrect the old Block.tsx
+// dispatch ladder the rewrite deliberately removed.
 export const EntryRow = memo(function EntryRow({ entry }: { entry: Entry }) {
   if (isCompactBoundaryEntry(entry)) {
     return <CompactBoundaryRow />
@@ -30,15 +28,12 @@ export const EntryRow = memo(function EntryRow({ entry }: { entry: Entry }) {
   if (isCompactSummaryEntry(entry)) {
     return <CompactSummaryRow entry={entry} />
   }
-  if (isConversationEntry(entry)) {
-    // Task-notification carrier rows must never paint as user bubbles
-    // (P2b). Entries whose parent Task row is visible never reach here
-    // (renderModel skips them); this branch is the parentless fallback.
-    const notification = taskNotificationFromEntry(entry)
-    if (notification) {
-      return <TaskNotificationRow notification={notification} />
-    }
-    return <ConversationRow entry={entry} />
+  // Task-notification carrier rows must never paint as user bubbles. The
+  // projector sends them here before flattening conversation blocks so an
+  // orphan notification retains its purpose-built fallback.
+  const notification = taskNotificationFromEntry(entry)
+  if (notification) {
+    return <TaskNotificationRow notification={notification} />
   }
   return <SystemRow entry={entry} />
 })

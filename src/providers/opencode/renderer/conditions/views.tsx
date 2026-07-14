@@ -23,6 +23,13 @@ import type {
   OpencodePermissionState,
   OpencodeQuestionState,
 } from '@shared/types/providerConditions'
+import { Button } from '@renderer/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 
 // Per-provider kind→state binding (see CodexStateByKind for the rationale
 // — eraseRegistry checks the registry literal against this, so filing a
@@ -56,21 +63,17 @@ function ConditionButtons({
       {actions.map((action, i) => {
         const reject = isRejectAction(action)
         return (
-          <button
+          <Button
             key={action.kind === 'custom' ? action.id : `pty-${i}`}
             type="button"
             autoFocus={i === firstPrimaryIdx}
             onClick={() => {
               void dispatch(action)
             }}
-            className={
-              reject
-                ? 'px-4 py-1.5 text-[12px] bg-transparent text-ink-dim border border-border hover:border-border-hi hover:text-ink transition-colors duration-120'
-                : 'px-4 py-1.5 text-[12px] font-semibold bg-accent text-accent-fg border border-accent hover:brightness-110 transition-all duration-120'
-            }
+            variant={reject ? 'outline' : 'default'}
           >
             {action.label}
-          </button>
+          </Button>
         )
       })}
     </div>
@@ -89,22 +92,25 @@ function ConditionShell({
   dispatch: (action: ConditionAction) => Promise<void>
 }) {
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      className="modal-fade fixed inset-0 z-[1000] flex items-center justify-center bg-canvas/80 backdrop-blur-sm"
-    >
-      <div className="modal-pop w-[480px] max-w-[calc(100vw-64px)] bg-surface border border-border-hi p-6">
+    <Dialog open>
+      <DialogContent
+        className="modal-pop w-[480px] max-w-[calc(100vw-64px)] p-6"
+        onEscapeKeyDown={event => event.preventDefault()}
+        onPointerDownOutside={event => event.preventDefault()}
+      >
         <div className="flex items-start gap-3 mb-4">
           <div className="text-accent text-[18px] leading-none select-none pt-0.5">!</div>
-          <div className="text-[14px] font-semibold text-ink leading-[1.3]">{heading}</div>
+          <DialogTitle className="text-[14px] font-semibold leading-[1.3]">{heading}</DialogTitle>
+          <DialogDescription className="sr-only">
+            OpenCode is waiting for an explicit response before it can continue.
+          </DialogDescription>
         </div>
         <div className="text-[12px] leading-[1.65] text-ink-dim pl-6">{children}</div>
         <div className="pl-6">
           <ConditionButtons actions={actions} dispatch={dispatch} />
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
