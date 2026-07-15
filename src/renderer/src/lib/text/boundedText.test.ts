@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  boundedTextLineCount,
   boundedTextPage,
   collapsedTextPreview,
   countTextLines,
@@ -30,5 +31,34 @@ describe('bounded text admission', () => {
     expect(countTextLines('')).toBe(0)
     expect(countTextLines('one')).toBe(1)
     expect(countTextLines('one\ntwo\n')).toBe(3)
+  })
+
+  it('keeps UTF-16 surrogate pairs and CRLF sequences on one page', () => {
+    const emojiSource = 'a😀b'
+    const emojiFirst = boundedTextPage(emojiSource, 0, 2, 10)
+    const emojiSecond = boundedTextPage(emojiSource, emojiFirst.end, 2, 10)
+    expect(emojiFirst.text).toBe('a')
+    expect(emojiSecond.text).toBe('😀')
+
+    const crlfSource = 'a\r\nb'
+    const crlfFirst = boundedTextPage(crlfSource, 0, 2, 10)
+    const crlfSecond = boundedTextPage(crlfSource, crlfFirst.end, 2, 10)
+    expect(crlfFirst.text).toBe('a')
+    expect(crlfSecond.text).toBe('\r\n')
+  })
+
+  it('reports a lower bound instead of scanning hidden output forever', () => {
+    expect(boundedTextLineCount('one\ntwo', 10, 100)).toEqual({
+      count: 2,
+      truncated: false,
+    })
+    expect(boundedTextLineCount('one\ntwo\nthree', 2, 100)).toEqual({
+      count: 2,
+      truncated: true,
+    })
+    expect(boundedTextLineCount('x'.repeat(1_000), 10, 20)).toEqual({
+      count: 1,
+      truncated: true,
+    })
   })
 })

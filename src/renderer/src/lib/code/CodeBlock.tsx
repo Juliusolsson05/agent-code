@@ -78,6 +78,7 @@ export const CodeBlock = memo(function CodeBlock({
   )
   const oversized = useMemo(() => exceedsInlineTextBudget(code), [code])
   const [largeContentOpen, setLargeContentOpen] = useState(false)
+  const [fullCopyState, setFullCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [pageStarts, setPageStarts] = useState([0])
   const requestedPageStart = pageStarts[pageStarts.length - 1] ?? 0
   const visiblePage = useMemo(() => {
@@ -259,7 +260,12 @@ export const CodeBlock = memo(function CodeBlock({
           workspaceRoot,
           filePath: path ?? null,
         })
-        if (disposed) return
+        if (disposed) {
+          // WHY close after a late open: unmount can happen while the main-process LSP handshake is
+          // in flight. Returning without a matching close leaks a document/listener in the server.
+          void window.api.closeLspDocument(clientUri)
+          return
+        }
 
         const unsubDiag = window.api.onLspDiagnostics(event => {
           if (event.clientUri !== clientUri) return
@@ -372,6 +378,25 @@ export const CodeBlock = memo(function CodeBlock({
             }}
           >
             collapse
+          </button>
+          <button
+            type="button"
+            className="hover:text-ink cursor-pointer"
+            onClick={() => {
+              // Full source is touched only after explicit user intent. Keeping it out of the
+              // registry avoids a second long-lived owner; direct clipboard access preserves the
+              // exact-content contract even though the visible editor remains page-bounded.
+              void navigator.clipboard.writeText(code).then(
+                () => setFullCopyState('copied'),
+                () => setFullCopyState('failed'),
+              )
+            }}
+          >
+            {fullCopyState === 'copied'
+              ? 'copied full content'
+              : fullCopyState === 'failed'
+                ? 'copy failed'
+                : 'copy full content'}
           </button>
         </>
       )}

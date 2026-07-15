@@ -2,7 +2,12 @@ import type { SessionManager } from '@main/sessionManager.js'
 import type { LspManager } from '@main/lspManager.js'
 
 import { sendToMainWindow } from '@main/window/mainWindow.js'
-import { enqueueJsonl, flushAndDropJsonl } from '@main/sessions/jsonlCoalescer.js'
+import {
+  enqueueJsonl,
+  flushAllJsonl,
+  flushAndDropJsonl,
+  flushJsonl,
+} from '@main/sessions/jsonlCoalescer.js'
 import { SemanticEventIpcCoalescer } from '@main/sessions/semanticEventCoalescer.js'
 import { LatestSessionIpcCoalescer } from '@main/sessions/latestSessionIpcCoalescer.js'
 import { SubAgentWatcherManager } from '@main/subagents/index.js'
@@ -20,10 +25,14 @@ import { SubAgentWatcherManager } from '@main/subagents/index.js'
 // Keeping both out of the normal structured feed path prevents every
 // agent pane listener from unpacking and ignoring raw PTY bytes.
 
+export type SessionForwarderControl = {
+  flush(): void
+}
+
 export function wireSessionForwarder(
   manager: SessionManager,
   lspManager: LspManager,
-): void {
+): SessionForwarderControl {
   // Per-session subagent fleet watcher. Driven off the main transcript stream
   // (jsonl-entry carries the transcript `file` we derive the subagents dir
   // from, and the tool_result blocks that flip a subagent to done/error). See
@@ -31,14 +40,23 @@ export function wireSessionForwarder(
   const subAgents = new SubAgentWatcherManager((sessionId, map) =>
     sendToMainWindow('session:sub-agents', { sessionId, subAgents: map }),
   )
-  const semanticEvents = new SemanticEventIpcCoalescer(payload =>
-    sendToMainWindow('session:semantic-event', payload),
-  )
   const screens = new LatestSessionIpcCoalescer(payload =>
     sendToMainWindow('session:screen', payload),
   )
   const processStates = new LatestSessionIpcCoalescer(payload =>
     sendToMainWindow('session:process-state', payload),
+  )
+  const semanticEvents = new SemanticEventIpcCoalescer(
+    payload => sendToMainWindow('session:semantic-event', payload),
+    undefined,
+    sessionId => {
+      // See SemanticEventIpcCoalescer.beforeBarrier. These are full snapshots / committed entries,
+      // so flushing them cannot lose information and prevents an older delayed value from landing
+      // after turn_completed or another structural semantic boundary.
+      screens.flush(sessionId)
+      processStates.flush(sessionId)
+      flushJsonl(sessionId)
+    },
   )
 
   manager.on('started', payload => sendToMainWindow('session:started', payload))
@@ -53,6 +71,10 @@ export function wireSessionForwarder(
   // — every jsonl-entry goes through the coalescer; live single
   // entries become 1-element bulk messages with imperceptible latency.
   manager.on('jsonl-entry', payload => {
+    // Committed transcript state must not overtake an earlier cumulative semantic preview still
+    // sitting in main's 100 ms window. The renderer's JSONL barrier can only flush messages it has
+    // received, so main must establish this order before crossing Electron IPC.
+    semanticEvents.flush(payload.sessionId)
     enqueueJsonl(payload.sessionId, payload.entry, payload.file)
     subAgents.observeParentEntry(payload.sessionId, payload.entry, payload.file)
   })
@@ -100,4 +122,13 @@ export function wireSessionForwarder(
     sendToMainWindow('session:exit', payload)
   })
   lspManager.on('diagnostics', payload => sendToMainWindow('lsp:diagnostics', payload))
+
+  return {
+    flush(): void {
+      semanticEvents.flush()
+      screens.flush()
+      processStates.flush()
+      flushAllJsonl()
+    },
+  }
 }

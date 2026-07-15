@@ -4,6 +4,7 @@ import type {
   WorkflowRunSnapshot,
   WorkflowService,
 } from 'workflow-mcp'
+import { createWorkflowState } from 'workflow-mcp/state'
 
 vi.mock('@main/window/mainWindow.js', () => ({
   recordIpcDiagnosticBreadcrumb: vi.fn(),
@@ -36,6 +37,19 @@ function stored(runId: string, cursor: number): StoredWorkflowEvent {
   }
 }
 
+function manifest(runId: string, cursor: number, cwd = '/repo') {
+  return {
+    schemaVersion: 1 as const,
+    runId,
+    cwd,
+    workflow: { name: 'hunt', description: 'Find renderer bugs' },
+    status: 'running' as const,
+    cursor,
+    createdAt: '2026-07-14T00:00:00.000Z',
+    updatedAt: '2026-07-14T00:00:00.000Z',
+  }
+}
+
 describe('WorkflowBridge', () => {
   it('delivers one acknowledged cursor hint only for an interested run', async () => {
     vi.useFakeTimers()
@@ -46,7 +60,17 @@ describe('WorkflowBridge', () => {
         listener = next
         return unsubscribe
       }),
-      snapshot: vi.fn(async () => ({ cursor: 0 })),
+      status: vi.fn(async () => manifest('run-a', 0)),
+      readEvents: vi.fn(async (
+        _scope: unknown,
+        { after }: { after: number },
+      ) => ({
+        runId: 'run-a',
+        fromCursor: after,
+        toCursor: 2,
+        events: [stored('run-a', 2)],
+        hasMore: false,
+      })),
     } as unknown as WorkflowService
     const send = vi.fn()
     const bridge = new WorkflowBridge(service, { send, batchWindowMs: 16 })
@@ -77,6 +101,7 @@ describe('WorkflowBridge', () => {
     listener!(stored('run-a', 3))
     vi.advanceTimersByTime(16)
     expect(send).toHaveBeenCalledTimes(1)
+    await bridge.readEvents({ cwd: '/repo', runId: 'run-a', after: 1 }, 7)
     bridge.acknowledgeEvents(7, { cwd: '/repo', runId: 'run-a', cursor: 2 })
     vi.advanceTimersByTime(16)
     expect(send).toHaveBeenCalledTimes(2)
@@ -95,13 +120,13 @@ describe('WorkflowBridge', () => {
 
   it('passes explicit renderer cwd scope to snapshot, cursor, cancel, and resume', async () => {
     const snapshot = {
-      manifest: { runId: 'run-a' },
+      manifest: manifest('run-a', 7),
       state: { runId: 'run-a' },
       cursor: 7,
     } as unknown as WorkflowRunSnapshot
     const service = {
       subscribe: () => () => undefined,
-      snapshot: vi.fn(async () => snapshot),
+      status: vi.fn(async () => snapshot.manifest),
       readEvents: vi.fn(async () => ({
         runId: 'run-a',
         cwd: '/repo',
@@ -124,9 +149,9 @@ describe('WorkflowBridge', () => {
     await expect(bridge.getSnapshot({ cwd: '/repo', runId: 'run-a' })).resolves.toEqual({
       cwd: '/repo',
       runId: 'run-a',
-      cursor: 7,
+      cursor: 0,
       manifest: snapshot.manifest,
-      state: snapshot.state,
+      state: createWorkflowState('run-a'),
     })
     await bridge.readEvents({ cwd: '/repo', runId: 'run-a', after: 7, limit: 10 })
     await bridge.cancel({ cwd: '/repo', runId: 'run-a', reason: 'user request' })
@@ -142,7 +167,7 @@ describe('WorkflowBridge', () => {
     })
 
     const scope = { cwd: '/repo', clientId: 'agent-code-renderer' }
-    expect(service.snapshot).toHaveBeenCalledWith(scope, 'run-a')
+    expect(service.status).toHaveBeenCalledWith(scope, 'run-a')
     expect(service.readEvents).toHaveBeenCalledWith(scope, {
       runId: 'run-a',
       after: 7,
@@ -188,5 +213,70 @@ describe('WorkflowBridge', () => {
 
     await expect(bridge.readEvents({ cwd: '/repo', runId: 'run-a', after: 0 }))
       .rejects.toThrow('renderer safety cap')
+  })
+
+  it('caps durable reads before the service materializes a renderer page', async () => {
+    const service = {
+      subscribe: () => () => undefined,
+      readEvents: vi.fn(async () => ({
+        runId: 'run-a',
+        fromCursor: 0,
+        toCursor: 0,
+        events: [],
+        hasMore: false,
+      })),
+    } as unknown as WorkflowService
+    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+
+    await bridge.readEvents({ cwd: '/repo', runId: 'run-a', after: 0, limit: 500 })
+
+    expect(service.readEvents).toHaveBeenCalledWith(
+      { cwd: '/repo', clientId: 'agent-code-renderer' },
+      { runId: 'run-a', after: 0, limit: 32 },
+    )
+  })
+
+  it('rejects acknowledgements beyond the durable cursor proven to that renderer', async () => {
+    vi.useFakeTimers()
+    let listener: ((event: StoredWorkflowEvent) => void) | null = null
+    const service = {
+      subscribe: (next: (event: StoredWorkflowEvent) => void) => {
+        listener = next
+        return () => undefined
+      },
+      status: vi.fn(async () => manifest('run-a', 1)),
+      readEvents: vi.fn(async () => ({
+        runId: 'run-a',
+        fromCursor: 0,
+        toCursor: 1,
+        events: [stored('run-a', 1)],
+        hasMore: false,
+      })),
+    } as unknown as WorkflowService
+    const send = vi.fn()
+    const bridge = new WorkflowBridge(service, { send, batchWindowMs: 1 })
+    bridge.start()
+    bridge.setRunInterest(9, { cwd: '/repo', runId: 'run-a', interested: true })
+    await bridge.getSnapshot({ cwd: '/repo', runId: 'run-a' }, 9)
+    await Promise.resolve()
+    vi.advanceTimersByTime(1)
+    expect(send).toHaveBeenCalledTimes(1)
+
+    bridge.acknowledgeEvents(9, { cwd: '/repo', runId: 'run-a', cursor: 999 })
+    listener!(stored('run-a', 2))
+    vi.advanceTimersByTime(1)
+    expect(send).toHaveBeenCalledTimes(1)
+
+    await bridge.readEvents({ cwd: '/repo', runId: 'run-a', after: 0 }, 9)
+    bridge.acknowledgeEvents(9, { cwd: '/repo', runId: 'run-a', cursor: 1 })
+    vi.advanceTimersByTime(1)
+    expect(send).toHaveBeenLastCalledWith('workflows:event-batch', {
+      cwd: '/repo',
+      runId: 'run-a',
+      fromCursor: 2,
+      toCursor: 2,
+      events: [],
+    })
+    vi.useRealTimers()
   })
 })

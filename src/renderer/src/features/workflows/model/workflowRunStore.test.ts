@@ -180,4 +180,81 @@ describe('WorkflowRunStore', () => {
     await eventually(() => expect(store.getSnapshot().cursor).toBe(2))
     stop()
   })
+
+  it('reconstructs a compact cursor-zero bootstrap from durable pages', async () => {
+    const client = new FakeWorkflowClient()
+    client.getSnapshot = async () => ({
+      runId: 'run-1',
+      cwd: '/repo',
+      cursor: 0,
+      manifest: {
+        schemaVersion: 1 as const,
+        runId: 'run-1',
+        cwd: '/repo',
+        workflow: { name: 'fat-bug-hunt', description: 'Deep hunt' },
+        status: 'running' as const,
+        cursor: 4,
+        createdAt: '2026-07-14T10:00:00.000Z',
+        updatedAt: '2026-07-14T10:00:04.000Z',
+      },
+      state: createWorkflowState('run-1'),
+    })
+    client.readEvents.mockResolvedValue({
+      runId: 'run-1',
+      cwd: '/repo',
+      fromCursor: 0,
+      toCursor: 4,
+      events: stored(...events),
+      hasMore: false,
+    })
+    const store = new WorkflowRunStore(client, { cwd: '/repo', runId: 'run-1' })
+    const stop = store.subscribe(() => {})
+
+    await eventually(() => expect(store.getSnapshot().cursor).toBe(4))
+    expect(store.getSnapshot().snapshot.agents[0]?.status).toBe('queued')
+    expect(client.acknowledge).toHaveBeenLastCalledWith({
+      cwd: '/repo',
+      runId: 'run-1',
+      cursor: 4,
+    })
+    stop()
+  })
+
+  it('does not let a delayed remount bootstrap overwrite newer cached state', async () => {
+    const client = new FakeWorkflowClient()
+    const store = new WorkflowRunStore(client, { cwd: '/repo', runId: 'run-1' })
+    const stopFirst = store.subscribe(() => {})
+    await eventually(() => expect(store.getSnapshot().cursor).toBe(1))
+    client.emit({
+      runId: 'run-1',
+      cwd: '/repo',
+      fromCursor: 1,
+      toCursor: 2,
+      events: stored(events[1]),
+    })
+    await eventually(() => expect(store.getSnapshot().cursor).toBe(2))
+    stopFirst()
+
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const original = client.getSnapshot.bind(client)
+    client.getSnapshot = async () => {
+      await gate
+      return original()
+    }
+    const stopSecond = store.subscribe(() => {})
+    await eventually(() => expect(client.listener).not.toBeNull())
+    client.emit({
+      runId: 'run-1',
+      cwd: '/repo',
+      fromCursor: 2,
+      toCursor: 3,
+      events: stored(events[2]),
+    })
+    release()
+
+    await eventually(() => expect(store.getSnapshot().cursor).toBe(3))
+    expect(store.getSnapshot().snapshot.phases[0]?.id).toBe('find')
+    stopSecond()
+  })
 })

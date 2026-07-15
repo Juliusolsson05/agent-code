@@ -55,13 +55,16 @@ export function WorkflowAgentDetails({
   agent: WorkflowAgentState
 }): React.JSX.Element {
   const [visibleActivityCount, setVisibleActivityCount] = useState(ACTIVITY_WINDOW)
+  const [activityWindowEnd, setActivityWindowEnd] = useState<number | null>(null)
   const prompt = referenceText(agent.prompt)
   const outcome = referenceText(agent.outcome?.result)
   const totalActivities = agent.attempts.reduce(
     (total, attempt) => total + attempt.activities.length,
     0,
   )
-  const firstVisibleActivity = Math.max(0, totalActivities - visibleActivityCount)
+  const lastVisibleActivity = Math.min(activityWindowEnd ?? totalActivities, totalActivities)
+  const firstVisibleActivity = Math.max(0, lastVisibleActivity - visibleActivityCount)
+  const newerActivityCount = totalActivities - lastVisibleActivity
   const activities: Array<{
     attemptId: string
     activity: WorkflowAgentState['attempts'][number]['activities'][number]
@@ -69,9 +72,10 @@ export function WorkflowAgentDetails({
   let activityOffset = 0
   for (const attempt of agent.attempts) {
     const attemptEnd = activityOffset + attempt.activities.length
-    if (attemptEnd > firstVisibleActivity) {
+    if (attemptEnd > firstVisibleActivity && activityOffset < lastVisibleActivity) {
       const localStart = Math.max(0, firstVisibleActivity - activityOffset)
-      for (let index = localStart; index < attempt.activities.length; index += 1) {
+      const localEnd = Math.min(attempt.activities.length, lastVisibleActivity - activityOffset)
+      for (let index = localStart; index < localEnd; index += 1) {
         const activity = attempt.activities[index]
         if (activity) activities.push({ attemptId: attempt.id, activity })
       }
@@ -93,9 +97,27 @@ export function WorkflowAgentDetails({
               <button
                 type="button"
                 className="mb-1 w-full rounded py-1 text-center text-[10px] text-muted hover:bg-surface-hi hover:text-ink"
-                onClick={() => setVisibleActivityCount(current => current + ACTIVITY_WINDOW)}
+                onClick={() => {
+                  // WHY the right edge freezes on first history expansion: otherwise every live
+                  // append shifts the tail window and silently evicts the oldest row the user just
+                  // asked to inspect, taking focus/disclosure state with it.
+                  setActivityWindowEnd(current => current ?? totalActivities)
+                  setVisibleActivityCount(current => current + ACTIVITY_WINDOW)
+                }}
               >
                 Show {Math.min(ACTIVITY_WINDOW, firstVisibleActivity)} earlier activities
+              </button>
+            ) : null}
+            {newerActivityCount > 0 ? (
+              <button
+                type="button"
+                className="mb-1 w-full rounded py-1 text-center text-[10px] text-muted hover:bg-surface-hi hover:text-ink"
+                onClick={() => {
+                  setActivityWindowEnd(null)
+                  setVisibleActivityCount(ACTIVITY_WINDOW)
+                }}
+              >
+                Show latest {Math.min(ACTIVITY_WINDOW, totalActivities)} activities · {newerActivityCount} new
               </button>
             ) : null}
             {/* WHY only a tail window has React elements: an active agent can

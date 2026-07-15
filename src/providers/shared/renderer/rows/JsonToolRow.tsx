@@ -7,6 +7,7 @@ import { truncateBashCommand } from '@renderer/features/feed/lib/helpers'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import {
   boundedSlabEntries,
   isAbsolutePathLike,
@@ -89,8 +90,12 @@ export const JsonToolRow = memo(function JsonToolRow({
     if (block.name === 'Bash' && headline.key === 'command') {
       return truncateBashCommand(headline.value)
     }
-    if (isAbsolutePathLike(headline.value)) return formatToolFilePath(headline.value, null)
-    return headline.value
+    // WHY clamp before URL/path classification and DOM insertion: providers sometimes place an
+    // entire prompt, diff, or file in a field named `path`/`description`. The headline is a hint;
+    // the structured parameter disclosure below remains the route to more context.
+    const preview = boundedTextPage(headline.value, 0, 400, 2).text
+    if (isAbsolutePathLike(preview)) return formatToolFilePath(preview, null)
+    return preview
   })()
 
   const { entries: params, hasMore } = boundedSlabEntries(

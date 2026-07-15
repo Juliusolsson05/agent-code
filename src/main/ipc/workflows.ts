@@ -22,11 +22,11 @@ export function registerWorkflowIpc(bridge: WorkflowBridge): void {
   // methods from accidentally bypassing cwd authorization.
   ipcMain.handle(
     'workflows:snapshot',
-    (_event, request: WorkflowGetSnapshotRequest) => bridge.getSnapshot(request),
+    (event, request: WorkflowGetSnapshotRequest) => bridge.getSnapshot(request, event.sender.id),
   )
   ipcMain.handle(
     'workflows:events',
-    (_event, request: WorkflowReadEventsRequest) => bridge.readEvents(request),
+    (event, request: WorkflowReadEventsRequest) => bridge.readEvents(request, event.sender.id),
   )
   ipcMain.handle(
     'workflows:cancel',

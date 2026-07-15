@@ -24,6 +24,7 @@ export class SemanticEventIpcCoalescer {
   constructor(
     private readonly send: (message: SessionSemanticEvent) => void,
     private readonly flushMs = DEFAULT_FLUSH_MS,
+    private readonly beforeBarrier?: (sessionId: string) => void,
   ) {}
 
   enqueue(message: SessionSemanticEvent): void {
@@ -34,6 +35,11 @@ export class SemanticEventIpcCoalescer {
       // turn_completed flush every other agent's cumulative prefixes, defeating
       // their 100 ms windows and recreating a nine-agent IPC burst.
       this.flush(message.sessionId)
+      // WHY the forwarder gets one explicit cross-channel barrier hook: JSONL, process snapshots,
+      // and semantic events use different coalescers, but renderer state observes one provider
+      // timeline. Draining the other channels here makes a structural semantic event the point at
+      // which all older snapshots/commits are guaranteed to have crossed IPC first.
+      this.beforeBarrier?.(message.sessionId)
       this.send(message)
       return
     }

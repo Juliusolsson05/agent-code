@@ -13,9 +13,10 @@ import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresenta
 import { asRecord } from '@shared/lib/asRecord'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
 import {
+  boundedTextLineCount,
   boundedTextPage,
-  countTextLines,
 } from '@renderer/lib/text/boundedText'
+import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 // WHY the import switch matters here: the local copy this replaced
 // did NOT exclude arrays — it returned `value as Record<...>` for
 // any non-null object including arrays. The shared helper rejects
@@ -28,12 +29,19 @@ import {
 function textFromContent(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
+    const textAt = (index: number): string => {
+      const item = content[index]
+      if (typeof item === 'string') return item
+      const rec = asRecord(item)
+      return typeof rec?.text === 'string' ? rec.text : JSON.stringify(item, null, 2)
+    }
+    // WHY avoid Array.map().join() for the overwhelmingly common single text block: the result can
+    // be megabytes, and joining makes a second full string before bounded rendering gets control.
+    // Multi-part output still has to become one exact source for paging/copy, but one block can be
+    // handed through by identity with no transient duplicate.
+    if (content.length === 1) return textAt(0)
     return content
-      .map(item => {
-        if (typeof item === 'string') return item
-        const rec = asRecord(item)
-        return typeof rec?.text === 'string' ? rec.text : JSON.stringify(item, null, 2)
-      })
+      .map((_, index) => textAt(index))
       .join('\n')
   }
   return String(content ?? '')
@@ -176,7 +184,7 @@ function headlineForTool(block: ToolUseBlock): string | null {
   if (block.name === 'exec_command') {
     const cmd = input.cmd
     if (typeof cmd === 'string') return cmd
-    if (Array.isArray(cmd)) return cmd.join(' ')
+    if (Array.isArray(cmd)) return boundedCommandParts(cmd)
   }
 
   if (block.name === 'apply_patch') {
@@ -210,11 +218,11 @@ function execCommandInput(input: unknown): ExecCommandInput | null {
   if (!rec) return null
   const rawCommand = rec.cmd ?? rec.command
   const command = Array.isArray(rawCommand)
-    ? rawCommand.map(String).join(' ')
+    ? boundedCommandParts(rawCommand)
     : typeof rawCommand === 'string'
-      ? rawCommand
+      ? truncateCommand(rawCommand)
       : ''
-  if (!command.trim()) return null
+  if (!/\S/.test(command)) return null
   return {
     command,
     workdir: typeof rec.workdir === 'string' ? rec.workdir : null,
@@ -222,6 +230,23 @@ function execCommandInput(input: unknown): ExecCommandInput | null {
     maxOutputTokens:
       typeof rec.max_output_tokens === 'number' ? rec.max_output_tokens : null,
   }
+}
+
+function boundedCommandParts(parts: readonly unknown[]): string {
+  let command = ''
+  for (const part of parts) {
+    const separator = command ? ' ' : ''
+    const remaining = MAX_COMMAND_DISPLAY_CHARS - command.length - separator.length
+    if (remaining <= 0) return `${command}…`
+    const page = boundedTextPage(String(part), 0, remaining, MAX_COMMAND_DISPLAY_LINES)
+    command += separator + page.text
+    if (page.hasNext) return `${command}…`
+  }
+  // WHY the join is built only to the display budget: command arrays are provider data, not a
+  // trusted argv size. Array.map(String).join(' ') used to materialize every argument before the
+  // two-line card truncated it. The transcript remains the complete tool-call source; this helper
+  // owns only the deliberately compact activity headline.
+  return truncateCommand(command)
 }
 
 function truncateCommand(text: string): string {
@@ -301,29 +326,26 @@ function parsedPath(parsed: Record<string, unknown> | null): string | null {
   return null
 }
 
-function countNonEmptyLines(text: string): number {
-  if (!text.trim()) return 0
-  return countTextLines(text)
-}
-
 function summaryLabelForCommandResult(
   parsedType: string | null,
   lineCount: number,
+  lineCountTruncated: boolean,
   path: string | null,
   workspaceRoot: string | null,
 ): string {
   const displayPath = path ? formatToolFilePath(path, workspaceRoot) : null
+  const countLabel = lineCountTruncated ? `≥${lineCount}` : String(lineCount)
   if (parsedType === 'read') {
-    const noun = lineCount === 1 ? 'line' : 'lines'
+    const noun = lineCount === 1 && !lineCountTruncated ? 'line' : 'lines'
     return displayPath
-      ? `Read ${lineCount} ${noun} from ${displayPath}`
-      : `Read ${lineCount} ${noun}`
+      ? `Read ${countLabel} ${noun} from ${displayPath}`
+      : `Read ${countLabel} ${noun}`
   }
   if (parsedType === 'search') {
-    const noun = lineCount === 1 ? 'line' : 'lines'
+    const noun = lineCount === 1 && !lineCountTruncated ? 'line' : 'lines'
     return displayPath
-      ? `Search results: ${lineCount} ${noun} in ${displayPath}`
-      : `Search results: ${lineCount} ${noun}`
+      ? `Search results: ${countLabel} ${noun} in ${displayPath}`
+      : `Search results: ${countLabel} ${noun}`
   }
   return displayPath ?? 'Result'
 }
@@ -387,7 +409,7 @@ export const CodexToolRow = memo(function CodexToolRow({
     const raw = headlineForTool(block)
     if (!raw) return null
     if (block.name === 'exec_command') return truncateCommand(raw)
-    return raw
+    return boundedTextPage(raw, 0, MAX_COMMAND_DISPLAY_CHARS, MAX_COMMAND_DISPLAY_LINES).text
   }, [block])
 
   return (
@@ -448,6 +470,8 @@ export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
   block: ToolUseBlock
 }) {
   const files = useMemo(() => parseApplyPatch(block.input), [block.input])
+  const rawPatch = applyPatchText(block.input)
+  const previewIncomplete = boundedTextPage(rawPatch).hasNext
 
   if (files.length === 0) {
     return <CodexToolRow block={block} />
@@ -466,6 +490,16 @@ export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
             <DiffSlab lines={file.lines} filePath={file.path} emptyLabel="(no inline diff)" />
           </div>
         ))}
+        {previewIncomplete ? (
+          <details className="text-[11px] text-muted">
+            <summary className="cursor-pointer select-none">
+              Rich preview is partial · view exact paged patch
+            </summary>
+            <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+              <PagedTextViewer source={rawPatch} />
+            </div>
+          </details>
+        ) : null}
       </div>
     </MarkerRow>
   )
@@ -477,7 +511,10 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   block: ToolResultBlock
 }) {
   const codeContext = useContext(CodeRenderContext)
-  const text = textFromContent(block.content).replace(/\s+$/, '')
+  const materializedText = textFromContent(block.content)
+  const text = materializedText.length <= 16 * 1024
+    ? materializedText.replace(/\s+$/, '')
+    : materializedText
   const meta = asRecord(asRecord(block)?.codex)
   const kind = typeof meta?.kind === 'string' ? meta.kind : null
   const isError = block.is_error === true
@@ -494,10 +531,11 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
       path &&
       text
     ) {
-      const lineCount = countNonEmptyLines(text)
+      const lineCount = boundedTextLineCount(text)
       const summary = summaryLabelForCommandResult(
         parsedType,
-        lineCount,
+        lineCount.count,
+        lineCount.truncated,
         path,
         codeContext.workspaceRoot,
       )
@@ -582,7 +620,7 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   // providers).
   const parsedJson = tryExtractJson(text)
   if (parsedJson !== null && typeof parsedJson === 'object') {
-    return <JsonResultSlab value={parsedJson} isError={isError} />
+    return <JsonResultSlab value={parsedJson} isError={isError} source={text} />
   }
 
   return <TruncatedOutputRow content={text} isError={isError} />

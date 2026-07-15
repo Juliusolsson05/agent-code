@@ -1,11 +1,13 @@
 import type {
   StoredWorkflowEvent,
+  WorkflowRunManifest,
   WorkflowRunSnapshot,
   WorkflowRunStartResult,
   WorkflowService,
   WorkflowServiceScope,
 } from 'workflow-mcp'
 import { WorkflowServiceError } from 'workflow-mcp'
+import { createWorkflowState } from 'workflow-mcp/state'
 
 import {
   recordIpcDiagnosticBreadcrumb,
@@ -37,14 +39,24 @@ const RENDERER_CLIENT_ID = 'agent-code-renderer'
 // burst and leaving input/heartbeat work guaranteed gaps between commits.
 const DEFAULT_BATCH_WINDOW_MS = 500
 const DEFAULT_MAX_BATCH_BYTES = 512 * 1024
+// WHY the durable API is count-paged while the renderer contract is byte-paged: asking the store
+// for 500 records can materialize and project a large burst before the byte admission policy gets
+// a chance to stop it. A small count ceiling is a second, independent work bound. One legacy event
+// can still be large on disk, but at most one small prefix is parsed/projected per renderer request
+// and an oversized projected event fails before structured clone.
+const MAX_DURABLE_EVENTS_PER_RENDERER_READ = 32
 
 type RendererRunInterest = {
   cwd: string
   acknowledgedCursor: number
+  /** Highest cursor main has actually returned through snapshot/readEvents to this renderer. */
+  provenCursor: number
   inFlightCursor: number | null
 }
 
 type RunDeliveryState = {
+  cwd: string
+  runId: string
   latestCursor: number
   interests: Map<number, RendererRunInterest>
 }
@@ -71,7 +83,7 @@ export type WorkflowBridgeOptions = {
  * distinction is what lets a 120-agent producer remain independent of renderer speed.
  */
 export class WorkflowBridge {
-  private readonly deliveryByRun = new Map<string, RunDeliveryState>()
+  private readonly deliveryByScope = new Map<string, RunDeliveryState>()
   private readonly runsBySession = new Map<
     string,
     { cwd: string; slots: Map<string, WorkflowRunReferenceData> }
@@ -107,23 +119,26 @@ export class WorkflowBridge {
     // WHY shutdown drops live hints: every hinted event is already durable, and a renderer which
     // is itself unloading cannot acknowledge delivery. Flushing here used to create one last IPC
     // burst exactly when Chromium was tearing its queues down.
-    this.deliveryByRun.clear()
+    this.deliveryByScope.clear()
   }
 
   setRunInterest(rendererId: number, request: WorkflowRunInterestRequest): void {
     const { cwd, runId } = validateRunScope(request)
+    const key = runScopeKey(cwd, runId)
     if (typeof request.interested !== 'boolean') {
       throw new TypeError('interested must be a boolean')
     }
 
     if (!request.interested) {
-      const delivery = this.deliveryByRun.get(runId)
+      const delivery = this.deliveryByScope.get(key)
       delivery?.interests.delete(rendererId)
-      if (delivery?.interests.size === 0) this.deliveryByRun.delete(runId)
+      if (delivery?.interests.size === 0) this.deliveryByScope.delete(key)
       return
     }
 
-    const delivery = this.deliveryByRun.get(runId) ?? {
+    const delivery = this.deliveryByScope.get(key) ?? {
+      cwd,
+      runId,
       latestCursor: 0,
       interests: new Map<number, RendererRunInterest>(),
     }
@@ -132,10 +147,11 @@ export class WorkflowBridge {
       delivery.interests.set(rendererId, {
         cwd,
         acknowledgedCursor: 0,
+        provenCursor: 0,
         inFlightCursor: null,
       })
     }
-    this.deliveryByRun.set(runId, delivery)
+    this.deliveryByScope.set(key, delivery)
 
     // A renderer re-registers after returning from Page Visibility `hidden`. Events emitted while
     // it was suspended were intentionally not queued, so prime from the durable snapshot cursor.
@@ -147,36 +163,49 @@ export class WorkflowBridge {
   acknowledgeEvents(rendererId: number, request: WorkflowEventsAcknowledgement): void {
     const { cwd, runId } = validateRunScope(request)
     const cursor = nonNegativeInteger(request.cursor, 'cursor')
-    const delivery = this.deliveryByRun.get(runId)
+    const delivery = this.deliveryByScope.get(runScopeKey(cwd, runId))
     const interest = delivery?.interests.get(rendererId)
+    const accepted = Boolean(
+      delivery &&
+      interest &&
+      interest.cwd === cwd &&
+      cursor <= interest.provenCursor,
+    )
     recordIpcDiagnosticBreadcrumb('workflows:acknowledge-events', {
       rendererId,
       runId,
       cursor,
-      accepted: Boolean(delivery && interest && interest.cwd === cwd),
+      accepted,
     })
     // An acknowledgement can race visibilitychange/unmount. Once interest is gone there is no
     // in-flight slot to release, so late success is harmless and must not resurrect the run.
-    if (!delivery || !interest || interest.cwd !== cwd) return
+    if (!delivery || !interest || interest.cwd !== cwd || cursor > interest.provenCursor) return
     interest.acknowledgedCursor = Math.max(interest.acknowledgedCursor, cursor)
-    if (interest.inFlightCursor !== null && cursor >= interest.inFlightCursor) {
-      interest.inFlightCursor = null
-    }
+    // WHY every proven acknowledgement releases the lease, even when it reports the renderer's
+    // previous cursor: a durable read can fail after main sent a cursor hint. The renderer acks its
+    // last admitted cursor as a NACK, allowing main to issue a fresh hint. Requiring cursor >= the
+    // hinted target permanently wedged that run after one transient IPC/storage error.
+    interest.inFlightCursor = null
     if (delivery.latestCursor > interest.acknowledgedCursor) this.scheduleFlush()
   }
 
   clearRendererInterests(rendererId: number): void {
-    for (const [runId, delivery] of this.deliveryByRun) {
+    for (const [key, delivery] of this.deliveryByScope) {
       delivery.interests.delete(rendererId)
-      if (delivery.interests.size === 0) this.deliveryByRun.delete(runId)
+      if (delivery.interests.size === 0) this.deliveryByScope.delete(key)
     }
   }
 
-  async getSnapshot(request: WorkflowGetSnapshotRequest): Promise<WorkflowGetSnapshotResult> {
+  async getSnapshot(
+    request: WorkflowGetSnapshotRequest,
+    rendererId?: number,
+  ): Promise<WorkflowGetSnapshotResult> {
     const { cwd, runId } = validateRunScope(request)
-    let snapshot: WorkflowRunSnapshot
+    let manifest: WorkflowRunSnapshot['manifest']
     try {
-      snapshot = await this.service.snapshot(rendererScope(cwd), runId)
+      manifest = workflowManifestForRenderer(
+        await this.service.status(rendererScope(cwd), runId),
+      )
     } catch (error) {
       // A feed can legitimately retain a historical workflow tool result after
       // its local run directory was removed. Treat absence as an empty client
@@ -186,12 +215,21 @@ export class WorkflowBridge {
       if (error instanceof WorkflowServiceError && error.code === 'run-not-found') return null
       throw error
     }
+    // Status proves this is the durable upper bound even though the bootstrap payload starts at
+    // cursor zero. This permits a remounted cached renderer store to acknowledge state it already
+    // reduced before unmount, while still rejecting cursors beyond durable truth.
+    this.noteProvenCursor(rendererId, cwd, runId, manifest.cursor)
+    // WHY bootstrap returns an empty projection instead of a fully reduced snapshot: a snapshot's
+    // activity arrays grow with the whole run and therefore cannot have an honest byte ceiling.
+    // The manifest is compact authority for status/latest cursor; the renderer reconstructs state
+    // from the same byte-bounded durable pages used for live gap repair, yielding between pages.
+    // This also makes restart cost proportional to admitted pages rather than one fatal clone.
     return {
       cwd,
       runId,
-      cursor: snapshot.cursor,
-      manifest: snapshot.manifest,
-      state: workflowPayloadForRenderer(snapshot.state),
+      cursor: 0,
+      manifest,
+      state: createWorkflowState(runId),
     }
   }
 
@@ -240,12 +278,18 @@ export class WorkflowBridge {
     }
   }
 
-  async readEvents(request: WorkflowReadEventsRequest): Promise<WorkflowReadEventsResult> {
+  async readEvents(
+    request: WorkflowReadEventsRequest,
+    rendererId?: number,
+  ): Promise<WorkflowReadEventsResult> {
     const { cwd, runId } = validateRunScope(request)
+    const requestedLimit = request.limit === undefined
+      ? MAX_DURABLE_EVENTS_PER_RENDERER_READ
+      : positiveInteger(request.limit, 'limit')
     const page = await this.service.readEvents(rendererScope(cwd), {
       runId,
       ...(request.after === undefined ? {} : { after: nonNegativeInteger(request.after, 'after') }),
-      ...(request.limit === undefined ? {} : { limit: positiveInteger(request.limit, 'limit') }),
+      limit: Math.min(requestedLimit, MAX_DURABLE_EVENTS_PER_RENDERER_READ),
       ...(request.waitMs === undefined ? {} : { waitMs: nonNegativeInteger(request.waitMs, 'waitMs') }),
     })
     const projected = byteBoundedEvents(page.events, this.maxBatchBytes)
@@ -257,6 +301,7 @@ export class WorkflowBridge {
       events: projected.events,
       hasMore: page.hasMore || projected.truncated,
     }
+    this.noteProvenCursor(rendererId, cwd, runId, response.toCursor)
     recordIpcDiagnosticBreadcrumb('workflows:events-result', {
       runId,
       requestAfter: request.after ?? 0,
@@ -320,12 +365,15 @@ export class WorkflowBridge {
   }
 
   private enqueue(event: StoredWorkflowEvent): void {
-    const delivery = this.deliveryByRun.get(event.runId)
+    let interested = false
+    for (const delivery of this.deliveryByScope.values()) {
+      if (delivery.runId !== event.runId || delivery.interests.size === 0) continue
+      delivery.latestCursor = Math.max(delivery.latestCursor, event.cursor)
+      interested = true
+    }
     // No visible workflow view is interested. The event is already in WorkflowService's journal;
     // retaining or cloning it here would create a second, unbounded queue with no consumer.
-    if (!delivery || delivery.interests.size === 0) return
-    delivery.latestCursor = Math.max(delivery.latestCursor, event.cursor)
-    this.scheduleFlush()
+    if (interested) this.scheduleFlush()
   }
 
   private scheduleFlush(): void {
@@ -337,7 +385,7 @@ export class WorkflowBridge {
   }
 
   private flush(): void {
-    for (const [runId, delivery] of this.deliveryByRun) {
+    for (const delivery of this.deliveryByScope.values()) {
       for (const interest of delivery.interests.values()) {
         if (
           interest.inFlightCursor !== null ||
@@ -350,7 +398,7 @@ export class WorkflowBridge {
         // this loop across windows.
         this.send('workflows:event-batch', {
           cwd: interest.cwd,
-          runId,
+          runId: delivery.runId,
           fromCursor: interest.acknowledgedCursor + 1,
           toCursor,
           events: [],
@@ -362,11 +410,11 @@ export class WorkflowBridge {
 
   private async primeRunInterest(rendererId: number, cwd: string, runId: string): Promise<void> {
     try {
-      const snapshot = await this.service.snapshot(rendererScope(cwd), runId)
-      const delivery = this.deliveryByRun.get(runId)
+      const manifest = await this.service.status(rendererScope(cwd), runId)
+      const delivery = this.deliveryByScope.get(runScopeKey(cwd, runId))
       const interest = delivery?.interests.get(rendererId)
       if (!delivery || !interest || interest.cwd !== cwd) return
-      delivery.latestCursor = Math.max(delivery.latestCursor, snapshot.cursor)
+      delivery.latestCursor = Math.max(delivery.latestCursor, manifest.cursor)
       if (delivery.latestCursor > interest.acknowledgedCursor) this.scheduleFlush()
     } catch (error) {
       // Historical transcript references can outlive pruned workflow storage. The store's own
@@ -375,6 +423,18 @@ export class WorkflowBridge {
       if (error instanceof WorkflowServiceError && error.code === 'run-not-found') return
       console.warn('[workflows] Unable to prime renderer run interest', { runId, error })
     }
+  }
+
+  private noteProvenCursor(
+    rendererId: number | undefined,
+    cwd: string,
+    runId: string,
+    cursor: number,
+  ): void {
+    if (rendererId === undefined) return
+    const interest = this.deliveryByScope.get(runScopeKey(cwd, runId))?.interests.get(rendererId)
+    if (!interest || interest.cwd !== cwd) return
+    interest.provenCursor = Math.max(interest.provenCursor, cursor)
   }
 }
 
@@ -386,7 +446,8 @@ function byteBoundedEvents(
   let bytes = 2 // JSON array brackets; exact envelope overhead is small and constant.
   for (const durable of events) {
     const projected = workflowPayloadForRenderer(durable)
-    const eventBytes = Buffer.byteLength(JSON.stringify(projected), 'utf8') + 1
+    const eventBytes = Buffer.byteLength(JSON.stringify(projected), 'utf8')
+    const separatorBytes = selected.length === 0 ? 0 : 1
     // WHY an oversized first event fails closed instead of using the old
     // "always make progress" escape hatch: that exception made the advertised
     // 512 KiB cap fictional exactly for the legacy payloads most likely to
@@ -394,16 +455,62 @@ function byteBoundedEvents(
     // above. A malformed legacy event now produces a visible/retryable workflow
     // error while the durable journal remains intact, rather than taking down
     // the entire app to preserve one inspector row.
-    if (eventBytes > maxBytes) {
+    if (2 + eventBytes > maxBytes) {
       throw new RangeError(
         `Workflow event at cursor ${durable.cursor} projects to ${eventBytes} bytes, exceeding the ${maxBytes}-byte renderer safety cap.`,
       )
     }
-    if (bytes + eventBytes > maxBytes) break
+    if (bytes + separatorBytes + eventBytes > maxBytes) break
     selected.push(projected)
-    bytes += eventBytes
+    bytes += separatorBytes + eventBytes
   }
   return { events: selected, truncated: selected.length < events.length, bytes }
+}
+
+function runScopeKey(cwd: string, runId: string): string {
+  return `${cwd}\u0000${runId}`
+}
+
+function workflowManifestForRenderer(manifest: WorkflowRunManifest): WorkflowRunManifest {
+  // WHY status is projected even though it is much smaller than a reduced snapshot: workflow
+  // metadata and terminal error text ultimately originate in user-authored definitions/providers.
+  // A pathological description must not smuggle an unbounded string through the one bootstrap IPC
+  // message that otherwise has a hard size invariant. Durable events retain complete diagnostic
+  // content through ContentReference; the renderer manifest only needs identity, lineage, and a
+  // compact label while it reconstructs those events page by page.
+  const bounded = (value: string): string => value.slice(0, 4 * 1024)
+  return {
+    schemaVersion: manifest.schemaVersion,
+    runId: bounded(manifest.runId),
+    cwd: bounded(manifest.cwd),
+    workflow: {
+      name: bounded(manifest.workflow.name),
+      description: bounded(manifest.workflow.description),
+      ...(manifest.workflow.title === undefined
+        ? {}
+        : { title: bounded(manifest.workflow.title) }),
+      ...(manifest.workflow.sourceHash === undefined
+        ? {}
+        : { sourceHash: bounded(manifest.workflow.sourceHash) }),
+      ...(manifest.workflow.filePath === undefined
+        ? {}
+        : { filePath: bounded(manifest.workflow.filePath) }),
+    },
+    status: manifest.status,
+    cursor: manifest.cursor,
+    createdAt: bounded(manifest.createdAt),
+    updatedAt: bounded(manifest.updatedAt),
+    ...(manifest.idempotencyKey === undefined
+      ? {}
+      : { idempotencyKey: bounded(manifest.idempotencyKey) }),
+    ...(manifest.resumedFromRunId === undefined
+      ? {}
+      : { resumedFromRunId: bounded(manifest.resumedFromRunId) }),
+    ...(manifest.cancellationReason === undefined
+      ? {}
+      : { cancellationReason: bounded(manifest.cancellationReason) }),
+    ...(manifest.error === undefined ? {} : { error: bounded(manifest.error) }),
+  }
 }
 
 function rendererScope(cwd: string): WorkflowServiceScope {

@@ -11,7 +11,7 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
-import { countTextLines, TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
+import { boundedTextLineCount, TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
 
@@ -40,6 +40,22 @@ function LazyDetails({
       {open ? <div className="mt-2">{children}</div> : null}
     </details>
   )
+}
+
+function toolResultText(content: ToolResultBlock['content']): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return String(content)
+  if (content.length === 0) return ''
+  const textAt = (index: number): string => {
+    const item = content[index]
+    return typeof item === 'string' ? item : item?.text ?? ''
+  }
+  // WHY the one-item fast path matters: provider-normalized results are commonly `[textBlock]`.
+  // Joining that array copies a multi-megabyte output before any paging decision can run, doubling
+  // peak live memory and blocking input. Multi-part results still require one contiguous durable
+  // source for exact paging/copy today, but the pathological common case no longer pays that copy.
+  if (content.length === 1) return textAt(0)
+  return content.map((_, index) => textAt(index)).join('\n')
 }
 
 /**
@@ -72,14 +88,7 @@ export const ToolResultRow = memo(function ToolResultRow({
   const codeContext = useContext(CodeRenderContext)
   const sourceTool = toolUseIndex.get(block.tool_use_id)?.name
 
-  const text =
-    typeof block.content === 'string'
-      ? block.content
-      : Array.isArray(block.content)
-        ? block.content
-            .map(c => (typeof c === 'string' ? c : c.text ?? ''))
-            .join('\n')
-        : String(block.content)
+  const text = toolResultText(block.content)
 
   const isError = block.is_error === true
   // WHY giant output skips eager trim: trim creates another near-complete
@@ -121,7 +130,7 @@ export const ToolResultRow = memo(function ToolResultRow({
     // WHY count with an index scan instead of split: this summary is rendered
     // before the disclosure opens. Allocating one array element per source line
     // would make the collapsed row pay proportional heap churn for hidden data.
-    const numLines = countTextLines(trimmed)
+    const lineCount = boundedTextLineCount(trimmed)
     const sourceInput = toolUseIndex.get(block.tool_use_id)?.input as
       | Record<string, unknown>
       | undefined
@@ -136,8 +145,10 @@ export const ToolResultRow = memo(function ToolResultRow({
         <LazyDetails
           summary={(
             <>
-            Read <span className="text-ink font-semibold">{numLines}</span>{' '}
-            {numLines === 1 ? 'line' : 'lines'}
+            Read <span className="text-ink font-semibold">
+              {lineCount.truncated ? `≥${lineCount.count}` : lineCount.count}
+            </span>{' '}
+            {lineCount.count === 1 && !lineCount.truncated ? 'line' : 'lines'}
             </>
           )}
         >
@@ -186,7 +197,7 @@ export const ToolResultRow = memo(function ToolResultRow({
   // can never make a result LESS readable than the truncation below.
   const parsedJson = tryExtractJson(trimmed)
   if (parsedJson !== null && typeof parsedJson === 'object') {
-    return <JsonResultSlab value={parsedJson} isError={isError} />
+    return <JsonResultSlab value={parsedJson} isError={isError} source={trimmed} />
   }
 
   // Everything else — Bash, Glob, LS, tool errors — truncates to the

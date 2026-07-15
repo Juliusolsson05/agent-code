@@ -19,6 +19,7 @@ import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import {
+  boundedTextPage,
   exceedsInlineTextBudget,
   TEXT_PAGE_MAX_CHARS,
 } from '@renderer/lib/text/boundedText'
@@ -35,6 +36,32 @@ import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOut
 
 import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
+
+const LIVE_LABEL_MAX_CHARS = 400
+const LIVE_LABEL_MAX_LINES = 2
+
+function boundedLiveLabel(source: string): string {
+  const page = boundedTextPage(
+    source,
+    0,
+    LIVE_LABEL_MAX_CHARS,
+    LIVE_LABEL_MAX_LINES,
+  )
+  return page.hasNext ? `${page.text}…` : page.text
+}
+
+function boundedJoinedLabel(values: readonly unknown[], separator: string): string {
+  let source = ''
+  for (const value of values) {
+    const prefix = source ? separator : ''
+    const remaining = LIVE_LABEL_MAX_CHARS - source.length - prefix.length
+    if (remaining <= 0) return `${source}…`
+    const part = boundedTextPage(String(value), 0, remaining, LIVE_LABEL_MAX_LINES)
+    source += prefix + part.text
+    if (part.hasNext) return `${source}…`
+  }
+  return boundedLiveLabel(source)
+}
 
 // [#285] Extract a CLOSED top-level JSON string field from a partial inputJson
 // buffer — i.e. one whose closing quote has already streamed. The regex body
@@ -384,13 +411,20 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
 
   if (block.kind === 'web_search_call') {
     const action = block.webSearchAction
+    // WHY live metadata is treated as a headline rather than trusted display content: provider
+    // events can carry generated queries/URLs measured in megabytes. React text nodes still pay
+    // allocation, reconciliation, layout, and accessibility costs even when CSS visually clips
+    // them. The committed transcript owns the complete payload; this streaming row only promises
+    // a bounded indication of what is happening now.
     const label =
       action?.kind === 'search'
-        ? `Search: ${action.query ?? action.queries?.join(', ') ?? '…'}`
+        ? `Search: ${boundedLiveLabel(action.query ?? (action.queries
+          ? boundedJoinedLabel(action.queries, ', ')
+          : '…'))}`
         : action?.kind === 'open_page'
-          ? `Open: ${action.url ?? '?'}`
+          ? `Open: ${boundedLiveLabel(action.url ?? '?')}`
           : action?.kind === 'find_in_page'
-            ? `Find "${action.pattern ?? '?'}" in ${action.url ?? '?'}`
+            ? boundedLiveLabel(`Find "${action.pattern ?? '?'}" in ${action.url ?? '?'}`)
             : 'Web search'
     return (
       <MarkerRow marker="⏺">
@@ -420,7 +454,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
           {img?.revisedPrompt ? (
             <MarkerRow marker="⎿" tone="muted">
               <div className="text-ink-dim text-[12px] leading-[1.55] italic">
-                {img.revisedPrompt}
+                {boundedLiveLabel(img.revisedPrompt)}
               </div>
             </MarkerRow>
           ) : null}
@@ -431,7 +465,12 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
 
   if (block.kind === 'local_shell_call') {
     const shell = block.localShellCall
-    const command = shell?.command.join(' ') ?? '(no command)'
+    // WHY joining is itself bounded: Array.join constructs the entire command before JSX can
+    // truncate it. A malformed/local provider event with thousands of arguments could therefore
+    // freeze the renderer despite the final row being only two visible lines.
+    const command = shell?.command
+      ? boundedJoinedLabel(shell.command, ' ')
+      : '(no command)'
     return (
       <MarkerRow marker="⏺">
         <div>

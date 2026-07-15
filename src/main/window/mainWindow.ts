@@ -196,10 +196,12 @@ function outboundMetadata(args: readonly unknown[]): Record<string, string | num
   // and can therefore outlive debug-retention cleanup or be pasted into an issue. Identifiers,
   // event families, and collection/string sizes are enough to identify a transport avalanche;
   // prompts, tool input, terminal bytes, and assistant output are both noisy and potentially
-  // sensitive, so none of their actual text belongs in this always-on breadcrumb ring.
-  copyStringMetadata(payload, metadata, 'sessionId')
-  copyStringMetadata(payload, metadata, 'runId')
-  copyStringMetadata(payload, metadata, 'type')
+  // sensitive, so none of their actual text belongs in this always-on breadcrumb ring. Even
+  // identifier and event-family fields are represented only by length; their expected shape is not
+  // a trustworthy guarantee once provider data crosses the boundary.
+  copyStringLength(payload, metadata, 'sessionId')
+  copyStringLength(payload, metadata, 'runId')
+  copyStringLength(payload, metadata, 'type')
   copyNumberMetadata(payload, metadata, 'fromCursor')
   copyNumberMetadata(payload, metadata, 'toCursor')
   copyNumberMetadata(payload, metadata, 'rawEventCount')
@@ -209,7 +211,7 @@ function outboundMetadata(args: readonly unknown[]): Record<string, string | num
   copyStringLength(payload, metadata, 'data')
   copyStringLength(payload, metadata, 'screen')
   const event = asRecord(payload.event)
-  if (event) copySafeLabelMetadata(event, metadata, 'type', 'eventType')
+  if (event && typeof event.type === 'string') metadata.eventTypeLength = event.type.length
   return metadata
 }
 
@@ -222,7 +224,11 @@ function sanitizeDiagnosticMetadata(
       result[key] = value
       continue
     }
-    copySafeLabelValue(result, key, value)
+    // WHY no renderer/provider string is ever copied verbatim: names such as `runId`, `type`, or
+    // `code` describe expected shape, not trustworthy provenance. A malformed payload can place a
+    // prompt, command, token, or path in any of them. Counts and lengths retain avalanche evidence
+    // without attempting an impossible content classifier at the terminal logging boundary.
+    result[`${key}Length`] = value.length
   }
   return result
 }
@@ -231,40 +237,6 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null
-}
-
-function copyStringMetadata(
-  source: Record<string, unknown>,
-  target: Record<string, string | number | boolean>,
-  key: string,
-): void {
-  if (typeof source[key] === 'string') copySafeLabelValue(target, key, source[key])
-}
-
-function copySafeLabelMetadata(
-  source: Record<string, unknown>,
-  target: Record<string, string | number | boolean>,
-  sourceKey: string,
-  targetKey: string,
-): void {
-  const value = source[sourceKey]
-  if (typeof value === 'string') copySafeLabelValue(target, targetKey, value)
-}
-
-function copySafeLabelValue(
-  target: Record<string, string | number | boolean>,
-  key: string,
-  value: string,
-): void {
-  // WHY even identifier-shaped fields are validated at the final logging
-  // boundary: a malformed provider payload could put prompt/command text in a
-  // field normally called `sessionId` or `type`. Only short protocol labels
-  // reach the terminal; everything else becomes a length, never a prefix.
-  if (value.length <= 256 && /^[A-Za-z0-9_.:@/-]+$/.test(value)) {
-    target[key] = value
-  } else {
-    target[`${key}Length`] = value.length
-  }
 }
 
 function copyNumberMetadata(

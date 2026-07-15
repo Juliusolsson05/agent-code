@@ -119,7 +119,7 @@ export function isAbsolutePathLike(s: string): boolean {
   // almost certainly prose that merely starts with `/` or `~/`, and mis-
   // classifying it as a path would route it through path-shortening display
   // that mangles the text. Bounding the regex input also keeps it linear.
-  return /^(~\/|\/)[^\0\n]*$/.test(s) && s.length < 512
+  return s.length < 512 && /^(~\/|\/)[^\0\n]*$/.test(s)
 }
 
 export function isHttpUrl(s: string): boolean {
@@ -127,7 +127,7 @@ export function isHttpUrl(s: string): boolean {
   // token/blob that happens to start with http(s):// than a real link, and we
   // don't want to wrap 2KB of text in an <a>. 2KB matches the de-facto
   // browser URL-length ceiling, so anything longer wouldn't navigate anyway.
-  return /^https?:\/\/\S+$/.test(s) && s.length < 2048
+  return s.length < 2048 && /^https?:\/\/\S+$/.test(s)
 }
 
 /**

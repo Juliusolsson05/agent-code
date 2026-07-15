@@ -51,6 +51,29 @@ describe('SemanticEventIpcCoalescer', () => {
     ])
   })
 
+  it('flushes sibling session channels before publishing a semantic barrier', () => {
+    const order: string[] = []
+    const coalescer = new SemanticEventIpcCoalescer(
+      payload => order.push((payload.event as { type: string }).type),
+      100,
+      sessionId => order.push(`siblings:${sessionId}`),
+    )
+    coalescer.enqueue({
+      sessionId: 'session-1',
+      event: { type: 'text_delta', turnId: 'turn-1', textSoFar: 'ready' },
+    })
+    coalescer.enqueue({
+      sessionId: 'session-1',
+      event: { type: 'turn_completed', turnId: 'turn-1' },
+    })
+
+    expect(order).toEqual([
+      'text_delta',
+      'siblings:session-1',
+      'turn_completed',
+    ])
+  })
+
   it('does not flush unrelated sessions at another session ordering barrier', () => {
     const send = vi.fn()
     const coalescer = new SemanticEventIpcCoalescer(send, 100)

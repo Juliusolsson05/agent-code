@@ -1,7 +1,10 @@
 import type { RendererFreezeHeartbeat } from '@shared/incident/rendererFreeze.js'
 
 const HEARTBEAT_INTERVAL_MS = 1_000
-const DOM_SAMPLE_EVERY_TICKS = 5
+// WHY DOM cardinality is sampled far less often than liveness: four whole-document collections are
+// useful context after a freeze, but they are not the heartbeat. A thirty-second cadence keeps the
+// always-on one-second path limited to clocks and numeric browser metrics.
+const DOM_SAMPLE_EVERY_TICKS = 30
 
 type PerformanceWithMemory = Performance & {
   memory?: {

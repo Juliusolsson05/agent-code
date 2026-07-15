@@ -23,6 +23,9 @@ type RendererLiveness = {
   stallClassification: 'foreground' | 'background' | null
   lastTerminalLogAt: number | null
   lastSnapshotAt: number | null
+  lastRecoveryLogAt: number | null
+  lastIncidentAt: number | null
+  expensiveCaptureInFlight: boolean
   lifecycle: WindowLifecycleBreadcrumb[]
 }
 
@@ -73,10 +76,12 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
     state.lastHeartbeat = heartbeat
     state.stallStartedAt = null
     state.stallClassification = null
-    state.lastTerminalLogAt = null
-    state.lastSnapshotAt = null
     liveness.set(event.sender.id, state)
-    if (stalledForMs !== null) {
+    if (
+      stalledForMs !== null &&
+      (state.lastRecoveryLogAt === null || now - state.lastRecoveryLogAt >= HEARTBEAT_REPEAT_LOG_MS)
+    ) {
+      state.lastRecoveryLogAt = now
       terminalFreezeLog('renderer heartbeat resumed', {
         recoveredAfterMs: stalledForMs,
         webContentsId: event.sender.id,
@@ -245,17 +250,19 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
         mainLoopDelay,
         includeProcessTree: unresponsiveEvents === 1,
       })
-      journal.recordIncident({
-        kind: 'window.unresponsive',
-        severity: 'error',
-        process: 'renderer',
-        context: {
-          windowId: window.id,
-          rendererPid: safeRendererPid(window.webContents),
-          heartbeatAgeMs: heartbeatAge(state),
-          unresponsiveEvents,
-        },
-      })
+      if (admitIncidentRecord(state)) {
+        journal.recordIncident({
+          kind: 'window.unresponsive',
+          severity: 'error',
+          process: 'renderer',
+          context: {
+            windowId: window.id,
+            rendererPid: safeRendererPid(window.webContents),
+            heartbeatAgeMs: heartbeatAge(state),
+            unresponsiveEvents,
+          },
+        })
+      }
     })
 
     window.on('responsive', () => {
@@ -271,13 +278,14 @@ export function installWindowIncidentHooks(journal: AppRunJournal): void {
       })
       unresponsiveSince = null
       unresponsiveEvents = 0
-      state.lastSnapshotAt = null
-      journal.recordIncident({
-        kind: 'window.responsive',
-        severity: 'warn',
-        process: 'renderer',
-        context: { windowId: window.id, frozenMs },
-      })
+      if (admitIncidentRecord(state)) {
+        journal.recordIncident({
+          kind: 'window.responsive',
+          severity: 'warn',
+          process: 'renderer',
+          context: { windowId: window.id, frozenMs },
+        })
+      }
     })
 
     window.webContents.on('preload-error', (_e, preloadPath, error) => {
@@ -318,6 +326,9 @@ function freshLiveness(now: number): RendererLiveness {
     stallClassification: null,
     lastTerminalLogAt: null,
     lastSnapshotAt: null,
+    lastRecoveryLogAt: null,
+    lastIncidentAt: null,
+    expensiveCaptureInFlight: false,
     lifecycle: [],
   }
 }
@@ -405,7 +416,6 @@ function logFreezeSnapshot(input: {
   // metadata snapshot every thirty seconds preserves trend evidence without
   // flooding a terminal or making stderr backpressure part of the incident.
   if (
-    input.reason !== 'responsive-again' &&
     input.state.lastSnapshotAt !== null &&
     now - input.state.lastSnapshotAt < HEARTBEAT_REPEAT_LOG_MS
   ) return
@@ -457,34 +467,21 @@ function logFreezeSnapshot(input: {
     terminalFreezeLog('renderer freeze snapshot failed', diagnosticFailureMetadata(error))
   }
 
-  if (input.includeProcessTree && EXPENSIVE_FREEZE_DIAGNOSTICS_ENABLED) {
+  if (
+    input.includeProcessTree &&
+    EXPENSIVE_FREEZE_DIAGNOSTICS_ENABLED &&
+    !input.state.expensiveCaptureInFlight
+  ) {
+    input.state.expensiveCaptureInFlight = true
     const rendererPid = safeRendererPid(input.window.webContents)
     // WHY the native collectors require an explicit environment opt-in:
     // pidtree/pidusage launch subprocesses and macOS `sample` stops and
     // inspects the renderer. They are valuable during a supervised repro, but
     // they are too invasive for an always-on production watchdog. Dynamic
     // imports also keep their startup/module cost out of normal runs.
-    void captureDescendantProcesses().then(
-      processes => terminalFreezeLog('descendant process snapshot', processes),
-      error => terminalFreezeLog(
-        'descendant process snapshot failed',
-        diagnosticFailureMetadata(error),
-      ),
-    )
-    if (rendererPid !== null && process.platform === 'darwin') {
-      // WHY an opt-in OS stack sample accompanies the first foreground stall: JavaScript metrics
-      // can tell us that the renderer stopped scheduling work, but low CPU cannot distinguish a
-      // Chromium native deadlock, synchronous IPC wait, pathological layout, or JavaScript
-      // execution. Keep it one second and summarize only the renderer-main thread; normal
-      // production runs never invoke this native collector.
-      void captureRendererStackSample(rendererPid).then(
-        sample => terminalFreezeLog('renderer stack sample', sample),
-        error => terminalFreezeLog('renderer stack sample failed', {
-          rendererPid,
-          ...diagnosticFailureMetadata(error),
-        }),
-      )
-    }
+    void captureExpensiveDiagnostics(rendererPid).finally(() => {
+      input.state.expensiveCaptureInFlight = false
+    })
   }
 }
 
@@ -503,8 +500,8 @@ async function captureDescendantProcesses(): Promise<Record<string, unknown>> {
     import('pidtree'),
     import('pidusage'),
   ])
-  const pids = await pidtree(process.pid, { root: true })
-  const stats = await pidusage(pids)
+  const pids = await withTimeout(pidtree(process.pid, { root: true }), 5_000)
+  const stats = await withTimeout(pidusage(pids), 5_000)
   const processes = Object.values(stats)
     .sort((left, right) => (right.cpu - left.cpu) || (right.memory - left.memory))
     .slice(0, 30)
@@ -521,6 +518,29 @@ async function captureDescendantProcesses(): Promise<Record<string, unknown>> {
     descendantCount: pids.length,
     topProcesses: processes,
   }
+}
+
+async function captureExpensiveDiagnostics(rendererPid: number | null): Promise<void> {
+  // WHY one coordinator owns both collectors: without a shared in-flight guard, repeated Electron
+  // lifecycle signals could overlap pid walks and OS samples even though terminal lines were rate-
+  // limited. Each branch catches locally and the outer caller uses finally, so diagnostics cannot
+  // retain the guard or reject into an Electron callback.
+  const captures: Promise<void>[] = [
+    captureDescendantProcesses().then(
+      processes => terminalFreezeLog('descendant process snapshot', processes),
+      error => terminalFreezeLog('descendant process snapshot failed', diagnosticFailureMetadata(error)),
+    ),
+  ]
+  if (rendererPid !== null && process.platform === 'darwin') {
+    captures.push(captureRendererStackSample(rendererPid).then(
+      sample => terminalFreezeLog('renderer stack sample', sample),
+      error => terminalFreezeLog('renderer stack sample failed', {
+        rendererPid,
+        ...diagnosticFailureMetadata(error),
+      }),
+    ))
+  }
+  await Promise.allSettled(captures)
 }
 
 async function captureRendererStackSample(rendererPid: number): Promise<Record<string, unknown>> {
@@ -594,12 +614,41 @@ function terminalFreezeLog(message: string, data: unknown): void {
 
 function diagnosticFailureMetadata(error: unknown): Record<string, string | number> {
   if (!(error instanceof Error)) return { errorType: typeof error }
-  const metadata: Record<string, string | number> = { errorName: error.name }
+  // Error.name and string codes are mutable application content. Only their lengths are useful for
+  // diagnosing malformed failures; copying them verbatim would reintroduce the same path/token leak
+  // eliminated from outbound IPC breadcrumbs.
+  const metadata: Record<string, string | number> = { errorType: 'Error' }
   const candidate = error as Error & { code?: unknown; stderrBytes?: unknown }
-  if (typeof candidate.code === 'string') metadata.errorCode = candidate.code
+  if (typeof candidate.code === 'string') metadata.errorCodeLength = candidate.code.length
   if (typeof candidate.code === 'number') metadata.errorCode = candidate.code
   if (typeof candidate.stderrBytes === 'number') metadata.stderrBytes = candidate.stderrBytes
   return metadata
+}
+
+function admitIncidentRecord(state: RendererLiveness): boolean {
+  const now = Date.now()
+  if (state.lastIncidentAt !== null && now - state.lastIncidentAt < HEARTBEAT_REPEAT_LOG_MS) {
+    return false
+  }
+  state.lastIncidentAt = now
+  return true
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('diagnostic timeout')), timeoutMs)
+    timer.unref?.()
+    promise.then(
+      value => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      error => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
 }
 
 function safeRendererPid(webContents: WebContents): number | null {
