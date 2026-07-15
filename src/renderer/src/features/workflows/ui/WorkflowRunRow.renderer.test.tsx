@@ -140,6 +140,7 @@ function clientFor(state: WorkflowState): WorkflowClient {
       }
     },
     subscribe() { return () => {} },
+    acknowledge() {},
     async cancel() {},
     async resume() { return { runId: 'run-resumed', cwd: '/repo' } },
     async listSessionRuns() { return [] },

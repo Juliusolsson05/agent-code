@@ -9,6 +9,7 @@ import type {
 } from '@shared/types/transcript'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import { asRecord } from '@shared/lib/asRecord'
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
 
 function isToolUseBlock(block: ContentBlock): block is ToolUseBlock {
   return (
@@ -110,18 +111,16 @@ const MAX_COMMAND_DISPLAY_CHARS = 160
  *  dump is truncated mid-line — both happen often enough in practice
  *  that one cap alone isn't enough. */
 export function truncateBashCommand(cmd: string): string {
-  const lines = cmd.split('\n')
-  const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
-  const needsCharTruncation = cmd.length > MAX_COMMAND_DISPLAY_CHARS
-  if (!needsLineTruncation && !needsCharTruncation) return cmd
-  let truncated = cmd
-  if (needsLineTruncation) {
-    truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n')
-  }
-  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
-    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS)
-  }
-  return truncated.trimEnd() + '…'
+  // WHY the bounded scanner is used for a two-line label: tool arguments are
+  // untrusted in size. Splitting a megabyte heredoc merely to retain two lines
+  // made the visually collapsed tool row allocate the complete command again.
+  const page = boundedTextPage(
+    cmd,
+    0,
+    MAX_COMMAND_DISPLAY_CHARS,
+    MAX_COMMAND_DISPLAY_LINES,
+  )
+  return page.hasNext ? `${page.text.trimEnd()}…` : page.text
 }
 
 /** Strip the "<digits>\t" prefix from every line so the user sees
@@ -130,10 +129,7 @@ export function truncateBashCommand(cmd: string): string {
  *  we hand Read-tool content to a code renderer that does its own
  *  line numbering; otherwise the markers would double up. */
 export function stripLineNumberPrefix(text: string): string {
-  return text
-    .split('\n')
-    .map(line => line.replace(/^\s*\d+\t/, ''))
-    .join('\n')
+  return text.replace(/(^|\n)\s*\d+\t/g, '$1')
 }
 
 /** Build a stable React key for an Entry + its index. Prefers the
@@ -153,7 +149,10 @@ export function debugLabelForEntry(entry: Entry): string {
     const content = Array.isArray(message.content) ? message.content : []
     const first = asRecord(content[0])
     if (first?.type === 'text' && typeof first.text === 'string') {
-      return `${entry.type}: ${first.text.replace(/\s+/g, ' ').trim().slice(0, 80)}`
+      // WHY slice precedes whitespace normalization: this label is a tiny
+      // debug breadcrumb, so scanning and copying a complete giant prompt to
+      // retain 80 characters would invert its cost/value ratio.
+      return `${entry.type}: ${first.text.slice(0, 512).replace(/\s+/g, ' ').trim().slice(0, 80)}`
     }
     if (typeof first?.type === 'string') {
       return `${entry.type}: ${String(first.type)}`
@@ -166,8 +165,15 @@ export function debugLabelForEntry(entry: Entry): string {
  *  streaming text currently has an odd number of fences (i.e. is
  *  mid-fence and should split into prose + code halves). */
 export function countFenceMarkers(text: string): number {
-  const matches = text.match(/```/g)
-  return matches ? matches.length : 0
+  let count = 0
+  let cursor = 0
+  while (cursor < text.length) {
+    const marker = text.indexOf('```', cursor)
+    if (marker < 0) break
+    count += 1
+    cursor = marker + 3
+  }
+  return count
 }
 
 /** Split streaming text at the LAST ``` marker when the total count
@@ -251,14 +257,10 @@ export function compactSummaryText(entry: CompactSummaryEntry): string {
  *  signal. The full summary is always available on the expanded
  *  compact boundary. */
 export function truncateCompactSummary(text: string): string {
-  const lines = text.split('\n')
-  if (lines.length > 24) {
-    return `${lines.slice(0, 24).join('\n')}\n\n[summary truncated]`
-  }
-  if (text.length > 2400) {
-    return `${text.slice(0, 2400).trimEnd()}\n\n[summary truncated]`
-  }
-  return text
+  const page = boundedTextPage(text, 0, 2_400, 24)
+  return page.hasNext
+    ? `${page.text.trimEnd()}\n\n[summary truncated]`
+    : page.text
 }
 
 /** Label attachment-type entries for the system row. Handles three

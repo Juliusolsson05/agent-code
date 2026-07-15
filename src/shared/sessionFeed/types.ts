@@ -158,7 +158,12 @@ export type SessionSubAgentsEvent = {
  *  stream_error / flow_selected / flow_ignored / source_changed /
  *  tool_result / signature). Kept `unknown` ON PURPOSE — see the module
  *  comment above. */
-export type SessionSemanticEvent = { sessionId: string; event: unknown }
+export type SessionSemanticEvent = {
+  sessionId: string
+  event: unknown
+  /** Number of provider deltas represented after transport coalescing. */
+  rawEventCount?: number
+}
 
 export type SessionExitEvent = {
   sessionId: string

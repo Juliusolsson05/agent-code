@@ -5,6 +5,7 @@ import type { Unsub } from '@preload/api/types.js'
 import type {
   WorkflowCancelRequest,
   WorkflowCancelResult,
+  WorkflowEventsAcknowledgement,
   WorkflowEventsBatch,
   WorkflowGetSnapshotRequest,
   WorkflowGetSnapshotResult,
@@ -12,6 +13,7 @@ import type {
   WorkflowReadEventsResult,
   WorkflowResumeRequest,
   WorkflowResumeResult,
+  WorkflowRunInterestRequest,
   WorkflowSessionRunsRequest,
   WorkflowSessionRunsResult,
 } from '@shared/workflows/types.js'
@@ -36,6 +38,14 @@ export const workflowsApi = {
   workflowListSessionRuns: (
     request: WorkflowSessionRunsRequest,
   ): Promise<WorkflowSessionRunsResult> => ipcRenderer.invoke('workflows:list-session-runs', request),
+
+  workflowSetRunInterest: (request: WorkflowRunInterestRequest): void => {
+    ipcRenderer.send('workflows:set-run-interest', request)
+  },
+
+  workflowAcknowledgeEvents: (request: WorkflowEventsAcknowledgement): void => {
+    ipcRenderer.send('workflows:acknowledge-events', request)
+  },
 
   onWorkflowEvents: (cb: (batch: WorkflowEventsBatch) => void): Unsub =>
     subscribe('workflows:event-batch', cb),

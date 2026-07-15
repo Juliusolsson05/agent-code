@@ -34,6 +34,10 @@ function validBatchForScope(batch: WorkflowEventBatch, scope: WorkflowRunScope):
   )
 }
 
+function yieldToRenderer(): Promise<void> {
+  return new Promise(resolve => window.setTimeout(resolve, 0))
+}
+
 /**
  * One cursor-checked projection for one durable workflow run.
  *
@@ -126,7 +130,7 @@ export class WorkflowRunStore {
     // sequence gap. Batches received during bootstrap are buffered, then compared against the
     // authoritative snapshot cursor.
     try {
-      this.stopPush = this.client.subscribe((batch) => {
+      this.stopPush = this.client.subscribe(this.scope, (batch) => {
         if (!validBatchForScope(batch, this.scope) || generation !== this.generation) return
         if (this.view.phase === 'loading') {
           this.pendingBeforeSnapshot.push(batch)
@@ -157,6 +161,7 @@ export class WorkflowRunStore {
         history: this.view.history,
         cursor: envelope.cursor,
       })
+      this.client.acknowledge({ ...this.scope, cursor: envelope.cursor })
       const pending = this.pendingBeforeSnapshot
       this.pendingBeforeSnapshot = []
       for (const batch of pending) this.enqueueBatch(batch, generation)
@@ -265,8 +270,14 @@ export class WorkflowRunStore {
     generation: number,
   ): Promise<void> {
     if (generation !== this.generation) return
-    if (batch.toCursor <= this.view.cursor) return
-    if (this.reduceContiguous(batch.events) && this.view.cursor >= batch.toCursor) return
+    if (batch.toCursor <= this.view.cursor) {
+      this.client.acknowledge({ ...this.scope, cursor: this.view.cursor })
+      return
+    }
+    if (this.reduceContiguous(batch.events) && this.view.cursor >= batch.toCursor) {
+      this.client.acknowledge({ ...this.scope, cursor: this.view.cursor })
+      return
+    }
 
     // A push is a latency optimization, never the source of truth. If it exposes a cursor gap,
     // fill from the persisted event log rather than guessing that a missing activity update was
@@ -292,8 +303,16 @@ export class WorkflowRunStore {
           `Workflow event gap after cursor ${before}; durable replay returned no progress.`,
         )
       }
+      // WHY every durable page ends with a macrotask boundary: awaiting IPC is
+      // not a reliable yield once responses are already queued. A resumed fat
+      // run can make dozens of readEvents promises resolve back-to-back, and
+      // reducing them in one microtask chain starves input, paint, and the
+      // heartbeat even though each individual page is byte-bounded.
       if (!page.hasMore && this.view.cursor >= target) break
+      await yieldToRenderer()
+      if (generation !== this.generation) return
     }
+    this.client.acknowledge({ ...this.scope, cursor: this.view.cursor })
   }
 }
 

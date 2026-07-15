@@ -31,6 +31,8 @@ import { memo, useMemo, useState } from 'react'
 import hljs from 'highlight.js'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
 import { escapeHtml, toHighlightLanguage } from '@shared/code/htmlHighlight'
 import { normalizeCodeLanguage } from '@shared/code/language'
 import type { GitIntent } from '@shared/git/gitDetect'
@@ -574,15 +576,46 @@ export const GitPushCard = memo(function GitPushCard({
 // ---------------------------------------------------------------------------
 
 export function renderGitCard(intent: GitIntent, output: string): React.ReactNode {
-  switch (intent.kind) {
-    case 'diff':   return <GitDiffCard intent={intent} output={output} />
-    case 'commit': return <GitCommitCard intent={intent} output={output} />
-    case 'status': return <GitStatusCard intent={intent} output={output} />
-    case 'add':    return <GitAddCard intent={intent} output={output} />
-    case 'log':    return <GitLogCard intent={intent} output={output} />
-    case 'push':   return <GitPushCard intent={intent} output={output} />
-    default: return null
-  }
+  // WHY custom git cards enforce the same admission budget as generic tool
+  // output: the parsers split output into files/hunks/lines and the diff card
+  // highlights each line. A huge `git diff` therefore bypassed CodeBlock's
+  // protections and could synchronously create thousands of highlighted DOM
+  // rows. Parse one bounded page; the complete durable output remains
+  // available through an explicitly opened paged raw viewer.
+  const page = boundedTextPage(output)
+  const card = (() => {
+    switch (intent.kind) {
+      case 'diff':   return <GitDiffCard intent={intent} output={page.text} />
+      case 'commit': return <GitCommitCard intent={intent} output={page.text} />
+      case 'status': return <GitStatusCard intent={intent} output={page.text} />
+      case 'add':    return <GitAddCard intent={intent} output={page.text} />
+      case 'log':    return <GitLogCard intent={intent} output={page.text} />
+      case 'push':   return <GitPushCard intent={intent} output={page.text} />
+      default: return null
+    }
+  })()
+  if (!page.hasNext) return card
+  return (
+    <>
+      {card}
+      <GitOutputDisclosure output={output} />
+    </>
+  )
+}
+
+function GitOutputDisclosure({ output }: { output: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details
+      className="mt-1 text-[11px] text-muted"
+      onToggle={event => setOpen(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer hover:text-ink">
+        view paged raw output · {output.length.toLocaleString()} characters
+      </summary>
+      {open ? <div className="mt-1"><PagedTextViewer source={output} /></div> : null}
+    </details>
+  )
 }
 
 /**

@@ -4,6 +4,7 @@ import type { DiffLine } from '@shared/parsers/lineDiff'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 
@@ -11,6 +12,10 @@ import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
 import { asRecord } from '@shared/lib/asRecord'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
+import {
+  boundedTextPage,
+  countTextLines,
+} from '@renderer/lib/text/boundedText'
 // WHY the import switch matters here: the local copy this replaced
 // did NOT exclude arrays — it returned `value as Record<...>` for
 // any non-null object including arrays. The shared helper rejects
@@ -35,15 +40,24 @@ function textFromContent(content: unknown): string {
 }
 
 function summarizePatchTargets(input: unknown): string[] {
-  const text =
+  const fullText =
     typeof input === 'string'
       ? input
       : typeof asRecord(input)?.raw === 'string'
         ? String(asRecord(input)?.raw)
         : ''
-  if (!text) return []
-  const matches = [...text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)]
-  return matches.map(match => match[1]).slice(0, 6)
+  if (!fullText) return []
+
+  // WHY only scan one renderer page: this headline is a preview, not a patch
+  // parser. Spreading matchAll over a generated megabyte patch allocates every
+  // match before slice(0, 6) can discard them, and repeats during live deltas.
+  const text = boundedTextPage(fullText).text
+  const targets: string[] = []
+  for (const match of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)) {
+    targets.push(match[1])
+    if (targets.length >= 6) break
+  }
+  return targets
 }
 
 type ApplyPatchFile = {
@@ -65,8 +79,14 @@ function applyPatchText(input: unknown): string {
 }
 
 function parseApplyPatch(input: unknown): ApplyPatchFile[] {
-  const text = applyPatchText(input)
-  if (!text.includes('*** Begin Patch')) return []
+  const fullText = applyPatchText(input)
+  if (!fullText.includes('*** Begin Patch')) return []
+
+  // WHY the rich diff card parses only one bounded page: DiffSlab creates a
+  // node per line. CSS clipping never reduced that parse/DOM/layout cost. The
+  // durable tool input still owns the complete patch; this card is explicitly
+  // a safe preview of its leading files/hunks.
+  const text = boundedTextPage(fullText).text
 
   const files: ApplyPatchFile[] = []
   let current: ApplyPatchFile | null = null
@@ -178,8 +198,6 @@ function headlineForTool(block: ToolUseBlock): string | null {
 
 const MAX_COMMAND_DISPLAY_LINES = 2
 const MAX_COMMAND_DISPLAY_CHARS = 160
-const RESULT_MAX_LINES = 3
-
 type ExecCommandInput = {
   command: string
   workdir: string | null
@@ -207,19 +225,14 @@ function execCommandInput(input: unknown): ExecCommandInput | null {
 }
 
 function truncateCommand(text: string): string {
-  const lines = text.split('\n')
-  const needsLineTruncation = lines.length > MAX_COMMAND_DISPLAY_LINES
-  const needsCharTruncation = text.length > MAX_COMMAND_DISPLAY_CHARS
-  if (!needsLineTruncation && !needsCharTruncation) return text
-
-  let truncated = text
-  if (needsLineTruncation) {
-    truncated = lines.slice(0, MAX_COMMAND_DISPLAY_LINES).join('\n')
-  }
-  if (truncated.length > MAX_COMMAND_DISPLAY_CHARS) {
-    truncated = truncated.slice(0, MAX_COMMAND_DISPLAY_CHARS)
-  }
-  return truncated.trimEnd() + '…'
+  const page = boundedTextPage(
+    text,
+    0,
+    MAX_COMMAND_DISPLAY_CHARS,
+    MAX_COMMAND_DISPLAY_LINES,
+  )
+  if (!page.hasNext) return text
+  return page.text.trimEnd() + '…'
 }
 
 export const CodexExecCommandRow = memo(function CodexExecCommandRow({
@@ -290,7 +303,7 @@ function parsedPath(parsed: Record<string, unknown> | null): string | null {
 
 function countNonEmptyLines(text: string): number {
   if (!text.trim()) return 0
-  return text.split('\n').length
+  return countTextLines(text)
 }
 
 function summaryLabelForCommandResult(
@@ -330,25 +343,24 @@ function ExpandableCodeResult({
   codeId: string
   language?: string | null
 }) {
-  const [opened, setOpened] = useState(false)
+  const [open, setOpen] = useState(false)
   return (
     <MarkerRow marker="⎿" tone="muted">
-      {/* Closed <details> still mounts React children. Keep the Monaco
-          CodeBlock behind first-open state so a resumed transcript with
-          many read/search results does not create hidden editors, models,
-          LSP documents, and diagnostics listeners before the user asks to
-          inspect the raw payload. Once opened, keep it mounted so copy-code
-          IDs and Monaco state remain stable while the user expands/collapses. */}
+      {/* WHY close destroys the child instead of latching first-open: restored
+          sessions can contain hundreds of previously inspected reads. A latch
+          turns every historical click into permanent editor/model ownership.
+          Recreating one bounded page on the next explicit open is cheaper and
+          preserves the invariant that collapsed content owns no heavy UI. */}
       <details
         className="text-[12px] leading-[1.55] text-ink-dim"
         onToggle={event => {
-          if (event.currentTarget.open) setOpened(true)
+          setOpen(event.currentTarget.open)
         }}
       >
         <summary className="cursor-pointer select-none">
           {summary}
         </summary>
-        {opened ? (
+        {open ? (
           <div className="mt-2">
           <CodeBlock
             code={code}
@@ -362,49 +374,6 @@ function ExpandableCodeResult({
           </div>
         ) : null}
       </details>
-    </MarkerRow>
-  )
-}
-
-function TruncatedOutputRow({
-  content,
-  isError,
-}: {
-  content: string
-  isError: boolean
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const lines = content.length === 0 ? [] : content.split('\n')
-  const needsTruncation = lines.length > RESULT_MAX_LINES
-  const shown = expanded || !needsTruncation
-    ? content
-    : lines.slice(0, RESULT_MAX_LINES).join('\n')
-  const hiddenCount = needsTruncation ? lines.length - RESULT_MAX_LINES : 0
-
-  return (
-    <MarkerRow marker="⎿" tone="muted">
-      <div className="min-w-0">
-        <pre
-          className={`
-            font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-            ${expanded ? 'max-h-[360px] overflow-auto' : ''}
-            ${isError ? 'text-danger' : 'text-ink-dim'}
-          `}
-        >
-          {shown || '(no output)'}
-        </pre>
-        {needsTruncation && (
-          <button
-            type="button"
-            onClick={() => setExpanded(prev => !prev)}
-            className="mt-1 text-[11px] text-muted hover:text-ink cursor-pointer"
-          >
-            {expanded
-              ? 'collapse'
-              : `… +${hiddenCount} ${hiddenCount === 1 ? 'line' : 'lines'} (click to expand)`}
-          </button>
-        )}
-      </div>
     </MarkerRow>
   )
 }

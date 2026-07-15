@@ -1,3 +1,5 @@
+import { memo } from 'react'
+
 import type { WorkflowAgentState } from '../model/workflowState'
 
 import { WorkflowAgentDetails } from './WorkflowAgentDetails'
@@ -27,14 +29,14 @@ function agentRightLabel(agent: WorkflowAgentState): string {
   return provider ? `${status} · ${provider}` : status
 }
 
-export function WorkflowAgentRow({
+function WorkflowAgentRowImpl({
   agent,
   expanded,
   onToggle,
 }: {
   agent: WorkflowAgentState
   expanded: boolean
-  onToggle: () => void
+  onToggle: (agentId: string) => void
 }): React.JSX.Element {
   const glyph = statusGlyph(agent.status)
   return (
@@ -42,7 +44,7 @@ export function WorkflowAgentRow({
       <button
         type="button"
         aria-expanded={expanded}
-        onClick={onToggle}
+        onClick={() => onToggle(agent.id)}
         className="grid w-full cursor-pointer grid-cols-[16px_minmax(0,1fr)_auto_14px] items-baseline gap-x-2 rounded px-1 py-1.5 text-left hover:bg-surface-hi focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
       >
         <span
@@ -63,3 +65,47 @@ export function WorkflowAgentRow({
     </div>
   )
 }
+
+function sameAttempts(
+  left: WorkflowAgentState['attempts'],
+  right: WorkflowAgentState['attempts'],
+): boolean {
+  if (left.length !== right.length) return false
+  return left.every((attempt, index) => {
+    const candidate = right[index]
+    return candidate !== undefined &&
+      attempt.id === candidate.id &&
+      attempt.status === candidate.status &&
+      attempt.provider === candidate.provider &&
+      attempt.completedAt === candidate.completedAt &&
+      attempt.providerSession === candidate.providerSession &&
+      attempt.usage === candidate.usage &&
+      attempt.error === candidate.error &&
+      attempt.activities === candidate.activities
+  })
+}
+
+function sameAgentRow(
+  previous: Parameters<typeof WorkflowAgentRowImpl>[0],
+  next: Parameters<typeof WorkflowAgentRowImpl>[0],
+): boolean {
+  if (previous.expanded !== next.expanded || previous.onToggle !== next.onToggle) return false
+  const left = previous.agent
+  const right = next.agent
+  // WHY this compares render-bearing fields instead of agent object identity: lineage composition
+  // intentionally creates a fresh agent shell to join immutable attempts from parent runs. Most
+  // live events touch one agent, so object identity would still rerender every row in the lineage.
+  // Activity arrays preserve identity for untouched attempts and give us a cheap exact boundary.
+  return left.id === right.id &&
+    left.label === right.label &&
+    left.status === right.status &&
+    left.queuedAt === right.queuedAt &&
+    left.prompt === right.prompt &&
+    left.outcome === right.outcome &&
+    left.error === right.error &&
+    left.skippedReason === right.skippedReason &&
+    left.cancelledReason === right.cancelledReason &&
+    sameAttempts(left.attempts, right.attempts)
+}
+
+export const WorkflowAgentRow = memo(WorkflowAgentRowImpl, sameAgentRow)

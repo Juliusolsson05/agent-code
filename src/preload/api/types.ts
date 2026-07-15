@@ -12,6 +12,7 @@ export type { SessionInfo } from '@shared/types/session.js'
 export type {
   WorkflowCancelRequest,
   WorkflowCancelResult,
+  WorkflowEventsAcknowledgement,
   WorkflowEventsBatch,
   WorkflowGetSnapshotRequest,
   WorkflowGetSnapshotResult,
@@ -21,6 +22,7 @@ export type {
   WorkflowResumeResult,
   WorkflowRunReferenceData,
   WorkflowRunIpcScope,
+  WorkflowRunInterestRequest,
   WorkflowSessionRunsRequest,
   WorkflowSessionRunsResult,
 } from '@shared/workflows/types.js'

@@ -1,7 +1,7 @@
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
-import { JsonToolRow, SLAB_MAX_CHARS } from '@providers/shared/renderer/rows/JsonToolRow'
+import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
-import { memo } from 'react'
+import { memo, useState } from 'react'
 
 import {
   CodexApplyPatchRow,
@@ -16,6 +16,12 @@ import {
 import type { ToolUseBlock } from '@shared/types/transcript'
 import { parseJsonRecord } from '@shared/lib/asRecord'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
+import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
+import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
+import {
+  exceedsInlineTextBudget,
+  TEXT_PAGE_MAX_CHARS,
+} from '@renderer/lib/text/boundedText'
 import {
   parseSemanticTodos,
   type SemanticLiveTurn,
@@ -25,6 +31,7 @@ import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
+import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 
 import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
@@ -49,17 +56,75 @@ function extractClosedJsonString(raw: string, key: string): string | null {
   }
 }
 
-// Cap any pretty-printed JSON slab on the LIVE path the same way JsonToolRow
-// caps its committed slabs. WHY: these two call sites stringify tool output /
-// parsed input straight into the DOM every render while the block streams. An
-// unbounded payload (a whole-file read result, a giant orchestration graph) is
-// the O(bytes²) highlight/paint trap on the hottest path in the feed. We reuse
-// JsonToolRow's exported SLAB_MAX_CHARS instead of a fresh magic number so the
-// live and committed previews truncate identically (they used to only be
-// capped on the committed side, so a live row could balloon).
-function cappedJson(value: unknown): string {
-  const json = JSON.stringify(value, null, 2)
-  return json.length > SLAB_MAX_CHARS ? `${json.slice(0, SLAB_MAX_CHARS)}\n…` : json
+function DeferredJsonDetails({
+  value,
+  blockIndex,
+}: {
+  value: Record<string, unknown>
+  blockIndex: number
+}) {
+  const [open, setOpen] = useState(false)
+  let count = 0
+  for (const key in value) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) continue
+    count += 1
+    if (count >= 40) break
+  }
+
+  return (
+    <details
+      className="text-[12px]"
+      onToggle={event => setOpen(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer text-ink-dim select-none">
+        {count}{count >= 40 ? '+' : ''} param{count === 1 ? '' : 's'}
+      </summary>
+      {/* WHY projection and CodeBlock only exist while open: live tool input
+          changes on every semantic delta. Eager stringify/highlight made each
+          growing update repay all prior bytes, and a first-open latch retained
+          the completed tree forever. This branch bounds traversal and releases
+          the tree the moment the disclosure closes. */}
+      {open ? (() => {
+        const json = boundedJsonPreview(value)
+        return json ? (
+          <div className="mt-1">
+            <CodeBlock
+              code={json}
+              language="json"
+              codeId={`live-tool-input:${blockIndex}`}
+              highlight={false}
+            />
+          </div>
+        ) : null
+      })() : null}
+    </details>
+  )
+}
+
+function DeferredThinking({ text, streaming }: { text: string; streaming: boolean }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <details
+      className="italic text-muted text-[12px] opacity-80"
+      onToggle={event => setOpen(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer select-none">
+        ∴ Thinking{streaming ? '…' : ''}
+        <span className="ml-2 not-italic text-ink-dim opacity-70">
+          (click to expand)
+        </span>
+      </summary>
+      {/* WHY a closed reasoning row must not parse Markdown: `<details>` only
+          changes paint visibility; React still builds its children. Reasoning
+          can be one of the largest streaming strings, so invisibly parsing it
+          defeats the point of a collapsed default. */}
+      {open ? (
+        <div className="mt-2 text-ink-dim opacity-90 not-italic">
+          <StreamingProse text={text} />
+        </div>
+      ) : null}
+    </details>
+  )
 }
 
 // [#285] Build the committed Edit/MultiEdit input object from a live semantic
@@ -74,10 +139,20 @@ function claudeLiveEditInput(
 ): Record<string, unknown> | null {
   if (block.parsedInput) return block.parsedInput
   const raw = block.inputJson ?? ''
-  const full = raw ? parseJsonRecord(raw) : null
+  // WHY the live renderer will not repeatedly JSON.parse an ever-growing
+  // payload: the semantic reducer is the owner of authoritative parsedInput.
+  // This fallback only helps during the small interval before that state lands.
+  // Beyond one renderer page, reparsing every delta becomes O(total bytes²), so
+  // we retain only the cheap file-path preview until the reducer finalizes it.
+  const full = raw && raw.length <= TEXT_PAGE_MAX_CHARS
+    ? parseJsonRecord(raw)
+    : null
   if (full) return full
   if (!raw) return null
-  const filePath = extractClosedJsonString(raw, 'file_path')
+  const filePath = extractClosedJsonString(
+    raw.slice(0, TEXT_PAGE_MAX_CHARS),
+    'file_path',
+  )
   if (!filePath) return null
   if (block.toolName === 'MultiEdit') {
     // The `edits` array can't be reliably half-parsed; show the header now
@@ -85,10 +160,11 @@ function claudeLiveEditInput(
     // diff chunks the instant the whole object completes.
     return { file_path: filePath, edits: [] }
   }
+  const boundedRaw = raw.slice(0, TEXT_PAGE_MAX_CHARS)
   return {
     file_path: filePath,
-    old_string: extractClosedJsonString(raw, 'old_string') ?? '',
-    new_string: extractClosedJsonString(raw, 'new_string') ?? '',
+    old_string: extractClosedJsonString(boundedRaw, 'old_string') ?? '',
+    new_string: extractClosedJsonString(boundedRaw, 'new_string') ?? '',
   }
 }
 
@@ -159,7 +235,13 @@ function partialApplyPatchInput(raw: string): Record<string, unknown> {
 function codexLiveToolInput(block: SemanticLiveTurn['blocks'][number]): unknown {
   const raw = block.argumentsJson ?? block.inputJson ?? ''
   if (block.parsedInput) return block.parsedInput
-  const parsed = raw ? parseJsonRecord(raw) : null
+  // WHY this fallback is page-bounded: `block.parsedInput` is populated by the
+  // semantic state machine once JSON is valid. Parsing a growing raw argument
+  // again in the renderer on every delta was duplicate O(n²) work and could
+  // stall the UI before any row was visibly large.
+  const parsed = raw && raw.length <= TEXT_PAGE_MAX_CHARS
+    ? parseJsonRecord(raw)
+    : null
   if (parsed) return parsed
 
   // WHY apply_patch keeps a raw fallback:
@@ -170,9 +252,16 @@ function codexLiveToolInput(block: SemanticLiveTurn['blocks'][number]): unknown 
   // the same shape gives streaming patch calls the same file/diff
   // card as committed transcript rows instead of showing a giant raw
   // preformatted argument blob.
-  if (block.toolName === 'apply_patch' && raw) return partialApplyPatchInput(raw)
+  // WHY every provider-specific fallback receives a bounded prefix: these
+  // helpers run on every streaming delta. Passing the complete growing buffer
+  // into includes/indexOf/decoding would be O(total bytes²) even though all
+  // downstream rows now render at most one page.
+  const boundedRaw = raw.slice(0, TEXT_PAGE_MAX_CHARS)
+  if (block.toolName === 'apply_patch' && boundedRaw) {
+    return partialApplyPatchInput(boundedRaw)
+  }
 
-  return raw ? { raw, arguments: raw } : {}
+  return boundedRaw ? { raw: boundedRaw, arguments: boundedRaw } : {}
 }
 
 function codexLiveToolUseBlock(block: SemanticLiveTurn['blocks'][number]): ToolUseBlock {
@@ -229,17 +318,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     const isStreaming = !block.finalized
     return (
       <MarkerRow marker="⏺" tone="muted">
-        <details className="italic text-muted text-[12px] opacity-80">
-          <summary className="cursor-pointer select-none">
-            ∴ Thinking{isStreaming ? '…' : ''}
-            <span className="ml-2 not-italic text-ink-dim opacity-70">
-              (click to expand)
-            </span>
-          </summary>
-          <div className="mt-2 text-ink-dim opacity-90 not-italic">
-            <StreamingProse text={text} />
-          </div>
-        </details>
+        <DeferredThinking text={text} streaming={isStreaming} />
       </MarkerRow>
     )
   }
@@ -297,19 +376,10 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     // standalone output row; downstream Feed rendering can associate
     // it with the call via the shared callId if the renderer wants to.
     const raw = block.output
-    const outputText =
-      typeof raw === 'string'
-        ? raw
-        : raw === undefined
-          ? '(no output)'
-          : cappedJson(raw)
-    return (
-      <MarkerRow marker="⎿" tone="muted">
-        <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-words m-0 max-h-[360px] overflow-auto">
-          {outputText}
-        </pre>
-      </MarkerRow>
-    )
+    if (raw !== undefined && typeof raw !== 'string') {
+      return <JsonResultSlab value={raw} isError={false} />
+    }
+    return <TruncatedOutputRow content={raw ?? '(no output)'} isError={false} />
   }
 
   if (block.kind === 'web_search_call') {
@@ -540,26 +610,16 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
             // keeps the raw stream below — pretty-printing half a JSON
             // string is worse than showing it verbatim.
             <MarkerRow marker="⎿" tone="muted">
-              <details className="text-[12px]">
-                <summary className="cursor-pointer text-ink-dim select-none">
-                  {Object.keys(block.parsedInput).length} param
-                  {Object.keys(block.parsedInput).length === 1 ? '' : 's'}
-                </summary>
-                <div className="mt-1">
-                  <CodeBlock
-                    code={cappedJson(block.parsedInput)}
-                    language="json"
-                    codeId={`live-tool-input:${block.blockIndex}`}
-                    highlight={false}
-                  />
-                </div>
-              </details>
+              <DeferredJsonDetails
+                value={block.parsedInput}
+                blockIndex={block.blockIndex}
+              />
             </MarkerRow>
           ) : (
             <MarkerRow marker="⎿" tone="muted">
-              <pre className="font-code text-[12px] leading-[1.55] text-ink-dim whitespace-pre-wrap break-all m-0">
-                {block.inputJson || '(waiting for input…)'}
-              </pre>
+              <PagedTextViewer
+                source={block.inputJson || '(waiting for input…)'}
+              />
             </MarkerRow>
           )}
           {block.parseError ? (
@@ -575,19 +635,10 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
               if (parsed !== null && typeof parsed === 'object') {
                 return <JsonResultSlab value={parsed} isError={block.resultIsError === true} />
               }
-              return (
-                <MarkerRow marker="⎿" tone="muted">
-                  <pre
-                    className={`
-                      font-code text-[12px] leading-[1.55] whitespace-pre-wrap break-words m-0
-                      max-h-[360px] overflow-auto
-                      ${block.resultIsError ? 'text-danger' : 'text-ink-dim'}
-                    `}
-                  >
-                    {block.resultContent || '(empty result)'}
-                  </pre>
-                </MarkerRow>
-              )
+              return <TruncatedOutputRow
+                content={block.resultContent || '(empty result)'}
+                isError={block.resultIsError === true}
+              />
             })()
           ) : null}
         </div>
@@ -596,7 +647,13 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   }
 
   const text = block.text ?? ''
-  const fence = text ? splitStreamingCodeFence(text) : null
+  // WHY fence detection shares the prose admission budget: lastIndexOf/slice
+  // are linear over the complete live buffer. Oversized streaming text is
+  // already handled by the paged raw fallback, so parsing a partial Markdown
+  // fence first would reintroduce the unbounded pre-render work.
+  const fence = text && !exceedsInlineTextBudget(text)
+    ? splitStreamingCodeFence(text)
+    : null
   if (fence) {
     return (
       <MarkerRow marker="⏺">

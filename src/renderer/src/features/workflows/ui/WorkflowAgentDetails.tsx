@@ -1,9 +1,15 @@
+import { useState } from 'react'
+
 import type {
   WorkflowAgentState,
   WorkflowContentReference,
 } from '../model/workflowState'
 
 import { WorkflowActivityRow } from './WorkflowActivityRow'
+import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
+import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
+
+const ACTIVITY_WINDOW = 100
 
 function referenceText(reference: WorkflowContentReference | undefined): string | null {
   if (!reference) return null
@@ -13,11 +19,7 @@ function referenceText(reference: WorkflowContentReference | undefined): string 
   if (reference.truncated) return reference.preview || null
   if (typeof reference.content === 'string') return reference.content
   if (reference.content !== undefined) {
-    try {
-      return JSON.stringify(reference.content, null, 2)
-    } catch {
-      return reference.preview
-    }
+    return boundedJsonPreview(reference.content) ?? reference.preview
   }
   return reference.preview || null
 }
@@ -36,13 +38,13 @@ function DetailSlab({
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
         {label}
       </div>
-      <pre
-        className={`m-0 max-h-[320px] overflow-auto whitespace-pre-wrap break-words rounded border border-border bg-surface px-2.5 py-2 font-code text-[11px] leading-[1.55] ${
+      <div
+        className={`rounded border border-border bg-surface px-2.5 py-2 ${
           tone === 'danger' ? 'text-danger' : 'text-ink-dim'
         }`}
       >
-        {value}
-      </pre>
+        <PagedTextViewer source={value} isError={tone === 'danger'} />
+      </div>
     </section>
   )
 }
@@ -52,11 +54,30 @@ export function WorkflowAgentDetails({
 }: {
   agent: WorkflowAgentState
 }): React.JSX.Element {
+  const [visibleActivityCount, setVisibleActivityCount] = useState(ACTIVITY_WINDOW)
   const prompt = referenceText(agent.prompt)
   const outcome = referenceText(agent.outcome?.result)
-  const activities = agent.attempts.flatMap(attempt =>
-    attempt.activities.map(activity => ({ attemptId: attempt.id, activity })),
+  const totalActivities = agent.attempts.reduce(
+    (total, attempt) => total + attempt.activities.length,
+    0,
   )
+  const firstVisibleActivity = Math.max(0, totalActivities - visibleActivityCount)
+  const activities: Array<{
+    attemptId: string
+    activity: WorkflowAgentState['attempts'][number]['activities'][number]
+  }> = []
+  let activityOffset = 0
+  for (const attempt of agent.attempts) {
+    const attemptEnd = activityOffset + attempt.activities.length
+    if (attemptEnd > firstVisibleActivity) {
+      const localStart = Math.max(0, firstVisibleActivity - activityOffset)
+      for (let index = localStart; index < attempt.activities.length; index += 1) {
+        const activity = attempt.activities[index]
+        if (activity) activities.push({ attemptId: attempt.id, activity })
+      }
+    }
+    activityOffset = attemptEnd
+  }
 
   return (
     <div className="ml-5 mt-1.5 space-y-3 border-l border-border pl-3 pb-2">
@@ -64,16 +85,32 @@ export function WorkflowAgentDetails({
 
       <section>
         <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted">
-          Activity · {activities.length} {activities.length === 1 ? 'event' : 'events'}
+          Activity · {totalActivities} {totalActivities === 1 ? 'event' : 'events'}
         </div>
-        {activities.length > 0 ? (
-          <div className="divide-y divide-border">
+        {totalActivities > 0 ? (
+          <div>
+            {firstVisibleActivity > 0 ? (
+              <button
+                type="button"
+                className="mb-1 w-full rounded py-1 text-center text-[10px] text-muted hover:bg-surface-hi hover:text-ink"
+                onClick={() => setVisibleActivityCount(current => current + ACTIVITY_WINDOW)}
+              >
+                Show {Math.min(ACTIVITY_WINDOW, firstVisibleActivity)} earlier activities
+              </button>
+            ) : null}
+            {/* WHY only a tail window has React elements: an active agent can
+                accumulate hundreds of activity updates. Memoized children still
+                require the parent to allocate and reconcile every element on
+                every live event. The full immutable arrays remain in state;
+                explicit paging admits at most 100 more rows per interaction. */}
+            <div className="divide-y divide-border">
             {activities.map(({ attemptId, activity }) => (
               <WorkflowActivityRow
                 key={`${agent.id}:${attemptId}:${activity.activityId}`}
                 activity={activity}
               />
             ))}
+            </div>
           </div>
         ) : (
           <div className="text-[11px] italic text-muted">

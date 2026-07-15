@@ -69,18 +69,21 @@ function stored(...items: WorkflowEvent[]): StoredWorkflowEvent[] {
 class FakeWorkflowClient implements WorkflowClient {
   available = true
   listener: ((batch: WorkflowEventBatch) => void) | null = null
+  acknowledge = vi.fn()
   readEvents = vi.fn<(request: { cwd: string; runId: string; after: number }) => Promise<WorkflowEventPage>>()
   private initial = reduceWorkflowState(createWorkflowState('run-1'), events[0])
 
   async getSnapshot() {
     return { runId: 'run-1', cwd: '/repo', cursor: 1, state: this.initial }
   }
-  subscribe(listener: (batch: WorkflowEventBatch) => void) {
+  subscribe(_scope: { cwd: string; runId: string }, listener: (batch: WorkflowEventBatch) => void) {
     this.listener = listener
     return () => { this.listener = null }
   }
   async cancel() {}
   async resume() { return { runId: 'run-2', cwd: '/repo' } }
+  async listSessionRuns() { return [] }
+  subscribeSessionRuns() { return () => {} }
   emit(batch: WorkflowEventBatch) { this.listener?.(batch) }
 }
 
@@ -132,9 +135,9 @@ describe('WorkflowRunStore', () => {
     client.emit({
       runId: 'run-1',
       cwd: '/repo',
-      fromCursor: 3,
+      fromCursor: 2,
       toCursor: 4,
-      events: stored(events[3]),
+      events: [],
     })
 
     await eventually(() => expect(store.getSnapshot().cursor).toBe(4))
@@ -146,6 +149,11 @@ describe('WorkflowRunStore', () => {
       waitMs: 0,
     })
     expect(store.getSnapshot().snapshot.agents[0]?.status).toBe('queued')
+    expect(client.acknowledge).toHaveBeenLastCalledWith({
+      cwd: '/repo',
+      runId: 'run-1',
+      cursor: 4,
+    })
     stop()
   })
 

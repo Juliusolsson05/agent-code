@@ -1,5 +1,7 @@
 import { ipcRenderer } from 'electron'
 
+import type { RendererFreezeHeartbeat } from '@shared/incident/rendererFreeze.js'
+
 // Renderer -> main incident breadcrumbs.
 //
 // One-way, fire-and-forget (`send`, not `invoke`): renderer errors are
@@ -19,5 +21,11 @@ export type RendererIncidentReport = {
 export const incidentApi = {
   reportIncident: (report: RendererIncidentReport): void => {
     ipcRenderer.send('incident:renderer-report', report)
+  },
+  // WHY this is a one-way signal: waiting for an invoke reply would couple the renderer's liveness
+  // probe to main IPC latency and could itself leave promises queued during a freeze. Main records
+  // receipt time, so the payload never needs to claim that delivery succeeded.
+  reportRendererHeartbeat: (heartbeat: RendererFreezeHeartbeat): void => {
+    ipcRenderer.send('incident:renderer-heartbeat', heartbeat)
   },
 }

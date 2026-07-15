@@ -38,7 +38,7 @@ export function WorkflowPhaseSection({
             key={agent.id}
             agent={agent}
             expanded={expandedAgentId === agent.id}
-            onToggle={() => onToggleAgent(agent.id)}
+            onToggle={onToggleAgent}
           />
         ))}
         {agents.length === 0 ? (

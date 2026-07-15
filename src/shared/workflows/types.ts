@@ -46,6 +46,14 @@ export type WorkflowRunIpcScope = {
   runId: string
 }
 
+export type WorkflowRunInterestRequest = WorkflowRunIpcScope & {
+  interested: boolean
+}
+
+export type WorkflowEventsAcknowledgement = WorkflowRunIpcScope & {
+  cursor: number
+}
+
 export type WorkflowGetSnapshotRequest = WorkflowRunIpcScope
 
 export type WorkflowGetSnapshotResult = {
@@ -101,13 +109,15 @@ export type WorkflowResumeResult = {
 }
 
 /**
- * One event subscription serves the whole renderer. Rows filter by runId and
- * heal gaps through workflowReadEvents; main never allocates one listener per
- * React component. Cursor bounds are repeated outside `events` so a consumer
- * can reject stale/empty batches without walking payload objects first.
+ * Live delivery is deliberately a cursor hint, not another copy of durable truth. `events` stays
+ * in the contract for compatibility with remote/test clients, but Electron main sends it empty:
+ * an interested renderer catches up through the byte-bounded `workflowReadEvents` path and then
+ * acknowledges the cursor. That gives main one in-flight notification per visible run instead of
+ * an unbounded structured-clone queue when a workflow emits faster than React can render.
  */
 export type WorkflowEventsBatch = {
   runId: string
+  cwd?: string
   fromCursor: number
   toCursor: number
   events: StoredWorkflowEvent[]

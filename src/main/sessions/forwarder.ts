@@ -3,14 +3,16 @@ import type { LspManager } from '@main/lspManager.js'
 
 import { sendToMainWindow } from '@main/window/mainWindow.js'
 import { enqueueJsonl, flushAndDropJsonl } from '@main/sessions/jsonlCoalescer.js'
+import { SemanticEventIpcCoalescer } from '@main/sessions/semanticEventCoalescer.js'
+import { LatestSessionIpcCoalescer } from '@main/sessions/latestSessionIpcCoalescer.js'
 import { SubAgentWatcherManager } from '@main/subagents/index.js'
 
 // Session event forwarder.
 //
-// Wires every manager event to a matching IPC channel. Each payload
-// already carries the sessionId so the renderer can route to the
-// right tile. The forwarder's job is the dumbest possible one: tag
-// the channel, push the payload.
+// Wires every manager event to a matching IPC channel. Each payload already
+// carries the sessionId so the renderer can route to the right tile. Complete
+// snapshots and cumulative semantic prefixes pass through the narrow
+// coalescers below; structural events still preserve direct ordering.
 //
 // terminal-data and agent-pty-data are intentionally separate channels from
 // screen / jsonl-entry. terminal-data is for plain shell panes;
@@ -29,9 +31,23 @@ export function wireSessionForwarder(
   const subAgents = new SubAgentWatcherManager((sessionId, map) =>
     sendToMainWindow('session:sub-agents', { sessionId, subAgents: map }),
   )
+  const semanticEvents = new SemanticEventIpcCoalescer(payload =>
+    sendToMainWindow('session:semantic-event', payload),
+  )
+  const screens = new LatestSessionIpcCoalescer(payload =>
+    sendToMainWindow('session:screen', payload),
+  )
+  const processStates = new LatestSessionIpcCoalescer(payload =>
+    sendToMainWindow('session:process-state', payload),
+  )
 
   manager.on('started', payload => sendToMainWindow('session:started', payload))
-  manager.on('screen', payload => sendToMainWindow('session:screen', payload))
+  // WHY screen/process-state do not cross IPC directly: both are complete,
+  // authoritative snapshots. During a nine-agent burst the old path cloned and
+  // dispatched every intermediate repaint even though the next snapshot made
+  // it obsolete. Latest-per-session delivery is lossless at the state level
+  // and keeps Chromium's queue bounded independently of producer cadence.
+  manager.on('screen', payload => screens.enqueue(payload))
 
   // Bulk-only forwarding. See jsonlCoalescer.ts for the full rationale
   // — every jsonl-entry goes through the coalescer; live single
@@ -52,7 +68,7 @@ export function wireSessionForwarder(
   manager.on('agent-pty-data', payload =>
     sendToMainWindow('session:agent-pty-data', payload),
   )
-  manager.on('process-state', payload => sendToMainWindow('session:process-state', payload))
+  manager.on('process-state', payload => processStates.enqueue(payload))
   // Legacy per-condition channels (session:trust-dialog / :resume-prompt /
   // :permission-prompt / :compaction-state) are no longer forwarded to the
   // renderer. The renderer consumes only the unified `session:conditions`
@@ -63,7 +79,7 @@ export function wireSessionForwarder(
   // drive them); we simply stop bridging them over IPC. Re-deprecating the
   // manager-level events is owned by the conditions-framework cluster.
   manager.on('conditions', payload => sendToMainWindow('session:conditions', payload))
-  manager.on('semantic-event', payload => sendToMainWindow('session:semantic-event', payload))
+  manager.on('semantic-event', payload => semanticEvents.enqueue(payload))
   manager.on('removed', payload => {
     // Final cleanup is keyed to removal, not renderer-facing exit. Some provider
     // stop() paths resolve without emitting exit, and SessionManager.kill() must
@@ -71,6 +87,12 @@ export function wireSessionForwarder(
     // watchers. Natural exits emit `removed` before `exit`, preserving the old
     // ordering where the final bulk JSONL flush reaches the renderer before the
     // pane is marked exited.
+    // A structural session removal is an ordering barrier just like turn_completed. Flush every
+    // pending cumulative delta before the renderer learns that a runtime disappeared; otherwise a
+    // final assistant/tool prefix can be stranded behind teardown and never become visible.
+    semanticEvents.flush(payload.sessionId)
+    screens.flush(payload.sessionId)
+    processStates.flush(payload.sessionId)
     flushAndDropJsonl(payload.sessionId)
     subAgents.stop(payload.sessionId)
   })

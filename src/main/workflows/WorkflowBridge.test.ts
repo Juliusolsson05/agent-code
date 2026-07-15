@@ -6,6 +6,7 @@ import type {
 } from 'workflow-mcp'
 
 vi.mock('@main/window/mainWindow.js', () => ({
+  recordIpcDiagnosticBreadcrumb: vi.fn(),
   sendToMainWindow: vi.fn(),
 }))
 
@@ -36,7 +37,7 @@ function stored(runId: string, cursor: number): StoredWorkflowEvent {
 }
 
 describe('WorkflowBridge', () => {
-  it('coalesces one service subscription into cursor-bounded per-run batches', () => {
+  it('delivers one acknowledged cursor hint only for an interested run', async () => {
     vi.useFakeTimers()
     let listener: ((event: StoredWorkflowEvent) => void) | null = null
     const unsubscribe = vi.fn()
@@ -45,6 +46,7 @@ describe('WorkflowBridge', () => {
         listener = next
         return unsubscribe
       }),
+      snapshot: vi.fn(async () => ({ cursor: 0 })),
     } as unknown as WorkflowService
     const send = vi.fn()
     const bridge = new WorkflowBridge(service, { send, batchWindowMs: 16 })
@@ -52,6 +54,8 @@ describe('WorkflowBridge', () => {
     bridge.start()
     bridge.start()
     expect(service.subscribe).toHaveBeenCalledTimes(1)
+    bridge.setRunInterest(7, { cwd: '/repo', runId: 'run-a', interested: true })
+    await Promise.resolve()
 
     listener!(stored('run-a', 1))
     listener!(stored('run-b', 1))
@@ -59,18 +63,29 @@ describe('WorkflowBridge', () => {
     expect(send).not.toHaveBeenCalled()
 
     vi.advanceTimersByTime(16)
-    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenCalledTimes(1)
     expect(send).toHaveBeenCalledWith('workflows:event-batch', {
+      cwd: '/repo',
       runId: 'run-a',
       fromCursor: 1,
       toCursor: 2,
-      events: [stored('run-a', 1), stored('run-a', 2)],
+      events: [],
     })
-    expect(send).toHaveBeenCalledWith('workflows:event-batch', {
-      runId: 'run-b',
-      fromCursor: 1,
-      toCursor: 1,
-      events: [stored('run-b', 1)],
+
+    // A fast producer can advance forever while the renderer is slow; no second message is placed
+    // in Chromium's IPC queue until the durable catch-up corresponding to the first is complete.
+    listener!(stored('run-a', 3))
+    vi.advanceTimersByTime(16)
+    expect(send).toHaveBeenCalledTimes(1)
+    bridge.acknowledgeEvents(7, { cwd: '/repo', runId: 'run-a', cursor: 2 })
+    vi.advanceTimersByTime(16)
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenLastCalledWith('workflows:event-batch', {
+      cwd: '/repo',
+      runId: 'run-a',
+      fromCursor: 3,
+      toCursor: 3,
+      events: [],
     })
 
     bridge.dispose()
@@ -150,5 +165,28 @@ describe('WorkflowBridge', () => {
       after: -1,
     })).rejects.toThrow('after must be a non-negative integer')
     expect(service.readEvents).not.toHaveBeenCalled()
+  })
+
+  it('rejects one unprojectable legacy event instead of violating the IPC byte cap', async () => {
+    const oversized = stored('run-a', 1)
+    ;(oversized.event.payload as Record<string, unknown>).legacyBlob = 'x'.repeat(2_000)
+    const service = {
+      subscribe: () => () => undefined,
+      readEvents: vi.fn(async () => ({
+        runId: 'run-a',
+        cwd: '/repo',
+        fromCursor: 0,
+        toCursor: 1,
+        events: [oversized],
+        hasMore: false,
+      })),
+    } as unknown as WorkflowService
+    const bridge = new WorkflowBridge(service, {
+      send: vi.fn(),
+      maxBatchBytes: 512,
+    })
+
+    await expect(bridge.readEvents({ cwd: '/repo', runId: 'run-a', after: 0 }))
+      .rejects.toThrow('renderer safety cap')
   })
 })
