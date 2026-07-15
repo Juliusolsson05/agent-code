@@ -34,6 +34,7 @@
       "opencode-headless/*": ["./packages/opencode-headless/src/*"],
       "agent-transcript-parser": ["./packages/agent-transcript-parser/src/index.ts"],
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
+      "workflow-mcp/state": ["./packages/workflow-mcp/src/state.ts"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],

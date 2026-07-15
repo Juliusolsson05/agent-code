@@ -37,6 +37,8 @@ import { registerIncidentIpc } from '@main/ipc/incident.js'
 import { registerUsageIpc } from '@main/ipc/usage.js'
 import { registerCliUpdatesIpc } from '@main/ipc/cliUpdates.js'
 import type { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
+import { registerWorkflowIpc } from '@main/ipc/workflows.js'
+import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 
 // IPC registration aggregator.
 //
@@ -64,6 +66,7 @@ export type IpcDeps = {
   remoteController: RemoteController
   appRunJournal: AppRunJournal
   cliUpdateOrchestrator: CliUpdateOrchestrator
+  workflowBridge: WorkflowBridge
 }
 
 export function registerAllIpc(deps: IpcDeps): void {
@@ -95,4 +98,5 @@ export function registerAllIpc(deps: IpcDeps): void {
   registerIncidentIpc(deps.appRunJournal)
   registerUsageIpc()
   registerCliUpdatesIpc(deps.cliUpdateOrchestrator)
+  registerWorkflowIpc(deps.workflowBridge)
 }

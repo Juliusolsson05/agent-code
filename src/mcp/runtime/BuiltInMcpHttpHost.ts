@@ -11,6 +11,8 @@ import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
+import type { WorkflowService } from 'workflow-mcp'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { normalizeBuiltInMcpDomains } from '@mcp/shared/types.js'
 import type {
@@ -36,6 +38,8 @@ export type BuiltInMcpDependencies = {
   openAiWorkspace?: (workspaceId: string) => void
   sessionManager?: SessionManager
   appRunJournal?: AppRunJournal
+  workflowService?: WorkflowService
+  workflowBridge?: WorkflowBridge
 }
 
 const MCP_REQUEST_SLOW_MS = 1000
@@ -189,24 +193,21 @@ export class BuiltInMcpHttpHost {
     })
     this.tokensBySession.set(scope.sessionId, token)
 
-    return [
-      {
-        name: 'agent_code',
-        // WHY the token appears in the URL even though we also provide an
-        // Authorization header:
-        //
-        // Claude Code and Codex have different MCP config schemas and their
-        // header support has moved over time. The URL token keeps the first
-        // built-in bridge robust while clients converge, and the loopback-only
-        // bind keeps exposure local to this machine. Future hardening can drop
-        // the query fallback once both providers are proven to preserve headers
-        // in every launch mode Agent Code supports.
-        url: `http://127.0.0.1:${this.port}/mcp?token=${encodeURIComponent(token)}`,
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    ]
+    return [this.serverConfig(token)]
+  }
+
+  sessionServers(sessionId: string): BuiltInMcpServerConfig[] {
+    const token = this.tokensBySession.get(sessionId)
+    const registration = token === undefined ? undefined : this.registrations.get(token)
+    if (!token || !registration || registration.revoked) return []
+
+    // Workflow subagents are separate Codex processes, but Claude's Workflow contract says they
+    // inherit every MCP server connected to the parent session. Returning the same scoped token
+    // gives them the exact parent tool set without minting a second registration that could outlive
+    // or accidentally broaden that session. Callers receive fresh objects so SDK configuration
+    // assembly cannot mutate the host's authorization state.
+    const config = this.serverConfig(token)
+    return [{ ...config, headers: { ...config.headers } }]
   }
 
   revokeSession(sessionId: string): void {
@@ -222,6 +223,18 @@ export class BuiltInMcpHttpHost {
     if (registration) registration.revoked = true
   }
 
+  private serverConfig(token: string): BuiltInMcpServerConfig {
+    if (this.port === null) throw new Error('Built-in MCP host is not running')
+    return {
+      name: 'agent_code',
+      // WHY the token appears in the URL even though we also provide an Authorization header:
+      // Claude and Codex header support has moved over time. The query fallback keeps the scoped
+      // loopback bridge usable across both clients; the bearer header remains the preferred path.
+      url: `http://127.0.0.1:${this.port}/mcp?token=${encodeURIComponent(token)}`,
+      headers: { Authorization: `Bearer ${token}` },
+    }
+  }
+
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const startedAt = performance.now()
     if (!req.url) {
@@ -231,6 +244,11 @@ export class BuiltInMcpHttpHost {
     const url = new URL(req.url, 'http://127.0.0.1')
     if (url.pathname !== '/mcp') {
       this.writeJson(res, 404, { error: 'not_found' })
+      return
+    }
+
+    if (!this.isAllowedOrigin(req)) {
+      this.writeJson(res, 403, { error: 'forbidden_origin' })
       return
     }
 
@@ -395,6 +413,33 @@ export class BuiltInMcpHttpHost {
     if (!token) return null
     const registration = this.registrations.get(token) ?? null
     return registration && !registration.revoked ? registration : null
+  }
+
+  private isAllowedOrigin(req: IncomingMessage): boolean {
+    const origin = req.headers.origin
+    // WHY an absent Origin is accepted: Claude and Codex are native MCP
+    // clients, not browser pages, and native HTTP stacks normally omit this
+    // header. Requiring it would lock out the exact trusted clients this host
+    // exists for. When a browser DOES send Origin, accepting only this
+    // process's loopback endpoint prevents a hostile web page from using DNS
+    // rebinding to drive a credentialed local MCP server.
+    if (origin === undefined) return true
+    if (typeof origin !== 'string' || this.port === null) return false
+
+    try {
+      const parsed = new URL(origin)
+      if (parsed.protocol !== 'http:') return false
+      if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+        return false
+      }
+      const isLoopback =
+        parsed.hostname === '127.0.0.1' ||
+        parsed.hostname === 'localhost' ||
+        parsed.hostname === '[::1]'
+      return isLoopback && parsed.port === String(this.port)
+    } catch {
+      return false
+    }
   }
 
   private writeJson(res: ServerResponse, statusCode: number, payload: unknown): void {

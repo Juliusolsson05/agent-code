@@ -65,6 +65,13 @@ export default defineConfig({
         replacement: resolve(__dirname, 'src', 'stubs', 'SafeInlineCode'),
       },
       // --- real desktop source (everything else) ---
+      // The shared workflow row reduces clean events. This exact alias keeps
+      // the phone on the pure reducer entry instead of importing Node/Electron
+      // runtime surfaces from the package root.
+      {
+        find: 'workflow-mcp/state',
+        replacement: resolve(src, '..', 'packages', 'workflow-mcp', 'src', 'state.ts'),
+      },
       { find: '@renderer', replacement: resolve(src, 'renderer', 'src') },
       { find: '@providers', replacement: resolve(src, 'providers') },
       { find: '@shared', replacement: resolve(src, 'shared') },

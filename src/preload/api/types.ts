@@ -9,6 +9,21 @@ import type { AgentTranscriptEntry } from '@shared/types/session.js'
 export type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 export type { BuiltInMcpDomain } from '@mcp/shared/types.js'
 export type { SessionInfo } from '@shared/types/session.js'
+export type {
+  WorkflowCancelRequest,
+  WorkflowCancelResult,
+  WorkflowEventsBatch,
+  WorkflowGetSnapshotRequest,
+  WorkflowGetSnapshotResult,
+  WorkflowReadEventsRequest,
+  WorkflowReadEventsResult,
+  WorkflowResumeRequest,
+  WorkflowResumeResult,
+  WorkflowRunReferenceData,
+  WorkflowRunIpcScope,
+  WorkflowSessionRunsRequest,
+  WorkflowSessionRunsResult,
+} from '@shared/workflows/types.js'
 
 // Shared payload types for the preload IPC bridge.
 //

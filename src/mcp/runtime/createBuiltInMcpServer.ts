@@ -24,6 +24,7 @@ import {
   isAgentProviderKind,
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
+import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
@@ -38,6 +39,13 @@ export function createBuiltInMcpServer(
       capabilities: {
         tools: {},
       },
+      // WHY the instructions travel in MCP initialization instead of Agent Code's chat prompt:
+      // workflow tools can be discovered lazily by Claude/Codex, and neither client should need
+      // implementation-repository context to know how to author, persist, poll, or resume a run.
+      // A session without the workflow domain must not be taught capabilities it cannot call.
+      ...(scope.domains.includes('workflows')
+        ? { instructions: WORKFLOW_MCP_INSTRUCTIONS }
+        : {}),
     },
   )
 
@@ -80,6 +88,32 @@ export function createBuiltInMcpServer(
 
   if (scope.domains.includes('agent_transcripts')) {
     registerAgentTranscriptTools(server)
+  }
+
+  if (scope.domains.includes('workflows')) {
+    // WHY the service is injected while registration stays request-scoped:
+    // BuiltInMcpHttpHost deliberately constructs a fresh McpServer for every
+    // POST so a provider's long-lived GET stream cannot wedge tool calls. The
+    // workflow service, however, owns active AbortControllers, durable cursors,
+    // and the one-writer guarantee for events.jsonl. Recreating that service
+    // with the protocol server would split run ownership and make cancel,
+    // idempotency, and resume racy. A cheap registrar over one app-owned
+    // service preserves both lifetimes.
+    if (dependencies.workflowService) {
+      registerWorkflowMcpTools(server, dependencies.workflowService, {
+        cwd: scope.cwd,
+        clientId: scope.sessionId,
+      }, {
+        onRunStarted: run => {
+          // WHY the provider transcript is not consulted here: current Codex intentionally defers
+          // MCP tools behind code mode, so the visible outer call is often `functions.exec` rather
+          // than `mcp__agent_code__workflow_run`. The scoped MCP handler still has the authoritative
+          // session ID and run result, making this boundary stable across Claude, Codex, and future
+          // clients regardless of how they choose to present tools to the model.
+          dependencies.workflowBridge?.registerRun(scope.sessionId, scope.cwd, run)
+        },
+      })
+    }
   }
 
   return server
@@ -434,7 +468,13 @@ function registerOrchestrationTools(
             'Pass all required context in the prompt until the inheritance path is redesigned.',
           ].join(' '),
         ),
-        builtInMcpDomains: z.array(z.enum(['ping', 'orchestration', 'ai_workspace', 'agent_transcripts'])).optional(),
+        builtInMcpDomains: z.array(z.enum([
+          'ping',
+          'orchestration',
+          'ai_workspace',
+          'agent_transcripts',
+          'workflows',
+        ])).optional(),
       },
     },
     async args => {
