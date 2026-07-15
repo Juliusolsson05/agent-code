@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const storeInitialize = vi.fn(async () => undefined)
 const serviceInitialize = vi.fn(async () => undefined)
 const stores: Array<{ root: string }> = []
 const services: Array<{ options: Record<string, unknown> }> = []
@@ -17,8 +16,6 @@ vi.mock('workflow-mcp', () => ({
     constructor(root: string) {
       stores.push({ root })
     }
-
-    initialize = storeInitialize
   },
   WorkflowService: class {
     constructor(options: Record<string, unknown>) {
@@ -39,12 +36,11 @@ const { createWorkflowService } = await import(
 )
 
 describe('createWorkflowService', () => {
-  it('initializes durable storage without eagerly constructing Codex', async () => {
+  it('lets WorkflowService acquire storage ownership before initialization without eagerly constructing Codex', async () => {
     const service = await createWorkflowService()
 
     expect(service).toBeDefined()
     expect(stores).toEqual([{ root: '/tmp/agent-code-user-data/workflows' }])
-    expect(storeInitialize).toHaveBeenCalledOnce()
     expect(serviceInitialize).toHaveBeenCalledOnce()
     expect(providerFactory).not.toHaveBeenCalled()
     expect(services[0]!.options).toMatchObject({
