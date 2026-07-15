@@ -15,4 +15,11 @@ export const ipcWorkflowClient: WorkflowClient = {
     const response = await window.api.workflowResume(request)
     return response.run
   },
+  async listSessionRuns(request) {
+    const response = await window.api.workflowListSessionRuns(request)
+    return response.runs
+  },
+  subscribeSessionRuns(listener) {
+    return window.api.onWorkflowSessionRuns(listener)
+  },
 }

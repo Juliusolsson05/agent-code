@@ -1,4 +1,8 @@
-import type { StoredWorkflowEvent, WorkflowState } from 'workflow-mcp/state'
+import type {
+  StoredWorkflowEvent,
+  WorkflowRunManifest,
+  WorkflowState,
+} from 'workflow-mcp/state'
 
 export type WorkflowRunReference = {
   runId: string
@@ -17,7 +21,7 @@ export type WorkflowSnapshotEnvelope = {
   runId: string
   cwd: string
   cursor: number
-  manifest?: unknown
+  manifest?: WorkflowRunManifest
   state: WorkflowState
 }
 
@@ -36,6 +40,15 @@ export type WorkflowEventPage = WorkflowEventBatch & {
 export type WorkflowRunScope = {
   cwd: string
   runId: string
+}
+
+export type WorkflowSessionRunScope = {
+  sessionId: string
+  cwd: string
+}
+
+export type WorkflowSessionRunsSnapshot = WorkflowSessionRunScope & {
+  runs: WorkflowRunReference[]
 }
 
 /**
@@ -61,6 +74,8 @@ export interface WorkflowClient {
   resume(
     scope: WorkflowRunScope & { idempotencyKey?: string },
   ): Promise<WorkflowRunReference>
+  listSessionRuns(scope: WorkflowSessionRunScope): Promise<WorkflowRunReference[]>
+  subscribeSessionRuns(listener: (snapshot: WorkflowSessionRunsSnapshot) => void): () => void
 }
 
 /**
@@ -92,5 +107,11 @@ export const unavailableWorkflowClient: WorkflowClient = {
   async cancel() {},
   async resume(scope) {
     return { runId: scope.runId, cwd: scope.cwd }
+  },
+  async listSessionRuns() {
+    return []
+  },
+  subscribeSessionRuns() {
+    return () => {}
   },
 }

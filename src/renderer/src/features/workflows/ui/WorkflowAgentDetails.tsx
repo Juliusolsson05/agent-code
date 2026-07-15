@@ -7,6 +7,10 @@ import { WorkflowActivityRow } from './WorkflowActivityRow'
 
 function referenceText(reference: WorkflowContentReference | undefined): string | null {
   if (!reference) return null
+  // WHY this check precedes JSON.stringify: legacy workflow snapshots can retain enormous command
+  // output objects. `max-height` only clips paint; it does not prevent serialization, text-node
+  // creation, or layout. The preview is the contract specifically intended for this list/detail UI.
+  if (reference.truncated) return reference.preview || null
   if (typeof reference.content === 'string') return reference.content
   if (reference.content !== undefined) {
     try {
@@ -50,7 +54,9 @@ export function WorkflowAgentDetails({
 }): React.JSX.Element {
   const prompt = referenceText(agent.prompt)
   const outcome = referenceText(agent.outcome?.result)
-  const activities = agent.attempts.flatMap(attempt => attempt.activities)
+  const activities = agent.attempts.flatMap(attempt =>
+    attempt.activities.map(activity => ({ attemptId: attempt.id, activity })),
+  )
 
   return (
     <div className="ml-5 mt-1.5 space-y-3 border-l border-border pl-3 pb-2">
@@ -62,9 +68,9 @@ export function WorkflowAgentDetails({
         </div>
         {activities.length > 0 ? (
           <div className="divide-y divide-border">
-            {activities.map(activity => (
+            {activities.map(({ attemptId, activity }) => (
               <WorkflowActivityRow
-                key={`${agent.id}:${activity.activityId}`}
+                key={`${agent.id}:${attemptId}:${activity.activityId}`}
                 activity={activity}
               />
             ))}

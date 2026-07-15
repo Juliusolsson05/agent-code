@@ -87,7 +87,10 @@ export type {
   WorkflowReadEventsResult,
   WorkflowResumeRequest,
   WorkflowResumeResult,
+  WorkflowRunReferenceData,
   WorkflowRunIpcScope,
+  WorkflowSessionRunsRequest,
+  WorkflowSessionRunsResult,
 } from '@preload/api/types.js'
 export type {
   OrchestrationAgentRecord,

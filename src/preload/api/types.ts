@@ -19,7 +19,10 @@ export type {
   WorkflowReadEventsResult,
   WorkflowResumeRequest,
   WorkflowResumeResult,
+  WorkflowRunReferenceData,
   WorkflowRunIpcScope,
+  WorkflowSessionRunsRequest,
+  WorkflowSessionRunsResult,
 } from '@shared/workflows/types.js'
 
 // Shared payload types for the preload IPC bridge.

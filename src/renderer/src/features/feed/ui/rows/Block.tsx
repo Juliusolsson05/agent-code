@@ -29,13 +29,9 @@ import { isAgentSpawnToolName } from '@providers/registry.renderer.capabilities'
 import { JsonToolRow } from '@providers/shared/renderer/rows/JsonToolRow'
 import { TaskSubagentRow } from '@renderer/features/feed/ui/rows/TaskSubagentRow'
 import {
-  isWorkflowRunToolName,
+  isWorkflowViewToolName,
   parseWorkflowToolResult,
 } from '@renderer/features/workflows/model/workflowTool'
-import {
-  WorkflowLaunchPendingRow,
-  WorkflowRunRow,
-} from '@renderer/features/workflows/ui/WorkflowRunRow'
 
 /* ---------- Block dispatcher ---------- */
 
@@ -131,20 +127,6 @@ export const Block = memo(function Block({
       // renderers as we learn codex's tool shapes from recordings).
       const tu = block as ToolUseBlock
 
-      // Workflow execution lives behind the same built-in MCP host for Claude and Codex, so the
-      // provider prefixes differ while the semantic tool suffix is stable. Intercept the launch
-      // before provider fallback and let the returned runId key a purpose-built event inspector.
-      // The transcript ledger still owns this row's placement; no workflow event is injected back
-      // into the conversation stream.
-      if (isWorkflowRunToolName(tu.name)) {
-        const paired = toolResultIndex.get(tu.id)
-        if (!paired) return <WorkflowLaunchPendingRow />
-        const reference = paired.is_error ? null : parseWorkflowToolResult(paired)
-        if (reference) return <WorkflowRunRow reference={reference} />
-        // A malformed/failed MCP result must remain visible through the generic tool/result rows.
-        // Hiding it behind a permanent "starting" card would erase the only useful diagnosis.
-      }
-
       // Custom rendering: intercept shell/bash invocations that are
       // recognized git commands and render them as a purpose-built
       // widget. Claude's tool name is 'Bash'; Codex's is
@@ -222,13 +204,13 @@ export const Block = memo(function Block({
       }
       const sourceTool = toolUseIndex.get(tr.tool_use_id)
       if (
-        isWorkflowRunToolName(sourceTool?.name) &&
+        isWorkflowViewToolName(sourceTool?.name) &&
         tr.is_error !== true &&
         parseWorkflowToolResult(tr) !== null
       ) {
-        // WorkflowRunRow consumes the launch envelope and then reads all subsequent activity from
-        // the workflow event service. Rendering this paired result again would expose raw MCP JSON
-        // directly below the inspector and create two visual owners for one tool call.
+        // The session shell consumes the launch envelope to add a view row below the composer.
+        // Keep Main readable by suppressing the raw JSON result, but leave the generic tool-use row
+        // in place as the durable transcript record that a workflow was launched or resumed.
         return null
       }
       // #442 finding-C2: an answered AskUserQuestion renders the picked answer

@@ -96,6 +96,15 @@ export function createBuiltInMcpServer(
       registerWorkflowMcpTools(server, dependencies.workflowService, {
         cwd: scope.cwd,
         clientId: scope.sessionId,
+      }, {
+        onRunStarted: run => {
+          // WHY the provider transcript is not consulted here: current Codex intentionally defers
+          // MCP tools behind code mode, so the visible outer call is often `functions.exec` rather
+          // than `mcp__agent_code__workflow_run`. The scoped MCP handler still has the authoritative
+          // session ID and run result, making this boundary stable across Claude, Codex, and future
+          // clients regardless of how they choose to present tools to the model.
+          dependencies.workflowBridge?.registerRun(scope.sessionId, scope.cwd, run)
+        },
       })
     }
   }

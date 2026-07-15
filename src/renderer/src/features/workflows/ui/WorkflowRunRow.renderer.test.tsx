@@ -7,10 +7,9 @@ import {
   type WorkflowState,
 } from 'workflow-mcp/state'
 
-import { CodeRenderContext } from '@renderer/features/feed/context'
 import type { WorkflowClient } from '../client/WorkflowClient'
 import { WorkflowClientProvider } from '../client/WorkflowClientContext'
-import { WorkflowRunRow } from './WorkflowRunRow'
+import { WorkflowRunView } from './WorkflowRunRow'
 
 function event(
   sequence: number,
@@ -146,14 +145,16 @@ function clientFor(state: WorkflowState): WorkflowClient {
   }
 }
 
-describe('WorkflowRunRow', () => {
+describe('WorkflowRunView', () => {
   it('renders phases and agents vertically and expands only the selected agent inline', async () => {
     const state = completedState()
     render(
       <WorkflowClientProvider value={clientFor(state)}>
-        <CodeRenderContext.Provider value={{ sessionId: 'session', workspaceRoot: '/repo' }}>
-          <WorkflowRunRow reference={{ runId: 'run-ui' }} />
-        </CodeRenderContext.Provider>
+        <WorkflowRunView
+          reference={{ runId: 'run-ui' }}
+          cwd="/repo"
+          onReferenceChange={() => {}}
+        />
       </WorkflowClientProvider>,
     )
 

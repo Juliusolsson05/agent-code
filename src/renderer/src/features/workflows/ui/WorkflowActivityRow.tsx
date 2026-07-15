@@ -3,6 +3,11 @@ import type { WorkflowActivityState } from '../model/workflowState'
 function contentText(activity: WorkflowActivityState): string | null {
   const content = activity.content
   if (content) {
+    // WHY a CSS max-height is insufficient protection: layout still has to create and measure the
+    // entire text node before overflow can clip it. Older durable runs may contain megabytes behind
+    // a correctly-marked truncated reference, so choose the already-bounded preview without ever
+    // stringifying the historical full object in the renderer.
+    if (content.truncated) return content.preview || null
     if (typeof content.content === 'string') return content.content
     if (content.content !== undefined) {
       try {

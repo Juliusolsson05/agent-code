@@ -630,6 +630,7 @@ async function startApp(): Promise<void> {
     sessionManager: manager,
     appRunJournal,
     workflowService: activeWorkflowService,
+    workflowBridge: activeWorkflowBridge,
   })
   performanceService.mark('app.main.sessionManager.created')
 

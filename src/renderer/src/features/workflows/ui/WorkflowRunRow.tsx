@@ -1,20 +1,10 @@
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
-
-import { CodeRenderContext } from '@renderer/features/feed/context'
-import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 import { useWorkflowClient } from '../client/WorkflowClientContext'
+import { mergeWorkflowLineage } from '../model/workflowLineage'
 import { useWorkflowRun } from '../model/workflowRunStore'
 import { WorkflowPhaseSection } from './WorkflowPhaseSection'
-
-function runGlyph(status: string): string {
-  if (status === 'completed') return '✓'
-  if (status === 'failed') return '✗'
-  if (status === 'cancelled' || status === 'interrupted') return '■'
-  if (status === 'pending') return '◌'
-  return '◉'
-}
 
 function runStatusLabel(status: string): string {
   return status.replace(/_/g, ' ').replace(/^./, first => first.toUpperCase())
@@ -41,69 +31,62 @@ function useRunClock(active: boolean): number {
   return now
 }
 
-export function WorkflowLaunchPendingRow(): React.JSX.Element {
-  return (
-    <MarkerRow marker="◉">
-      <div className="flex items-baseline gap-2 text-[13px]">
-        <span className="font-semibold text-ink">Workflow</span>
-        <span className="text-[11px] text-muted">starting…</span>
-      </div>
-    </MarkerRow>
-  )
-}
-
 /**
- * The workflow inspector is deliberately a feed leaf, not a second feed implementation.
+ * Full-pane workflow inspector selected from the session's view rows.
  *
- * The transcript ledger still decides whether and where the MCP tool call appears. This component
- * only follows the clean runId that tool returned and projects the workflow service's own event
- * stream. Keeping those ownership planes separate prevents workflow activity from being re-parsed
- * as chat transcript content or reordered around user prompts.
+ * WHY this no longer wraps MarkerRow: workflow execution is a sibling view of Main, not transcript
+ * content. The session shell owns selection and swaps this component into the feed-sized viewport;
+ * the composer and view rows remain mounted below it.
  */
-export function WorkflowRunRow({
+export function WorkflowRunView({
   reference,
+  cwd,
+  onReferenceChange,
 }: {
   reference: WorkflowRunReference
+  cwd: string
+  onReferenceChange: (reference: WorkflowRunReference) => void
 }): React.JSX.Element {
   const client = useWorkflowClient()
-  const { workspaceRoot } = useContext(CodeRenderContext)
-  const [activeReference, setActiveReference] = useState(reference)
   const [expandedAgentId, setExpandedAgentId] = useState<string | null>(null)
   const [action, setAction] = useState<'cancel' | 'resume' | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const resumeKey = useRef(`renderer-resume:${reference.runId}:${Date.now()}`)
 
   useEffect(() => {
-    setActiveReference(reference)
     setExpandedAgentId(null)
     resumeKey.current = `renderer-resume:${reference.runId}:${Date.now()}`
   }, [reference.runId])
 
-  const cwd = activeReference.cwd ?? workspaceRoot ?? ''
+  const effectiveCwd = reference.cwd ?? cwd
   const scope = useMemo(
-    () => ({ cwd, runId: activeReference.runId }),
-    [cwd, activeReference.runId],
+    () => ({ cwd: effectiveCwd, runId: reference.runId }),
+    [effectiveCwd, reference.runId],
   )
   const { view, store } = useWorkflowRun(client, scope)
   const snapshot = view.snapshot
+  const displaySnapshot = useMemo(
+    () => mergeWorkflowLineage(view.history, snapshot),
+    [view.history, snapshot],
+  )
   const status = view.phase !== 'ready' && view.cursor === 0
-    ? activeReference.status ?? snapshot.status
+    ? reference.status ?? snapshot.status
     : snapshot.status
   const active = status === 'pending' || status === 'running' || status === 'cancellation_requested'
   const now = useRunClock(active)
   const elapsed = elapsedLabel(snapshot.startedAt, snapshot.completedAt, now)
-  const workflow = snapshot.workflow ?? activeReference.workflow
+  const workflow = snapshot.workflow ?? reference.workflow
 
   const agentsByPhase = useMemo(() => {
-    const map = new Map<string, typeof snapshot.agents>()
-    for (const phase of snapshot.phases) map.set(phase.id, [])
+    const map = new Map<string, typeof displaySnapshot.agents>()
+    for (const phase of displaySnapshot.phases) map.set(phase.id, [])
     map.set('__unassigned__', [])
-    for (const agent of snapshot.agents) {
+    for (const agent of displaySnapshot.agents) {
       const key = agent.phaseId && map.has(agent.phaseId) ? agent.phaseId : '__unassigned__'
       map.get(key)!.push(agent)
     }
     return map
-  }, [snapshot.agents, snapshot.phases])
+  }, [displaySnapshot.agents, displaySnapshot.phases])
 
   const toggleAgent = (agentId: string): void => {
     // Exactly one expanded agent keeps a 76-agent workflow readable: expansion replaces the
@@ -129,9 +112,9 @@ export function WorkflowRunRow({
     try {
       const next = await client.resume({ ...scope, idempotencyKey: resumeKey.current })
       // Resume creates a new durable run instead of appending impossible post-terminal events to
-      // the old run. Following the returned run in this same card preserves the user's place while
-      // retaining `resumedFromRunId` as an explicit lineage label.
-      setActiveReference({ ...next, resumedFromRunId: scope.runId })
+      // the old run. The session shell retains this replacement against the original navigation
+      // slot so switching to Main and back does not silently return to the terminal parent run.
+      onReferenceChange({ ...next, resumedFromRunId: scope.runId })
       setExpandedAgentId(null)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error))
@@ -144,10 +127,12 @@ export function WorkflowRunRow({
   const canResume = ['failed', 'cancelled', 'interrupted'].includes(status)
 
   return (
-    <MarkerRow marker={runGlyph(status)}>
+    <div
+      data-workflow-run-id={reference.runId}
+      className="h-full min-h-0 overflow-y-auto bg-canvas"
+    >
       <article
-        data-workflow-run-id={activeReference.runId}
-        className="min-w-0 rounded-md border border-border bg-surface-hi/40 px-3 py-2.5"
+        className="mx-auto min-w-0 max-w-4xl px-4 py-4"
       >
         <header className="flex min-w-0 items-start gap-3">
           <div className="min-w-0 flex-1">
@@ -165,16 +150,16 @@ export function WorkflowRunRow({
               </div>
             ) : null}
             <div className="mt-1 flex flex-wrap gap-x-2 text-[10px] text-muted">
-              <span>{snapshot.counts.completed}/{snapshot.counts.total} agents</span>
-              {snapshot.counts.running > 0 ? <span>{snapshot.counts.running} running</span> : null}
-              {snapshot.counts.failed > 0 ? (
-                <span className="text-danger">{snapshot.counts.failed} failed</span>
+              <span>{displaySnapshot.counts.completed}/{displaySnapshot.counts.total} agents</span>
+              {displaySnapshot.counts.running > 0 ? <span>{displaySnapshot.counts.running} running</span> : null}
+              {displaySnapshot.counts.failed > 0 ? (
+                <span className="text-danger">{displaySnapshot.counts.failed} failed</span>
               ) : null}
-              {snapshot.counts.reused > 0 ? <span>{snapshot.counts.reused} cached</span> : null}
+              {displaySnapshot.counts.reused > 0 ? <span>{displaySnapshot.counts.reused} cached</span> : null}
               {elapsed ? <span>{elapsed}</span> : null}
             </div>
           </div>
-          {client.available && cwd ? (
+          {client.available && effectiveCwd ? (
             <div className="flex shrink-0 gap-1">
               {active ? (
                 <button
@@ -200,16 +185,16 @@ export function WorkflowRunRow({
           ) : null}
         </header>
 
-        {activeReference.resumedFromRunId ? (
+        {reference.resumedFromRunId ? (
           <div className="mt-2 text-[10px] text-muted">
-            Resumed from {activeReference.resumedFromRunId}
+            Resumed from {reference.resumedFromRunId}
           </div>
         ) : null}
 
         {view.phase === 'loading' ? (
           <div className="mt-3 text-[11px] text-muted">Loading workflow activity…</div>
         ) : null}
-        {view.phase === 'unavailable' || !cwd ? (
+        {view.phase === 'unavailable' || !effectiveCwd ? (
           <div className="mt-3 text-[11px] text-muted">
             Live workflow details are unavailable in this client.
           </div>
@@ -228,9 +213,9 @@ export function WorkflowRunRow({
         ) : null}
         {actionError ? <div className="mt-2 text-[11px] text-danger">{actionError}</div> : null}
 
-        {snapshot.phases.length > 0 || snapshot.agents.length > 0 ? (
+        {displaySnapshot.phases.length > 0 || displaySnapshot.agents.length > 0 ? (
           <div className="mt-3 flex flex-col gap-2">
-            {snapshot.phases.map(phase => (
+            {displaySnapshot.phases.map(phase => (
               <WorkflowPhaseSection
                 key={phase.id}
                 phase={phase}
@@ -250,6 +235,6 @@ export function WorkflowRunRow({
           </div>
         ) : null}
       </article>
-    </MarkerRow>
+    </div>
   )
 }

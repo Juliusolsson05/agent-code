@@ -28,14 +28,6 @@ import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 
 import { AskUserQuestionRow } from '@renderer/features/feed/ui/semantic/AskUserQuestionRow'
 import { SemanticTodoList } from '@renderer/features/feed/ui/semantic/TodoList'
-import {
-  isWorkflowRunToolName,
-  parseWorkflowRunReference,
-} from '@renderer/features/workflows/model/workflowTool'
-import {
-  WorkflowLaunchPendingRow,
-  WorkflowRunRow,
-} from '@renderer/features/workflows/ui/WorkflowRunRow'
 
 // [#285] Extract a CLOSED top-level JSON string field from a partial inputJson
 // buffer — i.e. one whose closing quote has already streamed. The regex body
@@ -264,20 +256,6 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   if (block.kind === 'function_call' || block.kind === 'custom_tool_call') {
     const liveTool = codexLiveToolUseBlock(block)
 
-    if (
-      isWorkflowRunToolName(liveTool.name) &&
-      !block.resultIsError &&
-      toolState?.status !== 'error'
-    ) {
-      const reference = parseWorkflowRunReference(
-        block.resultContent ?? toolState?.resultContent ?? block.output,
-      )
-      if (reference) return <WorkflowRunRow reference={reference} />
-      if (!block.resultAt && toolState?.status !== 'completed') {
-        return <WorkflowLaunchPendingRow />
-      }
-    }
-
     // WHY live Codex calls reuse committed Codex row renderers:
     // The broken 18:54 transcript showed the live plane rendering
     // provider internals (`exec_command`, `write_stdin`, raw JSON)
@@ -437,20 +415,6 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     block.kind === 'server_tool_use' ||
     block.kind === 'mcp_tool_use'
   ) {
-    if (
-      isWorkflowRunToolName(block.toolName) &&
-      !block.resultIsError &&
-      toolState?.status !== 'error'
-    ) {
-      const reference = parseWorkflowRunReference(
-        block.resultContent ?? toolState?.resultContent ?? block.output,
-      )
-      if (reference) return <WorkflowRunRow reference={reference} />
-      if (!block.resultAt && toolState?.status !== 'completed') {
-        return <WorkflowLaunchPendingRow />
-      }
-    }
-
     // WHY keep tool results nested under the tool row:
     //
     // Claude's transcript wire format splits tool_use and tool_result

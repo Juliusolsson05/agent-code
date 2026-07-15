@@ -15,6 +15,8 @@ import type {
 export type WorkflowRunView = {
   phase: 'loading' | 'ready' | 'unavailable' | 'error'
   snapshot: WorkflowState
+  /** Oldest-to-newest immutable ancestors; `snapshot` remains the live run authority. */
+  history: WorkflowState[]
   cursor: number
   error?: string
 }
@@ -57,6 +59,7 @@ export class WorkflowRunStore {
     this.view = {
       phase: client.available ? 'loading' : 'unavailable',
       snapshot: createWorkflowState(scope.runId),
+      history: [],
       cursor: 0,
     }
   }
@@ -74,7 +77,12 @@ export class WorkflowRunStore {
 
   retry(): void {
     this.stop()
-    this.setView({ phase: 'loading', snapshot: this.view.snapshot, cursor: this.view.cursor })
+    this.setView({
+      phase: 'loading',
+      snapshot: this.view.snapshot,
+      history: this.view.history,
+      cursor: this.view.cursor,
+    })
     if (this.listeners.size > 0) void this.start()
   }
 
@@ -82,6 +90,7 @@ export class WorkflowRunStore {
     if (
       next.phase === this.view.phase &&
       next.snapshot === this.view.snapshot &&
+      next.history === this.view.history &&
       next.cursor === this.view.cursor &&
       next.error === this.view.error
     ) return
@@ -103,7 +112,12 @@ export class WorkflowRunStore {
     const generation = ++this.generation
 
     if (!this.client.available) {
-      this.setView({ phase: 'unavailable', snapshot: this.view.snapshot, cursor: this.view.cursor })
+      this.setView({
+        phase: 'unavailable',
+        snapshot: this.view.snapshot,
+        history: this.view.history,
+        cursor: this.view.cursor,
+      })
       return
     }
 
@@ -126,20 +140,44 @@ export class WorkflowRunStore {
         this.setView({
           phase: 'error',
           snapshot: this.view.snapshot,
+          history: this.view.history,
           cursor: this.view.cursor,
           error: 'Workflow run was not found in this project.',
         })
         return
       }
-      this.setView({ phase: 'ready', snapshot: envelope.state, cursor: envelope.cursor })
+      // WHY the owned run becomes authoritative before optional ancestry is fetched: the current
+      // snapshot is enough to render and to establish the durable cursor. A missing/corrupt parent
+      // must not leave this store at cursor zero while live batches pile up behind `loading`; that
+      // turns one lineage error into a full replay of the child and can recreate the renderer burst
+      // this store is meant to absorb. Parent snapshots enrich the view, but they never gate it.
+      this.setView({
+        phase: 'ready',
+        snapshot: envelope.state,
+        history: this.view.history,
+        cursor: envelope.cursor,
+      })
       const pending = this.pendingBeforeSnapshot
       this.pendingBeforeSnapshot = []
       for (const batch of pending) this.enqueueBatch(batch, generation)
+
+      let history = this.view.history
+      try {
+        history = await this.loadHistory(envelope.manifest?.resumedFromRunId, generation)
+      } catch (error) {
+        // WHY ancestry failure is deliberately nonfatal: the child snapshot and event cursor came
+        // from the authoritative store and remain usable. Surfacing the parent problem in developer
+        // diagnostics preserves evidence without replacing a working run UI with an error card.
+        console.warn('[workflows] Unable to load optional resume ancestry', error)
+      }
+      if (generation !== this.generation) return
+      this.setView({ ...this.view, history })
     } catch (error) {
       if (generation !== this.generation) return
       this.setView({
         phase: 'error',
         snapshot: this.view.snapshot,
+        history: this.view.history,
         cursor: this.view.cursor,
         error: error instanceof Error ? error.message : String(error),
       })
@@ -157,6 +195,7 @@ export class WorkflowRunStore {
         this.setView({
           phase: 'error',
           snapshot: this.view.snapshot,
+          history: this.view.history,
           cursor: this.view.cursor,
           error: error instanceof Error ? error.message : String(error),
         })
@@ -175,8 +214,50 @@ export class WorkflowRunStore {
       cursor = stored.cursor
       changed = true
     }
-    if (changed) this.setView({ phase: 'ready', snapshot, cursor })
+    if (changed) this.setView({
+      phase: 'ready',
+      snapshot,
+      history: this.view.history,
+      cursor,
+    })
     return true
+  }
+
+  private async loadHistory(
+    firstParentRunId: string | undefined,
+    generation: number,
+  ): Promise<WorkflowState[]> {
+    const newestFirst: WorkflowState[] = []
+    const seen = new Set([this.scope.runId])
+    let parentRunId = firstParentRunId
+
+    // WHY ancestry is read as reduced snapshots rather than copying old events into the new run:
+    // a resume is intentionally a new immutable execution with its own cursor and terminal state.
+    // Re-appending a parent's run.cancelled event would make the child terminal before it starts,
+    // while duplicating a large event log on every resume would grow quadratically. Snapshots retain
+    // the complete agent attempt/activity tree, so the renderer can compose history without
+    // weakening either run's durability or cursor invariants.
+    while (parentRunId !== undefined) {
+      if (generation !== this.generation) return []
+      // Claude-native imports can seed Agent Code's first resume with an external `wf_...` parent.
+      // That identifier is useful lineage metadata but is not addressable by WorkflowService,
+      // whose owned IDs are `run_...`. Stop at the ownership boundary instead of generating an
+      // invalid snapshot request and a noisy performance error every time the view is opened.
+      if (!parentRunId.startsWith('run_')) break
+      if (seen.has(parentRunId)) {
+        throw new Error(`Workflow resume lineage contains a cycle at ${parentRunId}.`)
+      }
+      seen.add(parentRunId)
+
+      const parent = await this.client.getSnapshot({ cwd: this.scope.cwd, runId: parentRunId })
+      // Claude-native imports name an external run at the root of the lineage. Agent Code cannot
+      // snapshot that foreign store, but every Agent Code-owned ancestor above it is still useful.
+      if (!parent) break
+      newestFirst.push(parent.state)
+      parentRunId = parent.manifest?.resumedFromRunId
+    }
+
+    return newestFirst.reverse()
   }
 
   private async applyBatchOrRepair(

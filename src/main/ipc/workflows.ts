@@ -6,6 +6,7 @@ import type {
   WorkflowGetSnapshotRequest,
   WorkflowReadEventsRequest,
   WorkflowResumeRequest,
+  WorkflowSessionRunsRequest,
 } from '@shared/workflows/types.js'
 
 export function registerWorkflowIpc(bridge: WorkflowBridge): void {
@@ -30,5 +31,8 @@ export function registerWorkflowIpc(bridge: WorkflowBridge): void {
     'workflows:resume',
     (_event, request: WorkflowResumeRequest) => bridge.resume(request),
   )
+  ipcMain.handle(
+    'workflows:list-session-runs',
+    (_event, request: WorkflowSessionRunsRequest) => bridge.getSessionRuns(request),
+  )
 }
-

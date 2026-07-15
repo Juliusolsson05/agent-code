@@ -8,6 +8,7 @@ import type {
 import { WorkflowServiceError } from 'workflow-mcp'
 
 import { sendToMainWindow } from '@main/window/mainWindow.js'
+import { workflowPayloadForRenderer } from '@main/workflows/workflowPayloadForRenderer.js'
 import type {
   WorkflowCancelRequest,
   WorkflowCancelResult,
@@ -16,18 +17,24 @@ import type {
   WorkflowGetSnapshotResult,
   WorkflowReadEventsRequest,
   WorkflowReadEventsResult,
+  WorkflowRunReferenceData,
   WorkflowResumeRequest,
   WorkflowResumeResult,
+  WorkflowSessionRunsRequest,
+  WorkflowSessionRunsResult,
 } from '@shared/workflows/types.js'
 
 const RENDERER_CLIENT_ID = 'agent-code-renderer'
 const DEFAULT_BATCH_WINDOW_MS = 16
 
-type WorkflowBatchSender = (channel: 'workflows:event-batch', batch: WorkflowEventsBatch) => void
+type WorkflowBridgeSender = (
+  channel: 'workflows:event-batch' | 'workflows:session-runs',
+  payload: WorkflowEventsBatch | WorkflowSessionRunsResult,
+) => void
 
 export type WorkflowBridgeOptions = {
   batchWindowMs?: number
-  send?: WorkflowBatchSender
+  send?: WorkflowBridgeSender
 }
 
 /**
@@ -42,7 +49,11 @@ export type WorkflowBridgeOptions = {
  */
 export class WorkflowBridge {
   private readonly pendingByRun = new Map<string, StoredWorkflowEvent[]>()
-  private readonly send: WorkflowBatchSender
+  private readonly runsBySession = new Map<
+    string,
+    { cwd: string; slots: Map<string, WorkflowRunReferenceData> }
+  >()
+  private readonly send: WorkflowBridgeSender
   private readonly batchWindowMs: number
   private unsubscribe: (() => void) | null = null
   private flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -90,7 +101,52 @@ export class WorkflowBridge {
       runId,
       cursor: snapshot.cursor,
       manifest: snapshot.manifest,
-      state: snapshot.state,
+      state: workflowPayloadForRenderer(snapshot.state),
+    }
+  }
+
+  registerRun(sessionId: string, cwd: string, run: WorkflowRunStartResult): void {
+    const normalizedSessionId = nonEmpty(sessionId, 'sessionId')
+    const normalizedCwd = nonEmpty(cwd, 'cwd')
+    const existing = this.runsBySession.get(normalizedSessionId)
+    const session = existing?.cwd === normalizedCwd
+      ? existing
+      : { cwd: normalizedCwd, slots: new Map<string, WorkflowRunReferenceData>() }
+
+    // WHY a resume updates its original slot instead of appending another row: WorkflowService
+    // correctly creates a new immutable run for every resume, but product navigation represents
+    // one workflow lineage. The bridge is the first app-owned layer that knows both the MCP client
+    // session and the returned lineage, so this is the only reliable place to preserve that view.
+    let slotRunId = run.runId
+    if (run.resumedFromRunId) {
+      for (const [candidateSlot, reference] of session.slots) {
+        if (reference.runId === run.resumedFromRunId) {
+          slotRunId = candidateSlot
+          break
+        }
+      }
+    }
+    session.slots.set(slotRunId, {
+      cwd: normalizedCwd,
+      ...cloneStartResult(run),
+    })
+    this.runsBySession.set(normalizedSessionId, session)
+    this.publishSessionRuns(normalizedSessionId, session)
+  }
+
+  getSessionRuns(request: WorkflowSessionRunsRequest): WorkflowSessionRunsResult {
+    if (!request || typeof request !== 'object') {
+      throw new TypeError('Workflow session request is required')
+    }
+    const sessionId = nonEmpty(request.sessionId, 'sessionId')
+    const cwd = nonEmpty(request.cwd, 'cwd')
+    const session = this.runsBySession.get(sessionId)
+    return {
+      sessionId,
+      cwd,
+      runs: session?.cwd === cwd
+        ? [...session.slots.values()].map(reference => cloneReference(reference))
+        : [],
     }
   }
 
@@ -107,7 +163,7 @@ export class WorkflowBridge {
       runId: page.runId,
       fromCursor: page.fromCursor,
       toCursor: page.toCursor,
-      events: page.events,
+      events: workflowPayloadForRenderer(page.events),
       hasMore: page.hasMore,
     }
   }
@@ -130,7 +186,30 @@ export class WorkflowBridge {
         ? {}
         : { idempotencyKey: nonEmpty(request.idempotencyKey, 'idempotencyKey') }),
     })
+    const ownerSessionId = this.findSessionForRun(cwd, runId)
+    if (ownerSessionId) this.registerRun(ownerSessionId, cwd, run)
     return { ok: true, run: cloneStartResult(run) }
+  }
+
+  private findSessionForRun(cwd: string, runId: string): string | null {
+    for (const [sessionId, session] of this.runsBySession) {
+      if (session.cwd !== cwd) continue
+      for (const reference of session.slots.values()) {
+        if (reference.runId === runId) return sessionId
+      }
+    }
+    return null
+  }
+
+  private publishSessionRuns(
+    sessionId: string,
+    session: { cwd: string; slots: Map<string, WorkflowRunReferenceData> },
+  ): void {
+    this.send('workflows:session-runs', {
+      sessionId,
+      cwd: session.cwd,
+      runs: [...session.slots.values()].map(reference => cloneReference(reference)),
+    })
   }
 
   private enqueue(event: StoredWorkflowEvent): void {
@@ -160,7 +239,9 @@ export class WorkflowBridge {
         runId,
         fromCursor: events[0]!.cursor,
         toCursor: events[events.length - 1]!.cursor,
-        events,
+        // Durable storage keeps its exact records. The renderer gets a bounded projection so one
+        // verbose command cannot turn a routine structured clone into seconds of UI starvation.
+        events: workflowPayloadForRenderer(events),
       })
     }
   }
@@ -206,5 +287,12 @@ function cloneStartResult(run: WorkflowRunStartResult): WorkflowResumeResult['ru
     workflow: { ...run.workflow },
     cursor: run.cursor,
     ...(run.resumedFromRunId === undefined ? {} : { resumedFromRunId: run.resumedFromRunId }),
+  }
+}
+
+function cloneReference(reference: WorkflowRunReferenceData): WorkflowRunReferenceData {
+  return {
+    ...reference,
+    ...(reference.workflow ? { workflow: { ...reference.workflow } } : {}),
   }
 }

@@ -11,6 +11,7 @@ import type { AiWorkspaceRegistry } from '@main/aiWorkspace/AiWorkspaceRegistry.
 import type { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
 import type { SessionManager } from '@main/sessionManager.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
+import type { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
 import type { WorkflowService } from 'workflow-mcp'
 import { performanceService } from '@main/performance/PerformanceService.js'
 import { normalizeBuiltInMcpDomains } from '@mcp/shared/types.js'
@@ -38,6 +39,7 @@ export type BuiltInMcpDependencies = {
   sessionManager?: SessionManager
   appRunJournal?: AppRunJournal
   workflowService?: WorkflowService
+  workflowBridge?: WorkflowBridge
 }
 
 const MCP_REQUEST_SLOW_MS = 1000

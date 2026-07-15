@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
@@ -22,7 +22,7 @@ const launch = {
 }
 
 describe('workflow feed ownership', () => {
-  it('committed tool_use owns the inspector and consumes its paired raw result', () => {
+  it('keeps the committed launch as a transcript tool row without mounting the inspector', () => {
     const toolUse: ToolUseBlock = {
       type: 'tool_use',
       id: 'workflow-tool',
@@ -45,12 +45,11 @@ describe('workflow feed ownership', () => {
       </CodeRenderContext.Provider>,
     )
 
-    expect(screen.getByText('Deep hunt')).toBeInTheDocument()
-    expect(container.querySelectorAll('[data-workflow-run-id="run-feed"]')).toHaveLength(1)
+    expect(container.querySelectorAll('[data-workflow-run-id="run-feed"]')).toHaveLength(0)
     expect(container.textContent).not.toContain('"runId":"run-feed"')
   })
 
-  it('live Claude/Codex MCP blocks converge on the same workflow row', () => {
+  it('keeps live Claude/Codex MCP blocks out of the workflow inspector viewport', () => {
     render(
       <CodeRenderContext.Provider value={{ sessionId: 'session', workspaceRoot: '/repo' }}>
         <SemanticLiveBlockRow
@@ -75,7 +74,6 @@ describe('workflow feed ownership', () => {
       </CodeRenderContext.Provider>,
     )
 
-    expect(screen.getByText('Deep hunt')).toBeInTheDocument()
-    expect(document.querySelectorAll('[data-workflow-run-id="run-feed"]')).toHaveLength(1)
+    expect(document.querySelectorAll('[data-workflow-run-id="run-feed"]')).toHaveLength(0)
   })
 })

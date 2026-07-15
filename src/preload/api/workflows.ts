@@ -12,6 +12,8 @@ import type {
   WorkflowReadEventsResult,
   WorkflowResumeRequest,
   WorkflowResumeResult,
+  WorkflowSessionRunsRequest,
+  WorkflowSessionRunsResult,
 } from '@shared/workflows/types.js'
 
 export const workflowsApi = {
@@ -31,7 +33,13 @@ export const workflowsApi = {
     request: WorkflowResumeRequest,
   ): Promise<WorkflowResumeResult> => ipcRenderer.invoke('workflows:resume', request),
 
+  workflowListSessionRuns: (
+    request: WorkflowSessionRunsRequest,
+  ): Promise<WorkflowSessionRunsResult> => ipcRenderer.invoke('workflows:list-session-runs', request),
+
   onWorkflowEvents: (cb: (batch: WorkflowEventsBatch) => void): Unsub =>
     subscribe('workflows:event-batch', cb),
-}
 
+  onWorkflowSessionRuns: (cb: (snapshot: WorkflowSessionRunsResult) => void): Unsub =>
+    subscribe('workflows:session-runs', cb),
+}

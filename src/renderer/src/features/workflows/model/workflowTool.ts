@@ -1,4 +1,5 @@
-import type { ToolResultBlock } from '@shared/types/transcript'
+import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 
@@ -15,6 +16,21 @@ export function isWorkflowRunToolName(name: string | null | undefined): boolean 
     normalized.endsWith('/workflow_run') ||
     normalized.endsWith(':workflow_run')
   )
+}
+
+export function isWorkflowResumeToolName(name: string | null | undefined): boolean {
+  if (!name) return false
+  const normalized = name.trim().toLowerCase()
+  return (
+    normalized === 'workflow_resume' ||
+    normalized.endsWith('__workflow_resume') ||
+    normalized.endsWith('/workflow_resume') ||
+    normalized.endsWith(':workflow_resume')
+  )
+}
+
+export function isWorkflowViewToolName(name: string | null | undefined): boolean {
+  return isWorkflowRunToolName(name) || isWorkflowResumeToolName(name)
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -174,4 +190,60 @@ export function parseWorkflowToolResult(
   result: ToolResultBlock | null | undefined,
 ): WorkflowRunReference | null {
   return result ? parseWorkflowRunReference(result.content) : null
+}
+
+export type WorkflowRunReferenceSources = {
+  toolUseIndex: ReadonlyMap<string, ToolUseBlock>
+  toolResultIndex: ReadonlyMap<string, ToolResultBlock>
+  semanticTurns: readonly SemanticLiveTurn[]
+}
+
+/**
+ * Recover workflow runs from the session runtime without asking the feed renderer to own them.
+ *
+ * WHY both transcript indexes and semantic turns are scanned: the semantic plane sees an MCP
+ * result first, while the durable transcript can trail it by several provider turns. Relying on
+ * only one source either delays the workflow row or makes it disappear during reconciliation.
+ * De-duplicating by durable runId lets both planes overlap safely and keeps the first-seen order
+ * stable for the vertical view selector.
+ */
+export function collectWorkflowRunReferences({
+  toolUseIndex,
+  toolResultIndex,
+  semanticTurns,
+}: WorkflowRunReferenceSources): WorkflowRunReference[] {
+  const references = new Map<string, WorkflowRunReference>()
+  const remember = (reference: WorkflowRunReference | null): void => {
+    if (!reference) return
+    const previous = references.get(reference.runId)
+    references.set(reference.runId, {
+      ...previous,
+      ...reference,
+      ...(reference.workflow ?? previous?.workflow
+        ? { workflow: reference.workflow ?? previous?.workflow }
+        : {}),
+    })
+  }
+
+  for (const [toolUseId, toolUse] of toolUseIndex) {
+    if (!isWorkflowViewToolName(toolUse.name)) continue
+    const result = toolResultIndex.get(toolUseId)
+    if (!result || result.is_error === true) continue
+    remember(parseWorkflowToolResult(result))
+  }
+
+  for (const turn of semanticTurns) {
+    for (const blockIndex of turn.blockOrder) {
+      const block = turn.blocks[blockIndex]
+      if (!block || !isWorkflowViewToolName(block.toolName) || block.resultIsError) continue
+      const correlationId = block.toolUseId ?? block.callId ?? block.itemId
+      const toolState = correlationId ? turn.lookups.toolCallsById[correlationId] : undefined
+      if (toolState?.status === 'error') continue
+      remember(parseWorkflowRunReference(
+        block.resultContent ?? toolState?.resultContent ?? block.output,
+      ))
+    }
+  }
+
+  return [...references.values()]
 }

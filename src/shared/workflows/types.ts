@@ -4,6 +4,30 @@ import type {
   WorkflowState,
 } from 'workflow-mcp/state'
 
+export type WorkflowRunReferenceData = {
+  runId: string
+  cwd: string
+  status?: string
+  cursor?: number
+  workflow?: {
+    name: string
+    title?: string
+    description?: string
+  }
+  resumedFromRunId?: string
+}
+
+export type WorkflowSessionRunsRequest = {
+  sessionId: string
+  cwd: string
+}
+
+export type WorkflowSessionRunsResult = {
+  sessionId: string
+  cwd: string
+  runs: WorkflowRunReferenceData[]
+}
+
 /**
  * Clone-safe contracts for the Electron main <-> renderer workflow bridge.
  *

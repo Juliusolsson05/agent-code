@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  collectWorkflowRunReferences,
   isWorkflowRunToolName,
+  isWorkflowViewToolName,
   parseWorkflowRunReference,
   parseWorkflowToolResult,
 } from './workflowTool'
@@ -13,6 +15,7 @@ describe('workflow tool recognition', () => {
     expect(isWorkflowRunToolName('agent-code/workflow_run')).toBe(true)
     expect(isWorkflowRunToolName('workflow_run_status')).toBe(false)
     expect(isWorkflowRunToolName('some_workflow_runner')).toBe(false)
+    expect(isWorkflowViewToolName('mcp__agent_code__workflow_resume')).toBe(true)
   })
 })
 
@@ -53,5 +56,65 @@ describe('parseWorkflowRunReference', () => {
     expect(parseWorkflowRunReference('{"runId":')).toBeNull()
     expect(parseWorkflowRunReference({ run: { id: 'not-the-contract' } })).toBeNull()
     expect(parseWorkflowRunReference('workflow run-42 started')).toBeNull()
+  })
+})
+
+describe('collectWorkflowRunReferences', () => {
+  it('deduplicates live and committed launch envelopes without depending on feed rendering', () => {
+    const run = {
+      runId: 'run-view',
+      cwd: '/repo',
+      status: 'running',
+      workflow: { name: 'fat-bug-hunt', title: 'Deep hunt' },
+    }
+    const toolUse = {
+      type: 'tool_use' as const,
+      id: 'workflow-tool',
+      name: 'mcp__agent_code__workflow_run',
+      input: { name: 'fat-bug-hunt' },
+    }
+    const toolResult = {
+      type: 'tool_result' as const,
+      tool_use_id: toolUse.id,
+      content: JSON.stringify({ ok: true, run }),
+    }
+    const references = collectWorkflowRunReferences({
+      toolUseIndex: new Map([[toolUse.id, toolUse]]),
+      toolResultIndex: new Map([[toolUse.id, toolResult]]),
+      semanticTurns: [{
+        turnId: 'turn-1',
+        text: '',
+        source: 'codex',
+        blocks: {
+          0: {
+            blockIndex: 0,
+            kind: 'function_call',
+            toolName: 'mcp__agent_code__workflow_run',
+            callId: toolUse.id,
+            output: { structuredContent: { run } },
+          },
+        },
+        blockOrder: [0],
+        stopReason: null,
+        usage: null,
+        task: {
+          todos: [],
+          doneCount: 0,
+          totalCount: 0,
+          inProgressToolUseIds: [],
+          activeToolNames: [],
+        },
+        lookups: {
+          toolCallsById: {},
+          toolUseIdsInOrder: [],
+          resolvedToolUseIds: [],
+          erroredToolUseIds: [],
+        },
+        startedAt: 1,
+        endedAt: 2,
+      }],
+    })
+
+    expect(references).toEqual([run])
   })
 })
