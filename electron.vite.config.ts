@@ -196,6 +196,11 @@ export default defineConfig(({ mode }) => ({
           // function buried in the main bundle. The stable input name keeps
           // dev, preview, and packaged paths identical.
           workflowWorker: resolve(__dirname, 'src/main/workflows/workflowWorkerEntry.ts'),
+          // child_process.fork cannot address a function buried in the main
+          // bundle. A stable sibling entry gives every Codex attempt its own
+          // killable process group in preview and the packaged application;
+          // changing this name also requires changing createWorkflowService.
+          workflowProviderHost: resolve(__dirname, 'src/main/workflows/workflowProviderHostEntry.ts'),
         },
         // `agent-voice-dictation` uses `ws` for Deepgram streaming. Main runs
         // in Node, so bundling `ws` through Vite is the wrong tradeoff: Rollup

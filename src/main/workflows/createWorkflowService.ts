@@ -6,22 +6,15 @@ import {
   FileWorkflowStore,
   WorkflowService,
 } from 'workflow-mcp'
-import type { WorkflowProviderFactoryContext } from 'workflow-mcp'
 
 import { createCodexWorkflowProvider } from '@main/workflows/CodexWorkflowProvider.js'
 import { ElectronWorkflowWorkerLauncher } from '@main/workflows/ElectronWorkflowWorkerLauncher.js'
 import { resolveClaudeAgentType } from '@main/workflows/ClaudeAgentTypeResolver.js'
 import { prepareGitWorkflowWorktree } from '@main/workflows/GitWorkflowWorktree.js'
-import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 
-export type CreateWorkflowServiceOptions = {
-  sessionMcpServers?(sessionId: string): readonly BuiltInMcpServerConfig[]
-}
-
-export async function createWorkflowService(
-  options: CreateWorkflowServiceOptions = {},
-): Promise<WorkflowService> {
-  const store = new FileWorkflowStore(join(app.getPath('userData'), 'workflows'))
+export async function createWorkflowService(): Promise<WorkflowService> {
+  const workflowStateRoot = join(app.getPath('userData'), 'workflows')
+  const store = new FileWorkflowStore(workflowStateRoot)
 
   // WHY the worker path is relative to THIS BUILT MODULE rather than
   // app.getAppPath(): electron-vite emits workflowWorker.js beside the main
@@ -29,16 +22,23 @@ export async function createWorkflowService(
   // actual bundle (including app.asar), while app.getAppPath()+source-shaped
   // paths are easy to make work in npm start and silently miss in the .app.
   const workerFilePath = fileURLToPath(new URL('./workflowWorker.js', import.meta.url))
+  const providerHostFilePath = fileURLToPath(new URL('./workflowProviderHost.js', import.meta.url))
+  const interactiveCodexHome = process.env.CODEX_HOME ?? join(app.getPath('home'), '.codex')
 
   const service = new WorkflowService({
     store,
-    // The function is load-bearing: tool setup can change while Agent Code is
-    // open, so binding a Codex path at app startup would retain an empty/stale
-    // path until restart. WorkflowService invokes this once per new run.
-    provider: (context: WorkflowProviderFactoryContext) => createCodexWorkflowProvider({
-      mcpServers: context.clientId === undefined
-        ? []
-        : options.sessionMcpServers?.(context.clientId) ?? [],
+    // WHY this deliberately does not forward the parent chat's Agent Code MCP
+    // server: these workflow attempts run read-only and may be recovered
+    // automatically after a confirmed process-tree kill. The parent server
+    // exposes mutating orchestration and workspace tools, so inheriting it
+    // would make replay-safety unknowable. A future workflow-facing MCP surface
+    // needs per-tool effect/idempotency metadata before it can be admitted here.
+    // The factory remains lazy because tool setup can change while Agent Code
+    // is open; binding a Codex path at startup would retain an empty/stale path.
+    provider: () => createCodexWorkflowProvider({
+      providerHostFilePath,
+      codexHome: join(workflowStateRoot, 'codex-home'),
+      authenticationFile: join(interactiveCodexHome, 'auth.json'),
     }),
     workerLauncher: new ElectronWorkflowWorkerLauncher(),
     workerFilePath,

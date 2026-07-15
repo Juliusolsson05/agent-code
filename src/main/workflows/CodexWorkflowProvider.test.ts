@@ -37,6 +37,12 @@ const { createCodexWorkflowProvider } = await import(
   '@main/workflows/CodexWorkflowProvider.js'
 )
 
+const providerOptions = {
+  providerHostFilePath: '/opt/agent-code/workflowProviderHost.js',
+  codexHome: '/tmp/agent-code-workflow-codex',
+  authenticationFile: '/tmp/interactive-codex/auth.json',
+}
+
 describe('createCodexWorkflowProvider', () => {
   beforeEach(() => {
     resolvedCodexPath = ''
@@ -45,7 +51,7 @@ describe('createCodexWorkflowProvider', () => {
   })
 
   it('returns a durable agent failure when Codex is not configured', async () => {
-    const provider = createCodexWorkflowProvider()
+    const provider = createCodexWorkflowProvider(providerOptions)
 
     expect(provider.name).toBe('codex')
     expect(codexConstructor).not.toHaveBeenCalled()
@@ -58,10 +64,16 @@ describe('createCodexWorkflowProvider', () => {
   it('always supplies the setup-resolved absolute CLI override', () => {
     resolvedCodexPath = '/opt/agent-code/bin/codex'
 
-    createCodexWorkflowProvider()
+    createCodexWorkflowProvider(providerOptions)
 
     expect(codexConstructor).toHaveBeenCalledWith({
       codexPathOverride: '/opt/agent-code/bin/codex',
+      providerHostFilePath: '/opt/agent-code/workflowProviderHost.js',
+      configurationIsolation: {
+        codexHome: '/tmp/agent-code-workflow-codex',
+        authenticationFile: '/tmp/interactive-codex/auth.json',
+      },
+      capabilities: { inheritedMcpServers: 'disabled' },
     })
   })
 

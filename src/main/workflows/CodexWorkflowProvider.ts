@@ -6,10 +6,11 @@ import type {
 } from 'workflow-mcp'
 
 import { getToolPath } from '@main/setup/toolchain.js'
-import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 
 export type CodexWorkflowProviderOptions = {
-  mcpServers?: readonly BuiltInMcpServerConfig[]
+  providerHostFilePath: string
+  codexHome: string
+  authenticationFile?: string
 }
 
 /**
@@ -24,32 +25,33 @@ export type CodexWorkflowProviderOptions = {
  * Codex later takes effect on the next run without restarting the app.
  */
 export function createCodexWorkflowProvider(
-  options: CodexWorkflowProviderOptions = {},
+  options: CodexWorkflowProviderOptions,
 ): AgentProvider {
   const codexPath = getToolPath('codex', '')
   if (!codexPath || !isAbsolute(codexPath)) {
     return new MissingCodexWorkflowProvider()
   }
 
-  // Never let @openai/codex-sdk discover its optional platform package.
-  // Agent Code owns CLI installation, versioning, authentication, and path
-  // overrides; the packaged app intentionally excludes those huge optional
-  // binaries. An explicit absolute override is therefore a correctness
-  // boundary, not merely a bundle-size optimization.
-  const mcpServers = options.mcpServers ?? []
-  const mcpConfig = Object.fromEntries(mcpServers.map(server => [
-    server.name,
-    {
-      url: server.url,
-      http_headers: { ...server.headers },
-    },
-  ]))
+  // WHY all three boundaries are explicit here: the packaged app owns the
+  // Codex executable, the child-process module, and the configuration root.
+  // Falling back to SDK discovery works in a source checkout but breaks after
+  // packaging; falling back to the interactive CODEX_HOME is worse because it
+  // silently gives automatically replayed workflow attempts whatever MCP
+  // servers, plugins, and apps the user enabled for an ordinary chat.
   return new CodexAgentProvider({
     codexPathOverride: codexPath,
-    // The SDK flattens this object into the same `mcp_servers.*` CLI overrides used by normal
-    // Agent Code sessions. Omitting the whole block for unscoped/renderer resumes avoids inventing
-    // credentials or silently inheriting a different user's global Codex MCP configuration.
-    ...(mcpServers.length === 0 ? {} : { config: { mcp_servers: mcpConfig } }),
+    providerHostFilePath: options.providerHostFilePath,
+    configurationIsolation: {
+      codexHome: options.codexHome,
+      ...(options.authenticationFile === undefined
+        ? {}
+        : { authenticationFile: options.authenticationFile }),
+    },
+    // This is an attestation backed by configurationIsolation, not a claim
+    // inferred from an empty options object. Workflow MCP rejects this value
+    // without an isolated CODEX_HOME because normal Codex configuration can
+    // otherwise reintroduce unclassified external tools behind our back.
+    capabilities: { inheritedMcpServers: 'disabled' },
   })
 }
 
