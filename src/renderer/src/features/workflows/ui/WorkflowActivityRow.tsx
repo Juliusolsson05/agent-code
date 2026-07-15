@@ -1,4 +1,8 @@
+import { useState } from 'react'
+
 import type { WorkflowActivityState } from '../model/workflowState'
+
+const MAX_SUMMARY_CHARACTERS = 180
 
 function contentText(activity: WorkflowActivityState): string | null {
   const content = activity.content
@@ -40,12 +44,21 @@ function activityGlyph(activity: WorkflowActivityState): string {
   }
 }
 
+function oneLineSummary(activity: WorkflowActivityState, content: string | null): string {
+  const source = activity.title || content || activity.kind.replace(/_/g, ' ')
+  const compact = source.replace(/\s+/g, ' ').trim()
+  if (compact.length <= MAX_SUMMARY_CHARACTERS) return compact
+  return `${compact.slice(0, MAX_SUMMARY_CHARACTERS - 1).trimEnd()}…`
+}
+
 export function WorkflowActivityRow({
   activity,
 }: {
   activity: WorkflowActivityState
 }): React.JSX.Element {
   const content = contentText(activity)
+  const [expanded, setExpanded] = useState(false)
+  const summary = oneLineSummary(activity, content)
   return (
     <div className="grid grid-cols-[16px_minmax(0,1fr)] gap-x-2 py-1">
       <span
@@ -55,23 +68,40 @@ export function WorkflowActivityRow({
         {activityGlyph(activity)}
       </span>
       <div className="min-w-0">
-        <div className="flex min-w-0 items-baseline gap-2 text-[12px] leading-[1.5]">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => setExpanded(current => !current)}
+          className="flex w-full min-w-0 cursor-pointer items-baseline gap-2 rounded text-left text-[12px] leading-[1.5] hover:bg-surface-hi focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        >
           <span className="shrink-0 capitalize text-ink-dim">
             {activity.kind.replace(/_/g, ' ')}
           </span>
-          {activity.title ? (
-            <span className="min-w-0 truncate font-code text-ink">{activity.title}</span>
-          ) : null}
+          {/* WHY the command is both character-bounded and CSS-truncated: CSS alone still leaves a
+              giant accessible/text node and can expand unexpectedly in nonstandard clients. The
+              compact label is the browsing surface; the exact provider payload remains one click
+              away below it. */}
+          <span className="min-w-0 flex-1 truncate font-code text-ink" title={summary}>
+            {summary}
+          </span>
           {activity.status === 'running' ? (
             <span className="shrink-0 text-muted">running…</span>
           ) : null}
-        </div>
-        {content ? (
+          <span aria-hidden="true" className="shrink-0 px-1 text-muted">
+            {expanded ? '▾' : '▸'}
+          </span>
+        </button>
+        {expanded && activity.title ? (
+          <pre className="m-0 mt-1 max-h-[220px] overflow-auto whitespace-pre-wrap break-words rounded bg-surface-hi px-2 py-1.5 font-code text-[11px] leading-[1.5] text-ink-dim">
+            {activity.title}
+          </pre>
+        ) : null}
+        {expanded && content && content !== activity.title ? (
           <pre className="m-0 mt-1 max-h-[220px] overflow-auto whitespace-pre-wrap break-words rounded bg-surface-hi px-2 py-1.5 font-code text-[11px] leading-[1.5] text-ink-dim">
             {content}
           </pre>
         ) : null}
-        {activity.error ? (
+        {expanded && activity.error ? (
           <div className="mt-1 text-[11px] text-danger">{activity.error.message}</div>
         ) : null}
       </div>

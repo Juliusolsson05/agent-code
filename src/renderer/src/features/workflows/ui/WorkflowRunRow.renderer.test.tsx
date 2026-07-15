@@ -142,6 +142,8 @@ function clientFor(state: WorkflowState): WorkflowClient {
     subscribe() { return () => {} },
     async cancel() {},
     async resume() { return { runId: 'run-resumed', cwd: '/repo' } },
+    async listSessionRuns() { return [] },
+    subscribeSessionRuns() { return () => {} },
   }
 }
 
@@ -167,6 +169,9 @@ describe('WorkflowRunView', () => {
     fireEvent.click(screen.getByRole('button', { name: /find:main-sessions/i }))
     expect(screen.getByText('Inspect main sessions')).toBeInTheDocument()
     expect(screen.getByText('rg "spawn" src/main')).toBeInTheDocument()
+    expect(screen.queryByText('3 matches')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /command.*rg "spawn" src\/main/i }))
+    expect(screen.getByText('3 matches')).toBeInTheDocument()
     expect(screen.getByText('Found an orphan process')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /find:renderer/i }))
