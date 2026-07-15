@@ -6,6 +6,11 @@ import type {
 } from 'workflow-mcp'
 
 import { getToolPath } from '@main/setup/toolchain.js'
+import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+
+export type CodexWorkflowProviderOptions = {
+  mcpServers?: readonly BuiltInMcpServerConfig[]
+}
 
 /**
  * Resolve the setup-owned Codex binary once per workflow run.
@@ -18,7 +23,9 @@ import { getToolPath } from '@main/setup/toolchain.js'
  * It also lets Agent Code start for a Claude-only user; installing/configuring
  * Codex later takes effect on the next run without restarting the app.
  */
-export function createCodexWorkflowProvider(): AgentProvider {
+export function createCodexWorkflowProvider(
+  options: CodexWorkflowProviderOptions = {},
+): AgentProvider {
   const codexPath = getToolPath('codex', '')
   if (!codexPath || !isAbsolute(codexPath)) {
     return new MissingCodexWorkflowProvider()
@@ -29,7 +36,21 @@ export function createCodexWorkflowProvider(): AgentProvider {
   // overrides; the packaged app intentionally excludes those huge optional
   // binaries. An explicit absolute override is therefore a correctness
   // boundary, not merely a bundle-size optimization.
-  return new CodexAgentProvider({ codexPathOverride: codexPath })
+  const mcpServers = options.mcpServers ?? []
+  const mcpConfig = Object.fromEntries(mcpServers.map(server => [
+    server.name,
+    {
+      url: server.url,
+      http_headers: { ...server.headers },
+    },
+  ]))
+  return new CodexAgentProvider({
+    codexPathOverride: codexPath,
+    // The SDK flattens this object into the same `mcp_servers.*` CLI overrides used by normal
+    // Agent Code sessions. Omitting the whole block for unscoped/renderer resumes avoids inventing
+    // credentials or silently inheriting a different user's global Codex MCP configuration.
+    ...(mcpServers.length === 0 ? {} : { config: { mcp_servers: mcpConfig } }),
+  })
 }
 
 class MissingCodexWorkflowProvider implements AgentProvider {

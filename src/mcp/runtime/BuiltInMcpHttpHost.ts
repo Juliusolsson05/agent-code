@@ -193,24 +193,21 @@ export class BuiltInMcpHttpHost {
     })
     this.tokensBySession.set(scope.sessionId, token)
 
-    return [
-      {
-        name: 'agent_code',
-        // WHY the token appears in the URL even though we also provide an
-        // Authorization header:
-        //
-        // Claude Code and Codex have different MCP config schemas and their
-        // header support has moved over time. The URL token keeps the first
-        // built-in bridge robust while clients converge, and the loopback-only
-        // bind keeps exposure local to this machine. Future hardening can drop
-        // the query fallback once both providers are proven to preserve headers
-        // in every launch mode Agent Code supports.
-        url: `http://127.0.0.1:${this.port}/mcp?token=${encodeURIComponent(token)}`,
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      },
-    ]
+    return [this.serverConfig(token)]
+  }
+
+  sessionServers(sessionId: string): BuiltInMcpServerConfig[] {
+    const token = this.tokensBySession.get(sessionId)
+    const registration = token === undefined ? undefined : this.registrations.get(token)
+    if (!token || !registration || registration.revoked) return []
+
+    // Workflow subagents are separate Codex processes, but Claude's Workflow contract says they
+    // inherit every MCP server connected to the parent session. Returning the same scoped token
+    // gives them the exact parent tool set without minting a second registration that could outlive
+    // or accidentally broaden that session. Callers receive fresh objects so SDK configuration
+    // assembly cannot mutate the host's authorization state.
+    const config = this.serverConfig(token)
+    return [{ ...config, headers: { ...config.headers } }]
   }
 
   revokeSession(sessionId: string): void {
@@ -224,6 +221,18 @@ export class BuiltInMcpHttpHost {
     // ends when the agent's socket closes on exit. There is no cached server to
     // tear down — each request owns and closes its own scoped server.
     if (registration) registration.revoked = true
+  }
+
+  private serverConfig(token: string): BuiltInMcpServerConfig {
+    if (this.port === null) throw new Error('Built-in MCP host is not running')
+    return {
+      name: 'agent_code',
+      // WHY the token appears in the URL even though we also provide an Authorization header:
+      // Claude and Codex header support has moved over time. The query fallback keeps the scoped
+      // loopback bridge usable across both clients; the bearer header remains the preferred path.
+      url: `http://127.0.0.1:${this.port}/mcp?token=${encodeURIComponent(token)}`,
+      headers: { Authorization: `Bearer ${token}` },
+    }
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {

@@ -6,11 +6,21 @@ import {
   FileWorkflowStore,
   WorkflowService,
 } from 'workflow-mcp'
+import type { WorkflowProviderFactoryContext } from 'workflow-mcp'
 
 import { createCodexWorkflowProvider } from '@main/workflows/CodexWorkflowProvider.js'
 import { ElectronWorkflowWorkerLauncher } from '@main/workflows/ElectronWorkflowWorkerLauncher.js'
+import { resolveClaudeAgentType } from '@main/workflows/ClaudeAgentTypeResolver.js'
+import { prepareGitWorkflowWorktree } from '@main/workflows/GitWorkflowWorktree.js'
+import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 
-export async function createWorkflowService(): Promise<WorkflowService> {
+export type CreateWorkflowServiceOptions = {
+  sessionMcpServers?(sessionId: string): readonly BuiltInMcpServerConfig[]
+}
+
+export async function createWorkflowService(
+  options: CreateWorkflowServiceOptions = {},
+): Promise<WorkflowService> {
   const store = new FileWorkflowStore(join(app.getPath('userData'), 'workflows'))
   await store.initialize()
 
@@ -26,9 +36,18 @@ export async function createWorkflowService(): Promise<WorkflowService> {
     // The function is load-bearing: tool setup can change while Agent Code is
     // open, so binding a Codex path at app startup would retain an empty/stale
     // path until restart. WorkflowService invokes this once per new run.
-    provider: createCodexWorkflowProvider,
+    provider: (context: WorkflowProviderFactoryContext) => createCodexWorkflowProvider({
+      mcpServers: context.clientId === undefined
+        ? []
+        : options.sessionMcpServers?.(context.clientId) ?? [],
+    }),
     workerLauncher: new ElectronWorkflowWorkerLauncher(),
     workerFilePath,
+    // `agentType` is part of Claude's portable Workflow source language. Resolving the same
+    // `.claude/agents/<name>.md` layers here keeps those files runnable in Agent Code while the
+    // low-level runtime remains provider-neutral.
+    resolveAgentType: resolveClaudeAgentType,
+    prepareWorkingDirectory: prepareGitWorkflowWorktree,
     // `null` deliberately means "drop the Claude-specific name and let Codex
     // use its configured default". WorkflowService owns the mapping so it can
     // persist one visible warning per alias before the provider call; doing it

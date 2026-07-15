@@ -48,7 +48,7 @@ describe('createWorkflowService', () => {
     expect(serviceInitialize).toHaveBeenCalledOnce()
     expect(providerFactory).not.toHaveBeenCalled()
     expect(services[0]!.options).toMatchObject({
-      provider: providerFactory,
+      provider: expect.any(Function),
       sandbox: {
         mode: 'read-only',
         approvalPolicy: 'never',

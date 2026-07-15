@@ -24,7 +24,7 @@ import {
   isAgentProviderKind,
 } from '@shared/types/providerKind.js'
 import type { AgentProviderKind } from '@shared/types/providerKind.js'
-import { registerWorkflowMcpTools } from 'workflow-mcp'
+import { registerWorkflowMcpTools, WORKFLOW_MCP_INSTRUCTIONS } from 'workflow-mcp'
 
 export function createBuiltInMcpServer(
   scope: McpSessionScope,
@@ -39,6 +39,13 @@ export function createBuiltInMcpServer(
       capabilities: {
         tools: {},
       },
+      // WHY the instructions travel in MCP initialization instead of Agent Code's chat prompt:
+      // workflow tools can be discovered lazily by Claude/Codex, and neither client should need
+      // implementation-repository context to know how to author, persist, poll, or resume a run.
+      // A session without the workflow domain must not be taught capabilities it cannot call.
+      ...(scope.domains.includes('workflows')
+        ? { instructions: WORKFLOW_MCP_INSTRUCTIONS }
+        : {}),
     },
   )
 

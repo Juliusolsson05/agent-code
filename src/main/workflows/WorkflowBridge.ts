@@ -26,6 +26,7 @@ import type {
 
 const RENDERER_CLIENT_ID = 'agent-code-renderer'
 const DEFAULT_BATCH_WINDOW_MS = 16
+const DEFAULT_MAX_BATCH_BYTES = 512 * 1024
 
 type WorkflowBridgeSender = (
   channel: 'workflows:event-batch' | 'workflows:session-runs',
@@ -34,6 +35,7 @@ type WorkflowBridgeSender = (
 
 export type WorkflowBridgeOptions = {
   batchWindowMs?: number
+  maxBatchBytes?: number
   send?: WorkflowBridgeSender
 }
 
@@ -55,6 +57,7 @@ export class WorkflowBridge {
   >()
   private readonly send: WorkflowBridgeSender
   private readonly batchWindowMs: number
+  private readonly maxBatchBytes: number
   private unsubscribe: (() => void) | null = null
   private flushTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -64,6 +67,10 @@ export class WorkflowBridge {
   ) {
     this.send = options.send ?? sendToMainWindow
     this.batchWindowMs = options.batchWindowMs ?? DEFAULT_BATCH_WINDOW_MS
+    this.maxBatchBytes = positiveInteger(
+      options.maxBatchBytes ?? DEFAULT_MAX_BATCH_BYTES,
+      'maxBatchBytes',
+    )
   }
 
   start(): void {
@@ -158,13 +165,14 @@ export class WorkflowBridge {
       ...(request.limit === undefined ? {} : { limit: positiveInteger(request.limit, 'limit') }),
       ...(request.waitMs === undefined ? {} : { waitMs: nonNegativeInteger(request.waitMs, 'waitMs') }),
     })
+    const projected = byteBoundedEvents(page.events, this.maxBatchBytes)
     return {
       cwd,
       runId: page.runId,
       fromCursor: page.fromCursor,
-      toCursor: page.toCursor,
-      events: workflowPayloadForRenderer(page.events),
-      hasMore: page.hasMore,
+      toCursor: projected.events.at(-1)?.cursor ?? page.fromCursor,
+      events: projected.events,
+      hasMore: page.hasMore || projected.truncated,
     }
   }
 
@@ -180,13 +188,19 @@ export class WorkflowBridge {
 
   async resume(request: WorkflowResumeRequest): Promise<WorkflowResumeResult> {
     const { cwd, runId } = validateRunScope(request)
-    const run = await this.service.resume(rendererScope(cwd), {
+    const ownerSessionId = this.findSessionForRun(cwd, runId)
+    const run = await this.service.resume({
+      cwd,
+      // Preserve the parent session's MCP scope when a user clicks Resume in the renderer. Without
+      // this, tool-driven starts inherit connected servers but UI-driven resumes mysteriously lose
+      // them even though both runs belong to the same visible workflow lineage.
+      clientId: ownerSessionId ?? RENDERER_CLIENT_ID,
+    }, {
       runId,
       ...(request.idempotencyKey === undefined
         ? {}
         : { idempotencyKey: nonEmpty(request.idempotencyKey, 'idempotencyKey') }),
     })
-    const ownerSessionId = this.findSessionForRun(cwd, runId)
     if (ownerSessionId) this.registerRun(ownerSessionId, cwd, run)
     return { ok: true, run: cloneStartResult(run) }
   }
@@ -235,16 +249,44 @@ export class WorkflowBridge {
       // cursor order. Do not collapse activity.updated records here: every
       // durable event is part of replay state, and renderer gap detection must
       // see the same sequence whether it arrived by IPC or by disk-backed read.
-      this.send('workflows:event-batch', {
-        runId,
-        fromCursor: events[0]!.cursor,
-        toCursor: events[events.length - 1]!.cursor,
-        // Durable storage keeps its exact records. The renderer gets a bounded projection so one
-        // verbose command cannot turn a routine structured clone into seconds of UI starvation.
-        events: workflowPayloadForRenderer(events),
-      })
+      // WHY this is byte-bounded after content projection: event counts are not a payload limit.
+      // Even with producer-side truncation, hundreds of 10 KiB activity previews can accumulate in
+      // one 16 ms window. Splitting on the actual serialized projection keeps each structured clone
+      // below a predictable ceiling while preserving every cursor in consecutive batches.
+      let remaining = events
+      while (remaining.length > 0) {
+        const projected = byteBoundedEvents(remaining, this.maxBatchBytes)
+        const batch = projected.events
+        if (batch.length === 0) break
+        this.send('workflows:event-batch', {
+          runId,
+          fromCursor: batch[0]!.cursor,
+          toCursor: batch[batch.length - 1]!.cursor,
+          events: batch,
+        })
+        remaining = remaining.slice(batch.length)
+      }
     }
   }
+}
+
+function byteBoundedEvents(
+  events: readonly StoredWorkflowEvent[],
+  maxBytes: number,
+): { events: StoredWorkflowEvent[]; truncated: boolean } {
+  const selected: StoredWorkflowEvent[] = []
+  let bytes = 2 // JSON array brackets; exact envelope overhead is small and constant.
+  for (const durable of events) {
+    const projected = workflowPayloadForRenderer(durable)
+    const eventBytes = Buffer.byteLength(JSON.stringify(projected), 'utf8') + 1
+    // Always make progress for a single oversized legacy event. ContentReference compaction should
+    // keep modern records below the cap, while this escape hatch prevents replay from looping on a
+    // historical event whose unmarked object shape cannot be compacted generically.
+    if (selected.length > 0 && bytes + eventBytes > maxBytes) break
+    selected.push(projected)
+    bytes += eventBytes
+  }
+  return { events: selected, truncated: selected.length < events.length }
 }
 
 function rendererScope(cwd: string): WorkflowServiceScope {
@@ -286,6 +328,8 @@ function cloneStartResult(run: WorkflowRunStartResult): WorkflowResumeResult['ru
     status: run.status,
     workflow: { ...run.workflow },
     cursor: run.cursor,
+    ...(run.scriptPath === undefined ? {} : { scriptPath: run.scriptPath }),
+    transcriptDirectory: run.transcriptDirectory,
     ...(run.resumedFromRunId === undefined ? {} : { resumedFromRunId: run.resumedFromRunId }),
   }
 }

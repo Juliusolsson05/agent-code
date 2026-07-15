@@ -439,7 +439,9 @@ async function startApp(): Promise<void> {
   }
   appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.start' })
   try {
-    workflowService = await createWorkflowService()
+    workflowService = await createWorkflowService({
+      sessionMcpServers: sessionId => builtInMcpHost.sessionServers(sessionId),
+    })
     workflowBridge = new WorkflowBridge(workflowService)
     workflowBridge.start()
     appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.ready' })

@@ -14,6 +14,9 @@ export type WorkflowRunReferenceData = {
     title?: string
     description?: string
   }
+  /** Editable Claude-visible definition; immutable run bytes stay in the private workflow store. */
+  scriptPath?: string
+  transcriptDirectory?: string
   resumedFromRunId?: string
 }
 
@@ -91,6 +94,8 @@ export type WorkflowResumeResult = {
       description?: string
     }
     cursor: number
+    scriptPath?: string
+    transcriptDirectory?: string
     resumedFromRunId?: string
   }
 }
