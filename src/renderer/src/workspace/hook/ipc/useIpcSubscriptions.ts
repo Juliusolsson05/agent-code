@@ -1177,7 +1177,7 @@ export function useIpcSubscriptions(
       // against process/JSONL channels and could resurrect already-finished
       // turns. Flush the compact latest state, then fold the boundary now.
       flushSemanticEventQueue()
-      handleSemanticEvent(message)
+      handleSemanticEvent(message, message.rawEventCount ?? 1)
     })
 
     const offConditions = feed.onSessionConditions(({ sessionId, snapshot }) => {

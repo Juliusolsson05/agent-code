@@ -1,6 +1,14 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import ReactMarkdown from 'react-markdown'
 
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
@@ -77,6 +85,50 @@ type PromptTemplateForm = {
 const SHOW_HIDDEN_COMMANDS = false
 
 export function CommandPalette() {
+  const open = useAppStore(state => state.commandPaletteOpen)
+  const openPalette = useAppStore(state => state.openCommandPalette)
+  const [pendingMenuCommand, setPendingMenuCommand] = useState<{
+    id: string
+    closeAfterRun: boolean
+  } | null>(null)
+
+  useEffect(() => window.api.onMenuCommand(commandId => {
+    // WHY a native menu command temporarily mounts the open implementation:
+    // command definitions need live workspace actions, but keeping that entire
+    // registry subscribed while the palette is closed made every session delta
+    // rebuild an invisible feature. A menu click is rare and intentional, so it
+    // may pay the one-time registry cost. useLayoutEffect below runs it and
+    // closes before paint, avoiding a palette flash for menu-only execution.
+    setPendingMenuCommand({ id: commandId, closeAfterRun: !open })
+    if (!open) openPalette()
+  }), [open, openPalette])
+
+  const clearPendingMenuCommand = useCallback(
+    () => setPendingMenuCommand(null),
+    [],
+  )
+
+  // WHY the workspace-heavy component does not exist while closed: returning
+  // null at the bottom of the old monolith was too late. Hooks had already read
+  // the monolithic workspace context, assembled ~76 command dependencies, and
+  // built the registry. This outer gate subscribes to one boolean plus the
+  // native bridge; ordinary agent traffic cannot fan into the hidden palette.
+  if (!open) return null
+  return (
+    <OpenCommandPalette
+      pendingMenuCommand={pendingMenuCommand}
+      onMenuCommandHandled={clearPendingMenuCommand}
+    />
+  )
+}
+
+function OpenCommandPalette({
+  pendingMenuCommand,
+  onMenuCommandHandled,
+}: {
+  pendingMenuCommand: { id: string; closeAfterRun: boolean } | null
+  onMenuCommandHandled: () => void
+}) {
   // #494: the palette used to receive ~76 props whose only purpose was
   // to be reassembled into `commandContext` below. It now sources every
   // value itself — the store actions/flags by selector, workspace via
@@ -86,7 +138,6 @@ export function CommandPalette() {
   // are untouched, and the future provider-enumeration rewrite (#394 §7)
   // rebuilds command CONTENT, not this assembly.
   const workspace = useWorkspaceContext()
-  const open = useAppStore(state => state.commandPaletteOpen)
   const onClose = useAppStore(state => state.closeCommandPalette)
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
@@ -571,18 +622,13 @@ export function CommandPalette() {
         : aiWorkspaces,
     [aiWorkspaces, queryText],
   )
-  // Snapshot the recent-command history into a score map once per
-  // palette open. We deliberately depend on `open` (not on every
-  // keystroke) so the ranking is stable for the lifetime of one palette
-  // session: recording a use happens on execute, which closes the
-  // palette, so re-reading mid-session would never change anything here
-  // anyway — and re-parsing localStorage on every query change would be
-  // wasted work. recordCommandUse persists; this memo is the read side
-  // that picks the new state up the next time the palette opens.
+  // Snapshot recent-command history once per mounted palette. The open-only
+  // component is destroyed on close, so an empty dependency list now expresses
+  // the old "once per open" lifetime directly without retaining the expensive
+  // command registry between opens.
   const historyScoreMap = useMemo(
     () => buildHistoryScoreMap(loadRecentHistory()),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on `open`: re-read history each time the palette is shown.
-    [open],
+    [],
   )
   // rankCommands owns all ordering now (tier-first text match, with
   // history as a same-tier tiebreaker; empty query returns registry
@@ -613,18 +659,16 @@ export function CommandPalette() {
   }, [filteredCommands, mode, selectedIndex])
 
   useEffect(() => {
-    if (open) {
-      setQuery('')
-      setSelectedIndex(0)
-      setMode('commands')
-      setSessions([])
-      setSessionsLoading(false)
-      setAiWorkspaces([])
-      setAiWorkspacesLoading(false)
-      setPromptTemplateForm({ id: null, title: '', body: '' })
-      requestAnimationFrame(() => inputRef.current?.focus())
-    }
-  }, [open])
+    setQuery('')
+    setSelectedIndex(0)
+    setMode('commands')
+    setSessions([])
+    setSessionsLoading(false)
+    setAiWorkspaces([])
+    setAiWorkspacesLoading(false)
+    setPromptTemplateForm({ id: null, title: '', body: '' })
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
 
   useEffect(() => {
     setSelectedIndex(prev => Math.min(prev, Math.max(0, filteredLength - 1)))
@@ -663,25 +707,22 @@ export function CommandPalette() {
   // the id over `menu:command` and we resolve + run it here, where `commands`
   // (the resolved registry) and `commandContext` are in scope.
   //
-  // WHY this effect sits ABOVE the `if (!open) return null` early return at the
-  // bottom of this component: the File menu must work whether or not the palette
-  // is open. If this subscription lived below the early return, React would
-  // never register it while the palette is closed (the common case), and the
-  // menu items would silently do nothing. Hooks must be unconditional, so the
-  // listener is attached at mount and stays attached regardless of `open`.
-  //
-  // We resolve against the SAME `commands` memo the palette renders, so a menu
-  // item and its palette row run byte-identical logic. Unknown ids are ignored
-  // (defensive — the menu only ever sends ids we put there). We do NOT call
-  // onClose() here: a menu click should not implicitly close an open palette,
-  // and when the palette is closed there is nothing to close.
-  useEffect(() => {
-    const unsub = window.api.onMenuCommand(commandId => {
-      const command = commands.find(c => c.id === commandId)
-      if (command) void command.run(commandContext)
-    })
-    return unsub
-  }, [commands, commandContext])
+  // The lightweight outer bridge owns the always-on IPC listener. It mounts
+  // this implementation only long enough to resolve against the SAME registry
+  // the visible palette uses, so native and palette execution cannot drift.
+  useLayoutEffect(() => {
+    if (!pendingMenuCommand) return
+    const command = commands.find(candidate => candidate.id === pendingMenuCommand.id)
+    if (command) void command.run(commandContext)
+    onMenuCommandHandled()
+    if (pendingMenuCommand.closeAfterRun) onClose()
+  }, [
+    commandContext,
+    commands,
+    onClose,
+    onMenuCommandHandled,
+    pendingMenuCommand,
+  ])
 
   const executeResume = useCallback(
     (session: SessionInfo) => {
@@ -924,8 +965,6 @@ export function CommandPalette() {
       providerSessionId: session.sessionId,
     }
   })()
-
-  if (!open) return null
 
   return (
     <div

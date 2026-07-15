@@ -80,6 +80,7 @@ export type {
   UsageSpend,
   WorkflowCancelRequest,
   WorkflowCancelResult,
+  WorkflowEventsAcknowledgement,
   WorkflowEventsBatch,
   WorkflowGetSnapshotRequest,
   WorkflowGetSnapshotResult,
@@ -89,6 +90,7 @@ export type {
   WorkflowResumeResult,
   WorkflowRunReferenceData,
   WorkflowRunIpcScope,
+  WorkflowRunInterestRequest,
   WorkflowSessionRunsRequest,
   WorkflowSessionRunsResult,
 } from '@preload/api/types.js'

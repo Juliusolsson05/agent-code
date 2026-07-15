@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 import { useWorkflowClient } from '../client/WorkflowClientContext'
@@ -88,11 +88,11 @@ export function WorkflowRunView({
     return map
   }, [displaySnapshot.agents, displaySnapshot.phases])
 
-  const toggleAgent = (agentId: string): void => {
+  const toggleAgent = useCallback((agentId: string): void => {
     // Exactly one expanded agent keeps a 76-agent workflow readable: expansion replaces the
     // selected detail in place instead of turning every row into an independently growing panel.
     setExpandedAgentId(current => current === agentId ? null : agentId)
-  }
+  }, [])
 
   const cancel = async (): Promise<void> => {
     setAction('cancel')

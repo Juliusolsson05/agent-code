@@ -81,7 +81,7 @@ export function toolHintFromBlock(block: SemanticLiveBlock): string | null {
     // heredocs don't blow out the row.
     const command = pick('command')
     if (command) {
-      const firstLine = command.split('\n', 1)[0]?.trim()
+      const firstLine = boundedFirstLine(command)
       if (firstLine) return truncate(firstLine)
     }
     // Last-ditch free-form description.
@@ -91,13 +91,22 @@ export function toolHintFromBlock(block: SemanticLiveBlock): string | null {
   // Codex stores raw argumentsJson on the block. As a fallback, show
   // the first line of that string (rare — parsedInput usually wins).
   if (typeof block.argumentsJson === 'string' && block.argumentsJson.length > 0) {
-    const firstLine = block.argumentsJson.split('\n', 1)[0]?.trim()
+    const firstLine = boundedFirstLine(block.argumentsJson)
     if (firstLine) return truncate(firstLine)
   }
   return null
 }
 
 const MAX_HINT_LEN = 80
+
+function boundedFirstLine(value: string): string {
+  // WHY hint extraction slices before trim/split: this function runs for every
+  // semantic delta and returns at most 80 characters. A giant one-line command
+  // must not be copied in full merely to build transient chrome above the feed.
+  const prefix = value.slice(0, MAX_HINT_LEN * 2)
+  const newline = prefix.indexOf('\n')
+  return prefix.slice(0, newline < 0 ? prefix.length : newline).trim()
+}
 
 function truncate(s: string): string {
   if (s.length <= MAX_HINT_LEN) return s

@@ -36,6 +36,7 @@ import { acquireStateProcessLock } from '@main/storage/processLock.js'
 import type { StateProcessLock } from '@main/storage/processLock.js'
 import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
+import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/mainWindow.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
@@ -141,6 +142,7 @@ let workflowService: WorkflowService | null = null
 let workflowBridge: WorkflowBridge | null = null
 let workflowShutdownPromise: Promise<void> | null = null
 let workflowShutdownComplete = false
+let sessionForwarder: SessionForwarderControl | null = null
 
 // WHY Agent Code is intentionally single-primary-process:
 //
@@ -636,7 +638,7 @@ async function startApp(): Promise<void> {
   })
   performanceService.mark('app.main.sessionManager.created')
 
-  wireSessionForwarder(manager, lspManager)
+  sessionForwarder = wireSessionForwarder(manager, lspManager)
   // CLI auto-updater — constructed AFTER SessionManager because it uses
   // the manager to decide whether an active session of the target kind
   // is currently running (updating a binary while a session holds a
@@ -729,6 +731,10 @@ app.on('before-quit', (event) => {
   }
   appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')
+  // WHY coalescers drain before killAll: provider shutdown can complete quickly enough that
+  // Electron exits before a pending 100 ms semantic/screen timer. Flushing here preserves the
+  // final admitted state and prevents a timer from sending after recorders have finalized.
+  sessionForwarder?.flush()
   void manager?.killAll()
   void builtInMcpHost.stop()
   void remoteController?.dispose()

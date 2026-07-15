@@ -42,6 +42,10 @@ export type WorkflowRunScope = {
   runId: string
 }
 
+export type WorkflowEventsAcknowledgement = WorkflowRunScope & {
+  cursor: number
+}
+
 export type WorkflowSessionRunScope = {
   sessionId: string
   cwd: string
@@ -69,7 +73,11 @@ export interface WorkflowClient {
       waitMs?: number
     },
   ): Promise<WorkflowEventPage>
-  subscribe(listener: (batch: WorkflowEventBatch) => void): () => void
+  subscribe(
+    scope: WorkflowRunScope,
+    listener: (batch: WorkflowEventBatch) => void,
+  ): () => void
+  acknowledge(request: WorkflowEventsAcknowledgement): void
   cancel(scope: WorkflowRunScope & { reason?: string }): Promise<void>
   resume(
     scope: WorkflowRunScope & { idempotencyKey?: string },
@@ -104,6 +112,7 @@ export const unavailableWorkflowClient: WorkflowClient = {
   subscribe() {
     return () => {}
   },
+  acknowledge() {},
   async cancel() {},
   async resume(scope) {
     return { runId: scope.runId, cwd: scope.cwd }

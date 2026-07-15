@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useMemo, useRef } from 'react'
+import { memo, useEffect, useId, useMemo, useRef, useState } from 'react'
 import hljs from 'highlight.js'
 
 import {
@@ -15,6 +15,11 @@ import {
   registerCodeBlock,
   unregisterCodeBlock,
 } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
+import {
+  boundedTextPage,
+  collapsedTextPreview,
+  exceedsInlineTextBudget,
+} from '@renderer/lib/text/boundedText'
 
 type Props = {
   code: string
@@ -38,6 +43,10 @@ type Props = {
    *  Only consulted by the static engine — Monaco does its own
    *  incremental tokenization and isn't affected. */
   highlight?: boolean
+  /** Transform only the currently admitted page before rendering it. This is
+   *  intentionally page-scoped: normalizing a complete multi-megabyte Read
+   *  result before pagination would make the closed row computationally open. */
+  transformPage?: (page: string) => string
 }
 
 function inferClientUri(
@@ -61,10 +70,34 @@ export const CodeBlock = memo(function CodeBlock({
   engine = 'static',
   allowAutoDetect = false,
   highlight = true,
+  transformPage,
 }: Props) {
   const normalizedLanguage = useMemo(
     () => normalizeCodeLanguage(language, path),
     [language, path],
+  )
+  const oversized = useMemo(() => exceedsInlineTextBudget(code), [code])
+  const [largeContentOpen, setLargeContentOpen] = useState(false)
+  const [fullCopyState, setFullCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [pageStarts, setPageStarts] = useState([0])
+  const requestedPageStart = pageStarts[pageStarts.length - 1] ?? 0
+  const visiblePage = useMemo(() => {
+    if (!oversized) {
+      return {
+        text: code,
+        start: 0,
+        end: code.length,
+        hasPrevious: false,
+        hasNext: false,
+      }
+    }
+    return largeContentOpen
+      ? boundedTextPage(code, requestedPageStart)
+      : collapsedTextPreview(code)
+  }, [code, largeContentOpen, oversized, requestedPageStart])
+  const visibleCode = useMemo(
+    () => transformPage ? transformPage(visiblePage.text) : visiblePage.text,
+    [transformPage, visiblePage.text],
   )
   const shouldUseStaticFallback =
     engine === 'monaco' && allowAutoDetect && normalizedLanguage === 'plaintext'
@@ -75,19 +108,24 @@ export const CodeBlock = memo(function CodeBlock({
   // crashed when shouldUseStaticFallback flipped (e.g. Codex sessions
   // with allowAutoDetect where the language resolves after first render).
   const highlighted = useMemo(() => {
-    if (!code) return ''
+    if (!visibleCode) return ''
+    // WHY an oversized collapsed block is always plain text: highlighting even
+    // the preview during the initial feed commit recreates the exact failure
+    // this guard exists to prevent. Large content is an explicit interaction;
+    // until then the renderer owes the user a responsive summary, not colors.
+    if (oversized && !largeContentOpen) return null
     // Caller opted out of highlighting (e.g. a live streaming
     // preview) — return null so the static path renders a plain
     // <code> with no per-render hljs cost.
     if (!highlight) return null
     if (normalizedLanguage !== 'plaintext' && hljs.getLanguage(normalizedLanguage)) {
-      return hljs.highlight(code, { language: normalizedLanguage }).value
+      return hljs.highlight(visibleCode, { language: normalizedLanguage }).value
     }
     if (allowAutoDetect) {
-      return hljs.highlightAuto(code).value
+      return hljs.highlightAuto(visibleCode).value
     }
     return null
-  }, [code, normalizedLanguage, allowAutoDetect, highlight])
+  }, [visibleCode, normalizedLanguage, allowAutoDetect, highlight, largeContentOpen, oversized])
 
   const containerRef = useRef<HTMLDivElement>(null)
   const reactId = useId().replace(/:/g, '_')
@@ -100,7 +138,14 @@ export const CodeBlock = memo(function CodeBlock({
   // on every render. When the static path is active, containerRef.current
   // is null (the <div ref={containerRef}> isn't in the DOM) so the
   // effect bails immediately — no Monaco editor gets created.
-  const useMonaco = engine !== 'static' && !shouldUseStaticFallback
+  // WHY large content starts on the static path even when a caller requested
+  // Monaco: creating a hidden editor/model for the full payload would make a
+  // visually collapsed row computationally open. After explicit expansion we
+  // create Monaco for one bounded page only.
+  const useMonaco =
+    engine !== 'static' &&
+    !shouldUseStaticFallback &&
+    (!oversized || largeContentOpen)
   useEffect(() => {
     if (!useMonaco) return
     let disposed = false
@@ -129,7 +174,7 @@ export const CodeBlock = memo(function CodeBlock({
       if (disposed) return
 
       const uri = monaco.Uri.parse(clientUri)
-      const model = monaco.editor.createModel(code, normalizedLanguage, uri)
+      const model = monaco.editor.createModel(visibleCode, normalizedLanguage, uri)
       cleanups.push(() => model.dispose())
 
       const editor = monaco.editor.create(containerRef.current, {
@@ -210,12 +255,17 @@ export const CodeBlock = memo(function CodeBlock({
       if (workspaceRoot && supportsLsp(normalizedLanguage)) {
         await window.api.openLspDocument({
           clientUri,
-          content: code,
+          content: visibleCode,
           language: normalizedLanguage,
           workspaceRoot,
           filePath: path ?? null,
         })
-        if (disposed) return
+        if (disposed) {
+          // WHY close after a late open: unmount can happen while the main-process LSP handshake is
+          // in flight. Returning without a matching close leaks a document/listener in the server.
+          void window.api.closeLspDocument(clientUri)
+          return
+        }
 
         const unsubDiag = window.api.onLspDiagnostics(event => {
           if (event.clientUri !== clientUri) return
@@ -257,11 +307,16 @@ export const CodeBlock = memo(function CodeBlock({
         try { cleanups[i]() } catch { /* best-effort */ }
       }
     }
-  }, [useMonaco, clientUri, code, engine, normalizedLanguage, path, workspaceRoot])
+  }, [useMonaco, clientUri, visibleCode, engine, normalizedLanguage, path, workspaceRoot])
 
-  // Register this block's exact source in the code-block registry so
-  // the "Copy Code Block…" picker can copy it verbatim regardless of
-  // render engine (a Monaco block has no DOM text node to scrape).
+  // Register only the currently materialized page in the code-block registry.
+  //
+  // WHY this intentionally differs from the old "exact full source" contract:
+  // the registry is a second long-lived owner, so registering a multi-megabyte
+  // result defeats collapsing even if the DOM is bounded. The durable session
+  // transcript remains the full source of truth; the picker describes what is
+  // actually visible and copyable in this bounded viewer. Small blocks retain
+  // the old exact-source behavior because `visibleCode === code`.
   // Keyed by `reactId`, the same unique id stamped on the root as
   // `data-code-block-id`. Re-runs when `code` changes (the streaming
   // Write preview grows its `code` on every delta); unregisters on
@@ -269,20 +324,95 @@ export const CodeBlock = memo(function CodeBlock({
   // entry is a slow memory leak). Unconditional hook, placed with the
   // others so call order is stable across the static/Monaco branch.
   useEffect(() => {
-    registerCodeBlock(reactId, code)
+    // WHY a collapsed oversized block has no registry entry at all: the copy
+    // picker is another consumer of the same payload. Registering even the
+    // collapsed preview makes a visually closed row computationally present
+    // and causes every picker refresh to revisit work the user never opened.
+    // The entry appears as soon as the user expands a bounded page, which is
+    // also the first moment there is an honest "currently copyable" value.
+    if (oversized && !largeContentOpen) return
+    registerCodeBlock(reactId, visibleCode)
     return () => unregisterCodeBlock(reactId)
-  }, [reactId, code])
+  }, [largeContentOpen, oversized, reactId, visibleCode])
+
+  const largeContentControls = oversized ? (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+      <span>
+        characters {(visiblePage.start + 1).toLocaleString()}–{visiblePage.end.toLocaleString()} of{' '}
+        {code.length.toLocaleString()}
+      </span>
+      {!largeContentOpen ? (
+        <button
+          type="button"
+          className="hover:text-ink cursor-pointer"
+          onClick={() => setLargeContentOpen(true)}
+        >
+          view paged content
+        </button>
+      ) : (
+        <>
+          {visiblePage.hasPrevious ? (
+            <button
+              type="button"
+              className="hover:text-ink cursor-pointer"
+              onClick={() => setPageStarts(current => current.length > 1 ? current.slice(0, -1) : current)}
+            >
+              previous
+            </button>
+          ) : null}
+          {visiblePage.hasNext ? (
+            <button
+              type="button"
+              className="hover:text-ink cursor-pointer"
+              onClick={() => setPageStarts(current => [...current, visiblePage.end])}
+            >
+              next
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="hover:text-ink cursor-pointer"
+            onClick={() => {
+              setLargeContentOpen(false)
+              setPageStarts([0])
+            }}
+          >
+            collapse
+          </button>
+          <button
+            type="button"
+            className="hover:text-ink cursor-pointer"
+            onClick={() => {
+              // Full source is touched only after explicit user intent. Keeping it out of the
+              // registry avoids a second long-lived owner; direct clipboard access preserves the
+              // exact-content contract even though the visible editor remains page-bounded.
+              void navigator.clipboard.writeText(code).then(
+                () => setFullCopyState('copied'),
+                () => setFullCopyState('failed'),
+              )
+            }}
+          >
+            {fullCopyState === 'copied'
+              ? 'copied full content'
+              : fullCopyState === 'failed'
+                ? 'copy failed'
+                : 'copy full content'}
+          </button>
+        </>
+      )}
+    </div>
+  ) : null
 
   // Static/fallback early return — placed AFTER all hooks so the hook
   // call order is identical on every render regardless of code path.
   if (!useMonaco) {
-    return (
+    const staticBlock = (
       <pre
         data-code-block-id={reactId}
         className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink"
       >
         {highlighted == null ? (
-          <code>{code}</code>
+          <code>{visibleCode}</code>
         ) : (
           <code
             className={`hljs${normalizedLanguage !== 'plaintext' ? ` language-${normalizedLanguage}` : ''}`}
@@ -291,13 +421,27 @@ export const CodeBlock = memo(function CodeBlock({
         )}
       </pre>
     )
+    if (!oversized) return staticBlock
+    return (
+      <div className="min-w-0">
+        {staticBlock}
+        {largeContentControls}
+      </div>
+    )
   }
 
-  return (
+  const monacoBlock = (
     <div
       ref={containerRef}
       data-code-block-id={reactId}
       className="code-block-shell w-full overflow-hidden"
     />
+  )
+  if (!oversized) return monacoBlock
+  return (
+    <div className="min-w-0">
+      {monacoBlock}
+      {largeContentControls}
+    </div>
   )
 })

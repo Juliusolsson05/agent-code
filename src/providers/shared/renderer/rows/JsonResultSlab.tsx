@@ -2,6 +2,8 @@ import { memo, useState } from 'react'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
+import { boundedJsonPreview } from '@renderer/lib/text/boundedJson'
+import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 import { jsonResultSummary } from '@providers/shared/renderer/rows/jsonToolPresentation'
 
 /* ---------- Collapsed pretty-JSON tool RESULT ---------- */
@@ -18,59 +20,85 @@ import { jsonResultSummary } from '@providers/shared/renderer/rows/jsonToolPrese
 
 const RESULT_MAX_CHARS = 16 * 1024
 
-export const JsonResultSlab = memo(function JsonResultSlab({
+function ExactJsonDetails({
   value,
+  source,
   isError,
 }: {
   value: unknown
+  source?: string
   isError: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  let exactSource: string | null = null
+  if (open) {
+    try {
+      const serialized = source ?? JSON.stringify(value, null, 2)
+      exactSource = typeof serialized === 'string' ? serialized : null
+    } catch {
+      exactSource = null
+    }
+  }
+  return (
+    <details
+      className="text-[11px] text-muted"
+      onToggle={event => setOpen(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer select-none">View exact paged source</summary>
+      {open ? (
+        <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+          {exactSource === null ? (
+            <span>Exact JSON is unavailable for this non-serializable value.</span>
+          ) : (
+            <PagedTextViewer source={exactSource} isError={isError} />
+          )}
+        </div>
+      ) : null}
+    </details>
+  )
+}
+
+export const JsonResultSlab = memo(function JsonResultSlab({
+  value,
+  isError,
+  source,
+}: {
+  value: unknown
+  isError: boolean
+  source?: string
 }) {
   const summary = jsonResultSummary(value)
   const danger = isError || summary.isError
 
-  // Defer the JSON.stringify + syntax-highlighted CodeBlock until the
-  // <details> is first opened. WHY: these slabs render collapsed by default,
-  // and on a session restore many result rows mount at once. Stringifying a
-  // (potentially 16KB) payload and running the highlighter for every collapsed
-  // row is pure wasted work — the pretty JSON is invisible until the user
-  // expands it. Mirrors the LazyDetails pattern: `opened` latches true on the
-  // first toggle-open and never resets, so re-collapsing keeps the already
-  // highlighted body mounted (no re-highlight thrash on toggle).
-  const [opened, setOpened] = useState(false)
+  const [open, setOpen] = useState(false)
 
   return (
     <MarkerRow marker="⎿" tone="muted">
       <details
         className="text-[12px]"
-        onToggle={(e) => {
-          if (e.currentTarget.open) setOpened(true)
-        }}
+        onToggle={event => setOpen(event.currentTarget.open)}
       >
         <summary
           className={`cursor-pointer select-none ${danger ? 'text-danger' : 'text-ink-dim'}`}
         >
           {summary.label}
         </summary>
-        {opened &&
+        {open &&
           (() => {
-            // Stringify lazily here (not at module top) so this cost is only
-            // paid post-expand. A payload that fails to serialize (e.g. a BigInt
-            // or a circular structure that slipped past tryExtractJson) yields
-            // null and simply renders an empty body rather than throwing.
-            const json = (() => {
-              try {
-                const s = JSON.stringify(value, null, 2)
-                return s.length > RESULT_MAX_CHARS
-                  ? `${s.slice(0, RESULT_MAX_CHARS)}\n…`
-                  : s
-              } catch {
-                return null
-              }
-            })()
+            // WHY projection happens only while open and before stringify:
+            // slicing a full JSON string is not a work bound because the full
+            // object was already traversed and allocated. The bounded projector
+            // caps traversal itself, and closing releases the highlighted DOM.
+            const json = boundedJsonPreview(value, RESULT_MAX_CHARS)
             if (json === null) return null
             return (
-              <div className="mt-1">
+              <div className="mt-1 space-y-2">
                 <CodeBlock code={json} language="json" />
+                {/* WHY exact serialization is behind its own disclosure: raw object results do not
+                    have a source string, and JSON.stringify is proportional to the whole payload.
+                    The compact preview must never pay that work. User intent admits the one-time
+                    serialization, after which only one bounded text page owns DOM at a time. */}
+                <ExactJsonDetails value={value} source={source} isError={danger} />
               </div>
             )
           })()}
