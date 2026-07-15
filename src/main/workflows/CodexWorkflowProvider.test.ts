@@ -41,6 +41,7 @@ const providerOptions = {
   providerHostFilePath: '/opt/agent-code/workflowProviderHost.js',
   codexHome: '/tmp/agent-code-workflow-codex',
   authenticationFile: '/tmp/interactive-codex/auth.json',
+  sessionSourceHome: '/tmp/interactive-codex',
 }
 
 describe('createCodexWorkflowProvider', () => {
@@ -72,6 +73,7 @@ describe('createCodexWorkflowProvider', () => {
       configurationIsolation: {
         codexHome: '/tmp/agent-code-workflow-codex',
         authenticationFile: '/tmp/interactive-codex/auth.json',
+        sessionSourceHome: '/tmp/interactive-codex',
       },
       capabilities: { inheritedMcpServers: 'disabled' },
     })

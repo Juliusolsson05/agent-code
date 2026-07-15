@@ -23,7 +23,7 @@ function agentRightLabel(agent: WorkflowAgentState): string {
     const toolCount = agent.attempts.reduce((count, attempt) => count + attempt.activities.length, 0)
     return `Running · ${toolCount} ${toolCount === 1 ? 'activity' : 'activities'}`
   }
-  if (agent.status === 'queued' && agent.queuedAt) return 'Queued'
+  if (agent.status === 'queued' && agent.queuedAt) return agent.queueReason ?? 'Queued'
   const provider = agent.attempts.at(-1)?.provider
   const status = agent.status.charAt(0).toUpperCase() + agent.status.slice(1)
   return provider ? `${status} · ${provider}` : status
@@ -100,6 +100,7 @@ function sameAgentRow(
     left.label === right.label &&
     left.status === right.status &&
     left.queuedAt === right.queuedAt &&
+    left.queueReason === right.queueReason &&
     left.prompt === right.prompt &&
     left.outcome === right.outcome &&
     left.error === right.error &&

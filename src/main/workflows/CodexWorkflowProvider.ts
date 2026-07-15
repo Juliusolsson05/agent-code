@@ -11,6 +11,7 @@ export type CodexWorkflowProviderOptions = {
   providerHostFilePath: string
   codexHome: string
   authenticationFile?: string
+  sessionSourceHome?: string
 }
 
 /**
@@ -46,6 +47,9 @@ export function createCodexWorkflowProvider(
       ...(options.authenticationFile === undefined
         ? {}
         : { authenticationFile: options.authenticationFile }),
+      ...(options.sessionSourceHome === undefined
+        ? {}
+        : { sessionSourceHome: options.sessionSourceHome }),
     },
     // This is an attestation backed by configurationIsolation, not a claim
     // inferred from an empty options object. Workflow MCP rejects this value

@@ -39,6 +39,11 @@ export async function createWorkflowService(): Promise<WorkflowService> {
       providerHostFilePath,
       codexHome: join(workflowStateRoot, 'codex-home'),
       authenticationFile: join(interactiveCodexHome, 'auth.json'),
+      // WHY the interactive home is a session source but never CODEX_HOME for the child: upgrades
+      // must be able to resume thread IDs persisted before workflow isolation existed. Workflow MCP
+      // imports only the exact requested rollout; normal config, plugins, apps, and MCP servers
+      // remain outside the replay-safe provider boundary.
+      sessionSourceHome: interactiveCodexHome,
     }),
     workerLauncher: new ElectronWorkflowWorkerLauncher(),
     workerFilePath,
