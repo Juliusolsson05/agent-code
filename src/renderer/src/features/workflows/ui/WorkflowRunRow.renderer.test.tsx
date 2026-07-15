@@ -123,6 +123,35 @@ function completedState(): WorkflowState {
   return events.reduce(reduceWorkflowState, createWorkflowState('run-ui'))
 }
 
+function providerBlockedState(): WorkflowState {
+  const events: WorkflowEvent[] = [
+    event(1, {
+      type: 'run.started',
+      payload: { workflow: { name: 'provider-recovery', title: 'Provider recovery' } },
+    }),
+    event(2, {
+      type: 'agent.admitted',
+      agentId: 'agent-blocked',
+      payload: {
+        callIndex: 0,
+        label: 'resume historical review',
+        prompt: { preview: 'Continue', lineCount: 1, content: 'Continue' },
+        options: {},
+        cacheKey: 'blocked',
+      },
+    }),
+    event(3, {
+      type: 'agent.queued',
+      agentId: 'agent-blocked',
+      attemptId: 'attempt-2',
+      payload: {
+        reason: 'Waiting for codex provider health probe',
+      },
+    }),
+  ]
+  return events.reduce(reduceWorkflowState, createWorkflowState('run-ui'))
+}
+
 function clientFor(state: WorkflowState): WorkflowClient {
   return {
     available: true,
@@ -149,6 +178,21 @@ function clientFor(state: WorkflowState): WorkflowClient {
 }
 
 describe('WorkflowRunView', () => {
+  it('shows why admitted work is queued instead of presenting circuit recovery as idle capacity', async () => {
+    const state = providerBlockedState()
+    render(
+      <WorkflowClientProvider value={clientFor(state)}>
+        <WorkflowRunView
+          reference={{ runId: 'run-ui' }}
+          cwd="/repo"
+          onReferenceChange={() => {}}
+        />
+      </WorkflowClientProvider>,
+    )
+
+    expect(await screen.findByText('Waiting for codex provider health probe')).toBeInTheDocument()
+  })
+
   it('renders phases and agents vertically and expands only the selected agent inline', async () => {
     const state = completedState()
     render(
