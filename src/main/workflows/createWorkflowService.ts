@@ -22,7 +22,6 @@ export async function createWorkflowService(
   options: CreateWorkflowServiceOptions = {},
 ): Promise<WorkflowService> {
   const store = new FileWorkflowStore(join(app.getPath('userData'), 'workflows'))
-  await store.initialize()
 
   // WHY the worker path is relative to THIS BUILT MODULE rather than
   // app.getAppPath(): electron-vite emits workflowWorker.js beside the main
