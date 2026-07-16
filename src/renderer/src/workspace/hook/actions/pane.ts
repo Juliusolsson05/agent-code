@@ -104,6 +104,15 @@ function applyDispatchSpawnFocus(
   return { ...dispatchMode, focusedSessionId: sessionId }
 }
 
+type SplitFocusedContinuation = {
+  // WHY cwd and resumeSessionId are required together: this object represents a provider
+  // continuation, not generic split preferences. Making the scope cwd optional recreates the exact
+  // class of bug where a related child's transcript is resumed with its physical parent's token.
+  resumeSessionId: string
+  cwd: string
+  builtInMcpDomains?: BuiltInMcpDomain[]
+}
+
 export function usePaneActions(
   state: {
     activeTabId: string
@@ -124,7 +133,11 @@ export function usePaneActions(
   closeNewAgentPlacement: () => void,
   sessionActions: SessionActions,
 ): {
-  splitFocused: (direction: SplitDirection, kind?: SessionKind, resumeSessionId?: string) => Promise<void>
+  splitFocused: (
+    direction: SplitDirection,
+    kind?: SessionKind,
+    continuation?: SplitFocusedContinuation,
+  ) => Promise<void>
   startNewAgentPlacement: () => void
   commitNewAgentPlacement: (kind: SessionKind, target: PlacementTarget) => Promise<void>
   createDetachedDispatchAgent: (kind: Exclude<SessionKind, 'terminal'>) => Promise<void>
@@ -162,8 +175,10 @@ export function usePaneActions(
     async (
       direction: SplitDirection,
       kind: SessionKind = 'claude',
-      resumeSessionId?: string,
+      continuation?: SplitFocusedContinuation,
     ) => {
+      const resumeSessionId = continuation?.resumeSessionId
+      const builtInMcpDomains = continuation?.builtInMcpDomains
       const dispatchSnapshot = refs.stateRef.current
       if (dispatchSnapshot.dispatchMode && kind !== 'terminal') {
         // Same target resolution as createDetachedDispatchAgent: follow the
@@ -174,7 +189,13 @@ export function usePaneActions(
         if (!tab) return
 
         const leafIds = collectLeaves(tab.root)
+        // WHY a caller may override the visually focused project cwd: lifecycle commands can
+        // target a selected related/orchestration child that is rendered inside a physical parent
+        // pane but intentionally runs in another worktree. Its transcript id, enabled MCP domains,
+        // and cwd are one continuation identity. Mixing the child's domains with the parent's cwd
+        // would mint a fresh token for the wrong project scope.
         const cwd =
+          continuation?.cwd ??
           (target.cwdSessionId ? dispatchSnapshot.sessions[target.cwdSessionId]?.cwd : null) ??
           dispatchSnapshot.sessions[tab.focusedSessionId]?.cwd ??
           leafIds.map(id => dispatchSnapshot.sessions[id]?.cwd).find(Boolean)
@@ -185,7 +206,11 @@ export function usePaneActions(
 
         let sessionId: SessionId
         try {
-          sessionId = await sessionActions.spawn(cwd, { kind, resumeSessionId })
+          sessionId = await sessionActions.spawn(cwd, {
+            kind,
+            resumeSessionId,
+            builtInMcpDomains,
+          })
         } catch (err) {
           showToast(
             err instanceof Error && err.message.length > 0
@@ -309,12 +334,16 @@ export function usePaneActions(
       const tab = state.tabs.find(t => t.id === state.activeTabId)
       if (!tab) return
       const parentSessionId = tab.focusedSessionId
-      const parentCwd = state.sessions[parentSessionId]?.cwd
-      if (!parentCwd) return
+      const spawnCwd = continuation?.cwd ?? state.sessions[parentSessionId]?.cwd
+      if (!spawnCwd) return
 
       let newSessionId: SessionId
       try {
-        newSessionId = await sessionActions.spawn(parentCwd, { kind, resumeSessionId })
+        newSessionId = await sessionActions.spawn(spawnCwd, {
+          kind,
+          resumeSessionId,
+          builtInMcpDomains,
+        })
       } catch (err) {
         showToast(
           err instanceof Error && err.message.length > 0

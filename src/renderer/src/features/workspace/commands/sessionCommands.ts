@@ -727,7 +727,24 @@ export const sessionCommands: CommandDef[] = [
         // what "duplicate" should do. Using `splitFocused` places
         // both side-by-side so the user can see and interact with
         // them at once.
-        await workspace.splitFocused('vertical', kind, newProviderSessionId)
+        // WHY the capability domains travel with the transcript clone: built-in MCP credentials
+        // are deliberately ephemeral, but the user's decision to enable a domain is durable pane
+        // metadata. Passing only the new provider transcript id created a clone that worked until
+        // restart, then rehydrate had no domain names from which to mint a fresh project-scoped
+        // token. The clone must inherit domain NAMES, never the source session's bearer token.
+        await workspace.splitFocused(
+          'vertical',
+          kind,
+          {
+            resumeSessionId: newProviderSessionId,
+            builtInMcpDomains: meta.builtInMcpDomains,
+            // WHY cwd is part of the continuation payload: command targeting may resolve a
+            // related/orchestration child displayed inside a parent pane. That child's transcript
+            // and MCP domains must be re-registered against the CHILD worktree, not whichever
+            // physical pane happens to host its UI.
+            cwd: meta.cwd,
+          },
+        )
       } catch (err) {
         // Surface the failure as a pane toast, not just console.warn — an
         // OpenCode pane hitting `duplicateSession`'s fail-loud throw (see
