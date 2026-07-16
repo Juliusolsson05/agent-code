@@ -1,0 +1,21 @@
+{
+  "evidence": "Curated from Claude Read observations in the frozen bundle corpus and 2026-07-16 session recordings; values are synthetic, structure is preserved.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "read-fixture-1",
+    "name": "Read",
+    "input": {
+      "file_path": "/workspace/src/example.ts",
+      "offset": 41,
+      "limit": 2
+    },
+    "caller": {
+      "type": "direct"
+    }
+  },
+  "toolResult": {
+    "type": "tool_result",
+    "tool_use_id": "read-fixture-1",
+    "content": "41\texport const answer = 42\n42\texport type Answer = number"
+  }
+}

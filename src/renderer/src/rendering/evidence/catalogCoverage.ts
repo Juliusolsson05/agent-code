@@ -37,6 +37,13 @@ export type ClassifiableSighting = {
   outcome: RenderOutcome
 }
 
+export type StructureSightingClassification =
+  | { kind: 'known-structure'; shapeId: string }
+  | { kind: 'known-unsupported-lifecycle'; shapeId: string; lifecycle: RenderShapeLifecycle }
+  | { kind: 'unknown-structure'; structuralFingerprint: string }
+
+export type ClassifiableStructureSighting = Omit<ClassifiableSighting, 'outcome'>
+
 export type FingerprintIndex = {
   byFingerprint: ReadonlyMap<string, RenderShapeDefinition>
   /** Fingerprints claimed by MORE than one catalog entry — always a catalog
@@ -118,16 +125,14 @@ export function classifySighting(
   sighting: ClassifiableSighting,
   index: FingerprintIndex,
 ): SightingClassification {
-  const def = index.byFingerprint.get(sighting.structuralFingerprint)
-  if (!def) {
-    return { kind: 'unknown-structure', structuralFingerprint: sighting.structuralFingerprint }
-  }
-  if (!def.lifecycles.includes(sighting.lifecycle)) {
-    // The final shape is catalogued but THIS milestone has no declared
-    // behavior — the "streaming prefix nobody thought about" class that
-    // regressed PR #524 repeatedly.
-    return { kind: 'known-unsupported-lifecycle', shapeId: def.id, lifecycle: sighting.lifecycle }
-  }
+  const structure = classifySightingStructure(sighting, index)
+  if (structure.kind === 'unknown-structure') return structure
+  if (structure.kind === 'known-unsupported-lifecycle') return structure
+  // `known-structure` guarantees this lookup. Keeping structure-only
+  // classification as a public helper lets pre-receipt corpora prove catalog
+  // coverage without fabricating a paint outcome; the full runtime path still
+  // continues here and verifies the actual owner.
+  const def = index.byFingerprint.get(sighting.structuralFingerprint)!
   if (sighting.outcome.kind === 'unknown') {
     return { kind: 'unknown-outcome', shapeId: def.id, actual: sighting.outcome }
   }
@@ -140,6 +145,32 @@ export function classifySighting(
     }
   }
   return { kind: 'known-claimed', shapeId: def.id }
+}
+
+/**
+ * Classify only facts an evidence source actually contains.
+ *
+ * Frozen rendering bundles predate outcome receipts. Treating their missing
+ * outcome as `shared.generic-tool` made every later catalog graduation appear
+ * misrouted even though the bundle never observed a renderer at all. This
+ * helper deliberately stops after fingerprint + lifecycle and must not be used
+ * for live sightings, which always have an outcome and require classifySighting.
+ */
+export function classifySightingStructure(
+  sighting: ClassifiableStructureSighting,
+  index: FingerprintIndex,
+): StructureSightingClassification {
+  const def = index.byFingerprint.get(sighting.structuralFingerprint)
+  if (!def) {
+    return { kind: 'unknown-structure', structuralFingerprint: sighting.structuralFingerprint }
+  }
+  if (!def.lifecycles.includes(sighting.lifecycle)) {
+    // The final shape is catalogued but THIS milestone has no declared
+    // behavior — the "streaming prefix nobody thought about" class that
+    // regressed PR #524 repeatedly.
+    return { kind: 'known-unsupported-lifecycle', shapeId: def.id, lifecycle: sighting.lifecycle }
+  }
+  return { kind: 'known-structure', shapeId: def.id }
 }
 
 export type CatalogAuditFinding =

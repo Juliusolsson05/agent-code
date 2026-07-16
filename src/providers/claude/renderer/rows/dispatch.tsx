@@ -6,6 +6,10 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 // grandfathered import edge (see its header) and must gain no new users.
 import { EditRow } from '@providers/claude/renderer/components/edit'
 import { MultiEditRow } from '@providers/claude/renderer/components/multi-edit'
+import { ClaudeReadRow } from '@providers/claude/renderer/components/read'
+import { ClaudeReadResultRow } from '@providers/claude/renderer/components/read-result'
+import { ClaudeToolSearchRow } from '@providers/claude/renderer/components/tool-search'
+import { ClaudeToolSearchResultRow } from '@providers/claude/renderer/components/tool-search-result'
 import { WriteRow } from '@providers/claude/renderer/components/write'
 import { TodoRow } from '@providers/shared/renderer/components/todo'
 import {
@@ -14,6 +18,12 @@ import {
   fromClaudeBashBlock,
   fromClaudeBashCodeEdit,
 } from '@providers/claude/renderer/adapters/command'
+import {
+  fromClaudeReadResult,
+  fromClaudeReadUse,
+  fromClaudeToolSearchResult,
+  fromClaudeToolSearchUse,
+} from '@providers/claude/renderer/adapters/readSearch'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 import { OutputWell } from '@renderer/lib/text/OutputWell'
@@ -45,6 +55,14 @@ export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined 
       return <EditRow block={block} />
     case 'MultiEdit':
       return <MultiEditRow block={block} />
+    case 'Read': {
+      const model = fromClaudeReadUse(block)
+      return model ? <ClaudeReadRow model={model} /> : undefined
+    }
+    case 'ToolSearch': {
+      const model = fromClaudeToolSearchUse(block)
+      return model ? <ClaudeToolSearchRow model={model} /> : undefined
+    }
     case 'Write':
       return <WriteRow block={block} />
     case 'TodoWrite':
@@ -83,6 +101,18 @@ export function renderClaudeToolResult(
         <OutputWell text={text} isError={block.is_error === true} />
       </div>
     )
+  }
+  if (source?.name === 'Read') {
+    const model = fromClaudeReadResult(block, source)
+    // A malformed/error result deliberately declines to Block.tsx's visible
+    // generic fallback. The tool-use card above can still be specialized,
+    // while unsupported result evidence remains verbatim instead of being
+    // forced through a parser that did not prove its grammar.
+    return model ? <ClaudeReadResultRow model={model} /> : undefined
+  }
+  if (source?.name === 'ToolSearch') {
+    const model = fromClaudeToolSearchResult(block, source)
+    return model ? <ClaudeToolSearchResultRow model={model} /> : undefined
   }
   return undefined
 }

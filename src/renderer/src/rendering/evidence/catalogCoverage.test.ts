@@ -5,6 +5,7 @@ import {
   auditRenderShapeCatalog,
   buildFingerprintIndex,
   classifySighting,
+  classifySightingStructure,
   outcomeSatisfiesDisposition,
 } from '@renderer/rendering/evidence/catalogCoverage'
 import {
@@ -90,6 +91,35 @@ describe('classifySighting — the five plan §Step 4 states', () => {
       index,
     )
     expect(c.kind).toBe('unknown-outcome')
+  })
+})
+
+describe('classifySightingStructure — pre-receipt evidence stays honest', () => {
+  const index = buildFingerprintIndex([{ 'claude.edit.v1': shape() }])
+
+  it('proves catalog/lifecycle coverage without inventing a renderer outcome', () => {
+    expect(
+      classifySightingStructure(
+        { structuralFingerprint: FP, lifecycle: 'input-complete' },
+        index,
+      ),
+    ).toEqual({ kind: 'known-structure', shapeId: 'claude.edit.v1' })
+  })
+
+  it('still reports unknown fingerprints and unsupported prefixes', () => {
+    expect(
+      classifySightingStructure(
+        { structuralFingerprint: 'fp1-ffffffff', lifecycle: 'input-complete' },
+        index,
+      ),
+    ).toEqual({ kind: 'unknown-structure', structuralFingerprint: 'fp1-ffffffff' })
+    expect(
+      classifySightingStructure({ structuralFingerprint: FP, lifecycle: 'prefix' }, index),
+    ).toEqual({
+      kind: 'known-unsupported-lifecycle',
+      shapeId: 'claude.edit.v1',
+      lifecycle: 'prefix',
+    })
   })
 })
 

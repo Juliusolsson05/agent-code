@@ -6,7 +6,7 @@ import { sweepBundleShapes } from '@renderer/rendering/evidence/bundleShapeSweep
 import {
   auditRenderShapeCatalog,
   buildFingerprintIndex,
-  classifySighting,
+  classifySightingStructure,
 } from '@renderer/rendering/evidence/catalogCoverage'
 import { ALL_RENDER_SHAPE_CATALOGS } from '@providers/registry.renderShapes'
 
@@ -38,11 +38,10 @@ describe('render-shape catalog coverage (Phase 4 gate)', () => {
       const bundle = JSON.parse(readFileSync(join(BUNDLE_DIR, file), 'utf-8'))
       for (const obs of sweepBundleShapes(bundle)) {
         observations += 1
-        const classification = classifySighting(
+        const classification = classifySightingStructure(
           {
             structuralFingerprint: obs.fingerprint.fingerprint,
             lifecycle: obs.lifecycle,
-            outcome: { kind: 'generic', rendererId: 'shared.generic-tool' },
           },
           index,
         )

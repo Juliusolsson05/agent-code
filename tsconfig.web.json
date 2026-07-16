@@ -50,6 +50,12 @@
     // could not see its `expect` augmentation. Include the one shared setup instead of adding
     // matcher imports to individual specs and letting the two test environments drift.
     "testing/setup/renderer.ts",
+    // Curated rendering-shape fixtures are imported by provider adapter and
+    // DOM contracts. Composite TypeScript refuses transitive JSON that is not
+    // named in the project file list; keeping the fixture tree explicit makes
+    // the authoritative typecheck validate those evidence contracts instead
+    // of forcing tests to duplicate captured structures inline.
+    "testing/fixtures/rendering-shapes/**/*.json",
     // The phone client is browser code type-checked here (react-jsx, DOM
     // lib) even though it builds through its own plain-Vite config — the
     // tsc gate must cover it or client drift ships silently.

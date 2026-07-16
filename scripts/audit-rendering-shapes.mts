@@ -38,6 +38,7 @@ import { sweepBundleShapes } from '../src/renderer/src/rendering/evidence/bundle
 import {
   buildFingerprintIndex,
   classifySighting,
+  classifySightingStructure,
 } from '../src/renderer/src/rendering/evidence/catalogCoverage.ts'
 import { ALL_RENDER_SHAPE_CATALOGS } from '../src/providers/registry.renderShapes.ts'
 import type { RenderOutcome } from '../src/shared/types/renderShapes.ts'
@@ -144,16 +145,31 @@ if (RECORDINGS_DIR) {
 const index = buildFingerprintIndex(ALL_RENDER_SHAPE_CATALOGS)
 const byStatus = new Map<string, Map<string, Observation[]>>()
 for (const obs of observations) {
-  const classification = classifySighting(
-    {
-      structuralFingerprint: obs.fingerprint,
-      lifecycle: obs.lifecycle as never,
-      // Bundle observations carry no outcome; a neutral generic keeps
-      // structure/lifecycle coverage meaningful for them.
-      outcome: obs.outcome ?? { kind: 'generic', rendererId: 'shared.generic-tool' },
-    },
-    index,
-  )
+  // Bundle observations predate receipts. Missing evidence is not evidence of
+  // a generic route: classify only structure/lifecycle and report the outcome
+  // as unobserved. Recording sidecars do carry receipts and therefore take the
+  // strict full-outcome path below.
+  const classification = obs.outcome
+    ? classifySighting(
+        {
+          structuralFingerprint: obs.fingerprint,
+          lifecycle: obs.lifecycle as never,
+          outcome: obs.outcome,
+        },
+        index,
+      )
+    : (() => {
+        const structure = classifySightingStructure(
+          {
+            structuralFingerprint: obs.fingerprint,
+            lifecycle: obs.lifecycle as never,
+          },
+          index,
+        )
+        return structure.kind === 'known-structure'
+          ? { kind: 'known-outcome-unobserved' as const, shapeId: structure.shapeId }
+          : structure
+      })()
   const status = byStatus.get(classification.kind) ?? new Map<string, Observation[]>()
   const group = status.get(`${obs.provider} ${obs.fingerprint}`) ?? []
   group.push(obs)

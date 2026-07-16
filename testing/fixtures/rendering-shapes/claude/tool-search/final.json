@@ -1,0 +1,29 @@
+{
+  "evidence": "Curated from Claude ToolSearch observations in the frozen bundle corpus and 2026-07-16 session recordings; values are synthetic, structure is preserved.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "tool-search-fixture-1",
+    "name": "ToolSearch",
+    "input": {
+      "query": "select:ExampleTool",
+      "max_results": 2
+    },
+    "caller": {
+      "type": "direct"
+    }
+  },
+  "toolResult": {
+    "type": "tool_result",
+    "tool_use_id": "tool-search-fixture-1",
+    "content": [
+      {
+        "type": "tool_reference",
+        "tool_name": "ExampleTool"
+      },
+      {
+        "type": "tool_reference",
+        "tool_name": "ExampleToolTwo"
+      }
+    ]
+  }
+}
