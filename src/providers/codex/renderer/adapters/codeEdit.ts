@@ -30,14 +30,69 @@ export type ApplyPatchFile = {
 }
 
 export function applyPatchText(input: unknown): string {
-  if (typeof input === 'string') return input
-  const rec = asRecord(input)
-  if (typeof rec?.raw === 'string') return rec.raw
-  if (typeof rec?.arguments === 'string') return rec.arguments
-  if (typeof rec?.cmd === 'string') return rec.cmd
-  if (typeof rec?.patch === 'string') return rec.patch
-  if (typeof rec?.input === 'string') return rec.input
-  return ''
+  const direct =
+    typeof input === 'string'
+      ? input
+      : (() => {
+          const rec = asRecord(input)
+          if (typeof rec?.raw === 'string') return rec.raw
+          if (typeof rec?.arguments === 'string') return rec.arguments
+          if (typeof rec?.cmd === 'string') return rec.cmd
+          if (typeof rec?.patch === 'string') return rec.patch
+          if (typeof rec?.input === 'string') return rec.input
+          return ''
+        })()
+  // MODERN UNIFIED-EXEC WRAPPER (first caught in the wild 2026-07-16, the
+  // corpus's documented #1 gap): the patch arrives EMBEDDED in a JS script —
+  //   const patch = "*** Begin Patch\n*** Add File: …"; await tools.apply_patch(patch)
+  // The sentinel text is present but the newlines are \n ESCAPES inside a
+  // string literal, so the line-based parser sees one giant line and bails.
+  // Detect that case and decode the containing literal (prefix-tolerant: an
+  // unterminated literal mid-stream decodes to the patch streamed so far —
+  // streaming-first holds for wrapped patches too).
+  if (direct.includes('*** Begin Patch') && !direct.includes('*** Begin Patch\n')) {
+    const embedded = decodeEmbeddedPatchLiteral(direct)
+    if (embedded) return embedded
+  }
+  return direct
+}
+
+/** Find the JS string literal containing the patch sentinel and decode its
+ *  escapes. Exported for tests. Returns null when the sentinel is absent or
+ *  the literal cannot be located. */
+export function decodeEmbeddedPatchLiteral(script: string): string | null {
+  const at = script.indexOf('*** Begin Patch')
+  if (at === -1) return null
+  // Scan BACK to the opening quote of the containing literal (an unescaped
+  // " or '). The patch producer uses double quotes; tolerate both.
+  let open = -1
+  let quote = '"'
+  for (let i = at - 1; i >= 0; i--) {
+    const c = script[i]
+    if ((c === '"' || c === "'") && script[i - 1] !== '\\') {
+      open = i
+      quote = c
+      break
+    }
+  }
+  if (open === -1) return null
+  let out = ''
+  for (let i = open + 1; i < script.length; i++) {
+    const c = script[i]
+    if (c === '\\') {
+      const n = script[i + 1]
+      if (n === undefined) break // torn escape mid-stream — prefix ends here
+      if (n === 'n') out += '\n'
+      else if (n === 't') out += '\t'
+      else if (n === 'r') out += '\r'
+      else out += n // covers \" \' \\ and anything exotic
+      i += 1
+      continue
+    }
+    if (c === quote) break // literal closed — full patch decoded
+    out += c
+  }
+  return out.includes('*** Begin Patch') ? out : null
 }
 
 export function parseApplyPatch(input: unknown): ApplyPatchFile[] {

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { applyPatchText } from '@providers/codex/renderer/adapters/codeEdit'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import {
@@ -15,6 +16,12 @@ export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
   // has provider-specific headline extraction for arguments/raw patches. The
   // shared fallback remains for providers that do not claim a tool name.
   if (block.name === 'apply_patch') return <CodexApplyPatchRow block={block} />
+  // Modern unified-exec wrapper: a patch may hide inside the exec script
+  // (tools.apply_patch("*** Begin Patch…")). CodexApplyPatchRow decodes the
+  // embedded literal and falls back to the generic CodexToolRow when the
+  // script is a plain command — so routing exec here is strictly additive.
+  if (block.name === 'exec' && applyPatchText(block.input).includes('*** Begin Patch'))
+    return <CodexApplyPatchRow block={block} />
   if (block.name === 'exec_command') return <CodexExecCommandRow block={block} />
   if (block.name === 'write_stdin') return <CodexWriteStdinRow block={block} />
   // Unknown names deliberately fall through to the SHARED fallback

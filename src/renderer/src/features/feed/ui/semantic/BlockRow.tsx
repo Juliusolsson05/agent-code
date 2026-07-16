@@ -417,6 +417,14 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
     if (liveTool.name === 'apply_patch') {
       return <CodexApplyPatchRow block={liveTool} />
     }
+    // Modern unified-exec wrapper (caught live 2026-07-16): the patch hides
+    // inside the exec SCRIPT as an escaped string literal. The patch row's
+    // adapter decodes it prefix-tolerantly, so a wrapped patch streams as a
+    // growing diff instead of raw wrapper JavaScript; a plain exec script
+    // falls back to CodexToolRow inside the row.
+    if (liveTool.name === 'exec') {
+      return <CodexApplyPatchRow block={liveTool} />
+    }
     if (liveTool.name === 'exec_command') {
       return <CodexExecCommandRow block={liveTool} />
     }

@@ -5,7 +5,11 @@ import {
   fromClaudeEditBlock,
   fromClaudePartialEditJson,
 } from '@providers/claude/renderer/adapters/codeEdit'
-import { fromCodexPartialPatchText } from '@providers/codex/renderer/adapters/codeEdit'
+import {
+  decodeEmbeddedPatchLiteral,
+  fromCodexApplyPatch,
+  fromCodexPartialPatchText,
+} from '@providers/codex/renderer/adapters/codeEdit'
 
 // THE STREAMING-FIRST CONTRACT (product owner's explicit trap warning):
 // a paintable model must exist from the FIRST closed tokens — waiting for
@@ -79,6 +83,30 @@ describe('codex code-edit adapter — streaming first', () => {
 
   it('declines (null) before the sentinel — caller fallback stays visible', () => {
     expect(fromCodexPartialPatchText('{"cmd":"apply')).toBeNull()
+  })
+
+  it('UNIFIED-EXEC wrapper: decodes a patch embedded in the exec script (caught live 2026-07-16)', () => {
+    const script = 'const patch = "*** Begin Patch\\n*** Add File: temp/a.ts\\n+export const x = 1\\n*** End Patch";\nconst result = await tools.apply_patch(patch);'
+    const decoded = decodeEmbeddedPatchLiteral(script)
+    expect(decoded).toContain('*** Add File: temp/a.ts')
+    const m = fromCodexApplyPatch({ type: 'tool_use', id: '', name: 'exec', input: { cmd: script } } as never)
+    expect(m).not.toBeNull()
+    expect(m!.files[0].path).toBe('temp/a.ts')
+    expect(m!.files[0].verb).toBe('Creating')
+  })
+
+  it('UNIFIED-EXEC wrapper: streaming prefix decodes the patch streamed so far', () => {
+    const prefix = 'const patch = "*** Begin Patch\\n*** Update File: src/x.ts\\n-old\\n+new li'
+    const m = fromCodexApplyPatch({ type: 'tool_use', id: '', name: 'exec', input: { cmd: prefix } } as never, { streaming: true })
+    expect(m).not.toBeNull()
+    expect(m!.files[0].path).toBe('src/x.ts')
+    expect(m!.status).toBe('streaming')
+  })
+
+  it('UNIFIED-EXEC wrapper: a plain command script declines (no false patch)', () => {
+    const script = 'const r = await tools.exec_command({ cmd: "ls -la" });'
+    expect(decodeEmbeddedPatchLiteral(script)).toBeNull()
+    expect(fromCodexApplyPatch({ type: 'tool_use', id: '', name: 'exec', input: { cmd: script } } as never)).toBeNull()
   })
 
   it('multi-file patches map file-per-file with honest verbs', () => {
