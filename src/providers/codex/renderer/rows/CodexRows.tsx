@@ -68,14 +68,14 @@ function summarizePatchTargets(input: unknown): string[] {
   return targets
 }
 
-type ApplyPatchFile = {
+export type ApplyPatchFile = {
   path: string
   action: 'Add' | 'Update' | 'Delete'
   movedTo?: string
   lines: DiffLine[]
 }
 
-function applyPatchText(input: unknown): string {
+export function applyPatchText(input: unknown): string {
   if (typeof input === 'string') return input
   const rec = asRecord(input)
   if (typeof rec?.raw === 'string') return rec.raw
@@ -86,7 +86,7 @@ function applyPatchText(input: unknown): string {
   return ''
 }
 
-function parseApplyPatch(input: unknown): ApplyPatchFile[] {
+export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
   const fullText = applyPatchText(input)
   if (!fullText.includes('*** Begin Patch')) return []
 

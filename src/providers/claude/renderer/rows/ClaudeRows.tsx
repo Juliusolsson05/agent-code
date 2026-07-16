@@ -18,6 +18,8 @@ import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { DiffSlab } from '@providers/shared/renderer/rows/DiffSlab'
+import { fromClaudeEditBlock } from '@providers/claude/renderer/adapters/codeEdit'
+import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 import { PagedTextViewer } from '@renderer/lib/text/PagedTextViewer'
 
 /* ---------- Shared helpers ---------- */
@@ -259,33 +261,17 @@ const OversizedEditSlab = memo(function OversizedEditSlab({
 
 /* ---------- Write ---------- */
 
+// CUT OVER to the code-edit protocol (renderer rewrite PR #555, Phase 5
+// pattern proof): Claude adapter → shared CodeEditView. Write renders as
+// pure additions (honest no-before-state semantics) instead of a plain
+// code slab, and gains the shared header/±counts/status grammar. Both the
+// committed dispatch AND BlockRow's live path converge here, so streaming
+// upgrades for free. Edit/MultiEdit/ApplyPatch follow the same mechanical
+// swap next.
 export const WriteRow = memo(function WriteRow({ block }: { block: ToolUseBlock }) {
-  const input = (block.input ?? {}) as Record<string, unknown>
-  const filePath = typeof input.file_path === 'string' ? input.file_path : ''
-  const content = typeof input.content === 'string' ? input.content : ''
-  const codeContext = useContext(CodeRenderContext)
-  const lineCount = useMemo(() => {
-    if (!content) return 0
-    const normalized = content.endsWith('\n') ? content.slice(0, -1) : content
-    return normalized === '' ? 0 : normalized.split('\n').length
-  }, [content])
-  return (
-    <MarkerRow marker="⏺">
-      <div className="flex flex-col gap-1">
-        <FileToolHeader
-          name="Write"
-          filePath={filePath}
-          extra={`${lineCount} line${lineCount === 1 ? '' : 's'}`}
-        />
-        <CodeBlock
-          code={content}
-          path={filePath}
-          workspaceRoot={codeContext.workspaceRoot}
-          codeId={`write:${block.id}`}
-        />
-      </div>
-    </MarkerRow>
-  )
+  const model = useMemo(() => fromClaudeEditBlock(block), [block])
+  if (!model) return null // name !== Write — dispatch never sends that
+  return <CodeEditView model={model} />
 })
 
 // TodoRow moved to @providers/shared/renderer/rows/TodoRow (Phase 1,
