@@ -9,9 +9,11 @@ import { worktreeBadgeColor } from '@renderer/workspace/tile-tree/TileLeaf/workt
 export function WorktreeBadge({
   context,
   activity,
+  constrainToParent = false,
 }: {
   context: AgentWorkContext | null | undefined
   activity: WorktreeActivityState | null | undefined
+  constrainToParent?: boolean
 }) {
   // The badge is a "where is this agent working now?" signal, so
   // prefer the latest active worktree over the longer-lived primary
@@ -41,9 +43,18 @@ export function WorktreeBadge({
       : null,
   ].filter(Boolean).join('\n')
 
+  // WHY the narrow-pane behavior is opt-in instead of a permanent min-width change: Dispatch
+  // shares this badge with the composer status row, but its subtitle is intentionally the first
+  // item to shrink. Only the wrapping composer row needs the badge to remain one flex item while
+  // being capped by the pane itself. That makes wrapping happen between badges without changing
+  // Dispatch's established metadata-width allocation.
+  const widthClasses = constrainToParent
+    ? 'max-w-[min(180px,100%)] shrink-0'
+    : 'max-w-[180px]'
+
   return (
     <span
-      className="min-w-0 max-w-[180px] truncate rounded-sm px-1.5 py-[1px] text-[10px] font-code leading-none text-white"
+      className={`${widthClasses} truncate rounded-sm px-1.5 py-[1px] text-[10px] font-code leading-none text-white`}
       style={{ backgroundColor: color ?? undefined }}
       title={title}
     >
