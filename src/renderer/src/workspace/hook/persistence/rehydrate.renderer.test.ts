@@ -527,4 +527,93 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       draftInput: 'finish this after restart',
     })
   })
+
+  it('repairs detached records for deleted project tabs before publishing runtimes', async () => {
+    const persisted = makePersisted()
+    persisted.sessions['parked-session'] = {
+      cwd: '/tmp/project',
+      kind: 'codex',
+    }
+    persisted.sessions['ghost-session'] = {
+      cwd: '/tmp/deleted-project',
+      kind: 'claude',
+    }
+    persisted.detachedSessions = {
+      'parked-session': {
+        sessionId: 'parked-session',
+        surface: 'dispatch',
+        projectTabId: 'tab-1',
+        projectTabTitle: 'Project',
+        projectTabIndex: 0,
+        detachedAt: 42,
+      },
+      'ghost-session': {
+        sessionId: 'ghost-session',
+        surface: 'dispatch',
+        projectTabId: 'deleted-tab',
+        projectTabTitle: 'Deleted project',
+        projectTabIndex: 1,
+        detachedAt: 21,
+      },
+    }
+    persisted.dispatchMode = {
+      scope: 'global',
+      focusedSessionId: 'ghost-session',
+      tiled: {
+        focusedLane: 1,
+        lanes: [
+          { selectedSessionId: 'parked-session' },
+          { selectedSessionId: 'ghost-session' },
+        ],
+      },
+    }
+    persisted.drafts = {
+      ...persisted.drafts,
+      'ghost-session': 'this draft belongs to an unreachable ghost',
+    }
+    const harness = makeHarness()
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'adopted' as const,
+      snapshot: {
+        sessionId: 'stable-session',
+        kind: 'claude' as const,
+        cwd: '/tmp/project',
+        lifecycle: 'live' as const,
+        input: { ready: true, revision: 1, reason: 'ready' as const },
+      },
+    }))
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        recoverSession,
+        cancelSessionRecovery: vi.fn(async () => true),
+        defaultCwd: vi.fn(),
+      },
+    })
+
+    const result = await rehydrateWorkspace(
+      persisted,
+      harness.refs,
+      harness.setState,
+      harness.setRuntimes,
+      harness.setTileTabs,
+      vi.fn(),
+    )
+
+    expect(result).toEqual({ restoredSessions: 1, expectedSessions: 1, complete: true })
+    expect(recoverSession).toHaveBeenCalledTimes(1)
+    expect(harness.state().sessions).toHaveProperty('stable-session')
+    expect(harness.state().sessions).toHaveProperty('parked-session')
+    expect(harness.state().sessions).not.toHaveProperty('ghost-session')
+    expect(harness.state().detachedSessions).toHaveProperty('parked-session')
+    expect(harness.state().detachedSessions).not.toHaveProperty('ghost-session')
+    expect(harness.runtimes()).toHaveProperty('parked-session')
+    expect(harness.runtimes()).not.toHaveProperty('ghost-session')
+    expect(harness.state().dispatchMode?.focusedSessionId).toBeUndefined()
+    expect(harness.state().dispatchMode?.tiled?.lanes).toEqual([
+      { selectedSessionId: 'parked-session' },
+      { selectedSessionId: undefined },
+    ])
+  })
 })

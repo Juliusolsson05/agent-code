@@ -30,6 +30,7 @@ import { usePasteToFocus } from '@renderer/workspace/tile-tree/TileLeaf/usePaste
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
+import { resolveReadinessText } from '@renderer/workspace/tile-tree/TileLeaf/readiness'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
@@ -414,28 +415,7 @@ export function TileLeaf({
   }, [input, submitCurrentDraft])
 
   const isSessionLive = runtime.sessionStatus === 'running'
-  const readinessText =
-    runtime.transcriptStatus === 'loading'
-      ? 'loading transcript'
-      : runtime.transcriptStatus === 'error'
-        ? `transcript unavailable${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
-        : runtime.transcriptStatus === 'disconnected'
-          ? `transcript disconnected${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
-        // WHY exited beats "not input ready":
-        //
-        // A resumed agent can die before the renderer finishes the
-        // bootstrap quiet-window. That leaves `inputReady=false`,
-        // which used to render "starting agent" forever even though
-        // the composer correctly blocked Enter with "Agent has
-        // exited". The process lifecycle is the stronger signal here:
-        // once main has emitted exit, this pane is no longer starting.
-        : runtime.processStatus === 'failed'
-          ? (runtime.processError ?? 'agent failed to start')
-        : isSessionExited(runtime)
-          ? `agent exited${runtime.exited !== null ? ` (code ${runtime.exited})` : ''}`
-        : !runtime.inputReady || runtime.processStatus === 'spawning'
-          ? 'starting agent'
-          : null
+  const readinessText = resolveReadinessText(runtime)
   const canRetryBackend = runtime.processStatus === 'failed' ||
     runtime.processStatus === 'exited'
 

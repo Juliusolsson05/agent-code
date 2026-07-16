@@ -4,12 +4,14 @@ import type {
   DispatchModeState,
   SessionId,
   SessionMeta,
+  TabId,
   TileNode,
 } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
 import { keepTiledLaneSessions } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 
 type SessionOwnershipTab = {
+  id: TabId
   root: TileNode
 }
 
@@ -73,8 +75,24 @@ export type PrunedSessionOwnership = {
 // stale focus id resurrect work the user can no longer see or manage.
 export function collectOwnedSessionIds(input: SessionOwnershipInput): Set<SessionId> {
   const owned = collectLiveProcessIds(input)
+  const existingTabIds = new Set(input.tabs.map(tab => tab.id))
 
   for (const entry of Object.values(input.detachedSessions ?? {})) {
+    // WHY a detached record is not ownership by itself:
+    //
+    // Dispatch agents are children of a project tab. Closing that tab kills
+    // its visible and detached sessions together, but older builds and
+    // interrupted saves could leave the detached half behind. Blindly treating
+    // that stale record as an owner made it immortal: autosave preserved both
+    // the record and its SessionMeta forever, and rehydrate constructed an
+    // idle runtime for it on every launch. Real workspaces accumulated dozens
+    // of these ghosts even though the user had only a handful of open agents.
+    //
+    // `projectTabId` is the durable parent relation, so a missing parent means
+    // there is no surface from which the agent can be found or managed. Drop
+    // that closed ownership island as one unit instead of manufacturing a
+    // fourth, invisible workspace surface.
+    if (!existingTabIds.has(entry.projectTabId)) continue
     owned.add(entry.sessionId)
   }
 
