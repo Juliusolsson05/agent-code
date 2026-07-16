@@ -672,6 +672,15 @@ are `protocols/command/formatters/<family>/index.ts` (e.g. `tests/`, `json/`,
 `protocols/command/formatters/index.ts`. A new family is one new directory
 plus one registry line.
 
+A formatter that earns richer UI may own a typed model, conservative detector
+and parser over normalized command evidence, a model-only body component, and
+tests inside that directory. Git is the motivating case because its existing
+feed UI already has six evidence-backed card grammars. This does not relax the
+boundary: provider adapters must pair and normalize the operation first, the
+formatter must decline on uncertainty, and bounded raw output remains
+available. Formatter directories must never become a second shared wire-shape
+classifier.
+
 Two deliberate survivors of the split, both temporary: `rows/ClaudeRows.tsx`
 and `rows/CodexRows.tsx` remain as **re-export barrels with zero logic**,
 because the feed's live painter (`BlockRow.tsx`) imports provider rows through
@@ -873,6 +882,17 @@ src/providers/shared/renderer/protocols/
     model.ts
     CommandView.tsx
     formatters/
+      git/
+        model.ts
+        detect.ts
+        parse.ts
+        GitCommandBody.tsx
+        index.ts
+        git.test.tsx
+  compaction/
+    model.ts
+    CompactionView.tsx
+    CompactionView.test.tsx
   structured-tool/
     model.ts
     StructuredToolView.tsx
@@ -1125,6 +1145,12 @@ Formatters are conservative:
 - show terminal conclusions only when the operation is terminal;
 - never become provider wire parsers.
 
+When a conclusion line cannot preserve the proven interaction grammar, a
+formatter may return a typed rich body over its protocol model. It still obeys
+the same decline and raw-evidence rules. The Git formatter is the first planned
+example: status, diff, add, commit, log, and push may keep their specialized
+cards after they consume one paired, provider-normalized command operation.
+
 This is how “a certain command can use a distinctive color or layout” scales:
 the command component has one stable grammar, while a trusted command-family
 formatter adds an accessible accent, icon, summary, or structured output. Color
@@ -1267,7 +1293,8 @@ progress.
 
 Command-specific presentation is a formatter decision:
 
-- git may show branch/status/diff intent with a git accent;
+- git may show branch/status/diff intent with a git accent and, where fixtures
+  prove it, a rich formatter-owned status/diff/add/commit/log/push body;
 - test runners may show passed/failed/skipped totals;
 - compiler/linter output may group diagnostics and link `path:line:column`;
 - JSON may render as bounded key/value/table data;
@@ -1278,6 +1305,10 @@ Each formatter has a stable grammar and fixtures. It returns `null` on
 uncertainty, never runs arbitrary command output, and never removes the raw
 bounded output. This is how Agent Code can make different command families
 distinctive without pretending every command is a new component.
+
+This migration applies only to feed rendering. The persistent workspace Git
+bar remains an independent product surface under `features/git/`; sharing its
+domain helpers is allowed only where their inputs are already provider-neutral.
 
 ### Reads, searches, and discovery
 
@@ -1469,11 +1500,29 @@ Compaction appears in two separate forms:
    kind unless it errors.
 2. **Durable transcript semantics:** provider transcript mappers normalize a
    completed compaction into `compact_boundary` and `compact_summary` entries.
-   The feed renders those as `CompactBoundaryRow` and `CompactSummaryRow`.
+   The feed currently renders those through the central
+   `CompactBoundaryRow` / `CompactSummaryRow` exception. Phase 10 replaces that
+   exception with provider-owned compaction adapters/components backed by a
+   model-only shared compaction protocol.
 
 The live strip must not be converted into a feed tool card, and the durable
 summary must not depend on a still-live condition snapshot. Restart/replay must
 recover the durable entries even though the transient condition is gone.
+
+The condition transport must not become the semantic owner of compaction.
+Phase 10 inventories Claude's proxy/semantic compaction-synthesis signals plus
+committed `compact_boundary` / `compact_summary` evidence, Codex's semantic
+`compaction` event plus durable `compacted` evidence, and OpenCode only when
+recordings prove a signal. Structured semantic/proxy events are preferred for
+live state. Screen parsing remains only as an explicit compatibility fallback
+for provider versions with no usable structured live signal.
+
+When structured and screen signals both fire, provider-owned precedence,
+deduplication, and provenance rules must yield one monotonic running → error or
+done lifecycle. The observer records structure and source, never raw summary or
+screen text. Tests must cover structured-only operation with screen detection
+disabled, screen-only fallback, both-source agreement, disagreement, terminal
+error/done, and restart/replay of the independent durable entries.
 
 ### Condition catalog treatment
 
@@ -1538,6 +1587,14 @@ the feed rewrite. Provider-specific detection and action resolution remain in
 the provider/headless boundary. Shared condition components may reuse visual
 primitives, but shared code never narrows provider state or parses a terminal
 screen.
+
+Phase 10 may colocate each provider's compaction condition adapter/view under
+`renderer/conditions/compaction/` and its durable feed component under
+`renderer/components/compaction/`. That is an ownership-preserving directory
+move, not a merger of live and durable semantics. It may also replace
+screen-primary detection after structured-event fixtures prove parity; it must
+retain a documented screen fallback wherever the evidence says one is still
+required.
 
 ## Testing contract
 
@@ -1839,10 +1896,20 @@ src/
 │       │   │   ├── CommandView.test.tsx            [A]
 │       │   │   └── formatters/                     [A, evidence-backed]
 │       │   │       ├── types.ts                    [A]
-│       │   │       ├── git.ts                      [A]
-│       │   │       ├── tests.ts                    [A]
-│       │   │       ├── diagnostics.ts              [A]
-│       │   │       └── json.ts                     [A]
+│       │   │       ├── git/                        [A, rich formatter]
+│       │   │       │   ├── model.ts                [A]
+│       │   │       │   ├── detect.ts               [M/A]
+│       │   │       │   ├── parse.ts                [M/A]
+│       │   │       │   ├── GitCommandBody.tsx      [M/A]
+│       │   │       │   ├── index.ts                [A]
+│       │   │       │   └── git.test.tsx            [A]
+│       │   │       ├── tests/index.ts              [A]
+│       │   │       ├── diagnostics/index.ts        [A]
+│       │   │       └── json/index.ts               [A]
+│       │   ├── compaction/                         [A]
+│       │   │   ├── model.ts                        [A]
+│       │   │   ├── CompactionView.tsx              [A]
+│       │   │   └── CompactionView.test.tsx         [A]
 │       │   ├── read-search/                        [A when proven shared]
 │       │   ├── web/                                [A when proven shared]
 │       │   ├── collaboration/                      [A when proven shared]
@@ -2218,6 +2285,9 @@ Tasks:
 - update evergreen rendering docs from the as-built system;
 - close/supersede PR #524 after every valuable primitive/fixture has a recorded
   port-or-reject decision.
+- keep the central Git and compact-entry exceptions intact until Phase 10 has
+  paired evidence, replacement fixtures, and shadow/replay proof; Phase 9 must
+  not delete them early.
 
 Exit gate:
 
@@ -2226,6 +2296,67 @@ Exit gate:
 - there is one provider-owned path per catalogued shape and no split legacy/new
   renderer for the same shape;
 - every deletion is backed by a catalog query and replay result.
+
+### Phase 10 — final Git and compaction ownership convergence
+
+This final phase closes two architectural exceptions discovered while Phases
+1–6 were running. It does not invent new semantics: it migrates the already
+proven Git and compaction experiences into the provider-owned, directory-based
+renderer after the operation boundary can carry the evidence they need.
+
+Git tasks:
+
+- land the actual paired `renderOperation(ProviderOperationInput)` capability
+  promised by Phases 5–6, so one provider renderer receives correlated tool-use
+  and result evidence rather than reconstructing a pair inside `Block.tsx`;
+- move feed Git intent detection, parsing, and the six specialized
+  status/diff/add/commit/log/push bodies from `features/git/ui/GitRows.tsx` into
+  `providers/shared/renderer/protocols/command/formatters/git/`;
+- require provider command adapters to normalize the pair before that formatter
+  runs; preserve conservative decline, bounded raw output, and an explicit
+  absorption receipt naming the owning command row;
+- keep the persistent Git bar in `features/git/` as a separate workspace product
+  surface; do not force its IPC/store lifecycle into the feed protocol;
+- remove or generalize the Git-only `customRendering` gate after auditing whether
+  it has any remaining product meaning outside this legacy interception path.
+
+Compaction tasks:
+
+- move durable compact boundary/summary selection out of the central `EntryRow`
+  exception into `providers/<provider>/renderer/components/compaction/`, using
+  provider adapters plus
+  `providers/shared/renderer/protocols/compaction/{model,CompactionView}` only
+  when the providers map honestly to the same visual model;
+- colocate each provider's transient condition view/adapter under
+  `providers/<provider>/renderer/conditions/compaction/`, while retaining the
+  hard semantic boundary: the condition owns live state and the feed component
+  owns durable replayable transcript evidence;
+- inventory Claude proxy/semantic synthesis signals and committed compact
+  entries, Codex semantic `compaction` and durable `compacted` evidence, and any
+  OpenCode evidence actually captured; prefer structured signals for live state
+  and use screen detection only as a versioned compatibility fallback;
+- define provider-owned source precedence, provenance, and deduplication so
+  structured and screen detection cannot create duplicate or regressing live
+  conditions;
+- add fixtures for structured-only with screen detection disabled, screen-only
+  fallback, both sources, disagreement, error/done, and restart/replay; add an
+  explicit Codex regression proving semantic compaction cannot fall through to
+  an empty generic marker.
+
+Exit gate:
+
+- no shared feed dispatcher recognizes Git command intent or durable compact
+  entry kinds;
+- named provider receipts own every migrated Git/compaction outcome, including
+  absorbed results;
+- structured-capable fixtures work with screen detection disabled, fallback-only
+  fixtures still work, and both sources produce one monotonic live lifecycle;
+- durable compaction survives restart/replay independently of transient condition
+  state;
+- every removed central/legacy route has catalog, fixture, shadow comparison, and
+  replay proof;
+- the inbox/corpus reports no unknown, misrouted, unsupported, or unknown-outcome
+  residue for the migrated Git and compaction shapes.
 
 ## PR #524 salvage matrix
 
@@ -2286,6 +2417,10 @@ Review and port selectively, with tests, rather than copying directories.
    built on the draft branch remains correct.
 5. **Which command formatters deserve product support first?** Choose from
    observed frequency and user value, not an exhaustive command taxonomy.
+6. **Can every provider/version expose live compaction without screen parsing?**
+   Decide from captured structured events. Where the answer is no, retain screen
+   detection as an explicit versioned fallback with source provenance and
+   deduplication, rather than making the screen channel the primary contract.
 
 ## Definition of done
 
@@ -2301,7 +2436,12 @@ This program is complete when:
   rendering without sharing raw decoders;
 - live, committed, prefix, restart, and replay behavior is covered;
 - compaction and all other conditions retain their separate transient and
-  durable semantics;
+  durable semantics; structured semantic/proxy evidence leads live compaction
+  where available, screen detection is only a proven compatibility fallback,
+  and durable entries render from provider-owned compaction directories;
+- feed Git UI consumes paired provider-normalized command evidence through a
+  rich formatter directory, while the persistent workspace Git bar remains a
+  separate product surface;
 - the ownership/order pipeline remains the source of truth for which content
   may paint;
 - PR #524 has been reduced to a closed historical/salvage reference rather than
