@@ -7,6 +7,8 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
+import { applyPatchText, fromCodexApplyPatch, type ApplyPatchFile } from '@providers/codex/renderer/adapters/codeEdit'
+import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 
 import { JsonResultSlab } from '@providers/shared/renderer/rows/JsonResultSlab'
 import { tryExtractJson } from '@providers/shared/renderer/rows/jsonToolPresentation'
@@ -68,77 +70,6 @@ function summarizePatchTargets(input: unknown): string[] {
   return targets
 }
 
-export type ApplyPatchFile = {
-  path: string
-  action: 'Add' | 'Update' | 'Delete'
-  movedTo?: string
-  lines: DiffLine[]
-}
-
-export function applyPatchText(input: unknown): string {
-  if (typeof input === 'string') return input
-  const rec = asRecord(input)
-  if (typeof rec?.raw === 'string') return rec.raw
-  if (typeof rec?.arguments === 'string') return rec.arguments
-  if (typeof rec?.cmd === 'string') return rec.cmd
-  if (typeof rec?.patch === 'string') return rec.patch
-  if (typeof rec?.input === 'string') return rec.input
-  return ''
-}
-
-export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
-  const fullText = applyPatchText(input)
-  if (!fullText.includes('*** Begin Patch')) return []
-
-  // WHY the rich diff card parses only one bounded page: DiffSlab creates a
-  // node per line. CSS clipping never reduced that parse/DOM/layout cost. The
-  // durable tool input still owns the complete patch; this card is explicitly
-  // a safe preview of its leading files/hunks.
-  const text = boundedTextPage(fullText).text
-
-  const files: ApplyPatchFile[] = []
-  let current: ApplyPatchFile | null = null
-
-  for (const rawLine of text.split('\n')) {
-    const fileMatch = rawLine.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/)
-    if (fileMatch) {
-      current = {
-        action: fileMatch[1] as ApplyPatchFile['action'],
-        path: fileMatch[2] ?? '',
-        lines: [],
-      }
-      files.push(current)
-      continue
-    }
-
-    if (!current) continue
-
-    const moveMatch = rawLine.match(/^\*\*\* Move to: (.+)$/)
-    if (moveMatch) {
-      current.movedTo = moveMatch[1] ?? ''
-      continue
-    }
-
-    if (
-      rawLine === '*** Begin Patch' ||
-      rawLine === '*** End Patch' ||
-      rawLine === '*** End of File' ||
-      rawLine.startsWith('@@')
-    ) {
-      continue
-    }
-
-    if (rawLine.startsWith('+')) {
-      current.lines.push({ kind: '+', text: rawLine.slice(1) })
-    } else if (rawLine.startsWith('-')) {
-      current.lines.push({ kind: '-', text: rawLine.slice(1) })
-    } else if (rawLine.startsWith(' ')) {
-      current.lines.push({ kind: 'ctx', text: rawLine.slice(1) })
-    }
-  }
-
-  return files
-}
 
 function PatchFileHeader({
   action,
@@ -469,39 +400,33 @@ export const CodexApplyPatchRow = memo(function CodexApplyPatchRow({
 }: {
   block: ToolUseBlock
 }) {
-  const files = useMemo(() => parseApplyPatch(block.input), [block.input])
+  // CUT OVER to the code-edit protocol (PR #555 Phase 5): Codex adapter →
+  // shared CodeEditView. The provider component WRAPS the shared view (the
+  // plan's chrome rule) to keep two codex-specific affordances: the
+  // fallback to CodexToolRow before the patch sentinel is recognizable,
+  // and the "rich preview is partial" exact-paged-patch disclosure.
+  const model = useMemo(() => fromCodexApplyPatch(block), [block])
   const rawPatch = applyPatchText(block.input)
   const previewIncomplete = boundedTextPage(rawPatch).hasNext
 
-  if (files.length === 0) {
+  if (!model) {
     return <CodexToolRow block={block} />
   }
 
   return (
-    <MarkerRow marker="⏺">
-      <div className="flex flex-col gap-2">
-        {files.map((file, index) => (
-          <div key={`${file.path}:${index}`} className="flex flex-col gap-1">
-            <PatchFileHeader
-              action={file.action}
-              path={file.path}
-              movedTo={file.movedTo}
-            />
-            <DiffSlab lines={file.lines} filePath={file.path} emptyLabel="(no inline diff)" />
+    <div className="flex flex-col gap-1">
+      <CodeEditView model={model} />
+      {previewIncomplete ? (
+        <details className="text-[11px] text-muted">
+          <summary className="cursor-pointer select-none">
+            Rich preview is partial · view exact paged patch
+          </summary>
+          <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
+            <PagedTextViewer source={rawPatch} />
           </div>
-        ))}
-        {previewIncomplete ? (
-          <details className="text-[11px] text-muted">
-            <summary className="cursor-pointer select-none">
-              Rich preview is partial · view exact paged patch
-            </summary>
-            <div className="mt-1 rounded border border-border bg-surface px-2 py-1.5">
-              <PagedTextViewer source={rawPatch} />
-            </div>
-          </details>
-        ) : null}
-      </div>
-    </MarkerRow>
+        </details>
+      ) : null}
+    </div>
   )
 })
 

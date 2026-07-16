@@ -96,24 +96,15 @@ function FileToolHeader({
 
 /* ---------- Edit ---------- */
 
+// CUT OVER to the code-edit protocol (PR #555 Phase 5): adapter → shared
+// CodeEditView. Committed dispatch AND BlockRow's live streaming path both
+// land here, so partial synthetic blocks stream through the same card.
+// The adapter owns the oversize gate (bounded -/+ fallback replaces the
+// old OversizedEditSlab — same protection, one home).
 export const EditRow = memo(function EditRow({ block }: { block: ToolUseBlock }) {
-  const { filePath, oldString, newString } = editInput(block)
-  const lines = useMemo(
-    () => canDiffLinesInline(oldString, newString) ? diffLines(oldString, newString) : null,
-    [oldString, newString],
-  )
-  return (
-    <MarkerRow marker="⏺">
-      <div className="flex flex-col gap-1">
-        <FileToolHeader name="Edit" filePath={filePath} />
-        {lines ? (
-          <DiffSlab lines={lines} filePath={filePath} emptyLabel="(no changes)" />
-        ) : (
-          <OversizedEditSlab oldString={oldString} newString={newString} />
-        )}
-      </div>
-    </MarkerRow>
-  )
+  const model = useMemo(() => fromClaudeEditBlock(block), [block])
+  if (!model) return null
+  return <CodeEditView model={model} />
 })
 
 /* ---------- MultiEdit ---------- */

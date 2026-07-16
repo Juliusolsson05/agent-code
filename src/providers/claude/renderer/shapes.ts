@@ -601,8 +601,8 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json","rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json","rendering-bundles/2026-06-14T15-52-20-411-b728adb8.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'code-edit' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (12 sightings); structural variants share this id.',
+    disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (12 sightings); structural variants share this id. GRADUATED 2026-07-16: cut over to the code-edit protocol (adapter + CodeEditView); receipts must name this renderer or the sighting files as misrouted',
   }),
   'claude.tool-use.lsp.v1': defineRenderShape({
     id: 'claude.tool-use.lsp.v1',
@@ -1043,8 +1043,8 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-42-750-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-54-340-a8ad1ebb.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'code-edit' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (16 sightings); structural variants share this id.',
+    disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (16 sightings); structural variants share this id. GRADUATED 2026-07-16: cut over to the code-edit protocol (adapter + CodeEditView); receipts must name this renderer or the sighting files as misrouted',
   }),})
 
 export type ClaudeRenderShapeId = keyof typeof CLAUDE_RENDER_SHAPES

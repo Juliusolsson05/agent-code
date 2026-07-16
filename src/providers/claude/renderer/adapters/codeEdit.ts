@@ -24,12 +24,22 @@ function editFile(filePath: string, oldString: string, newString: string, stream
   // canDiffLinesInline is the oversize gate the legacy EditRow used — the
   // LCS diff is quadratic, so past its budget we degrade to an
   // everything-removed/everything-added view instead of freezing the paint.
+  // Oversize fallback is BOUNDED (review-noted preservation item: the
+  // legacy path used a paged viewer; an uncapped -/+ dump of a huge string
+  // would mount unbounded DOM). 200 lines per side + an explicit marker —
+  // the full content remains in the transcript/committed views.
+  const OVERSIZE_SIDE_CAP = 200
+  const capSide = (text: string, kind: '-' | '+'): DiffLine[] => {
+    const all = text.split('\n')
+    const shown: DiffLine[] = all.slice(0, OVERSIZE_SIDE_CAP).map(t => ({ kind, text: t }))
+    if (all.length > OVERSIZE_SIDE_CAP) {
+      shown.push({ kind: 'ctx', text: `… ${all.length - OVERSIZE_SIDE_CAP} more ${kind === '+' ? 'added' : 'removed'} lines (view full content in the committed block)` })
+    }
+    return shown
+  }
   const lines: DiffLine[] = canDiffLinesInline(oldString, newString)
     ? diffLines(oldString, newString)
-    : [
-        ...oldString.split('\n').map(text => ({ kind: '-' as const, text })),
-        ...newString.split('\n').map(text => ({ kind: '+' as const, text })),
-      ]
+    : [...capSide(oldString, '-'), ...capSide(newString, '+')]
   return {
     path: filePath,
     verb: oldString === '' ? 'Creating' : 'Editing',

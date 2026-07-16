@@ -30,6 +30,8 @@ import {
 
 import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
+import { normalizeCodeLanguage } from '@shared/code/language'
+import { StreamingCodeText } from '@renderer/lib/code/StreamingCodeText'
 import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
 import { useRenderShapeCapture } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
 import {
@@ -667,22 +669,17 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
                 </span>
               </MarkerRow>
               {/*
-                `highlight={false}` is load-bearing for performance.
-                highlight.js re-highlights the WHOLE code string on
-                every change; this CodeBlock is fed a growing buffer
-                that re-renders on every `input_json_delta`, so
-                highlighting here would cost O(streamed bytes²) over
-                a long write. The plain preview is cheap; the
-                committed WriteRow does the one-shot highlight after
-                the stream ends. `codeId` is keyed by blockIndex so
-                the component stays mounted across the many delta
-                re-renders rather than remounting.
+                Sealed-line streaming highlight (PR #555 Phase 5; product
+                verdict 2026-07-16: writes must be COLORED while streaming).
+                The old `highlight={false}` CodeBlock existed because whole-
+                buffer hljs per delta is O(bytes²); StreamingCodeText caches
+                sealed lines and re-tokenizes only the tail — O(new bytes)
+                per delta, color in the same frame. Committed WriteRow still
+                does the authoritative full-context pass afterwards.
               */}
-              <CodeBlock
+              <StreamingCodeText
                 code={writeStream.partialContent ?? ''}
-                path={writeStream.filePath}
-                codeId={`write-live:${block.blockIndex}`}
-                highlight={false}
+                language={normalizeCodeLanguage(undefined, writeStream.filePath)}
               />
             </div>
           ) : block.parsedInput && block.inputJsonValid !== false ? (

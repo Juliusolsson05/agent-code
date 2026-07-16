@@ -492,8 +492,8 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-bundles/2026-05-20T18-43-47-377-f6d733f8.json","rendering-bundles/2026-05-21T09-12-59-519-e4f30416.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'code-edit' },
-    why: 'Seeded from the 48-bundle corpus (22 sightings); structural variants share this id.',
+    disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+    why: 'Seeded from the 48-bundle corpus (22 sightings); structural variants share this id. GRADUATED 2026-07-16: cut over to the code-edit protocol (adapter + CodeEditView); receipts must name this renderer or the sighting files as misrouted',
   }),
   'codex.tool-use.exec.v1': defineRenderShape({
     id: 'codex.tool-use.exec.v1',

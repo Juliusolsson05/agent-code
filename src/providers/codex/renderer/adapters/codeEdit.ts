@@ -1,8 +1,7 @@
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import {
-  applyPatchText,
-  parseApplyPatch,
-} from '@providers/codex/renderer/rows/CodexRows'
+import { asRecord } from '@shared/lib/asRecord'
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
+import type { DiffLine } from '@shared/parsers/lineDiff'
 import type {
   CodeEditFile,
   CodeEditRenderModel,
@@ -19,6 +18,81 @@ import type {
 // model exists from the moment `*** Begin Patch` + the first file header
 // arrive. The trap this kills: waiting for the full JSON/patch to land
 // before rendering anything (which reduces streaming to a spinner).
+
+// ---- apply_patch parser (MOVED here from CodexRows.tsx, PR #555 Phase 5):
+// the adapter is the parser's home — rows import FROM the adapter, never the
+// reverse, keeping the graph acyclic (rows -> adapter -> shared protocol).
+export type ApplyPatchFile = {
+  path: string
+  action: 'Add' | 'Update' | 'Delete'
+  movedTo?: string
+  lines: DiffLine[]
+}
+
+export function applyPatchText(input: unknown): string {
+  if (typeof input === 'string') return input
+  const rec = asRecord(input)
+  if (typeof rec?.raw === 'string') return rec.raw
+  if (typeof rec?.arguments === 'string') return rec.arguments
+  if (typeof rec?.cmd === 'string') return rec.cmd
+  if (typeof rec?.patch === 'string') return rec.patch
+  if (typeof rec?.input === 'string') return rec.input
+  return ''
+}
+
+export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
+  const fullText = applyPatchText(input)
+  if (!fullText.includes('*** Begin Patch')) return []
+
+  // WHY the rich diff card parses only one bounded page: DiffSlab creates a
+  // node per line. CSS clipping never reduced that parse/DOM/layout cost. The
+  // durable tool input still owns the complete patch; this card is explicitly
+  // a safe preview of its leading files/hunks.
+  const text = boundedTextPage(fullText).text
+
+  const files: ApplyPatchFile[] = []
+  let current: ApplyPatchFile | null = null
+
+  for (const rawLine of text.split('\n')) {
+    const fileMatch = rawLine.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/)
+    if (fileMatch) {
+      current = {
+        action: fileMatch[1] as ApplyPatchFile['action'],
+        path: fileMatch[2] ?? '',
+        lines: [],
+      }
+      files.push(current)
+      continue
+    }
+
+    if (!current) continue
+
+    const moveMatch = rawLine.match(/^\*\*\* Move to: (.+)$/)
+    if (moveMatch) {
+      current.movedTo = moveMatch[1] ?? ''
+      continue
+    }
+
+    if (
+      rawLine === '*** Begin Patch' ||
+      rawLine === '*** End Patch' ||
+      rawLine === '*** End of File' ||
+      rawLine.startsWith('@@')
+    ) {
+      continue
+    }
+
+    if (rawLine.startsWith('+')) {
+      current.lines.push({ kind: '+', text: rawLine.slice(1) })
+    } else if (rawLine.startsWith('-')) {
+      current.lines.push({ kind: '-', text: rawLine.slice(1) })
+    } else if (rawLine.startsWith(' ')) {
+      current.lines.push({ kind: 'ctx', text: rawLine.slice(1) })
+    }
+  }
+
+  return files
+}
 
 const VERB = { Add: 'Creating', Update: 'Editing', Delete: 'Deleting' } as const
 
@@ -67,4 +141,3 @@ function firstLine(result: ToolResultBlock | null | undefined): string | undefin
   return text ? text.split('\n')[0].slice(0, 200) : 'patch failed'
 }
 
-export { applyPatchText }
