@@ -11,6 +11,7 @@ import type { CodexConditionSnapshot, CodexRolloutLine, CodexSemanticEvent } fro
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
+import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 
 
 /** Allocate a per-session run directory and return the path of its
@@ -212,26 +213,17 @@ export class CodexSession extends EventEmitter {
   async start(): Promise<void> {
     // Codex uses a subcommand for resume: `codex resume <id>`.
     const args: string[] = []
+    // Filter undefined env entries before adding generated MCP credential variables. Keeping this
+    // object local to one start prevents a stopped session's bearer from remaining on the reusable
+    // session wrapper or leaking into another provider process.
+    const cleanEnv: Record<string, string> = {}
+    for (const [k, v] of Object.entries(this.env)) {
+      if (typeof v === 'string') cleanEnv[k] = v
+    }
     if (this.dangerousMode) {
       args.push('--dangerously-bypass-approvals-and-sandbox')
     }
-    for (const server of this.builtInMcpServers) {
-      // WHY this uses Codex `--config` overrides instead of a temporary
-      // CODEX_HOME/config.toml overlay:
-      //
-      // Codex explicitly documents dotted `-c/--config` paths for nested
-      // values, and Agent Code already uses that path for the Responses proxy.
-      // Keeping MCP injection in argv makes the scope visibly tied to this one
-      // provider process. A temp config directory would be harder to inspect
-      // and easier to accidentally reuse across unrelated sessions.
-      args.push('--config', `mcp_servers.${server.name}.url=${JSON.stringify(server.url)}`)
-      for (const [key, value] of Object.entries(server.headers)) {
-        args.push(
-          '--config',
-          `mcp_servers.${server.name}.http_headers.${key}=${JSON.stringify(value)}`,
-        )
-      }
-    }
+    addCodexBuiltInMcpLaunchConfig(this.builtInMcpServers, args, cleanEnv)
     if (this.useProxy) {
       // Mirror the Claude proxy's on-disk layout so a single
       // bundle-inspection tool can read either provider's
@@ -271,12 +263,6 @@ export class CodexSession extends EventEmitter {
     }
     if (this.resumeSessionId) {
       args.push('resume', this.resumeSessionId)
-    }
-
-    // Filter undefined env entries — node-pty expects strings only.
-    const cleanEnv: Record<string, string> = {}
-    for (const [k, v] of Object.entries(this.env)) {
-      if (typeof v === 'string') cleanEnv[k] = v
     }
 
     // From here on we have a listening proxy (if useProxy was set) but

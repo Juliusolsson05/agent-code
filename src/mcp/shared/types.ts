@@ -16,6 +16,12 @@ export const BUILT_IN_MCP_DOMAINS: readonly BuiltInMcpDomain[] = [
 export type BuiltInMcpServerConfig = {
   name: string
   url: string
+  /**
+   * Kept separate from ordinary headers so provider launchers can choose a protected transport.
+   * Putting this value in `headers` previously made both the Codex `--config` override and
+   * Claude's inline `--mcp-config` JSON publish the bearer in the OS process argument list.
+   */
+  bearerToken?: string
   headers: Record<string, string>
 }
 

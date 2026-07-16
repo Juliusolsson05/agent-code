@@ -227,11 +227,13 @@ export class BuiltInMcpHttpHost {
     if (this.port === null) throw new Error('Built-in MCP host is not running')
     return {
       name: 'agent_code',
-      // WHY the token appears in the URL even though we also provide an Authorization header:
-      // Claude and Codex header support has moved over time. The query fallback keeps the scoped
-      // loopback bridge usable across both clients; the bearer header remains the preferred path.
-      url: `http://127.0.0.1:${this.port}/mcp?token=${encodeURIComponent(token)}`,
-      headers: { Authorization: `Bearer ${token}` },
+      // WHY the scoped credential is a separate field: provider launchers have different secure
+      // injection mechanisms (Codex environment-backed headers and Claude a private config file).
+      // Embedding it in the URL or generic header map inevitably copied it into argv, where local
+      // process inspection and crash reports could retain it for the whole session lifetime.
+      url: `http://127.0.0.1:${this.port}/mcp`,
+      bearerToken: token,
+      headers: {},
     }
   }
 

@@ -1,3 +1,8 @@
+import { createHash } from 'node:crypto'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 let resolvedCodexPath = ''
@@ -41,6 +46,7 @@ const providerOptions = {
   providerHostFilePath: '/opt/agent-code/workflowProviderHost.js',
   codexHome: '/tmp/agent-code-workflow-codex',
   authenticationFile: '/tmp/interactive-codex/auth.json',
+  prepareAuthentication: vi.fn(),
   sessionSourceHome: '/tmp/interactive-codex',
 }
 
@@ -73,10 +79,26 @@ describe('createCodexWorkflowProvider', () => {
       configurationIsolation: {
         codexHome: '/tmp/agent-code-workflow-codex',
         authenticationFile: '/tmp/interactive-codex/auth.json',
+        prepareAuthentication: providerOptions.prepareAuthentication,
         sessionSourceHome: '/tmp/interactive-codex',
       },
-      capabilities: { inheritedMcpServers: 'disabled' },
+      capabilities: { inheritedMcpServers: 'unknown' },
     })
+  })
+
+  it('attaches a hash of the actual setup-resolved executable', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'workflow-codex-evidence-'))
+    resolvedCodexPath = join(directory, 'codex')
+    await writeFile(resolvedCodexPath, 'fixture executable bytes')
+
+    createCodexWorkflowProvider(providerOptions)
+
+    expect(codexConstructor).toHaveBeenCalledWith(expect.objectContaining({
+      executableEvidence: {
+        path: resolvedCodexPath,
+        sha256: createHash('sha256').update('fixture executable bytes').digest('hex'),
+      },
+    }))
   })
 
 })

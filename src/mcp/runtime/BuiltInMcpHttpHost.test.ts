@@ -9,6 +9,15 @@ vi.mock('@main/performance/PerformanceService.js', () => ({
 
 const { BuiltInMcpHttpHost } = await import('@mcp/runtime/BuiltInMcpHttpHost.js')
 
+function requestHeaders(config: { bearerToken?: string; headers: Record<string, string> }) {
+  return {
+    ...config.headers,
+    ...(config.bearerToken === undefined
+      ? {}
+      : { Authorization: `Bearer ${config.bearerToken}` }),
+  }
+}
+
 describe('BuiltInMcpHttpHost', () => {
   it('rejects browser origins outside the exact loopback endpoint', async () => {
     const host = new BuiltInMcpHttpHost(() => new McpServer(
@@ -28,7 +37,7 @@ describe('BuiltInMcpHttpHost', () => {
       const hostile = await fetch(config!.url, {
         headers: {
           Origin: 'https://attacker.example',
-          ...config!.headers,
+          ...requestHeaders(config!),
         },
       })
       expect(hostile.status).toBe(403)
@@ -65,7 +74,7 @@ describe('BuiltInMcpHttpHost', () => {
       const response = await fetch(config!.url, {
         headers: {
           Origin: 'http://127.0.0.1:1',
-          ...config!.headers,
+          ...requestHeaders(config!),
         },
       })
       expect(response.status).toBe(403)
@@ -100,7 +109,7 @@ describe('BuiltInMcpHttpHost', () => {
       const response = await fetch(config!.url, {
         headers: {
           Accept: 'text/event-stream',
-          ...config!.headers,
+          ...requestHeaders(config!),
         },
         signal: abort.signal,
       })

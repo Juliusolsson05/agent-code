@@ -8,6 +8,10 @@ import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { getToolPath } from '@main/setup/toolchain.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import {
+  createPrivateClaudeMcpConfig,
+  type PrivateMcpConfig,
+} from '@providers/shared/runtime/builtInMcpLaunch.js'
 import type {
   PromptAcceptanceOutcome,
   PromptAcceptanceWaiter,
@@ -166,6 +170,7 @@ export class ClaudeSession extends EventEmitter {
   private readonly useProxy: boolean
   private readonly shellSessionId: string | null
   private readonly builtInMcpServers: BuiltInMcpServerConfig[]
+  private privateMcpConfig: PrivateMcpConfig | null = null
 
   constructor(options: ClaudeSessionOptions = {}) {
     super()
@@ -201,20 +206,6 @@ export class ClaudeSession extends EventEmitter {
 
   async start(): Promise<void> {
     const args: string[] = []
-    if (this.builtInMcpServers.length > 0) {
-      args.push('--mcp-config', JSON.stringify({
-        mcpServers: Object.fromEntries(
-          this.builtInMcpServers.map(server => [
-            server.name,
-            {
-              type: 'http',
-              url: server.url,
-              headers: server.headers,
-            },
-          ]),
-        ),
-      }))
-    }
     if (this.resumeSessionId) args.push('--resume', this.resumeSessionId)
     else args.push('--session-id', this.transcriptSessionId)
     if (this.dangerousMode) args.push('--dangerously-skip-permissions')
@@ -347,6 +338,7 @@ export class ClaudeSession extends EventEmitter {
       // Wrap the spawn so a failure rolls the proxy back (#495 A9; same
       // shape as codexSession's guarded spawn).
       try {
+        await this.appendPrivateMcpConfig(args)
         this.pty = ptySpawn(this.binary, args, {
           name: 'xterm-256color',
           cols: this.cols,
@@ -363,6 +355,7 @@ export class ClaudeSession extends EventEmitter {
       // kept anyway so both spawn paths share one failure contract and a
       // future resource acquired before this point is covered by default.
       try {
+        await this.appendPrivateMcpConfig(args)
         this.pty = ptySpawn(this.binary, args, {
           name: 'xterm-256color',
           cols: this.cols,
@@ -881,6 +874,10 @@ export class ClaudeSession extends EventEmitter {
     // proxy first would leak chunk events into a live adapter during
     // the mitmdump shutdown window.
     await this.teardownProxy()
+    try { await this.privateMcpConfig?.dispose() } catch (err) {
+      console.warn('[claudeSession] private MCP config cleanup failed:', err)
+    }
+    this.privateMcpConfig = null
   }
 
   // Proxy teardown shared by stop() and rollbackStart(). One
@@ -912,6 +909,14 @@ export class ClaudeSession extends EventEmitter {
     this.proxyServer = null
   }
 
+  private async appendPrivateMcpConfig(args: string[]): Promise<void> {
+    // WHY materialization happens immediately before spawn inside the rollback-protected region:
+    // proxy setup contains several awaited operations. Creating the credential file at the top of
+    // start() left it behind when any of those operations failed before the old catch boundary.
+    this.privateMcpConfig = await createPrivateClaudeMcpConfig(this.builtInMcpServers)
+    if (this.privateMcpConfig) args.push('--mcp-config', this.privateMcpConfig.path)
+  }
+
   // Unified cleanup for start() failure paths — the Claude port of
   // codexSession.rollbackStart. From the moment proxy.start() resolves we
   // have a live mitmdump child but (until start() returns) no exit/stop
@@ -934,6 +939,8 @@ export class ClaudeSession extends EventEmitter {
     // second throw. Let GC collect it — teardownProxy already detached
     // the proxy-event handler that would otherwise pin it.
     this.headless = null
+    try { await this.privateMcpConfig?.dispose() } catch { /* best-effort */ }
+    this.privateMcpConfig = null
   }
 }
 
