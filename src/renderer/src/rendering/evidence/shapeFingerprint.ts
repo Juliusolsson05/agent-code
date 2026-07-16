@@ -161,7 +161,22 @@ function collectPaths(
       paths.add(prefix ? `${prefix}:array` : '<root>:array')
       // Every element merges into the single `[]` segment — see WHY above.
       for (const element of arr) {
-        collectPaths(element, `${prefix}[]`, depth + 1, false, ancestors, paths, discriminators)
+        // JSON-PARITY: JSON.stringify turns an undefined ELEMENT into null,
+        // and our evidence corpus (bundles, recordings, fixtures) is JSON on
+        // disk while runtime payloads arrive via structured clone which
+        // preserves undefined. Normalizing here keeps one shape from
+        // fingerprinting differently live vs from its own serialized
+        // evidence — the skew would file every affected live sighting as a
+        // false unknown.
+        collectPaths(
+          element === undefined ? null : element,
+          `${prefix}[]`,
+          depth + 1,
+          false,
+          ancestors,
+          paths,
+          discriminators,
+        )
       }
       return
     }
@@ -177,6 +192,11 @@ function collectPaths(
         continue
       }
       const child = (obj as Record<string, unknown>)[key]
+      // JSON-PARITY (see the array comment above): JSON.stringify DROPS a
+      // key whose value is undefined, so serialized evidence never shows
+      // it while a structured-cloned runtime payload does. Skip it so the
+      // same logical shape gets the same fingerprint from both sources.
+      if (child === undefined) continue
       const eligible =
         DISCRIMINATOR_KEYS_ANY_DEPTH.has(key) ||
         (topLevel && DISCRIMINATOR_KEYS_TOP_LEVEL.has(key))

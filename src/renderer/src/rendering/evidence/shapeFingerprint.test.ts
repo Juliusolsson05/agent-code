@@ -228,6 +228,24 @@ describe('structural fingerprint — hostile/degenerate inputs never throw', () 
     expect(a.shapePaths[a.shapePaths.length - 1]).toBe('<truncated-paths>')
   })
 
+  it('JSON parity: undefined-valued keys fingerprint as ABSENT, undefined elements as null', () => {
+    // Runtime payloads arrive via structured clone (undefined survives);
+    // the evidence corpus is JSON on disk (undefined keys dropped, undefined
+    // elements → null). The SAME logical shape must fingerprint identically
+    // from both sources or every live sighting of a seeded shape files as a
+    // false unknown.
+    const live = fingerprintRenderShape({
+      ...base,
+      payload: { kind: 'tool_use', finalized: undefined, items: [undefined] },
+    })
+    const fromDisk = fingerprintRenderShape({
+      ...base,
+      payload: JSON.parse(JSON.stringify({ kind: 'tool_use', finalized: undefined, items: [undefined] })),
+    })
+    expect(live.fingerprint).toBe(fromDisk.fingerprint)
+    expect(live.shapePaths.some(p => p.startsWith('finalized'))).toBe(false)
+  })
+
   it('unserializable leaves (function/symbol/bigint) become type markers', () => {
     const a = fingerprintRenderShape({
       ...base,
