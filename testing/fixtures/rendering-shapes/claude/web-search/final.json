@@ -1,0 +1,19 @@
+{
+  "evidence": "Curated from Claude WebSearch observations in 2026-07-16 session recordings; values are synthetic, structure is preserved.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "web-search-fixture-1",
+    "name": "WebSearch",
+    "input": {
+      "query": "evidence backed rendering"
+    },
+    "caller": {
+      "type": "direct"
+    }
+  },
+  "toolResult": {
+    "type": "tool_result",
+    "tool_use_id": "web-search-fixture-1",
+    "content": "## Search results\n\n1. [Evidence-backed UI](https://example.com/evidence)\n2. [Provider rendering](https://example.com/providers)"
+  }
+}

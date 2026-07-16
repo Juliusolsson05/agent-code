@@ -10,6 +10,10 @@ import { ClaudeReadRow } from '@providers/claude/renderer/components/read'
 import { ClaudeReadResultRow } from '@providers/claude/renderer/components/read-result'
 import { ClaudeToolSearchRow } from '@providers/claude/renderer/components/tool-search'
 import { ClaudeToolSearchResultRow } from '@providers/claude/renderer/components/tool-search-result'
+import { ClaudeWebFetchRow } from '@providers/claude/renderer/components/web-fetch'
+import { ClaudeWebFetchResultRow } from '@providers/claude/renderer/components/web-fetch-result'
+import { ClaudeWebSearchRow } from '@providers/claude/renderer/components/web-search'
+import { ClaudeWebSearchResultRow } from '@providers/claude/renderer/components/web-search-result'
 import { WriteRow } from '@providers/claude/renderer/components/write'
 import { TodoRow } from '@providers/shared/renderer/components/todo'
 import {
@@ -24,6 +28,12 @@ import {
   fromClaudeToolSearchResult,
   fromClaudeToolSearchUse,
 } from '@providers/claude/renderer/adapters/readSearch'
+import {
+  fromClaudeWebFetchResult,
+  fromClaudeWebFetchUse,
+  fromClaudeWebSearchResult,
+  fromClaudeWebSearchUse,
+} from '@providers/claude/renderer/adapters/web'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 import { OutputWell } from '@renderer/lib/text/OutputWell'
@@ -62,6 +72,14 @@ export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined 
     case 'ToolSearch': {
       const model = fromClaudeToolSearchUse(block)
       return model ? <ClaudeToolSearchRow model={model} /> : undefined
+    }
+    case 'WebFetch': {
+      const model = fromClaudeWebFetchUse(block)
+      return model ? <ClaudeWebFetchRow model={model} /> : undefined
+    }
+    case 'WebSearch': {
+      const model = fromClaudeWebSearchUse(block)
+      return model ? <ClaudeWebSearchRow model={model} /> : undefined
     }
     case 'Write':
       return <WriteRow block={block} />
@@ -113,6 +131,14 @@ export function renderClaudeToolResult(
   if (source?.name === 'ToolSearch') {
     const model = fromClaudeToolSearchResult(block, source)
     return model ? <ClaudeToolSearchResultRow model={model} /> : undefined
+  }
+  if (source?.name === 'WebFetch') {
+    const model = fromClaudeWebFetchResult(block, source)
+    return model ? <ClaudeWebFetchResultRow model={model} /> : undefined
+  }
+  if (source?.name === 'WebSearch') {
+    const model = fromClaudeWebSearchResult(block, source)
+    return model ? <ClaudeWebSearchResultRow model={model} /> : undefined
   }
   return undefined
 }

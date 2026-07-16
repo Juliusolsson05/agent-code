@@ -1,0 +1,20 @@
+{
+  "evidence": "Curated from Claude WebFetch observations in 2026-07-16 session recordings; values are synthetic, structure is preserved.",
+  "toolUse": {
+    "type": "tool_use",
+    "id": "web-fetch-fixture-1",
+    "name": "WebFetch",
+    "input": {
+      "url": "https://example.com/docs/rendering?view=full",
+      "prompt": "Summarize the documented rendering contract."
+    },
+    "caller": {
+      "type": "direct"
+    }
+  },
+  "toolResult": {
+    "type": "tool_result",
+    "tool_use_id": "web-fetch-fixture-1",
+    "content": "## Rendering contract\n\nThe page describes an evidence-backed renderer.\n\n[Related documentation](https://example.com/docs/related)"
+  }
+}
