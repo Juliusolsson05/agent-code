@@ -15,6 +15,7 @@ export type CodexWorkflowProviderOptions = {
   authenticationFile?: string
   prepareAuthentication?(): void | Promise<void>
   sessionSourceHome?: string
+  isCliUpdateReserved?: () => boolean
 }
 
 const executableEvidenceCache = new Map<string, {
@@ -37,6 +38,7 @@ const executableEvidenceCache = new Map<string, {
 export function createCodexWorkflowProvider(
   options: CodexWorkflowProviderOptions,
 ): AgentProvider {
+  if (options.isCliUpdateReserved?.() === true) return new UpdatingCodexWorkflowProvider()
   const codexPath = getToolPath('codex', '')
   if (!codexPath || !isAbsolute(codexPath)) {
     return new MissingCodexWorkflowProvider()
@@ -106,6 +108,20 @@ class MissingCodexWorkflowProvider implements AgentProvider {
     throw new AgentProviderFailure(
       'Workflow execution requires a configured Codex CLI. Open Agent Code setup, resolve Codex to an absolute executable path, then resume or start the workflow again.',
       { code: 'codex-cli-unavailable' },
+    )
+  }
+}
+
+class UpdatingCodexWorkflowProvider implements AgentProvider {
+  readonly name = 'codex'
+
+  async execute(): Promise<never> {
+    // A run can be persisted just before it asks the provider factory for an execution boundary.
+    // Failing through the normal provider path makes that race durable and recoverable while still
+    // guaranteeing no new Codex process observes a half-replaced executable.
+    throw new AgentProviderFailure(
+      'Workflow execution is temporarily deferred while Agent Code updates the Codex CLI. Resume the workflow after the update finishes.',
+      { code: 'codex-cli-update-in-progress', retryable: true },
     )
   }
 }

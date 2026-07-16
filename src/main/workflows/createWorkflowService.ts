@@ -14,7 +14,9 @@ import { resolveClaudeAgentType } from '@main/workflows/ClaudeAgentTypeResolver.
 import { prepareGitWorkflowWorktree } from '@main/workflows/GitWorkflowWorktree.js'
 import { WorkflowSourceApprovalStore } from '@main/workflows/WorkflowSourceApprovalStore.js'
 
-export async function createWorkflowService(): Promise<WorkflowService> {
+export async function createWorkflowService(options: {
+  isCodexCliUpdateReserved?: () => boolean
+} = {}): Promise<WorkflowService> {
   const workflowStateRoot = join(app.getPath('userData'), 'workflows')
   const store = new FileWorkflowStore(workflowStateRoot)
   const sourceApprovals = new WorkflowSourceApprovalStore(
@@ -58,6 +60,9 @@ export async function createWorkflowService(): Promise<WorkflowService> {
       // imports only the exact requested rollout; normal config, plugins, apps, and MCP servers
       // remain outside the replay-safe provider boundary.
       sessionSourceHome: interactiveCodexHome,
+      ...(options.isCodexCliUpdateReserved === undefined
+        ? {}
+        : { isCliUpdateReserved: options.isCodexCliUpdateReserved }),
     }),
     authorizeWorkflowSource: request => sourceApprovals.authorize(request, async source => {
       const result = await dialog.showMessageBox({

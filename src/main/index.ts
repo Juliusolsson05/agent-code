@@ -140,6 +140,7 @@ let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = nul
 let appRunJournal: AppRunJournal | null = null
 let workflowService: WorkflowService | null = null
 let workflowBridge: WorkflowBridge | null = null
+let codexCliUpdateReserved = false
 let workflowShutdownPromise: Promise<void> | null = null
 let workflowShutdownComplete = false
 let sessionForwarder: SessionForwarderControl | null = null
@@ -441,7 +442,9 @@ async function startApp(): Promise<void> {
   }
   appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.start' })
   try {
-    workflowService = await createWorkflowService()
+    workflowService = await createWorkflowService({
+      isCodexCliUpdateReserved: () => codexCliUpdateReserved,
+    })
     workflowBridge = new WorkflowBridge(workflowService)
     // Recovery successors may be created during service.initialize(), before the bridge exists.
     // Await rehydration so the first renderer query sees the durable lineage owner instead of a
@@ -652,6 +655,12 @@ async function startApp(): Promise<void> {
   // not the placeholder default.
   const cliUpdateOrchestrator = new CliUpdateOrchestrator(manager, {
     hasActiveWorkflow: cli => cli === 'codex' && activeWorkflowService.hasActiveRuns(),
+    acquireUpdateLease: cli => {
+      if (cli !== 'codex') return () => undefined
+      if (codexCliUpdateReserved || activeWorkflowService.hasActiveRuns()) return null
+      codexCliUpdateReserved = true
+      return () => { codexCliUpdateReserved = false }
+    },
   })
   await cliUpdateOrchestrator.loadInitialBehavior()
   registerAllIpc({

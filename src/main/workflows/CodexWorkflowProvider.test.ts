@@ -68,6 +68,19 @@ describe('createCodexWorkflowProvider', () => {
     })
   })
 
+  it('does not spawn Codex while a CLI replacement owns admission', async () => {
+    resolvedCodexPath = '/opt/agent-code/bin/codex'
+    const provider = createCodexWorkflowProvider({
+      ...providerOptions,
+      isCliUpdateReserved: () => true,
+    })
+
+    expect(codexConstructor).not.toHaveBeenCalled()
+    await expect(provider.execute({} as never, {} as never)).rejects.toMatchObject({
+      code: 'codex-cli-update-in-progress',
+    })
+  })
+
   it('always supplies the setup-resolved absolute CLI override', () => {
     resolvedCodexPath = '/opt/agent-code/bin/codex'
 

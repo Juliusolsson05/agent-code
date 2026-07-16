@@ -118,7 +118,10 @@ export class CliUpdateOrchestrator extends EventEmitter {
 
   constructor(
     private readonly manager: SessionManager,
-    private readonly options: { hasActiveWorkflow?: (cli: CliUpdateKind) => boolean } = {},
+    private readonly options: {
+      hasActiveWorkflow?: (cli: CliUpdateKind) => boolean
+      acquireUpdateLease?: (cli: CliUpdateKind) => (() => void) | null
+    } = {},
   ) {
     super()
   }
@@ -198,7 +201,8 @@ export class CliUpdateOrchestrator extends EventEmitter {
     }
 
     const installMethod = await detectCliInstallMethod(binary)
-    if (this.hasActiveSession(cli)) {
+    const releaseUpdateLease = this.acquireUpdateLease(cli)
+    if (releaseUpdateLease === null) {
       this.updateSnapshot(cli, {
         kind: 'deferred',
         cli,
@@ -209,12 +213,16 @@ export class CliUpdateOrchestrator extends EventEmitter {
       })
       return
     }
-    await this.runUpdate(cli, {
-      binary,
-      from: installed.version,
-      to: latestVersion,
-      installMethod,
-    })
+    try {
+      await this.runUpdate(cli, {
+        binary,
+        from: installed.version,
+        to: latestVersion,
+        installMethod,
+      })
+    } finally {
+      releaseUpdateLease()
+    }
   }
 
   /** Persist the user's behavior preference and update our in-memory
@@ -375,7 +383,8 @@ export class CliUpdateOrchestrator extends EventEmitter {
     // behavior === 'automatic': run the update, unless a session of this
     // kind is currently spawned (see the class-level WHY on the
     // SessionManager dep).
-    if (this.hasActiveSession(cli)) {
+    const releaseUpdateLease = this.acquireUpdateLease(cli)
+    if (releaseUpdateLease === null) {
       this.updateSnapshot(cli, {
         kind: 'deferred',
         cli,
@@ -386,13 +395,16 @@ export class CliUpdateOrchestrator extends EventEmitter {
       })
       return
     }
-
-    await this.runUpdate(cli, {
-      binary,
-      from: installed.version,
-      to: latestVersion,
-      installMethod,
-    })
+    try {
+      await this.runUpdate(cli, {
+        binary,
+        from: installed.version,
+        to: latestVersion,
+        installMethod,
+      })
+    } finally {
+      releaseUpdateLease()
+    }
   }
 
   private async runUpdate(
@@ -519,6 +531,15 @@ export class CliUpdateOrchestrator extends EventEmitter {
 
   private hasActiveSession(cli: CliUpdateKind): boolean {
     return hasActiveCliLease(this.manager, cli, this.options.hasActiveWorkflow)
+  }
+
+  private acquireUpdateLease(cli: CliUpdateKind): (() => void) | null {
+    if (this.hasActiveSession(cli)) return null
+    // WHY the reservation is synchronous and follows the active-run check with no await: a normal
+    // "check, then update" leaves a window in which WorkflowService can admit a new Codex run
+    // before the package manager replaces the executable. Agent Code's shared gate sets the update
+    // flag in this same JavaScript turn; provider admission consults it before spawning a host.
+    return this.options.acquireUpdateLease?.(cli) ?? (() => undefined)
   }
 
   private updateSnapshot(cli: CliUpdateKind, state: CliUpdateState): void {
