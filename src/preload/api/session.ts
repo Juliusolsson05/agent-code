@@ -15,6 +15,7 @@ import type {
   SessionScreenEvent,
   SessionSemanticEvent,
   SessionStartedEvent,
+  SessionInputReadinessEvent,
   SessionTerminalDataEvent,
   SessionConditionsEvent,
   ConditionCustomAction,
@@ -177,6 +178,9 @@ export const sessionApi = {
   // --- Session events (subscribe once; dispatch by sessionId in the callback) ---
   onSessionStarted: (cb: (e: SessionStartedEvent) => void): Unsub =>
     subscribe('session:started', cb),
+
+  onSessionInputReadiness: (cb: (e: SessionInputReadinessEvent) => void): Unsub =>
+    subscribe('session:input-readiness', cb),
 
   onSessionScreen: (cb: (e: SessionScreenEvent) => void): Unsub =>
     subscribe('session:screen', cb),

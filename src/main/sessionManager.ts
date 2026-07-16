@@ -25,6 +25,7 @@ import type {
   AgentPermissionPromptState,
   AgentCompactionState,
   AgentProcessState,
+  AgentInputReadiness,
   SessionBackendSnapshot,
   SessionInputReadiness,
   SessionRecoverOptions,
@@ -88,6 +89,7 @@ export type { SessionKind } from '@shared/types/providerKind.js'
 // not via direct event-map type access.
 type ManagerEvents = {
   started: [{ sessionId: string; kind: SessionKind; projectDir?: string }]
+  'input-readiness': [{ sessionId: string; input: SessionInputReadiness }]
   'pty-data': [{ sessionId: string; data: string }]
   /** Raw PTY bytes for an attached agent inline terminal. Emitted
    *  only after attachAgentPty() flips the per-session attach flag. */
@@ -192,6 +194,7 @@ type RegistryEntry =
 type RecoveryClaim = {
   kind: SessionKind
   cwd: string
+  startedAt: number
   cancelled: boolean
   promise: Promise<SessionRecoverResult>
 }
@@ -273,6 +276,14 @@ export class SessionManager extends EventEmitter {
   private readonly lastScreenSnapshot = new Map<string, AgentScreenSnapshot>()
   private readonly lastConditionsSnapshot = new Map<string, ProviderConditionSnapshot>()
   private readonly lastInputReadiness = new Map<string, SessionInputReadiness>()
+  // WHY the revision watermark outlives one physical provider process:
+  // recovery deliberately reuses the stable local SessionId after a provider
+  // failure. The renderer can still hold revision N from the old process while
+  // the replacement begins. Resetting the counter to zero would make every
+  // truthful replacement event look stale, leaving the pane permanently
+  // disabled (or retaining stale ready=true). The current readiness level is
+  // still deleted on cleanup; only this bounded ordering watermark survives.
+  private readonly inputReadinessRevisions = new Map<string, number>()
   // Durable transcript path per session, cached from the jsonl-entry relay.
   // This is the one main-side key that unlocks history reads for a LIVE
   // session: cwd is provider-constructor-private and the provider session id
@@ -384,6 +395,43 @@ export class SessionManager extends EventEmitter {
     this.lastActivityAt.set(sessionId, Date.now())
   }
 
+  private recordRecovery(
+    name: 'session.recovery.joined' | 'session.recovery.completed' | 'session.recovery.failed',
+    data: Record<string, unknown>,
+  ): void {
+    // WHY this helper is best-effort and metadata-only: recovery is the path
+    // that repairs the app after a crash, so diagnostics must never become a
+    // new startup dependency. The existing journal is already byte/pending-
+    // bounded; this wrapper additionally prevents an unexpected journal bug
+    // from delaying ownership reconciliation. Callers provide only local id,
+    // provider kind, disposition/lifecycle, duration, or typed failure code—
+    // never prompts, commands, transcript text, MCP URLs, tokens, or payloads.
+    try {
+      this.journal?.record({ area: 'session.recovery', name, data })
+    } catch {
+      // Recovery correctness outranks optional forensic breadcrumbs.
+    }
+  }
+
+  private setInputReadiness(sessionId: string, next: AgentInputReadiness): void {
+    const previous = this.lastInputReadiness.get(sessionId)
+    if (previous?.ready === next.ready && previous.reason === next.reason) return
+    const revision = (this.inputReadinessRevisions.get(sessionId) ?? 0) + 1
+    const input: SessionInputReadiness = {
+      ...next,
+      revision,
+    }
+    this.inputReadinessRevisions.set(sessionId, revision)
+    this.lastInputReadiness.set(sessionId, input)
+    // WHY readiness is emitted as a level fact with a main-owned revision:
+    // providers know the real composer boundary, but renderer reload can race
+    // both the provider event and the recovery snapshot. A monotonic counter
+    // lets every consumer subscribe first, seed second, and reject an older
+    // seed that arrives after a newer event. Process/activity signals cannot
+    // safely substitute for this fact.
+    this.emit('input-readiness', { sessionId, input })
+  }
+
   private cleanupSessionState(sessionId: string, kind: SessionKind): void {
     // WHY this helper exists even before the larger SessionState consolidation:
     // per-session state currently lives in several maps whose lifetimes must end
@@ -435,8 +483,19 @@ export class SessionManager extends EventEmitter {
     const existingClaim = this.recoveriesInFlight.get(options.sessionId)
     if (existingClaim) {
       if (existingClaim.kind === kind && existingClaim.cwd === cwd) {
+        this.recordRecovery('session.recovery.joined', {
+          sessionId: options.sessionId,
+          kind,
+          lifecycle: 'spawning',
+        })
         return existingClaim.promise
       }
+      this.recordRecovery('session.recovery.failed', {
+        sessionId: options.sessionId,
+        kind,
+        code: 'ownership-conflict',
+        lifecycle: 'spawning',
+      })
       return Promise.resolve(this.recoveryConflict(options.sessionId, existingClaim))
     }
 
@@ -444,6 +503,13 @@ export class SessionManager extends EventEmitter {
     if (existingEntry) {
       const snapshot = this.getBackendSnapshot(options.sessionId)
       if (snapshot && snapshot.kind === kind && path.resolve(snapshot.cwd) === cwd) {
+        this.recordRecovery('session.recovery.completed', {
+          sessionId: options.sessionId,
+          kind,
+          disposition: 'adopted',
+          lifecycle: snapshot.lifecycle,
+          durationMs: 0,
+        })
         return Promise.resolve({
           ok: true,
           disposition: 'adopted',
@@ -453,10 +519,22 @@ export class SessionManager extends EventEmitter {
             : {}),
         })
       }
+      this.recordRecovery('session.recovery.failed', {
+        sessionId: options.sessionId,
+        kind,
+        code: 'ownership-conflict',
+        lifecycle: snapshot?.lifecycle ?? 'live',
+      })
       return Promise.resolve(this.recoveryConflict(options.sessionId, snapshot))
     }
 
     if (this.spawningSessionIds.has(options.sessionId)) {
+      this.recordRecovery('session.recovery.failed', {
+        sessionId: options.sessionId,
+        kind,
+        code: 'ownership-conflict',
+        lifecycle: 'spawning',
+      })
       return Promise.resolve(this.recoveryConflict(options.sessionId, null))
     }
 
@@ -468,6 +546,7 @@ export class SessionManager extends EventEmitter {
     const claim: RecoveryClaim = {
       kind,
       cwd,
+      startedAt: performance.now(),
       cancelled: false,
       // Replaced on the next line before the claim is published. A typed
       // never-settling placeholder keeps the object fully initialized without
@@ -505,6 +584,13 @@ export class SessionManager extends EventEmitter {
   ): Promise<SessionRecoverResult> {
     try {
       if (claim.cancelled) {
+        this.recordRecovery('session.recovery.failed', {
+          sessionId: options.sessionId,
+          kind: claim.kind,
+          code: 'cancelled',
+          lifecycle: 'spawning',
+          durationMs: performance.now() - claim.startedAt,
+        })
         return {
           ok: false,
           code: 'cancelled',
@@ -512,12 +598,11 @@ export class SessionManager extends EventEmitter {
           message: `Recovery for session ${options.sessionId} was cancelled`,
         }
       }
-      const result = await this.spawn({
+      const result = await this.spawnWithId({
         ...options,
         cwd: claim.cwd,
         kind: claim.kind,
-        preferredSessionId: options.sessionId,
-      })
+      }, options.sessionId)
       const snapshot = this.getBackendSnapshot(options.sessionId)
       if (claim.cancelled || !snapshot || snapshot.lifecycle !== 'live') {
         // A provider is allowed to resolve start() after stop() has already
@@ -525,6 +610,13 @@ export class SessionManager extends EventEmitter {
         // renderer a phantom backend; stop any late materialization and report
         // the stable cancelled outcome instead.
         await this.kill(options.sessionId)
+        this.recordRecovery('session.recovery.failed', {
+          sessionId: options.sessionId,
+          kind: claim.kind,
+          code: 'cancelled',
+          lifecycle: snapshot?.lifecycle ?? 'spawning',
+          durationMs: performance.now() - claim.startedAt,
+        })
         return {
           ok: false,
           code: 'cancelled',
@@ -532,6 +624,13 @@ export class SessionManager extends EventEmitter {
           message: `Recovery for session ${options.sessionId} was cancelled`,
         }
       }
+      this.recordRecovery('session.recovery.completed', {
+        sessionId: options.sessionId,
+        kind: claim.kind,
+        disposition: 'spawned',
+        lifecycle: snapshot.lifecycle,
+        durationMs: performance.now() - claim.startedAt,
+      })
       return {
         ok: true,
         disposition: 'spawned',
@@ -540,6 +639,13 @@ export class SessionManager extends EventEmitter {
       }
     } catch (error) {
       if (claim.cancelled) {
+        this.recordRecovery('session.recovery.failed', {
+          sessionId: options.sessionId,
+          kind: claim.kind,
+          code: 'cancelled',
+          lifecycle: 'spawning',
+          durationMs: performance.now() - claim.startedAt,
+        })
         return {
           ok: false,
           code: 'cancelled',
@@ -547,6 +653,13 @@ export class SessionManager extends EventEmitter {
           message: `Recovery for session ${options.sessionId} was cancelled`,
         }
       }
+      this.recordRecovery('session.recovery.failed', {
+        sessionId: options.sessionId,
+        kind: claim.kind,
+        code: 'start-failed',
+        lifecycle: 'spawning',
+        durationMs: performance.now() - claim.startedAt,
+      })
       return {
         ok: false,
         code: 'start-failed',
@@ -569,8 +682,24 @@ export class SessionManager extends EventEmitter {
    * terminal sessions it's just the PTY spawn.
    */
   async spawn(options: SessionSpawnOptions): Promise<SessionSpawnResult> {
+    return await this.spawnWithId(options, randomUUID())
+  }
+
+  /**
+   * Start a backend under an already-owned local routing id.
+   *
+   * WHY this is private: accepting a caller-selected id on the ordinary spawn
+   * IPC made it possible for renderer code to recreate the exact check-then-
+   * spawn race that recover() exists to close. Only recover() may reach this
+   * method, after it has synchronously published the ownership claim that all
+   * compatible callers join and kill() can cancel. Fresh panes always receive
+   * a random id through spawn().
+   */
+  private async spawnWithId(
+    options: SessionSpawnOptions,
+    sessionId: string,
+  ): Promise<SessionSpawnResult> {
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
-    const sessionId = options.preferredSessionId ?? randomUUID()
     if (
       this.sessions.has(sessionId) ||
       this.spawningSessionIds.has(sessionId) ||
@@ -592,6 +721,16 @@ export class SessionManager extends EventEmitter {
       cwd: path.resolve(options.cwd),
       resumeSessionId: options.resumeSessionId ?? null,
     })
+    // Record even a startup attempt before readiness creates its watermark.
+    // Otherwise repeated pre-provider failures would populate the watermark
+    // map without participating in the manager's existing bounded-id eviction.
+    this.rememberSessionId(sessionId)
+    // WHY main publishes starting before provider construction: every provider
+    // should also report its more specific bootstrap phase, but ownership must
+    // remain safe even if a provider regresses and omits that event. This also
+    // advances the stable-id revision before a replacement process can emit
+    // anything, so an old renderer fact can never outrank the new generation.
+    this.setInputReadiness(sessionId, { ready: false, reason: 'starting' })
     try {
     const spawnStartedAt = performance.now()
     performanceService.mark('session.spawn.start', {
@@ -719,6 +858,9 @@ export class SessionManager extends EventEmitter {
         this.markActivity(sessionId)
         this.emit('started', { sessionId, kind, projectDir })
       })
+      session.on('input-readiness', (input: AgentInputReadiness) => {
+        this.setInputReadiness(sessionId, input)
+      })
       session.on('pty-data', (data: string) => {
         this.markActivity(sessionId)
         const prev = this.agentPtyBuffers.get(sessionId) ?? ''
@@ -776,6 +918,10 @@ export class SessionManager extends EventEmitter {
       })
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
         this.markActivity(sessionId)
+        this.setInputReadiness(sessionId, {
+          ready: false,
+          reason: 'provider-not-ready',
+        })
         this.emit('removed', { sessionId })
         this.emit('exit', { sessionId, exitCode, signal })
         this.cleanupSessionState(sessionId, kind)
@@ -939,6 +1085,10 @@ export class SessionManager extends EventEmitter {
     })
     session.on('exit', ({ exitCode, signal }) => {
       this.markActivity(sessionId)
+      this.setInputReadiness(sessionId, {
+        ready: false,
+        reason: 'provider-not-ready',
+      })
       this.emit('removed', { sessionId })
       this.emit('exit', { sessionId, exitCode, signal })
       this.cleanupSessionState(sessionId, 'terminal')
@@ -949,9 +1099,8 @@ export class SessionManager extends EventEmitter {
     try {
       const terminalStartStartedAt = performance.now()
       await session.start()
-      this.lastInputReadiness.set(sessionId, {
+      this.setInputReadiness(sessionId, {
         ready: true,
-        revision: 1,
         reason: 'ready',
       })
       performanceService.record({
@@ -1177,7 +1326,13 @@ export class SessionManager extends EventEmitter {
       // Bound memory: evict the oldest id (Set preserves insertion order). Evicted
       // ids are long-dead sessions; a late write to one is vanishingly unlikely.
       const oldest = this.everKnownSessionIds.values().next().value
-      if (oldest !== undefined) this.everKnownSessionIds.delete(oldest)
+      if (oldest !== undefined) {
+        this.everKnownSessionIds.delete(oldest)
+        // The revision watermark follows the same bounded stable-id history.
+        // An evicted id has not been used in thousands of subsequent sessions;
+        // keeping its counter forever would turn crash-safety into a leak.
+        this.inputReadinessRevisions.delete(oldest)
+      }
     }
   }
 
@@ -1521,7 +1676,7 @@ export class SessionManager extends EventEmitter {
       lifecycle: entry ? 'live' : 'spawning',
       input: this.lastInputReadiness.get(sessionId) ?? {
         ready: false,
-        revision: 0,
+        revision: this.inputReadinessRevisions.get(sessionId) ?? 0,
         reason: 'starting',
       },
     }

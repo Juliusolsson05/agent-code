@@ -523,6 +523,9 @@ export type SessionRuntime = {
   processStatus: ProcessStatus
   processError: string | null
   inputReady: boolean
+  /** Last main-owned readiness revision applied to this runtime. -1 means no
+   * authoritative snapshot/event has arrived yet. */
+  inputReadinessRevision: number
   semantic: SemanticRuntimeState
   /** Current in-feed stream phase. Set by the `stream_phase` reducer
    *  case from SemanticStreamPhaseEvent; additionally set by the
@@ -727,6 +730,7 @@ export function emptyRuntime(): SessionRuntime {
     processStatus: 'idle',
     processError: null,
     inputReady: false,
+    inputReadinessRevision: -1,
     semantic: emptySemanticRuntime(),
     streamPhase: 'idle',
     streamPhasePendingToolName: null,

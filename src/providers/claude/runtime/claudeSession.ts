@@ -13,6 +13,7 @@ import {
   type PrivateMcpConfig,
 } from '@providers/shared/runtime/builtInMcpLaunch.js'
 import type {
+  AgentInputReadiness,
   PromptAcceptanceOutcome,
   PromptAcceptanceWaiter,
 } from '@shared/types/session.js'
@@ -67,6 +68,7 @@ export type ScreenSnapshot = {
 
 export type ClaudeSessionEvents = {
   started: [{ projectDir: string; proxyUrl?: string }]
+  'input-readiness': [AgentInputReadiness]
   'pty-data': [string]
   screen: [ScreenSnapshot]
   'jsonl-entry': [JsonlEntry, string]
@@ -205,6 +207,10 @@ export class ClaudeSession extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    this.emit('input-readiness', {
+      ready: false,
+      reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
+    })
     const args: string[] = []
     if (this.resumeSessionId) args.push('--resume', this.resumeSessionId)
     else args.push('--session-id', this.transcriptSessionId)
@@ -516,6 +522,9 @@ export class ClaudeSession extends EventEmitter {
     )
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
+      if (this.liveBridgeTimer) clearTimeout(this.liveBridgeTimer)
+      this.liveBridgeTimer = null
+      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       this.finishPromptAcceptanceWaiters({ kind: 'session-exited' })
       this.emit('exit', { exitCode, signal })
     })
@@ -714,7 +723,9 @@ export class ClaudeSession extends EventEmitter {
     if (this.liveBridgeTimer) clearTimeout(this.liveBridgeTimer)
     this.liveBridgeTimer = setTimeout(() => {
       this.liveBridgeTimer = null
+      if (this.exited) return
       this.readyForLiveBridge = true
+      this.emit('input-readiness', { ready: true, reason: 'ready' })
     }, 250)
   }
 

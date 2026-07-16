@@ -70,8 +70,6 @@ export type SessionActions = {
       kind?: SessionKind
       dangerousMode?: boolean
       recoverTmuxName?: string
-      preferredSessionId?: SessionId
-      preserveRuntime?: boolean
       builtInMcpDomains?: BuiltInMcpDomain[]
     },
   ) => Promise<SessionId>
@@ -143,6 +141,7 @@ function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean)
     processStatus: current.processStatus,
     processError: current.processError,
     inputReady: current.inputReady,
+    inputReadinessRevision: current.inputReadinessRevision,
     exited: current.exited,
     projectDir: current.projectDir,
     conditions: current.conditions,
@@ -224,8 +223,6 @@ export function useSessionActions(
         kind?: SessionKind
         dangerousMode?: boolean
         recoverTmuxName?: string
-        preferredSessionId?: SessionId
-        preserveRuntime?: boolean
         builtInMcpDomains?: BuiltInMcpDomain[]
       },
     ): Promise<SessionId> => {
@@ -247,7 +244,6 @@ export function useSessionActions(
       try {
         const result = await window.api.spawnSession({
           kind,
-          preferredSessionId: opts?.preferredSessionId,
           cwd,
           resumeSessionId: opts?.resumeSessionId,
           dangerousMode,
@@ -288,33 +284,23 @@ export function useSessionActions(
       }))
       setRuntimes(prev => {
         const current = prev[sessionId]
-        // WHY preserveRuntime exists only for same-id restart wake:
-        //
-        // Normal spawn creates a new pane identity, so an empty runtime is the
-        // right source of truth. Wake is different: the renderer already owns a
-        // live-looking pane with feed rows, draft text, ghost state, semantic
-        // phase, debug logs, and possibly an in-flight submit. The only missing
-        // piece is main's backend process after an app restart. Replacing that
-        // runtime with emptyRuntime() during Enter handling erases the user's
-        // visible context and can make the submit caller clear a prompt that
-        // never reached the PTY. Same-id wake therefore updates just the backend
-        // lifecycle fields and leaves renderer-owned history intact.
-        const base = opts?.preserveRuntime && current ? current : emptyRuntime()
+        const base = emptyRuntime()
         return {
           ...prev,
           [sessionId]: {
             ...base,
             ...(kind !== 'terminal'
-              ? seedResumedRuntimeFields(opts?.preserveRuntime ? current : undefined, meta)
+              ? seedResumedRuntimeFields(current, meta)
               : {
                   hasOlderHistory: false,
                   transcriptStatus: 'ready' as const,
                   transcriptError: null,
-                  processStatus: opts?.preserveRuntime && current ? current.processStatus : 'started' as const,
+                  processStatus: 'started' as const,
                   processError: null,
-                  inputReady: opts?.preserveRuntime && current ? current.inputReady : true,
+                  inputReady: current?.inputReady ?? false,
+                  inputReadinessRevision: current?.inputReadinessRevision ?? -1,
                 }),
-            exited: opts?.preserveRuntime && current ? current.exited : null,
+            exited: current?.exited ?? null,
           },
         }
       })
@@ -414,15 +400,6 @@ export function useSessionActions(
         }
         const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
 
-        const liveKind = await window.api.getLiveSessionKind(sessionId)
-        if (liveKind === kind) {
-          await waitForSessionInputReady(refs, sessionId)
-          return sessionId
-        }
-        if (liveKind !== null) {
-          throw new Error(`Cannot wake ${sessionId}; main has a live ${liveKind} session at that id.`)
-        }
-
         const builtInMcpDomains =
           kind !== 'terminal' ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains) : undefined
         const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
@@ -443,8 +420,8 @@ export function useSessionActions(
           }
         })
 
-        // WHY this respawns under the SAME SessionId instead of using
-        // replaceSession/idMap:
+        // WHY this recovers under the SAME SessionId instead of using
+        // replaceSession/idMap or renderer get-kind-then-spawn:
         //
         // This action repairs a split-brain state created by process restart:
         // renderer workspace metadata survived, but main's provider registry did
@@ -453,24 +430,63 @@ export function useSessionActions(
         // ownership, and possibly a tool call that is currently trying to send
         // to that exact id. A new id would force a broad remap while a command is
         // in flight. Reusing the id makes wake equivalent to "main caught up with
-        // workspace.json" and keeps every existing reference valid.
+        // workspace.json" and keeps every existing reference valid. The main
+        // recovery claim is the ownership lock: renderer single-flight only
+        // suppresses duplicate UI transitions and is never relied on for
+        // provider, proxy, or MCP exactly-once behavior.
         let readyError: unknown = null
+        let recoverySnapshot: Awaited<ReturnType<typeof window.api.getBackendSnapshot>> = null
+        let recoveredTmuxName: string | undefined
         try {
-          await spawn(meta.cwd, {
+          const recovery = await window.api.recoverSession({
+            sessionId,
             kind,
-            preferredSessionId: sessionId,
-            preserveRuntime: true,
+            cwd: meta.cwd,
             resumeSessionId,
             builtInMcpDomains,
             recoverTmuxName: kind === 'terminal' ? meta.tmuxName : undefined,
             dangerousMode: kind !== 'terminal' ? refs.dangerousAgentsRef.current : undefined,
+            useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
+          })
+          if (!recovery.ok) {
+            throw new Error(recovery.message)
+          }
+          recoverySnapshot = recovery.snapshot
+          recoveredTmuxName = recovery.tmuxName
+          setRuntimes(prev => {
+            const current = prev[sessionId]
+            if (!current) return prev
+            const preserveObservedTerminalProcess = current.processStatus === 'failed' ||
+              current.processStatus === 'exited'
+            const snapshotIsNewer = recovery.snapshot.input.revision >
+              current.inputReadinessRevision
+            return {
+              ...prev,
+              [sessionId]: {
+                ...current,
+                ...(preserveObservedTerminalProcess
+                  ? {}
+                  : {
+                      processStatus: recovery.snapshot.lifecycle === 'live'
+                        ? 'started' as const
+                        : 'spawning' as const,
+                      processError: null,
+                      ...(snapshotIsNewer
+                        ? {
+                            inputReady: recovery.snapshot.input.ready,
+                            inputReadinessRevision: recovery.snapshot.input.revision,
+                          }
+                        : {}),
+                      exited: null,
+                    }),
+              },
+            }
           })
         } catch (err) {
-          const racedKind = await window.api.getLiveSessionKind(sessionId)
-          if (racedKind !== kind) readyError = err
+          readyError = err
         }
 
-        if (!readyError) {
+        if (!readyError && recoverySnapshot && !recoverySnapshot.input.ready) {
           try {
             await waitForSessionInputReady(refs, sessionId)
           } catch (err) {
@@ -489,7 +505,7 @@ export function useSessionActions(
               ...prev,
               [sessionId]: {
                 ...current,
-                processStatus: 'idle',
+                processStatus: 'failed',
                 processError: message,
                 inputReady: false,
               },
@@ -509,6 +525,7 @@ export function useSessionActions(
                 ...current,
                 ...restoredMeta,
                 ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+                ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
               },
             },
           }
@@ -526,7 +543,13 @@ export function useSessionActions(
         }
       }
     },
-    [refs.dangerousAgentsRef, refs.stateRef, setRuntimes, setState, spawn],
+    [
+      refs.dangerousAgentsRef,
+      refs.stateRef,
+      refs.useProxyStreamingRef,
+      setRuntimes,
+      setState,
+    ],
   )
 
   const killSession = useCallback(

@@ -29,6 +29,7 @@ function makeManager(): FakeManager {
   emitter.list = vi.fn(() => [])
   emitter.getScreenSnapshot = vi.fn(() => null)
   emitter.getConditionsSnapshot = vi.fn(() => null)
+  emitter.getBackendSnapshot = vi.fn(() => null)
   emitter.resolveTranscriptFile = vi.fn(async () => null)
   emitter.getSpawnCwd = vi.fn(() => null)
   emitter.getLastActivityAt = vi.fn(() => null)
@@ -121,6 +122,24 @@ describe('WebSocketSessionFeed against a live RemoteServer', () => {
       picker: { visible: false, items: [] },
     })
     await vi.waitFor(() => expect(screens).toContain('live from the mac'))
+  })
+
+  it('transports versioned input readiness through the same feed contract', async () => {
+    const f = makeFeed()
+    await waitForOpen(f)
+
+    const readiness: Array<{ ready: boolean; revision: number }> = []
+    f.onSessionInputReadiness(e => readiness.push(e.input))
+    manager.emit('input-readiness', {
+      sessionId: 's1',
+      input: { ready: true, revision: 7, reason: 'ready' },
+    })
+
+    await vi.waitFor(() => expect(readiness).toContainEqual({
+      ready: true,
+      revision: 7,
+      reason: 'ready',
+    }))
   })
 
   it('tracks the session list from started/exit events', async () => {

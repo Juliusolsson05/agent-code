@@ -23,6 +23,11 @@ export type SessionInputReadiness = {
   reason?: 'starting' | 'replaying-history' | 'provider-not-ready' | 'ready'
 }
 
+// Provider runtimes know *when* their composer is safe, but they do not own
+// the cross-process ordering counter. SessionManager adds `revision` when it
+// folds this provider fact into the level-triggered backend snapshot.
+export type AgentInputReadiness = Omit<SessionInputReadiness, 'revision'>
+
 export type SessionBackendSnapshot = {
   sessionId: string
   kind: SessionKind
@@ -221,6 +226,7 @@ export type AgentCompactionState = {
  */
 export type AgentSessionEvents = {
   started: [{ projectDir?: string; proxyUrl?: string }]
+  'input-readiness': [AgentInputReadiness]
   'pty-data': [string]
   screen: [AgentScreenSnapshot]
   'jsonl-entry': [AgentTranscriptEntry, string]

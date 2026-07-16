@@ -54,7 +54,7 @@ class BlockingAgentSession extends EventEmitter {
   resize(): void {}
 }
 
-describe('SessionManager restart wake spawn', () => {
+describe('SessionManager restart wake recovery', () => {
   beforeEach(() => {
     createSession.mockReset()
     createSession.mockImplementation(() => new FakeAgentSession())
@@ -64,14 +64,18 @@ describe('SessionManager restart wake spawn', () => {
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()
 
-    const result = await manager.spawn({
+    const result = await manager.recover({
+      sessionId: 'restored-session',
       kind: 'claude',
       cwd: '/tmp/project',
-      preferredSessionId: 'restored-session',
       resumeSessionId: 'provider-session',
     })
 
-    expect(result.sessionId).toBe('restored-session')
+    expect(result).toMatchObject({
+      ok: true,
+      disposition: 'spawned',
+      snapshot: { sessionId: 'restored-session' },
+    })
     expect(manager.getSessionKind('restored-session')).toBe('claude')
     expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
       cwd: '/tmp/project',
@@ -80,25 +84,26 @@ describe('SessionManager restart wake spawn', () => {
     }))
   })
 
-  it('refuses to reuse an id that already has a live backend', async () => {
+  it('keeps ordinary fresh spawn unable to choose a persisted local id', async () => {
     const { SessionManager } = await import('./sessionManager')
     const manager = new SessionManager()
 
-    await manager.spawn({
+    const first = await manager.spawn({
       kind: 'codex',
       cwd: '/tmp/project',
-      preferredSessionId: 'live-session',
+    })
+    const second = await manager.spawn({
+      kind: 'codex',
+      cwd: '/tmp/project',
     })
 
-    await expect(manager.spawn({
-      kind: 'codex',
-      cwd: '/tmp/project',
-      preferredSessionId: 'live-session',
-    })).rejects.toThrow('Session live-session is already live')
-    expect(createSession).toHaveBeenCalledTimes(1)
+    expect(first.sessionId).not.toBe(second.sessionId)
+    expect(first.sessionId).not.toBe('live-session')
+    expect(second.sessionId).not.toBe('live-session')
+    expect(createSession).toHaveBeenCalledTimes(2)
   })
 
-  it('refuses to reuse an id while the first backend spawn is still starting', async () => {
+  it('joins a second wake while the first backend recovery is still starting', async () => {
     const { SessionManager } = await import('./sessionManager')
     let releaseStart!: () => void
     const startGate = new Promise<void>(resolve => {
@@ -107,20 +112,23 @@ describe('SessionManager restart wake spawn', () => {
     createSession.mockImplementation(() => new BlockingAgentSession(startGate))
     const manager = new SessionManager()
 
-    const firstSpawn = manager.spawn({
+    const firstSpawn = manager.recover({
+      sessionId: 'waking-session',
       kind: 'claude',
       cwd: '/tmp/project',
-      preferredSessionId: 'waking-session',
     })
 
-    await expect(manager.spawn({
+    const secondSpawn = manager.recover({
+      sessionId: 'waking-session',
       kind: 'claude',
       cwd: '/tmp/project',
-      preferredSessionId: 'waking-session',
-    })).rejects.toThrow('Session waking-session is already live')
+    })
 
     releaseStart()
-    await expect(firstSpawn).resolves.toEqual({ sessionId: 'waking-session' })
+    await expect(Promise.all([firstSpawn, secondSpawn])).resolves.toEqual([
+      expect.objectContaining({ ok: true, disposition: 'spawned' }),
+      expect.objectContaining({ ok: true, disposition: 'spawned' }),
+    ])
     expect(createSession).toHaveBeenCalledTimes(1)
   })
 })

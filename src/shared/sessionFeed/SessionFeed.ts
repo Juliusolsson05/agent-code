@@ -5,6 +5,7 @@ import type {
   SessionExitEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
   SessionSemanticEvent,
@@ -56,6 +57,7 @@ export type { Unsub } from '@shared/sessionFeed/types.js'
 export interface SessionFeed {
   // --- Listeners (subscribe once; dispatch by sessionId in the callback) ---
   onSessionStarted(cb: (e: SessionStartedEvent) => void): Unsub
+  onSessionInputReadiness(cb: (e: SessionInputReadinessEvent) => void): Unsub
   onSessionScreen(cb: (e: SessionScreenEvent) => void): Unsub
   onSessionJsonlEntries(cb: (e: SessionJsonlEntriesEvent) => void): Unsub
   onSessionJsonlError(cb: (e: SessionJsonlErrorEvent) => void): Unsub

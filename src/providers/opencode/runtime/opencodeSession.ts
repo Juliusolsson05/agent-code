@@ -132,6 +132,10 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
   }
 
   async start(): Promise<{ projectDir?: string } | void> {
+    this.emit('input-readiness', {
+      ready: false,
+      reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
+    })
     const headless = new OpencodeHeadless({
       mode: 'spawn',
       cwd: this.cwd,
@@ -147,6 +151,7 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
 
     headless.on('exit', ({ exitCode }) => {
       this.exited = true
+      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       // AgentSession's exit payload types exitCode as a number; the
       // server can exit with a null code when killed by a signal.
       // Normalize null → -1, matching how the PTY providers report a
@@ -230,6 +235,8 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       this.headless = null
       throw err
     }
+
+    this.emit('input-readiness', { ready: true, reason: 'ready' })
 
     // Opencode has no per-cwd transcript directory to report as
     // projectDir (its storage root is server-owned, #406 blocker 1), so

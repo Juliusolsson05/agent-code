@@ -6,6 +6,7 @@ import type { MutableRefObject } from 'react'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import {
   MAX_LIVE_ENTRIES,
@@ -240,6 +241,79 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
 
     expect(runtimes.s1?.screen).toBe('hello world')
     expect(runtimes.s1?.recentScreen).toBe('hello world')
+  })
+
+  it('treats provider readiness as versioned state, never as process activity', () => {
+    const fake = createFakeSessionFeed()
+    const state = {
+      sessions: { s1: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+
+    act(() => {
+      fake.emitStarted({ sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+      fake.emitProcessState({ sessionId: 's1', active: false })
+    })
+    expect(runtimes.s1).toMatchObject({
+      processStatus: 'started',
+      inputReady: false,
+      inputReadinessRevision: -1,
+    })
+
+    act(() => {
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: true, revision: 2, reason: 'ready' },
+      })
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: false, revision: 1, reason: 'replaying-history' },
+      })
+      fake.emitProcessState({ sessionId: 's1', active: true, status: 'Working' })
+    })
+    expect(runtimes.s1).toMatchObject({
+      inputReady: true,
+      inputReadinessRevision: 2,
+      processActive: true,
+    })
+
+    act(() => {
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: false, revision: 3, reason: 'provider-not-ready' },
+      })
+    })
+    expect(runtimes.s1).toMatchObject({
+      inputReady: false,
+      inputReadinessRevision: 3,
+    })
   })
 
   it('marks the runtime exited when the fake feed emits exit', () => {

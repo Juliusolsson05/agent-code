@@ -596,7 +596,6 @@ export function useIpcSubscriptions(
         projectDir,
         processStatus: 'started',
         processError: null,
-        inputReady: true,
       })
       const cwd = refs.stateRef.current.sessions[sessionId]?.cwd ?? projectDir
       refreshWorktrees(cwd)
@@ -605,6 +604,34 @@ export function useIpcSubscriptions(
         kind: 'session_started',
         summary: `session started${projectDir ? ` · ${projectDir}` : ''}`,
         data: { projectDir },
+      })
+    })
+
+    const offInputReadiness = feed.onSessionInputReadiness(({ sessionId, input }) => {
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        if (input.revision <= current.inputReadinessRevision) return prev
+        // WHY revisions are compared in the renderer instead of trusting IPC
+        // arrival order: a recovery snapshot is requested over invoke while
+        // live readiness travels over the feed. Either can win the race. Main's
+        // monotonic revision is the only ordering shared by both paths, so an
+        // older seed must never disable (or enable) a newer provider verdict.
+        return {
+          ...prev,
+          [sessionId]: appendFeedDebugLog(
+            {
+              ...current,
+              inputReady: input.ready,
+              inputReadinessRevision: input.revision,
+            },
+            {
+              layer: 'STATE',
+              kind: 'input_readiness',
+              summary: `input ${input.ready ? 'ready' : 'blocked'} · rev ${input.revision}`,
+              data: { revision: input.revision, reason: input.reason ?? null },
+            },
+          ),
+        }
       })
     })
 
@@ -849,7 +876,6 @@ export function useIpcSubscriptions(
                 processActive: active,
                 processStatus: current.exited === null ? 'started' : current.processStatus,
                 processError: null,
-                inputReady: current.exited === null,
                 activityStatus: active ? (status ?? null) : null,
                 awaitingAssistant: false,
                 queuedMessages: shouldClearIdleQueue
@@ -2200,6 +2226,7 @@ export function useIpcSubscriptions(
       if (semanticFlushTimer !== null) window.clearTimeout(semanticFlushTimer)
       semanticEventQueue.drain()
       offStarted()
+      offInputReadiness()
       offScreen()
       // No singular offEntry() — see the deleted-handler comment
       // above. The bulk path is the only one.
