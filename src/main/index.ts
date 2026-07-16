@@ -140,6 +140,7 @@ let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = nul
 let appRunJournal: AppRunJournal | null = null
 let workflowService: WorkflowService | null = null
 let workflowBridge: WorkflowBridge | null = null
+let codexCliUpdateReserved = false
 let workflowShutdownPromise: Promise<void> | null = null
 let workflowShutdownComplete = false
 let sessionForwarder: SessionForwarderControl | null = null
@@ -441,9 +442,14 @@ async function startApp(): Promise<void> {
   }
   appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.start' })
   try {
-    workflowService = await createWorkflowService()
+    workflowService = await createWorkflowService({
+      isCodexCliUpdateReserved: () => codexCliUpdateReserved,
+    })
     workflowBridge = new WorkflowBridge(workflowService)
-    workflowBridge.start()
+    // Recovery successors may be created during service.initialize(), before the bridge exists.
+    // Await rehydration so the first renderer query sees the durable lineage owner instead of a
+    // stale parent with a misleading Resume action.
+    await workflowBridge.start()
     appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.ready' })
   } catch (err) {
     // Workflow persistence is part of the execution contract, not a cosmetic
@@ -647,7 +653,15 @@ async function startApp(): Promise<void> {
   // behavior is loaded from setup.json before IPC registers so the
   // renderer's first `cli-updates:get` sees the user's preference,
   // not the placeholder default.
-  const cliUpdateOrchestrator = new CliUpdateOrchestrator(manager)
+  const cliUpdateOrchestrator = new CliUpdateOrchestrator(manager, {
+    hasActiveWorkflow: cli => cli === 'codex' && activeWorkflowService.hasActiveRuns(),
+    acquireUpdateLease: cli => {
+      if (cli !== 'codex') return () => undefined
+      if (codexCliUpdateReserved || activeWorkflowService.hasActiveRuns()) return null
+      codexCliUpdateReserved = true
+      return () => { codexCliUpdateReserved = false }
+    },
+  })
   await cliUpdateOrchestrator.loadInitialBehavior()
   registerAllIpc({
     manager,
@@ -687,6 +701,13 @@ async function startApp(): Promise<void> {
 }
 
 app.on('window-all-closed', () => {
+  if (process.platform === 'darwin') {
+    // macOS treats closing windows as hiding the UI, not quitting the application. Workflow/MCP
+    // services are app-owned and may still be serving Codex turns; stopping them here made Dock
+    // activation create a fresh window backed by a permanently stopped host. The real quit path
+    // below remains the single lifecycle owner for these services.
+    return
+  }
   void manager?.killAll()
   void builtInMcpHost.stop()
   void remoteController?.dispose()
@@ -698,7 +719,7 @@ app.on('window-all-closed', () => {
   // awake for an app that no longer has active work to protect. Cmd+Q also
   // reaches before-quit below; this branch covers the close-window path.
   caffeinateController.dispose()
-  if (process.platform !== 'darwin') app.quit()
+  app.quit()
 })
 
 app.on('before-quit', (event) => {
@@ -712,20 +733,38 @@ app.on('before-quit', (event) => {
   if (workflowService && !workflowShutdownComplete) {
     event.preventDefault()
     if (!workflowShutdownPromise) {
-      workflowBridge?.dispose()
       workflowShutdownPromise = workflowService
         .stop('Agent Code is quitting')
         .catch(err => {
-          console.warn('[workflows] graceful shutdown failed:', err)
+          // An unconfirmed provider may still own descendants. Treating this as a warning and
+          // immediately calling app.quit() defeats Workflow MCP's fail-closed ownership fence.
+          // Keep Electron alive, retain the bridge for diagnostics, and let a later quit retry once
+          // the provider settles (or let the user make an explicit OS-level force-quit decision).
+          console.error('[workflows] graceful shutdown blocked:', err)
           appRunJournal?.recordError('workflow_service.stop.error', err)
+          workflowShutdownPromise = null
+          void dialog.showMessageBox({
+            type: 'error',
+            title: 'Agent work is still shutting down',
+            message: 'Agent Code could not safely quit yet.',
+            detail: err instanceof Error ? err.message : String(err),
+            buttons: ['Keep Agent Code Open'],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          })
+          throw err
         })
         .then(() => {
+          workflowBridge?.dispose()
           workflowShutdownComplete = true
           workflowBridge = null
           workflowService = null
           app.quit()
         })
+        .catch(() => undefined)
     }
+    return
   }
   appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')

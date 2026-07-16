@@ -1,4 +1,4 @@
-import { appendFile, mkdir, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 import { SESSION_RECORDING_DIR } from '@main/storage/paths.js'
@@ -373,9 +373,19 @@ export class SessionRecorder {
       /* re-ensured lazily on first event append */
     }
     try {
-      await writeFile(join(this.dir, 'meta.json'), JSON.stringify(snapshot, null, 1), {
+      const metaPath = join(this.dir, 'meta.json')
+      const temporaryPath = join(this.dir, '.meta.json.tmp')
+      // WHY replace instead of overwriting meta.json in place: readers discover
+      // recordings concurrently while the recorder is active. writeFile first
+      // truncates an existing file, which gives a correctly synchronized reader
+      // a small but real window in which JSON.parse sees empty/partial bytes.
+      // The per-recorder FIFO above guarantees only one metadata write owns this
+      // fixed temporary path, and a same-directory rename makes every visible
+      // meta.json revision complete on POSIX and Windows filesystems.
+      await writeFile(temporaryPath, JSON.stringify(snapshot, null, 1), {
         mode: 0o600,
       })
+      await rename(temporaryPath, metaPath)
     } catch {
       /* non-fatal: the events stream is the source of truth; meta is a convenience */
     }

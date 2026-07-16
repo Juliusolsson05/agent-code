@@ -9,10 +9,14 @@ describe('SessionManager prompt delivery reservation', () => {
     const acceptance = new Promise<PromptAcceptanceOutcome>(resolve => {
       resolveAcceptance = resolve
     })
-    const write = vi.fn()
+    let screen = '❯'
+    const write = vi.fn((data: string) => {
+      if (data !== '\r') screen = `❯ ${data}`
+    })
     const session = {
       write,
       isExited: () => false,
+      snapshotScreen: () => screen,
       armPromptAcceptance: () => ({ promise: acceptance, cancel: vi.fn() }),
     }
     const manager = new SessionManager()
@@ -36,8 +40,10 @@ describe('SessionManager prompt delivery reservation', () => {
       retrySafe: true,
       promptWritten: false,
     })
-    expect(write).toHaveBeenCalledTimes(1)
-    expect(write).toHaveBeenCalledWith('first\r')
+    // WHY two writes are expected: Claude's current protocol proves that the
+    // prompt reached the active composer before sending Enter. This manager
+    // test must model that protocol because its reservation spans both writes.
+    expect(write.mock.calls.map(([data]) => data)).toEqual(['first', '\r'])
 
     resolveAcceptance({ kind: 'user', acceptedAt: 123 })
     await expect(first).resolves.toMatchObject({ ok: true })
@@ -72,9 +78,13 @@ describe('SessionManager prompt delivery reservation', () => {
 
   it('releases the reservation when provider setup throws', async () => {
     let attempts = 0
+    let screen = '❯'
     const session = {
-      write: vi.fn(),
+      write: vi.fn((data: string) => {
+        if (data !== '\r') screen = `❯ ${data}`
+      }),
       isExited: () => false,
+      snapshotScreen: () => screen,
       armPromptAcceptance: () => {
         attempts += 1
         if (attempts === 1) throw new Error('probe failed')
@@ -94,13 +104,14 @@ describe('SessionManager prompt delivery reservation', () => {
     await expect(manager.deliverPromptToAgent('s1', 'second')).resolves.toMatchObject({ ok: true })
   })
 
-  it('treats a throwing PTY write as potentially written and blocks condition interleaving', async () => {
+  it('treats a throwing PTY prompt write as potentially written and blocks condition interleaving', async () => {
     let release!: (value: PromptAcceptanceOutcome) => void
     const acceptance = new Promise<PromptAcceptanceOutcome>(resolve => { release = resolve })
     const resolveCondition = vi.fn(async () => ({ ok: true as const }))
     const session = {
       write: vi.fn(() => { throw new Error('pty boundary failed') }),
       isExited: () => false,
+      snapshotScreen: () => '❯',
       resolveCondition,
       armPromptAcceptance: () => ({ promise: acceptance, cancel: vi.fn() }),
     }
@@ -119,7 +130,9 @@ describe('SessionManager prompt delivery reservation', () => {
       ok: false,
       retrySafe: false,
       promptWritten: true,
-      enterWritten: true,
+      // WHY false is still the conservative answer: the prompt write may have
+      // crossed node-pty, but the separate Enter boundary was never attempted.
+      enterWritten: false,
     })
     release({ kind: 'cancelled' })
   })

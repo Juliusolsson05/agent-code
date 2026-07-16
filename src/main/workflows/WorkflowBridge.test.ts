@@ -51,6 +51,74 @@ function manifest(runId: string, cursor: number, cwd = '/repo') {
 }
 
 describe('WorkflowBridge', () => {
+  it('rehydrates an automatic successor into its original session lineage', async () => {
+    const service = {
+      subscribe: () => () => undefined,
+      listStoredRunReferences: vi.fn(async () => ([
+        {
+          runId: 'run-parent',
+          cwd: '/repo',
+          clientId: 'session-1',
+          status: 'interrupted',
+          cursor: 10,
+          workflow: { name: 'hunt', description: 'Find bugs' },
+          transcriptDirectory: '/state/run-parent/transcripts',
+        },
+        {
+          runId: 'run-successor',
+          cwd: '/repo',
+          clientId: 'session-1',
+          status: 'running',
+          cursor: 4,
+          workflow: { name: 'hunt', description: 'Find bugs' },
+          transcriptDirectory: '/state/run-successor/transcripts',
+          resumedFromRunId: 'run-parent',
+        },
+      ])),
+      cancel: vi.fn(async () => undefined),
+    } as unknown as WorkflowService
+    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+
+    await bridge.start()
+
+    expect(bridge.getSessionRuns({ sessionId: 'session-1', cwd: '/repo' }).runs).toEqual([
+      expect.objectContaining({ runId: 'run-successor', resumedFromRunId: 'run-parent' }),
+    ])
+    await bridge.cancel({ cwd: '/repo', runId: 'run-successor' })
+    expect(service.cancel).toHaveBeenCalledWith(
+      { cwd: '/repo', clientId: 'agent-code-renderer' },
+      'run-successor',
+      undefined,
+    )
+  })
+
+  it('collapses reverse-ordered multi-hop recovery lineage to one leaf', async () => {
+    const base = {
+      cwd: '/repo',
+      clientId: 'session-1',
+      status: 'interrupted' as const,
+      cursor: 1,
+      workflow: { name: 'hunt', description: 'Find bugs' },
+      transcriptDirectory: '/state/transcripts',
+    }
+    const service = {
+      subscribe: () => () => undefined,
+      // Newest-first is intentionally hostile to the tempting parent-first slot algorithm.
+      listStoredRunReferences: vi.fn(async () => ([
+        { ...base, runId: 'run-third', status: 'running' as const, resumedFromRunId: 'run-second' },
+        { ...base, runId: 'run-first' },
+        { ...base, runId: 'run-second', resumedFromRunId: 'run-first' },
+      ])),
+    } as unknown as WorkflowService
+    const bridge = new WorkflowBridge(service, { send: vi.fn() })
+
+    await bridge.start()
+
+    expect(bridge.getSessionRuns({ sessionId: 'session-1', cwd: '/repo' }).runs).toEqual([
+      expect.objectContaining({ runId: 'run-third', resumedFromRunId: 'run-second' }),
+    ])
+  })
+
   it('delivers one acknowledged cursor hint only for an interested run', async () => {
     vi.useFakeTimers()
     let listener: ((event: StoredWorkflowEvent) => void) | null = null

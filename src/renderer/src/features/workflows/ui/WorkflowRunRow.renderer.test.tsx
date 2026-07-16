@@ -127,7 +127,13 @@ function providerBlockedState(): WorkflowState {
   const events: WorkflowEvent[] = [
     event(1, {
       type: 'run.started',
-      payload: { workflow: { name: 'provider-recovery', title: 'Provider recovery' } },
+      payload: {
+        workflow: {
+          name: 'provider-recovery',
+          title: 'Provider recovery',
+          description: 'Provider recovery renderer fixture',
+        },
+      },
     }),
     event(2, {
       type: 'agent.admitted',
@@ -146,6 +152,79 @@ function providerBlockedState(): WorkflowState {
       attemptId: 'attempt-2',
       payload: {
         reason: 'Waiting for codex provider health probe',
+      },
+    }),
+  ]
+  return events.reduce(reduceWorkflowState, createWorkflowState('run-ui'))
+}
+
+function recoveryHealthState(): WorkflowState {
+  const events: WorkflowEvent[] = [
+    event(1, {
+      type: 'run.started',
+      payload: {
+        workflow: {
+          name: 'recovery-health',
+          title: 'Recovery health',
+          description: 'Expose stalled and intervention-required work without hiding it as active',
+        },
+      },
+    }),
+    event(2, {
+      type: 'agent.admitted',
+      agentId: 'agent-stalled',
+      payload: {
+        callIndex: 0,
+        label: 'quiet provider',
+        prompt: { preview: 'Inspect quietly', lineCount: 1, content: 'Inspect quietly' },
+        options: {},
+        cacheKey: 'stalled',
+      },
+    }),
+    event(3, {
+      type: 'agent.started',
+      agentId: 'agent-stalled',
+      attemptId: 'attempt-stalled',
+      payload: { attemptNumber: 1, source: 'live', provider: 'codex' },
+    }),
+    event(4, {
+      type: 'agent.stalled',
+      agentId: 'agent-stalled',
+      attemptId: 'attempt-stalled',
+      payload: {
+        kind: 'idle',
+        lastProgressAt: '2026-07-14T10:00:03.000Z',
+        deadlineAt: '2026-07-14T10:06:03.000Z',
+      },
+    }),
+    event(5, {
+      type: 'agent.admitted',
+      agentId: 'agent-recovery-required',
+      payload: {
+        callIndex: 1,
+        label: 'uncertain mutation',
+        prompt: { preview: 'Deploy', lineCount: 1, content: 'Deploy' },
+        options: {},
+        cacheKey: 'recovery-required',
+      },
+    }),
+    event(6, {
+      type: 'agent.started',
+      agentId: 'agent-recovery-required',
+      attemptId: 'attempt-recovery-required',
+      payload: { attemptNumber: 1, source: 'live', provider: 'codex' },
+    }),
+    event(7, {
+      type: 'agent.recovery_required',
+      agentId: 'agent-recovery-required',
+      attemptId: 'attempt-recovery-required',
+      payload: {
+        error: { name: 'UnconfirmedProviderTerminationError', message: 'Ownership is ambiguous' },
+        replaySafety: {
+          automatic: false,
+          risk: 'unknown_external',
+          reason: 'The interrupted attempt could have changed an external system',
+        },
       },
     }),
   ]
@@ -178,6 +257,23 @@ function clientFor(state: WorkflowState): WorkflowClient {
 }
 
 describe('WorkflowRunView', () => {
+  it('distinguishes a soft stall from work that requires operator recovery', async () => {
+    const state = recoveryHealthState()
+    render(
+      <WorkflowClientProvider value={clientFor(state)}>
+        <WorkflowRunView
+          reference={{ runId: 'run-ui' }}
+          cwd="/repo"
+          onReferenceChange={() => {}}
+        />
+      </WorkflowClientProvider>,
+    )
+
+    expect(await screen.findByText('Stalled · idle')).toBeInTheDocument()
+    expect(screen.getByText('Recovery required')).toBeInTheDocument()
+    expect(screen.getByText('1/2 agents')).toBeInTheDocument()
+  })
+
   it('shows why admitted work is queued instead of presenting circuit recovery as idle capacity', async () => {
     const state = providerBlockedState()
     render(

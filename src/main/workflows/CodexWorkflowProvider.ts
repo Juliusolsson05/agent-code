@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import { readFileSync, statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 
 import { AgentProviderFailure, CodexAgentProvider } from 'workflow-mcp'
@@ -11,8 +13,16 @@ export type CodexWorkflowProviderOptions = {
   providerHostFilePath: string
   codexHome: string
   authenticationFile?: string
+  prepareAuthentication?(): void | Promise<void>
   sessionSourceHome?: string
+  isCliUpdateReserved?: () => boolean
 }
+
+const executableEvidenceCache = new Map<string, {
+  mtimeMs: number
+  size: number
+  sha256: string
+}>()
 
 /**
  * Resolve the setup-owned Codex binary once per workflow run.
@@ -28,10 +38,12 @@ export type CodexWorkflowProviderOptions = {
 export function createCodexWorkflowProvider(
   options: CodexWorkflowProviderOptions,
 ): AgentProvider {
+  if (options.isCliUpdateReserved?.() === true) return new UpdatingCodexWorkflowProvider()
   const codexPath = getToolPath('codex', '')
   if (!codexPath || !isAbsolute(codexPath)) {
     return new MissingCodexWorkflowProvider()
   }
+  const executableEvidence = codexExecutableEvidence(codexPath)
 
   // WHY all three boundaries are explicit here: the packaged app owns the
   // Codex executable, the child-process module, and the configuration root.
@@ -47,16 +59,46 @@ export function createCodexWorkflowProvider(
       ...(options.authenticationFile === undefined
         ? {}
         : { authenticationFile: options.authenticationFile }),
+      ...(options.prepareAuthentication === undefined
+        ? {}
+        : { prepareAuthentication: options.prepareAuthentication }),
       ...(options.sessionSourceHome === undefined
         ? {}
         : { sessionSourceHome: options.sessionSourceHome }),
     },
-    // This is an attestation backed by configurationIsolation, not a claim
-    // inferred from an empty options object. Workflow MCP rejects this value
-    // without an isolated CODEX_HOME because normal Codex configuration can
-    // otherwise reintroduce unclassified external tools behind our back.
-    capabilities: { inheritedMcpServers: 'disabled' },
+    // A private CODEX_HOME removes user/project configuration, but Codex also loads system/admin
+    // and managed layers. Agent Code does not yet inspect and fingerprint every effective layer,
+    // so claiming "disabled" here would turn missing evidence into permission for automatic
+    // replay. Keep recovery fail-closed until the effective-config inspector exists.
+    capabilities: { inheritedMcpServers: 'unknown' },
+    ...(executableEvidence === undefined
+      ? {}
+      : { executableEvidence }),
   })
+}
+
+function codexExecutableEvidence(path: string): {
+  path: string
+  sha256: string
+} | undefined {
+  try {
+    const stat = statSync(path)
+    const cached = executableEvidenceCache.get(path)
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return { path, sha256: cached.sha256 }
+    }
+    // WHY hash the executable bytes rather than report the SDK package pin as the CLI version:
+    // Agent Code passes an explicit setup-resolved binary, so the SDK's bundled artifact may never
+    // execute. mtime/size cache the expensive read across run factories while SHA-256 makes crash
+    // diagnostics and future recovery fingerprints identify the actual launched bytes.
+    const sha256 = createHash('sha256').update(readFileSync(path)).digest('hex')
+    executableEvidenceCache.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, sha256 })
+    return { path, sha256 }
+  } catch {
+    // The ordinary provider path will produce a durable spawn failure. Missing evidence must not
+    // be replaced with a guessed SDK version because that was the audit bug this field fixes.
+    return undefined
+  }
 }
 
 class MissingCodexWorkflowProvider implements AgentProvider {
@@ -66,6 +108,20 @@ class MissingCodexWorkflowProvider implements AgentProvider {
     throw new AgentProviderFailure(
       'Workflow execution requires a configured Codex CLI. Open Agent Code setup, resolve Codex to an absolute executable path, then resume or start the workflow again.',
       { code: 'codex-cli-unavailable' },
+    )
+  }
+}
+
+class UpdatingCodexWorkflowProvider implements AgentProvider {
+  readonly name = 'codex'
+
+  async execute(): Promise<never> {
+    // A run can be persisted just before it asks the provider factory for an execution boundary.
+    // Failing through the normal provider path makes that race durable and recoverable while still
+    // guaranteeing no new Codex process observes a half-replaced executable.
+    throw new AgentProviderFailure(
+      'Workflow execution is temporarily deferred while Agent Code updates the Codex CLI. Resume the workflow after the update finishes.',
+      { code: 'codex-cli-update-in-progress', retryable: true },
     )
   }
 }

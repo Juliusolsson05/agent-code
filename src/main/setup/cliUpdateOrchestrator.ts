@@ -96,11 +96,33 @@ export interface CliUpdateOrchestrator {
   ): this
 }
 
+export function hasActiveCliLease(
+  manager: Pick<SessionManager, 'list' | 'getSessionKind'>,
+  cli: CliUpdateKind,
+  hasActiveWorkflow?: (cli: CliUpdateKind) => boolean,
+): boolean {
+  // Workflow attempts launch outside SessionManager, so checking only visible terminal sessions
+  // can replace Codex between two agents in one durable run. Keep the app-owned workflow lease in
+  // the same decision function so boot probes, manual updates, and tests cannot drift apart.
+  if (hasActiveWorkflow?.(cli) === true) return true
+  for (const sessionId of manager.list()) {
+    // getSessionKind returns null for terminals — irrelevant here.
+    if (manager.getSessionKind(sessionId) === cli) return true
+  }
+  return false
+}
+
 export class CliUpdateOrchestrator extends EventEmitter {
   private snapshot: CliUpdateSnapshot = DEFAULT_CLI_UPDATE_SNAPSHOT
   private readonly running: PerCliMutex = { claude: false, codex: false }
 
-  constructor(private readonly manager: SessionManager) {
+  constructor(
+    private readonly manager: SessionManager,
+    private readonly options: {
+      hasActiveWorkflow?: (cli: CliUpdateKind) => boolean
+      acquireUpdateLease?: (cli: CliUpdateKind) => (() => void) | null
+    } = {},
+  ) {
     super()
   }
 
@@ -179,7 +201,8 @@ export class CliUpdateOrchestrator extends EventEmitter {
     }
 
     const installMethod = await detectCliInstallMethod(binary)
-    if (this.hasActiveSession(cli)) {
+    const releaseUpdateLease = this.acquireUpdateLease(cli)
+    if (releaseUpdateLease === null) {
       this.updateSnapshot(cli, {
         kind: 'deferred',
         cli,
@@ -190,12 +213,16 @@ export class CliUpdateOrchestrator extends EventEmitter {
       })
       return
     }
-    await this.runUpdate(cli, {
-      binary,
-      from: installed.version,
-      to: latestVersion,
-      installMethod,
-    })
+    try {
+      await this.runUpdate(cli, {
+        binary,
+        from: installed.version,
+        to: latestVersion,
+        installMethod,
+      })
+    } finally {
+      releaseUpdateLease()
+    }
   }
 
   /** Persist the user's behavior preference and update our in-memory
@@ -356,7 +383,8 @@ export class CliUpdateOrchestrator extends EventEmitter {
     // behavior === 'automatic': run the update, unless a session of this
     // kind is currently spawned (see the class-level WHY on the
     // SessionManager dep).
-    if (this.hasActiveSession(cli)) {
+    const releaseUpdateLease = this.acquireUpdateLease(cli)
+    if (releaseUpdateLease === null) {
       this.updateSnapshot(cli, {
         kind: 'deferred',
         cli,
@@ -367,13 +395,16 @@ export class CliUpdateOrchestrator extends EventEmitter {
       })
       return
     }
-
-    await this.runUpdate(cli, {
-      binary,
-      from: installed.version,
-      to: latestVersion,
-      installMethod,
-    })
+    try {
+      await this.runUpdate(cli, {
+        binary,
+        from: installed.version,
+        to: latestVersion,
+        installMethod,
+      })
+    } finally {
+      releaseUpdateLease()
+    }
   }
 
   private async runUpdate(
@@ -499,11 +530,16 @@ export class CliUpdateOrchestrator extends EventEmitter {
   }
 
   private hasActiveSession(cli: CliUpdateKind): boolean {
-    for (const sessionId of this.manager.list()) {
-      // getSessionKind returns null for terminals — irrelevant here.
-      if (this.manager.getSessionKind(sessionId) === cli) return true
-    }
-    return false
+    return hasActiveCliLease(this.manager, cli, this.options.hasActiveWorkflow)
+  }
+
+  private acquireUpdateLease(cli: CliUpdateKind): (() => void) | null {
+    if (this.hasActiveSession(cli)) return null
+    // WHY the reservation is synchronous and follows the active-run check with no await: a normal
+    // "check, then update" leaves a window in which WorkflowService can admit a new Codex run
+    // before the package manager replaces the executable. Agent Code's shared gate sets the update
+    // flag in this same JavaScript turn; provider admission consults it before spawning a host.
+    return this.options.acquireUpdateLease?.(cli) ?? (() => undefined)
   }
 
   private updateSnapshot(cli: CliUpdateKind, state: CliUpdateState): void {

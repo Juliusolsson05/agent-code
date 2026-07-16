@@ -74,7 +74,8 @@ describe('createWorkflowService', () => {
     expect(providerFactory).toHaveBeenCalledWith({
       providerHostFilePath: expect.stringMatching(/workflowProviderHost\.js$/),
       codexHome: '/tmp/agent-code-user-data/workflows/codex-home',
-      authenticationFile: '/tmp/agent-code-home/.codex/auth.json',
+      authenticationFile: '/tmp/agent-code-user-data/workflows/codex-home/auth.json',
+      prepareAuthentication: expect.any(Function),
       sessionSourceHome: '/tmp/agent-code-home/.codex',
     })
   })

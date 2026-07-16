@@ -106,9 +106,17 @@ export class WorkflowBridge {
     )
   }
 
-  start(): void {
+  async start(): Promise<void> {
     if (this.unsubscribe) return
     this.unsubscribe = this.service.subscribe(event => this.enqueue(event))
+    if (typeof this.service.listStoredRunReferences === 'function') {
+      const references = await this.service.listStoredRunReferences()
+      for (const reference of references) {
+        if (!reference.clientId) continue
+        const { cwd, clientId, ...run } = reference
+        this.upsertRun(clientId, cwd, run)
+      }
+    }
   }
 
   dispose(): void {
@@ -234,6 +242,18 @@ export class WorkflowBridge {
   }
 
   registerRun(sessionId: string, cwd: string, run: WorkflowRunStartResult): void {
+    const { sessionId: normalizedSessionId, session } = this.upsertRun(sessionId, cwd, run)
+    this.publishSessionRuns(normalizedSessionId, session)
+  }
+
+  private upsertRun(
+    sessionId: string,
+    cwd: string,
+    run: WorkflowRunStartResult,
+  ): {
+    sessionId: string
+    session: { cwd: string; slots: Map<string, WorkflowRunReferenceData> }
+  } {
     const normalizedSessionId = nonEmpty(sessionId, 'sessionId')
     const normalizedCwd = nonEmpty(cwd, 'cwd')
     const existing = this.runsBySession.get(normalizedSessionId)
@@ -241,25 +261,46 @@ export class WorkflowBridge {
       ? existing
       : { cwd: normalizedCwd, slots: new Map<string, WorkflowRunReferenceData>() }
 
-    // WHY a resume updates its original slot instead of appending another row: WorkflowService
-    // correctly creates a new immutable run for every resume, but product navigation represents
-    // one workflow lineage. The bridge is the first app-owned layer that knows both the MCP client
-    // session and the returned lineage, so this is the only reliable place to preserve that view.
-    let slotRunId = run.runId
-    if (run.resumedFromRunId) {
-      for (const [candidateSlot, reference] of session.slots) {
-        if (reference.runId === run.resumedFromRunId) {
-          slotRunId = candidateSlot
-          break
-        }
-      }
-    }
-    session.slots.set(slotRunId, {
+    session.slots.set(run.runId, {
       cwd: normalizedCwd,
       ...cloneStartResult(run),
     })
+    // WHY collapse after insertion instead of choosing a slot from the incoming run alone:
+    // startup storage inventory has no parent-before-child ordering contract. A successor may be
+    // seen before its parent, and a three-run lineage can arrive newest, oldest, middle. Repeatedly
+    // replacing any present parent with its present child converges on the leaf while retaining the
+    // oldest slot key for stable React identity. Live resumes take the same path, so restart and
+    // in-process navigation cannot drift into different lineage representations.
+    while (true) {
+      const entries = [...session.slots.entries()]
+      // Collapse from the oldest available edge toward the leaf. If C→B is collapsed before B→A,
+      // B's own ancestry disappears with its card and A can no longer be recognized as the same
+      // lineage. A valid resume graph is acyclic, so at least one present edge has a parent whose
+      // own parent is not present; absence of such an edge means corrupt/cyclic lineage, which is
+      // safer to display as separate cards than to spin or discard an arbitrary run.
+      const edge = entries
+        .map(([childSlot, child]) => {
+          if (!child.resumedFromRunId) return null
+          const parentEntry = entries.find(([, parent]) => parent.runId === child.resumedFromRunId)
+          if (!parentEntry || parentEntry[0] === childSlot) return null
+          const [, parent] = parentEntry
+          const parentHasPresentParent = parent.resumedFromRunId !== undefined &&
+            entries.some(([, candidate]) => candidate.runId === parent.resumedFromRunId)
+          return parentHasPresentParent
+            ? null
+            : { childSlot, child, parentSlot: parentEntry[0] }
+        })
+        .find((candidate): candidate is {
+          childSlot: string
+          child: WorkflowRunReferenceData
+          parentSlot: string
+        } => candidate !== null)
+      if (!edge) break
+      session.slots.delete(edge.childSlot)
+      session.slots.set(edge.parentSlot, edge.child)
+    }
     this.runsBySession.set(normalizedSessionId, session)
-    this.publishSessionRuns(normalizedSessionId, session)
+    return { sessionId: normalizedSessionId, session }
   }
 
   getSessionRuns(request: WorkflowSessionRunsRequest): WorkflowSessionRunsResult {
