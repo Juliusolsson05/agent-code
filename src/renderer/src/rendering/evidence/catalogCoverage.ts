@@ -98,11 +98,19 @@ export function outcomeSatisfiesDisposition(
       return outcome.kind === 'condition-surface' && outcome.surface === disposition.surface
     case 'planned':
     case 'unsupported':
-      // No specialization promised yet — the bounded generic/fallback paths
-      // are the correct interim behavior. `unknown` outcome is also
-      // acceptable: the shape is catalogued, the renderer just has no route
-      // yet, and the visible fallback is the contract.
-      return outcome.kind === 'generic' || outcome.kind === 'unknown'
+      // No promise made yet — EVERY outcome satisfies these dispositions.
+      // This breadth is deliberate and load-bearing for the Phase 4 seed:
+      // the legacy painter routes one structure differently by CONTENT
+      // (a Bash tool_use is a git widget for git commands and a generic row
+      // otherwise; one tool_result structure is absorbed under the git
+      // widget or painted generic depending on its source tool), and the
+      // structural fingerprint cannot — must not — see that difference. A
+      // `planned` entry flagging those legitimate legacy routes as
+      // "misrouted" would drown the inbox in false positives. The strict
+      // matching above starts to bite per family exactly when Phase 5+
+      // migrates it and its entries graduate to specialized/absorbed
+      // dispositions with receipt-backed outcomes.
+      return true
   }
 }
 

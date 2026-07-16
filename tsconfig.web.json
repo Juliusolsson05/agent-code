@@ -86,6 +86,13 @@
     // list and go un-type-checked (the registry itself rides in
     // transitively via renderer imports; the node project excludes both).
     "src/providers/registry.renderer.capabilities.spawnTool.test.ts",
+    // Shape-catalog registry + Phase 4 coverage gate (PR #555): providers-
+    // root files importing the per-provider shapes.ts catalogs and renderer
+    // evidence modules — web-project citizens for the same reason as the
+    // capability registry (node project excludes them; see
+    // tsconfig.node.json's matching exclude comment).
+    "src/providers/registry.renderShapes.ts",
+    "src/providers/shapes.coverage.test.ts",
     // registry.renderer.ts lives at providers/ root, outside the
     // `*/renderer/**/*` glob above. TileTree imports it to mount
     // provider-specific TileLeaf components, so the web project

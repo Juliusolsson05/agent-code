@@ -116,7 +116,7 @@ describe('outcomeSatisfiesDisposition — conservative matching', () => {
     ).toBe(false)
   })
 
-  it('planned/unsupported accept generic or visible-unknown, nothing else', () => {
+  it('planned/unsupported accept every outcome — no promise, no misroute (pre-receipt seed contract)', () => {
     const planned = { kind: 'planned', targetGrammar: 'code-edit' } as const
     expect(
       outcomeSatisfiesDisposition(planned, { kind: 'generic', rendererId: 'shared.generic-tool' }),
@@ -124,7 +124,16 @@ describe('outcomeSatisfiesDisposition — conservative matching', () => {
     expect(
       outcomeSatisfiesDisposition(planned, { kind: 'unknown', fallbackRenderId: 'x' }),
     ).toBe(true)
-    expect(outcomeSatisfiesDisposition(planned, specialized)).toBe(false)
+    // Legacy content-dependent routes (git widget for git Bash, absorbed
+    // result echoes) must not read as misrouted while the entry is planned.
+    expect(outcomeSatisfiesDisposition(planned, specialized)).toBe(true)
+    expect(
+      outcomeSatisfiesDisposition(planned, {
+        kind: 'absorbed',
+        ownerRenderId: 'shared.git-widget',
+        reason: 'x',
+      }),
+    ).toBe(true)
   })
 })
 

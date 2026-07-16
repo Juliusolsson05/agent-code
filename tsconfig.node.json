@@ -107,6 +107,17 @@
     // the same renderer-subtree walk this block exists to stop. The web
     // project + vitest cover it.
     "src/providers/registry.renderer.capabilities.spawnTool.test.ts",
+    // Shape-catalog registry + coverage gate (Phase 3/4, PR #555): both live
+    // at providers/ root but import the provider shapes.ts files under
+    // providers/<kind>/renderer/ and the renderer evidence modules — the
+    // exact renderer-subtree walk this block stops. Web project + vitest
+    // cover them, same as the capabilities registry above.
+    "src/providers/registry.renderShapes.ts",
+    "src/providers/shapes.coverage.test.ts",
+    // The import-boundary test (Phase 1, PR #555) is fs-scanning node code
+    // with no renderer imports, but it lives at providers/ root next to
+    // these — listed here as documentation that it deliberately STAYS in
+    // the node project (vitest unit project runs it in node env).
     // conditions-core ships ONE renderer-only file: ConditionOutlet.tsx (a JSX
     // component). The rest of conditions-core (contract.ts/view.ts/dispatch.ts)
     // is node-safe and SHOULD be type-checked by this project. Excluding just
