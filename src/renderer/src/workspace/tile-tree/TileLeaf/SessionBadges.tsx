@@ -43,7 +43,7 @@ export function WorktreeBadge({
 
   return (
     <span
-      className="max-w-[180px] truncate rounded-sm px-1.5 py-[1px] text-[10px] font-code leading-none text-white"
+      className="min-w-0 max-w-[180px] truncate rounded-sm px-1.5 py-[1px] text-[10px] font-code leading-none text-white"
       style={{ backgroundColor: color ?? undefined }}
       title={title}
     >
@@ -58,7 +58,7 @@ export function AgentTypeBadge({
   kind: SessionKind | undefined
 }) {
   return (
-    <span className="px-1.5 py-[1px] text-[10px] font-code leading-none text-muted border border-border bg-surface-hi">
+    <span className="shrink-0 whitespace-nowrap px-1.5 py-[1px] text-[10px] font-code leading-none text-muted border border-border bg-surface-hi">
       {providerLabel(kind)}
     </span>
   )
