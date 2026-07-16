@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import { TodoRow } from '@providers/shared/renderer/rows/TodoRow'
-import { renderOpencodeReadResult } from '@providers/opencode/renderer/rows/OpencodeReadResult'
+import { TodoRow } from '@providers/shared/renderer/components/todo'
+import { renderOpencodeReadResult } from '@providers/opencode/renderer/components/read-result'
 
 // OpenCode committed/live tool rows.
 //

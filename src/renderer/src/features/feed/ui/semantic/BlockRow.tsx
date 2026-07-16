@@ -10,6 +10,7 @@ import {
   CodexWriteStdinRow,
 } from '@providers/codex/renderer/rows/CodexRows'
 import {
+  ClaudeLiveBashRow,
   EditRow,
   MultiEditRow,
 } from '@providers/claude/renderer/rows/ClaudeRows'
@@ -566,6 +567,21 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   // tool_result lands and sets `resultAt`, we fall through to the normal
   // tool_use branch so the answered question renders as a plain
   // committed-style row instead of a stale clickable picker.
+  // STREAMING-FIRST command headline (PR #555 Phase 6): a live Bash block
+  // paints the command card the moment the `command` string CLOSES in the
+  // partial input JSON — same contract as streaming edits. Falls through to
+  // the generic live card until then (a half-streamed command must not
+  // headline).
+  if (block.toolName === 'Bash') {
+    return (
+      <ClaudeLiveBashRow
+        parsedInput={block.parsedInput ?? null}
+        inputJson={block.inputJson ?? ''}
+        finalized={block.finalized === true}
+        blockIndex={block.blockIndex}
+      />
+    )
+  }
   if (block.toolName === 'AskUserQuestion' && !block.resultAt) {
     return <AskUserQuestionRow block={block} />
   }

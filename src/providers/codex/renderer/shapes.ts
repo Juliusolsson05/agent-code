@@ -526,8 +526,8 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-09-04-906-7b859c43.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command' },
-    why: 'Seeded from the 48-bundle corpus (408 sightings); structural variants share this id.',
+    disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+    why: 'Seeded from the 48-bundle corpus (408 sightings); structural variants share this id. GRADUATED 2026-07-16: command protocol cutover (adapter + CommandView); receipts must name this renderer or sightings file as misrouted',
   }),
   'codex.tool-use.followup-task.v1': defineRenderShape({
     id: 'codex.tool-use.followup-task.v1',
@@ -832,8 +832,8 @@ export const CODEX_RENDER_SHAPES = defineRenderShapeCatalog('codex', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-05-20T14-00-04-079-b53fc4fe.json","rendering-bundles/2026-05-20T15-15-32-562-7b859c43.json","rendering-bundles/2026-05-20T18-43-47-377-f6d733f8.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command' },
-    why: 'Seeded from the 48-bundle corpus (65 sightings); structural variants share this id.',
+    disposition: { kind: 'specialized', rendererId: 'codex.rows.dispatch' },
+    why: 'Seeded from the 48-bundle corpus (65 sightings); structural variants share this id. GRADUATED 2026-07-16: command protocol cutover (adapter + CommandView); receipts must name this renderer or sightings file as misrouted',
   }),})
 
 export type CodexRenderShapeId = keyof typeof CODEX_RENDER_SHAPES

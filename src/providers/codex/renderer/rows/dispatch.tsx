@@ -1,14 +1,17 @@
 import type { ReactNode } from 'react'
 import { applyPatchText } from '@providers/codex/renderer/adapters/codeEdit'
+import { fromCodexExecScript } from '@providers/codex/renderer/adapters/command'
+import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import {
-  CodexApplyPatchRow,
-  CodexExecCommandRow,
-  CodexToolResultRow,
-  CodexToolRow,
-  CodexWriteStdinRow,
-} from '@providers/codex/renderer/rows/CodexRows'
+// Provider-internal imports reach the component DIRECTORIES directly —
+// rows/CodexRows.tsx is a barrel that exists only for the feed's
+// grandfathered import edge (see its header) and must gain no new users.
+import { CodexApplyPatchRow } from '@providers/codex/renderer/components/apply-patch'
+import { CodexExecCommandRow } from '@providers/codex/renderer/components/exec-command'
+import { CodexToolResultRow } from '@providers/codex/renderer/components/tool-result'
+import { CodexToolRow } from '@providers/codex/renderer/components/tool'
+import { CodexWriteStdinRow } from '@providers/codex/renderer/components/write-stdin'
 
 export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
   // WHY Codex falls back to CodexToolRow here instead of shared ToolUseRow:
@@ -22,6 +25,13 @@ export function renderCodexToolUse(block: ToolUseBlock): ReactNode | undefined {
   // script is a plain command — so routing exec here is strictly additive.
   if (block.name === 'exec' && applyPatchText(block.input).includes('*** Begin Patch'))
     return <CodexApplyPatchRow block={block} />
+  // …and its plain-command case (Phase 6): extract every embedded
+  // tools.exec_command call and render a real command card. Scripts with
+  // neither patch nor command intent still fall to the generic row.
+  if (block.name === 'exec') {
+    const model = fromCodexExecScript(block)
+    if (model) return <CommandView model={model} />
+  }
   if (block.name === 'exec_command') return <CodexExecCommandRow block={block} />
   if (block.name === 'write_stdin') return <CodexWriteStdinRow block={block} />
   // Unknown names deliberately fall through to the SHARED fallback
