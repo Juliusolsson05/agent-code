@@ -66,6 +66,13 @@ const exclude = [
   // belongs to the package. App-level dictation integration can still add
   // colocated tests under src/ when it has an Agent Code invariant to protect.
   'packages/agent-voice-dictation/src/**/*.test.ts',
+  // WHY the nested Flow Electron app is excluded as a unit rather than one
+  // mystery file: it owns a Node `node:test` suite and its own package runner.
+  // Vitest can execute those assertions but cannot discover them as Vitest
+  // tests, then fails the aggregate Agent Code run with "No test suite found".
+  // Root-level integration belongs here only after that app intentionally
+  // exposes a Vitest project instead of being swept up by packages/**/*.test.ts.
+  'packages/agent-voice-dictation/apps/flow-electron/**',
 ]
 
 export default defineConfig({

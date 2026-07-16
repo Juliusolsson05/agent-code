@@ -27,6 +27,7 @@
     "package:mac": "node scripts/package-mac.mjs",
     "dist:mac": "npm run build && npm run package:mac",
     "start": "npm run workflow-mcp:build && electron-vite preview",
+    "typecheck": "npm run workflow-mcp:build && tsc -b --pretty false",
     "test": "npm run workflow-mcp:build && NODE_ENV=test vitest run",
     "test:watch": "npm run workflow-mcp:build && NODE_ENV=test vitest",
     "test:unit": "npm run workflow-mcp:build && NODE_ENV=test vitest run --project unit",
