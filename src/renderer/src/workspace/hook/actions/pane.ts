@@ -51,7 +51,10 @@ import type {
   WorkspaceSetTileTabs,
 } from '@renderer/workspace/hook/context'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
-import type { SessionActions } from '@renderer/workspace/hook/actions/session'
+import {
+  killSessionBackendIfOwned,
+  type SessionActions,
+} from '@renderer/workspace/hook/actions/session'
 
 // -----------------------------------------------------------------------------
 // Pane / focus / navigation actions.
@@ -1130,7 +1133,7 @@ export function usePaneActions(
       showToast(`Closed “${tab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
     }
 
-    await window.api.killSession(targetId)
+    await killSessionBackendIfOwned(refs, targetId)
 
     setRuntimes(prev => {
       const next = { ...prev }
@@ -1208,7 +1211,7 @@ export function usePaneActions(
       await closeLinkedChildren(targetId)
 
       if (!owningTab && detached) {
-        await window.api.killSession(targetId)
+        await killSessionBackendIfOwned(refs, targetId)
 
         setRuntimes(prev => {
           const next = { ...prev }
@@ -1273,7 +1276,7 @@ export function usePaneActions(
         showToast(`Closed “${owningTab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
       }
 
-      await window.api.killSession(targetId)
+      await killSessionBackendIfOwned(refs, targetId)
 
       setRuntimes(prev => {
         const next = { ...prev }
@@ -1636,7 +1639,7 @@ export function usePaneActions(
       // using it here would no-op. Killing a buried pane is a different
       // operation: terminate the hidden backend and delete the buried
       // record directly, without briefly reviving or mutating layout.
-      await window.api.killSession(entry.sessionId)
+      await killSessionBackendIfOwned(refs, entry.sessionId)
 
       setRuntimes(prev => {
         const next = { ...prev }

@@ -14,7 +14,10 @@ import {
 } from '@main/sessions/historyLoader.js'
 import { resolveTranscriptPaths } from '@main/sessions/transcriptPaths.js'
 import type { SessionSpawnOptions } from '@preload/api/types.js'
-import type { SessionRecoverOptions } from '@shared/types/session.js'
+import type {
+  SessionOwnershipOptions,
+  SessionRecoverOptions,
+} from '@shared/types/session.js'
 
 // Session lifecycle + I/O IPC.
 //
@@ -47,12 +50,23 @@ export function registerSessionIpc(
     return await manager.recover(options)
   })
 
+  ipcMain.handle(
+    'session:cancel-recovery',
+    async (_evt, options: SessionOwnershipOptions) => {
+      return await manager.cancelRecovery(options)
+    },
+  )
+
   ipcMain.handle('session:get-backend-snapshot', (_evt, sessionId: string) => {
     return manager.getBackendSnapshot(sessionId)
   })
 
   ipcMain.handle('session:kill', async (_evt, sessionId: string) => {
     return await manager.kill(sessionId)
+  })
+
+  ipcMain.handle('session:kill-owned', async (_evt, options: SessionOwnershipOptions) => {
+    return await manager.killOwned(options)
   })
 
   ipcMain.handle('session:kind', (_evt, sessionId: string) => {

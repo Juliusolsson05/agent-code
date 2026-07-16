@@ -1,4 +1,7 @@
-import type { SessionBackendSnapshot } from '@shared/types/session'
+import type {
+  SessionBackendSnapshot,
+  SessionRecoverFailureCode,
+} from '@shared/types/session'
 import type { SessionId, SessionMeta } from '@renderer/workspace/types'
 
 export type SessionRecoveryOutcome =
@@ -11,6 +14,7 @@ export type SessionRecoveryOutcome =
       status: 'failed'
       meta: SessionMeta
       message: string
+      code: SessionRecoverFailureCode
     }
 
 export type RecoveryProjection = {
@@ -19,6 +23,7 @@ export type RecoveryProjection = {
   resolvedIds: Set<SessionId>
   liveBackendIds: Set<SessionId>
   failures: Map<SessionId, string>
+  failureCodes: Map<SessionId, SessionRecoverFailureCode>
   backendSnapshots: Map<SessionId, SessionBackendSnapshot>
 }
 
@@ -44,29 +49,30 @@ export function projectSessionRecovery(input: {
     resolvedIds: new Set(),
     liveBackendIds: new Set(),
     failures: new Map(),
+    failureCodes: new Map(),
     backendSnapshots: new Map(),
   }
 
   for (const [sessionId, persistedMeta] of Object.entries(input.persistedSessions)) {
     if (!input.ownedIds.has(sessionId)) continue
-    if (!input.liveProcessIds.has(sessionId)) {
-      projection.sessions[sessionId] = persistedMeta
-      continue
-    }
-    const outcome = input.outcomes.get(sessionId)
-    if (!outcome) continue
-
-    // Recovery preserves the app-local routing id. Keeping an explicit
-    // identity mapping lets the still-remap-shaped relationship/layout code
-    // converge without reintroducing fresh-id allocation.
+    // WHY unresolved visible panes are projected immediately: renderer
+    // recovery is concurrent and one provider can hang forever. Hiding every
+    // leaf until its individual promise settles made a healthy workspace look
+    // empty and also gave later partial commits authority to reconstruct the
+    // entire layout from disk. Stable local ids let us publish the durable
+    // shell first, then reconcile only the runtime fact for each pane.
     projection.idMap.set(sessionId, sessionId)
-    projection.sessions[sessionId] = outcome.meta
+    const outcome = input.outcomes.get(sessionId)
+    projection.sessions[sessionId] = outcome?.meta ?? persistedMeta
+    if (!input.liveProcessIds.has(sessionId) || !outcome) continue
+
     projection.resolvedIds.add(sessionId)
     if (outcome.status === 'live') {
       projection.liveBackendIds.add(sessionId)
       projection.backendSnapshots.set(sessionId, outcome.snapshot)
     } else {
       projection.failures.set(sessionId, outcome.message)
+      projection.failureCodes.set(sessionId, outcome.code)
     }
   }
 

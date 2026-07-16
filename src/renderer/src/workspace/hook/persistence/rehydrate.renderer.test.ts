@@ -23,6 +23,16 @@ function ref<T>(current: T): MutableRefObject<T> {
   return { current }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 function makePersisted(): PersistedWorkspace {
   return {
     tabs: [{
@@ -59,6 +69,8 @@ function makeHarness() {
   const refs = {
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
+    stateRef: ref(state),
+    latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
   } as unknown as WorkspaceRefs
 
@@ -68,6 +80,8 @@ function makeHarness() {
     runtimes: () => runtimes,
     setState: (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
       state = typeof next === 'function' ? next(state) : next
+      refs.stateRef.current = state
+      refs.latestStateRef.current = state
     },
     setRuntimes: (
       next:
@@ -178,6 +192,7 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       draftInput: 'unfinished prompt',
       processStatus: 'failed',
       processError: 'Claude CLI not found',
+      recoveryFailureCode: 'start-failed',
       inputReady: false,
     })
   })
@@ -278,10 +293,238 @@ describe('rehydrateWorkspace backend reconciliation', () => {
       b: { sessionId: 'second-session' },
     })
     expect(harness.runtimes()['second-session']).toMatchObject({
-      ...emptyRuntime(),
       processStatus: 'failed',
       processError: 'Owned by another project',
+      recoveryFailureCode: 'ownership-conflict',
       inputReady: false,
+    })
+  })
+
+  it('never replays persisted layout or runtime state after the initial shell is published', async () => {
+    const persisted = makePersisted()
+    persisted.sessions['second-session'] = {
+      cwd: '/tmp/project',
+      kind: 'codex',
+      title: 'Persisted title',
+    }
+    persisted.tabs[0].root = {
+      type: 'split',
+      direction: 'vertical',
+      ratio: 0.5,
+      a: { type: 'leaf', sessionId: 'stable-session' },
+      b: { type: 'leaf', sessionId: 'second-session' },
+    }
+    const first = deferred<Awaited<ReturnType<Window['api']['recoverSession']>>>()
+    const second = deferred<Awaited<ReturnType<Window['api']['recoverSession']>>>()
+    const harness = makeHarness()
+    const recoveryApi = {
+      recoverSession: vi.fn(({ sessionId }: { sessionId: string }) =>
+        sessionId === 'stable-session' ? first.promise : second.promise,
+      ),
+      cancelSessionRecovery: vi.fn(async () => true),
+      defaultCwd: vi.fn(async () => '/tmp/fallback'),
+    }
+
+    const bootstrap = rehydrateWorkspace(
+      persisted,
+      harness.refs,
+      harness.setState,
+      harness.setRuntimes,
+      harness.setTileTabs,
+      vi.fn(),
+      recoveryApi,
+    )
+
+    expect(harness.state().tabs[0].root).toMatchObject({
+      type: 'split',
+      a: { sessionId: 'stable-session' },
+      b: { sessionId: 'second-session' },
+    })
+    expect(harness.runtimes()['stable-session'].processStatus).toBe('spawning')
+    expect(harness.runtimes()['second-session'].processStatus).toBe('spawning')
+
+    first.resolve({
+      ok: true,
+      disposition: 'spawned',
+      snapshot: {
+        sessionId: 'stable-session',
+        kind: 'claude',
+        cwd: '/tmp/project',
+        lifecycle: 'live',
+        input: { ready: true, revision: 2, reason: 'ready' },
+      },
+    })
+    await vi.waitFor(() => {
+      expect(harness.runtimes()['stable-session'].processStatus).toBe('started')
+    })
+
+    // Model user and live-feed mutations while the second provider is still
+    // unresolved. Its eventual outcome owns neither the removed first leaf nor
+    // this newer draft/feed/title state.
+    harness.setState(prev => ({
+      ...prev,
+      tabs: [{
+        ...prev.tabs[0],
+        root: { type: 'leaf', sessionId: 'second-session' },
+        focusedSessionId: 'second-session',
+      }],
+      sessions: {
+        'second-session': {
+          ...prev.sessions['second-session'],
+          title: 'Edited while recovering',
+        },
+      },
+    }))
+    harness.setRuntimes(prev => ({
+      'second-session': {
+        ...prev['second-session'],
+        draftInput: 'newer draft',
+        queuedMessages: [{ content: 'live feed state', timestamp: 'now' }],
+      },
+    }))
+
+    second.resolve({
+      ok: true,
+      disposition: 'spawned',
+      snapshot: {
+        sessionId: 'second-session',
+        kind: 'codex',
+        cwd: '/tmp/project',
+        lifecycle: 'live',
+        input: { ready: true, revision: 3, reason: 'ready' },
+      },
+    })
+    await expect(bootstrap).resolves.toEqual({
+      restoredSessions: 2,
+      expectedSessions: 2,
+      complete: true,
+    })
+
+    expect(harness.state().tabs[0].root).toEqual({
+      type: 'leaf',
+      sessionId: 'second-session',
+    })
+    expect(harness.state().sessions['stable-session']).toBeUndefined()
+    expect(harness.state().sessions['second-session'].title).toBe('Edited while recovering')
+    expect(harness.runtimes()['stable-session']).toBeUndefined()
+    expect(harness.runtimes()['second-session']).toMatchObject({
+      processStatus: 'started',
+      draftInput: 'newer draft',
+      queuedMessages: [{ content: 'live feed state', timestamp: 'now' }],
+    })
+  })
+
+  it('bounds a never-settling recovery, cancels main ownership, and completes bootstrap', async () => {
+    const persisted = makePersisted()
+    const harness = makeHarness()
+    const cancelSessionRecovery = vi.fn(async () => true)
+    const recoveryApi = {
+      recoverSession: vi.fn(() => new Promise<never>(() => {})),
+      cancelSessionRecovery,
+      defaultCwd: vi.fn(async () => '/tmp/fallback'),
+    }
+
+    const result = await rehydrateWorkspace(
+      persisted,
+      harness.refs,
+      harness.setState,
+      harness.setRuntimes,
+      harness.setTileTabs,
+      vi.fn(),
+      recoveryApi,
+      5,
+    )
+
+    expect(result).toEqual({ restoredSessions: 0, expectedSessions: 1, complete: true })
+    expect(cancelSessionRecovery).toHaveBeenCalledWith({
+      sessionId: 'stable-session',
+      kind: 'claude',
+      cwd: '/tmp/project',
+    })
+    expect(harness.state().tabs[0].root).toEqual({
+      type: 'leaf',
+      sessionId: 'stable-session',
+    })
+    expect(harness.runtimes()['stable-session']).toMatchObject({
+      processStatus: 'failed',
+      recoveryFailureCode: 'cancelled',
+      inputReady: false,
+    })
+  })
+
+  it('preserves a parked agent draft and Dispatch focus without spawning its backend', async () => {
+    const persisted = makePersisted()
+    persisted.sessions['parked-session'] = {
+      cwd: '/tmp/project',
+      kind: 'codex',
+      title: 'Parked review',
+    }
+    persisted.detachedSessions = {
+      'parked-session': {
+        sessionId: 'parked-session',
+        surface: 'dispatch',
+        projectTabId: 'tab-1',
+        projectTabTitle: 'Project',
+        projectTabIndex: 0,
+        detachedAt: 42,
+      },
+    }
+    persisted.dispatchMode = {
+      scope: 'project',
+      focusedSessionId: 'parked-session',
+    }
+    persisted.drafts = {
+      ...persisted.drafts,
+      'parked-session': 'finish this after restart',
+    }
+    const harness = makeHarness()
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'adopted' as const,
+      snapshot: {
+        sessionId: 'stable-session',
+        kind: 'claude' as const,
+        cwd: '/tmp/project',
+        lifecycle: 'live' as const,
+        input: { ready: true, revision: 1, reason: 'ready' as const },
+      },
+    }))
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: {
+        recoverSession,
+        cancelSessionRecovery: vi.fn(async () => true),
+        defaultCwd: vi.fn(),
+      },
+    })
+
+    const result = await rehydrateWorkspace(
+      persisted,
+      harness.refs,
+      harness.setState,
+      harness.setRuntimes,
+      harness.setTileTabs,
+      vi.fn(),
+    )
+
+    // WHY this assertion is stricter than merely checking the metadata row:
+    // parked agents deliberately have no provider process after restart, but
+    // they are still first-class workspace owners. Losing either their draft
+    // or the Dispatch selection makes a successful rehydrate feel like data
+    // loss and sends the next command to a different agent.
+    expect(recoverSession).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ restoredSessions: 1, expectedSessions: 1, complete: true })
+    expect(harness.state().detachedSessions['parked-session']).toMatchObject({
+      sessionId: 'parked-session',
+      projectTabId: 'tab-1',
+    })
+    expect(harness.state().dispatchMode).toMatchObject({
+      focusedSessionId: 'parked-session',
+    })
+    expect(harness.runtimes()['parked-session']).toMatchObject({
+      processStatus: 'idle',
+      inputReady: false,
+      draftInput: 'finish this after restart',
     })
   })
 })

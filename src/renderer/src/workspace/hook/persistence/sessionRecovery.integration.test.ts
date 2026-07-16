@@ -116,6 +116,8 @@ function makeRendererHarness() {
   const refs = {
     dangerousAgentsRef: ref(false),
     useProxyStreamingRef: ref(false),
+    stateRef: ref(state),
+    latestStateRef: ref(state),
     latestRuntimesRef: ref(runtimes),
   } as unknown as WorkspaceRefs
 
@@ -125,6 +127,8 @@ function makeRendererHarness() {
     runtimes: () => runtimes,
     setState: (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
       state = typeof next === 'function' ? next(state) : next
+      refs.stateRef.current = state
+      refs.latestStateRef.current = state
     },
     setRuntimes: (
       next:
@@ -164,6 +168,7 @@ describe('cross-layer session restart reconciliation', () => {
     const persisted = makePersisted()
     const recoveryApi = {
       recoverSession: manager.recover.bind(manager),
+      cancelSessionRecovery: manager.cancelRecovery.bind(manager),
       defaultCwd: vi.fn(async () => '/tmp/fallback'),
     }
 
@@ -262,6 +267,7 @@ describe('cross-layer session restart reconciliation', () => {
     const persisted = makePersisted()
     const recoveryApi = {
       recoverSession: manager.recover.bind(manager),
+      cancelSessionRecovery: manager.cancelRecovery.bind(manager),
       defaultCwd: vi.fn(async () => '/tmp/fallback'),
     }
     const failedRenderer = makeRendererHarness()
@@ -284,7 +290,8 @@ describe('cross-layer session restart reconciliation', () => {
     expect(failedRenderer.runtimes()['stable-session']).toMatchObject({
       draftInput: 'unfinished prompt',
       processStatus: 'failed',
-      processError: expect.stringContaining('provider unavailable'),
+      processError: 'Session failed to start. Check provider setup and retry.',
+      recoveryFailureCode: 'start-failed',
       inputReady: false,
     })
     expect(manager.getBackendSnapshot('stable-session')).toBeNull()
@@ -327,6 +334,7 @@ describe('cross-layer session restart reconciliation', () => {
     const renderer = makeRendererHarness()
     const recoveryApi = {
       recoverSession: manager.recover.bind(manager),
+      cancelSessionRecovery: manager.cancelRecovery.bind(manager),
       defaultCwd: vi.fn(async () => '/tmp/fallback'),
     }
 
@@ -348,7 +356,7 @@ describe('cross-layer session restart reconciliation', () => {
       complete: true,
     })
 
-    expect(blockedProvider.stop).toHaveBeenCalledTimes(1)
+    expect(blockedProvider.stop).toHaveBeenCalledTimes(2)
     expect(revokeSession).toHaveBeenCalledTimes(1)
     expect(manager.getBackendSnapshot('stable-session')).toBeNull()
     expect(manager.list()).toEqual([])

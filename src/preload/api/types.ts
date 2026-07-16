@@ -136,6 +136,7 @@ export type { SessionKind } from '@shared/types/providerKind.js'
 export type {
   SessionBackendSnapshot,
   SessionInputReadiness,
+  SessionOwnershipOptions,
   SessionRecoverOptions,
   SessionRecoverResult,
 } from '@shared/types/session.js'

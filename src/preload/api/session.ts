@@ -16,6 +16,7 @@ import type {
   SessionSemanticEvent,
   SessionStartedEvent,
   SessionInputReadinessEvent,
+  SessionOwnershipOptions,
   SessionTerminalDataEvent,
   SessionConditionsEvent,
   ConditionCustomAction,
@@ -47,11 +48,23 @@ export const sessionApi = {
   recoverSession: (options: SessionRecoverOptions): Promise<SessionRecoverResult> =>
     ipcRenderer.invoke('session:recover', options),
 
+  // A renderer recovery deadline must cancel only the claim it created. An
+  // id-only kill is unsafe here because a stale workspace can collide with a
+  // live backend owned by another cwd/provider generation.
+  cancelSessionRecovery: (options: SessionOwnershipOptions): Promise<boolean> =>
+    ipcRenderer.invoke('session:cancel-recovery', options),
+
   getBackendSnapshot: (sessionId: string): Promise<SessionBackendSnapshot | null> =>
     ipcRenderer.invoke('session:get-backend-snapshot', sessionId),
 
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
+
+  // Workspace teardown knows the persisted kind/cwd and should use that
+  // ownership proof. The legacy id-only primitive remains for trusted main
+  // integrations that already hold a live manager reference.
+  killOwnedSession: (options: SessionOwnershipOptions): Promise<boolean> =>
+    ipcRenderer.invoke('session:kill-owned', options),
 
   getLiveSessionKind: (sessionId: string): Promise<SessionKind | null> =>
     ipcRenderer.invoke('session:kind', sessionId),

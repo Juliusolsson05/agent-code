@@ -49,6 +49,16 @@ export type SessionRecoverOptions = {
   builtInMcpDomains?: BuiltInMcpDomain[]
 }
 
+export type SessionOwnershipOptions = Pick<
+  SessionRecoverOptions,
+  'sessionId' | 'kind' | 'cwd'
+>
+
+export type SessionRecoverFailureCode =
+  | 'ownership-conflict'
+  | 'cancelled'
+  | 'start-failed'
+
 export type SessionRecoverResult =
   | {
       ok: true
@@ -58,7 +68,7 @@ export type SessionRecoverResult =
     }
   | {
       ok: false
-      code: 'ownership-conflict' | 'cancelled' | 'start-failed'
+      code: SessionRecoverFailureCode
       retryable: boolean
       message: string
       actual?: Pick<SessionBackendSnapshot, 'kind' | 'cwd' | 'lifecycle'>

@@ -17,6 +17,7 @@ describe('projectSessionRecovery', () => {
         status: 'failed' as const,
         meta: sessions.visible,
         message: 'provider missing',
+        code: 'start-failed' as const,
       }]]),
     })
 
@@ -25,6 +26,24 @@ describe('projectSessionRecovery', () => {
     expect(projected.resolvedIds).toEqual(new Set(['visible']))
     expect(projected.liveBackendIds.size).toBe(0)
     expect(projected.failures.get('visible')).toBe('provider missing')
+    expect(projected.failureCodes.get('visible')).toBe('start-failed')
+  })
+
+  it('publishes unresolved visible ownership without calling it resolved', () => {
+    const projected = projectSessionRecovery({
+      persistedSessions: sessions,
+      ownedIds: new Set(['visible', 'parked']),
+      liveProcessIds: new Set(['visible']),
+      outcomes: new Map(),
+    })
+
+    expect(projected.idMap).toEqual(new Map([
+      ['visible', 'visible'],
+      ['parked', 'parked'],
+    ]))
+    expect(projected.sessions).toEqual(sessions)
+    expect(projected.resolvedIds.size).toBe(0)
+    expect(projected.liveBackendIds.size).toBe(0)
   })
 
   it('marks adopted or spawned leaves live without changing their local id', () => {

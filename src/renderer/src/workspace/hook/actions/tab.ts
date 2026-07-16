@@ -122,7 +122,7 @@ export function useTabActions(
       showToast(`Closed “${tab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
 
       // Kill every session in this tab.
-      await Promise.all(idsToKill.map(id => window.api.killSession(id)))
+      await Promise.all(idsToKill.map(id => sessionActions.killSession(id)))
       setRuntimes(prev => {
         const next = { ...prev }
         for (const id of idsToKill) delete next[id]
@@ -180,6 +180,7 @@ export function useTabActions(
       refs.latestScreenRef,
       refs.seenUuidsRef,
       refs.undoStackRef,
+      sessionActions,
       setReaderMode,
       setRuntimes,
       setSpotlight,

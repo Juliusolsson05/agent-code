@@ -236,6 +236,21 @@ export class OpencodeSession extends EventEmitter implements AgentSession {
       throw err
     }
 
+    if (this.exited || this.headless !== headless) {
+      // WHY a resolved start promise is not sufficient evidence of liveness:
+      // the spawned server can emit exit while history publication is still
+      // unwinding, then let start() resolve. Emitting ready/started afterward
+      // creates a phantom writable backend in SessionManager. Treat the exit as
+      // the authoritative fact and run the same rollback as a rejected start.
+      try {
+        await headless.stop()
+      } catch {
+        /* best-effort */
+      }
+      if (this.headless === headless) this.headless = null
+      throw new Error('opencode exited during startup')
+    }
+
     this.emit('input-readiness', { ready: true, reason: 'ready' })
 
     // Opencode has no per-cwd transcript directory to report as

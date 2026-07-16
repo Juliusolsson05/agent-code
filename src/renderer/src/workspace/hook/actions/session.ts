@@ -1,4 +1,9 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import {
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+  isSessionKind,
+} from '@shared/types/providerKind'
+import type { SessionRecoverFailureCode } from '@shared/types/session'
 import { useCallback, useRef } from 'react'
 
 import { emptyRuntime } from '@renderer/session-runtime/state'
@@ -88,6 +93,23 @@ export type SessionActions = {
   softReloadAgentView: (sessionId?: SessionId) => Promise<SessionId | null>
 }
 
+export async function killSessionBackendIfOwned(
+  refs: WorkspaceRefs,
+  sessionId: SessionId,
+): Promise<boolean> {
+  const meta = refs.stateRef.current.sessions[sessionId]
+  if (!meta) return false
+  // WHY this proof lives in main as one atomic check+kill: renderer runtime
+  // flags are advisory and can be reset by retry, soft reload, or a delayed
+  // feed event. A stale pane may share its id with another project, but only a
+  // matching provider kind and lexical cwd authorize destructive teardown.
+  return await window.api.killOwnedSession({
+    sessionId,
+    kind: meta.kind,
+    cwd: meta.cwd,
+  })
+}
+
 function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean): SessionRuntime {
   if (!hasProviderSession) {
     // WHY no-provider soft reload is non-destructive:
@@ -140,6 +162,7 @@ function softReloadRuntime(current: SessionRuntime, hasProviderSession: boolean)
     sessionStatusSource: current.sessionStatusSource,
     processStatus: current.processStatus,
     processError: current.processError,
+    recoveryFailureCode: current.recoveryFailureCode,
     inputReady: current.inputReady,
     inputReadinessRevision: current.inputReadinessRevision,
     exited: current.exited,
@@ -398,12 +421,32 @@ export function useSessionActions(
         if (!meta) {
           throw new Error(`Cannot wake ${sessionId}; no persisted session metadata exists.`)
         }
+        if (meta.kind !== undefined && !isSessionKind(meta.kind)) {
+          const message = 'This pane uses an unsupported provider. Update Agent Code or close it.'
+          setRuntimes(prev => {
+            const current = prev[sessionId]
+            if (!current) return prev
+            return {
+              ...prev,
+              [sessionId]: {
+                ...current,
+                processStatus: 'failed',
+                processError: message,
+                recoveryFailureCode: 'start-failed',
+                inputReady: false,
+              },
+            }
+          })
+          throw new Error(message)
+        }
         const kind: SessionKind = meta.kind ?? DEFAULT_PROVIDER
 
         const builtInMcpDomains =
           kind !== 'terminal' ? normalizeSessionBuiltInMcpDomains(meta.builtInMcpDomains) : undefined
         const resumeSessionId = kind !== 'terminal' ? resumableProviderSessionId(meta) : undefined
         const restoredMeta = withoutProvisionalProviderSession(meta)
+        const priorRecoveryFailureCode =
+          refs.latestRuntimesRef.current[sessionId]?.recoveryFailureCode ?? null
 
         setRuntimes(prev => {
           const current = prev[sessionId]
@@ -414,7 +457,11 @@ export function useSessionActions(
               ...current,
               processStatus: 'spawning',
               processError: null,
-              inputReady: false,
+              // WHY an ownership-conflict fence survives the retry RPC: feed
+              // events and close actions can race while main decides whether
+              // this pane may adopt the id. Only a successful matching
+              // snapshot proves the unrelated-backend quarantine can clear.
+              recoveryFailureCode: current.recoveryFailureCode,
               exited: null,
             },
           }
@@ -435,6 +482,8 @@ export function useSessionActions(
         // suppresses duplicate UI transitions and is never relied on for
         // provider, proxy, or MCP exactly-once behavior.
         let readyError: unknown = null
+        let recoveryFailureCode: SessionRecoverFailureCode | null = null
+        let ownershipProven = false
         let recoverySnapshot: Awaited<ReturnType<typeof window.api.getBackendSnapshot>> = null
         let recoveredTmuxName: string | undefined
         try {
@@ -449,41 +498,56 @@ export function useSessionActions(
             useProxy: kind !== 'terminal' ? refs.useProxyStreamingRef.current : undefined,
           })
           if (!recovery.ok) {
-            throw new Error(recovery.message)
+            readyError = new Error(recovery.message)
+            recoveryFailureCode = priorRecoveryFailureCode === 'ownership-conflict'
+              ? 'ownership-conflict'
+              : recovery.code
+          } else {
+            ownershipProven = true
+            recoverySnapshot = recovery.snapshot
+            recoveredTmuxName = recovery.tmuxName
+            setRuntimes(prev => {
+              const current = prev[sessionId]
+              if (!current) return prev
+              // Any failed/exited state observed AFTER the wake transition to
+              // spawning is a real provider event and outranks the returned
+              // snapshot. The stale failure that initiated retry was cleared
+              // above, so a successful retry is not trapped in "failed".
+              const preserveObservedTerminalProcess = current.processStatus === 'failed' ||
+                current.processStatus === 'exited'
+              const snapshotIsAuthoritative = recovery.snapshot.input.revision >=
+                current.inputReadinessRevision
+              return {
+                ...prev,
+                [sessionId]: {
+                  ...current,
+                  ...(preserveObservedTerminalProcess
+                    ? {}
+                    : {
+                        processStatus: recovery.snapshot.lifecycle === 'live'
+                          ? 'started' as const
+                          : 'spawning' as const,
+                        processError: null,
+                        recoveryFailureCode: null,
+                        ...(snapshotIsAuthoritative
+                          ? {
+                              inputReady: recovery.snapshot.input.ready,
+                              inputReadinessRevision: recovery.snapshot.input.revision,
+                            }
+                          : {}),
+                        exited: null,
+                      }),
+                },
+              }
+            })
           }
-          recoverySnapshot = recovery.snapshot
-          recoveredTmuxName = recovery.tmuxName
-          setRuntimes(prev => {
-            const current = prev[sessionId]
-            if (!current) return prev
-            const preserveObservedTerminalProcess = current.processStatus === 'failed' ||
-              current.processStatus === 'exited'
-            const snapshotIsNewer = recovery.snapshot.input.revision >
-              current.inputReadinessRevision
-            return {
-              ...prev,
-              [sessionId]: {
-                ...current,
-                ...(preserveObservedTerminalProcess
-                  ? {}
-                  : {
-                      processStatus: recovery.snapshot.lifecycle === 'live'
-                        ? 'started' as const
-                        : 'spawning' as const,
-                      processError: null,
-                      ...(snapshotIsNewer
-                        ? {
-                            inputReady: recovery.snapshot.input.ready,
-                            inputReadinessRevision: recovery.snapshot.input.revision,
-                          }
-                        : {}),
-                      exited: null,
-                    }),
-              },
-            }
-          })
-        } catch (err) {
-          readyError = err
+        } catch {
+          // WHY unexpected IPC errors use a fixed message: rejected invokes
+          // can contain provider commands, environment fragments, or scoped
+          // MCP URLs. Typed recovery results carry the safe operational detail;
+          // transport failures never become pane content or toast text.
+          readyError = new Error('Backend recovery failed unexpectedly. Retry this pane.')
+          recoveryFailureCode = priorRecoveryFailureCode
         }
 
         if (!readyError && recoverySnapshot && !recoverySnapshot.input.ready) {
@@ -491,6 +555,11 @@ export function useSessionActions(
             await waitForSessionInputReady(refs, sessionId)
           } catch (err) {
             readyError = err
+            // A provider that started but never reached its real composer
+            // boundary must be replaced, not repeatedly re-adopted on Retry.
+            // Main rechecks kind+cwd atomically, so a stale/conflicted pane
+            // cannot use this timeout to stop another workspace's backend.
+            void killSessionBackendIfOwned(refs, sessionId).catch(() => undefined)
           }
         }
 
@@ -507,6 +576,9 @@ export function useSessionActions(
                 ...current,
                 processStatus: 'failed',
                 processError: message,
+                recoveryFailureCode: ownershipProven
+                  ? 'start-failed'
+                  : recoveryFailureCode ?? priorRecoveryFailureCode ?? 'start-failed',
                 inputReady: false,
               },
             }
@@ -514,6 +586,11 @@ export function useSessionActions(
           throw readyError
         }
 
+        const recoveredMeta: SessionMeta = {
+          ...restoredMeta,
+          ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
+          ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
+        }
         setState(prev => {
           const current = prev.sessions[sessionId]
           if (!current) return prev
@@ -521,15 +598,28 @@ export function useSessionActions(
             ...prev,
             sessions: {
               ...prev.sessions,
-              [sessionId]: {
-                ...current,
-                ...restoredMeta,
-                ...(builtInMcpDomains ? { builtInMcpDomains } : {}),
-                ...(recoveredTmuxName ? { tmuxName: recoveredTmuxName } : {}),
-              },
+              [sessionId]: { ...current, ...recoveredMeta },
             },
           }
         })
+
+        if (
+          kind !== 'terminal' &&
+          resumeSessionId &&
+          refs.stateRef.current.sessions[sessionId] &&
+          refs.latestRuntimesRef.current[sessionId]
+        ) {
+          // Parked/buried sessions do not hydrate history at app bootstrap.
+          // Their explicit wake is therefore the first safe moment to rebuild
+          // the durable feed, including legacy Claude metadata whose kind was
+          // absent and defaulted above.
+          void loadInitialHistoryForSession({
+            sessionId,
+            meta: recoveredMeta,
+            refs,
+            setRuntimes,
+          })
+        }
 
         return sessionId
       })()
@@ -554,7 +644,7 @@ export function useSessionActions(
 
   const killSession = useCallback(
     async (sessionId: SessionId) => {
-      await window.api.killSession(sessionId)
+      await killSessionBackendIfOwned(refs, sessionId)
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[sessionId]
@@ -665,7 +755,7 @@ export function useSessionActions(
         },
       }))
 
-      await window.api.killSession(oldId)
+      await killSessionBackendIfOwned(refs, oldId)
       setRuntimes(prev => {
         const next = { ...prev }
         delete next[oldId]
@@ -813,7 +903,7 @@ export function useSessionActions(
 
       for (const [oldId, meta] of agentEntries) {
         try {
-          await window.api.killSession(oldId)
+          await killSessionBackendIfOwned(refs, oldId)
         } catch {
           // Kill failures still fall through to respawn — the old
           // process may already be gone.
