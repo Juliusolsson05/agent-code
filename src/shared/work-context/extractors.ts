@@ -1,16 +1,16 @@
-import type { Entry } from '@shared/types/transcript'
-import { isConversationEntry } from '@shared/types/transcript'
-import { asRecord, parseJsonRecord } from '@shared/lib/asRecord'
+import type { Entry } from '@shared/types/transcript.js'
+import { isConversationEntry } from '@shared/types/transcript.js'
+import { asRecord, parseJsonRecord } from '@shared/lib/asRecord.js'
 import type {
   WorkContextConfidence,
   WorktreeActivityEvent,
   WorktreeActivityKind,
-} from '@shared/work-context/types'
+} from '@shared/work-context/types.js'
 import {
   classifyCommand,
   confidenceForKind,
   primaryWeightFor,
-} from '@shared/work-context/scoring'
+} from '@shared/work-context/scoring.js'
 
 type EventSeed = Omit<WorktreeActivityEvent, 'key' | 'ts' | 'primaryWeight'> & {
   ts?: number

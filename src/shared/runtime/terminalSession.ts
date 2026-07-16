@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events'
-import { spawn as ptySpawn, type IPty } from 'node-pty'
+import { spawn as ptySpawn } from 'node-pty'
+import type { IPty } from 'node-pty'
 
 import { pickShell } from './pickShell.js'
 

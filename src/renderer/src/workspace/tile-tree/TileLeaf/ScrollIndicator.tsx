@@ -74,16 +74,25 @@ export function ScrollIndicator({
   const position = Math.min(offset + inBuffer, denominator)
 
   return (
-    <div className="flex-shrink-0 flex justify-end px-3 leading-none">
-      <div className="flex items-center gap-2">
-        <WorktreeBadge context={workContext} activity={workActivity} />
+    <div className="flex min-w-0 shrink-0 px-3 leading-none">
+      {/* WHY this row wraps between badges instead of squeezing their text: Tiled Dispatch can
+          make an agent pane narrower than the combined worktree/provider/tail/count width. The
+          old max-content row then widened the pane and painted past its right edge. A full-width,
+          zero-minimum flex row gives the worktree pill a real constraint while keeping every
+          compact status token intact and preserving the historical right alignment. */}
+      <div className="flex w-full min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+        <WorktreeBadge
+          context={workContext}
+          activity={workActivity}
+          constrainToParent
+        />
         <AgentTypeBadge kind={sessionKind} />
         {tailMode && (
-          <span className="text-[10px] font-code uppercase tracking-wider text-accent">
+          <span className="shrink-0 whitespace-nowrap text-[10px] font-code uppercase tracking-wider text-accent">
             TAIL
           </span>
         )}
-        <span className="text-[12px] font-code tabular-nums text-accent">
+        <span className="shrink-0 whitespace-nowrap text-[12px] font-code tabular-nums text-accent">
           {position}/{denominator}
         </span>
       </div>

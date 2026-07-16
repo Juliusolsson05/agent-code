@@ -1,4 +1,5 @@
-import { Menu, type MenuItemConstructorOptions } from 'electron'
+import { Menu } from 'electron'
+import type { MenuItemConstructorOptions } from 'electron'
 
 import { sendToMainWindow, zoomMainWindow } from '@main/window/mainWindow.js'
 

@@ -1,5 +1,6 @@
 import { app } from 'electron'
-import { execFile, spawn, type ChildProcessByStdio } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import type { ChildProcessByStdio } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { constants } from 'node:fs'
 import { access, chmod, mkdir, readFile, stat } from 'node:fs/promises'

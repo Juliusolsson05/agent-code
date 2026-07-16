@@ -1,5 +1,7 @@
-import { DEFAULT_PROVIDER, type AgentProviderKind } from '@shared/types/providerKind.js'
+import { DEFAULT_PROVIDER } from '@shared/types/providerKind.js'
+import type { AgentProviderKind } from '@shared/types/providerKind.js'
 import { ipcRenderer } from 'electron'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 import { subscribe } from '@preload/api/ipc.js'
 import type {
@@ -13,6 +15,8 @@ import type {
   SessionScreenEvent,
   SessionSemanticEvent,
   SessionStartedEvent,
+  SessionInputReadinessEvent,
+  SessionOwnershipOptions,
   SessionTerminalDataEvent,
   SessionConditionsEvent,
   ConditionCustomAction,
@@ -20,6 +24,9 @@ import type {
   SessionSubAgentsEvent,
   SessionSpawnOptions,
   SessionSpawnResult,
+  SessionRecoverOptions,
+  SessionRecoverResult,
+  SessionBackendSnapshot,
   TranscriptPathRequest,
   TranscriptPathResult,
   Unsub,
@@ -38,8 +45,26 @@ export const sessionApi = {
   spawnSession: (options: SessionSpawnOptions): Promise<SessionSpawnResult> =>
     ipcRenderer.invoke('session:spawn', options),
 
+  recoverSession: (options: SessionRecoverOptions): Promise<SessionRecoverResult> =>
+    ipcRenderer.invoke('session:recover', options),
+
+  // A renderer recovery deadline must cancel only the claim it created. An
+  // id-only kill is unsafe here because a stale workspace can collide with a
+  // live backend owned by another cwd/provider generation.
+  cancelSessionRecovery: (options: SessionOwnershipOptions): Promise<boolean> =>
+    ipcRenderer.invoke('session:cancel-recovery', options),
+
+  getBackendSnapshot: (sessionId: string): Promise<SessionBackendSnapshot | null> =>
+    ipcRenderer.invoke('session:get-backend-snapshot', sessionId),
+
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
+
+  // Workspace teardown knows the persisted kind/cwd and should use that
+  // ownership proof. The legacy id-only primitive remains for trusted main
+  // integrations that already hold a live manager reference.
+  killOwnedSession: (options: SessionOwnershipOptions): Promise<boolean> =>
+    ipcRenderer.invoke('session:kill-owned', options),
 
   getLiveSessionKind: (sessionId: string): Promise<SessionKind | null> =>
     ipcRenderer.invoke('session:kind', sessionId),
@@ -94,8 +119,10 @@ export const sessionApi = {
   deliverPrompt: (
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }> =>
-    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt),
+    imagePaths?: string[],
+    deliveryId?: string,
+  ): Promise<PromptDeliveryResult> =>
+    ipcRenderer.invoke('session:deliver-prompt', sessionId, prompt, imagePaths, deliveryId),
 
   resolveCondition: (
     sessionId: string,
@@ -164,6 +191,9 @@ export const sessionApi = {
   // --- Session events (subscribe once; dispatch by sessionId in the callback) ---
   onSessionStarted: (cb: (e: SessionStartedEvent) => void): Unsub =>
     subscribe('session:started', cb),
+
+  onSessionInputReadiness: (cb: (e: SessionInputReadinessEvent) => void): Unsub =>
+    subscribe('session:input-readiness', cb),
 
   onSessionScreen: (cb: (e: SessionScreenEvent) => void): Unsub =>
     subscribe('session:screen', cb),

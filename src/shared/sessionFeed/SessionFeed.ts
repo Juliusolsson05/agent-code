@@ -5,6 +5,7 @@ import type {
   SessionExitEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
   SessionSemanticEvent,
@@ -12,6 +13,7 @@ import type {
   SessionSubAgentsEvent,
   Unsub,
 } from '@shared/sessionFeed/types.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 // Convenience re-export: implementations import the contract and its return
 // type from one module (types.ts stays the declaration home).
@@ -55,6 +57,7 @@ export type { Unsub } from '@shared/sessionFeed/types.js'
 export interface SessionFeed {
   // --- Listeners (subscribe once; dispatch by sessionId in the callback) ---
   onSessionStarted(cb: (e: SessionStartedEvent) => void): Unsub
+  onSessionInputReadiness(cb: (e: SessionInputReadinessEvent) => void): Unsub
   onSessionScreen(cb: (e: SessionScreenEvent) => void): Unsub
   onSessionJsonlEntries(cb: (e: SessionJsonlEntriesEvent) => void): Unsub
   onSessionJsonlError(cb: (e: SessionJsonlErrorEvent) => void): Unsub
@@ -80,7 +83,9 @@ export interface SessionFeed {
   deliverPrompt(
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }>
+    imagePaths?: string[],
+    deliveryId?: string,
+  ): Promise<PromptDeliveryResult>
 
   /** Resolve a live provider condition (permission prompt, trust dialog,
    *  AskUserQuestion, codex approval) with a custom action. */

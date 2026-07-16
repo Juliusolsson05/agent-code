@@ -42,6 +42,9 @@
       "agent-transcript-parser/*": ["./packages/agent-transcript-parser/src/*"],
       "agent-voice-dictation": ["./packages/agent-voice-dictation/src/index.ts"],
       "agent-voice-dictation/*": ["./packages/agent-voice-dictation/src/*/index.ts"],
+      "workflow-mcp": ["./packages/workflow-mcp/src/index.ts"],
+      "workflow-mcp/state": ["./packages/workflow-mcp/src/state.ts"],
+      "workflow-mcp/worker": ["./packages/workflow-mcp/src/worker.ts"],
       "@main/*": ["./src/main/*"],
       "@preload/*": ["./src/preload/*"],
       "@renderer/*": ["./src/renderer/src/*"],
@@ -68,7 +71,8 @@
     "packages/agent-voice-dictation/src/speech/**/*",
     "packages/claude-code-headless/src/**/*",
     "packages/codex-headless/src/**/*",
-    "packages/opencode-headless/src/**/*"
+    "packages/opencode-headless/src/**/*",
+    "packages/workflow-mcp/src/**/*"
   ],
   "exclude": [
     // Provider renderer halves live under the node project's

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events'
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { spawn } from 'child_process'
+import type { ChildProcessWithoutNullStreams } from 'child_process'
 import { resolve } from 'path'
 import { fileURLToPath, pathToFileURL } from 'url'
 
@@ -7,23 +8,23 @@ import {
   createMessageConnection,
   StreamMessageReader,
   StreamMessageWriter,
-  type MessageConnection,
 } from 'vscode-jsonrpc/node.js'
-import {
-  DiagnosticSeverity,
-  type CompletionItem,
-  type CompletionList,
-  type DocumentSymbol,
-  type Hover,
-  type InitializeParams,
-  type InitializeResult,
-  type Location,
-  type LocationLink,
-  type PublishDiagnosticsParams,
-  type Range,
-  type SemanticTokens,
-  type SemanticTokensLegend,
-  type SymbolInformation,
+import type { MessageConnection } from 'vscode-jsonrpc/node.js'
+import { DiagnosticSeverity } from 'vscode-languageserver-protocol'
+import type {
+  CompletionItem,
+  CompletionList,
+  DocumentSymbol,
+  Hover,
+  InitializeParams,
+  InitializeResult,
+  Location,
+  LocationLink,
+  PublishDiagnosticsParams,
+  Range,
+  SemanticTokens,
+  SemanticTokensLegend,
+  SymbolInformation,
 } from 'vscode-languageserver-protocol'
 
 import {

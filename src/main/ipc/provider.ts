@@ -3,10 +3,8 @@ import { ipcMain } from 'electron'
 
 import { switchProvider } from '@main/providerSwitch/switchProvider.js'
 import { duplicateSession } from '@main/providerSwitch/duplicateSession.js'
-import {
-  rewindSession,
-  type RewindSessionRequest,
-} from '@main/providerSwitch/rewindSession.js'
+import { rewindSession } from '@main/providerSwitch/rewindSession.js'
+import type { RewindSessionRequest } from '@main/providerSwitch/rewindSession.js'
 
 // Provider-level session transforms.
 //

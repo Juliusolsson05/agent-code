@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 type AnyFn = (...args: unknown[]) => unknown
 const listenerNames = [
   'onSessionStarted',
+  'onSessionInputReadiness',
   'onSessionScreen',
   'onSessionJsonlEntries',
   'onSessionJsonlError',
@@ -59,7 +60,12 @@ describe('IpcSessionFeed', () => {
     const api = stubWindowApi()
     const { ipcSessionFeed } = await import('./IpcSessionFeed')
     await ipcSessionFeed.deliverPrompt('s1', 'do the thing')
-    expect(api.deliverPrompt).toHaveBeenCalledWith('s1', 'do the thing')
+    expect(api.deliverPrompt).toHaveBeenCalledWith(
+      's1',
+      'do the thing',
+      undefined,
+      undefined,
+    )
     const action = { kind: 'select-option', optionIndex: 0 } as never
     await ipcSessionFeed.resolveCondition('s1', action)
     expect(api.resolveCondition).toHaveBeenCalledWith('s1', action)

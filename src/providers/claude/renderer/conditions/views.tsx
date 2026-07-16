@@ -90,7 +90,7 @@ export const resumeView = defineView<'claude.resume-prompt', ClaudeResumePromptS
   layout: 'strip',
   // selectors.ts: claude.resume-prompt → 'RESUME'.
   attention: () => 'RESUME',
-  Component: ({ state, dispatch }) => (
+  Component: ({ state, dispatch, interactionActive }) => (
     <ResumePromptModal
       prompt={
         state?.visible
@@ -102,6 +102,7 @@ export const resumeView = defineView<'claude.resume-prompt', ClaudeResumePromptS
           : null
       }
       onSend={(data) => dispatch(raw(data))}
+      interactionActive={interactionActive}
     />
   ),
 })

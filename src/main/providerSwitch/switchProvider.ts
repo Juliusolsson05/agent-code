@@ -251,6 +251,15 @@ function prepareTranslatedClaudeForResume(
       return next
     })
 
+  // The `as unknown as ClaudeEntry` casts below are deliberate, not sloppiness:
+  // Claude Code's native JSONL begins with lightweight header lines
+  // (`last-prompt`, `permission-mode`) that genuinely carry no uuid/parentUuid/
+  // timestamp, but agent-transcript-parser's ClaudeEntry declares those fields
+  // required (they are, for conversation entries). A single `as ClaudeEntry`
+  // does not compile because the shapes don't overlap enough. Widening
+  // ClaudeEntry in the parser package would weaken every real conversation
+  // entry to accommodate two synthetic header lines — the local double-cast is
+  // the smaller lie.
   const leafUuid = conversation.at(-1)?.uuid
   const prefix: ClaudeEntry[] = []
   if (typeof leafUuid === 'string' && leafUuid.length > 0) {

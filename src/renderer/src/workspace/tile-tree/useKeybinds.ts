@@ -6,6 +6,7 @@ import { getRendererProviderCapabilities } from '@providers/registry.renderer.ca
 import { useEffect } from 'react'
 
 import { useAppStore } from '@renderer/app-state/hooks'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { getEffectiveAgentSurface, isAgentKind } from '@renderer/workspace/agentDisplayMode'
 import {
@@ -89,6 +90,59 @@ function isTextEditingTarget(target: EventTarget | null): boolean {
   return el.isContentEditable
 }
 
+const BLOCKED_META_CODES = new Set([
+  'BracketLeft',
+  'BracketRight',
+  'KeyE',
+  'KeyP',
+  'KeyR',
+  'KeyT',
+  'KeyW',
+])
+
+const BLOCKED_ALT_CODES = new Set([
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'End',
+  'Equal',
+  'Home',
+  'KeyC',
+  'KeyD',
+  'KeyH',
+  'KeyJ',
+  'KeyK',
+  'KeyL',
+  'KeyT',
+  'KeyW',
+  'Minus',
+  'PageDown',
+  'PageUp',
+])
+
+export function shouldPreventOwnedApplicationShortcut(event: KeyboardEvent): boolean {
+  // WHY this is an allow-list of Agent Code chords instead of "any Cmd/Alt":
+  // a modal input still needs native editing shortcuts (Cmd+C/V/X/A/Z) and
+  // macOS Option-based character entry. The earlier per-modal bailout blocked
+  // every modified key, which happened to protect the workspace but also made
+  // legitimate form editing inert. Suppress only chords this router owns.
+  if (event.metaKey) {
+    if (/^Digit[0-9]$/.test(event.code)) return true
+    if (event.altKey && /^Digit[1-9]$/.test(event.code)) return true
+    return BLOCKED_META_CODES.has(event.code)
+  }
+  if (!event.altKey) return false
+  // Option is also macOS's text-composition modifier. While an app-owned
+  // surface has an editable target, Option+C may produce "ç" and Option+Arrow
+  // performs native word navigation/selection. The ownership gate already
+  // prevents the workspace router from acting; preventing the browser default
+  // here would only break the modal's legitimate editing behavior.
+  if (isTextEditingTarget(event.target)) return false
+  if (/^Digit[0-9]$/.test(event.code)) return true
+  return BLOCKED_ALT_CODES.has(event.code)
+}
+
 function renderedAgentSurfaceIsVisible(workspace: Workspace, agentViewMode: string, sessionId: string): boolean {
   const kind = workspace.state.sessions[sessionId]?.kind
   if (!isAgentKind(kind)) return false
@@ -168,6 +222,18 @@ export function useKeybinds(
       const alt = e.altKey
       const shift = e.shiftKey
       const k = e.key
+
+      // App-owned dialogs/takeovers get the whole interaction turn. This gate
+      // must precede every workspace shortcut because the listener runs in
+      // capture phase, before a focused modal control can stop propagation.
+      // Do not stop propagation here: the owning surface still needs Escape,
+      // Enter, arrows, and normal form input. Only prevent browser/Electron
+      // defaults for chords that Agent Code itself claims (Cmd+W is the
+      // important one — otherwise macOS closes the window after we return).
+      if (hasAppInteractionOwner()) {
+        if (shouldPreventOwnedApplicationShortcut(e)) e.preventDefault()
+        return
+      }
       // Unified placement-overlay predicate — matches App.tsx's
       // `placementOverlayOpen` so create, attach, and linked-agent
       // modes share one keyboard bailout.

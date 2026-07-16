@@ -1,6 +1,8 @@
-import { useCallback, type Dispatch, type SetStateAction } from 'react'
+import { useCallback } from 'react'
+import type { Dispatch, SetStateAction } from 'react'
 
-import { emptyRuntime, type SessionRuntime } from '@renderer/session-runtime/state'
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
 import type { SessionId } from '@renderer/workspace/types'
 import type { WorkspaceSetRuntimes } from '@renderer/workspace/hook/context'
 

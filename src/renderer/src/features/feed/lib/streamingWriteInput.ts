@@ -28,27 +28,26 @@
 //      recovery heuristics.
 //   2. This runs on every `input_json_delta` — hundreds of times a
 //      second on a long write. A single linear pass with no
-//      allocation beyond the result keeps it off the profiler.
+//      allocation beyond one bounded result keeps it off the profiler.
 //   3. The only fiddly part is JSON-string unescape, and that's a
 //      fixed spec table we can inline.
 //
 // WHAT MAKES IT WRONG (invariants):
-//   - Assumes key order `file_path` then `content`. If the model
-//     ever emits them reversed, `extractStreamingWriteInput` returns
-//     `{ filePath: null, partialContent: null }` and the caller
-//     falls back to the raw-JSON `<pre>`. It must never throw and
+//   - Members may arrive in either order, but an unknown non-string value
+//     still stops this intentionally tiny scanner. It must never throw and
 //     must never return a half-unescaped string.
 //   - `partialContent` is intentionally returned WITHOUT requiring
-//     the closing quote — the whole point is to show the in-flight
-//     value. Once the block finalizes, the committed WriteRow
-//     renderer takes over and this code is no longer on the path.
+//     the closing quote, but is capped to one renderer page. The goal is a
+//     responsive in-flight preview, not mirroring an unbounded file on every
+//     delta. Once the block finalizes, the committed WriteRow owns the durable
+//     value and this code is no longer on the path.
 
 export type StreamingWriteInput = {
   /** The `file_path` value, or null if its string literal has not
    *  finished streaming yet (or the buffer didn't match the
    *  expected shape). */
   filePath: string | null
-  /** The `content` value decoded so far (JSON-unescaped), or null
+  /** A bounded prefix of the `content` value decoded so far (JSON-unescaped), or null
    *  if the scanner has not yet reached the start of the `content`
    *  string. Empty string is a valid value — it means `content`
    *  has started but no bytes have arrived. */
@@ -56,6 +55,8 @@ export type StreamingWriteInput = {
 }
 
 const EMPTY: StreamingWriteInput = { filePath: null, partialContent: null }
+const MAX_STREAMING_FILE_PATH_CHARS = 4 * 1024
+const MAX_STREAMING_CONTENT_CHARS = 16 * 1024
 
 // JSON single-char escapes (the `\X` forms other than `\uXXXX`).
 const SIMPLE_ESCAPES: Record<string, string> = {
@@ -84,10 +85,16 @@ const SIMPLE_ESCAPES: Record<string, string> = {
 function decodeJsonStringBody(
   raw: string,
   start: number,
+  maxDecodedChars: number,
 ): { text: string; closed: boolean; end: number } {
   let out = ''
   let i = start
-  while (i < raw.length) {
+  // WHY decoding stops at a renderer page: this function runs for every
+  // input_json_delta. Re-decoding an ever-growing file made a large Write
+  // preview O(total bytes²), even after syntax highlighting was disabled. The
+  // committed transcript owns the complete value; the live plane needs only a
+  // responsive preview prefix.
+  while (i < raw.length && out.length < maxDecodedChars) {
     const ch = raw[i]
     if (ch === '"') {
       return { text: out, closed: true, end: i + 1 }
@@ -168,7 +175,7 @@ export function extractStreamingWriteInput(inputJson: string): StreamingWriteInp
     // point yet. Stop; the next delta will carry more.
     if (ch !== '"') break
 
-    const key = decodeJsonStringBody(raw, i + 1)
+    const key = decodeJsonStringBody(raw, i + 1, 256)
     // Key literal still streaming → can't know what member this is.
     if (!key.closed) break
     i = key.end
@@ -185,7 +192,13 @@ export function extractStreamingWriteInput(inputJson: string): StreamingWriteInp
     // value with this minimal scanner — stop.
     if (raw[i] !== '"') break
 
-    const value = decodeJsonStringBody(raw, i + 1)
+    const value = decodeJsonStringBody(
+      raw,
+      i + 1,
+      key.text === 'file_path'
+        ? MAX_STREAMING_FILE_PATH_CHARS
+        : MAX_STREAMING_CONTENT_CHARS,
+    )
     if (key.text === 'file_path') {
       // file_path is only surfaced once its literal is fully closed
       // — a half path would flicker in the header on every delta.

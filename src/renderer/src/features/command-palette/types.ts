@@ -1,5 +1,5 @@
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import type { AgentViewMode } from '@renderer/app-state/settings/types'
+import type { AgentViewMode, UsageHeaderLevel } from '@renderer/app-state/settings/types'
 import type { RenderedViewPolicy } from '@renderer/workspace/agentDisplayMode'
 import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
 
@@ -141,6 +141,8 @@ export type CommandContext = {
     toggleCustomRendering: () => void
     toggleStatusMode: () => void
     toggleWorktreeBadges: () => void
+    toggleUsageHeader: () => void
+    cycleUsageHeaderLevel: () => void
     setDangerousAgentsEnabled: (enabled: boolean) => void
     setAggressiveDebugPersistence: (enabled: boolean) => void
     enterResumeMode: () => void
@@ -157,6 +159,8 @@ export type CommandContext = {
     customRenderingEnabled: boolean
     statusModeEnabled: boolean
     worktreeBadgesEnabled: boolean
+    usageHeaderEnabled: boolean
+    usageHeaderLevel: UsageHeaderLevel
     dangerousAgentsEnabled: boolean
     aggressiveDebugPersistenceEnabled: boolean
     gitBarOpen: boolean

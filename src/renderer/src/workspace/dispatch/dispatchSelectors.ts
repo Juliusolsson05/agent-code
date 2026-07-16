@@ -1,6 +1,6 @@
 import type { SessionId, SessionKind, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { collectLeaves } from '@renderer/workspace/tile-tree/treeOps'
-import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
+import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabelFormat'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 
 export type DispatchAgentRow = {

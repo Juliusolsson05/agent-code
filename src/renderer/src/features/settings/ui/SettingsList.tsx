@@ -5,6 +5,7 @@ import type {
 } from '@renderer/features/settings/lib/settingsRegistry'
 import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
 import { HotkeyInput } from '@renderer/features/settings/ui/HotkeyInput'
+import { CliUpdateBehaviorRow } from '@renderer/features/cli-updates/CliUpdateBehaviorRow'
 
 type Props = {
   definitions: SettingDefinition[]
@@ -86,7 +87,7 @@ function SettingRow({
   const control = definition.control
 
   return (
-    <div className="border-b border-border px-4 py-4 last:border-b-0">
+    <div className="border-b border-panel-border px-4 py-4 last:border-b-0">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
         <div className="min-w-0">
           <div className="text-[12px] text-ink">{definition.title}</div>
@@ -103,14 +104,14 @@ function SettingRow({
                   !control.getValue(settings),
                 )
               }
-              className="flex w-full items-center justify-between border border-border px-3 py-2 text-left text-[12px] text-ink-dim hover:border-border-hi hover:text-ink"
+              className="flex w-full items-center justify-between border border-control-border bg-control-bg px-3 py-2 text-left text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
             >
               <span>{control.getValue(settings) ? 'Enabled' : 'Disabled'}</span>
               <span
                 className={`flex h-3.5 w-3.5 border ${
                   control.getValue(settings)
-                    ? 'border-accent bg-accent'
-                    : 'border-border-hi bg-transparent'
+                        ? 'border-control-active-bg bg-control-active-bg'
+                        : 'border-control-border-hover bg-transparent'
                 }`}
               />
             </button>
@@ -132,13 +133,13 @@ function SettingRow({
                     onClick={() => void control.onSelect(context, option.value)}
                     className={`border px-3 py-2 text-left ${
                       active
-                        ? 'border-accent bg-accent text-accent-fg'
-                        : 'border-border text-ink-dim hover:border-border-hi hover:text-ink'
+                        ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
+                        : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
                     }`}
                   >
                     <div className="text-[11px]">{option.label}</div>
                     {option.description ? (
-                      <div className={`mt-1 text-[10px] ${active ? 'text-accent-fg/80' : 'text-muted'}`}>
+                      <div className={`mt-1 text-[10px] ${active ? 'text-control-active-fg/80' : 'text-muted'}`}>
                         {option.description}
                       </div>
                     ) : null}
@@ -161,8 +162,8 @@ function SettingRow({
               onClick={() => void control.onTrigger(context)}
               className={`w-full border px-3 py-2 text-left text-[12px] ${
                 control.tone === 'danger'
-                  ? 'border-danger text-danger hover:bg-danger/10'
-                  : 'border-border text-ink-dim hover:border-border-hi hover:text-ink'
+                  ? 'border-danger text-danger hover:bg-danger-soft'
+                  : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
               }`}
             >
               {control.label}
@@ -186,14 +187,14 @@ function SettingRow({
                       key={command.id}
                       type="button"
                       onClick={() => control.onToggleCommand(context, command, !visible)}
-                      className="flex w-full items-center justify-between border border-border px-3 py-2 text-left text-[12px] text-ink-dim hover:border-border-hi hover:text-ink"
+                      className="flex w-full items-center justify-between border border-control-border bg-control-bg px-3 py-2 text-left text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
                     >
                       <span className="min-w-0 truncate">{command.title}</span>
                       <span
                         className={`ml-3 flex h-3.5 w-3.5 shrink-0 border ${
                           visible
-                            ? 'border-accent bg-accent'
-                            : 'border-border-hi bg-transparent'
+                            ? 'border-control-active-bg bg-control-active-bg'
+                            : 'border-control-border-hover bg-transparent'
                         }`}
                       />
                     </button>
@@ -203,12 +204,18 @@ function SettingRow({
               <button
                 type="button"
                 onClick={() => control.onResetVisibility(context)}
-                className="w-full border border-border px-3 py-2 text-left text-[12px] text-ink-dim hover:border-border-hi hover:text-ink"
+                className="w-full border border-control-border bg-control-bg px-3 py-2 text-left text-[12px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
               >
                 Reset command visibility
               </button>
             </div>
           ) : null}
+
+          {/* CLI auto-updater — the row owns its own subscription
+              because the value lives in setup.json (main-owned), not
+              in the renderer Settings store. See
+              features/cli-updates/CliUpdateBehaviorRow.tsx. */}
+          {control.type === 'cli-update-behavior' ? <CliUpdateBehaviorRow /> : null}
         </div>
       </div>
     </div>

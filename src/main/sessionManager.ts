@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
+import path from 'node:path'
 import { performance } from 'perf_hooks'
 
 import { getMainProvider } from '@providers/registry.main.js'
@@ -24,6 +25,12 @@ import type {
   AgentPermissionPromptState,
   AgentCompactionState,
   AgentProcessState,
+  AgentInputReadiness,
+  SessionBackendSnapshot,
+  SessionInputReadiness,
+  SessionOwnershipOptions,
+  SessionRecoverOptions,
+  SessionRecoverResult,
 } from '@shared/types/session.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
 import { performanceService } from '@main/performance/PerformanceService.js'
@@ -38,9 +45,9 @@ import type {
 import {
   DEFAULT_PROVIDER,
   isAgentProviderKind,
-  type AgentProviderKind,
-  type SessionKind,
+  isSessionKind,
 } from '@shared/types/providerKind.js'
+import type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
 import type { BuiltInMcpDomain, BuiltInMcpServerConfig } from '@mcp/shared/types.js'
 import type { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import type { AppRunJournal } from '@main/incident/AppRunJournal.js'
@@ -48,6 +55,7 @@ import type {
   SessionSpawnOptions,
   SessionSpawnResult,
 } from '@preload/api/types.js'
+import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
 
 // SessionManager: a thin registry on top of ClaudeSession / TerminalSession
 // that lets the main process run N sessions in parallel. Every event
@@ -86,6 +94,7 @@ export type { SessionKind } from '@shared/types/providerKind.js'
 // not via direct event-map type access.
 type ManagerEvents = {
   started: [{ sessionId: string; kind: SessionKind; projectDir?: string }]
+  'input-readiness': [{ sessionId: string; input: SessionInputReadiness }]
   'pty-data': [{ sessionId: string; data: string }]
   /** Raw PTY bytes for an attached agent inline terminal. Emitted
    *  only after attachAgentPty() flips the per-session attach flag. */
@@ -178,14 +187,59 @@ export interface SessionManager {
 // awaitReadyForPrompt), so the callers keep reading naturally.
 type AgentSessionLike = AgentSession
 
+type RegistryLifecycle = {
+  generation: symbol
+  startSettled: boolean
+  stopRequested: boolean
+  stopRequestedBeforeStartSettled: boolean
+  stopPromise: Promise<void> | null
+  postStartStopPromise: Promise<void> | null
+}
+
 // Internal registry shape: we store the concrete instance plus its
 // kind so kill/write/resize can dispatch without sniffing the object.
 // The registry holds concrete session instances. Agent sessions
 // (claude, codex) are created via the provider registry; terminal
 // sessions are handled directly.
 type RegistryEntry =
-  | { kind: AgentProviderKind; session: AgentSessionLike }
-  | { kind: 'terminal'; session: TerminalSession; tmuxName: string | null }
+  | {
+      kind: AgentProviderKind
+      session: AgentSessionLike
+      lifecycle: RegistryLifecycle
+    }
+  | {
+      kind: 'terminal'
+      session: TerminalSession
+      tmuxName: string | null
+      lifecycle: RegistryLifecycle
+    }
+
+type RecoveryClaim = {
+  kind: SessionKind
+  cwd: string
+  startedAt: number
+  cancelled: boolean
+  spawnGeneration: symbol | null
+  promise: Promise<SessionRecoverResult>
+}
+
+class RecoveryCancelledError extends Error {
+  constructor() {
+    super('Session recovery was cancelled')
+    this.name = 'RecoveryCancelledError'
+  }
+}
+
+function createRegistryLifecycle(generation: symbol): RegistryLifecycle {
+  return {
+    generation,
+    startSettled: false,
+    stopRequested: false,
+    stopRequestedBeforeStartSettled: false,
+    stopPromise: null,
+    postStartStopPromise: null,
+  }
+}
 
 // Rolling buffer cap for terminal replay. 256 KB is enough to hold
 // the recent scrollback of a normal interactive shell session —
@@ -237,7 +291,21 @@ function appendCappedBuffer(prev: string, data: string, cap: number): string {
 
 export class SessionManager extends EventEmitter {
   private readonly sessions = new Map<string, RegistryEntry>()
-  private readonly spawningSessionIds = new Set<string>()
+  private readonly spawningSessionGenerations = new Map<string, symbol>()
+  private readonly sessionStateGenerations = new Map<string, symbol>()
+  // WHY this is separate from spawningSessionGenerations: the map is a low-level
+  // duplicate-spawn guard, while this map is the public reconciliation
+  // authority. A renderer reload, a wake action, and a remote caller may all
+  // ask for the same persisted pane concurrently. They must join the same
+  // result rather than interpreting an ordinary in-flight recovery as an
+  // error. The claim is installed synchronously before provider/MCP code can
+  // re-enter main and is always released by the owning recovery's finally.
+  private readonly recoveriesInFlight = new Map<string, RecoveryClaim>()
+  // WHY main owns this reservation: renderer guards disappear on reload and
+  // remote/MCP callers never share renderer state. PTY prompt delivery is a
+  // per-session critical section; without it, Enter from attempt A can submit
+  // paste B and turn a slow operation into duplicate queue entries.
+  private readonly promptDeliveriesInFlight = new Set<string>()
   private readonly lastActivityAt = new Map<string, number>()
   // Latest per-session UI-state snapshots, cached at the emit sites below.
   // WHY: consumers that attach mid-flight (the remote mobile companion's
@@ -250,6 +318,16 @@ export class SessionManager extends EventEmitter {
   // in cleanupSessionState.
   private readonly lastScreenSnapshot = new Map<string, AgentScreenSnapshot>()
   private readonly lastConditionsSnapshot = new Map<string, ProviderConditionSnapshot>()
+  private readonly lastInputReadiness = new Map<string, SessionInputReadiness>()
+  // WHY this is one manager-global sequence instead of a bounded per-id map:
+  // a persisted pane may reuse its stable local id after arbitrarily many
+  // unrelated sessions have come and gone. Evicting that id's watermark made
+  // the replacement restart at revision 1 while a renderer still held N, so
+  // every truthful ready/unready event looked stale. One scalar is both more
+  // memory-efficient and strictly orders every readiness fact produced during
+  // this main-process lifetime; renderer state from any older generation can
+  // never outrank a replacement.
+  private inputReadinessRevision = 0
   // Durable transcript path per session, cached from the jsonl-entry relay.
   // This is the one main-side key that unlocks history reads for a LIVE
   // session: cwd is provider-constructor-private and the provider session id
@@ -278,7 +356,7 @@ export class SessionManager extends EventEmitter {
   // not the workspace the user thinks of.
   private readonly spawnInfo = new Map<
     string,
-    { cwd: string; resumeSessionId: string | null }
+    { kind: SessionKind; cwd: string; resumeSessionId: string | null }
   >()
   private readonly sessionSizes = new Map<string, PtySize>()
   // Coalesce "input write to a session main doesn't own" incidents — the
@@ -361,7 +439,49 @@ export class SessionManager extends EventEmitter {
     this.lastActivityAt.set(sessionId, Date.now())
   }
 
-  private cleanupSessionState(sessionId: string, kind: SessionKind): void {
+  private recordRecovery(
+    name: 'session.recovery.joined' | 'session.recovery.completed' | 'session.recovery.failed',
+    data: Record<string, unknown>,
+  ): void {
+    // WHY this helper is best-effort and metadata-only: recovery is the path
+    // that repairs the app after a crash, so diagnostics must never become a
+    // new startup dependency. The existing journal is already byte/pending-
+    // bounded; this wrapper additionally prevents an unexpected journal bug
+    // from delaying ownership reconciliation. Callers provide only local id,
+    // provider kind, disposition/lifecycle, duration, or typed failure code—
+    // never prompts, commands, transcript text, MCP URLs, tokens, or payloads.
+    try {
+      this.journal?.record({ area: 'session.recovery', name, data })
+    } catch {
+      // Recovery correctness outranks optional forensic breadcrumbs.
+    }
+  }
+
+  private setInputReadiness(sessionId: string, next: AgentInputReadiness): void {
+    const previous = this.lastInputReadiness.get(sessionId)
+    if (previous?.ready === next.ready && previous.reason === next.reason) return
+    const revision = ++this.inputReadinessRevision
+    const input: SessionInputReadiness = {
+      ...next,
+      revision,
+    }
+    this.lastInputReadiness.set(sessionId, input)
+    // WHY readiness is emitted as a level fact with a main-owned revision:
+    // providers know the real composer boundary, but renderer reload can race
+    // both the provider event and the recovery snapshot. A monotonic counter
+    // lets every consumer subscribe first, seed second, and reject an older
+    // seed that arrives after a newer event. Process/activity signals cannot
+    // safely substitute for this fact.
+    this.emit('input-readiness', { sessionId, input })
+  }
+
+  private cleanupSessionState(
+    sessionId: string,
+    kind: SessionKind,
+    expectedEntry?: RegistryEntry,
+    revokeAgentMcp = kind !== 'terminal',
+    expectedGeneration = expectedEntry?.lifecycle.generation,
+  ): boolean {
     // WHY this helper exists even before the larger SessionState consolidation:
     // per-session state currently lives in several maps whose lifetimes must end
     // together. Keeping all deletes here makes the removal invariant visible and
@@ -370,13 +490,28 @@ export class SessionManager extends EventEmitter {
     // resources (JSONL coalescer buffers and subagent watchers) are cleaned by
     // the separate `removed` event so SessionManager does not import forwarder
     // internals.
+    // WHY cleanup is generation-owned: stable local ids are deliberately
+    // reused after a failed provider start. The old wrapper may still emit a
+    // late exit/readiness event after its replacement is registered. An
+    // id-only delete would let generation A revoke generation B's MCP token
+    // and erase B from the registry. Every entry-backed teardown therefore
+    // proves it still owns the exact object installed under this id.
+    if (expectedEntry && this.sessions.get(sessionId) !== expectedEntry) return false
+    if (
+      expectedGeneration &&
+      this.sessionStateGenerations.get(sessionId) !== expectedGeneration
+    ) {
+      return false
+    }
     this.sessions.delete(sessionId)
+    this.sessionStateGenerations.delete(sessionId)
     // UI-state snapshot caches die with the session — replaying a dead
     // session's screen/conditions to a late subscriber would present it as
     // live (the exact stale-state bug the remote late-joiner replay had).
     this.lastScreenSnapshot.delete(sessionId)
     this.lastConditionsSnapshot.delete(sessionId)
     this.lastTranscriptFile.delete(sessionId)
+    this.lastInputReadiness.delete(sessionId)
     this.spawnInfo.delete(sessionId)
     // Keep lastActivityAt after removal. Process telemetry can be asked about a
     // pane the renderer still knows but whose PTY already exited; deleting this
@@ -391,9 +526,304 @@ export class SessionManager extends EventEmitter {
       this.agentPtyBuffers.delete(sessionId)
       this.agentPtyAttachCounts.delete(sessionId)
       this.agentPtyRestoreSizes.delete(sessionId)
-      this.builtInMcpHost?.revokeSession(sessionId)
+      if (revokeAgentMcp) this.builtInMcpHost?.revokeSession(sessionId)
     }
     forgetFeedDebugSession(sessionId)
+    return true
+  }
+
+  private throwIfRecoveryCancelled(claim?: RecoveryClaim): void {
+    if (claim?.cancelled) throw new RecoveryCancelledError()
+  }
+
+  private requestEntryStop(sessionId: string, entry: RegistryEntry): Promise<void> {
+    const lifecycle = entry.lifecycle
+    lifecycle.stopRequested = true
+    if (!lifecycle.startSettled) lifecycle.stopRequestedBeforeStartSettled = true
+    if (!lifecycle.stopPromise) {
+      lifecycle.stopPromise = Promise.resolve()
+        .then(() => entry.session.stop())
+        .catch(error => {
+          // WHY stop failures are diagnostic, not ownership failures: main
+          // must still sever the registry/MCP references even when a provider
+          // wrapper cannot prove its child exited. Retaining a writable entry
+          // after stop rejected is strictly worse than recording the failure
+          // and allowing the provider/process supervisor to finish cleanup.
+          performanceService.error('session.stop.error', error, {
+            sessionId,
+            kind: entry.kind,
+          })
+        })
+    }
+    return lifecycle.stopPromise
+  }
+
+  private async settleEntryStart(
+    sessionId: string,
+    entry: RegistryEntry,
+  ): Promise<void> {
+    const lifecycle = entry.lifecycle
+    lifecycle.startSettled = true
+    if (!lifecycle.stopRequestedBeforeStartSettled) return
+    if (!lifecycle.postStartStopPromise) {
+      // WHY a second, post-start stop is intentional: some wrappers can finish
+      // acquiring their PTY/proxy/server after an earlier stop() returned.
+      // The first stop makes kill responsive; this generation-owned second
+      // stop closes anything that materialized late. It runs at most once and
+      // never targets a replacement entry.
+      lifecycle.postStartStopPromise = Promise.resolve()
+        .then(() => entry.session.stop())
+        .catch(error => {
+          performanceService.error('session.stop.postStart.error', error, {
+            sessionId,
+            kind: entry.kind,
+          })
+        })
+    }
+    // WHY invoke the post-start stop before awaiting the first one: the first
+    // stop may itself be waiting for startup to finish. Waiting on it here
+    // would deadlock the second stop behind the exact pre-start race it exists
+    // to repair. Start settlement launches the second attempt immediately,
+    // then the generation fence remains held until both teardown attempts have
+    // settled.
+    await Promise.all([
+      lifecycle.stopPromise ?? Promise.resolve(),
+      lifecycle.postStartStopPromise,
+    ])
+  }
+
+  private removeEntryListeners(entry: RegistryEntry): void {
+    try {
+      const maybe = (entry.session as { removeAllListeners?: () => void })
+        .removeAllListeners
+      maybe?.call(entry.session)
+    } catch {
+      // Listener cleanup is best-effort and must never block ownership release.
+    }
+  }
+
+  /**
+   * Reconcile one persisted renderer pane with main's backend registry.
+   *
+   * WHY this is a main-owned atomic operation instead of renderer
+   * get-kind-then-spawn: renderer state disappears on reload, and two
+   * renderers/remote callers do not share a JavaScript single-flight. The
+   * persisted local SessionId is the only ownership key. Provider history ids
+   * are consumed only by the cold-spawn path and never used to adopt a process.
+   */
+  recover(options: SessionRecoverOptions): Promise<SessionRecoverResult> {
+    const requestedKind: unknown = options.kind
+    if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
+      // WHY validate again in main even though renderer has a type guard: IPC
+      // is a runtime trust boundary and stale/newer renderers can send values
+      // this build does not know. Falling through the agent-kind check would
+      // otherwise interpret an unknown provider as a terminal shell.
+      return Promise.resolve({
+        ok: false,
+        code: 'start-failed',
+        retryable: false,
+        message: 'This Agent Code version does not support the requested provider.',
+      })
+    }
+    const kind = options.kind ?? DEFAULT_PROVIDER
+    const cwd = path.resolve(options.cwd)
+    const existingClaim = this.recoveriesInFlight.get(options.sessionId)
+    if (existingClaim) {
+      if (existingClaim.kind === kind && existingClaim.cwd === cwd) {
+        this.recordRecovery('session.recovery.joined', {
+          sessionId: options.sessionId,
+          kind,
+          lifecycle: 'spawning',
+        })
+        return existingClaim.promise
+      }
+      this.recordRecovery('session.recovery.failed', {
+        sessionId: options.sessionId,
+        kind,
+        code: 'ownership-conflict',
+        lifecycle: 'spawning',
+      })
+      return Promise.resolve(this.recoveryConflict(options.sessionId, existingClaim))
+    }
+
+    const existingEntry = this.sessions.get(options.sessionId)
+    if (existingEntry) {
+      const snapshot = this.getBackendSnapshot(options.sessionId)
+      if (snapshot && snapshot.kind === kind && path.resolve(snapshot.cwd) === cwd) {
+        this.recordRecovery('session.recovery.completed', {
+          sessionId: options.sessionId,
+          kind,
+          disposition: 'adopted',
+          lifecycle: snapshot.lifecycle,
+          durationMs: 0,
+        })
+        return Promise.resolve({
+          ok: true,
+          disposition: 'adopted',
+          snapshot,
+          ...(existingEntry.kind === 'terminal' && existingEntry.tmuxName
+            ? { tmuxName: existingEntry.tmuxName }
+            : {}),
+        })
+      }
+      this.recordRecovery('session.recovery.failed', {
+        sessionId: options.sessionId,
+        kind,
+        code: 'ownership-conflict',
+        lifecycle: snapshot?.lifecycle ?? 'live',
+      })
+      return Promise.resolve(this.recoveryConflict(options.sessionId, snapshot))
+    }
+
+    if (this.spawningSessionGenerations.has(options.sessionId)) {
+      this.recordRecovery('session.recovery.failed', {
+        sessionId: options.sessionId,
+        kind,
+        code: 'ownership-conflict',
+        lifecycle: 'spawning',
+      })
+      return Promise.resolve(this.recoveryConflict(options.sessionId, null))
+    }
+
+    // WHY the microtask: assigning the promise by calling an async helper first
+    // would execute that helper synchronously until its first await. Provider
+    // construction (and MCP registration) occurs before spawn's first
+    // provider-start await and can re-enter recover(). Queueing the owner work
+    // lets us publish the fully-formed claim before any of those side effects.
+    const claim: RecoveryClaim = {
+      kind,
+      cwd,
+      startedAt: performance.now(),
+      cancelled: false,
+      spawnGeneration: null,
+      // Replaced on the next line before the claim is published. A typed
+      // never-settling placeholder keeps the object fully initialized without
+      // allowing async owner work to run before recoveriesInFlight.set().
+      promise: new Promise<SessionRecoverResult>(() => {}),
+    }
+    claim.promise = Promise.resolve().then(() => this.runRecovery(options, claim))
+    this.recoveriesInFlight.set(options.sessionId, claim)
+    return claim.promise
+  }
+
+  private recoveryConflict(
+    sessionId: string,
+    ownership: RecoveryClaim | SessionBackendSnapshot | null,
+  ): SessionRecoverResult {
+    const actual = ownership
+      ? {
+          kind: ownership.kind,
+          cwd: ownership.cwd,
+          lifecycle: 'lifecycle' in ownership ? ownership.lifecycle : 'spawning' as const,
+        }
+      : undefined
+    return {
+      ok: false,
+      code: 'ownership-conflict',
+      retryable: false,
+      message: `Session ${sessionId} is already owned by another backend`,
+      ...(actual ? { actual } : {}),
+    }
+  }
+
+  private async runRecovery(
+    options: SessionRecoverOptions,
+    claim: RecoveryClaim,
+  ): Promise<SessionRecoverResult> {
+    try {
+      if (claim.cancelled) {
+        this.recordRecovery('session.recovery.failed', {
+          sessionId: options.sessionId,
+          kind: claim.kind,
+          code: 'cancelled',
+          lifecycle: 'spawning',
+          durationMs: performance.now() - claim.startedAt,
+        })
+        return {
+          ok: false,
+          code: 'cancelled',
+          retryable: true,
+          message: `Recovery for session ${options.sessionId} was cancelled`,
+        }
+      }
+      const spawnPromise = this.spawnWithId({
+        ...options,
+        cwd: claim.cwd,
+        kind: claim.kind,
+      }, options.sessionId, claim)
+      const result = await spawnPromise
+      const snapshot = this.getBackendSnapshot(options.sessionId)
+      if (claim.cancelled || !snapshot || snapshot.lifecycle !== 'live') {
+        // A provider is allowed to resolve start() after stop() has already
+        // removed its registry entry. Treating that as success would hand the
+        // renderer a phantom backend; stop any late materialization and report
+        // the stable cancelled outcome instead.
+        await this.kill(options.sessionId)
+        this.recordRecovery('session.recovery.failed', {
+          sessionId: options.sessionId,
+          kind: claim.kind,
+          code: 'cancelled',
+          lifecycle: snapshot?.lifecycle ?? 'spawning',
+          durationMs: performance.now() - claim.startedAt,
+        })
+        return {
+          ok: false,
+          code: 'cancelled',
+          retryable: true,
+          message: `Recovery for session ${options.sessionId} was cancelled`,
+        }
+      }
+      this.recordRecovery('session.recovery.completed', {
+        sessionId: options.sessionId,
+        kind: claim.kind,
+        disposition: 'spawned',
+        lifecycle: snapshot.lifecycle,
+        durationMs: performance.now() - claim.startedAt,
+      })
+      return {
+        ok: true,
+        disposition: 'spawned',
+        snapshot,
+        ...(result.tmuxName ? { tmuxName: result.tmuxName } : {}),
+      }
+    } catch (error) {
+      if (claim.cancelled) {
+        this.recordRecovery('session.recovery.failed', {
+          sessionId: options.sessionId,
+          kind: claim.kind,
+          code: 'cancelled',
+          lifecycle: 'spawning',
+          durationMs: performance.now() - claim.startedAt,
+        })
+        return {
+          ok: false,
+          code: 'cancelled',
+          retryable: true,
+          message: `Recovery for session ${options.sessionId} was cancelled`,
+        }
+      }
+      this.recordRecovery('session.recovery.failed', {
+        sessionId: options.sessionId,
+        kind: claim.kind,
+        code: 'start-failed',
+        lifecycle: 'spawning',
+        durationMs: performance.now() - claim.startedAt,
+      })
+      return {
+        ok: false,
+        code: 'start-failed',
+        retryable: true,
+        // WHY the raw provider exception stays out of IPC: binary launch
+        // errors can contain environment values, proxy URLs, or scoped MCP
+        // tokens. Main records the typed code and internal performance error;
+        // renderer receives one stable, actionable message with no payload.
+        message: 'Session failed to start. Check provider setup and retry.',
+      }
+    } finally {
+      if (this.recoveriesInFlight.get(options.sessionId) === claim) {
+        this.recoveriesInFlight.delete(options.sessionId)
+      }
+    }
   }
 
   /**
@@ -405,9 +835,34 @@ export class SessionManager extends EventEmitter {
    * terminal sessions it's just the PTY spawn.
    */
   async spawn(options: SessionSpawnOptions): Promise<SessionSpawnResult> {
+    return await this.spawnWithId(options, randomUUID())
+  }
+
+  /**
+   * Start a backend under an already-owned local routing id.
+   *
+   * WHY this is private: accepting a caller-selected id on the ordinary spawn
+   * IPC made it possible for renderer code to recreate the exact check-then-
+   * spawn race that recover() exists to close. Only recover() may reach this
+   * method, after it has synchronously published the ownership claim that all
+   * compatible callers join and kill() can cancel. Fresh panes always receive
+   * a random id through spawn().
+   */
+  private async spawnWithId(
+    options: SessionSpawnOptions,
+    sessionId: string,
+    recoveryClaim?: RecoveryClaim,
+  ): Promise<SessionSpawnResult> {
+    const requestedKind: unknown = options.kind
+    if (requestedKind !== undefined && !isSessionKind(requestedKind)) {
+      throw new Error('Unsupported session provider')
+    }
     const kind: SessionKind = options.kind ?? DEFAULT_PROVIDER
-    const sessionId = options.preferredSessionId ?? randomUUID()
-    if (this.sessions.has(sessionId) || this.spawningSessionIds.has(sessionId)) {
+    if (
+      this.sessions.has(sessionId) ||
+      this.spawningSessionGenerations.has(sessionId) ||
+      this.promptDeliveriesInFlight.has(sessionId)
+    ) {
       throw new Error(`Session ${sessionId} is already live`)
     }
     // WHY reserve before any provider/tmux await: restored sessions can be
@@ -418,12 +873,30 @@ export class SessionManager extends EventEmitter {
     // the RegistryEntry, which left a small duplicate-spawn window during
     // restart wake. This reservation makes "spawning" observable to every
     // concurrent caller without pretending the backend is ready yet.
-    this.spawningSessionIds.add(sessionId)
+    const spawnGeneration = Symbol(sessionId)
+    this.spawningSessionGenerations.set(sessionId, spawnGeneration)
+    this.sessionStateGenerations.set(sessionId, spawnGeneration)
+    if (recoveryClaim) recoveryClaim.spawnGeneration = spawnGeneration
     this.spawnInfo.set(sessionId, {
-      cwd: options.cwd,
+      kind,
+      cwd: path.resolve(options.cwd),
       resumeSessionId: options.resumeSessionId ?? null,
     })
+    // Record even a startup attempt before readiness creates its watermark.
+    // Otherwise repeated pre-provider failures would populate the watermark
+    // map without participating in the manager's existing bounded-id eviction.
+    this.rememberSessionId(sessionId)
+    // WHY main publishes starting before provider construction: every provider
+    // should also report its more specific bootstrap phase, but ownership must
+    // remain safe even if a provider regresses and omits that event. This also
+    // advances the stable-id revision before a replacement process can emit
+    // anything, so an old renderer fact can never outrank the new generation.
+    this.setInputReadiness(sessionId, { ready: false, reason: 'starting' })
+    let entry: RegistryEntry | null = null
+    let mcpRegistered = false
+    let createdTmuxName: string | null = null
     try {
+    this.throwIfRecoveryCancelled(recoveryClaim)
     const spawnStartedAt = performance.now()
     performanceService.mark('session.spawn.start', {
       sessionId,
@@ -462,9 +935,12 @@ export class SessionManager extends EventEmitter {
         // refreshToolchainFromState pair the setup gate uses so the next
         // spawn takes the fast cache path and PATH augmentation applies.
         const resolved = await resolveToolPath(kind)
+        this.throwIfRecoveryCancelled(recoveryClaim)
         if (resolved) {
           await updateToolPaths({ [kind]: resolved })
+          this.throwIfRecoveryCancelled(recoveryClaim)
           await refreshToolchainFromState()
+          this.throwIfRecoveryCancelled(recoveryClaim)
           binary = resolved
         }
       }
@@ -485,7 +961,9 @@ export class SessionManager extends EventEmitter {
           cwd: options.cwd,
           domains: options.builtInMcpDomains,
         })
+        mcpRegistered = true
       }
+      this.throwIfRecoveryCancelled(recoveryClaim)
       const provider = getMainProvider(kind)
       const createStartedAt = performance.now()
       // `session` here structurally conforms to AgentSessionLike —
@@ -529,6 +1007,14 @@ export class SessionManager extends EventEmitter {
         useProxy: options.useProxy,
         builtInMcpServers,
       })
+      const agentEntry: RegistryEntry = {
+        kind,
+        session,
+        lifecycle: createRegistryLifecycle(spawnGeneration),
+      }
+      entry = agentEntry
+      const ownsEntry = (): boolean => this.sessions.get(sessionId) === agentEntry
+      this.throwIfRecoveryCancelled(recoveryClaim)
       // No cast: createSession's return type is now AgentSession, so
       // any provider whose runtime drifts from the contract fails
       // compilation inside the provider (registry.main.ts's
@@ -547,10 +1033,16 @@ export class SessionManager extends EventEmitter {
       this.sessionSizes.set(sessionId, initialSize)
       this.agentPtyBuffers.set(sessionId, '')
       session.on('started', ({ projectDir }) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('started', { sessionId, kind, projectDir })
       })
+      session.on('input-readiness', (input: AgentInputReadiness) => {
+        if (!ownsEntry()) return
+        this.setInputReadiness(sessionId, input)
+      })
       session.on('pty-data', (data: string) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         const prev = this.agentPtyBuffers.get(sessionId) ?? ''
         this.agentPtyBuffers.set(
@@ -563,60 +1055,79 @@ export class SessionManager extends EventEmitter {
         this.emit('pty-data', { sessionId, data })
       })
       session.on('screen', (snap: AgentScreenSnapshot) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.lastScreenSnapshot.set(sessionId, snap)
         this.emit('screen', { sessionId, ...snap })
       })
       session.on('jsonl-entry', (entry: AgentTranscriptEntry, file: string) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.lastTranscriptFile.set(sessionId, file)
         this.emit('jsonl-entry', { sessionId, entry, file })
       })
       session.on('jsonl-error', (error: Error) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('jsonl-error', { sessionId, error })
       })
       session.on('process-state', (state: AgentProcessState) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('process-state', { sessionId, ...state })
       })
       session.on('trust-dialog', (state: AgentTrustDialogState) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('trust-dialog', { sessionId, ...state })
       })
       session.on('resume-prompt', (state: AgentResumePromptState) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('resume-prompt', { sessionId, ...state })
       })
       session.on('permission-prompt', (state: AgentPermissionPromptState) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('permission-prompt', { sessionId, ...state })
       })
       session.on('compaction-state', (state: AgentCompactionState) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('compaction-state', { sessionId, ...state })
       })
       session.on('conditions', (snapshot: ProviderConditionSnapshot) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.lastConditionsSnapshot.set(sessionId, snapshot)
         this.emit('conditions', { sessionId, snapshot })
       })
       session.on('semantic-event', (event: unknown) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('semantic-event', { sessionId, event })
       })
       session.on('exit', ({ exitCode, signal }: { exitCode: number; signal?: number }) => {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
+        this.setInputReadiness(sessionId, {
+          ready: false,
+          reason: 'provider-not-ready',
+        })
         this.emit('removed', { sessionId })
         this.emit('exit', { sessionId, exitCode, signal })
-        this.cleanupSessionState(sessionId, kind)
+        this.cleanupSessionState(sessionId, kind, agentEntry)
       })
 
-      this.sessions.set(sessionId, { kind, session })
+      this.sessions.set(sessionId, agentEntry)
       this.rememberSessionId(sessionId)
+      this.throwIfRecoveryCancelled(recoveryClaim)
       try {
         const startStartedAt = performance.now()
         await session.start()
+        await this.settleEntryStart(sessionId, agentEntry)
+        this.throwIfRecoveryCancelled(recoveryClaim)
+        if (!ownsEntry()) throw new RecoveryCancelledError()
         performanceService.record({
           kind: 'span_end',
           process: 'main',
@@ -627,15 +1138,7 @@ export class SessionManager extends EventEmitter {
           provider: kind,
         })
       } catch (err) {
-        // Same shape as the terminal path below: start() failure must
-        // not leave a dead entry in the registry. The listeners we
-        // attached above will never fire again (the session didn't
-        // start), so removing the registry row is enough to let GC
-        // collect the whole graph. We do NOT call removeAllListeners
-        // on `session` because the wrapper already owns its own
-        // EventEmitter — nothing outside the registry subscribed.
-        if (this.sessions.has(sessionId)) this.emit('removed', { sessionId })
-        this.cleanupSessionState(sessionId, kind)
+        await this.settleEntryStart(sessionId, agentEntry)
         performanceService.error('session.spawn.providerStart.error', err, {
           sessionId,
           kind,
@@ -669,6 +1172,7 @@ export class SessionManager extends EventEmitter {
       const recoveredTmux = options.recoverTmuxName
         ? await reg.sessionExists(options.recoverTmuxName)
         : false
+      this.throwIfRecoveryCancelled(recoveryClaim)
       if (options.recoverTmuxName && recoveredTmux) {
         // Reattach path — tmux owned this session through the previous
         // Agent Code launch and it's still alive. Reuse the name; do
@@ -687,6 +1191,8 @@ export class SessionManager extends EventEmitter {
           command: pickShell(),
           cwd: options.cwd,
         })
+        createdTmuxName = tmuxSessionName
+        this.throwIfRecoveryCancelled(recoveryClaim)
       }
       performanceService.record({
         kind: 'span_end',
@@ -729,6 +1235,15 @@ export class SessionManager extends EventEmitter {
       tmuxSessionName: tmuxSessionName ?? undefined,
       tmuxBinary: useTmux ? registryBinary : undefined,
     })
+    const terminalEntry: RegistryEntry = {
+      kind: 'terminal',
+      session,
+      tmuxName: tmuxSessionName,
+      lifecycle: createRegistryLifecycle(spawnGeneration),
+    }
+    entry = terminalEntry
+    const ownsEntry = (): boolean => this.sessions.get(sessionId) === terminalEntry
+    this.throwIfRecoveryCancelled(recoveryClaim)
 
     // Initialize an empty buffer entry NOW, before start() fires any
     // data events. The buffer accumulates every byte of PTY output
@@ -744,11 +1259,13 @@ export class SessionManager extends EventEmitter {
     // for Claude's structured events getting involved.
     session.on('started', () =>
       {
+        if (!ownsEntry()) return
         this.markActivity(sessionId)
         this.emit('started', { sessionId, kind, projectDir: undefined })
       },
     )
     session.on('data', data => {
+      if (!ownsEntry()) return
       this.markActivity(sessionId)
       // Always append to the rolling buffer so a later attach can
       // replay the full history. Cap at TERMINAL_BUFFER_CAP —
@@ -769,17 +1286,30 @@ export class SessionManager extends EventEmitter {
       }
     })
     session.on('exit', ({ exitCode, signal }) => {
+      if (!ownsEntry()) return
       this.markActivity(sessionId)
+      this.setInputReadiness(sessionId, {
+        ready: false,
+        reason: 'provider-not-ready',
+      })
       this.emit('removed', { sessionId })
       this.emit('exit', { sessionId, exitCode, signal })
-      this.cleanupSessionState(sessionId, 'terminal')
+      this.cleanupSessionState(sessionId, 'terminal', terminalEntry)
     })
 
-    this.sessions.set(sessionId, { kind: 'terminal', session, tmuxName: tmuxSessionName })
+    this.sessions.set(sessionId, terminalEntry)
     this.rememberSessionId(sessionId)
+    this.throwIfRecoveryCancelled(recoveryClaim)
     try {
       const terminalStartStartedAt = performance.now()
       await session.start()
+      await this.settleEntryStart(sessionId, terminalEntry)
+      this.throwIfRecoveryCancelled(recoveryClaim)
+      if (!ownsEntry()) throw new RecoveryCancelledError()
+      this.setInputReadiness(sessionId, {
+        ready: true,
+        reason: 'ready',
+      })
       performanceService.record({
         kind: 'span_end',
         process: 'main',
@@ -798,8 +1328,7 @@ export class SessionManager extends EventEmitter {
       // a half-dead TerminalSession that callers might still try to
       // write()/resize()/kill(). Roll back everything we added in
       // THIS spawn so the caller can retry from a clean slate.
-      if (this.sessions.has(sessionId)) this.emit('removed', { sessionId })
-      this.cleanupSessionState(sessionId, 'terminal')
+      await this.settleEntryStart(sessionId, terminalEntry)
       performanceService.error('session.spawn.terminalStart.error', err, { sessionId })
       throw err
     }
@@ -813,8 +1342,54 @@ export class SessionManager extends EventEmitter {
       provider: 'terminal',
     })
     return { sessionId, tmuxName: tmuxSessionName ?? undefined }
+    } catch (error) {
+      // WHY spawn is one transaction across provider construction, MCP
+      // registration, registry publication, and start(): failures can occur at
+      // every boundary, including cancellation while start() is still pending.
+      // Rolling back only the map that happened to be nearest the throw left
+      // half-live providers, writable registry entries, and newly-created tmux
+      // servers behind. The exact RegistryEntry is the transaction token: it
+      // lets this generation clean itself up without ever deleting a newer
+      // replacement that reused the stable renderer id.
+      if (entry) {
+        await this.settleEntryStart(sessionId, entry)
+        await this.requestEntryStop(sessionId, entry)
+        this.removeEntryListeners(entry)
+        if (this.sessions.get(sessionId) === entry) {
+          this.emit('removed', { sessionId })
+          this.cleanupSessionState(sessionId, kind, entry, mcpRegistered)
+        }
+      } else {
+        // Construction can fail after session-scoped MCP registration but
+        // before a wrapper exists. There is nothing to stop, yet those
+        // pre-entry maps and credentials still belong to this attempt.
+        this.cleanupSessionState(
+          sessionId,
+          kind,
+          undefined,
+          mcpRegistered,
+          spawnGeneration,
+        )
+      }
+
+      if (createdTmuxName && this.tmuxRegistry) {
+        // Recovered tmux sessions are durable user state and must survive a
+        // failed attach. Only a server created by this transaction is safe to
+        // destroy here.
+        try {
+          await this.tmuxRegistry.killSession(createdTmuxName)
+        } catch (tmuxError) {
+          performanceService.error('session.spawn.tmuxRollback.error', tmuxError, {
+            sessionId,
+            kind,
+          })
+        }
+      }
+      throw error
     } finally {
-      this.spawningSessionIds.delete(sessionId)
+      if (this.spawningSessionGenerations.get(sessionId) === spawnGeneration) {
+        this.spawningSessionGenerations.delete(sessionId)
+      }
     }
   }
 
@@ -938,6 +1513,11 @@ export class SessionManager extends EventEmitter {
    * the renderer queueing input and the main process handling it.
    */
   write(sessionId: string, data: string): boolean {
+    // A raw Enter is globally meaningful to a TUI composer. While the provider
+    // delivery state machine owns that composer, accepting Enter from a slash
+    // path, remote submit, or raw terminal would let one operation submit
+    // another's bytes. Provider-owned writes use writeReserved below.
+    if (this.promptDeliveriesInFlight.has(sessionId)) return false
     const entry = this.sessions.get(sessionId)
     if (!entry) {
       // A silent miss here is brutal to debug from the renderer: the composer
@@ -971,6 +1551,22 @@ export class SessionManager extends EventEmitter {
     return true
   }
 
+  private writeReserved(
+    sessionId: string,
+    expectedEntry: RegistryEntry,
+    data: string,
+    onWriteAttempt?: () => void,
+  ): boolean {
+    if (this.sessions.get(sessionId) !== expectedEntry) return false
+    // node-pty's write boundary is not transactional: an exception does not
+    // prove zero bytes reached the child. Mark the stage immediately before
+    // crossing it so the outer coordinator never labels a thrown write safe to
+    // retry. The identity rejection above remains genuinely pre-write.
+    onWriteAttempt?.()
+    expectedEntry.session.write(data)
+    return true
+  }
+
   getSessionKind(sessionId: string): SessionKind | null {
     return this.sessions.get(sessionId)?.kind ?? null
   }
@@ -982,7 +1578,9 @@ export class SessionManager extends EventEmitter {
       // Bound memory: evict the oldest id (Set preserves insertion order). Evicted
       // ids are long-dead sessions; a late write to one is vanishingly unlikely.
       const oldest = this.everKnownSessionIds.values().next().value
-      if (oldest !== undefined) this.everKnownSessionIds.delete(oldest)
+      if (oldest !== undefined) {
+        this.everKnownSessionIds.delete(oldest)
+      }
     }
   }
 
@@ -1029,6 +1627,18 @@ export class SessionManager extends EventEmitter {
     sessionId: string,
     action: ConditionCustomAction,
   ): Promise<ResolveConditionResult> {
+    // Provider condition resolvers synthesize PTY keystrokes internally and
+    // cannot use writeReserved. Letting one answer a dialog while prompt
+    // delivery owns the composer can splice bytes into the paste or consume
+    // its Enter. Rejecting is safe: condition state remains visible and the
+    // caller can retry after the bounded delivery finishes.
+    if (this.promptDeliveriesInFlight.has(sessionId)) {
+      return {
+        ok: false,
+        reason: 'aborted',
+        failedAtStep: 'prompt delivery in progress',
+      }
+    }
     const entry = this.sessions.get(sessionId)
     // ANY agent kind may carry a resolver now (#394 phase 3) — the
     // old `entry.kind !== 'claude'` gate meant a provider that
@@ -1094,7 +1704,7 @@ export class SessionManager extends EventEmitter {
    * state. MCP (and any future caller — composer flows, dispatch)
    * gets one provider-agnostic entry point; the per-provider
    * discipline (Codex readiness-gate + atomic paste+Enter, Claude
-   * paste → placeholder confirm → Enter) lives in
+   * paste/image absorption → Enter → durable acceptance) lives in
    * providers/<kind>/runtime/promptDelivery.ts.
    *
    * An unknown/non-agent kind is a LOUD failure — the predecessor
@@ -1105,7 +1715,17 @@ export class SessionManager extends EventEmitter {
   async deliverPromptToAgent(
     sessionId: string,
     prompt: string,
-  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    imagePaths?: string[],
+    record?: (event: string, data?: Record<string, unknown>) => void,
+  ): Promise<PromptDeliveryResult> {
+    if (this.promptDeliveriesInFlight.has(sessionId)) {
+      record?.('duplicate-blocked')
+      return {
+        ok: false, stage: 'reservation', code: 'delivery-in-flight',
+        retrySafe: true, promptWritten: false, enterWritten: false,
+        message: `A prompt delivery is already in flight for session ${sessionId}`,
+      }
+    }
     const entry = this.sessions.get(sessionId)
     // `=== 'terminal'` rather than !isAgentProviderKind: TypeScript
     // only discriminates the RegistryEntry union on literal kind
@@ -1113,16 +1733,60 @@ export class SessionManager extends EventEmitter {
     // AgentSession for the registry call below.
     if (!entry || entry.kind === 'terminal') {
       return {
-        ok: false,
+        ok: false, stage: 'before-write', code: 'not-ready', retrySafe: true,
+        promptWritten: false, enterWritten: false,
         message: `Cannot deliver prompt: ${sessionId} is not a live agent session`,
       }
     }
-    return getMainProvider(entry.kind).deliverPrompt({
-      session: entry.session,
-      write: data => this.write(sessionId, data),
-      sessionId,
-      prompt,
-    })
+    this.promptDeliveriesInFlight.add(sessionId)
+    record?.('reserved')
+    let promptWritten = false
+    let enterWritten = false
+    try {
+      return await getMainProvider(entry.kind).deliverPrompt({
+        session: entry.session,
+        // WHY identity-check every delayed write: provider protocols await
+        // absorption/readiness. A same-ID wake must never receive Enter from a
+        // delivery that began against the process which just exited.
+        write: data => {
+          const wrote = this.writeReserved(sessionId, entry, data, () => {
+            if (data === '\r' || data.endsWith('\r')) enterWritten = true
+            if (data !== '\r') promptWritten = true
+          })
+          return wrote
+        },
+        sessionId,
+        prompt,
+        imagePaths,
+        record,
+      })
+    } catch (err) {
+      record?.('uncertain', { reason: 'provider-threw' })
+      return {
+        ok: false,
+        stage: enterWritten ? 'after-enter' : promptWritten ? 'absorption' : 'before-write',
+        code: 'transport-failed',
+        message: `Prompt delivery failed unexpectedly: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        // The coordinator cannot know how far provider code progressed before
+        // throwing. Conservatively forbid automatic retry.
+        retrySafe: !promptWritten && !enterWritten,
+        promptWritten,
+        enterWritten,
+      }
+    } finally {
+      this.promptDeliveriesInFlight.delete(sessionId)
+      record?.('released')
+    }
+  }
+
+  /** Submit staged composer content only when no finished-prompt transaction
+   * owns the session. Remote's legacy `submit` command cannot be allowed to
+   * inject Enter during paste absorption. */
+  submitStagedPrompt(sessionId: string): boolean {
+    if (this.promptDeliveriesInFlight.has(sessionId)) return false
+    return this.write(sessionId, '\r')
   }
 
   /** Resize a session's terminal + PTY. No-op if session doesn't exist. */
@@ -1138,56 +1802,102 @@ export class SessionManager extends EventEmitter {
    * the session existed and was killed.
    */
   async kill(sessionId: string): Promise<boolean> {
+    const recovery = this.recoveriesInFlight.get(sessionId)
+    if (recovery) recovery.cancelled = true
     const entry = this.sessions.get(sessionId)
-    if (!entry) return false
-    await entry.session.stop()
-    // Belt-and-suspenders listener cleanup.
-    //
-    // The spawn() path attaches ~10 listeners to the underlying
-    // session EventEmitter (started / pty-data / screen / jsonl-entry
-    // / …). Those listeners are removed naturally when `exit` fires
-    // and we `this.sessions.delete(sessionId)` — the EventEmitter
-    // becomes unreachable and gets GC'd.
-    //
-    // But if a provider's stop() resolves WITHOUT ever emitting
-    // 'exit' (observed on some Codex error paths and in any future
-    // runtime that's sloppy about the contract), the session object
-    // is still alive, still referenced by closures inside those
-    // listeners, and holds open all its internal state — effectively
-    // a slow memory leak that accumulates across session churn.
-    //
-    // removeAllListeners() on the session object breaks the closure
-    // graph, and we do it unconditionally so the leak class is
-    // impossible regardless of which provider emits exit and which
-    // doesn't. Safe even if exit later fires: the registry has
-    // already deleted the entry, so the exit handler's
-    // `this.sessions.delete` is a no-op.
-    // Both AgentSessionLike and TerminalSession (an EventEmitter
-    // subclass) expose removeAllListeners — typed as optional on the
-    // agent interface because we don't want to mandate it contractually,
-    // just use it when present.
-    try {
-      const maybe = (entry.session as { removeAllListeners?: () => void })
-        .removeAllListeners
-      maybe?.call(entry.session)
-    } catch { /* best-effort */ }
-    // For tmux-backed terminals, stop() detaches the client but
-    // intentionally leaves the tmux session alive so undo-close can
-    // re-attach to it (scrollback intact, environment intact, any
-    // long-running process still running). The eventual GC happens
-    // on next app launch via tmuxRecovery — when a session is closed
-    // and the user never undoes, it falls out of workspace.json, and
-    // launch-time reconcile() classifies the still-alive tmux as an
-    // orphan and kills it. This is the explicit "buffer for undo"
-    // behavior the user asked for in the P1 brainstorm.
-    if (this.sessions.get(sessionId) !== entry) {
-      // stop() emitted exit synchronously and the exit handler already emitted
-      // `removed` + cleaned every map. Returning here avoids a second final JSONL
-      // flush / subagent-stop from the explicit kill path.
-      return true
+    const generation = entry?.lifecycle.generation ?? recovery?.spawnGeneration ?? null
+
+    // WHY registry visibility is severed now but the spawn-generation fence is
+    // not: callers must stop routing input immediately, yet a replacement may
+    // not start while the abandoned provider can still perform tools or other
+    // external mutations. spawnWithId releases the fence only after startup
+    // settles and its generation-owned rollback has attempted both pre- and
+    // post-start stops. Renderer bootstrap has its own bounded deadline, so a
+    // pathological provider cannot hide the workspace while this safety fence
+    // remains honest in main.
+    if (entry && this.sessions.get(sessionId) === entry) {
+      this.removeEntryListeners(entry)
+      this.emit('removed', { sessionId })
+      this.cleanupSessionState(sessionId, entry.kind, entry)
+    } else if (recovery && generation) {
+      this.cleanupSessionState(
+        sessionId,
+        recovery.kind,
+        undefined,
+        recovery.kind !== 'terminal',
+        generation,
+      )
     }
-    this.emit('removed', { sessionId })
-    this.cleanupSessionState(sessionId, entry.kind)
+
+    if (!entry) return recovery !== undefined
+
+    // For tmux-backed terminals, stop() detaches the client but intentionally
+    // leaves the tmux session alive for undo-close. Failed spawn rollback is
+    // different and destroys only the tmux server created by that transaction.
+    await this.requestEntryStop(sessionId, entry)
+    return true
+  }
+
+  /** Kill only when the caller's durable workspace ownership still matches. */
+  async killOwned(options: SessionOwnershipOptions): Promise<boolean> {
+    const requestedKind: unknown = options.kind
+    if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
+    const kind = options.kind ?? DEFAULT_PROVIDER
+    const cwd = path.resolve(options.cwd)
+    const entry = this.sessions.get(options.sessionId)
+    const claim = this.recoveriesInFlight.get(options.sessionId)
+
+    // WHY check and kill occur without an await between them: this is the
+    // atomic ownership proof missing from renderer-only guards. A stale pane
+    // may share a local id with another project, but it cannot terminate that
+    // backend unless both provider kind and lexical cwd still match in main.
+    if (entry) {
+      const snapshot = this.getBackendSnapshot(options.sessionId)
+      if (!snapshot || snapshot.kind !== kind || path.resolve(snapshot.cwd) !== cwd) {
+        return false
+      }
+    } else if (!claim || claim.kind !== kind || claim.cwd !== cwd) {
+      return false
+    }
+    return await this.kill(options.sessionId)
+  }
+
+  /** Cancel only a matching in-flight recovery claim, never an adopted entry. */
+  async cancelRecovery(options: SessionOwnershipOptions): Promise<boolean> {
+    const requestedKind: unknown = options.kind
+    if (requestedKind !== undefined && !isSessionKind(requestedKind)) return false
+    const kind = options.kind ?? DEFAULT_PROVIDER
+    const cwd = path.resolve(options.cwd)
+    const claim = this.recoveriesInFlight.get(options.sessionId)
+    if (!claim || claim.kind !== kind || claim.cwd !== cwd) return false
+
+    // WHY this is distinct from killOwned: a renderer deadline can fire while
+    // an earlier recover IPC is merely queued behind a blocked main event loop.
+    // By the time cancellation is processed, recover may already have returned
+    // an ownership conflict or adopted a healthy existing backend. Claim-only
+    // cancellation makes that delayed message a harmless no-op instead of an
+    // id-based kill of another renderer's live session.
+    claim.cancelled = true
+    const entry = this.sessions.get(options.sessionId)
+    const ownsEntry = Boolean(
+      entry &&
+      claim.spawnGeneration &&
+      entry.lifecycle.generation === claim.spawnGeneration,
+    )
+    if (entry && ownsEntry) {
+      this.removeEntryListeners(entry)
+      this.emit('removed', { sessionId: options.sessionId })
+      this.cleanupSessionState(options.sessionId, entry.kind, entry)
+      await this.requestEntryStop(options.sessionId, entry)
+    } else if (claim.spawnGeneration) {
+      this.cleanupSessionState(
+        options.sessionId,
+        claim.kind,
+        undefined,
+        claim.kind !== 'terminal',
+        claim.spawnGeneration,
+      )
+    }
     return true
   }
 
@@ -1242,6 +1952,28 @@ export class SessionManager extends EventEmitter {
     return this.lastConditionsSnapshot.get(sessionId) ?? null
   }
 
+  /** Current level-triggered backend fact used to seed a late renderer. */
+  getBackendSnapshot(sessionId: string): SessionBackendSnapshot | null {
+    const claim = this.recoveriesInFlight.get(sessionId)
+    const entry = this.sessions.get(sessionId)
+    const info = this.spawnInfo.get(sessionId)
+    if (!entry && !claim && !info) return null
+    const kind = entry?.kind ?? info?.kind ?? claim?.kind
+    const cwd = info?.cwd ?? claim?.cwd
+    if (!kind || !cwd) return null
+    return {
+      sessionId,
+      kind,
+      cwd,
+      lifecycle: entry ? 'live' : 'spawning',
+      input: this.lastInputReadiness.get(sessionId) ?? {
+        ready: false,
+        revision: this.inputReadinessRevision,
+        reason: 'starting',
+      },
+    }
+  }
+
   /** Durable transcript file for a live session, or null before the first
    *  jsonl entry has been observed. See the cache field's WHY. */
   getTranscriptFile(sessionId: string): string | null {
@@ -1289,7 +2021,10 @@ export class SessionManager extends EventEmitter {
 
   /** Kill every live session. Called on app quit. */
   async killAll(): Promise<void> {
-    const ids = this.list()
+    // Recoveries can still be in the pre-entry tool/tmux/MCP phase and are not
+    // visible in list(). Shutdown must mark those claims cancelled too so they
+    // cannot publish a provider after the app has begun quitting.
+    const ids = [...new Set([...this.list(), ...this.recoveriesInFlight.keys()])]
     await Promise.all(ids.map(id => this.kill(id)))
   }
 }

@@ -10,10 +10,8 @@ import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { WorktreeBadge } from '@renderer/workspace/tile-tree/TileLeaf/SessionBadges'
 import { extractLatestUserPrompt } from '@renderer/features/workspace/lib/latestUserPrompts'
-import {
-  buildDispatchGroups,
-  type DispatchAgentRow,
-} from '@renderer/workspace/dispatch/dispatchSelectors'
+import { buildDispatchGroups } from '@renderer/workspace/dispatch/dispatchSelectors'
+import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { tabIndexLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { SessionId, SessionKind, TabId } from '@renderer/workspace/types'
 import type { Entry } from '@shared/types/transcript'

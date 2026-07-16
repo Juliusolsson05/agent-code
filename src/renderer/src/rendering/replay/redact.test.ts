@@ -4,8 +4,8 @@ import {
   extractRecordingFixture,
   findSensitiveSurvivors,
   redactRecording,
-  type Recording,
 } from '@renderer/rendering/replay/redact'
+import type { Recording } from '@renderer/rendering/replay/redact'
 
 // ---------------------------------------------------------------------------
 // Redaction is the one piece of the recording feature that can LEAK — so it is

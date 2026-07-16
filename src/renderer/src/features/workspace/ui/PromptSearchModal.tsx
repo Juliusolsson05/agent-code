@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { SessionIndexEntry, SessionIndexPrompt } from '@preload/index'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { relativeTime } from '@renderer/lib/relativeTime'
 import { cwdBasename, providerGlyph } from '@renderer/features/workspace/lib/sessionDisplay'
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
-import {
-  SessionPreviewPane,
-  type PreviewTarget,
-} from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 
 // PromptSearchModal — cross-session prompt search.
 //
@@ -207,11 +211,6 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onClose()
-        return
-      }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setSelectedIdx(i => Math.min(sessions.length - 1, i + 1))
@@ -228,7 +227,7 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
         if (entry) void resume(entry)
       }
     },
-    [sessions, selectedIdx, onClose, resume],
+    [sessions, selectedIdx, resume],
   )
 
   // Scroll the selected card into view on keyboard nav.
@@ -259,20 +258,22 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
       }
     : null
 
-  if (!open) return null
-
   return (
-    <div
-      className="fixed inset-0 z-[1100] flex items-start justify-center bg-black/40 pt-[8vh]"
-      onMouseDown={e => {
-        if (e.target === e.currentTarget) onClose()
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
       }}
     >
-      <div
+      <DialogContent
         ref={modalRef}
-        className={`${previewVisible ? 'w-[min(1200px,96vw)]' : 'w-[min(820px,94vw)]'} max-h-[82vh] flex flex-col overflow-hidden bg-surface border border-border-hi`}
+        className={`${previewVisible ? 'w-[min(1200px,96vw)]' : 'w-[min(820px,94vw)]'} top-[8vh] max-h-[82vh] translate-y-0 flex flex-col overflow-hidden`}
         onKeyDown={onKeyDown}
       >
+        <DialogTitle className="sr-only">Find a Conversation</DialogTitle>
+        <DialogDescription className="sr-only">
+          Search recent prompts, preview a conversation, and resume it in the active pane.
+        </DialogDescription>
         {/* Search input */}
         <div className="border-b border-border px-4 py-3 flex items-center gap-3">
           <span className="text-accent text-[13px] font-semibold select-none">
@@ -360,8 +361,8 @@ export function PromptSearchModal({ open, workspace, onClose }: Props) {
           )}
         </div>
         {splitter.cursorLock}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

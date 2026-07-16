@@ -1,16 +1,14 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 
-// PathInput — a generic path-with-completion input for anywhere in Agent Code
-// that needs the user to type a filesystem path (PathPickerModal today,
-// likely more places soon: file pickers, context attachments, cwd
-// changes within a pane, etc).
+// PathInput — the path picker's path-with-completion input.
+//
+// WHY this lives with the feature instead of components/ui: directory IPC,
+// shell-path splitting, and suggestion navigation are product workflow, not a
+// provider-agnostic form primitive. If a second real consumer arrives, extract
+// a proven shared contract then; keeping a speculative "generic" control in
+// the old ui/ bucket would preserve the ambiguous structure this rewrite is
+// removing.
 //
 // Responsibilities:
 //   - Debounced directory listing via window.api.listDirectory.

@@ -1,4 +1,5 @@
-import { createContext, useContext, type ReactNode } from 'react'
+import { createContext, useContext } from 'react'
+import type { ReactNode } from 'react'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 
 // WHY this exists (issue #494): App.tsx was the only owner of the

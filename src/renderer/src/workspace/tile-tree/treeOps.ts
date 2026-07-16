@@ -9,14 +9,8 @@
 // dispatch. Keeping the ops pure means the store is ~100 lines of
 // boilerplate instead of a tangled reducer with tree logic inline.
 
-import {
-  RATIO_DEFAULT,
-  RATIO_MAX,
-  RATIO_MIN,
-  type SessionId,
-  type SplitDirection,
-  type TileNode,
-} from '@renderer/workspace/types'
+import { RATIO_DEFAULT, RATIO_MAX, RATIO_MIN } from '@renderer/workspace/types'
+import type { SessionId, SplitDirection, TileNode } from '@renderer/workspace/types'
 
 /**
  * Walk a tree and return every leaf's sessionId in depth-first order.

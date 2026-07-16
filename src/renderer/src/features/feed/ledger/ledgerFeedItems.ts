@@ -71,7 +71,7 @@ export function ledgerFeedContextFromRuntime(
     if (typeof e.uuid === 'string') entriesByUuid.set(e.uuid, e)
   }
   for (const [uuid, ghost] of runtime.ghosts) {
-    entriesByUuid.set(uuid, ghost as unknown as Entry)
+    entriesByUuid.set(uuid, ghost as Entry)
   }
   const turnsById = new Map<string, SemanticLiveTurn>()
   if (runtime.semantic.currentTurn) {

@@ -1,14 +1,24 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
+import { Textarea } from '@renderer/components/ui/textarea'
+import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_SCHEMA_JSON,
-  type CustomAppearanceColors,
   parseCustomAppearanceJson,
   stringifyCustomAppearance,
 } from '@renderer/app-state/settings/customAppearance'
+import type { CustomAppearanceColors } from '@renderer/app-state/settings/customAppearance'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
+import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 import { getSettingsRegistry, matchesSettingQuery } from '@renderer/features/settings/lib/settingsRegistry'
 import { SettingsList } from '@renderer/features/settings/ui/SettingsList'
 import { SettingsSearch } from '@renderer/features/settings/ui/SettingsSearch'
@@ -46,8 +56,11 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   }, [registry])
 
   return (
-    <div className="h-full min-h-0 min-w-0 bg-canvas">
-      <div className="flex h-full min-h-0 min-w-0 border-t border-border">
+    <div
+      {...{ [APP_INTERACTION_OWNER_ATTRIBUTE]: 'app' }}
+      className="h-full min-h-0 min-w-0 bg-canvas"
+    >
+      <div className="flex h-full min-h-0 min-w-0 border-t border-panel-border">
         <SettingsSidebar
           selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory}
@@ -55,7 +68,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
         />
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
+          <div className="flex items-center justify-between border-b border-panel-border bg-panel-header-bg px-4 py-3">
             <div>
               <div className="text-[13px] text-ink">Settings</div>
               <div className="mt-1 text-[11px] text-muted">
@@ -65,7 +78,7 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
             <button
               type="button"
               onClick={onClose}
-              className="border border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+              className="border border-control-border bg-control-bg px-2.5 py-1.5 text-[11px] text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink"
             >
               Close
             </button>
@@ -118,19 +131,6 @@ function CustomAppearanceModal({
   const [draft, setDraft] = useState(raw)
   const [view, setView] = useState<'json' | 'schema'>('json')
   const [error, setError] = useState<string | null>(null)
-  const textAreaRef = useRef<HTMLTextAreaElement>(null)
-
-  useEffect(() => {
-    textAreaRef.current?.focus()
-  }, [])
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   const save = () => {
     try {
@@ -141,73 +141,71 @@ function CustomAppearanceModal({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="custom-appearance-title"
-      onMouseDown={event => {
-        if (event.target === event.currentTarget) onClose()
+    <Dialog
+      open
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
       }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/80 px-6 py-6"
     >
-      <div className="flex h-full max-h-[760px] w-full max-w-4xl flex-col border border-border bg-canvas">
-        <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
+      <DialogContent className="flex h-[calc(100vh-3rem)] max-h-[760px] w-[calc(100vw-3rem)] max-w-4xl flex-col border-popover-border bg-popover-bg p-0">
+        <div className="flex items-center justify-between border-b border-panel-border bg-panel-header-bg px-4 py-3">
           <div>
-            <div id="custom-appearance-title" className="text-[13px] text-ink">
+            <DialogTitle>
               Custom Appearance
-            </div>
-            <div className="mt-1 text-[11px] text-muted">
+            </DialogTitle>
+            <DialogDescription>
               Define the application color tokens as validated JSON.
-            </div>
+            </DialogDescription>
           </div>
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
               onClick={() => setView(view === 'json' ? 'schema' : 'json')}
-              className="border border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+              variant="secondary"
+              size="sm"
             >
               {view === 'json' ? 'Show Schema' : 'Show JSON'}
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={onClose}
-              className="border border-border px-2.5 py-1.5 text-[11px] text-ink-dim hover:border-border-hi hover:text-ink"
+              variant="secondary"
+              size="sm"
             >
               Close
-            </button>
+            </Button>
           </div>
         </div>
 
         <div className="min-h-0 flex-1 px-4 py-4">
           {view === 'json' ? (
-            <textarea
-              ref={textAreaRef}
+            <Textarea
+              autoFocus
               value={draft}
               onChange={event => {
                 setDraft(event.target.value)
                 setError(null)
               }}
               spellCheck={false}
-              className="h-full min-h-[420px] w-full resize-none border border-border bg-code-bg px-3 py-3 font-code text-[12px] leading-5 text-code-ink outline-none focus:border-accent"
+              className="h-full min-h-[420px] resize-none bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink"
             />
           ) : (
-            <pre className="h-full min-h-[420px] overflow-auto border border-border bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink">
+            <pre className="h-full min-h-[420px] overflow-auto border border-input-border bg-code-bg px-3 py-3 text-[12px] leading-5 text-code-ink">
               {CUSTOM_APPEARANCE_SCHEMA_JSON}
             </pre>
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-border bg-surface px-4 py-3">
+        <div className="flex items-center justify-between border-t border-panel-border bg-panel-header-bg px-4 py-3">
           <div className="min-w-0 text-[11px] text-danger">{error ?? ''}</div>
-          <button
+          <Button
             type="button"
             onClick={save}
-            className="border border-accent bg-accent px-3 py-2 text-[12px] text-accent-fg"
           >
             Save Custom Appearance
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

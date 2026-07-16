@@ -1,4 +1,5 @@
-import { useCallback, useRef, type ReactNode } from 'react'
+import { useCallback, useRef } from 'react'
+import type { ReactNode } from 'react'
 
 import { useResizableSplitter } from '@renderer/features/shared/useResizableSplitter'
 import { SplitHandle } from '@renderer/features/shared/SplitHandle'

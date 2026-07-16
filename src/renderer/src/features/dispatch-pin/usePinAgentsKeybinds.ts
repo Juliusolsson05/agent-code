@@ -31,8 +31,6 @@ export type UsePinAgentsKeybindsArgs<R extends PinAgentsCandidateRow> = {
   open: boolean
   /** Called with the final ordered selection when the user presses Enter. */
   onCommit: (ids: SessionId[]) => void
-  /** Called when the user presses Escape or otherwise cancels. */
-  onCancel: () => void
 }
 
 export type UsePinAgentsKeybindsResult = {
@@ -48,7 +46,6 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
   initialSelectedIds,
   open,
   onCommit,
-  onCancel,
 }: UsePinAgentsKeybindsArgs<R>): UsePinAgentsKeybindsResult {
   const [selectedIds, setSelectedIds] = useState<SessionId[]>(initialSelectedIds)
   const [focusedIndex, setFocusedIndex] = useState(0)
@@ -97,11 +94,9 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        onCancel()
-        return
-      }
+      // Escape deliberately belongs to DialogContent. Keeping it here would
+      // make this feature's key handler race Radix's close/focus-restoration
+      // path and can call the owner twice for one key press.
       if (event.key === 'Enter') {
         event.preventDefault()
         onCommit(selectedIds)
@@ -127,7 +122,7 @@ export function usePinAgentsKeybinds<R extends PinAgentsCandidateRow>({
         return
       }
     },
-    [focusedIndex, onCancel, onCommit, rows, selectedIds, toggle],
+    [focusedIndex, onCommit, rows, selectedIds, toggle],
   )
 
   return { selectedIds, focusedIndex, setFocusedIndex, toggle, onKeyDown }

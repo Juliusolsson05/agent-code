@@ -6,17 +6,13 @@ import { spawn as ptySpawn } from 'node-pty'
 import type { SlashPickerState } from '@preload/index.js'
 import { PROXY_EVENTS_DIR } from '@main/storage/paths.js'
 import { scheduleDebugStoragePrune } from '@main/storage/debugRetention.js'
-import {
-  CodexHeadless,
-  CodexResponsesAdapter,
-  ResponsesProxy,
-  type CodexConditionSnapshot,
-  type CodexRolloutLine,
-  type CodexSemanticEvent,
-} from 'codex-headless'
+import { CodexHeadless, CodexResponsesAdapter, ResponsesProxy } from 'codex-headless'
+import type { CodexConditionSnapshot, CodexRolloutLine, CodexSemanticEvent } from 'codex-headless'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import type { AgentInputReadiness } from '@shared/types/session.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
+import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 
 
 /** Allocate a per-session run directory and return the path of its
@@ -114,6 +110,7 @@ export type CodexScreenSnapshot = {
 
 export type CodexSessionEvents = {
   started: [{ projectDir: string; proxyUrl?: string }]
+  'input-readiness': [AgentInputReadiness]
   'pty-data': [string]
   screen: [CodexScreenSnapshot]
   'jsonl-entry': [CodexRolloutLine, string]
@@ -168,6 +165,7 @@ export class CodexSession extends EventEmitter {
   private headless: CodexHeadless | null = null
   private pty: ReturnType<typeof ptySpawn> | null = null
   private exited = false
+  private composerReady = false
 
   private readonly cwd: string
   private readonly cols: number
@@ -216,28 +214,24 @@ export class CodexSession extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    this.composerReady = false
+    this.emit('input-readiness', {
+      ready: false,
+      reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
+    })
     // Codex uses a subcommand for resume: `codex resume <id>`.
     const args: string[] = []
+    // Filter undefined env entries before adding generated MCP credential variables. Keeping this
+    // object local to one start prevents a stopped session's bearer from remaining on the reusable
+    // session wrapper or leaking into another provider process.
+    const cleanEnv: Record<string, string> = {}
+    for (const [k, v] of Object.entries(this.env)) {
+      if (typeof v === 'string') cleanEnv[k] = v
+    }
     if (this.dangerousMode) {
       args.push('--dangerously-bypass-approvals-and-sandbox')
     }
-    for (const server of this.builtInMcpServers) {
-      // WHY this uses Codex `--config` overrides instead of a temporary
-      // CODEX_HOME/config.toml overlay:
-      //
-      // Codex explicitly documents dotted `-c/--config` paths for nested
-      // values, and Agent Code already uses that path for the Responses proxy.
-      // Keeping MCP injection in argv makes the scope visibly tied to this one
-      // provider process. A temp config directory would be harder to inspect
-      // and easier to accidentally reuse across unrelated sessions.
-      args.push('--config', `mcp_servers.${server.name}.url=${JSON.stringify(server.url)}`)
-      for (const [key, value] of Object.entries(server.headers)) {
-        args.push(
-          '--config',
-          `mcp_servers.${server.name}.http_headers.${key}=${JSON.stringify(value)}`,
-        )
-      }
-    }
+    addCodexBuiltInMcpLaunchConfig(this.builtInMcpServers, args, cleanEnv)
     if (this.useProxy) {
       // Mirror the Claude proxy's on-disk layout so a single
       // bundle-inspection tool can read either provider's
@@ -279,12 +273,6 @@ export class CodexSession extends EventEmitter {
       args.push('resume', this.resumeSessionId)
     }
 
-    // Filter undefined env entries — node-pty expects strings only.
-    const cleanEnv: Record<string, string> = {}
-    for (const [k, v] of Object.entries(this.env)) {
-      if (typeof v === 'string') cleanEnv[k] = v
-    }
-
     // From here on we have a listening proxy (if useProxy was set) but
     // no PTY, no CodexHeadless, and therefore no exit/stop plumbing.
     // Any throw between the proxy-create above and the end of start()
@@ -322,6 +310,7 @@ export class CodexSession extends EventEmitter {
 
     // Forward screen snapshots.
     this.headless.on('screen', snap => {
+      this.markComposerReady(snap.plain)
       this.emit('screen', {
         plain: snap.plain,
         markdown: snap.markdown,
@@ -384,6 +373,8 @@ export class CodexSession extends EventEmitter {
 
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
+      this.composerReady = false
+      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       this.emit('exit', { exitCode, signal })
     })
 
@@ -448,6 +439,7 @@ export class CodexSession extends EventEmitter {
       const tick = (): void => {
         const screen = this.headless?.getScreen() ?? ''
         if (isCodexReadyForPromptScreen(screen)) {
+          this.markComposerReady(screen)
           resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
           return
         }
@@ -459,6 +451,16 @@ export class CodexSession extends EventEmitter {
       }
       tick()
     })
+  }
+
+  private markComposerReady(screen: string): void {
+    if (this.composerReady || this.exited || !isCodexReadyForPromptScreen(screen)) return
+    // WHY this latches instead of mirroring every screen: the composer
+    // intentionally disappears while Codex is working. Once startup/trust
+    // chrome has yielded a real composer, ordinary turns must not flap the
+    // renderer disabled. Exit is the only boundary that clears the latch.
+    this.composerReady = true
+    this.emit('input-readiness', { ready: true, reason: 'ready' })
   }
 
   resize(cols: number, rows: number): void {

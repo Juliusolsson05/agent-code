@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { act } from 'react'
-import { useRef, type MutableRefObject } from 'react'
+import { useRef } from 'react'
+import type { MutableRefObject } from 'react'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import {
   MAX_LIVE_ENTRIES,
@@ -14,6 +16,24 @@ import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
 import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
 
 import { useIpcSubscriptions } from './useIpcSubscriptions'
+
+const originalWindowApi = window.api
+
+afterEach(() => {
+  // The semantic burst test installs the smallest Electron bridge needed by
+  // the ghost path and uses fake time for the 100 ms cadence. Restore both even
+  // when an assertion fails so one backpressure regression cannot cascade into
+  // misleading failures in the otherwise bridge-free subscription tests.
+  vi.useRealTimers()
+  if (originalWindowApi === undefined) {
+    Reflect.deleteProperty(window, 'api')
+  } else {
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: originalWindowApi,
+    })
+  }
+})
 
 // Proof test for the phase-0 decoupling: the subscription hub must consume
 // session events from an injected SessionFeed — NOT from window.api — so the
@@ -53,6 +73,130 @@ function makeRefs(state: WorkspaceState): WorkspaceRefs {
 }
 
 describe('useIpcSubscriptions with an injected SessionFeed', () => {
+  it('folds a cumulative semantic burst at preview cadence instead of once per transport event', () => {
+    vi.useFakeTimers()
+    const fake = createFakeSessionFeed()
+    const state = { sessions: {} } as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    const ghostAppend = vi.fn()
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { ghostAppend },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+        },
+        () => {},
+        () => {},
+      )
+      return <div />
+    }
+
+    const mounted = render(<Harness />)
+    act(() => {
+      fake.emitSemantic({
+        sessionId: 'burst-1',
+        event: { type: 'turn_started', turnId: 'turn-1', source: 'proxy', ts: 1 },
+      })
+      fake.emitSemantic({
+        sessionId: 'burst-1',
+        event: {
+          type: 'block_started',
+          turnId: 'turn-1',
+          blockIndex: 0,
+          kind: 'tool_use',
+          toolName: 'apply_patch',
+          toolUseId: 'tool-1',
+          source: 'proxy',
+          ts: 2,
+        },
+      })
+      for (let index = 1; index <= 1_000; index += 1) {
+        fake.emitSemantic({
+          sessionId: 'burst-1',
+          event: {
+            type: 'tool_input_delta',
+            turnId: 'turn-1',
+            blockIndex: 0,
+            toolName: 'apply_patch',
+            toolUseId: 'tool-1',
+            partialJson: 'x',
+            inputJsonSoFar: 'x'.repeat(index),
+            source: 'proxy',
+            ts: index + 2,
+          },
+        })
+      }
+    })
+
+    // turn_started + block_started are ordering boundaries and are visible
+    // immediately. The 1,000 obsolete input prefixes wait as ONE snapshot.
+    expect(runtimes['burst-1']?.semantic.currentTurn?.blocks[0]?.inputJson).toBe('')
+    expect(ghostAppend).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+
+    expect(runtimes['burst-1']?.semantic.currentTurn?.blocks[0]?.inputJson).toBe(
+      'x'.repeat(1_000),
+    )
+    // One initial ghost plus one latest cumulative snapshot. The pre-fix hook
+    // invoked IPC 1,001 times here and journaled every growing copy.
+    expect(ghostAppend).toHaveBeenCalledTimes(2)
+
+    act(() => {
+      fake.emitSemantic({
+        sessionId: 'burst-1',
+        event: {
+          type: 'tool_input_delta',
+          turnId: 'turn-1',
+          blockIndex: 0,
+          toolName: 'apply_patch',
+          toolUseId: 'tool-1',
+          partialJson: 'y',
+          inputJsonSoFar: `${'x'.repeat(1_000)}y`,
+          source: 'proxy',
+          ts: 1_003,
+        },
+      })
+      fake.emitSemantic({
+        sessionId: 'burst-1',
+        event: {
+          type: 'tool_input_finalized',
+          turnId: 'turn-1',
+          blockIndex: 0,
+          toolName: 'apply_patch',
+          toolUseId: 'tool-1',
+          inputJson: `${'x'.repeat(1_000)}y`,
+          parsed: { patch: 'final' },
+          source: 'proxy',
+          ts: 1_004,
+        },
+      })
+    })
+
+    // A structural event bypasses the timer but first drains the pending
+    // latest delta, so completion can never overtake or later be resurrected
+    // by a stale timer callback.
+    expect(runtimes['burst-1']?.semantic.currentTurn?.blocks[0]?.inputJson).toBe(
+      `${'x'.repeat(1_000)}y`,
+    )
+    expect(runtimes['burst-1']?.semantic.currentTurn?.blocks[0]?.parsedInput).toEqual({
+      patch: 'final',
+    })
+
+    mounted.unmount()
+  })
+
   it('folds a screen event from the fake feed into session runtimes', () => {
     const fake = createFakeSessionFeed()
     const state = { sessions: {} } as WorkspaceState
@@ -97,6 +241,150 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
 
     expect(runtimes.s1?.screen).toBe('hello world')
     expect(runtimes.s1?.recentScreen).toBe('hello world')
+  })
+
+  it('treats provider readiness as versioned state, never as process activity', () => {
+    const fake = createFakeSessionFeed()
+    const state = {
+      sessions: { s1: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+
+    act(() => {
+      fake.emitStarted({ sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+      fake.emitProcessState({ sessionId: 's1', active: false })
+    })
+    expect(runtimes.s1).toMatchObject({
+      processStatus: 'started',
+      inputReady: false,
+      inputReadinessRevision: -1,
+    })
+
+    act(() => {
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: true, revision: 2, reason: 'ready' },
+      })
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: false, revision: 1, reason: 'replaying-history' },
+      })
+      fake.emitProcessState({ sessionId: 's1', active: true, status: 'Working' })
+    })
+    expect(runtimes.s1).toMatchObject({
+      inputReady: true,
+      inputReadinessRevision: 2,
+      processActive: true,
+    })
+
+    act(() => {
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: false, revision: 3, reason: 'provider-not-ready' },
+      })
+    })
+    expect(runtimes.s1).toMatchObject({
+      inputReady: false,
+      inputReadinessRevision: 3,
+    })
+  })
+
+  it('quarantines every content and lifecycle channel after an ownership conflict', () => {
+    const fake = createFakeSessionFeed()
+    const state = {
+      sessions: { s1: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    const conflictedRuntime: SessionRuntime = {
+      ...emptyRuntime(),
+      processStatus: 'failed',
+      processError: 'Session id is owned by another workspace',
+      recoveryFailureCode: 'ownership-conflict',
+      draftInput: 'renderer-local draft survives',
+    }
+    let runtimes: Record<SessionId, SessionRuntime> = { s1: conflictedRuntime }
+    let refsForAssertion: WorkspaceRefs | null = null
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) {
+        refs.current = makeRefs(state)
+        refs.current.latestRuntimesRef.current = runtimes
+        refsForAssertion = refs.current
+      }
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    act(() => {
+      fake.emitStarted({ sessionId: 's1', kind: 'claude', projectDir: '/wrong-repo' })
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: true, revision: 99, reason: 'ready' },
+      })
+      fake.emitScreen({
+        sessionId: 's1',
+        plain: 'wrong backend content',
+        markdown: 'wrong backend content',
+        recent: 'wrong backend content',
+        recentMarkdown: 'wrong backend content',
+        picker: { visible: false, items: [] },
+      })
+      fake.emitProcessState({ sessionId: 's1', active: true, status: 'Working' })
+      fake.emitSemantic({
+        sessionId: 's1',
+        event: { type: 'turn_started', turnId: 'wrong-turn', source: 'proxy', ts: 1 },
+      })
+      fake.emitExit({ sessionId: 's1', exitCode: 17 })
+    })
+
+    // WHY reference equality matters here: merely restoring the visible error
+    // after folding a wrong event would still transiently ingest another
+    // workspace's text and mutate hidden semantic/debug state. Quarantine must
+    // return before every state/ref write until matching ownership is proven.
+    expect(runtimes.s1).toBe(conflictedRuntime)
+    expect(refsForAssertion!.latestScreenRef.current.s1).toBeUndefined()
   })
 
   it('marks the runtime exited when the fake feed emits exit', () => {

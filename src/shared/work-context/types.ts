@@ -1,4 +1,4 @@
-import type { WorktreeIdentity } from '@shared/types/git'
+import type { WorktreeIdentity } from '@shared/types/git.js'
 
 export type WorkContextConfidence =
   | 'explicit'

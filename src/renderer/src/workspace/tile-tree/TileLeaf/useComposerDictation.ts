@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { KeyboardEvent } from 'react'
 
 import type { DictationProviderId } from '@renderer/app-state/settings/types'
 import { useSessionFeed } from '@renderer/features/sessionFeed/SessionFeedContext'
@@ -10,7 +11,9 @@ import {
 import { keyboardEventMatchesBinding } from '@renderer/lib/hotkeyBinding'
 import {
   registerDictationTarget,
-  type DictationTargetHandle,
+} from '@renderer/workspace/tile-tree/TileLeaf/dictationHotkeyRegistry'
+import type {
+  DictationTargetHandle,
 } from '@renderer/workspace/tile-tree/TileLeaf/dictationHotkeyRegistry'
 import type { SessionId } from '@renderer/workspace/types'
 import type { DictationDebugLayer } from '@preload/api/types'

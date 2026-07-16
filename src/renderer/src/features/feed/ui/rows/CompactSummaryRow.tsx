@@ -4,6 +4,7 @@ import type { CompactSummaryEntry } from '@shared/types/transcript'
 
 import { compactSummaryText, truncateCompactSummary } from '@renderer/features/feed/lib/helpers'
 import { TextProse } from '@renderer/features/feed/ui/markdown'
+import { boundedTextPage } from '@renderer/lib/text/boundedText'
 
 // Compact-summary entry renderer — the card that replaces a
 // compacted run of turns with a human-readable summary. Shown as a
@@ -22,7 +23,13 @@ export const CompactSummaryRow = memo(function CompactSummaryRow({
 }) {
   const [expanded, setExpanded] = useState(false)
   const text = useMemo(() => compactSummaryText(entry), [entry])
-  const compact = text.length > 2400 || text.split('\n').length > 24
+  // WHY compactness is derived from the same bounded page shown below:
+  // `split()` previously allocated every line in a durable summary before the
+  // row could decide to display only 24 of them.
+  const compact = useMemo(
+    () => boundedTextPage(text, 0, 2_400, 24).hasNext,
+    [text],
+  )
   const visibleText = compact && !expanded ? truncateCompactSummary(text) : text
 
   return (

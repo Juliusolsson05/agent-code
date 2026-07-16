@@ -1,16 +1,12 @@
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
-import {
-  reduceStreamPhase,
-  type StreamPhaseState,
-} from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import type { StreamPhaseState } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import { indexEntryIntoMaps } from '@renderer/session-runtime/entries'
-import {
-  emptySemanticRuntime,
-  type SemanticLiveTurn,
-  type SemanticRuntimeState,
-} from '@renderer/session-runtime/state'
-import { isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import { emptySemanticRuntime } from '@renderer/session-runtime/state'
+import type { SemanticLiveTurn, SemanticRuntimeState } from '@renderer/session-runtime/state'
+import { isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { Entry, ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions'
 import { asRecord } from '@shared/lib/asRecord'

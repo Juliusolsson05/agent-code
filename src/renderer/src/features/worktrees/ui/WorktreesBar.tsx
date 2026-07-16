@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { formatWorktreeDump, labelFor, providerLabel } from '@renderer/features/worktrees/lib/formatWorktreeDump'
 import { relativeTime } from '@renderer/lib/relativeTime'
-import {
-  loadWorktreeDump,
-  type WorktreeDump,
-  type WorktreeDumpRow,
+import { loadWorktreeDump } from '@renderer/features/worktrees/lib/loadWorktreeDump'
+import type {
+  WorktreeDump,
+  WorktreeDumpRow,
 } from '@renderer/features/worktrees/lib/loadWorktreeDump'
 import { worktreeColorForIdentity } from '@renderer/workspace/tile-tree/TileLeaf/worktreeBadgeColor'
 import type { Workspace } from '@renderer/workspace/workspaceStore'

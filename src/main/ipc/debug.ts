@@ -1,19 +1,12 @@
 import { ipcMain } from 'electron'
 
-import {
-  queueFeedDebugAppend,
-  type FeedDebugPersistEntry,
-} from '@main/storage/feedDebugLog.js'
-import {
-  saveDebugBundle,
-  type SaveDebugBundleParams,
-  type SaveDebugBundleResult,
-} from '@main/storage/debugBundle.js'
+import { queueFeedDebugAppend } from '@main/storage/feedDebugLog.js'
+import type { FeedDebugPersistEntry } from '@main/storage/feedDebugLog.js'
+import { saveDebugBundle } from '@main/storage/debugBundle.js'
+import type { SaveDebugBundleParams, SaveDebugBundleResult } from '@main/storage/debugBundle.js'
 import { addDebugBundleNote } from '@main/storage/debugBundleLog.js'
-import {
-  readProxyEventsForBundle,
-  type ProxyEventsBundleSection,
-} from '@main/storage/proxyEventsReader.js'
+import { readProxyEventsForBundle } from '@main/storage/proxyEventsReader.js'
+import type { ProxyEventsBundleSection } from '@main/storage/proxyEventsReader.js'
 
 // Debug-panel IPC.
 //

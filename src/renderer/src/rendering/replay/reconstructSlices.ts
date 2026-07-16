@@ -2,15 +2,11 @@ import type { Entry } from '@shared/types/transcript'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { TranscriptEntryMapper } from '@shared/types/providerConfig'
 import { asRecord } from '@shared/lib/asRecord'
-import {
-  emptySemanticRuntime,
-  type SemanticRuntimeState,
-} from '@renderer/session-runtime/state'
+import { emptySemanticRuntime } from '@renderer/session-runtime/state'
+import type { SemanticRuntimeState } from '@renderer/session-runtime/state'
 import { foldSemanticEvent } from '@renderer/session-runtime/semantic/foldEvent'
-import {
-  reduceStreamPhase,
-  type StreamPhaseState,
-} from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import { reduceStreamPhase } from '@renderer/session-runtime/semantic/streamPhaseMachine'
+import type { StreamPhaseState } from '@renderer/session-runtime/semantic/streamPhaseMachine'
 import {
   ghostsFromSemanticTurn,
   reconcileUpstream,

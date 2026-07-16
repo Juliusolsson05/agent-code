@@ -1,4 +1,5 @@
-import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
+import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
 
 type Props = {
   selectedCategory: SettingCategoryId | 'all'
@@ -51,12 +52,12 @@ function SidebarButton({
       onClick={onClick}
       className={`flex items-center justify-between border px-3 py-2 text-left text-[12px] ${
         active
-          ? 'border-accent bg-accent text-accent-fg'
-          : 'border-border text-ink-dim hover:border-border-hi hover:text-ink'
+          ? 'border-control-active-bg bg-control-active-bg text-control-active-fg'
+          : 'border-control-border bg-control-bg text-control-fg hover:border-control-border-hover hover:bg-control-hover-bg hover:text-ink'
       }`}
     >
       <span>{label}</span>
-      <span className={active ? 'text-accent-fg/80' : 'text-muted'}>{count}</span>
+      <span className={active ? 'text-control-active-fg/80' : 'text-muted'}>{count}</span>
     </button>
   )
 }

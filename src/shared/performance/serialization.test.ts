@@ -4,7 +4,7 @@ import {
   serializePerformanceError,
   sanitizePerformanceData,
   areaFromPerformanceName,
-} from '@shared/performance/serialization'
+} from '@shared/performance/serialization.js'
 
 // These pin a PRIVACY control. The sanitizer drops sensitive fields when not
 // verbose; if these invariants regress, telemetry could leak prompts/secrets.

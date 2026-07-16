@@ -4,19 +4,20 @@ import {
   FONT_FAMILIES,
   THEME_MODES,
   WORKSPACE_MODES,
-  type AccentId,
-  type AgentViewMode,
-  type FontFamilyId,
-  type Settings,
-  type ThemeMode,
-  type WorkspaceModeId,
+} from '@renderer/app-state/settings/types'
+import type {
+  AccentId,
+  AgentViewMode,
+  FontFamilyId,
+  Settings,
+  ThemeMode,
+  WorkspaceModeId,
 } from '@renderer/app-state/settings/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
-import { SETTING_CATEGORIES, type SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
-import {
-  listPickerCommandMeta,
-  type PickerCommandMeta,
-} from '@renderer/features/command-palette/registry'
+import { SETTING_CATEGORIES } from '@renderer/features/settings/lib/settingsCategories'
+import type { SettingCategoryId } from '@renderer/features/settings/lib/settingsCategories'
+import { listPickerCommandMeta } from '@renderer/features/command-palette/registry'
+import type { PickerCommandMeta } from '@renderer/features/command-palette/registry'
 
 export type SettingActionContext = {
   workspace: Workspace
@@ -83,6 +84,21 @@ export type SettingDefinition =
         label: string
         tone?: 'neutral' | 'danger'
         onTrigger: (ctx: SettingActionContext) => void | Promise<void>
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
+      // Marker for the CLI auto-update three-way (Automatic / Notify /
+      // Off). The row is rendered by its own self-subscribing component
+      // in <SettingsList> — the value lives in setup.json (main-owned),
+      // not in Settings, so there's no getValue/onChange to hoist here.
+      // See features/cli-updates/CliUpdateBehaviorRow.tsx.
+      control: {
+        type: 'cli-update-behavior'
       }
     }
   | {
@@ -332,6 +348,45 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      id: 'usage-header',
+      category: 'workspace',
+      title: 'Usage in Header',
+      description:
+        'Show Claude and Codex quota usage in the header bar. Click the indicator to open the full Usage modal.',
+      keywords: ['usage', 'quota', 'limits', 'header', 'tokens', 'claude', 'codex'],
+      control: {
+        type: 'toggle',
+        getValue: settings => settings.usageHeaderEnabled,
+        onToggle: (ctx, value) => ctx.onChange({ usageHeaderEnabled: value }),
+      },
+    },
+    {
+      // The registry has no dependent-visibility concept, so this select
+      // stays visible while the toggle above is off — it simply has no
+      // visible effect until the header is enabled, and the description
+      // says so. Modeling enable+level as one 5-option select was
+      // rejected: the palette needs a plain on/off toggle command, and
+      // splitting keeps setting↔command mappings 1:1.
+      id: 'usage-header-level',
+      category: 'workspace',
+      title: 'Usage Header Detail',
+      description:
+        'How much detail the header usage indicator shows (no effect while Usage in Header is off).',
+      keywords: ['usage', 'quota', 'level', 'detail', 'header'],
+      control: {
+        type: 'select',
+        getValue: settings => settings.usageHeaderLevel,
+        options: [
+          { value: 'minimal', label: 'Minimal', description: 'Single worst-case percentage across both providers.' },
+          { value: 'providers', label: 'Providers', description: 'One chip per provider showing its most constrained limit.' },
+          { value: 'all', label: 'All limits', description: 'Every active limit row per provider, compact labels.' },
+          { value: 'detailed', label: 'Detailed', description: 'All limits plus severity bars and reset countdowns.' },
+        ],
+        onSelect: (ctx, value) =>
+          ctx.onChange({ usageHeaderLevel: value as Settings['usageHeaderLevel'] }),
+      },
+    },
+    {
       // Replaces the old "Dispatch Terminal" command-palette toggle. The
       // command sat on a per-session `dispatchMode.terminalVisible` flag
       // that re-defaulted to ON every time dispatch was re-entered, which
@@ -486,6 +541,32 @@ export function getSettingsRegistry(): SettingDefinition[] {
           await ctx.workspace.reloadAgentSessions(value)
         },
       },
+    },
+    {
+      // Kept in the experimental category alongside proxy-streaming for
+      // now — the auto-updater is opinionated (it takes over the
+      // upstream CLIs' own update flow) and users may want to see it in
+      // the same drawer as other things that reshape default behavior
+      // rather than mixed into workspace polish toggles. If it graduates
+      // to being the obvious default it can move.
+      id: 'cli-update-behavior',
+      category: 'experimental',
+      title: 'CLI Auto-Updates',
+      description:
+        "Detect new Claude Code and Codex releases on launch and update the user's installed CLI in the background using the correct install method.",
+      keywords: [
+        'cli',
+        'update',
+        'auto',
+        'claude',
+        'codex',
+        'version',
+        'npm',
+        'brew',
+        'homebrew',
+        'winget',
+      ],
+      control: { type: 'cli-update-behavior' },
     },
     {
       id: 'reset-settings',

@@ -1,8 +1,27 @@
-import { DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import ReactMarkdown from 'react-markdown'
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
+import {
+  buildAgentIndexCommand,
+  isAgentIndexCommand,
+} from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
   loadRecentHistory,
@@ -16,19 +35,19 @@ import {
   loadCustomPromptTemplates,
   saveCustomPromptTemplate,
   updateCustomPromptTemplate,
-  type PromptTemplate,
 } from '@renderer/features/prompt-templates/templates'
+import type { PromptTemplate } from '@renderer/features/prompt-templates/templates'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
 import { useDevDebugConfig } from '@renderer/features/debug/devDebugConfig'
 import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPickerRequests'
-import {
-  SessionPreviewPane,
-  type PreviewTarget,
-} from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
+import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
 // Canonical session listing shape. This was a local copy that DROPPED
@@ -78,6 +97,59 @@ type PromptTemplateForm = {
 const SHOW_HIDDEN_COMMANDS = false
 
 export function CommandPalette() {
+  const open = useAppStore(state => state.commandPaletteOpen)
+  const openPalette = useAppStore(state => state.openCommandPalette)
+  const [pendingMenuCommand, setPendingMenuCommand] = useState<{
+    id: string
+    closeAfterRun: boolean
+  } | null>(null)
+
+  useEffect(() => window.api.onMenuCommand(commandId => {
+    // Native-menu IPC bypasses Radix's DOM focus trap and inert background.
+    // Check the same synchronous ownership marker as keyboard, paste, Enter,
+    // and dictation before mounting the heavy command implementation. Without
+    // this guard a File-menu click could mutate workspace state underneath an
+    // unrelated confirmation dialog even though every DOM input path was
+    // correctly blocked. When the command palette itself is open it also owns
+    // this marker, so menu commands wait instead of competing with its current
+    // search/navigation turn.
+    if (hasAppInteractionOwner()) return
+    // WHY a native menu command temporarily mounts the open implementation:
+    // command definitions need live workspace actions, but keeping that entire
+    // registry subscribed while the palette is closed made every session delta
+    // rebuild an invisible feature. A menu click is rare and intentional, so it
+    // may pay the one-time registry cost. useLayoutEffect below runs it and
+    // closes before paint, avoiding a palette flash for menu-only execution.
+    setPendingMenuCommand({ id: commandId, closeAfterRun: !open })
+    if (!open) openPalette()
+  }), [open, openPalette])
+
+  const clearPendingMenuCommand = useCallback(
+    () => setPendingMenuCommand(null),
+    [],
+  )
+
+  // WHY the workspace-heavy component does not exist while closed: returning
+  // null at the bottom of the old monolith was too late. Hooks had already read
+  // the monolithic workspace context, assembled ~76 command dependencies, and
+  // built the registry. This outer gate subscribes to one boolean plus the
+  // native bridge; ordinary agent traffic cannot fan into the hidden palette.
+  if (!open) return null
+  return (
+    <OpenCommandPalette
+      pendingMenuCommand={pendingMenuCommand}
+      onMenuCommandHandled={clearPendingMenuCommand}
+    />
+  )
+}
+
+function OpenCommandPalette({
+  pendingMenuCommand,
+  onMenuCommandHandled,
+}: {
+  pendingMenuCommand: { id: string; closeAfterRun: boolean } | null
+  onMenuCommandHandled: () => void
+}) {
   // #494: the palette used to receive ~76 props whose only purpose was
   // to be reassembled into `commandContext` below. It now sources every
   // value itself — the store actions/flags by selector, workspace via
@@ -87,7 +159,6 @@ export function CommandPalette() {
   // are untouched, and the future provider-enumeration rewrite (#394 §7)
   // rebuilds command CONTENT, not this assembly.
   const workspace = useWorkspaceContext()
-  const open = useAppStore(state => state.commandPaletteOpen)
   const onClose = useAppStore(state => state.closeCommandPalette)
   const settings = useAppStore(state => state.settings)
   const setSettings = useAppStore(state => state.setSettings)
@@ -129,6 +200,8 @@ export function CommandPalette() {
   const toggleCustomRendering = useAppStore(state => state.toggleCustomRendering)
   const toggleStatusMode = useAppStore(state => state.toggleStatusMode)
   const toggleWorktreeBadges = useAppStore(state => state.toggleWorktreeBadges)
+  const toggleUsageHeader = useAppStore(state => state.toggleUsageHeader)
+  const cycleUsageHeaderLevel = useAppStore(state => state.cycleUsageHeaderLevel)
   const toggleCaffeinate = useCaffeinateStore(state => state.toggle)
   const caffeinateStatus = useCaffeinateStore(state => state.status)
   const devDebugEnabled = useDevDebugConfig(state => state.enabled)
@@ -164,6 +237,8 @@ export function CommandPalette() {
   const showHiddenCommands = SHOW_HIDDEN_COMMANDS
   const statusModeEnabled = settings.showStatusMode
   const worktreeBadgesEnabled = settings.showWorktreeBadges
+  const usageHeaderEnabled = settings.usageHeaderEnabled
+  const usageHeaderLevel = settings.usageHeaderLevel
   const dangerousAgentsEnabled = settings.dangerousAgentsEnabled
   const aggressiveDebugPersistenceEnabled = settings.aggressiveDebugPersistence
   const gitBarOpen = useAppStore(state => state.gitBarOpen)
@@ -383,6 +458,8 @@ export function CommandPalette() {
         toggleCustomRendering,
         toggleStatusMode,
         toggleWorktreeBadges,
+        toggleUsageHeader,
+        cycleUsageHeaderLevel,
         setDangerousAgentsEnabled,
         setAggressiveDebugPersistence,
         enterResumeMode,
@@ -399,6 +476,8 @@ export function CommandPalette() {
         customRenderingEnabled,
         statusModeEnabled,
         worktreeBadgesEnabled,
+        usageHeaderEnabled,
+        usageHeaderLevel,
         dangerousAgentsEnabled,
         aggressiveDebugPersistenceEnabled,
         gitBarOpen,
@@ -464,6 +543,8 @@ export function CommandPalette() {
       toggleCustomRendering,
       toggleStatusMode,
       toggleWorktreeBadges,
+      toggleUsageHeader,
+      cycleUsageHeaderLevel,
       setDangerousAgentsEnabled,
       setAggressiveDebugPersistence,
       enterResumeMode,
@@ -478,6 +559,8 @@ export function CommandPalette() {
       customRenderingEnabled,
       statusModeEnabled,
       worktreeBadgesEnabled,
+      usageHeaderEnabled,
+      usageHeaderLevel,
       dangerousAgentsEnabled,
       aggressiveDebugPersistenceEnabled,
       gitBarOpen,
@@ -563,18 +646,13 @@ export function CommandPalette() {
         : aiWorkspaces,
     [aiWorkspaces, queryText],
   )
-  // Snapshot the recent-command history into a score map once per
-  // palette open. We deliberately depend on `open` (not on every
-  // keystroke) so the ranking is stable for the lifetime of one palette
-  // session: recording a use happens on execute, which closes the
-  // palette, so re-reading mid-session would never change anything here
-  // anyway — and re-parsing localStorage on every query change would be
-  // wasted work. recordCommandUse persists; this memo is the read side
-  // that picks the new state up the next time the palette opens.
+  // Snapshot recent-command history once per mounted palette. The open-only
+  // component is destroyed on close, so an empty dependency list now expresses
+  // the old "once per open" lifetime directly without retaining the expensive
+  // command registry between opens.
   const historyScoreMap = useMemo(
     () => buildHistoryScoreMap(loadRecentHistory()),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on `open`: re-read history each time the palette is shown.
-    [open],
+    [],
   )
   // rankCommands owns all ordering now (tier-first text match, with
   // history as a same-tier tiebreaker; empty query returns registry
@@ -584,6 +662,28 @@ export function CommandPalette() {
   const filteredCommands = useMemo(
     () => rankCommands(commands, queryText, historyScoreMap),
     [commands, queryText, historyScoreMap],
+  )
+  const directAgentTarget = useMemo(
+    () => resolveAgentPaneLabel(workspace.state, queryText, workspace.tileTabs),
+    [queryText, workspace.state, workspace.tileTabs],
+  )
+  const directAgentCommand = useMemo(
+    () => directAgentTarget
+      ? buildAgentIndexCommand(
+          directAgentTarget,
+          workspace.focusAgentByPaneLabel,
+        )
+      : null,
+    [directAgentTarget, workspace.focusAgentByPaneLabel],
+  )
+  // The exact coordinate result is deliberately row zero. It is not part of
+  // fuzzy command ranking and must win Enter even if a future command happens
+  // to contain "A2" in its title or keywords.
+  const paletteCommands = useMemo(
+    () => directAgentCommand
+      ? [directAgentCommand, ...filteredCommands]
+      : filteredCommands,
+    [directAgentCommand, filteredCommands],
   )
 
   const filteredLength =
@@ -596,27 +696,25 @@ export function CommandPalette() {
           : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
             ? filteredAiWorkspaces.length
           : mode === 'commands'
-            ? filteredCommands.length
+            ? paletteCommands.length
             : 0
 
   const selectedCommand = useMemo(() => {
     if (mode !== 'commands') return null
-    return filteredCommands[selectedIndex] ?? null
-  }, [filteredCommands, mode, selectedIndex])
+    return paletteCommands[selectedIndex] ?? null
+  }, [mode, paletteCommands, selectedIndex])
 
   useEffect(() => {
-    if (open) {
-      setQuery('')
-      setSelectedIndex(0)
-      setMode('commands')
-      setSessions([])
-      setSessionsLoading(false)
-      setAiWorkspaces([])
-      setAiWorkspacesLoading(false)
-      setPromptTemplateForm({ id: null, title: '', body: '' })
-      requestAnimationFrame(() => inputRef.current?.focus())
-    }
-  }, [open])
+    setQuery('')
+    setSelectedIndex(0)
+    setMode('commands')
+    setSessions([])
+    setSessionsLoading(false)
+    setAiWorkspaces([])
+    setAiWorkspacesLoading(false)
+    setPromptTemplateForm({ id: null, title: '', body: '' })
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [])
 
   useEffect(() => {
     setSelectedIndex(prev => Math.min(prev, Math.max(0, filteredLength - 1)))
@@ -636,7 +734,11 @@ export function CommandPalette() {
       // command execution passes through (keyboard Enter and click both
       // route here), so it's the one correct place to update history.
       // recordCommandUse never throws, so it can't block command.run.
-      recordCommandUse(command.id)
+      // Agent coordinates are transient workspace destinations, not reusable
+      // registry commands. Recording `agent-index:<sessionId>` would fill the
+      // recent-command history with launch-local ids that can never rank a
+      // future palette open, while crowding out real commands the user repeats.
+      if (!isAgentIndexCommand(command)) recordCommandUse(command.id)
       if (command.keepPaletteOpen) {
         void command.run(commandContext)
         return
@@ -655,25 +757,22 @@ export function CommandPalette() {
   // the id over `menu:command` and we resolve + run it here, where `commands`
   // (the resolved registry) and `commandContext` are in scope.
   //
-  // WHY this effect sits ABOVE the `if (!open) return null` early return at the
-  // bottom of this component: the File menu must work whether or not the palette
-  // is open. If this subscription lived below the early return, React would
-  // never register it while the palette is closed (the common case), and the
-  // menu items would silently do nothing. Hooks must be unconditional, so the
-  // listener is attached at mount and stays attached regardless of `open`.
-  //
-  // We resolve against the SAME `commands` memo the palette renders, so a menu
-  // item and its palette row run byte-identical logic. Unknown ids are ignored
-  // (defensive — the menu only ever sends ids we put there). We do NOT call
-  // onClose() here: a menu click should not implicitly close an open palette,
-  // and when the palette is closed there is nothing to close.
-  useEffect(() => {
-    const unsub = window.api.onMenuCommand(commandId => {
-      const command = commands.find(c => c.id === commandId)
-      if (command) void command.run(commandContext)
-    })
-    return unsub
-  }, [commands, commandContext])
+  // The lightweight outer bridge owns the always-on IPC listener. It mounts
+  // this implementation only long enough to resolve against the SAME registry
+  // the visible palette uses, so native and palette execution cannot drift.
+  useLayoutEffect(() => {
+    if (!pendingMenuCommand) return
+    const command = commands.find(candidate => candidate.id === pendingMenuCommand.id)
+    if (command) void command.run(commandContext)
+    onMenuCommandHandled()
+    if (pendingMenuCommand.closeAfterRun) onClose()
+  }, [
+    commandContext,
+    commands,
+    onClose,
+    onMenuCommandHandled,
+    pendingMenuCommand,
+  ])
 
   const executeResume = useCallback(
     (session: SessionInfo) => {
@@ -800,35 +899,6 @@ export function CommandPalette() {
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        e.stopPropagation()
-        if (
-          mode === 'resume' ||
-          mode === 'buried' ||
-          mode === 'kill-buried' ||
-          mode === 'prompt-template' ||
-          mode === 'save-prompt-template' ||
-          mode === 'ai-workspace-open' ||
-          mode === 'ai-workspace-create' ||
-          mode === 'ai-workspace-clear'
-        ) {
-          setMode('commands')
-          setPromptTemplateForm({ id: null, title: '', body: '' })
-          setQuery('')
-          setSelectedIndex(0)
-          return
-        }
-        if (mode === 'edit-prompt-template') {
-          setMode('prompt-template')
-          setPromptTemplateForm({ id: null, title: '', body: '' })
-          setQuery('')
-          setSelectedIndex(0)
-          return
-        }
-        onClose()
-        return
-      }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setSelectedIndex(prev => Math.min(prev + 1, filteredLength - 1))
@@ -864,7 +934,7 @@ export function CommandPalette() {
           const template = filteredPromptTemplates[selectedIndex]
           if (template) void executePromptTemplate(template)
         } else {
-          const command = filteredCommands[selectedIndex]
+          const command = paletteCommands[selectedIndex]
           if (command) executeCommand(command)
         }
       }
@@ -873,7 +943,7 @@ export function CommandPalette() {
       mode,
       filteredLength,
       filteredBuried,
-      filteredCommands,
+      paletteCommands,
       filteredAiWorkspaces,
       filteredPromptTemplates,
       filteredSessions,
@@ -887,7 +957,6 @@ export function CommandPalette() {
       clearAiWorkspace,
       openAiWorkspace,
       savePromptTemplateForm,
-      onClose,
     ],
   )
 
@@ -917,27 +986,44 @@ export function CommandPalette() {
     }
   })()
 
-  if (!open) return null
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-center"
-      onClick={onClose}
-      role="dialog"
-      aria-label="Command palette"
+    <Dialog
+      open
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
+      }}
     >
-      <div
+      <DialogContent
         className={`
-          mt-[12vh] flex flex-col
-          bg-surface border border-border
-          shadow-lg shadow-black/30
+          top-[12vh] translate-y-0 flex flex-col p-0
+          bg-popover-bg border border-popover-border
+          shadow-[0_16px_48px_var(--theme-shadow-color)]
           overflow-hidden
           ${mode === 'resume'
             ? 'w-[min(1180px,95vw)] max-h-[80vh]'
             : 'w-[min(900px,92vw)] max-h-[60vh]'}
         `}
-        onClick={e => e.stopPropagation()}
+        onEscapeKeyDown={event => {
+          // The palette has nested navigation modes. Escape first backs out
+          // of a mode; only the top-level command list dismisses the Dialog.
+          // Preventing Radix's close for those inner transitions preserves the
+          // established keyboard model without reimplementing global Escape.
+          if (mode === 'commands') return
+          event.preventDefault()
+          if (mode === 'edit-prompt-template') {
+            setMode('prompt-template')
+          } else {
+            setMode('commands')
+          }
+          setPromptTemplateForm({ id: null, title: '', body: '' })
+          setQuery('')
+          setSelectedIndex(0)
+        }}
       >
+        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogDescription className="sr-only">
+          Search application commands and related session workflows.
+        </DialogDescription>
         <div className="flex-shrink-0 border-b border-border px-3 py-2 flex items-center gap-2">
           {mode === 'resume' && (
             <span className="text-accent text-[11px] flex-shrink-0 select-none">
@@ -1062,7 +1148,7 @@ export function CommandPalette() {
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  className="border border-border bg-surface-hi px-2 py-1 text-[11px] text-muted hover:text-ink"
+                  className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
                   onClick={() => {
                     setPromptTemplateForm({ id: null, title: '', body: '' })
                     setMode(mode === 'edit-prompt-template' ? 'prompt-template' : 'commands')
@@ -1085,12 +1171,12 @@ export function CommandPalette() {
           )}
 
           {mode === 'commands' &&
-            (filteredCommands.length === 0 ? (
+            (paletteCommands.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
                 No matching commands
               </div>
             ) : (
-              filteredCommands.map((command, i) => (
+              paletteCommands.map((command, i) => (
                 <div
                   key={command.id}
                   className={`
@@ -1100,8 +1186,8 @@ export function CommandPalette() {
                     text-[13px] font-code
                     ${
                       i === selectedIndex
-                        ? 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1115,8 +1201,8 @@ export function CommandPalette() {
                           command.state.tone === 'danger'
                             ? 'rounded border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger'
                             : command.state.tone === 'accent'
-                              ? 'rounded border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
-                              : 'rounded border border-border bg-surface-hi px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
+                              ? 'rounded border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
+                              : 'rounded border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
                         }
                       >
                         {command.state.label}
@@ -1149,8 +1235,8 @@ export function CommandPalette() {
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1187,9 +1273,9 @@ export function CommandPalette() {
                     ${
                       i === selectedIndex
                         ? mode === 'ai-workspace-clear'
-                          ? 'bg-danger-soft text-ink'
-                          : 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                          ? 'bg-row-danger-selected-bg text-row-selected-fg'
+                          : 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1216,7 +1302,7 @@ export function CommandPalette() {
               <div className="flex justify-end gap-2">
                 <button
                   type="button"
-                  className="border border-border bg-surface-hi px-2 py-1 text-[11px] text-muted hover:text-ink"
+                  className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
                   onClick={() => {
                     setMode('commands')
                     setQuery('')
@@ -1252,8 +1338,8 @@ export function CommandPalette() {
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1287,8 +1373,8 @@ export function CommandPalette() {
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-danger-soft text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-danger-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1322,8 +1408,8 @@ export function CommandPalette() {
                     border-b border-border last:border-b-0
                     ${
                       i === selectedIndex
-                        ? 'bg-accent/15 text-ink'
-                        : 'text-ink-dim hover:bg-surface-hi'
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
                   onMouseEnter={() => setSelectedIndex(i)}
@@ -1385,8 +1471,8 @@ export function CommandPalette() {
             </aside>
           )}
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1435,8 +1521,8 @@ const CommandDescriptionPanel = memo(function CommandDescriptionPanel({
                 command.state.tone === 'danger'
                   ? 'border border-danger-border bg-danger-soft px-1.5 py-0.5 uppercase tracking-wider text-danger'
                   : command.state.tone === 'accent'
-                    ? 'border border-accent/30 bg-accent/10 px-1.5 py-0.5 uppercase tracking-wider text-accent'
-                    : 'border border-border bg-surface-hi px-1.5 py-0.5 uppercase tracking-wider text-muted'
+                    ? 'border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 uppercase tracking-wider text-accent'
+                    : 'border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 uppercase tracking-wider text-muted'
               }
             >
               {command.state.label}

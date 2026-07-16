@@ -6,9 +6,8 @@ import {
   buildSubAgentStateFromAccumulator,
   createAccumulator,
   SUBAGENT_PRUNE_AFTER_MS,
-  type SubAgentAccumulator,
-  type SubAgentMeta,
 } from './subagentState.js'
+import type { SubAgentAccumulator, SubAgentMeta } from './subagentState.js'
 import { readRange } from './shared.js'
 
 // One poller per session, watching <sessionDir>/subagents/.

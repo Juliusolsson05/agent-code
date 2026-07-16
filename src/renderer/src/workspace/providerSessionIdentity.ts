@@ -24,6 +24,7 @@ export function seedResumedRuntimeFields(
   | 'processStatus'
   | 'processError'
   | 'inputReady'
+  | 'inputReadinessRevision'
 > {
   const stickyTranscript =
     existing?.transcriptStatus === 'ready' ||
@@ -45,7 +46,10 @@ export function seedResumedRuntimeFields(
     transcriptError: existing?.transcriptError ?? null,
     processStatus: preserveProcess ? existing.processStatus : 'started',
     processError: existing?.processError ?? null,
-    inputReady: preserveProcess ? existing.inputReady : true,
+    // Process start is deliberately not composer readiness. A provider may
+    // still be replaying history or sitting behind startup/trust chrome.
+    inputReady: existing?.inputReady ?? false,
+    inputReadinessRevision: existing?.inputReadinessRevision ?? -1,
   }
 }
 

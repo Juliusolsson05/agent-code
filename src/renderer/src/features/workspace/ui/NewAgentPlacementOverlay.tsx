@@ -1,4 +1,9 @@
-import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER, isAgentProviderKind, type AgentProviderKind } from '@shared/types/providerKind'
+import {
+  AGENT_PROVIDER_KINDS,
+  DEFAULT_PROVIDER,
+  isAgentProviderKind,
+} from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -6,8 +11,8 @@ import {
   buildPlacementTargets,
   defaultPlacementTargetId,
   placementTargetIdForArrow,
-  type PlacementTarget,
 } from '@renderer/features/workspace/lib/newAgentPlacement'
+import type { PlacementTarget } from '@renderer/features/workspace/lib/newAgentPlacement'
 import type { SessionId, SessionKind } from '@renderer/workspace/types'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { DispatchAttachIntent } from '@renderer/app-state/uiShell/types'
@@ -378,6 +383,7 @@ export function NewAgentPlacementOverlay({
   return (
     <div
       ref={overlayRef}
+      data-agent-code-interaction-owner="app"
       className="absolute inset-0 z-40 bg-black/20"
     >
       {selectedKind && placementTarget && (

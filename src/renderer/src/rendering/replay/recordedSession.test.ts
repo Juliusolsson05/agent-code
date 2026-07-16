@@ -1,11 +1,10 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 
-import {
-  parseRecording,
-  replayRecording,
-  type RecordingHeader,
-  type RecordedLine,
-  type ReplayItemsProjection,
+import { parseRecording, replayRecording } from '@renderer/rendering/replay/recordedSession'
+import type {
+  RecordingHeader,
+  RecordedLine,
+  ReplayItemsProjection,
 } from '@renderer/rendering/replay/recordedSession'
 import {
   ledgerFeedContextFromRuntime,

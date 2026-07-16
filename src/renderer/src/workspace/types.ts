@@ -103,8 +103,8 @@ export type SessionMeta = {
    */
   agentViewModeOverride?: AgentViewModeOverride
   /**
-   * Provider's own session UUID (distinct from Agent Code's SessionId which is
-   * a per-launch routing key). For Claude this is either confirmed by the
+   * Provider's own session UUID (distinct from Agent Code's durable local
+   * SessionId ownership key). For Claude this is either confirmed by the
    * committed JSONL `sessionId` field, supplied by an explicit resume request,
    * or provisionally observed from the proxy's `x-claude-code-session-id`
    * header before the root JSONL file exists.
@@ -395,16 +395,13 @@ export type WorkspaceState = {
    * switch replaces it, and returning the batch clears it. Null when there is
    * nothing to return.
    *
-   * WHY this is in-memory workspace state and deliberately NOT in
-   * PersistedWorkspace: the `agents[].sessionId` values are current-launch
-   * cc-shell SessionIds. On reload every session is re-spawned and its
-   * SessionId is remapped (see rehydrate.ts), so a persisted batch would point
-   * at dead placeholder ids unless it rode the same remap. Threading a remap
-   * for a convenience "undo the last batch" record is not worth the complexity
-   * for v1; the batch lives for the working session, which covers the "switch
-   * out, bring back an hour later" workflow. If cross-restart durability is
-   * wanted later, key the record by the durable provider session id instead of
-   * the local SessionId — this comment is where that decision should be made.
+   * WHY this remains in-memory and deliberately NOT in PersistedWorkspace:
+   * local SessionIds now survive restart, so identity is no longer the blocker.
+   * This record is operational undo history, however, and persisting it would
+   * promise that a provider switch remains reversible after arbitrary provider
+   * history changes and app upgrades. We have no acceptance proof for that
+   * stronger promise yet. Keep the one-run convenience semantics until a
+   * dedicated durable provider-switch protocol owns validation and expiry.
    */
   lastProviderSwitchBatch?: ProviderSwitchBatch | null
 }

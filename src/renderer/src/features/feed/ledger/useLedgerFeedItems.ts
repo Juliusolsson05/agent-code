@@ -3,10 +3,8 @@ import { useMemo, useRef } from 'react'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { FeedRenderItem } from '@renderer/features/feed/model/renderModel'
 import type { RuntimeRenderInput } from '@renderer/session-runtime/state'
-import {
-  createLedgerInputAdapter,
-  type RuntimeLedgerSlices,
-} from '@renderer/rendering/adapter/collectLedgerInput'
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 import {
   ledgerFeedContextFromRuntime,

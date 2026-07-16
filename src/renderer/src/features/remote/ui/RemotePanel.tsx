@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import type {
   RemotePairingIssue,
   RemoteStatus,
@@ -118,15 +124,22 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
   const connected = new Set(status?.connectedDeviceIds ?? [])
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div
-        className="w-[440px] max-h-[80vh] overflow-y-auto border border-border bg-surface text-[12px] text-ink flex flex-col"
-        onClick={e => e.stopPropagation()}
+    <Dialog
+      open
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
+      }}
+    >
+      <DialogContent
+        className="flex max-h-[80vh] w-[440px] flex-col overflow-y-auto border-border p-0 text-[12px]"
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border select-none">
           <div>
             <div className="text-[10px] uppercase tracking-[0.16em] text-muted">Remote Control</div>
-            <div className="font-medium">Control your agents from a phone</div>
+            <DialogTitle className="font-medium">Control your agents from a phone</DialogTitle>
+            <DialogDescription className="sr-only">
+              Configure the remote server, pair phones, and manage connected devices.
+            </DialogDescription>
           </div>
           <button
             className="text-muted hover:text-ink px-1"
@@ -294,7 +307,7 @@ export function RemotePanel({ onClose }: { onClose: () => void }): React.JSX.Ele
             do not exist in the wire protocol.
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import {
-  createLedgerInputAdapter,
-  type RuntimeLedgerSlices,
-} from '@renderer/rendering/adapter/collectLedgerInput'
+import { createLedgerInputAdapter } from '@renderer/rendering/adapter/collectLedgerInput'
+import type { RuntimeLedgerSlices } from '@renderer/rendering/adapter/collectLedgerInput'
 import { createSessionLedger } from '@renderer/rendering/model/ledger'
 
 // ---------------------------------------------------------------------------

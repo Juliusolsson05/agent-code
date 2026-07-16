@@ -9,8 +9,8 @@ import {
   buildDispatchGroups,
   buildPinnedDispatchRows,
   buildVisibleDispatchRows,
-  type DispatchAgentRow,
 } from '@renderer/workspace/dispatch/dispatchSelectors'
+import type { DispatchAgentRow } from '@renderer/workspace/dispatch/dispatchSelectors'
 import {
   DispatchAgentList,
   DispatchEmpty,

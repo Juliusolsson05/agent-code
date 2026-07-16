@@ -22,7 +22,8 @@ import {
   pruneOldPasteDebugLogs,
 } from '@main/pasteDebugJournal.js'
 import { TmuxRegistry } from '@main/tmux/TmuxRegistry.js'
-import { reconcile, type PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
+import { reconcile } from '@main/tmux/tmuxRecovery.js'
+import type { PersistedTerminalRef } from '@main/tmux/tmuxRecovery.js'
 
 import { STATE_DIR, STATE_FILE } from '@main/storage/paths.js'
 import {
@@ -31,9 +32,11 @@ import {
   setLiveRecordingDirsProvider,
 } from '@main/storage/debugRetention.js'
 import { cleanupClaudeImageCacheDir } from '@main/storage/claudeImageCache.js'
-import { acquireStateProcessLock, type StateProcessLock } from '@main/storage/processLock.js'
+import { acquireStateProcessLock } from '@main/storage/processLock.js'
+import type { StateProcessLock } from '@main/storage/processLock.js'
 import { createMainWindow, focusMainWindow, sendToMainWindow } from '@main/window/mainWindow.js'
 import { wireSessionForwarder } from '@main/sessions/forwarder.js'
+import type { SessionForwarderControl } from '@main/sessions/forwarder.js'
 import { SessionRecorderManager } from '@main/recording/SessionRecorderManager.js'
 import { setOutboundObserver } from '@main/window/mainWindow.js'
 import { isSessionRecordingEnabled, isSessionRecordingAutoStart } from '@main/ipc/devDebug.js'
@@ -43,6 +46,7 @@ import { performanceService } from '@main/performance/PerformanceService.js'
 import { startMainHeapWatchdog, stopMainHeapWatchdog } from '@main/performance/heapWatchdog.js'
 import { getPlatformKey, resolveBundledTool } from '@main/setup/runtimeTools.js'
 import { initializeToolchain } from '@main/setup/toolchain.js'
+import { CliUpdateOrchestrator } from '@main/setup/cliUpdateOrchestrator.js'
 import { WorktreeActivityIndex } from '@main/worktreeActivity/WorktreeActivityIndex.js'
 import { BuiltInMcpHttpHost } from '@mcp/runtime/BuiltInMcpHttpHost.js'
 import { OrchestrationBridge } from '@main/orchestration/OrchestrationBridge.js'
@@ -58,6 +62,9 @@ import {
   PREVIOUS_RUN_CLASSIFIER_VERSION,
 } from '@main/incident/previousRunClassifier.js'
 import { getBuildInfo } from '@main/buildInfo.js'
+import { createWorkflowService } from '@main/workflows/createWorkflowService.js'
+import { WorkflowBridge } from '@main/workflows/WorkflowBridge.js'
+import type { WorkflowService } from 'workflow-mcp'
 
 // Main process — thin Electron host.
 //
@@ -131,6 +138,12 @@ let remoteController: RemoteController | null = null
 let tmuxRegistry: TmuxRegistry | null = null
 let stateProcessLock: Extract<StateProcessLock, { acquired: true }> | null = null
 let appRunJournal: AppRunJournal | null = null
+let workflowService: WorkflowService | null = null
+let workflowBridge: WorkflowBridge | null = null
+let codexCliUpdateReserved = false
+let workflowShutdownPromise: Promise<void> | null = null
+let workflowShutdownComplete = false
+let sessionForwarder: SessionForwarderControl | null = null
 
 // WHY Agent Code is intentionally single-primary-process:
 //
@@ -427,6 +440,25 @@ async function startApp(): Promise<void> {
     appRunJournal.recordError('toolchain.error', err)
     throw err
   }
+  appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.start' })
+  try {
+    workflowService = await createWorkflowService({
+      isCodexCliUpdateReserved: () => codexCliUpdateReserved,
+    })
+    workflowBridge = new WorkflowBridge(workflowService)
+    // Recovery successors may be created during service.initialize(), before the bridge exists.
+    // Await rehydration so the first renderer query sees the durable lineage owner instead of a
+    // stale parent with a misleading Resume action.
+    await workflowBridge.start()
+    appRunJournal.record({ area: 'workflows.service', name: 'workflow_service.ready' })
+  } catch (err) {
+    // Workflow persistence is part of the execution contract, not a cosmetic
+    // renderer enhancement. Starting the MCP host without its durable service
+    // would advertise a toggle that either loses runs or fails every tool call;
+    // fail startup explicitly so the incident journal records the real cause.
+    appRunJournal.recordError('workflow_service.error', err)
+    throw err
+  }
   await cleanupClaudeImageCacheDir().catch(err => {
     console.warn('[images] failed to clean Claude image cache:', err)
     performanceService.error('app.main.imageCache.cleanup.error', err)
@@ -580,6 +612,15 @@ async function startApp(): Promise<void> {
       return existsSync(devCache) ? devCache : null
     },
   })
+  const activeWorkflowService = workflowService
+  const activeWorkflowBridge = workflowBridge
+  if (!activeWorkflowService || !activeWorkflowBridge) {
+    // This should be unreachable because workflow initialization is awaited
+    // above. Keep the assertion at the composition boundary so a future
+    // optional/lazy startup refactor cannot accidentally register half a
+    // workflow surface (MCP without IPC, or IPC without a durable owner).
+    throw new Error('Workflow service was not initialized before app composition')
+  }
   builtInMcpHost.setDependencies({
     orchestrationBridge,
     aiWorkspaceRegistry,
@@ -596,10 +637,32 @@ async function startApp(): Promise<void> {
     },
     sessionManager: manager,
     appRunJournal,
+    workflowService: activeWorkflowService,
+    workflowBridge: activeWorkflowBridge,
   })
   performanceService.mark('app.main.sessionManager.created')
 
-  wireSessionForwarder(manager, lspManager)
+  sessionForwarder = wireSessionForwarder(manager, lspManager)
+  // CLI auto-updater — constructed AFTER SessionManager because it uses
+  // the manager to decide whether an active session of the target kind
+  // is currently running (updating a binary while a session holds a
+  // handle to it is safe on POSIX and hostile on Windows). The
+  // orchestrator's boot probe fires shortly after registration below,
+  // and it never blocks the main-window creation because the check is
+  // scheduled via setTimeout inside scheduleBootProbe(). The initial
+  // behavior is loaded from setup.json before IPC registers so the
+  // renderer's first `cli-updates:get` sees the user's preference,
+  // not the placeholder default.
+  const cliUpdateOrchestrator = new CliUpdateOrchestrator(manager, {
+    hasActiveWorkflow: cli => cli === 'codex' && activeWorkflowService.hasActiveRuns(),
+    acquireUpdateLease: cli => {
+      if (cli !== 'codex') return () => undefined
+      if (codexCliUpdateReserved || activeWorkflowService.hasActiveRuns()) return null
+      codexCliUpdateReserved = true
+      return () => { codexCliUpdateReserved = false }
+    },
+  })
+  await cliUpdateOrchestrator.loadInitialBehavior()
   registerAllIpc({
     manager,
     remoteController,
@@ -613,7 +676,12 @@ async function startApp(): Promise<void> {
     aiWorkspaceRegistry,
     caffeinateController,
     appRunJournal,
+    cliUpdateOrchestrator,
+    workflowBridge: activeWorkflowBridge,
   })
+  // Boot probe runs after the IPC is wired so its first `state` push
+  // has a live subscriber to receive it on the renderer side.
+  cliUpdateOrchestrator.scheduleBootProbe()
   performanceService.mark('app.main.ipc.registered')
   appRunJournal.record({ area: 'window.main', name: 'window.create.start' })
   createMainWindow()
@@ -633,6 +701,13 @@ async function startApp(): Promise<void> {
 }
 
 app.on('window-all-closed', () => {
+  if (process.platform === 'darwin') {
+    // macOS treats closing windows as hiding the UI, not quitting the application. Workflow/MCP
+    // services are app-owned and may still be serving Codex turns; stopping them here made Dock
+    // activation create a fresh window backed by a permanently stopped host. The real quit path
+    // below remains the single lifecycle owner for these services.
+    return
+  }
   void manager?.killAll()
   void builtInMcpHost.stop()
   void remoteController?.dispose()
@@ -644,12 +719,59 @@ app.on('window-all-closed', () => {
   // awake for an app that no longer has active work to protect. Cmd+Q also
   // reaches before-quit below; this branch covers the close-window path.
   caffeinateController.dispose()
-  if (process.platform !== 'darwin') app.quit()
+  app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  // WHY Electron quit is gated on WorkflowService.stop(): the durable service
+  // promises that every published event was appended first, but cancellation
+  // and the terminal/interrupted marker still require asynchronous file I/O.
+  // A fire-and-forget stop here would let Electron tear main down between
+  // those writes, leaving a healthy user-initiated quit indistinguishable from
+  // a crash. Prevent exactly the first quit, drain once, then re-enter quit
+  // with the completion flag set so the ordinary lifecycle can finish.
+  if (workflowService && !workflowShutdownComplete) {
+    event.preventDefault()
+    if (!workflowShutdownPromise) {
+      workflowShutdownPromise = workflowService
+        .stop('Agent Code is quitting')
+        .catch(err => {
+          // An unconfirmed provider may still own descendants. Treating this as a warning and
+          // immediately calling app.quit() defeats Workflow MCP's fail-closed ownership fence.
+          // Keep Electron alive, retain the bridge for diagnostics, and let a later quit retry once
+          // the provider settles (or let the user make an explicit OS-level force-quit decision).
+          console.error('[workflows] graceful shutdown blocked:', err)
+          appRunJournal?.recordError('workflow_service.stop.error', err)
+          workflowShutdownPromise = null
+          void dialog.showMessageBox({
+            type: 'error',
+            title: 'Agent work is still shutting down',
+            message: 'Agent Code could not safely quit yet.',
+            detail: err instanceof Error ? err.message : String(err),
+            buttons: ['Keep Agent Code Open'],
+            defaultId: 0,
+            cancelId: 0,
+            noLink: true,
+          })
+          throw err
+        })
+        .then(() => {
+          workflowBridge?.dispose()
+          workflowShutdownComplete = true
+          workflowBridge = null
+          workflowService = null
+          app.quit()
+        })
+        .catch(() => undefined)
+    }
+    return
+  }
   appRunJournal?.record({ area: 'app.lifecycle', name: 'app.before_quit' })
   performanceService.mark('app.main.beforeQuit')
+  // WHY coalescers drain before killAll: provider shutdown can complete quickly enough that
+  // Electron exits before a pending 100 ms semantic/screen timer. Flushing here preserves the
+  // final admitted state and prevents a timer from sending after recorders have finalized.
+  sessionForwarder?.flush()
   void manager?.killAll()
   void builtInMcpHost.stop()
   void remoteController?.dispose()

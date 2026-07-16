@@ -81,6 +81,23 @@ describe('SessionRecorderManager', () => {
     expect(lines[0].payload.event.kind).toBe('turn_started')
   })
 
+  it('defers payload serialization off the outbound IPC observation stack', async () => {
+    const m = mgr()
+    m.startRecording('deferred')
+    const toJSON = vi.fn(() => ({ safely: 'serialized later' }))
+
+    m.observe('session:semantic-event', [{
+      sessionId: 'deferred',
+      event: { type: 'tool_input_delta', payload: { toJSON } },
+    }])
+
+    // The observer is invoked synchronously after BrowserWindow.send. Calling
+    // user JSON hooks here proves serialization is still on that critical path.
+    expect(toJSON).not.toHaveBeenCalled()
+    await m.stop('deferred')
+    expect(toJSON).toHaveBeenCalledTimes(1)
+  })
+
   it('ignores payloads without a sessionId', async () => {
     const m = mgr()
     m.observe('session:screen', [{ screen: 'no id here' }])

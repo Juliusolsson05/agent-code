@@ -35,7 +35,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
     <div
       className="
         flex items-stretch
-        bg-surface border-b border-border
+        bg-tab-bg border-b border-panel-border
         flex-shrink-0
         select-none
         [-webkit-app-region:drag]
@@ -46,8 +46,18 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
           scale-safe. See pushTrafficLightInset() in main/index.ts. */}
       <div className="flex-shrink-0" style={{ width: trafficInset }} />
 
-      {/* Tab list */}
-      <div className="flex items-stretch flex-1 min-w-0 [-webkit-app-region:no-drag]">
+      {/* Tab list.
+          WHY no-drag lives on each INTERACTIVE CHILD, not this container:
+          this container is flex-1 — it spans every pixel right of the
+          traffic lights. With no-drag up here, the empty bar right of the
+          "+" button (usually most of the row) was dead: not a tab, not a
+          button, and not draggable either. Combined with the traffic-light
+          spacer collapsing to 0 after a renderer reload (inset arrives via
+          IPC), the window could end up with NO draggable header at all —
+          "I can't move the app" (post-#517 investigation). Drag is
+          inherited from the bar; each tab/button opts out individually,
+          which is exactly the Chrome tab-strip behavior users expect. */}
+      <div className="flex items-stretch flex-1 min-w-0">
         {state.tabs.map(tab => {
           const active = tab.id === state.activeTabId
           // Derive active/total pane counts from the tile tree +
@@ -69,20 +79,21 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
                 flex items-center gap-2
                 px-3 py-2
                 min-w-[120px] max-w-[220px]
-                border-r border-border
+                border-r border-panel-border
                 cursor-pointer
+                [-webkit-app-region:no-drag]
                 transition-colors duration-120
                 ${
                   active
-                    ? 'bg-canvas text-ink'
-                    : 'bg-surface text-ink-dim hover:bg-surface-hi'
+                    ? 'bg-tab-active-bg text-ink'
+                    : 'bg-tab-bg text-ink-dim hover:bg-tab-hover-bg'
                 }
               `}
             >
               <span
                 className={`
                   w-1 h-1 rounded-full flex-shrink-0
-                  ${active ? 'bg-accent' : 'bg-muted'}
+                  ${active ? 'bg-tab-accent' : 'bg-muted'}
                 `}
               />
               <span className="flex-1 min-w-0 text-[11px] truncate tabular-nums">
@@ -133,6 +144,7 @@ export function TabBar({ workspace, onNewTabRequest }: Props) {
             text-muted hover:text-ink hover:bg-surface-hi
             text-[14px] leading-none
             transition-colors duration-120
+            [-webkit-app-region:no-drag]
           "
         >
           +

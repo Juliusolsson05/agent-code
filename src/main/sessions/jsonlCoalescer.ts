@@ -45,7 +45,7 @@ type PendingJsonlBuffer = {
 
 const jsonlPending = new Map<string, PendingJsonlBuffer>()
 
-function flushJsonlFor(sessionId: string): void {
+export function flushJsonl(sessionId: string): void {
   const pending = jsonlPending.get(sessionId)
   if (!pending || pending.entries.length === 0) return
   const payload = {
@@ -55,6 +55,14 @@ function flushJsonlFor(sessionId: string): void {
   pending.entries = []
   pending.flushScheduled = false
   sendToMainWindow('session:jsonl-entries', payload)
+}
+
+export function flushAllJsonl(): void {
+  // WHY shutdown cannot rely on each session's eventual `exit`: killAll and Electron teardown race
+  // the setImmediate used for ordinary coalescing. Iterating the bounded session map preserves every
+  // already-admitted commit before the app exits; the scheduled callbacks later observe empty
+  // buffers and are harmless if the event loop remains alive.
+  for (const sessionId of jsonlPending.keys()) flushJsonl(sessionId)
 }
 
 export function enqueueJsonl(
@@ -75,7 +83,7 @@ export function enqueueJsonl(
   pending.entries.push({ entry, file })
   if (!pending.flushScheduled) {
     pending.flushScheduled = true
-    setImmediate(() => flushJsonlFor(sessionId))
+    setImmediate(() => flushJsonl(sessionId))
   }
 }
 
@@ -85,6 +93,6 @@ export function enqueueJsonl(
  * leak buffers for dead sessions.
  */
 export function flushAndDropJsonl(sessionId: string): void {
-  flushJsonlFor(sessionId)
+  flushJsonl(sessionId)
   jsonlPending.delete(sessionId)
 }

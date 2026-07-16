@@ -1,6 +1,7 @@
 import { contextBridge } from 'electron'
 
-import { api, type Api } from '@preload/api/index.js'
+import { api } from '@preload/api/index.js'
+import type { Api } from '@preload/api/index.js'
 
 // Preload bridge — multi-session API.
 //
@@ -77,6 +78,21 @@ export type {
   UsageSnapshot,
   UsageSnapshotRequest,
   UsageSpend,
+  WorkflowCancelRequest,
+  WorkflowCancelResult,
+  WorkflowEventsAcknowledgement,
+  WorkflowEventsBatch,
+  WorkflowGetSnapshotRequest,
+  WorkflowGetSnapshotResult,
+  WorkflowReadEventsRequest,
+  WorkflowReadEventsResult,
+  WorkflowResumeRequest,
+  WorkflowResumeResult,
+  WorkflowRunReferenceData,
+  WorkflowRunIpcScope,
+  WorkflowRunInterestRequest,
+  WorkflowSessionRunsRequest,
+  WorkflowSessionRunsResult,
 } from '@preload/api/types.js'
 export type {
   OrchestrationAgentRecord,

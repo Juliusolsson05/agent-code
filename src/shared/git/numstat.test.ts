@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { parseNumstat } from '@shared/git/numstat'
+import { parseNumstat } from '@shared/git/numstat.js'
 
 // parseNumstat was extracted out of src/main/ipc/git.ts so the one tricky
 // invariant it carries — binary files report '-' for both counts and we coerce

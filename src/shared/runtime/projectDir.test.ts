@@ -4,7 +4,7 @@ import {
   sanitizePath,
   sanitizePathSegment,
   sanitizeFilenameToken,
-} from '@shared/runtime/projectDir'
+} from '@shared/runtime/projectDir.js'
 
 // sanitizePathSegment is the proxy-event storage segment sanitiser shared by
 // the Codex writer and the debug-bundle reader. If writer and reader produce
