@@ -3,6 +3,7 @@ import {
   type TaskNotification,
 } from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
+import { RenderShapeCaptureProvider } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,
@@ -986,6 +987,12 @@ function FeedImpl({
 
   return (
     <ProviderContext.Provider value={provider}>
+    {/* Shape-capture binding (Phase 2, PR #555): carries {sessionId, provider}
+        to the observation call sites in Block/EntryRow/SemanticLiveBlockRow and
+        syncs the observer's armed state with main's recording truth on mount.
+        Value is memoized per session — armed-ness deliberately lives OUTSIDE
+        the context so toggling capture never re-renders the feed. */}
+    <RenderShapeCaptureProvider sessionId={sessionId} provider={provider}>
     <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
     <SubAgentsContext.Provider value={subAgents}>
@@ -1035,6 +1042,7 @@ function FeedImpl({
     </SubAgentsContext.Provider>
     </ToolResultIndexContext.Provider>
     </ToolUseIndexContext.Provider>
+    </RenderShapeCaptureProvider>
     </ProviderContext.Provider>
   )
 }

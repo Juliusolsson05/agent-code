@@ -134,6 +134,16 @@ export type RenderShapeSighting = {
   sourceRecordingCursor: number | null
   observedAt: number
   outcome: RenderOutcome
+  /**
+   * How many times this exact (provider, plane, lifecycle, eventType,
+   * fingerprint, outcome-kind) key was observed since capture began. Only
+   * meaningful on the FINAL-FLUSH copy of a sighting: the live path emits a
+   * key once on first sight (count 1 implied) and counts repeats locally —
+   * shipping a message per repeat is the IPC flood the observer exists to
+   * prevent. The disarm flush re-emits keys whose count grew so the sidecar
+   * records the true volume.
+   */
+  seenCount?: number
 }
 
 /**

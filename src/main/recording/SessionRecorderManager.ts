@@ -165,6 +165,21 @@ export class SessionRecorderManager {
     this.recorders.get(sessionId)?.note({ id: noteId, status: 'filled', text })
   }
 
+  /**
+   * Route one coalesced batch of renderer shape sightings into the live
+   * recording's `__render_shape` sidecar (Phase 2, PR #555). Returns false
+   * when the session has no active recorder — the documented no-op: the
+   * renderer's observer can outlive a stopped recording by one flush tick,
+   * and that race must be a dropped batch, never an error surfaced to the
+   * paint path.
+   */
+  appendRenderShapes(sessionId: string, sightings: readonly unknown[]): boolean {
+    const recorder = this.recorders.get(sessionId)
+    if (!recorder) return false
+    recorder.renderShapes(sightings)
+    return true
+  }
+
   isRecording(sessionId: string): boolean {
     return this.recorders.has(sessionId)
   }

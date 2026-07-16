@@ -166,7 +166,11 @@ const REAL_CHANNELS = new Set<FeedChannel>([
 ])
 
 function isSyntheticChannel(ch: string): boolean {
-  return ch === '__note' || ch === '__truncated'
+  // __render_shape (Phase 2, PR #555) joins notes/tombstones: sighting
+  // sidecar lines are extraction/audit input, never pipeline input — a
+  // replay that fed them to the fold would invent events the session
+  // never emitted.
+  return ch === '__note' || ch === '__truncated' || ch === '__render_shape'
 }
 
 /**

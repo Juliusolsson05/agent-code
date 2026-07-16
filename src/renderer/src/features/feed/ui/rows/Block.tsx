@@ -32,6 +32,15 @@ import {
   isWorkflowViewToolName,
   parseWorkflowToolResult,
 } from '@renderer/features/workflows/model/workflowTool'
+import type { RenderOutcome, RenderShapePlane } from '@shared/types/renderShapes'
+import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
+import { useRenderShapeCapture } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
+import {
+  absorbedOutcome,
+  GENERIC_OUTCOME,
+  specializedOutcome,
+  unknownOutcome,
+} from '@renderer/features/feed/evidence/outcome'
 
 /* ---------- Block dispatcher ---------- */
 
@@ -71,6 +80,25 @@ export const Block = memo(function Block({
   const toolUseIndex = useContext(ToolUseIndexContext)
   const toolResultIndex = useContext(ToolResultIndexContext)
   const customRendering = useAppStore(state => state.settings.customRendering)
+  const capture = useRenderShapeCapture()
+  // Shape sighting at the exact paint-decision point (Phase 2, PR #555).
+  // A module-state side effect during render, on purpose: it never touches
+  // React state (no re-render), it is inert unless capture is armed (one
+  // Map.get), and StrictMode double-renders only bump a dedup counter — the
+  // documented approximate-count contract in observer.ts. Committed blocks
+  // are durable transcript evidence, hence lifecycle 'durable'.
+  const sight = (plane: RenderShapePlane, payload: unknown, outcome: RenderOutcome): void => {
+    if (!capture) return
+    observeRenderShape({
+      sessionId: capture.sessionId,
+      provider: capture.provider,
+      plane,
+      lifecycle: 'durable',
+      eventType: block.type,
+      payload,
+      outcome,
+    })
+  }
   switch (block.type) {
     case 'text': {
       // Only text blocks under a user role represent an actual user
@@ -152,6 +180,7 @@ export const Block = memo(function Block({
         if (intent && cmd) {
           const paired = toolResultIndex.get(tu.id)
           const output = paired ? toolResultText(paired) : ''
+          sight('committed-tool-use', tu, specializedOutcome('shared.git-widget'))
           return <GitCardRow intent={intent} output={output} />
         }
       }
@@ -164,6 +193,7 @@ export const Block = memo(function Block({
         // predicate routes them all through the fleet row before provider
         // dispatch, so the main process's SubAgentState (and P2b's
         // notification join) always has a card to land on.
+        sight('committed-tool-use', tu, specializedOutcome('shared.task-subagent'))
         return <TaskSubagentRow block={tu} />
       }
 
@@ -171,6 +201,7 @@ export const Block = memo(function Block({
         // Committed-plane question rendering (P2d): questions + verbatim
         // answer from the paired result. The LIVE picker (semantic plane)
         // owns the interaction; this is the durable record of it.
+        sight('committed-tool-use', tu, specializedOutcome('shared.ask-user-question-answered'))
         return (
           <AskUserQuestionAnsweredRow
             block={tu}
@@ -180,6 +211,13 @@ export const Block = memo(function Block({
       }
 
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolUse?.(tu)
+      sight(
+        'committed-tool-use',
+        tu,
+        providerRow !== undefined
+          ? specializedOutcome(`${currentProvider}.rows.dispatch`)
+          : GENERIC_OUTCOME,
+      )
       // Shared fallback is the generic JSON tool row (residue plan P1):
       // it degrades to the old ToolUseRow look for headline-only inputs
       // (Bash keeps its 2-line cap) and gives MCP/orchestration payloads
@@ -199,6 +237,7 @@ export const Block = memo(function Block({
           && isGitWidgetShellTool(sourceTu.name)
           && detectGitIntent(extractToolCommand(sourceTu))
         ) {
+          sight('committed-tool-result', tr, absorbedOutcome('shared.git-widget', 'output consumed by git widget on the tool_use row'))
           return null
         }
       }
@@ -211,6 +250,7 @@ export const Block = memo(function Block({
         // The session shell consumes the launch envelope to add a view row below the composer.
         // Keep Main readable by suppressing the raw JSON result, but leave the generic tool-use row
         // in place as the durable transcript record that a workflow was launched or resumed.
+        sight('committed-tool-result', tr, absorbedOutcome('workflow.session-view', 'launch envelope consumed by the session workflow view'))
         return null
       }
       // #442 finding-C2: an answered AskUserQuestion renders the picked answer
@@ -219,13 +259,29 @@ export const Block = memo(function Block({
       // answer twice — the committed plane never had the suppression the live
       // semantic plane does. Suppress it so the answered-question card is the
       // single surface, mirroring the git-widget suppression just above.
-      if (sourceTool?.name === 'AskUserQuestion') return null
+      if (sourceTool?.name === 'AskUserQuestion') {
+        sight('committed-tool-result', tr, absorbedOutcome('shared.ask-user-question-answered', 'answer painted on the tool_use row'))
+        return null
+      }
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolResult?.(tr, {
         sourceTool,
       })
+      sight(
+        'committed-tool-result',
+        tr,
+        providerRow !== undefined
+          ? specializedOutcome(`${currentProvider}.rows.dispatch`)
+          : GENERIC_OUTCOME,
+      )
       return providerRow !== undefined ? providerRow : <ToolResultRow block={tr} />
     }
     default:
+      // An unknown committed block kind is exactly the class of shape the
+      // capture system exists to catch — record it as an unknown outcome
+      // (visible bounded fallback below), never a silent drop. Plane
+      // 'transcript-entry' because a non-tool content block is normalized
+      // transcript content, not a tool envelope.
+      sight('transcript-entry', block, unknownOutcome('shared.block-type-label'))
       return (
         <MarkerRow marker="⏺" tone="muted">
           <div className="text-muted text-[11px] uppercase tracking-wider">

@@ -30,6 +30,9 @@ import {
 
 import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
+import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
+import { useRenderShapeCapture } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
+import { GENERIC_OUTCOME } from '@renderer/features/feed/evidence/outcome'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
@@ -319,6 +322,28 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   block: SemanticLiveTurn['blocks'][number]
   toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
 }) {
+  // Shape sighting for the LIVE plane (Phase 2, PR #555). One observation
+  // per block per lifecycle stage, at the top of the dispatch rather than
+  // per branch: this component's dozen branches are the legacy live painter
+  // slated for Phase 5/6 replacement, and threading a truthful per-branch
+  // outcome through all of them buys little before receipts exist. The
+  // coarse `generic` outcome is the documented pre-receipt convention
+  // (evidence/outcome.ts) — catalogs seeded in Phase 4 mark these shapes
+  // `planned`, which accepts generic, so the inbox stays signal. Lifecycle:
+  // a non-finalized live block is a meaningful streaming PREFIX — exactly
+  // the shapes the old renderer kept forgetting.
+  const capture = useRenderShapeCapture()
+  if (capture) {
+    observeRenderShape({
+      sessionId: capture.sessionId,
+      provider: capture.provider,
+      plane: 'semantic-tool',
+      lifecycle: block.finalized ? 'input-complete' : 'prefix',
+      eventType: block.kind,
+      payload: block,
+      outcome: GENERIC_OUTCOME,
+    })
+  }
   if (block.kind === 'thinking' || block.kind === 'reasoning') {
     // Live thinking — for Claude this is the ONLY time the plaintext is
     // available (`thinking` is stripped on the final message before

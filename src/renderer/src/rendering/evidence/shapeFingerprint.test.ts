@@ -171,6 +171,20 @@ describe('structural fingerprint — privacy (the hard invariant)', () => {
     expect(JSON.stringify(out.discriminatorValues)).not.toContain('/Users')
   })
 
+  it('top-level `toolName` splits semantic live blocks (session-runtime vocabulary)', () => {
+    const bash = fingerprintRenderShape({
+      ...base,
+      plane: 'semantic-tool',
+      payload: { kind: 'tool_use', toolName: 'Bash', inputJson: '{}' },
+    })
+    const edit = fingerprintRenderShape({
+      ...base,
+      plane: 'semantic-tool',
+      payload: { kind: 'tool_use', toolName: 'Edit', inputJson: '{}' },
+    })
+    expect(bash.fingerprint).not.toBe(edit.fingerprint)
+  })
+
   it('nested `name` is NOT a discriminator (MCP inputs put user values there)', () => {
     const a = fingerprintRenderShape({
       ...base,

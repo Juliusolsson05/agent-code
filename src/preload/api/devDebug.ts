@@ -32,4 +32,16 @@ export const devDebugApi = {
     ipcRenderer.invoke('record-session:stop', sessionId),
   isSessionRecording: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('record-session:is-recording', sessionId),
+
+  // Render-shape sighting sidecar (Phase 2/3, PR #555). append routes one
+  // coalesced metadata-only batch into the live recording's __render_shape
+  // line; read sweeps every on-disk recording for the Unknown Shape Inbox
+  // (derived state — recordings ARE the database).
+  appendRenderShapeSightings: (sessionId: string, sightings: unknown[]): Promise<boolean> =>
+    ipcRenderer.invoke('render-shape:append', sessionId, sightings),
+  readRenderShapeSightings: (): Promise<{
+    sightings: unknown[]
+    recordingsScanned: number
+    truncated: boolean
+  }> => ipcRenderer.invoke('render-shape:read-sightings'),
 }

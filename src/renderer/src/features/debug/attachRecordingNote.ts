@@ -2,6 +2,10 @@ import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import { useAppStore } from '@renderer/app-state/store'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import {
+  armRenderShapeCapture,
+  disarmRenderShapeCapture,
+} from '@renderer/features/feed/evidence/observer'
 
 // Attach-Recording-Note command body (plan §7b). Kept out of sessionCommands
 // so the command file stays focused on palette registration and so this logic
@@ -53,18 +57,30 @@ export async function runAttachRecordingNoteCommand(workspace: Workspace): Promi
 // Recording is command-driven: this starts the focused pane recording if it
 // isn't, or stops+finalizes it if it is. Kept beside the note command since
 // both operate the focused pane's recorder and share the toast pattern.
+//
+// SHAPE CAPTURE RIDES RECORDING (Phase 2, PR #555): the same toggle arms/
+// disarms the renderer-side render-shape observer. The plan's "Start
+// Rendering Evidence Capture" is deliberately NOT a second command — capture
+// without a recording would produce sightings with no sidecar to land in,
+// and a recording without capture is just the pre-Phase-2 behavior. One
+// switch, both halves. Ordering matters on stop: disarm FIRST so the
+// observer's final count flush lands before the recorder finalizes; on
+// start, arm AFTER the IPC succeeds so a failed start leaves the observer
+// off.
 export async function runToggleSessionRecordingCommand(workspace: Workspace): Promise<void> {
   const sessionId = commandTargetSessionId(workspace)
   if (!sessionId) return
   try {
     const recording = await window.api.isSessionRecording(sessionId)
     if (recording) {
+      disarmRenderShapeCapture(sessionId)
       await window.api.stopSessionRecording(sessionId)
       workspace.showPaneToast(sessionId, 'recording stopped — saved to session-recordings/', 3500)
     } else {
       const provider = workspace.state.sessions[sessionId]?.kind
       await window.api.startSessionRecording(sessionId, provider)
-      workspace.showPaneToast(sessionId, 'recording started for this pane', 3000)
+      armRenderShapeCapture(sessionId)
+      workspace.showPaneToast(sessionId, 'recording started for this pane (shape capture armed)', 3000)
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

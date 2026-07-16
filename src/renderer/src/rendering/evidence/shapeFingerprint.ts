@@ -57,13 +57,15 @@ export const MAX_SHAPE_PATHS = 512
 /**
  * Discriminator allowlist. `type`/`kind`/`subtype` are structural at ANY
  * depth (content blocks carry `content[].type=text|image|tool_use` — the
- * exact split the painter cares about). `name` is top-level ONLY: at the
- * top of a tool_use block it is the tool name (render-relevant, low
- * cardinality); nested it is routinely user data (MCP tool inputs, file
- * names) and would explode one shape into thousands.
+ * exact split the painter cares about). `name`/`toolName` are top-level
+ * ONLY: at the top of a tool_use block `name` is the tool name and at the
+ * top of a SEMANTIC live block the same fact travels as `toolName`
+ * (session-runtime vocabulary) — both render-relevant, low cardinality.
+ * Nested, `name` is routinely user data (MCP tool inputs, file names) and
+ * would explode one shape into thousands.
  */
 const DISCRIMINATOR_KEYS_ANY_DEPTH = new Set(['type', 'kind', 'subtype'])
-const DISCRIMINATOR_KEYS_TOP_LEVEL = new Set(['name'])
+const DISCRIMINATOR_KEYS_TOP_LEVEL = new Set(['name', 'toolName'])
 
 /**
  * A discriminator VALUE must look like an enum token, not prose. Length ≤64

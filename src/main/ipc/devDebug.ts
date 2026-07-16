@@ -156,4 +156,36 @@ export function registerDevDebugIpc(sessionRecorders: SessionRecorderManager | n
     if (!isSessionRecordingEnabled() || !sessionRecorders) return false
     return sessionRecorders.isRecording(sessionId)
   })
+
+  // Render-shape sighting sidecar (Phase 2/3, PR #555). Same trust posture
+  // as the note handlers: dev-debug flag is the boundary, manager may be
+  // null in a normal build, and the payload is bounded HERE because the
+  // renderer is not trusted to bound it. Sightings are metadata-only by
+  // construction on the sending side, but a compromised renderer could ship
+  // anything — the caps make the worst case a bounded write, and the
+  // recorder's own byte cap is the second belt.
+  const MAX_SIGHTING_BATCH = 512
+  const MAX_SIGHTING_BATCH_BYTES = 1024 * 1024
+  ipcMain.handle(
+    'render-shape:append',
+    (_evt, sessionId: string, sightings: unknown): boolean => {
+      if (!isSessionRecordingEnabled() || !sessionRecorders) return false
+      if (!Array.isArray(sightings) || sightings.length === 0) return false
+      if (sightings.length > MAX_SIGHTING_BATCH) return false
+      try {
+        if (JSON.stringify(sightings).length > MAX_SIGHTING_BATCH_BYTES) return false
+      } catch {
+        return false // unserializable batch can't be recorded anyway
+      }
+      return sessionRecorders.appendRenderShapes(sessionId, sightings)
+    },
+  )
+  // Disk sweep for the Unknown Shape Inbox — derived-state read, no writes.
+  ipcMain.handle('render-shape:read-sightings', async () => {
+    if (!isDevDebugEnabled()) {
+      return { sightings: [], recordingsScanned: 0, truncated: false }
+    }
+    const { readRenderShapeSightings } = await import('../recording/renderShapeSidecar.js')
+    return readRenderShapeSightings()
+  })
 }
