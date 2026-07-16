@@ -12,6 +12,13 @@
 
 **Related draft:** [PR #524](https://github.com/Juliusolsson05/agent-code/pull/524)
 
+**Lean implementation plan:**
+[`2026-07-16-evidence-first-provider-owned-feed-rendering-lean.md`](./2026-07-16-evidence-first-provider-owned-feed-rendering-lean.md)
+
+Implementers start with the lean companion. This document is the exhaustive
+reference for contracts, visual-family behavior, the before/after tree, and the
+new/modified/deletion ledger.
+
 ## Goal
 
 Build two things, in this order:
@@ -842,7 +849,11 @@ sharing the entire provider operation component.
 
 ### The common base is a contract and primitives, not inheritance
 
-The requested common definition exists at two useful altitudes:
+The user explicitly proposed a base definition that components could inherit so
+future agents would not forget the obligations shared by every shape. We keep
+that intent, but implement it as a typed contract plus composition because React
+inheritance would couple unrelated visual grammars to one base card. The
+requested common definition therefore exists at two useful altitudes:
 
 1. every raw shape satisfies `RenderShapeDefinition` and therefore has the
    same evidence, fixture, disposition, and provenance obligations;
@@ -1090,6 +1101,13 @@ is the intended product behavior. Each provider reaches it through its own
 adapter/components and the fixtures it actually emits.
 
 ### Global interaction rules
+
+**Truncate by default is a global product rule, not a workflow-only detail.** A
+tool or operation first paints one useful line and an affordance to expand. It
+must not dump a complete command, argument object, MCP payload, assistant body,
+or result into the activity surface merely because the value is available. A
+family may show a small live preview when that preview is the useful result, but
+the bounded full detail remains behind disclosure.
 
 Every operation presents three levels of information:
 
@@ -1532,16 +1550,20 @@ in one PR.
 src/shared/types/
   renderShapes.ts                    common metadata-only contracts
 
-src/renderer/src/rendering/model/
+src/renderer/src/rendering/evidence/
   shapeFingerprint.ts               pure structural identity + redaction rules
-  unknowns.ts                        structurally keyed unknown registry
+  defineRenderShape.ts              catalog definition helper
+  catalogCoverage.ts                fixture/catalog/claim audit
+
+src/renderer/src/rendering/model/
+  unknowns.ts                       structurally keyed unknown registry
 
 src/renderer/src/features/feed/evidence/
   observer.ts                        bounded per-session sighting accumulator
   outcome.ts                         paint decision -> metadata-only receipt
   RenderShapeCaptureContext.tsx      capture gate/session binding
 
-src/renderer/src/features/dev-debug/rendering-shapes/
+src/renderer/src/features/debug/devModules/RenderingShapes/
   UnknownShapeInbox.tsx              local grouped report
   unknownShapeReport.ts              derive report from sidecars + catalogs
 
@@ -1549,23 +1571,20 @@ src/main/recording/
   SessionRecorder.ts                 existing writer; accepts __render_shape
   SessionRecorderManager.ts          existing lifecycle; batched sighting append
 
-src/preload/
-  rendering-shape batch IPC          explicit dev-gated, metadata-only contract
+src/main/ipc/devDebug.ts              dev-gated batch/report handlers
+src/preload/api/devDebug.ts           metadata-only renderer API
 
 src/providers/claude/renderer/
   shapes.ts                          typed Claude catalog
-  operations/*                       only as visual families migrate
-  adapters/*                         Claude-only parsing/mapping
+  operations/*                       Claude-only parsing/mapping + composition
 
 src/providers/codex/renderer/
   shapes.ts                          typed Codex catalog
-  operations/*                       only as visual families migrate
-  adapters/*                         Codex-only parsing/mapping
+  operations/*                       Codex-only parsing/mapping + composition
 
 src/providers/opencode/renderer/
   shapes.ts                          typed OpenCode catalog
-  operations/*                       only as evidence exists
-  adapters/*                         OpenCode-only parsing/mapping
+  operations/*                       OpenCode-only parsing/mapping + composition
 
 src/providers/shared/renderer/protocols/
   code-edit/*                        first proven shared visual protocol
@@ -1584,6 +1603,310 @@ No current folder is renamed to make this map look cleaner. `presentation/` is
 not introduced. `projection/` remains deferred. Existing provider `rows/` and
 shared `rows/` coexist until each shape family has migrated and its old route is
 provably unused.
+
+### Concrete before-and-after tree
+
+This is the filesystem contract for the complete program. The lean companion
+shows only the responsibility-level tree; this long reference records the
+expected additions and modifications so each implementation PR does not invent
+a different home.
+
+The map is incremental, not a request to scaffold empty directories. An added
+path lands only when its phase has evidence and tests. A deletion candidate is
+not deleted until catalog and replay gates prove that no shape still uses it.
+
+Legend:
+
+- `[=]` existing path whose responsibility remains unchanged;
+- `[M]` existing file intentionally modified;
+- `[A]` new file or directory;
+- `[D?]` existing file eligible for later deletion only with proof;
+- `[F]` repeated fixture files produced from reviewed evidence.
+
+#### Before: the anchors we preserve
+
+```text
+src/renderer/src/rendering/
+├── adapter/collectLedgerInput.ts                   [=] observation collection
+├── model/
+│   ├── ledger.ts                                   [=] ownership source of truth
+│   ├── order.ts                                    [=] row ordering source of truth
+│   ├── ownership.ts                                [=] ownership vocabulary
+│   ├── types.ts                                    [=] ledger contracts
+│   └── unknowns.ts                                 [M] unknown grouping evolves
+├── observations/                                   [=] committed/live/local evidence
+├── replay/                                         [M] shape-aware assertions
+└── shadow/                                         [M] legacy/new outcome comparison
+
+src/renderer/src/features/feed/
+├── ledger/                                         [=] ledger -> FeedRenderItem
+├── model/renderModel.ts                            [M] stable receipt references
+└── ui/
+    ├── Feed.tsx                                    [M] capture/operation boundary
+    ├── rows/
+    │   ├── EntryRow.tsx                            [M] provider delegation
+    │   ├── ToolUseRow.tsx                          [M/D?] migration fallback
+    │   ├── ToolResultRow.tsx                       [M/D?] migration fallback
+    │   └── LazyEntry.tsx                           [=] lazy mounting
+    └── semantic/                                   [M] family-by-family only
+
+src/providers/
+├── registry.renderer.capabilities.ts               [M] operation capability
+├── claude/renderer/rows/                           [M/D?] current Claude rows
+├── codex/renderer/rows/                            [M/D?] current Codex rows
+├── opencode/renderer/rows/                         [M/D?] current OpenCode rows
+└── shared/renderer/
+    ├── conditions/                                 [=] parallel condition system
+    └── rows/                                       [M/D?] current visual rows
+
+src/renderer/src/features/debug/
+├── devModules/registry.ts                          [M] register shape inbox
+├── devModules/types.ts                             [=] debug module contract
+└── ui/DevDebugPanel.tsx                            [=] module host
+
+src/main/recording/
+├── SessionRecorder.ts                              [M] shape sidecar records
+└── SessionRecorderManager.ts                       [M] bounded batch routing
+
+src/main/ipc/devDebug.ts                            [M] capture/report IPC
+src/preload/api/devDebug.ts                         [M] renderer API
+src/preload/api/types.ts                            [M] exposed typings
+src/preload/api/index.ts                            [M] export wiring if needed
+```
+
+#### After: target tree when every phase is complete
+
+```text
+src/
+├── shared/types/
+│   └── renderShapes.ts                             [A]
+│
+├── renderer/src/
+│   ├── rendering/
+│   │   ├── adapter/collectLedgerInput.ts           [=]
+│   │   ├── evidence/                               [A]
+│   │   │   ├── shapeFingerprint.ts                 [A]
+│   │   │   ├── shapeFingerprint.test.ts            [A]
+│   │   │   ├── defineRenderShape.ts                [A]
+│   │   │   ├── defineRenderShape.test.ts           [A]
+│   │   │   ├── catalogCoverage.ts                  [A]
+│   │   │   └── catalogCoverage.test.ts             [A]
+│   │   ├── model/
+│   │   │   ├── ledger.ts                           [=]
+│   │   │   ├── order.ts                            [=]
+│   │   │   ├── ownership.ts                        [=]
+│   │   │   ├── types.ts                            [M]
+│   │   │   ├── unknowns.ts                         [M]
+│   │   │   └── unknowns.test.ts                    [M]
+│   │   ├── observations/                           [=]
+│   │   ├── replay/
+│   │   │   ├── invariants.ts                       [M]
+│   │   │   ├── invariants.test.ts                  [M]
+│   │   │   ├── recordedSession.ts                  [M]
+│   │   │   └── recordedSession.test.ts             [M]
+│   │   └── shadow/
+│   │       ├── shadowDiff.ts                        [M]
+│   │       └── shadowDiff.test.ts                   [M]
+│   │
+│   └── features/
+│       ├── feed/
+│       │   ├── evidence/                           [A]
+│       │   │   ├── RenderShapeCaptureContext.tsx   [A]
+│       │   │   ├── observer.ts                     [A]
+│       │   │   ├── observer.test.ts                [A]
+│       │   │   ├── outcome.ts                      [A]
+│       │   │   └── outcome.test.ts                 [A]
+│       │   ├── model/renderModel.ts                [M]
+│       │   └── ui/
+│       │       ├── Feed.tsx                        [M]
+│       │       ├── ProviderOperationBoundary.tsx   [A]
+│       │       ├── ProviderOperationBoundary.test.tsx [A]
+│       │       └── rows/
+│       │           ├── EntryRow.tsx                [M]
+│       │           ├── ToolUseRow.tsx              [M/D?]
+│       │           ├── ToolResultRow.tsx           [M/D?]
+│       │           └── UnknownOperationRow.tsx     [A]
+│       │
+│       └── debug/devModules/
+│           ├── registry.ts                         [M]
+│           └── RenderingShapes/                    [A]
+│               ├── module.tsx                      [A]
+│               ├── UnknownShapeInbox.tsx           [A]
+│               ├── unknownShapeReport.ts           [A]
+│               └── unknownShapeReport.test.ts      [A]
+│
+├── providers/
+│   ├── registry.renderer.capabilities.ts           [M]
+│   ├── registry.renderer.capabilities.operation.test.ts [A]
+│   ├── claude/renderer/
+│   │   ├── shapes.ts                               [A]
+│   │   ├── shapes.test.ts                          [A]
+│   │   ├── operations/                             [A]
+│   │   │   ├── renderClaudeOperation.tsx           [A]
+│   │   │   ├── renderClaudeOperation.test.tsx      [A]
+│   │   │   ├── ClaudeCodeEditOperation.tsx         [A]
+│   │   │   ├── ClaudeCommandOperation.tsx          [A]
+│   │   │   ├── ClaudeReadSearchOperation.tsx       [A]
+│   │   │   ├── ClaudeWebOperation.tsx              [A]
+│   │   │   ├── ClaudeCollaborationOperation.tsx    [A]
+│   │   │   ├── ClaudeWorkflowMcpOperation.tsx      [A]
+│   │   │   └── ClaudeStructuredOperation.tsx       [A]
+│   │   └── rows/{dispatch.tsx,ClaudeRows.tsx}      [M/D?]
+│   ├── codex/renderer/
+│   │   ├── shapes.ts                               [A]
+│   │   ├── shapes.test.ts                          [A]
+│   │   ├── operations/                             [A]
+│   │   │   ├── renderCodexOperation.tsx            [A]
+│   │   │   ├── renderCodexOperation.test.tsx       [A]
+│   │   │   ├── CodexCodeEditOperation.tsx          [A]
+│   │   │   ├── CodexCommandOperation.tsx           [A]
+│   │   │   ├── CodexReadSearchOperation.tsx        [A]
+│   │   │   ├── CodexWebOperation.tsx               [A]
+│   │   │   ├── CodexCollaborationOperation.tsx     [A]
+│   │   │   ├── CodexWorkflowMcpOperation.tsx       [A]
+│   │   │   └── CodexStructuredOperation.tsx        [A]
+│   │   └── rows/{dispatch.tsx,CodexRows.tsx}       [M/D?]
+│   ├── opencode/renderer/
+│   │   ├── shapes.ts                               [A]
+│   │   ├── shapes.test.ts                          [A]
+│   │   ├── operations/                             [A when evidenced]
+│   │   │   ├── renderOpencodeOperation.tsx         [A]
+│   │   │   └── OpencodeStructuredOperation.tsx     [A]
+│   │   └── rows/dispatch.tsx                       [M/D?]
+│   └── shared/renderer/
+│       ├── conditions/                             [=]
+│       ├── protocols/                              [A]
+│       │   ├── code-edit/
+│       │   │   ├── model.ts                        [A]
+│       │   │   ├── CodeEditView.tsx                [A]
+│       │   │   └── CodeEditView.test.tsx           [A]
+│       │   ├── command/
+│       │   │   ├── model.ts                        [A]
+│       │   │   ├── CommandView.tsx                 [A]
+│       │   │   ├── CommandView.test.tsx            [A]
+│       │   │   └── formatters/                     [A, evidence-backed]
+│       │   │       ├── types.ts                    [A]
+│       │   │       ├── git.ts                      [A]
+│       │   │       ├── tests.ts                    [A]
+│       │   │       ├── diagnostics.ts              [A]
+│       │   │       └── json.ts                     [A]
+│       │   ├── read-search/                        [A when proven shared]
+│       │   ├── web/                                [A when proven shared]
+│       │   ├── collaboration/                      [A when proven shared]
+│       │   └── structured-tool/
+│       │       ├── model.ts                        [A]
+│       │       ├── StructuredToolView.tsx          [A]
+│       │       └── StructuredToolView.test.tsx     [A]
+│       └── rows/{DiffSlab,JsonToolRow,JsonResultSlab}.tsx [M/D?]
+│
+├── main/
+│   ├── ipc/devDebug.ts                             [M]
+│   └── recording/
+│       ├── SessionRecorder.ts                      [M]
+│       ├── SessionRecorderManager.ts               [M]
+│       └── SessionRecorderManager.test.ts          [M]
+│
+└── preload/api/
+    ├── devDebug.ts                                 [M]
+    ├── types.ts                                    [M]
+    └── index.ts                                    [M if wiring changes]
+
+scripts/
+├── audit-rendering-shapes.mjs                      [A]
+├── audit-rendering-shapes.test.mjs                 [A]
+├── extract-rendering-shape.mjs                     [A]
+├── extract-rendering-shape.test.mjs                [A]
+├── extract-rendering-fixtures.mjs                  [M]
+└── audit-rendering-fixture.mjs                     [M]
+
+testing/fixtures/
+├── rendering-bundles/                              [=] seed evidence
+├── rendering-recordings/                           [=] replay evidence
+└── rendering-shapes/                               [A]
+    ├── README.md                                   [A]
+    ├── claude/<shape-id>/
+    │   ├── manifest.json                           [F]
+    │   ├── final.json                              [F]
+    │   ├── prefix-*.json                           [F]
+    │   └── expected.json                           [F]
+    ├── codex/<shape-id>/                           [F, same contract]
+    └── opencode/<shape-id>/                        [F, same contract]
+```
+
+### Existing-file modification ledger
+
+This table explains why each existing file changes. If an implementation PR
+cannot point to one of these reasons, that file is probably outside the current
+slice and should not be touched.
+
+| Existing file                                              | Intended modification                                                                                                 | First phase |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------- |
+| `src/renderer/src/rendering/model/unknowns.ts`             | Replace content-hash identity with structural fingerprint identity while retaining bounded sample/count diagnostics.  | 1           |
+| `src/renderer/src/rendering/model/types.ts`                | Carry only the evidence and receipt references required by invariant/replay tooling.                                  | 1–2         |
+| `src/renderer/src/rendering/replay/invariants.ts`          | Assert catalog coverage and explicit outcomes in addition to ownership invariants.                                    | 2–5         |
+| `src/renderer/src/rendering/replay/recordedSession.ts`     | Reproduce provider paint decisions across bootstrap and restart.                                                      | 2–5         |
+| `src/renderer/src/rendering/shadow/shadowDiff.ts`          | Compare legacy/new claimed, generic, absorbed, and visible-fallback outcomes during cutover.                          | 5           |
+| `src/renderer/src/features/feed/model/renderModel.ts`      | Preserve stable operation identity and receipt metadata without redoing ownership.                                    | 5           |
+| `src/renderer/src/features/feed/ui/Feed.tsx`               | Install the capture context and pass stable session/provider/workspace metadata to the operation boundary.            | 2, 5        |
+| `src/renderer/src/features/feed/ui/rows/EntryRow.tsx`      | Give provider capabilities first refusal for catalogued operations, then retain the legacy fallback during migration. | 5           |
+| `src/renderer/src/features/feed/ui/rows/ToolUseRow.tsx`    | Remain the visible legacy/generic tool-use route until each claimed shape family is cut over.                         | 5–9         |
+| `src/renderer/src/features/feed/ui/rows/ToolResultRow.tsx` | Remain the visible legacy/generic result route until paired outcomes have migrated.                                   | 5–9         |
+| `src/providers/registry.renderer.capabilities.ts`          | Add the narrow optional `renderOperation` contract and register provider-owned implementations.                       | 5           |
+| `src/providers/claude/renderer/rows/*`                     | Delegate migrated Claude families to canonical Claude operation modules while retaining unmigrated shapes.            | 5–9         |
+| `src/providers/codex/renderer/rows/*`                      | Delegate migrated Codex families to canonical Codex operation modules while retaining unmigrated shapes.              | 5–9         |
+| `src/providers/opencode/renderer/rows/*`                   | Delegate only evidence-backed OpenCode families; preserve generic behavior otherwise.                                 | 5–9         |
+| `src/providers/shared/renderer/rows/*`                     | Port bounded primitives into proven protocols, then remove duplicate rows only after every caller migrates.           | 5–9         |
+| `src/renderer/src/features/debug/devModules/registry.ts`   | Register Rendering Shapes through the existing debug-module convention.                                               | 3           |
+| `src/main/recording/SessionRecorder.ts`                    | Persist metadata-only `__render_shape` records through the current capped writer.                                     | 2           |
+| `src/main/recording/SessionRecorderManager.ts`             | Route coalesced renderer sighting batches to the correct active recorder and report drops.                            | 2           |
+| `src/main/recording/SessionRecorderManager.test.ts`        | Prove cap, missing-recorder, flush, and failure-isolation behavior.                                                   | 2           |
+| `src/main/ipc/devDebug.ts`                                 | Add dev-gated batch append/report endpoints instead of a general production telemetry channel.                        | 2–3         |
+| `src/preload/api/devDebug.ts`                              | Expose the safe rendering-shape capture/report calls.                                                                 | 2–3         |
+| `src/preload/api/types.ts`                                 | Type the metadata-only API crossing context isolation.                                                                | 2–3         |
+| `src/preload/api/index.ts`                                 | Export the API only if the existing spread does not already cover the added methods.                                  | 2–3         |
+| `scripts/extract-rendering-fixtures.mjs`                   | Reuse its extraction/redaction core rather than fork a second unsafe extractor.                                       | 3           |
+| `scripts/audit-rendering-fixture.mjs`                      | Validate shape manifests and sensitive-survivor rules alongside existing audits.                                      | 3–4         |
+
+Adjacent test files are modified with their production file whenever existing
+coverage already has the right home. New tests are added only when no current
+test expresses the responsibility; the tree above names those additions.
+
+### New-file responsibility ledger
+
+| New path                                                          | Sole responsibility                                                                                           | First phase |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------- |
+| `src/shared/types/renderShapes.ts`                                | Serializable metadata contracts shared across renderer, preload, and main; never provider payload values.     | 1           |
+| `src/renderer/src/rendering/evidence/*`                           | Pure structural identity, typed catalog definition, and coverage audit logic.                                 | 1           |
+| `src/renderer/src/features/feed/evidence/*`                       | Runtime observation, coalescing, and paint-outcome receipts.                                                  | 2           |
+| `src/renderer/src/features/debug/devModules/RenderingShapes/*`    | Developer-only Unknown Shape Inbox and disk-backed report derivation.                                         | 3           |
+| `scripts/audit-rendering-shapes.mjs`                              | Report known, unknown, misrouted, generic, specialized, and missing-prefix coverage.                          | 3           |
+| `scripts/extract-rendering-shape.mjs`                             | Convert one reviewed recording sighting into a redacted fixture draft.                                        | 3           |
+| `testing/fixtures/rendering-shapes/**`                            | Checked-in provider shape memory: final, meaningful prefixes, manifest, and expected decision.                | 3–4         |
+| `src/providers/{provider}/renderer/shapes.ts`                     | Provider-local source of truth for observed raw shapes and declared outcomes.                                 | 4           |
+| `src/renderer/src/features/feed/ui/ProviderOperationBoundary.tsx` | Select the provider capability, require an explicit decision, emit a receipt, and own the visible fallback.   | 5           |
+| `src/renderer/src/features/feed/ui/rows/UnknownOperationRow.tsx`  | High-quality bounded rendering for unclaimed structures; unknown never means invisible.                       | 5           |
+| `src/providers/{provider}/renderer/operations/*`                  | Provider-private raw recognition/mapping and provider-specific composition.                                   | 5–9         |
+| `src/providers/shared/renderer/protocols/*`                       | Narrow provider-neutral visual models and views introduced only after independent mappings prove equivalence. | 5–9         |
+
+### Deletion and rename policy
+
+There are no planned broad renames. `presentation/` is not introduced, and
+`projection/` remains deferred unless the code-edit vertical slice proves a
+pure provider-neutral assembly responsibility that has no current home.
+
+The only deletion candidates are superseded provider/shared row branches and
+duplicate primitives. A candidate becomes an actual deletion only when:
+
+1. every shape it previously painted has a typed provider catalog entry;
+2. final and meaningful prefix fixtures replay through the replacement;
+3. shadow comparison records no missing visible content or owner;
+4. restart/replay produces the same terminal visual model;
+5. repository search finds no remaining consumer; and
+6. the deleting PR names the catalog query and fixtures that prove safety.
+
+Until those gates pass, old and new routes coexist behind explicit provider
+claims. No file is moved or renamed merely to make the target tree look clean
+in advance.
 
 ## Incremental delivery plan
 
