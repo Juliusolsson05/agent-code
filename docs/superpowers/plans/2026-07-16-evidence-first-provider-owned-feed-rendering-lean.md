@@ -532,7 +532,9 @@ src/main/recording/SessionRecorder*.ts       existing; accepts __render_shape
 src/main/ipc/devDebug.ts + src/preload/api/devDebug.ts   dev-gated batch IPC
 src/providers/<provider>/renderer/
   shapes.ts                                  typed per-provider catalog
-  operations/*                               provider-only parsing/mapping + compose
+  adapters/*.ts                              provider wire -> protocol model mapping
+  components/<component>/index.tsx           ONE distinguished component per directory
+  rows/dispatch.tsx                          provider dispatch table
 src/providers/shared/renderer/protocols/
   code-edit/*                                first proven shared protocol
   command/*  structured-tool/*               later, after independent adapters
@@ -545,6 +547,23 @@ testing/fixtures/rendering-shapes/<provider>/<shape-id>/*
 No current folder is renamed; `presentation/` is not introduced; `projection/`
 stays deferred (see below). Existing provider `rows/` and shared `rows/` coexist
 until each family migrates and its old route is provably unused.
+
+**Dir-per-component convention (2026-07-16 amendment, product-owner rule):**
+every distinguished component a provider renders gets its **own directory**,
+even while it is a single file — `components/edit/`, `components/write/`,
+`components/apply-patch/`, and a future OpenCode write is
+`providers/opencode/renderer/components/write/`, never a branch in a shared
+file. The directory is the unit of ownership (fixtures/sub-parsers/tests land
+beside the component instead of accreting into a grab-bag `rows/<P>Rows.tsx`),
+and `ls components/` doubles as the provider's specialized-rendering coverage
+list. The same rule holds inside shared protocol families: command formatters
+are `protocols/command/formatters/<family>/index.ts` plus one registry line.
+`rows/ClaudeRows.tsx` / `rows/CodexRows.tsx` survive only as zero-logic
+re-export barrels for the grandfathered `BlockRow` import edges and are
+deleted with their `GRANDFATHERED` entries when BlockRow migrates to
+`renderOperation`; provider-internal code imports component directories
+directly. Full rationale: long plan §One directory per distinguished
+component.
 
 ## Test-first delivery phases
 

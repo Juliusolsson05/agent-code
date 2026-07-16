@@ -629,6 +629,59 @@ domain data, never provider wire data. If only one provider has a feature, keep
 the component provider-owned until a second implementation proves the shared
 contract.
 
+### One directory per distinguished component (2026-07-16 amendment)
+
+Product-owner correction issued during Phase 6 implementation, superseding the
+single-file `rows/<Provider>Rows.tsx` grab-bag the examples above sketched:
+**every distinguished component a provider renders gets its own directory,
+even while it is one file.**
+
+```text
+src/providers/<provider>/renderer/
+  adapters/*.ts                      # wire -> protocol model mapping (not components)
+  components/
+    <component>/index.tsx            # ONE distinguished component per directory
+  rows/dispatch.tsx                  # the provider dispatch table
+```
+
+Realized during the implementation PR (#555): Claude ships
+`components/{edit,multi-edit,write,bash}/`; Codex ships
+`components/{apply-patch,exec-command,write-stdin,tool,tool-result}/`;
+OpenCode ships `components/read-result/`; the provider-neutral todo checklist
+lives at `providers/shared/renderer/components/todo/`. When OpenCode grows a
+write component, it becomes `providers/opencode/renderer/components/write/` —
+never a case in a shared file, never a sibling function in another
+component's file.
+
+Why a directory rather than a flat `components/<component>.tsx` file:
+
+- The directory is the **unit of ownership**. A component's fixtures,
+  sub-parsers, helper views, and tests land beside it instead of accreting
+  into a shared file — `ClaudeRows.tsx` grew past 300 lines of four unrelated
+  components exactly that way before the split.
+- `ls components/` **is the coverage list**: the tree itself documents which
+  operations each provider renders specially, which is the question the shape
+  catalog audit asks. A missing directory is a visible gap, not a missing
+  branch inside a monolith.
+- Growth is **additive**: upgrading a component from one file to several
+  (model + view + fixtures) changes nothing outside its directory.
+
+The same rule applies **inside shared protocol families**: command formatters
+are `protocols/command/formatters/<family>/index.ts` (e.g. `tests/`, `json/`,
+`file-mutation/`), registered in priority order by
+`protocols/command/formatters/index.ts`. A new family is one new directory
+plus one registry line.
+
+Two deliberate survivors of the split, both temporary: `rows/ClaudeRows.tsx`
+and `rows/CodexRows.tsx` remain as **re-export barrels with zero logic**,
+because the feed's live painter (`BlockRow.tsx`) imports provider rows through
+exactly those specifiers and the import-boundary test grandfathers them by
+exact string match. Keeping the specifiers stable means the restructure adds
+zero new feed→provider edges. Provider-internal code imports the component
+directories directly, never the barrels; the barrels are deleted together
+with their `GRANDFATHERED` entries when BlockRow migrates to
+`renderOperation`.
+
 ## Dependency and ownership contract
 
 The allowed direction is:
