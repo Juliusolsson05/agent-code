@@ -1,11 +1,63 @@
-import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import type {
+  BuiltInMcpDomain,
+  BuiltInMcpServerConfig,
+} from '@mcp/shared/types.js'
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
+import type { SessionKind } from '@shared/types/providerKind.js'
 
 // Re-export the provider/session kind source of truth so callers that
 // already import session types from here keep one import. The canonical
 // definition (and the rationale for the AgentProviderKind vs SessionKind
 // split) lives in providerKind.ts — see that file before adding a kind.
 export type { AgentProviderKind, SessionKind } from '@shared/types/providerKind.js'
+
+// WHY recovery types live at the neutral shared boundary: main owns the
+// operation, preload transports it, and the renderer consumes it. Defining a
+// look-alike at each layer would make the most important fields in the restart
+// protocol (the stable local id and readiness revision) vulnerable to silent
+// drift. Provider history ids remain launch hints; they are intentionally not
+// part of the ownership comparison represented by SessionBackendSnapshot.
+export type SessionInputReadiness = {
+  ready: boolean
+  revision: number
+  reason?: 'starting' | 'replaying-history' | 'provider-not-ready' | 'ready'
+}
+
+export type SessionBackendSnapshot = {
+  sessionId: string
+  kind: SessionKind
+  cwd: string
+  lifecycle: 'spawning' | 'live'
+  input: SessionInputReadiness
+}
+
+export type SessionRecoverOptions = {
+  sessionId: string
+  kind?: SessionKind
+  cwd: string
+  cols?: number
+  rows?: number
+  resumeSessionId?: string
+  dangerousMode?: boolean
+  useProxy?: boolean
+  recoverTmuxName?: string
+  builtInMcpDomains?: BuiltInMcpDomain[]
+}
+
+export type SessionRecoverResult =
+  | {
+      ok: true
+      disposition: 'adopted' | 'spawned'
+      snapshot: SessionBackendSnapshot
+      tmuxName?: string
+    }
+  | {
+      ok: false
+      code: 'ownership-conflict' | 'cancelled' | 'start-failed'
+      retryable: boolean
+      message: string
+      actual?: Pick<SessionBackendSnapshot, 'kind' | 'cwd' | 'lifecycle'>
+    }
 
 // ---------------------------------------------------------------------------
 // AgentSession contract (#394 phase 2a)

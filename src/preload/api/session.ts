@@ -22,6 +22,9 @@ import type {
   SessionSubAgentsEvent,
   SessionSpawnOptions,
   SessionSpawnResult,
+  SessionRecoverOptions,
+  SessionRecoverResult,
+  SessionBackendSnapshot,
   TranscriptPathRequest,
   TranscriptPathResult,
   Unsub,
@@ -39,6 +42,12 @@ export const sessionApi = {
   // --- Session lifecycle ---
   spawnSession: (options: SessionSpawnOptions): Promise<SessionSpawnResult> =>
     ipcRenderer.invoke('session:spawn', options),
+
+  recoverSession: (options: SessionRecoverOptions): Promise<SessionRecoverResult> =>
+    ipcRenderer.invoke('session:recover', options),
+
+  getBackendSnapshot: (sessionId: string): Promise<SessionBackendSnapshot | null> =>
+    ipcRenderer.invoke('session:get-backend-snapshot', sessionId),
 
   killSession: (sessionId: string): Promise<boolean> =>
     ipcRenderer.invoke('session:kill', sessionId),
