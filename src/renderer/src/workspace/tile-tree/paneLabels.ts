@@ -1,3 +1,5 @@
+import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
+import type { AgentProviderKind } from '@shared/types/providerKind'
 import type { SessionId, Tab, TabId, WorkspaceState } from '@renderer/workspace/types'
 import { resolveTabSessions } from '@renderer/workspace/queries'
 
@@ -35,4 +37,65 @@ export function paneLabelForSession(
   if (tabIndex < 0) return '?'
   const paneIndex = resolveTabSessions(state, tabId).indexOf(sessionId)
   return `${tabIndexLabel(tabIndex)}${paneIndex >= 0 ? paneIndex + 1 : '?'}`
+}
+
+export type AgentPaneLabelTarget = {
+  label: string
+  sessionId: SessionId
+  tabId: TabId
+  tabTitle: string
+  title: string
+  cwd: string
+  kind: AgentProviderKind
+}
+
+/**
+ * Resolve the compact label the user can already see in pane/Dispatch chrome.
+ *
+ * WHY this belongs beside paneLabelForSession instead of in the command
+ * palette: `A2` is workspace identity, not search syntax. Dispatch, grid,
+ * Tiled Tabs, and any future navigation surface must all agree that terminals
+ * still occupy an index position while only provider agents are navigable for
+ * issue #546. Rebuilding the ordering inside the palette would inevitably
+ * drift the first time detached-session ordering changes.
+ */
+export function resolveAgentPaneLabel(
+  state: WorkspaceState,
+  input: string,
+): AgentPaneLabelTarget | null {
+  const requestedLabel = input.trim().toUpperCase()
+  if (!/^[A-Z]+[1-9]\d*$/.test(requestedLabel)) return null
+
+  for (let tabIndex = 0; tabIndex < state.tabs.length; tabIndex++) {
+    const tab = state.tabs[tabIndex]
+    const sessionIds = resolveTabSessions(state, tab.id)
+    for (let paneIndex = 0; paneIndex < sessionIds.length; paneIndex++) {
+      const label = `${tabIndexLabel(tabIndex)}${paneIndex + 1}`
+      if (label !== requestedLabel) continue
+
+      const sessionId = sessionIds[paneIndex]
+      const meta = state.sessions[sessionId]
+      if (!meta) return null
+      const kind = meta.kind ?? DEFAULT_PROVIDER
+      // Terminals deliberately keep their visible coordinate (so an A2 agent
+      // does not become A1 merely because A1 is a terminal), but issue #546 is
+      // an agent-navigation affordance. An exact terminal label therefore
+      // falls through to ordinary command search instead of becoming a hidden
+      // second terminal-navigation feature.
+      if (!isAgentProviderKind(kind)) return null
+
+      const cwdParts = meta.cwd.split('/').filter(Boolean)
+      return {
+        label,
+        sessionId,
+        tabId: tab.id,
+        tabTitle: tab.title,
+        title: meta.title?.trim() || cwdParts[cwdParts.length - 1] || meta.cwd,
+        cwd: meta.cwd,
+        kind,
+      }
+    }
+  }
+
+  return null
 }

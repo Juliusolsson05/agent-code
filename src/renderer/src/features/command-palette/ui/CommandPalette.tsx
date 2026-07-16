@@ -19,6 +19,10 @@ import {
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
 import {
+  buildAgentIndexCommand,
+  isAgentIndexCommand,
+} from '@renderer/features/command-palette/lib/agentIndexCommand'
+import {
   buildHistoryScoreMap,
   loadRecentHistory,
   recordCommandUse,
@@ -34,6 +38,7 @@ import {
 } from '@renderer/features/prompt-templates/templates'
 import type { PromptTemplate } from '@renderer/features/prompt-templates/templates'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
@@ -655,6 +660,28 @@ function OpenCommandPalette({
     () => rankCommands(commands, queryText, historyScoreMap),
     [commands, queryText, historyScoreMap],
   )
+  const directAgentTarget = useMemo(
+    () => resolveAgentPaneLabel(workspace.state, queryText),
+    [queryText, workspace.state],
+  )
+  const directAgentCommand = useMemo(
+    () => directAgentTarget
+      ? buildAgentIndexCommand(
+          directAgentTarget,
+          workspace.focusAgentByPaneLabel,
+        )
+      : null,
+    [directAgentTarget, workspace.focusAgentByPaneLabel],
+  )
+  // The exact coordinate result is deliberately row zero. It is not part of
+  // fuzzy command ranking and must win Enter even if a future command happens
+  // to contain "A2" in its title or keywords.
+  const paletteCommands = useMemo(
+    () => directAgentCommand
+      ? [directAgentCommand, ...filteredCommands]
+      : filteredCommands,
+    [directAgentCommand, filteredCommands],
+  )
 
   const filteredLength =
     mode === 'resume'
@@ -666,13 +693,13 @@ function OpenCommandPalette({
           : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
             ? filteredAiWorkspaces.length
           : mode === 'commands'
-            ? filteredCommands.length
+            ? paletteCommands.length
             : 0
 
   const selectedCommand = useMemo(() => {
     if (mode !== 'commands') return null
-    return filteredCommands[selectedIndex] ?? null
-  }, [filteredCommands, mode, selectedIndex])
+    return paletteCommands[selectedIndex] ?? null
+  }, [mode, paletteCommands, selectedIndex])
 
   useEffect(() => {
     setQuery('')
@@ -704,7 +731,11 @@ function OpenCommandPalette({
       // command execution passes through (keyboard Enter and click both
       // route here), so it's the one correct place to update history.
       // recordCommandUse never throws, so it can't block command.run.
-      recordCommandUse(command.id)
+      // Agent coordinates are transient workspace destinations, not reusable
+      // registry commands. Recording `agent-index:<sessionId>` would fill the
+      // recent-command history with launch-local ids that can never rank a
+      // future palette open, while crowding out real commands the user repeats.
+      if (!isAgentIndexCommand(command)) recordCommandUse(command.id)
       if (command.keepPaletteOpen) {
         void command.run(commandContext)
         return
@@ -900,7 +931,7 @@ function OpenCommandPalette({
           const template = filteredPromptTemplates[selectedIndex]
           if (template) void executePromptTemplate(template)
         } else {
-          const command = filteredCommands[selectedIndex]
+          const command = paletteCommands[selectedIndex]
           if (command) executeCommand(command)
         }
       }
@@ -909,7 +940,7 @@ function OpenCommandPalette({
       mode,
       filteredLength,
       filteredBuried,
-      filteredCommands,
+      paletteCommands,
       filteredAiWorkspaces,
       filteredPromptTemplates,
       filteredSessions,
@@ -1137,12 +1168,12 @@ function OpenCommandPalette({
           )}
 
           {mode === 'commands' &&
-            (filteredCommands.length === 0 ? (
+            (paletteCommands.length === 0 ? (
               <div className="px-3 py-4 text-muted text-[12px] text-center">
                 No matching commands
               </div>
             ) : (
-              filteredCommands.map((command, i) => (
+              paletteCommands.map((command, i) => (
                 <div
                   key={command.id}
                   className={`
