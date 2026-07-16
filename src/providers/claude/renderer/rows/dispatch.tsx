@@ -4,9 +4,9 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import {
   EditRow,
   MultiEditRow,
-  TodoRow,
   WriteRow,
 } from '@providers/claude/renderer/rows/ClaudeRows'
+import { TodoRow } from '@providers/shared/renderer/rows/TodoRow'
 
 export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined {
   // WHY this dispatch lives with the provider rows: these names are Claude Code

@@ -240,8 +240,23 @@ export type UnknownBehavior = {
   provider: AgentProviderKind | 'unknown'
   sourcePlane: RenderSourcePlane
   eventType?: string
+  /**
+   * The finding's identity (Phase 1, evidence-first rendering plan):
+   * content-independent structural fingerprint from
+   * rendering/evidence/shapeFingerprint.ts. `Bash ls` and `Bash git status`
+   * are ONE finding under it — the payload hash below is demoted to a
+   * bounded sample so content churn can never re-split a shape.
+   */
+  structuralFingerprint: string
   shapePaths: string[]
+  /** First-seen payload hash — kept as a stable field for bundle readers;
+   *  identity lives in structuralFingerprint, never here. */
   payloadHash: string
+  /** Bounded distinct-hash samples (≤8) proving how varied the CONTENT of
+   *  this one structure was; seeds extraction, never identity. */
+  payloadHashSamples: string[]
+  /** Saturating counter (stops at 64 tracked hashes) — see unknowns.ts. */
+  distinctPayloadHashes: number
   redactedPreview?: string
   firstSeenAt: number
   seenCount: number

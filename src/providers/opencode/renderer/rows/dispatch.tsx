@@ -1,21 +1,24 @@
 import type { ReactNode } from 'react'
 
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
-import { TodoRow } from '@providers/claude/renderer/rows/ClaudeRows'
+import { TodoRow } from '@providers/shared/renderer/rows/TodoRow'
 import { renderOpencodeReadResult } from '@providers/opencode/renderer/rows/OpencodeReadResult'
 
 // OpenCode committed/live tool rows.
 //
-// WHY this reuses Claude's TodoRow instead of cloning it: the live probe of
-// a real opencode 1.15.2 session (2026-07-06, /tmp/oc-probe-events.jsonl)
+// WHY this reuses the SHARED TodoRow instead of cloning it: the live probe
+// of a real opencode 1.15.2 session (2026-07-06, /tmp/oc-probe-events.jsonl)
 // captured todowrite's finalized input as
 //   { todos: [{ content, status, priority }] }
 // — a compatible subset of what TodoRow's parseTodos already handles
 // defensively (activeForm simply renders empty, priority is ignored). The
 // `label` prop keeps the row header honest about which tool the agent
-// actually called. If opencode's todo shape ever diverges, THIS is the seam
-// to fork at — clone the row into this directory rather than growing
-// provider branches inside ClaudeRows.
+// actually called. The row moved from Claude's directory to
+// providers/shared (Phase 1, evidence-first rendering plan) because a
+// provider importing another provider's rows is the exact coupling the
+// import-boundary rules forbid. If opencode's todo shape ever diverges,
+// clone the row into THIS directory rather than growing provider branches
+// inside the shared row.
 //
 // Everything else (read/glob/bash/task/…) intentionally falls through to the
 // generic ToolUseRow/ToolResultRow: the probe showed their inputs/results
