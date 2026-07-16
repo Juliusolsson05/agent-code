@@ -1,3 +1,5 @@
+import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
+
 // Single shared dispatcher for the native dictation hotkey.
 //
 // Why this module exists at all:
@@ -56,6 +58,13 @@ const ensureDispatcher = (): void => {
   if (dispatcherSubs) return
   dispatcherSubs = {
     offDown: window.api.onDictationHotkeyDown(() => {
+      // Native hotkey events bypass the DOM entirely, so a focus trap or
+      // pointer-inert overlay cannot protect the composer. Consult the same
+      // synchronous ownership contract as DOM input before choosing a target.
+      // Key-up intentionally does NOT share this early return: if a dialog
+      // opens while the user is holding Fn, release must still stop the
+      // recording that already took ownership of the press.
+      if (hasAppInteractionOwner()) return
       const target = pickTarget()
       if (!target) return
       activeTargetForKeyHold = target

@@ -1,6 +1,15 @@
 import { DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@renderer/components/ui/dialog'
 import { extractAnchoredUserPrompts } from '@renderer/features/workspace/lib/latestUserPrompts'
 import type { Workspace } from '@renderer/workspace/workspaceStore'
 import type { SessionId } from '@renderer/workspace/types'
@@ -93,12 +102,7 @@ export function RewindToPromptModal({
     void workspace.loadOlderHistory(sessionId)
   }, [open, prompts.length, runtime, sessionId, workspace])
 
-  useEffect(() => {
-    if (!open) return
-    requestAnimationFrame(() => scrollerRef.current?.focus())
-  }, [open])
-
-  if (!open || !meta || !runtime) return null
+  if (!meta || !runtime) return null
 
   const cwdBase = meta.cwd.split('/').filter(Boolean).pop() ?? meta.cwd
   const selected = prompts[selectedIndex] ?? null
@@ -110,30 +114,33 @@ export function RewindToPromptModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/30"
-      onMouseDown={e => {
-        if (e.target === e.currentTarget) onClose()
+    <Dialog
+      open={open}
+      onOpenChange={nextOpen => {
+        if (!nextOpen) onClose()
       }}
     >
-      <div className="w-[min(760px,92vw)] max-h-[82vh] overflow-hidden bg-surface border border-border-hi">
-        <div className="border-b border-border px-4 py-3">
-          <div className="text-[13px] text-ink">Rewind to Prompt</div>
-          <div className="mt-1 text-[11px] text-muted">
-            {meta.kind ?? DEFAULT_PROVIDER} · {cwdBase}
-          </div>
-          <div className="mt-0.5 text-[10px] text-muted truncate">{meta.cwd}</div>
-        </div>
+      <DialogContent
+        className="flex max-h-[82vh] w-[min(760px,92vw)] flex-col overflow-hidden"
+        onOpenAutoFocus={event => {
+          event.preventDefault()
+          scrollerRef.current?.focus()
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Rewind to Prompt</DialogTitle>
+          <DialogDescription asChild>
+            <div>
+              <div>{meta.kind ?? DEFAULT_PROVIDER} · {cwdBase}</div>
+              <div className="mt-0.5 truncate text-[10px]">{meta.cwd}</div>
+            </div>
+          </DialogDescription>
+        </DialogHeader>
 
         <div
           ref={scrollerRef}
           tabIndex={-1}
           onKeyDown={e => {
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              onClose()
-              return
-            }
             if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) {
               e.preventDefault()
               setSelectedIndex(i => Math.min(prompts.length - 1, i + 1))
@@ -149,7 +156,7 @@ export function RewindToPromptModal({
               void confirm()
             }
           }}
-          className="max-h-[calc(82vh-168px)] overflow-y-auto px-4 py-3 outline-none"
+          className="min-h-0 flex-1 overflow-y-auto px-4 py-3 outline-none"
         >
           {prompts.length === 0 ? (
             <div className="py-8 text-center text-[12px] text-muted">
@@ -191,7 +198,7 @@ export function RewindToPromptModal({
           )}
         </div>
 
-        <div className="border-t border-border px-4 py-3 flex items-center justify-between gap-3 text-[11px] text-muted">
+        <DialogFooter className="justify-between text-[11px] text-muted">
           <div className="flex flex-col gap-0.5">
             <span>
               {runtime.loadingOlderHistory && prompts.length < PROMPT_LIMIT
@@ -203,24 +210,23 @@ export function RewindToPromptModal({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <button
+            <Button
               type="button"
               onClick={onClose}
-              className="px-3 py-1.5 text-[12px] border border-border text-ink-dim hover:text-ink hover:border-border-hi"
+              variant="outline"
             >
               Cancel
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() => void confirm()}
               disabled={!selected}
-              className="px-3 py-1.5 text-[12px] border border-accent text-accent hover:bg-canvas disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Rewind here
-            </button>
+            </Button>
           </div>
-        </div>
-      </div>
-    </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

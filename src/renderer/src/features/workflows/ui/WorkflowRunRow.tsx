@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { Button } from '@renderer/components/ui/button'
+
 import type { WorkflowRunReference } from '../client/WorkflowClient'
 import { useWorkflowClient } from '../client/WorkflowClientContext'
 import { mergeWorkflowLineage } from '../model/workflowLineage'
@@ -161,25 +163,33 @@ export function WorkflowRunView({
           </div>
           {client.available && effectiveCwd ? (
             <div className="flex shrink-0 gap-1">
+              {/* These are ordinary feature actions, so they deliberately use
+                  the shared Button primitive introduced after this workflow
+                  surface was built. The row/tab/disclosure buttons elsewhere
+                  in this feature keep their native specialized layouts: they
+                  are navigation widgets, not generic action controls, and
+                  forcing them through Button would erase their ARIA/layout
+                  semantics merely for visual uniformity. */}
               {active ? (
-                <button
+                <Button
                   type="button"
+                  variant="outline"
+                  size="xs"
                   disabled={action !== null}
                   onClick={() => void cancel()}
-                  className="rounded border border-border px-2 py-1 text-[10px] text-muted hover:text-ink disabled:opacity-50"
                 >
                   {action === 'cancel' ? 'Cancelling…' : 'Cancel'}
-                </button>
+                </Button>
               ) : null}
               {canResume ? (
-                <button
+                <Button
                   type="button"
+                  size="xs"
                   disabled={action !== null}
                   onClick={() => void resume()}
-                  className="rounded border border-border px-2 py-1 text-[10px] text-accent hover:bg-surface-hi disabled:opacity-50"
                 >
                   {action === 'resume' ? 'Resuming…' : 'Resume'}
-                </button>
+                </Button>
               ) : null}
             </div>
           ) : null}
@@ -202,13 +212,15 @@ export function WorkflowRunView({
         {view.phase === 'error' ? (
           <div className="mt-3 flex items-center gap-2 text-[11px] text-danger">
             <span>{view.error}</span>
-            <button
+            <Button
               type="button"
+              variant="outline"
+              size="xs"
               onClick={() => store.retry()}
-              className="rounded border border-danger/40 px-1.5 py-0.5"
+              className="border-danger/40 text-danger hover:border-danger hover:text-danger"
             >
               Retry
-            </button>
+            </Button>
           </div>
         ) : null}
         {actionError ? <div className="mt-2 text-[11px] text-danger">{actionError}</div> : null}

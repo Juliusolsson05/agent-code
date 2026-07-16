@@ -33,9 +33,15 @@ type Props = {
   conditions: ProviderConditionSnapshot | null
   onSend: (data: string) => Promise<void>
   onResolveCustom?: (action: ConditionCustomAction) => Promise<unknown>
+  interactionActive: boolean
 }
 
-export function ProviderConditionOutlet({ conditions, onSend, onResolveCustom }: Props) {
+export function ProviderConditionOutlet({
+  conditions,
+  onSend,
+  onResolveCustom,
+  interactionActive,
+}: Props) {
   if (!conditions) return null
 
   const { conditionViews: registry } = getRendererProviderCapabilities(conditions.provider)
@@ -51,6 +57,11 @@ export function ProviderConditionOutlet({ conditions, onSend, onResolveCustom }:
   const snapshot = conditions as import('@shared/conditions-core/contract').ConditionSnapshot
 
   return (
-    <ConditionOutlet snapshot={snapshot} registry={registry} dispatch={dispatch} />
+    <ConditionOutlet
+      snapshot={snapshot}
+      registry={registry}
+      dispatch={dispatch}
+      interactionActive={interactionActive}
+    />
   )
 }
