@@ -8,6 +8,7 @@ function statusGlyph(status: WorkflowAgentState['status']): string {
   switch (status) {
     case 'completed': return '✓'
     case 'failed': return '✗'
+    case 'recovery_required': return '!'
     case 'running': return '◉'
     case 'queued': return '◌'
     case 'cancelled': return '■'
@@ -19,7 +20,16 @@ function statusGlyph(status: WorkflowAgentState['status']): string {
 function agentRightLabel(agent: WorkflowAgentState): string {
   if (agent.outcome?.source === 'journal') return 'Completed · cached'
   if (agent.outcome?.source === 'provider-resume') return 'Completed · resumed'
+  if (agent.status === 'recovery_required') return 'Recovery required'
+  if (agent.status === 'queued' && agent.retry) {
+    return `Retrying · attempt ${agent.retry.nextAttemptNumber}`
+  }
   if (agent.status === 'running') {
+    const attempt = agent.attempts.at(-1)
+    if (attempt?.status === 'stalled') return `Stalled · ${attempt.stall?.kind ?? 'no progress'}`
+    if (attempt?.recovery && attempt.recovery.completedAt === undefined) {
+      return `Recovering · attempt ${attempt.number}`
+    }
     const toolCount = agent.attempts.reduce((count, attempt) => count + attempt.activities.length, 0)
     return `Running · ${toolCount} ${toolCount === 1 ? 'activity' : 'activities'}`
   }
@@ -49,7 +59,7 @@ function WorkflowAgentRowImpl({
       >
         <span
           aria-hidden="true"
-          className={agent.status === 'failed' ? 'text-danger' : 'text-muted'}
+          className={['failed', 'recovery_required'].includes(agent.status) ? 'text-danger' : 'text-muted'}
         >
           {glyph}
         </span>

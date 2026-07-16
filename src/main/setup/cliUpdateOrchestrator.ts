@@ -96,11 +96,30 @@ export interface CliUpdateOrchestrator {
   ): this
 }
 
+export function hasActiveCliLease(
+  manager: Pick<SessionManager, 'list' | 'getSessionKind'>,
+  cli: CliUpdateKind,
+  hasActiveWorkflow?: (cli: CliUpdateKind) => boolean,
+): boolean {
+  // Workflow attempts launch outside SessionManager, so checking only visible terminal sessions
+  // can replace Codex between two agents in one durable run. Keep the app-owned workflow lease in
+  // the same decision function so boot probes, manual updates, and tests cannot drift apart.
+  if (hasActiveWorkflow?.(cli) === true) return true
+  for (const sessionId of manager.list()) {
+    // getSessionKind returns null for terminals — irrelevant here.
+    if (manager.getSessionKind(sessionId) === cli) return true
+  }
+  return false
+}
+
 export class CliUpdateOrchestrator extends EventEmitter {
   private snapshot: CliUpdateSnapshot = DEFAULT_CLI_UPDATE_SNAPSHOT
   private readonly running: PerCliMutex = { claude: false, codex: false }
 
-  constructor(private readonly manager: SessionManager) {
+  constructor(
+    private readonly manager: SessionManager,
+    private readonly options: { hasActiveWorkflow?: (cli: CliUpdateKind) => boolean } = {},
+  ) {
     super()
   }
 
@@ -499,11 +518,7 @@ export class CliUpdateOrchestrator extends EventEmitter {
   }
 
   private hasActiveSession(cli: CliUpdateKind): boolean {
-    for (const sessionId of this.manager.list()) {
-      // getSessionKind returns null for terminals — irrelevant here.
-      if (this.manager.getSessionKind(sessionId) === cli) return true
-    }
-    return false
+    return hasActiveCliLease(this.manager, cli, this.options.hasActiveWorkflow)
   }
 
   private updateSnapshot(cli: CliUpdateKind, state: CliUpdateState): void {

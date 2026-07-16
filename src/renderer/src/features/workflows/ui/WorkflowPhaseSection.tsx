@@ -8,14 +8,22 @@ export function WorkflowPhaseSection({
   expandedAgentId,
   onToggleAgent,
 }: {
-  phase: Pick<WorkflowPhaseState, 'id' | 'title' | 'detail' | 'complete'>
+  phase: Pick<WorkflowPhaseState, 'id' | 'title' | 'detail' | 'complete'> &
+    Partial<Pick<WorkflowPhaseState, 'status'>>
   agents: WorkflowAgentState[]
   expandedAgentId: string | null
   onToggleAgent: (agentId: string) => void
 }): React.JSX.Element {
   const completed = agents.filter(agent =>
-    ['completed', 'failed', 'skipped', 'cancelled'].includes(agent.status),
+    ['completed', 'failed', 'recovery_required', 'skipped', 'cancelled'].includes(agent.status),
   ).length
+  const phaseLabel = phase.status === 'failed'
+    ? 'failed'
+    : phase.status === 'pending'
+      ? 'waiting'
+      : phase.complete
+        ? 'done'
+        : 'active'
   return (
     <section className="rounded border border-border bg-surface px-2 py-2">
       <div className="mb-1.5 flex items-baseline gap-2 border-b border-border px-1 pb-1.5">
@@ -24,7 +32,7 @@ export function WorkflowPhaseSection({
           {completed}/{agents.length} agents
         </span>
         <span className="ml-auto text-[10px] text-muted">
-          {phase.complete ? 'done' : 'active'}
+          {phaseLabel}
         </span>
       </div>
       {phase.detail ? (

@@ -1,3 +1,4 @@
+import { createWorkflowAgentCounts } from 'workflow-mcp/state'
 import type { WorkflowState } from 'workflow-mcp/state'
 
 type WorkflowAgent = WorkflowState['agents'][number]
@@ -19,18 +20,10 @@ function lineageAgent(runId: string, agent: WorkflowAgent): WorkflowAgent {
 }
 
 function deriveCounts(agents: WorkflowAgent[]): WorkflowState['counts'] {
-  const counts: WorkflowState['counts'] = {
-    total: agents.length,
-    admitted: 0,
-    queued: 0,
-    running: 0,
-    completed: 0,
-    failed: 0,
-    skipped: 0,
-    cancelled: 0,
-    reused: 0,
-    attempts: 0,
-  }
+  // Keep the renderer on the runtime-owned constructor. Hand-maintained object literals silently
+  // became NaN when recovery_required was added to the status union but omitted here.
+  const counts = createWorkflowAgentCounts()
+  counts.total = agents.length
   for (const agent of agents) {
     counts[agent.status] += 1
     counts.attempts += agent.attempts.length
