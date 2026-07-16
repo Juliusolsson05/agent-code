@@ -43,17 +43,22 @@ export function useRenderShapeCapture(): RenderShapeCaptureBinding | null {
  * state resets with the renderer on reload, and a recorder that stopped in
  * main is handled by the observer's own recorder-miss auto-disarm.
  *
- * Auto-record soak caveat: this one-shot query can also race a recorder
- * that auto-starts on the session's FIRST event (after Feed mounted). The
- * observer self-heals on the next remount, and interactive capture is the
- * primary path; soak users should expect arming from the first pane
- * mount/remount after events flow, not necessarily the first event.
+ * RETRY SCHEDULE, not one shot: under AGENT_CODE_SESSION_RECORD the
+ * recorder auto-starts in MAIN on the session's FIRST event, which
+ * regularly lands AFTER Feed mounts and after a single query would have
+ * resolved false — first live test of the system produced recordings with
+ * ZERO sidecar lines for exactly this reason. A short bounded backoff
+ * (checks at ~0s/2s/5s/15s, then stops) closes the boot race for the soak
+ * path at the cost of ≤4 tiny IPC round-trips per pane mount; in normal
+ * production builds the handler answers false immediately and the retries
+ * are noise-free no-ops.
  *
  * Unmount does NOT disarm: Feed unmounts on pane moves/reloads while the
  * recording keeps running, and disarming would drop the local counters a
  * final flush is supposed to persist. Disarm belongs to the stop command
  * and the recorder-miss auto-disarm.
  */
+const ARM_SYNC_DELAYS_MS = [0, 2000, 5000, 15_000]
 export function RenderShapeCaptureProvider({
   sessionId,
   provider,
@@ -69,21 +74,30 @@ export function RenderShapeCaptureProvider({
   )
   useEffect(() => {
     let cancelled = false
-    try {
-      void window.api
-        .isSessionRecording(sessionId)
-        .then((recording: boolean) => {
-          if (cancelled) return
-          if (recording) armRenderShapeCapture(sessionId)
-        })
-        .catch(() => {
-          /* recording capability off — observer stays disarmed */
-        })
-    } catch {
-      /* preload absent (bare component tests) — observer stays disarmed */
+    const timers: ReturnType<typeof setTimeout>[] = []
+    const check = (): void => {
+      try {
+        void window.api
+          .isSessionRecording(sessionId)
+          .then((recording: boolean) => {
+            if (cancelled) return
+            if (recording) armRenderShapeCapture(sessionId)
+          })
+          .catch(() => {
+            /* recording capability off — observer stays disarmed */
+          })
+      } catch {
+        /* preload absent (bare component tests) — observer stays disarmed */
+      }
+    }
+    for (const delay of ARM_SYNC_DELAYS_MS) {
+      // Later checks are harmless when an earlier one already armed —
+      // armRenderShapeCapture is idempotent and never resets counters.
+      timers.push(setTimeout(check, delay))
     }
     return () => {
       cancelled = true
+      for (const t of timers) clearTimeout(t)
     }
   }, [sessionId])
   return (
