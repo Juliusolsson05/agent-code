@@ -95,9 +95,26 @@ export function RenderShapeCaptureProvider({
       // armRenderShapeCapture is idempotent and never resets counters.
       timers.push(setTimeout(check, delay))
     }
+    // PUSH is the authoritative arming path (live-test finding): under
+    // auto-record the recorder starts on the session's FIRST event, which
+    // for an idle restored pane is whenever the user first prompts it —
+    // unboundedly after mount, past any retry schedule. Main announces the
+    // start; the retries above remain as the reload-recovery belt (a
+    // renderer that reloads MID-recording gets no fresh start event).
+    let unsubscribe: (() => void) | undefined
+    try {
+      unsubscribe = window.api.onSessionRecordingStarted?.(payload => {
+        if (!cancelled && payload.sessionId === sessionId) {
+          armRenderShapeCapture(sessionId)
+        }
+      })
+    } catch {
+      /* preload absent — belt retries still ran */
+    }
     return () => {
       cancelled = true
       for (const t of timers) clearTimeout(t)
+      unsubscribe?.()
     }
   }, [sessionId])
   return (

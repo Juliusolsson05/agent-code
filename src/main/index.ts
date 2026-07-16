@@ -106,7 +106,14 @@ const ghostJournals = new GhostJournalRegistry()
 // so the Start Recording command works. autoRecord (the env flag) stays OFF
 // by default — nothing records until the command starts a session.
 const sessionRecorders = isSessionRecordingEnabled()
-  ? new SessionRecorderManager(undefined, undefined, isSessionRecordingAutoStart())
+  ? new SessionRecorderManager(undefined, undefined, isSessionRecordingAutoStart(), sessionId =>
+      // Push "recording started" to the renderer so the shape observer arms
+      // the moment a recorder exists (PR #555). Polling from the renderer
+      // provably loses the auto-record race: the recorder starts on a
+      // session's FIRST event, which for an idle restored pane is whenever
+      // the user first prompts it — unboundedly after Feed mount.
+      sendToMainWindow('record-session:started', { sessionId }),
+    )
   : null
 if (sessionRecorders) setOutboundObserver(sessionRecorders.observe)
 // Per-dictation-session debug-dump registry. Mirrors `ghostJournals`:

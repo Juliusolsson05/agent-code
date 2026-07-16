@@ -39,6 +39,17 @@ export const devDebugApi = {
   // (derived state — recordings ARE the database).
   appendRenderShapeSightings: (sessionId: string, sightings: unknown[]): Promise<boolean> =>
     ipcRenderer.invoke('render-shape:append', sessionId, sightings),
+  // Push channel: main announces a recorder STARTING for a session so the
+  // shape observer can arm immediately. WHY push (PR #555, live-test
+  // finding): under auto-record the recorder starts on the session's FIRST
+  // event — for an idle restored pane that is whenever the user first
+  // prompts it, unboundedly after Feed mount, so every renderer-side poll
+  // schedule loses the race. Same subscribe shape as lsp:diagnostics.
+  onSessionRecordingStarted: (cb: (payload: { sessionId: string }) => void): (() => void) => {
+    const listener = (_evt: unknown, payload: { sessionId: string }): void => cb(payload)
+    ipcRenderer.on('record-session:started', listener)
+    return () => ipcRenderer.removeListener('record-session:started', listener)
+  },
   readRenderShapeSightings: (): Promise<{
     sightings: unknown[]
     recordingsScanned: number

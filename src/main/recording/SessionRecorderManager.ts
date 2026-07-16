@@ -73,6 +73,16 @@ export class SessionRecorderManager {
     // default. Without it, NOTHING records until `startRecording` is called
     // by the Start Recording command.
     private readonly autoRecord: boolean = false,
+    // Push notification for the renderer's shape observer (Phase 2, PR
+    // #555). INJECTED (index.ts passes a sendToMainWindow closure) rather
+    // than imported, because this manager sits UNDER the outbound funnel —
+    // importing mainWindow here would invert that relationship. WHY push
+    // and not renderer polling: under auto-record the recorder starts on a
+    // session's FIRST event, which for an idle restored pane can be
+    // minutes after its Feed mounted — live testing proved every bounded
+    // poll schedule loses that race. The notification channel is not in
+    // RECORDED_CHANNELS, so the observe() tap ignores it (no recursion).
+    private readonly notifyRecordingStarted: (sessionId: string) => void = () => {},
   ) {}
 
   /** The outbound observer registered on sendToMainWindow. The critical
@@ -146,6 +156,11 @@ export class SessionRecorderManager {
         this.nowMono,
       )
       this.recorders.set(sessionId, recorder)
+      try {
+        this.notifyRecordingStarted(sessionId)
+      } catch {
+        /* a notify failure must never break recording itself */
+      }
     }
     return recorder
   }
