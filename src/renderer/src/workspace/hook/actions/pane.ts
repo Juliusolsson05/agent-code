@@ -25,6 +25,7 @@ import {
 } from '@renderer/workspace/tile-tree/treeOps'
 import { findBestRemainingFocus, findDirectionalNeighbor } from '@renderer/workspace/tile-tree/geometry'
 import { findParentSplitInfo } from '@renderer/lib/undoClose'
+import type { ClosedTabDetachedEntry } from '@renderer/lib/undoClose'
 import { titleFromCwd } from '@renderer/workspace/layout/helpers'
 import {
   buildVisibleDispatchRows,
@@ -78,6 +79,42 @@ function forgetClosedSessionDebugState(refs: WorkspaceRefs, sessionId: SessionId
   // follow the session lifecycle, or every close leaves another bounded-but-
   // permanent trace behind for the life of the renderer process.
   forgetDebugTrace(sessionId)
+}
+
+type DetachedTabChildren = {
+  records: DetachedSessionRecord[]
+  ids: SessionId[]
+  entries: ClosedTabDetachedEntry[]
+}
+
+function detachedTabChildren(state: WorkspaceState, tabId: string): DetachedTabChildren {
+  // WHY projectTabId is authoritative here: detached sessions deliberately
+  // have no tile-tree leaf. Their persisted projectTabId is the only ownership
+  // edge tying them to the tab whose final visible pane is being removed.
+  // Ignoring that edge creates an invisible orphan; the save-time ownership
+  // sanitizer then correctly prunes it, turning a UI action into data loss.
+  const records = Object.values(state.detachedSessions)
+    .filter(entry => entry.projectTabId === tabId)
+
+  return {
+    records,
+    ids: records.map(entry => entry.sessionId),
+    entries: records.flatMap(entry => {
+      const meta = state.sessions[entry.sessionId]
+      return meta ? [{ meta, detachedAt: entry.detachedAt }] : []
+    }),
+  }
+}
+
+function dispatchModeAfterSessionRemovals(
+  dispatchMode: DispatchModeState | null,
+  removedSessionIds: ReadonlySet<SessionId>,
+): DispatchModeState | null {
+  const cleared = clearTiledLaneSessions(dispatchMode, removedSessionIds)
+  if (!cleared?.focusedSessionId || !removedSessionIds.has(cleared.focusedSessionId)) {
+    return cleared
+  }
+  return { ...cleared, focusedSessionId: undefined }
 }
 
 // Update dispatchMode after a new dispatch agent is spawned. In Tiled
@@ -1091,6 +1128,13 @@ export function usePaneActions(
     // normal grid layout.
     await closeLinkedChildren(targetId)
 
+    // WHY this snapshot is taken after linked-child closure: closing a linked
+    // child mutates detachedSessions synchronously. Capturing from the earlier
+    // command snapshot would put already-closed children back into the tab's
+    // Undo Close entry and could issue a second destructive kill for the same
+    // backend. The post-cascade workspace is the ownership source of truth.
+    const closeSnapshot = refs.stateRef.current
+
     // Capture undo info BEFORE mutating the tree. Two cases:
     //   1. Pane inside a split → record the parent split's geometry
     //      and the surviving sibling's anchor leaf so we can
@@ -1098,6 +1142,10 @@ export function usePaneActions(
     //   2. Last pane in a tab → record the whole tab so we can
     //      re-insert it at the same index.
     const parentInfo = findParentSplitInfo(tab.root, targetId)
+    const detachedChildren = parentInfo
+      ? { records: [], ids: [], entries: [] }
+      : detachedTabChildren(closeSnapshot, tab.id)
+    const closedSessionIds = [targetId, ...detachedChildren.ids]
     if (parentInfo && sessionMeta) {
       refs.undoStackRef.current.push({
         type: 'pane',
@@ -1118,10 +1166,10 @@ export function usePaneActions(
     } else if (!parentInfo && sessionMeta) {
       // This pane IS the root — closing it kills the tab. Capture
       // the tab-level undo entry.
-      const tabIdx = state.tabs.findIndex(t => t.id === tab.id)
+      const tabIdx = closeSnapshot.tabs.findIndex(t => t.id === tab.id)
       const allMetas: Record<SessionId, SessionMeta> = {}
       for (const leafId of collectLeaves(tab.root)) {
-        if (state.sessions[leafId]) allMetas[leafId] = state.sessions[leafId]
+        if (closeSnapshot.sessions[leafId]) allMetas[leafId] = closeSnapshot.sessions[leafId]
       }
       refs.undoStackRef.current.push({
         type: 'tab',
@@ -1129,18 +1177,21 @@ export function usePaneActions(
         tab: { ...tab },
         tabIndex: tabIdx,
         sessionMetas: allMetas,
+        detachedEntries: detachedChildren.entries.length > 0
+          ? detachedChildren.entries
+          : undefined,
       })
       showToast(`Closed “${tab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
     }
 
-    await killSessionBackendIfOwned(refs, targetId)
+    await Promise.all(closedSessionIds.map(id => killSessionBackendIfOwned(refs, id)))
 
     setRuntimes(prev => {
       const next = { ...prev }
-      delete next[targetId]
+      for (const id of closedSessionIds) delete next[id]
       return next
     })
-    forgetClosedSessionDebugState(refs, targetId)
+    for (const id of closedSessionIds) forgetClosedSessionDebugState(refs, id)
 
     setState(prev => {
       const tabs = [...prev.tabs]
@@ -1153,12 +1204,17 @@ export function usePaneActions(
         // Tab is now empty — close it and activate another tab.
         const remaining = tabs.filter((_, i) => i !== tabIdx)
         const sessions = { ...prev.sessions }
-        delete sessions[targetId]
+        for (const id of closedSessionIds) delete sessions[id]
+        const detachedSessions = { ...prev.detachedSessions }
+        for (const id of detachedChildren.ids) delete detachedSessions[id]
+        const removed = new Set(closedSessionIds)
         return {
           ...prev,
           tabs: remaining,
           activeTabId: remaining[Math.max(0, tabIdx - 1)]?.id ?? '',
           sessions,
+          detachedSessions,
+          dispatchMode: dispatchModeAfterSessionRemovals(prev.dispatchMode, removed),
         }
       }
 
@@ -1183,9 +1239,6 @@ export function usePaneActions(
     setRuntimes,
     setState,
     showToast,
-    state.activeTabId,
-    state.sessions,
-    state.tabs,
   ])
 
   // Mirrors closeFocused but operates on a caller-specified session
@@ -1209,6 +1262,7 @@ export function usePaneActions(
       // any session that named `targetId` as its linkedParentId
       // before we close the parent itself.
       await closeLinkedChildren(targetId)
+      const closeSnapshot = refs.stateRef.current
 
       if (!owningTab && detached) {
         await killSessionBackendIfOwned(refs, targetId)
@@ -1246,6 +1300,10 @@ export function usePaneActions(
       // vs. last-pane-in-tab. Keeps ⌘⇧T working for modal-driven
       // closes.
       const parentInfo = findParentSplitInfo(owningTab.root, targetId)
+      const detachedChildren = parentInfo
+        ? { records: [], ids: [], entries: [] }
+        : detachedTabChildren(closeSnapshot, owningTab.id)
+      const closedSessionIds = [targetId, ...detachedChildren.ids]
       if (parentInfo && sessionMeta) {
         refs.undoStackRef.current.push({
           type: 'pane',
@@ -1261,10 +1319,10 @@ export function usePaneActions(
         const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
         showToast(`Closed ${kindLabel} pane (${cwdBase}) — ⌘⇧T Undo Close; repeat for earlier closes`)
       } else if (!parentInfo && sessionMeta) {
-        const tabIdx = snapshot.tabs.findIndex(t => t.id === owningTab.id)
+        const tabIdx = closeSnapshot.tabs.findIndex(t => t.id === owningTab.id)
         const allMetas: Record<SessionId, SessionMeta> = {}
         for (const leafId of collectLeaves(owningTab.root)) {
-          if (snapshot.sessions[leafId]) allMetas[leafId] = snapshot.sessions[leafId]
+          if (closeSnapshot.sessions[leafId]) allMetas[leafId] = closeSnapshot.sessions[leafId]
         }
         refs.undoStackRef.current.push({
           type: 'tab',
@@ -1272,18 +1330,21 @@ export function usePaneActions(
           tab: { ...owningTab },
           tabIndex: tabIdx,
           sessionMetas: allMetas,
+          detachedEntries: detachedChildren.entries.length > 0
+            ? detachedChildren.entries
+            : undefined,
         })
         showToast(`Closed “${owningTab.title}” — ⌘⇧T Undo Close; repeat for earlier closes`)
       }
 
-      await killSessionBackendIfOwned(refs, targetId)
+      await Promise.all(closedSessionIds.map(id => killSessionBackendIfOwned(refs, id)))
 
       setRuntimes(prev => {
         const next = { ...prev }
-        delete next[targetId]
+        for (const id of closedSessionIds) delete next[id]
         return next
       })
-      forgetClosedSessionDebugState(refs, targetId)
+      for (const id of closedSessionIds) forgetClosedSessionDebugState(refs, id)
 
       setState(prev => {
         const tabs = [...prev.tabs]
@@ -1298,7 +1359,9 @@ export function usePaneActions(
         if (nextRoot === null) {
           const remaining = tabs.filter((_, i) => i !== tabIdx)
           const sessions = { ...prev.sessions }
-          delete sessions[targetId]
+          for (const id of closedSessionIds) delete sessions[id]
+          const detachedSessions = { ...prev.detachedSessions }
+          for (const id of detachedChildren.ids) delete detachedSessions[id]
           // Only retarget activeTabId if we just removed the active
           // tab. Closing a pane in a BACKGROUND tab from the modal
           // must not yank the user out of the tab they see when the
@@ -1306,20 +1369,18 @@ export function usePaneActions(
           const nextActiveTabId = prev.activeTabId === owningTab.id
             ? (remaining[Math.max(0, tabIdx - 1)]?.id ?? '')
             : prev.activeTabId
-          return {
+          const next = {
             ...prev,
             tabs: remaining,
             activeTabId: nextActiveTabId,
             sessions,
-            dispatchMode: dispatchModeAfterSessionRemoval(
-              prev,
-              {
-                ...prev,
-                tabs: remaining,
-                activeTabId: nextActiveTabId,
-                sessions,
-              },
-              targetId,
+            detachedSessions,
+          }
+          return {
+            ...next,
+            dispatchMode: dispatchModeAfterSessionRemovals(
+              next.dispatchMode,
+              new Set(closedSessionIds),
             ),
           }
         }
@@ -1406,11 +1467,12 @@ export function usePaneActions(
 
       const parentInfo = findParentSplitInfo(owningTab.root, targetId)
       const tabIndex = snapshot.tabs.findIndex(t => t.id === owningTab.id)
+      const buriedAt = Date.now()
       const buriedRecord: BuriedPaneRecord = {
         id: targetId,
         sessionId: targetId,
         sessionMeta,
-        buriedAt: Date.now(),
+        buriedAt,
         sourceTabId: owningTab.id,
         sourceTabTitle: owningTab.title,
         sourceTabIndex: tabIndex,
@@ -1420,6 +1482,29 @@ export function usePaneActions(
         siblingLeafId: parentInfo?.siblingLeafId,
         note: note?.trim() ? note.trim() : undefined,
       }
+      const detachedChildren = parentInfo
+        ? { records: [], ids: [], entries: [] }
+        : detachedTabChildren(snapshot, owningTab.id)
+      // WHY last-pane bury transfers detached children into the buried archive
+      // instead of killing them: Bury is explicitly the non-destructive close.
+      // Once the source tab disappears, leaving its dispatch children detached
+      // would make them ownerless and the persistence sanitizer would discard
+      // them on the next save. Giving every live child an archive record keeps
+      // it discoverable and revivable while preserving its running backend.
+      const detachedBuriedRecords: BuriedPaneRecord[] = detachedChildren.records
+        .flatMap(entry => {
+          const meta = snapshot.sessions[entry.sessionId]
+          if (!meta) return []
+          return [{
+            id: entry.sessionId,
+            sessionId: entry.sessionId,
+            sessionMeta: meta,
+            buriedAt,
+            sourceTabId: owningTab.id,
+            sourceTabTitle: owningTab.title,
+            sourceTabIndex: tabIndex,
+          }]
+        })
 
       const kindLabel = sessionMeta.kind ?? DEFAULT_PROVIDER
       const cwdBase = sessionMeta.cwd.split('/').filter(Boolean).pop() ?? sessionMeta.cwd
@@ -1436,6 +1521,13 @@ export function usePaneActions(
         const nextRoot = closeLeaf(currentTab.root, targetId)
         if (nextRoot === null) {
           const remaining = tabs.filter((_, i) => i !== tabIdx)
+          const detachedSessions = { ...prev.detachedSessions }
+          for (const id of detachedChildren.ids) delete detachedSessions[id]
+          const buriedSessionIds = new Set([
+            targetId,
+            ...detachedBuriedRecords.map(entry => entry.sessionId),
+          ])
+          const hiddenSessionIds = new Set([targetId, ...detachedChildren.ids])
           // Only retarget activeTabId if we just removed the active
           // tab. Burying a pane in a background tab must not yank
           // the user out of the tab they're currently looking at.
@@ -1446,14 +1538,19 @@ export function usePaneActions(
             ...prev,
             tabs: remaining,
             activeTabId: nextActiveTabId,
+            detachedSessions,
             buried: [
-              ...prev.buried.filter(entry => entry.sessionId !== targetId),
+              ...prev.buried.filter(entry => !buriedSessionIds.has(entry.sessionId)),
               buriedRecord,
+              ...detachedBuriedRecords,
             ],
             // A buried session is hidden from the dispatch rows, so a tiled
             // lane still pointing at it would dangle; clear it so the lane
             // re-homes cleanly instead of bouncing to tile 0.
-            dispatchMode: clearTiledLaneSessions(prev.dispatchMode, targetId),
+            dispatchMode: dispatchModeAfterSessionRemovals(
+              prev.dispatchMode,
+              hiddenSessionIds,
+            ),
           }
         }
 
