@@ -113,7 +113,7 @@ const BLOCKED_ALT_CODES = new Set([
   'PageUp',
 ])
 
-function isBlockedApplicationShortcut(event: KeyboardEvent): boolean {
+export function shouldPreventOwnedApplicationShortcut(event: KeyboardEvent): boolean {
   // WHY this is an allow-list of Agent Code chords instead of "any Cmd/Alt":
   // a modal input still needs native editing shortcuts (Cmd+C/V/X/A/Z) and
   // macOS Option-based character entry. The earlier per-modal bailout blocked
@@ -125,6 +125,12 @@ function isBlockedApplicationShortcut(event: KeyboardEvent): boolean {
     return BLOCKED_META_CODES.has(event.code)
   }
   if (!event.altKey) return false
+  // Option is also macOS's text-composition modifier. While an app-owned
+  // surface has an editable target, Option+C may produce "ç" and Option+Arrow
+  // performs native word navigation/selection. The ownership gate already
+  // prevents the workspace router from acting; preventing the browser default
+  // here would only break the modal's legitimate editing behavior.
+  if (isTextEditingTarget(event.target)) return false
   if (/^Digit[0-9]$/.test(event.code)) return true
   return BLOCKED_ALT_CODES.has(event.code)
 }
@@ -217,7 +223,7 @@ export function useKeybinds(
       // defaults for chords that Agent Code itself claims (Cmd+W is the
       // important one — otherwise macOS closes the window after we return).
       if (hasAppInteractionOwner()) {
-        if (isBlockedApplicationShortcut(e)) e.preventDefault()
+        if (shouldPreventOwnedApplicationShortcut(e)) e.preventDefault()
         return
       }
       // Unified placement-overlay predicate — matches App.tsx's

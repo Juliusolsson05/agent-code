@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { Textarea } from '@renderer/components/ui/textarea'
+import { APP_INTERACTION_OWNER_ATTRIBUTE } from '@renderer/lib/interaction-ownership'
 import type { Settings } from '@renderer/app-state/settings/types'
 import {
   CUSTOM_APPEARANCE_SCHEMA_JSON,
@@ -55,7 +56,10 @@ export function SettingsPage({ onClose, workspace, settings, onChange, onReset }
   }, [registry])
 
   return (
-    <div className="h-full min-h-0 min-w-0 bg-canvas">
+    <div
+      {...{ [APP_INTERACTION_OWNER_ATTRIBUTE]: 'app' }}
+      className="h-full min-h-0 min-w-0 bg-canvas"
+    >
       <div className="flex h-full min-h-0 min-w-0 border-t border-panel-border">
         <SettingsSidebar
           selectedCategory={selectedCategory}

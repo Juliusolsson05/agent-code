@@ -25,6 +25,8 @@ function moveSelection(current: number, target: number): string {
 export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) {
   const [localSelected, setLocalSelected] = useState(0)
   const stripRef = useRef<HTMLDivElement>(null)
+  const interactionActiveRef = useRef(interactionActive)
+  interactionActiveRef.current = interactionActive
 
   useEffect(() => {
     if (prompt?.selectedIndex != null) {
@@ -48,8 +50,17 @@ export function ResumePromptModal({ prompt, onSend, interactionActive }: Props) 
 
   useEffect(() => {
     if (!prompt || !interactionActive) return
-    requestAnimationFrame(() => stripRef.current?.focus())
-  }, [interactionActive, prompt])
+    const frame = requestAnimationFrame(() => {
+      // A pane switch can commit between scheduling and paint. The ref check
+      // prevents an old strip from reclaiming DOM focus after ownership moved.
+      if (interactionActiveRef.current) stripRef.current?.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+    // Object identity is intentionally absent: the condition adapter builds a
+    // fresh presentation object from every provider snapshot. Only a newly
+    // visible prompt or ownership transition should request focus; selection
+    // ticks must not continually steal it back from controls in the pane.
+  }, [interactionActive, prompt?.sessionAgeText, prompt?.tokenCountText])
 
   if (!prompt) return null
 

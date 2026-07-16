@@ -46,6 +46,8 @@ const OPTION_KEYS = ['\r', 'p', '\x1b']
 export function CodexApprovalModal({ approval, onSend, interactionActive }: Props) {
   const [localSelected, setLocalSelected] = useState(0)
   const stripRef = useRef<HTMLDivElement>(null)
+  const interactionActiveRef = useRef(interactionActive)
+  interactionActiveRef.current = interactionActive
 
   // Sync local selection from screen-parsed selection state.
   // The screen parser tracks which option has the `›` marker.
@@ -76,8 +78,14 @@ export function CodexApprovalModal({ approval, onSend, interactionActive }: Prop
 
   useEffect(() => {
     if (!approval || !interactionActive) return
-    requestAnimationFrame(() => stripRef.current?.focus())
-  }, [approval, interactionActive])
+    const frame = requestAnimationFrame(() => {
+      if (interactionActiveRef.current) stripRef.current?.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+    // Provider snapshots rebuild `approval` as a fresh object. Key on the
+    // approval's semantic identity so an unrelated snapshot/selection update
+    // cannot keep pulling focus back to this strip.
+  }, [approval?.callId, approval?.command.join('\0'), interactionActive])
 
   if (!approval) return null
 
