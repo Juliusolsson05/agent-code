@@ -128,6 +128,17 @@ export const CodeBlock = memo(function CodeBlock({
   }, [visibleCode, normalizedLanguage, allowAutoDetect, highlight, largeContentOpen, oversized])
 
   const containerRef = useRef<HTMLDivElement>(null)
+  // INSTANT-PAINT LAYER (renderer rewrite PR #555; product-owner verdict
+  // 2026-07-16: "LSP should kick in instantly"): Monaco + the LSP semantic
+  // provider boot ASYNCHRONOUSLY — dynamic import, editor create, language
+  // server round-trip — which left monaco-engine code blocks visibly
+  // unstyled for seconds in the feed. Until the editor exists we render the
+  // SAME synchronous hljs static block the static engine uses (the
+  // `highlighted` memo is already computed above regardless of engine), then
+  // swap Monaco in place. Layered tokens by design: plain text → lexical
+  // colors in the same frame → Monaco/LSP semantics as a later, invisible
+  // upgrade. First paint must never wait on a language server.
+  const [monacoReady, setMonacoReady] = useState(false)
   const reactId = useId().replace(/:/g, '_')
   const clientUri = useMemo(
     () => inferClientUri(codeId ?? reactId, normalizedLanguage, path),
@@ -148,6 +159,10 @@ export const CodeBlock = memo(function CodeBlock({
     (!oversized || largeContentOpen)
   useEffect(() => {
     if (!useMonaco) return
+    // Re-arm the static placeholder whenever the editor must be rebuilt
+    // (page change, language resolution, remount) — the swap below flips
+    // it back off the moment the new editor exists.
+    setMonacoReady(false)
     let disposed = false
     // Collect ALL cleanup functions as they're created — even inside
     // the async block. The effect cleanup runs them all, regardless
@@ -225,6 +240,10 @@ export const CodeBlock = memo(function CodeBlock({
         },
       })
       cleanups.push(() => editor.dispose())
+      // Editor exists — retire the instant static placeholder. Semantic/LSP
+      // tokens may still be pending, but Monaco's built-in tokenization
+      // paints immediately from here, so the handoff is colored→colored.
+      if (!disposed) setMonacoReady(true)
 
       const syncHeight = () => {
         const nextHeight = Math.min(Math.max(editor.getContentHeight(), 48), 360)
@@ -431,11 +450,29 @@ export const CodeBlock = memo(function CodeBlock({
   }
 
   const monacoBlock = (
-    <div
-      ref={containerRef}
-      data-code-block-id={reactId}
-      className="code-block-shell w-full overflow-hidden"
-    />
+    <div className="min-w-0">
+      {/* Instant lexical layer: shown until the async Monaco editor exists.
+          Same hljs output the static engine renders, so a TS/JSON block is
+          colored in the SAME FRAME it first paints — never gated on the
+          dynamic import or the LSP round-trip. */}
+      {!monacoReady ? (
+        <pre className="code-block-static font-code text-[12px] leading-[1.6] whitespace-pre overflow-auto max-h-[360px] m-0 px-3 py-2 text-code-ink">
+          {highlighted == null ? (
+            <code>{visibleCode}</code>
+          ) : (
+            <code
+              className={`hljs${normalizedLanguage !== 'plaintext' ? ` language-${normalizedLanguage}` : ''}`}
+              dangerouslySetInnerHTML={{ __html: highlighted }}
+            />
+          )}
+        </pre>
+      ) : null}
+      <div
+        ref={containerRef}
+        data-code-block-id={reactId}
+        className={`code-block-shell w-full overflow-hidden${monacoReady ? '' : ' h-0'}`}
+      />
+    </div>
   )
   if (!oversized) return monacoBlock
   return (
