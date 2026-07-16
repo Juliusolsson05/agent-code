@@ -69,7 +69,7 @@ export const CodeEditView = memo(function CodeEditView({ model }: { model: CodeE
                 </span>
               </div>
             ) : null}
-            {file.lines.length > 0 ? <DiffSlab lines={[...file.lines]} /> : null}
+            {file.lines.length > 0 ? <DiffSlab lines={[...file.lines]} filePath={file.path || undefined} emptyLabel="(no inline diff)" /> : null}
           </div>
         ))}
       </div>
