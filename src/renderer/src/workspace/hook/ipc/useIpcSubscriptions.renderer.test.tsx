@@ -6,6 +6,7 @@ import type { MutableRefObject } from 'react'
 
 import { createFakeSessionFeed } from '@renderer/features/sessionFeed/FakeSessionFeed'
 import { UndoCloseStack } from '@renderer/lib/undoClose'
+import { emptyRuntime } from '@renderer/session-runtime/state'
 import type { SessionRuntime } from '@renderer/session-runtime/state'
 import {
   MAX_LIVE_ENTRIES,
@@ -240,6 +241,150 @@ describe('useIpcSubscriptions with an injected SessionFeed', () => {
 
     expect(runtimes.s1?.screen).toBe('hello world')
     expect(runtimes.s1?.recentScreen).toBe('hello world')
+  })
+
+  it('treats provider readiness as versioned state, never as process activity', () => {
+    const fake = createFakeSessionFeed()
+    const state = {
+      sessions: { s1: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {}
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { gitWorktrees: vi.fn(async () => ({ ok: false })) },
+    })
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) refs.current = makeRefs(state)
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+
+    act(() => {
+      fake.emitStarted({ sessionId: 's1', kind: 'claude', projectDir: '/repo' })
+      fake.emitProcessState({ sessionId: 's1', active: false })
+    })
+    expect(runtimes.s1).toMatchObject({
+      processStatus: 'started',
+      inputReady: false,
+      inputReadinessRevision: -1,
+    })
+
+    act(() => {
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: true, revision: 2, reason: 'ready' },
+      })
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: false, revision: 1, reason: 'replaying-history' },
+      })
+      fake.emitProcessState({ sessionId: 's1', active: true, status: 'Working' })
+    })
+    expect(runtimes.s1).toMatchObject({
+      inputReady: true,
+      inputReadinessRevision: 2,
+      processActive: true,
+    })
+
+    act(() => {
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: false, revision: 3, reason: 'provider-not-ready' },
+      })
+    })
+    expect(runtimes.s1).toMatchObject({
+      inputReady: false,
+      inputReadinessRevision: 3,
+    })
+  })
+
+  it('quarantines every content and lifecycle channel after an ownership conflict', () => {
+    const fake = createFakeSessionFeed()
+    const state = {
+      sessions: { s1: { cwd: '/repo', kind: 'claude' } },
+    } as unknown as WorkspaceState
+    const conflictedRuntime: SessionRuntime = {
+      ...emptyRuntime(),
+      processStatus: 'failed',
+      processError: 'Session id is owned by another workspace',
+      recoveryFailureCode: 'ownership-conflict',
+      draftInput: 'renderer-local draft survives',
+    }
+    let runtimes: Record<SessionId, SessionRuntime> = { s1: conflictedRuntime }
+    let refsForAssertion: WorkspaceRefs | null = null
+
+    function Harness(): React.JSX.Element {
+      const refs = useRef<WorkspaceRefs | null>(null)
+      if (refs.current === null) {
+        refs.current = makeRefs(state)
+        refs.current.latestRuntimesRef.current = runtimes
+        refsForAssertion = refs.current
+      }
+      useIpcSubscriptions(
+        fake,
+        refs.current,
+        () => {},
+        updater => {
+          runtimes = typeof updater === 'function' ? updater(runtimes) : updater
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        (sessionId, patch) => {
+          const current = runtimes[sessionId] ?? emptyRuntime()
+          runtimes = { ...runtimes, [sessionId]: { ...current, ...patch } }
+          refs.current!.latestRuntimesRef.current = runtimes
+        },
+        () => {},
+      )
+      return <div />
+    }
+
+    render(<Harness />)
+    act(() => {
+      fake.emitStarted({ sessionId: 's1', kind: 'claude', projectDir: '/wrong-repo' })
+      fake.emitInputReadiness({
+        sessionId: 's1',
+        input: { ready: true, revision: 99, reason: 'ready' },
+      })
+      fake.emitScreen({
+        sessionId: 's1',
+        plain: 'wrong backend content',
+        markdown: 'wrong backend content',
+        recent: 'wrong backend content',
+        recentMarkdown: 'wrong backend content',
+        picker: { visible: false, items: [] },
+      })
+      fake.emitProcessState({ sessionId: 's1', active: true, status: 'Working' })
+      fake.emitSemantic({
+        sessionId: 's1',
+        event: { type: 'turn_started', turnId: 'wrong-turn', source: 'proxy', ts: 1 },
+      })
+      fake.emitExit({ sessionId: 's1', exitCode: 17 })
+    })
+
+    // WHY reference equality matters here: merely restoring the visible error
+    // after folding a wrong event would still transiently ingest another
+    // workspace's text and mutate hidden semantic/debug state. Quarantine must
+    // return before every state/ref write until matching ownership is proven.
+    expect(runtimes.s1).toBe(conflictedRuntime)
+    expect(refsForAssertion!.latestScreenRef.current.s1).toBeUndefined()
   })
 
   it('marks the runtime exited when the fake feed emits exit', () => {

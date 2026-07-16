@@ -170,6 +170,7 @@ export type OutboundFrame =
       type: 'session-event'
       channel:
         | 'started'
+        | 'input-readiness'
         | 'screen'
         | 'jsonl-entries'
         | 'jsonl-error'

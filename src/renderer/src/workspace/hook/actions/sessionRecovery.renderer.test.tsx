@@ -1,0 +1,115 @@
+import { act, renderHook } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { MutableRefObject } from 'react'
+
+import { emptyRuntime } from '@renderer/session-runtime/state'
+import type { SessionRuntime } from '@renderer/session-runtime/state'
+import type { WorkspaceRefs } from '@renderer/workspace/hook/refs'
+import type { SessionId, WorkspaceState } from '@renderer/workspace/types'
+
+import { useSessionActions } from './session'
+
+const originalApiDescriptor = Object.getOwnPropertyDescriptor(window, 'api')
+
+afterEach(() => {
+  if (originalApiDescriptor) {
+    Object.defineProperty(window, 'api', originalApiDescriptor)
+  } else {
+    Reflect.deleteProperty(window, 'api')
+  }
+})
+
+function ref<T>(current: T): MutableRefObject<T> {
+  return { current }
+}
+
+describe('useSessionActions recovery retry', () => {
+  it('clears a retained failure and accepts an equal-revision readiness snapshot', async () => {
+    const sessionId = 'retry-session'
+    let state = {
+      tabs: [{
+        id: 'tab-1',
+        title: 'Project',
+        focusedSessionId: sessionId,
+        root: { type: 'leaf' as const, sessionId },
+      }],
+      activeTabId: 'tab-1',
+      sessions: {
+        [sessionId]: { cwd: '/tmp/project', kind: 'claude' as const },
+      },
+      detachedSessions: {},
+      buried: [],
+      pinnedSessionIds: [],
+      dispatchMode: null,
+    } as WorkspaceState
+    let runtimes: Record<SessionId, SessionRuntime> = {
+      [sessionId]: {
+        ...emptyRuntime(),
+        processStatus: 'failed',
+        processError: 'old failed attempt',
+        recoveryFailureCode: 'start-failed',
+        inputReady: false,
+        inputReadinessRevision: 7,
+        exited: 1,
+      },
+    }
+    const refs = {
+      stateRef: ref(state),
+      latestStateRef: ref(state),
+      latestRuntimesRef: ref(runtimes),
+      dangerousAgentsRef: ref(false),
+      useProxyStreamingRef: ref(false),
+    } as unknown as WorkspaceRefs
+    const setState = (next: WorkspaceState | ((prev: WorkspaceState) => WorkspaceState)) => {
+      state = typeof next === 'function' ? next(state) : next
+      refs.stateRef.current = state
+      refs.latestStateRef.current = state
+    }
+    const setRuntimes = (
+      next: Record<SessionId, SessionRuntime> |
+        ((prev: Record<SessionId, SessionRuntime>) => Record<SessionId, SessionRuntime>),
+    ) => {
+      runtimes = typeof next === 'function' ? next(runtimes) : next
+      refs.latestRuntimesRef.current = runtimes
+    }
+    const recoverSession = vi.fn(async () => ({
+      ok: true as const,
+      disposition: 'spawned' as const,
+      snapshot: {
+        sessionId,
+        kind: 'claude' as const,
+        cwd: '/tmp/project',
+        lifecycle: 'live' as const,
+        // Equal is intentional. The snapshot is a level fact, not an edge;
+        // retry must restore its readiness even when the renderer already saw
+        // this revision number on the abandoned generation.
+        input: { ready: true, revision: 7, reason: 'ready' as const },
+      },
+    }))
+    Object.defineProperty(window, 'api', {
+      configurable: true,
+      value: { recoverSession },
+    })
+
+    const { result } = renderHook(() => useSessionActions(
+      state,
+      setState,
+      setRuntimes,
+      refs,
+    ))
+
+    await act(async () => {
+      await result.current.ensureSessionLive(sessionId)
+    })
+
+    expect(recoverSession).toHaveBeenCalledTimes(1)
+    expect(runtimes[sessionId]).toMatchObject({
+      processStatus: 'started',
+      processError: null,
+      recoveryFailureCode: null,
+      inputReady: true,
+      inputReadinessRevision: 7,
+      exited: null,
+    })
+  })
+})

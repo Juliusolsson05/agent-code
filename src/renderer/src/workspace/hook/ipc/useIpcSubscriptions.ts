@@ -591,12 +591,26 @@ export function useIpcSubscriptions(
       }
     }
 
+    const quarantinesSessionFeed = (sessionId: string): boolean =>
+      refs.latestRuntimesRef.current[sessionId]?.recoveryFailureCode ===
+      'ownership-conflict'
+
+    // WHY every SessionFeed channel is fenced, rather than only transcript
+    // ingestion: session ids are renderer-chosen routing keys, not proof that
+    // the backend process currently attached to that key belongs to this
+    // workspace pane. A failed recovery can discover that another cwd/provider
+    // already owns the id after a few feed messages have arrived. Accepting even
+    // "harmless" lifecycle or screen events after that point can overwrite the
+    // quarantined runtime, clear its warning, or expose another agent's content.
+    // The conflict marker therefore acts as a fail-closed ownership fence until
+    // a later recovery has positively validated both provider kind and cwd.
+
     const offStarted = feed.onSessionStarted(({ sessionId, projectDir }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       updateRuntime(sessionId, {
         projectDir,
         processStatus: 'started',
         processError: null,
-        inputReady: true,
       })
       const cwd = refs.stateRef.current.sessions[sessionId]?.cwd ?? projectDir
       refreshWorktrees(cwd)
@@ -608,8 +622,38 @@ export function useIpcSubscriptions(
       })
     })
 
+    const offInputReadiness = feed.onSessionInputReadiness(({ sessionId, input }) => {
+      if (quarantinesSessionFeed(sessionId)) return
+      setRuntimes(prev => {
+        const current = prev[sessionId] ?? emptyRuntime()
+        if (input.revision <= current.inputReadinessRevision) return prev
+        // WHY revisions are compared in the renderer instead of trusting IPC
+        // arrival order: a recovery snapshot is requested over invoke while
+        // live readiness travels over the feed. Either can win the race. Main's
+        // monotonic revision is the only ordering shared by both paths, so an
+        // older seed must never disable (or enable) a newer provider verdict.
+        return {
+          ...prev,
+          [sessionId]: appendFeedDebugLog(
+            {
+              ...current,
+              inputReady: input.ready,
+              inputReadinessRevision: input.revision,
+            },
+            {
+              layer: 'STATE',
+              kind: 'input_readiness',
+              summary: `input ${input.ready ? 'ready' : 'blocked'} · rev ${input.revision}`,
+              data: { revision: input.revision, reason: input.reason ?? null },
+            },
+          ),
+        }
+      })
+    })
+
     const offScreen = feed.onSessionScreen(
       ({ sessionId, plain, markdown, recent, recentMarkdown, picker }) => {
+        if (quarantinesSessionFeed(sessionId)) return
         const startedAt = performance.now()
         // latestScreenRef is the synchronous source of truth for
         // the Enter-baseline capture in TileLeaf — always update
@@ -756,6 +800,7 @@ export function useIpcSubscriptions(
     // a second IPC channel that races the bulk one.
 
     const offErr = feed.onSessionJsonlError(({ sessionId, message }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       flushSemanticEventQueue()
       // eslint-disable-next-line no-console
       console.warn(`[jsonl ${sessionId.slice(0, 8)}]`, message)
@@ -766,6 +811,7 @@ export function useIpcSubscriptions(
     })
 
     const offExit = feed.onSessionExit(({ sessionId, exitCode }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       flushSemanticEventQueue()
       recentWorkContextRawBySession.delete(sessionId)
       codexCurrentTurnIdBySession.delete(sessionId)
@@ -831,6 +877,7 @@ export function useIpcSubscriptions(
     // too.
     const offProcessState = feed.onSessionProcessState(
       ({ sessionId, active, status }) => {
+        if (quarantinesSessionFeed(sessionId)) return
         flushSemanticEventQueue()
         setRuntimes(prev => {
           const current = prev[sessionId] ?? emptyRuntime()
@@ -849,7 +896,6 @@ export function useIpcSubscriptions(
                 processActive: active,
                 processStatus: current.exited === null ? 'started' : current.processStatus,
                 processError: null,
-                inputReady: current.exited === null,
                 activityStatus: active ? (status ?? null) : null,
                 awaitingAssistant: false,
                 queuedMessages: shouldClearIdleQueue
@@ -883,6 +929,10 @@ export function useIpcSubscriptions(
       { sessionId, event }: SessionSemanticEvent,
       rawEventCount = 1,
     ): void => {
+      // Re-check at fold time as well as enqueue time. A delta can be queued
+      // immediately before recovery discovers an ownership conflict; letting
+      // that queued payload through afterward would punch a hole in the fence.
+      if (quarantinesSessionFeed(sessionId)) return
       const span = perf.span('workspace.ipc.semantic.fold', { sessionId })
       let spanClosed = false
       const closeSpan = (data: Record<string, unknown>) => {
@@ -1166,6 +1216,7 @@ export function useIpcSubscriptions(
       }, SEMANTIC_DELTA_FLUSH_MS)
     }
     const offSemantic = feed.onSessionSemanticEvent(message => {
+      if (quarantinesSessionFeed(message.sessionId)) return
       if (semanticEventQueue.tryPush(message)) {
         scheduleSemanticEventFlush()
         return
@@ -1181,6 +1232,7 @@ export function useIpcSubscriptions(
     })
 
     const offConditions = feed.onSessionConditions(({ sessionId, snapshot }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         const next = applyConditionSnapshot(current, snapshot)
@@ -1220,6 +1272,7 @@ export function useIpcSubscriptions(
     // timeline), so we just replace the field wholesale. Reference-equal bail
     // keeps Feed from re-rendering when an unrelated session updates.
     const offSubAgents = feed.onSessionSubAgents(({ sessionId, subAgents }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       setRuntimes(prev => {
         const current = prev[sessionId] ?? emptyRuntime()
         if (current.subAgents === subAgents) return prev
@@ -1245,6 +1298,7 @@ export function useIpcSubscriptions(
     //   5. pendingCompaction clearing on compact summary entries.
     //   6. Optimistic-Codex-user reconciliation against the head row.
     const offEntries = feed.onSessionJsonlEntries(({ sessionId, entries }) => {
+      if (quarantinesSessionFeed(sessionId)) return
       if (!entries || entries.length === 0) return
       // JSONL/process/exit live on sibling SessionFeed channels but still form
       // ordering boundaries with semantic state. Letting a queued delta cross
@@ -2200,6 +2254,7 @@ export function useIpcSubscriptions(
       if (semanticFlushTimer !== null) window.clearTimeout(semanticFlushTimer)
       semanticEventQueue.drain()
       offStarted()
+      offInputReadiness()
       offScreen()
       // No singular offEntry() — see the deleted-handler comment
       // above. The bulk path is the only one.

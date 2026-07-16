@@ -14,6 +14,7 @@ import type { SessionFeed } from '@shared/sessionFeed/SessionFeed.js'
 // implementations rely on.
 const noop: SessionFeed = {
   onSessionStarted: () => () => {},
+  onSessionInputReadiness: () => () => {},
   onSessionScreen: () => () => {},
   onSessionJsonlEntries: () => () => {},
   onSessionJsonlError: () => () => {},

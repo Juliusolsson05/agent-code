@@ -13,6 +13,7 @@ import type { ResolveConditionResult } from '@shared/sessionFeed/types.js'
 import type { ConditionCustomAction } from '@shared/conditions-core/contract.js'
 import type { SessionKind } from '@shared/types/providerKind.js'
 import type { PromptDeliveryResult } from '@shared/types/providerConfig.js'
+import type { SessionBackendSnapshot } from '@shared/types/session.js'
 
 import { DevicePairing } from '@main/remote/auth/DevicePairing.js'
 import type { DeviceRegistry } from '@main/remote/auth/deviceRegistry.js'
@@ -63,6 +64,7 @@ export type RemoteSessionControl = {
   list(): string[]
   getScreenSnapshot(sessionId: string): unknown
   getConditionsSnapshot(sessionId: string): unknown
+  getBackendSnapshot(sessionId: string): SessionBackendSnapshot | null
   resolveTranscriptFile(sessionId: string): Promise<string | null>
   getSpawnCwd(sessionId: string): string | null
   getLastActivityAt(sessionId: string): number | null
@@ -160,6 +162,7 @@ export class RemoteServer extends EventEmitter {
   private readonly lastScreen = new Map<string, unknown>()
   private readonly lastConditions = new Map<string, unknown>()
   private readonly lastProcessState = new Map<string, unknown>()
+  private readonly lastInputReadiness = new Map<string, unknown>()
 
   constructor(private readonly deps: RemoteServerDeps) {
     super()
@@ -198,6 +201,13 @@ export class RemoteServer extends EventEmitter {
         this.lastConditions.set(session.sessionId, {
           sessionId: session.sessionId,
           snapshot,
+        })
+      }
+      const backend = this.deps.manager.getBackendSnapshot(session.sessionId)
+      if (backend) {
+        this.lastInputReadiness.set(session.sessionId, {
+          sessionId: session.sessionId,
+          input: backend.input,
         })
       }
     }
@@ -239,6 +249,7 @@ export class RemoteServer extends EventEmitter {
     this.lastScreen.clear()
     this.lastConditions.clear()
     this.lastProcessState.clear()
+    this.lastInputReadiness.clear()
     this.deps.journal?.record({ area: 'remote.server', name: 'remote_server.stopped' })
   }
 
@@ -538,6 +549,9 @@ export class RemoteServer extends EventEmitter {
     for (const [, payload] of this.lastProcessState) {
       this.send(ws, { type: 'session-event', channel: 'process-state', payload })
     }
+    for (const [, payload] of this.lastInputReadiness) {
+      this.send(ws, { type: 'session-event', channel: 'input-readiness', payload })
+    }
 
     ws.on('message', data => {
       void this.onMessage(ws, String(data))
@@ -715,6 +729,7 @@ export class RemoteServer extends EventEmitter {
     if (channel === 'screen') this.lastScreen.set(sessionId, payload)
     else if (channel === 'conditions') this.lastConditions.set(sessionId, payload)
     else if (channel === 'process-state') this.lastProcessState.set(sessionId, payload)
+    else if (channel === 'input-readiness') this.lastInputReadiness.set(sessionId, payload)
     else if (channel === 'exit' || channel === 'removed') {
       // A dead session's stale screen must not greet the next connection as
       // if it were live; the event itself still broadcast normally.
@@ -723,6 +738,7 @@ export class RemoteServer extends EventEmitter {
       this.lastScreen.delete(sessionId)
       this.lastConditions.delete(sessionId)
       this.lastProcessState.delete(sessionId)
+      this.lastInputReadiness.delete(sessionId)
     }
   }
 

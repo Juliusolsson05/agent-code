@@ -1,8 +1,26 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ClaudeSession } from './claudeSession.js'
 
+afterEach(() => vi.useRealTimers())
+
 describe('ClaudeSession prompt acceptance', () => {
+  it('publishes readiness from the existing replay quiet-window boundary', () => {
+    vi.useFakeTimers()
+    const session = new ClaudeSession()
+    const seen: boolean[] = []
+    session.on('input-readiness', input => seen.push(input.ready))
+    ;(session as unknown as { transcriptTailAttached: boolean }).transcriptTailAttached = true
+    ;(session as unknown as { armLiveBridgeReady(): void }).armLiveBridgeReady()
+
+    expect(seen).toEqual([])
+    vi.advanceTimersByTime(249)
+    expect(seen).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(seen).toEqual([true])
+    expect(session.isPromptAcceptanceReady()).toBe(true)
+  })
+
   it('assigns distinct exact transcript ids to concurrent fresh sessions', () => {
     const first = new ClaudeSession()
     const second = new ClaudeSession()

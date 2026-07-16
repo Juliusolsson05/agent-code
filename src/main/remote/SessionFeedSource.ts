@@ -23,6 +23,7 @@ import type { OutboundSessionSummary } from '@main/remote/protocol/messages.js'
 
 export type FeedChannel =
   | 'started'
+  | 'input-readiness'
   | 'screen'
   | 'jsonl-entries'
   | 'jsonl-error'
@@ -118,6 +119,9 @@ export class SessionFeedSource {
     })
 
     sub('screen', (payload: { sessionId: string }) => this.emit('screen', payload))
+    sub('input-readiness', (payload: { sessionId: string }) =>
+      this.emit('input-readiness', payload),
+    )
     sub('jsonl-error', (payload: { sessionId: string; error: Error }) =>
       this.emit('jsonl-error', {
         sessionId: payload.sessionId,

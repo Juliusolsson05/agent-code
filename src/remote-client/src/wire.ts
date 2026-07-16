@@ -24,6 +24,7 @@ export type RemoteSessionSummary = {
 
 export type FeedChannel =
   | 'started'
+  | 'input-readiness'
   | 'screen'
   | 'jsonl-entries'
   | 'jsonl-error'

@@ -60,6 +60,9 @@ export function wireSessionForwarder(
   )
 
   manager.on('started', payload => sendToMainWindow('session:started', payload))
+  manager.on('input-readiness', payload =>
+    sendToMainWindow('session:input-readiness', payload),
+  )
   // WHY screen/process-state do not cross IPC directly: both are complete,
   // authoritative snapshots. During a nine-agent burst the old path cloned and
   // dispatched every intermediate repaint even though the next snapshot made

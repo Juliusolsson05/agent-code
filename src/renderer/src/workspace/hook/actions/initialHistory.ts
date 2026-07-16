@@ -93,7 +93,11 @@ export async function loadInitialHistoryForSession({
 
   if (!hasDurableProviderSession(meta)) {
     setRuntimes(prev => {
-      const current = prev[sessionId] ?? emptyRuntime()
+      const current = prev[sessionId]
+      // WHY history hydration never creates session ownership: recovery may
+      // finish after the user closed the pane. A metadata override proves
+      // which transcript to read, not that a renderer runtime still exists.
+      if (!current) return prev
       const isProvisional = meta.providerSessionIdSource === 'proxy-header'
       return {
         ...prev,
@@ -119,7 +123,8 @@ export async function loadInitialHistoryForSession({
   // window where status is 'loading' but the load looks idle.
   inFlightInitialLoads.add(sessionId)
   setRuntimes(prev => {
-    const current = prev[sessionId] ?? emptyRuntime()
+    const current = prev[sessionId]
+    if (!current) return prev
     return {
       ...prev,
       [sessionId]: {
@@ -349,7 +354,8 @@ export function reconcileStuckTranscriptLoads({
     const emptyFeed = runtime.entries.length === 0
     if (!stuckSpinner && !emptyFeed) continue
     const meta = sessions[sessionId]
-    if (!meta || !isAgentProviderKind(meta.kind)) continue
+    const kind = meta?.kind ?? DEFAULT_PROVIDER
+    if (!meta || !isAgentProviderKind(kind)) continue
     // Only durable sessions have a reloadable transcript. Provisional
     // proxy-header sessions are left to the 'disconnected' path.
     if (!hasDurableProviderSession(meta)) continue

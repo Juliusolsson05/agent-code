@@ -221,13 +221,11 @@ export function TileLeaf({
       runtime.processStatus !== 'started' ||
       isSessionExited(runtime)
     ) {
-      if (runtime.processStatus === 'failed' || runtime.processStatus === 'exited') {
-        const message = runtime.processStatus === 'failed'
-          ? (runtime.processError ?? 'Agent failed to start')
-          : 'Agent has exited'
-        workspace.showPaneToast(sessionId, message)
-        throw new Error(message)
-      }
+      // WHY failed/exited panes use the same wake path as dormant panes:
+      // provider attempts are disposable. Keeping the old early throw made a
+      // retained recovery failure permanent even though main's stable-id
+      // recovery protocol is explicitly retryable. The draft stays intact
+      // while ensureSessionLive replaces only the backend generation.
       try {
         await workspace.ensureSessionLive(sessionId)
       } catch (err) {
@@ -431,13 +429,15 @@ export function TileLeaf({
         // the composer correctly blocked Enter with "Agent has
         // exited". The process lifecycle is the stronger signal here:
         // once main has emitted exit, this pane is no longer starting.
+        : runtime.processStatus === 'failed'
+          ? (runtime.processError ?? 'agent failed to start')
         : isSessionExited(runtime)
           ? `agent exited${runtime.exited !== null ? ` (code ${runtime.exited})` : ''}`
         : !runtime.inputReady || runtime.processStatus === 'spawning'
           ? 'starting agent'
-          : runtime.processStatus === 'failed'
-            ? (runtime.processError ?? 'agent failed to start')
-            : null
+          : null
+  const canRetryBackend = runtime.processStatus === 'failed' ||
+    runtime.processStatus === 'exited'
 
   useEffect(() => {
     if (!htmlDebugPanelOpen || !focused) return
@@ -622,8 +622,26 @@ export function TileLeaf({
       <QueueStrip queuedMessages={runtime.queuedMessages} />
 
       {readinessText && (
-        <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
-          {readinessText}
+        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
+          <span className="min-w-0 truncate">{readinessText}</span>
+          {canRetryBackend && (
+            <button
+              type="button"
+              className="flex-shrink-0 text-accent hover:underline"
+              onClick={() => {
+                void workspace.ensureSessionLive(sessionId).catch(err => {
+                  workspace.showPaneToast(
+                    sessionId,
+                    err instanceof Error && err.message.length > 0
+                      ? err.message
+                      : 'Could not restart agent',
+                  )
+                })
+              }}
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
 
