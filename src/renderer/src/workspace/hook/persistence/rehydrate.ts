@@ -18,7 +18,10 @@ import type {
   TileNode,
 } from '@renderer/workspace/types'
 import { collectLeaves, remapTileTreeSessionIds } from '@renderer/workspace/tile-tree/treeOps'
-import { remapTiledLanes } from '@renderer/workspace/dispatch/tiledDispatchSelectors'
+import {
+  keepTiledLaneSessions,
+  remapTiledLanes,
+} from '@renderer/workspace/dispatch/tiledDispatchSelectors'
 import { remapSessionMetaRelationships } from '@renderer/workspace/idRemap'
 import { sanitizeTileTabsState } from '@renderer/workspace/layout/helpers'
 import type { PersistedWorkspace } from '@renderer/workspace/persistence'
@@ -304,6 +307,16 @@ export async function rehydrateWorkspace(
       // keeping this projection shared with the rest of layout restoration
       // prevents detached records from becoming a special-case identity path.
       const mappedSessionId = idMap.get(entry.sessionId) ?? entry.sessionId
+      // WHY metadata survival is the gate here, not the presence of the raw
+      // detached record:
+      //
+      // collectOwnedSessionIds rejects a detached agent when its project tab
+      // no longer exists. Copying the raw record anyway would leave half of the
+      // corrupted pair in renderer state: no SessionMeta/runtime, but a ghost
+      // Dispatch owner that autosave and selectors must keep reasoning about.
+      // freshSessions is the already-normalized ownership set, so closing the
+      // projection over it repairs old workspace files on their first launch.
+      if (!freshSessions[mappedSessionId]) continue
       out[mappedSessionId] = {
         ...entry,
         sessionId: mappedSessionId,
@@ -453,17 +466,27 @@ export async function rehydrateWorkspace(
           : restoredTileTabs?.focusedTabId
             ?? newTabs.find(t => t.id === persisted.activeTabId)?.id
             ?? newTabs[0].id
-        const remappedDispatchMode = remapTiledLanes(
-          persisted.dispatchMode
-            ? {
-                ...persisted.dispatchMode,
-                focusedSessionId: persisted.dispatchMode.focusedSessionId
-                  ? idMap.get(persisted.dispatchMode.focusedSessionId)
-                  : undefined,
-              }
-            : null,
-          idMap,
-        )
+        const remappedDispatchMode = keepTiledLaneSessions(
+          remapTiledLanes(
+            persisted.dispatchMode
+              ? {
+                  ...persisted.dispatchMode,
+                  focusedSessionId: persisted.dispatchMode.focusedSessionId
+                    ? idMap.get(persisted.dispatchMode.focusedSessionId)
+                    : undefined,
+                }
+              : null,
+            idMap,
+          ),
+          // WHY remapping alone cannot repair stale lane ownership:
+          // remapTiledLanes intentionally leaves unknown ids untouched because
+          // valid hibernated sessions keep their durable ids. After ownership
+          // normalization, initialSessions is the authority that distinguishes
+          // those valid parked ids from deleted-tab ghosts. Closing every
+          // Dispatch pointer over this same set prevents the repaired owner
+          // record from lingering as a selected-but-unresolvable lane.
+          new Set(Object.keys(initialSessions)),
+        ) ?? null
         return {
           tabs: newTabs,
           activeTabId,
