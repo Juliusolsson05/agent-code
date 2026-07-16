@@ -680,6 +680,7 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
               <StreamingCodeText
                 code={writeStream.partialContent ?? ''}
                 language={normalizeCodeLanguage(undefined, writeStream.filePath)}
+                tone="added"
               />
             </div>
           ) : block.parsedInput && block.inputJsonValid !== false ? (
