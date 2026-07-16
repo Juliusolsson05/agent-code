@@ -2,29 +2,33 @@
 // Render-shape coverage audit (Phase 3/4, PR #555).
 //
 // Compares OBSERVED shapes against the checked-in provider catalogs and
-// prints the coverage report the plan requires (total / known / misrouted /
-// unsupported-lifecycle / unknown / unknown-outcome). Two evidence sources:
+// prints the coverage report the plan requires. Two evidence sources:
 //
 //   default            sweep testing/fixtures/rendering-bundles (the frozen
-//                      48-bundle corpus) through the SAME
-//                      bundleShapeSweep the coverage test uses;
+//                      corpus) through the SAME bundleShapeSweep the
+//                      coverage test uses;
 //   --recordings [dir] additionally sweep __render_shape sidecar lines from
 //                      local session recordings (default:
 //                      ~/.config/agent-code/session-recordings).
 //
 //   --seed             print suggested catalog entries for every
-//                      UNCLASSIFIED fingerprint, grouped by provider +
-//                      discriminator — the copy-paste source for
-//                      shapes.ts. Seeding stays a reviewed code change
-//                      (plan §Step 6): this prints source text, it never
-//                      writes source files.
+//                      UNCLASSIFIED fingerprint, GROUPED by (provider,
+//                      plane family, discriminator slug) with all variant
+//                      fingerprints merged under one id (plan: multiple
+//                      fingerprints per shape id when semantics match) —
+//                      the copy-paste source for shapes.ts. Prints source,
+//                      never writes it: classification stays a reviewed
+//                      code change (plan §Step 6).
 //
 // Run: npx tsx --tsconfig tsconfig.web.json scripts/audit-rendering-shapes.mts [--seed] [--recordings [dir]]
 //
-// Exit codes: 0 = full coverage; 1 = unclassified/misrouted shapes exist.
-// CI-friendly by design, but the authoritative CI gate is the in-repo
-// coverage test (shapes.coverage.test.ts) — this script exists for local
-// triage and for sweeping recordings, which CI does not have.
+// Exit codes: 0 = clean; 1 = unknown-structure, misrouted, or
+// unknown-outcome shapes exist. known-unsupported-lifecycle is REPORTED but
+// non-fatal by design: while the catalog is all-`planned`, every genuinely
+// new streaming prefix would otherwise flip CI red — the inbox is where
+// those get worked, not the exit code. The authoritative CI gate is the
+// in-repo coverage test (shapes.coverage.test.ts); this script exists for
+// local triage and recording sweeps, which CI does not have.
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -36,13 +40,14 @@ import {
   classifySighting,
 } from '../src/renderer/src/rendering/evidence/catalogCoverage.ts'
 import { ALL_RENDER_SHAPE_CATALOGS } from '../src/providers/registry.renderShapes.ts'
+import type { RenderOutcome } from '../src/shared/types/renderShapes.ts'
 
 const args = process.argv.slice(2)
 const SEED = args.includes('--seed')
 const recIdx = args.indexOf('--recordings')
 // STATE_DIR (src/main/storage/paths.ts) is electron-bound; scripts mirror the
-// well-known location instead of importing it. If the app's state dir moves,
-// this default (and extract-rendering-recordings.mjs) move with it.
+// well-known location instead of importing it (same as
+// extract-rendering-recordings.mjs).
 const RECORDINGS_DIR =
   recIdx >= 0
     ? args[recIdx + 1] && !args[recIdx + 1].startsWith('--')
@@ -58,7 +63,10 @@ type Observation = {
   fingerprint: string
   shapePaths: readonly string[]
   discriminators: Readonly<Record<string, string>>
-  outcomeKind: string | null
+  /** Full outcome, not just kind (review finding: reconstructing {kind}
+   *  dropped rendererId/ownerRenderId and made every graduated shape read
+   *  as misrouted). Null for bundle observations, which predate receipts. */
+  outcome: RenderOutcome | null
   count: number
 }
 
@@ -77,7 +85,7 @@ for (const file of readdirSync(bundleDir).filter(f => f.endsWith('.json'))) {
       fingerprint: obs.fingerprint.fingerprint,
       shapePaths: obs.fingerprint.shapePaths,
       discriminators: obs.fingerprint.discriminatorValues,
-      outcomeKind: null, // bundles predate outcome receipts
+      outcome: null,
       count: 1,
     })
   }
@@ -89,8 +97,12 @@ if (RECORDINGS_DIR) {
   try {
     dirs = readdirSync(RECORDINGS_DIR)
   } catch {
-    console.error(`no recordings dir at ${RECORDINGS_DIR} — skipping`)
+    console.error(`no recordings dir at ${RECORDINGS_DIR} — skipping recordings sweep`)
   }
+  // Writer emits a key once (implied count 1) plus a final-flush copy with
+  // cumulative seenCount — MAX per writer key, never sum (review finding:
+  // summing double-counted every repeated key by one).
+  const maxByWriterKey = new Map<string, Observation>()
   for (const dir of dirs) {
     let body: string
     try {
@@ -104,7 +116,11 @@ if (RECORDINGS_DIR) {
         const parsed = JSON.parse(line)
         if (parsed.ch !== '__render_shape' || !Array.isArray(parsed.sightings)) continue
         for (const s of parsed.sightings) {
-          observations.push({
+          const key = [dir, s.provider, s.sourcePlane, s.lifecycle, s.eventType, s.structuralFingerprint, s.outcome?.kind].join(' ')
+          const count = typeof s.seenCount === 'number' ? s.seenCount : 1
+          const existing = maxByWriterKey.get(key)
+          if (existing && existing.count >= count) continue
+          maxByWriterKey.set(key, {
             provider: s.provider,
             plane: s.sourcePlane,
             lifecycle: s.lifecycle,
@@ -112,8 +128,8 @@ if (RECORDINGS_DIR) {
             fingerprint: s.structuralFingerprint,
             shapePaths: s.shapePaths ?? [],
             discriminators: s.discriminatorValues ?? {},
-            outcomeKind: s.outcome?.kind ?? null,
-            count: s.seenCount ?? 1,
+            outcome: s.outcome ?? null,
+            count,
           })
         }
       } catch {
@@ -121,6 +137,7 @@ if (RECORDINGS_DIR) {
       }
     }
   }
+  observations.push(...maxByWriterKey.values())
 }
 
 // ---- Classify ---------------------------------------------------------------
@@ -131,12 +148,9 @@ for (const obs of observations) {
     {
       structuralFingerprint: obs.fingerprint,
       lifecycle: obs.lifecycle as never,
-      // Bundle observations carry no outcome; classify them with a neutral
-      // generic outcome so lifecycle/structure coverage still applies.
-      outcome:
-        obs.outcomeKind === null
-          ? { kind: 'generic', rendererId: 'shared.generic-tool' }
-          : ({ kind: obs.outcomeKind } as never),
+      // Bundle observations carry no outcome; a neutral generic keeps
+      // structure/lifecycle coverage meaningful for them.
+      outcome: obs.outcome ?? { kind: 'generic', rendererId: 'shared.generic-tool' },
     },
     index,
   )
@@ -148,37 +162,97 @@ for (const obs of observations) {
 }
 
 const summary = [...byStatus.entries()]
-  .map(([status, groups]) => `${status}: ${groups.size} shapes / ${[...groups.values()].reduce((n, g) => n + g.reduce((m, o) => m + o.count, 0), 0)} sightings`)
+  .map(
+    ([status, groups]) =>
+      `${status}: ${groups.size} shapes / ${[...groups.values()].reduce((n, g) => n + g.reduce((m, o) => m + o.count, 0), 0)} sightings`,
+  )
   .join('\n')
 console.log(`observations: ${observations.length}\n${summary}\n`)
 
 // ---- Seed mode --------------------------------------------------------------
 if (SEED) {
-  const unknown = byStatus.get('unknown-structure') ?? new Map()
-  for (const [key, group] of [...unknown.entries()].sort()) {
-    const first = group[0]
-    const total = group.reduce((n: number, o: Observation) => n + o.count, 0)
-    const planes = [...new Set(group.map((o: Observation) => o.plane))].sort()
-    const lifecycles = [...new Set(group.map((o: Observation) => o.lifecycle))].sort()
-    const eventTypes = [...new Set(group.map((o: Observation) => o.eventType))].sort()
-    const disc =
-      first.discriminators.name ??
-      first.discriminators.toolName ??
-      Object.values(first.discriminators)[0] ??
-      eventTypes[0]
-    const slug = String(disc).toLowerCase().replace(/^mcp__[^_]+(?:_[^_]+)*__/, 'mcp-').replace(/[^a-z0-9]+/g, '-')
-    console.log(`// ${key} — ${total} sightings, planes ${planes.join('/')}`)
-    console.log(`'${first.provider}.${planes[0].replace('committed-', '')}.${slug}.v1': defineRenderShape({`)
-    console.log(`  id: '${first.provider}.${planes[0].replace('committed-', '')}.${slug}.v1',`)
-    console.log(`  provider: '${first.provider}',`)
-    console.log(`  fingerprints: ['${first.fingerprint}'],`)
-    console.log(`  eventTypes: ${JSON.stringify(eventTypes)},`)
-    console.log(`  planes: ${JSON.stringify(planes)},`)
-    console.log(`  lifecycles: ${JSON.stringify(lifecycles)},`)
-    console.log(`  // paths: ${first.shapePaths.slice(0, 12).join(' ')}`)
-    console.log(`}),\n`)
+  const unknown = byStatus.get('unknown-structure') ?? new Map<string, Observation[]>()
+  type SeedGroup = {
+    provider: string
+    family: string
+    slug: string
+    fingerprints: Set<string>
+    eventTypes: Set<string>
+    planes: Set<string>
+    lifecycles: Set<string>
+    count: number
+    samplePaths: readonly string[]
+  }
+  const seedGroups = new Map<string, SeedGroup>()
+  for (const group of unknown.values()) {
+    for (const obs of group) {
+      const family =
+        obs.plane === 'committed-tool-use'
+          ? 'tool-use'
+          : obs.plane === 'committed-tool-result'
+            ? 'tool-result'
+            : obs.plane === 'semantic-tool'
+              ? 'semantic'
+              : obs.plane === 'condition'
+                ? 'condition'
+                : 'entry'
+      // Discriminator preference mirrors what selects the visual grammar:
+      // tool name first, then the provider result-kind (codex.kind), then
+      // any structural kind/type, then the event type.
+      const d = obs.discriminators
+      const disc =
+        d['name'] ?? d['toolName'] ?? d['codex.kind'] ?? d['kind'] ?? d['type'] ?? obs.eventType
+      const slug = String(disc)
+        .toLowerCase()
+        .replace(/^mcp__.*__orchestration_/, 'mcp-orchestration-')
+        .replace(/^mcp__.*__/, 'mcp-')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '')
+      const key = `${obs.provider}|${family}|${slug}`
+      const g =
+        seedGroups.get(key) ??
+        ({
+          provider: obs.provider,
+          family,
+          slug,
+          fingerprints: new Set<string>(),
+          eventTypes: new Set<string>(),
+          planes: new Set<string>(),
+          lifecycles: new Set<string>(),
+          count: 0,
+          samplePaths: obs.shapePaths,
+        } satisfies SeedGroup)
+      g.fingerprints.add(obs.fingerprint)
+      g.eventTypes.add(obs.eventType)
+      g.planes.add(obs.plane)
+      g.lifecycles.add(obs.lifecycle)
+      g.count += obs.count
+      seedGroups.set(key, g)
+    }
+  }
+  const today = new Date().toISOString().slice(0, 10)
+  for (const g of [...seedGroups.values()].sort((a, b) =>
+    `${a.provider}.${a.family}.${a.slug}`.localeCompare(`${b.provider}.${b.family}.${b.slug}`),
+  )) {
+    const id = `${g.provider}.${g.family}.${g.slug}.v1`
+    console.log(`  // ${g.count} sightings — paths: ${g.samplePaths.slice(0, 10).join(' ')}`)
+    console.log(`  '${id}': defineRenderShape({`)
+    console.log(`    id: '${id}',`)
+    console.log(`    provider: '${g.provider}',`)
+    console.log(`    fingerprints: ${JSON.stringify([...g.fingerprints].sort())},`)
+    console.log(`    eventTypes: ${JSON.stringify([...g.eventTypes].sort())},`)
+    console.log(`    planes: ${JSON.stringify([...g.planes].sort())} as const,`)
+    console.log(`    lifecycles: ${JSON.stringify([...g.lifecycles].sort())} as const,`)
+    console.log(`    observed: { providerVersions: [], models: [], firstSeen: '${today}', lastSeen: '${today}' },`)
+    console.log(`    fixtures: { final: [], prefixes: [] },`)
+    console.log(`    disposition: { kind: 'planned', targetGrammar: 'structured-tool' },`)
+    console.log(`    why: 'Seeded from observed sightings (${g.count}); REVIEW: set targetGrammar + fixtures.',`)
+    console.log(`  }),\n`)
   }
 }
 
-const unclassified = (byStatus.get('unknown-structure')?.size ?? 0) + (byStatus.get('known-misrouted')?.size ?? 0)
-process.exit(unclassified > 0 ? 1 : 0)
+const fatal =
+  (byStatus.get('unknown-structure')?.size ?? 0) +
+  (byStatus.get('known-misrouted')?.size ?? 0) +
+  (byStatus.get('unknown-outcome')?.size ?? 0)
+process.exit(fatal > 0 ? 1 : 0)

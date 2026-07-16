@@ -19,9 +19,18 @@ import { SESSION_RECORDING_DIR } from '@main/storage/paths.js'
 // recordings if it needs deeper history.
 
 const MAX_SIGHTINGS = 20_000
-const MAX_RECORDINGS = 200
+const MAX_RECORDINGS = 60
+/**
+ * Total-bytes budget for one sweep (review finding: 200 recordings at the
+ * 128 MiB per-recording cap meant a dev-panel open could read ~25 GiB on
+ * the MAIN process — the exact whole-file pattern behind the 2026-07-07
+ * OOM). Newest-first means the budget always covers recent captures;
+ * hitting it flags `truncated` so the inbox says so instead of lying about
+ * coverage.
+ */
+const MAX_SWEEP_BYTES = 256 * 1024 * 1024
 /** Skip absurd single lines defensively — a sidecar line is a coalesced
- *  batch of ≤256 metadata sightings, far below this. */
+ *  batch of ≤512 metadata sightings, far below this. */
 const MAX_LINE_CHARS = 4 * 1024 * 1024
 
 export type RenderShapeSidecarSweep = {
@@ -51,8 +60,13 @@ export async function readRenderShapeSightings(): Promise<RenderShapeSidecarSwee
   const sightings: unknown[] = []
   let truncated = false
   let scanned = 0
+  let bytesRead = 0
   for (const dir of dirs) {
-    if (scanned >= MAX_RECORDINGS || sightings.length >= MAX_SIGHTINGS) {
+    if (
+      scanned >= MAX_RECORDINGS ||
+      sightings.length >= MAX_SIGHTINGS ||
+      bytesRead >= MAX_SWEEP_BYTES
+    ) {
       truncated = true
       break
     }
@@ -63,6 +77,7 @@ export async function readRenderShapeSightings(): Promise<RenderShapeSidecarSwee
     } catch {
       continue // meta-only folder or torn recording — fine, skip
     }
+    bytesRead += body.length
     for (const line of body.split('\n')) {
       // Cheap pre-filter before JSON.parse — the sidecar is a needle in a
       // haystack of feed events, and parsing every line of every recording
@@ -77,7 +92,12 @@ export async function readRenderShapeSightings(): Promise<RenderShapeSidecarSwee
             truncated = true
             break
           }
-          sightings.push(s)
+          // Inject the recording id so the inbox/report can point back at
+          // the source recording (plan §Step 5 traceability). Injected here
+          // because the writer deliberately doesn't know its recording id.
+          sightings.push(
+            typeof s === 'object' && s !== null ? { ...s, sourceRecordingId: dir } : s,
+          )
         }
       } catch {
         continue // torn tail — recorder contract tolerates it, so do we

@@ -56,7 +56,11 @@ describe('unknown-shape report derivation (Phase 3)', () => {
       index,
     )
     expect(report.rows).toHaveLength(2)
-    expect(report.totalSightings).toBe(43)
+    // Writer-key MAX semantics (review finding: summing the first-sight
+    // line (implied 1) and its final-flush copy (seenCount 41) double-
+    // counted): the two same-key lines are ONE key at max(1, 41) = 41,
+    // plus the unknown fingerprint's 1 → 42, never 43.
+    expect(report.totalSightings).toBe(42)
     expect(report.inbox).toHaveLength(1)
     expect(report.inbox[0].status).toBe('unknown-structure')
     // Unknown rows sort ABOVE clean rows — worst first is the inbox contract.

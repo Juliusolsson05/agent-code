@@ -63,27 +63,42 @@ export async function runAttachRecordingNoteCommand(workspace: Workspace): Promi
 // Rendering Evidence Capture" is deliberately NOT a second command — capture
 // without a recording would produce sightings with no sidecar to land in,
 // and a recording without capture is just the pre-Phase-2 behavior. One
-// switch, both halves. Ordering matters on stop: disarm FIRST so the
-// observer's final count flush lands before the recorder finalizes; on
-// start, arm AFTER the IPC succeeds so a failed start leaves the observer
-// off.
+// switch, both halves. Ordering matters on stop: disarm (AWAITED — the
+// final count flush must land) BEFORE the recorder finalizes; on start, arm
+// only when the IPC reports success so a refused start (flag off, manager
+// null) leaves the observer off.
+//
+// Per-session in-flight lock (review finding: the command was re-entrant —
+// two rapid invocations could both read `recording === false`, both start,
+// and leave recording ON after what the user meant as on+off). Toggles are
+// rare human gestures; dropping an overlapping invocation is the correct
+// cheap linearization.
+const toggleInFlight = new Set<string>()
 export async function runToggleSessionRecordingCommand(workspace: Workspace): Promise<void> {
   const sessionId = commandTargetSessionId(workspace)
   if (!sessionId) return
+  if (toggleInFlight.has(sessionId)) return
+  toggleInFlight.add(sessionId)
   try {
     const recording = await window.api.isSessionRecording(sessionId)
     if (recording) {
-      disarmRenderShapeCapture(sessionId)
+      await disarmRenderShapeCapture(sessionId)
       await window.api.stopSessionRecording(sessionId)
       workspace.showPaneToast(sessionId, 'recording stopped — saved to session-recordings/', 3500)
     } else {
       const provider = workspace.state.sessions[sessionId]?.kind
-      await window.api.startSessionRecording(sessionId, provider)
-      armRenderShapeCapture(sessionId)
-      workspace.showPaneToast(sessionId, 'recording started for this pane (shape capture armed)', 3000)
+      const started = await window.api.startSessionRecording(sessionId, provider)
+      if (started) {
+        armRenderShapeCapture(sessionId)
+        workspace.showPaneToast(sessionId, 'recording started for this pane (shape capture armed)', 3000)
+      } else {
+        workspace.showPaneToast(sessionId, 'recording unavailable (AGENT_CODE_DEV_DEBUG off?)', 4000)
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     workspace.showPaneToast(sessionId, `recording toggle failed: ${message}`, 4000)
+  } finally {
+    toggleInFlight.delete(sessionId)
   }
 }

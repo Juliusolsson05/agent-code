@@ -45,7 +45,24 @@ function flag(name: string, fallback: string): string {
 }
 const RECORDINGS_DIR = flag('--recordings', join(homedir(), '.config', 'agent-code', 'session-recordings'))
 const WINDOW = Number(flag('--window', '8'))
-const MODE = flag('--mode', 'full-text-capped') as RedactionMode
+// DEFAULT structure-only (review finding A2): full-text-capped keeps every
+// non-secret-keyed string up to 8000 chars — prompts, commands, file
+// contents — and the sensitive-survivor gate only detects values under
+// secret-NAMED keys, so a token pasted into chat would sail through into a
+// git-adjacent draft. structure-only is the safe default; full text is an
+// explicit, warned opt-in for payloads whose parsing evidence needs prose.
+const MODE_RAW = flag('--mode', 'structure-only')
+if (MODE_RAW !== 'structure-only' && MODE_RAW !== 'full-text-capped') {
+  console.error(`unknown --mode "${MODE_RAW}" (structure-only | full-text-capped)`)
+  process.exit(2)
+}
+const MODE = MODE_RAW as RedactionMode
+if (MODE === 'full-text-capped') {
+  console.error(
+    'WARNING: full-text-capped keeps free text (prompts/commands/outputs). The hard gate only\n' +
+      'catches secret-NAMED keys — review draft.json line by line before it goes anywhere shared.',
+  )
+}
 
 type Draft = {
   recordingId: string

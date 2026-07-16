@@ -76,12 +76,18 @@ function listSourceFiles(dir: string): string[] {
   return out
 }
 
-/** Static + dynamic import specifiers. A regex is enough: the codebase uses
- *  plain string literals for module specifiers (enforced de facto by Vite's
- *  static analysis), so an AST parser would be bespoke-framework overkill. */
+/** Static + dynamic + SIDE-EFFECT import specifiers, plus require(). A
+ *  regex is enough: the codebase uses plain string literals for module
+ *  specifiers (enforced de facto by Vite's static analysis), so an AST
+ *  parser would be bespoke-framework overkill. The side-effect form
+ *  (`import '@providers/x/renderer/y'`) was a review-caught false negative
+ *  — it registers modules and is exactly how a cross-provider dependency
+ *  would most plausibly sneak in. Known accepted noise: a specifier-shaped
+ *  string inside a comment matches too; that fails LOUD (a human deletes
+ *  the comment), which is the right failure direction for a boundary. */
 function importSpecifiers(source: string): string[] {
   const out: string[] = []
-  const re = /(?:from\s*|import\s*\(\s*)['"]([^'"]+)['"]/g
+  const re = /(?:from\s*|import\s*\(\s*|import\s+|require\s*\(\s*)['"]([^'"]+)['"]/g
   for (let m = re.exec(source); m; m = re.exec(source)) out.push(m[1])
   return out
 }

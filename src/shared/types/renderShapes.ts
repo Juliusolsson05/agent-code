@@ -176,7 +176,12 @@ export type RenderShapeDisposition =
     }
   | {
       kind: 'condition-surface'
-      surface: 'outlet' | 'feed-inline' | 'composer' | 'attention-only'
+      // `intentional-hidden` exists on the DISPOSITION side only (plan
+      // §Conditions destinations): a condition we deliberately never paint
+      // is a reviewable decision, but an OUTCOME of intentional-hidden
+      // would be a silent null wearing a receipt — outcomes must name a
+      // visible surface or an absorbing owner.
+      surface: 'outlet' | 'feed-inline' | 'composer' | 'attention-only' | 'intentional-hidden'
     }
   | {
       kind: 'planned'

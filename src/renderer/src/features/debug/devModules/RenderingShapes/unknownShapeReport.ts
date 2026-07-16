@@ -50,6 +50,9 @@ export type UnknownShapeReportRow = {
   status: SightingClassification['kind']
   /** Catalog id when the fingerprint is catalogued (any status). */
   catalogShapeId: string | null
+  /** Source recording ids (injected by the sidecar sweep) — the plan
+   *  §Step 5 traceability link back to the evidence on disk. */
+  recordings: readonly string[]
 }
 
 export type UnknownShapeReport = {
@@ -64,7 +67,7 @@ export type UnknownShapeReport = {
 
 /** Trust-boundary validation: sidecar lines come off disk and cross IPC,
  *  so the reader proves the fields it uses rather than casting. */
-function asSighting(value: unknown): RenderShapeSighting | null {
+function asSighting(value: unknown): (RenderShapeSighting & { sourceRecordingId?: string }) | null {
   if (typeof value !== 'object' || value === null) return null
   const s = value as Partial<RenderShapeSighting>
   if (s.schemaVersion !== 1) return null
@@ -74,7 +77,10 @@ function asSighting(value: unknown): RenderShapeSighting | null {
   if (typeof s.lifecycle !== 'string') return null
   if (typeof s.eventType !== 'string') return null
   if (typeof s.outcome !== 'object' || s.outcome === null) return null
-  return s as RenderShapeSighting
+  // A non-number observedAt would poison Math.min/max into NaN downstream.
+  if (typeof s.observedAt !== 'number') return null
+  if (s.shapePaths !== undefined && !Array.isArray(s.shapePaths)) return null
+  return s as RenderShapeSighting & { sourceRecordingId?: string }
 }
 
 export function buildUnknownShapeReport(
@@ -94,13 +100,19 @@ export function buildUnknownShapeReport(
       lastSeenAt: number
       totalCount: number
       outcomes: Record<string, number>
+      recordings: Set<string>
       status: SightingClassification['kind']
       catalogShapeId: string | null
     }
   }
   const groups = new Map<string, Group['row']>()
+  // Writer contract (observer.ts): a dedup key's FIRST sight lands as one
+  // line (count 1 implied) and the disarm flush re-emits the key with the
+  // cumulative seenCount. Summing both lines double-counts (review
+  // finding: 5,000 observations reported as 5,001) — so counts aggregate
+  // as MAX per writer dedup key, then sum across keys.
+  const countsByWriterKey = new Map<string, number>()
   let invalid = 0
-  let total = 0
 
   for (const raw of rawSightings) {
     const s = asSighting(raw)
@@ -109,7 +121,18 @@ export function buildUnknownShapeReport(
       continue
     }
     const count = s.seenCount ?? 1
-    total += count
+    const writerKey = [
+      s.sourceRecordingId ?? '',
+      s.provider,
+      s.sourcePlane,
+      s.lifecycle,
+      s.eventType,
+      s.structuralFingerprint,
+      s.outcome.kind,
+    ].join(' ')
+    const prev = countsByWriterKey.get(writerKey) ?? 0
+    const delta = Math.max(0, count - prev)
+    countsByWriterKey.set(writerKey, Math.max(prev, count))
     // Group by provider + fingerprint (NOT payload hash — plan §Step 5):
     // one structure = one inbox item regardless of how varied its content.
     const key = `${s.provider} ${s.structuralFingerprint}`
@@ -135,8 +158,9 @@ export function buildUnknownShapeReport(
         discriminatorValues: s.discriminatorValues ?? {},
         firstSeenAt: s.observedAt,
         lastSeenAt: s.observedAt,
-        totalCount: count,
-        outcomes: { [s.outcome.kind]: count },
+        totalCount: delta,
+        outcomes: { [s.outcome.kind]: delta },
+        recordings: new Set(s.sourceRecordingId ? [s.sourceRecordingId] : []),
         status: classification.kind,
         catalogShapeId,
       })
@@ -147,8 +171,9 @@ export function buildUnknownShapeReport(
     existing.eventTypes.add(s.eventType)
     existing.firstSeenAt = Math.min(existing.firstSeenAt, s.observedAt)
     existing.lastSeenAt = Math.max(existing.lastSeenAt, s.observedAt)
-    existing.totalCount += count
-    existing.outcomes[s.outcome.kind] = (existing.outcomes[s.outcome.kind] ?? 0) + count
+    existing.totalCount += delta
+    existing.outcomes[s.outcome.kind] = (existing.outcomes[s.outcome.kind] ?? 0) + delta
+    if (s.sourceRecordingId) existing.recordings.add(s.sourceRecordingId)
     if (STATUS_RANK[classification.kind] < STATUS_RANK[existing.status]) {
       existing.status = classification.kind
     }
@@ -161,6 +186,7 @@ export function buildUnknownShapeReport(
       planes: [...g.planes].sort(),
       lifecycles: [...g.lifecycles].sort(),
       eventTypes: [...g.eventTypes].sort(),
+      recordings: [...g.recordings].sort(),
     }))
     .sort(
       (a, b) =>
@@ -170,7 +196,7 @@ export function buildUnknownShapeReport(
   return {
     rows,
     inbox: rows.filter(r => r.status !== 'known-claimed'),
-    totalSightings: total,
+    totalSightings: [...countsByWriterKey.values()].reduce((n, c) => n + c, 0),
     invalidSightings: invalid,
   }
 }

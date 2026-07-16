@@ -32,7 +32,11 @@ import { splitStreamingCodeFence } from '@renderer/features/feed/lib/helpers'
 import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
 import { observeRenderShape } from '@renderer/features/feed/evidence/observer'
 import { useRenderShapeCapture } from '@renderer/features/feed/evidence/RenderShapeCaptureContext'
-import { GENERIC_OUTCOME } from '@renderer/features/feed/evidence/outcome'
+import {
+  absorbedOutcome,
+  GENERIC_OUTCOME,
+  specializedOutcome,
+} from '@renderer/features/feed/evidence/outcome'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { StreamingProse } from '@renderer/features/feed/ui/markdown'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
@@ -323,17 +327,25 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
   toolState: SemanticLiveTurn['lookups']['toolCallsById'][string] | null
 }) {
   // Shape sighting for the LIVE plane (Phase 2, PR #555). One observation
-  // per block per lifecycle stage, at the top of the dispatch rather than
-  // per branch: this component's dozen branches are the legacy live painter
-  // slated for Phase 5/6 replacement, and threading a truthful per-branch
-  // outcome through all of them buys little before receipts exist. The
-  // coarse `generic` outcome is the documented pre-receipt convention
-  // (evidence/outcome.ts) — catalogs seeded in Phase 4 mark these shapes
-  // `planned`, which accepts generic, so the inbox stays signal. Lifecycle:
-  // a non-finalized live block is a meaningful streaming PREFIX — exactly
-  // the shapes the old renderer kept forgetting.
+  // per block per lifecycle stage, at the top of the dispatch. Outcome is
+  // COARSE by design before Phase 5 receipts, but coarse must not mean
+  // WRONG (review finding: recording a specialized Codex apply-patch row —
+  // or a suppressed empty-thinking block — as "generic" is precisely the
+  // misreporting the receipts exist to catch), so the cheap top-level facts
+  // are classified honestly: empty thinking/reasoning is an absorbed
+  // suppression; the three specialized Codex tool names are specialized;
+  // everything else stays generic until its family migrates. Lifecycle: a
+  // non-finalized live block is a meaningful streaming PREFIX — exactly the
+  // shapes the old renderer kept forgetting.
   const capture = useRenderShapeCapture()
   if (capture) {
+    const isThinking = block.kind === 'thinking' || block.kind === 'reasoning'
+    const thinkingEmpty = isThinking && !(block.thinking ?? block.text ?? '').trim()
+    const codexSpecialized =
+      (block.kind === 'function_call' || block.kind === 'custom_tool_call') &&
+      (block.toolName === 'apply_patch' ||
+        block.toolName === 'exec_command' ||
+        block.toolName === 'write_stdin')
     observeRenderShape({
       sessionId: capture.sessionId,
       provider: capture.provider,
@@ -341,7 +353,11 @@ export const SemanticLiveBlockRow = memo(function SemanticLiveBlockRow({
       lifecycle: block.finalized ? 'input-complete' : 'prefix',
       eventType: block.kind,
       payload: block,
-      outcome: GENERIC_OUTCOME,
+      outcome: thinkingEmpty
+        ? absorbedOutcome('semantic.blockrow', 'empty thinking/reasoning suppressed')
+        : codexSpecialized
+          ? specializedOutcome('codex.rows.dispatch')
+          : GENERIC_OUTCOME,
     })
   }
   if (block.kind === 'thinking' || block.kind === 'reasoning') {

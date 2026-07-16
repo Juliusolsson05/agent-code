@@ -1,10 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
 
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import {
-  armRenderShapeCapture,
-  disarmRenderShapeCapture,
-} from '@renderer/features/feed/evidence/observer'
+import { armRenderShapeCapture } from '@renderer/features/feed/evidence/observer'
 
 // Capture gate / session binding — Phase 2.
 //
@@ -39,11 +36,23 @@ export function useRenderShapeCapture(): RenderShapeCaptureBinding | null {
  * main without any renderer command firing. The toggle command handles the
  * interactive path directly (it knows the answer without a round-trip).
  *
+ * ARM-ONLY, never disarm (review finding: the round-trip's stale `false`
+ * could land AFTER the user toggled recording on and silently disarm a
+ * fresh capture — silent loss of exactly the evidence this feature
+ * collects). There is nothing for a mount-sync disarm to fix anyway: module
+ * state resets with the renderer on reload, and a recorder that stopped in
+ * main is handled by the observer's own recorder-miss auto-disarm.
+ *
+ * Auto-record soak caveat: this one-shot query can also race a recorder
+ * that auto-starts on the session's FIRST event (after Feed mounted). The
+ * observer self-heals on the next remount, and interactive capture is the
+ * primary path; soak users should expect arming from the first pane
+ * mount/remount after events flow, not necessarily the first event.
+ *
  * Unmount does NOT disarm: Feed unmounts on pane moves/reloads while the
  * recording keeps running, and disarming would drop the local counters a
  * final flush is supposed to persist. Disarm belongs to the stop command
- * (and observer state is per-session module state, so a remount just
- * re-syncs onto the same map entry).
+ * and the recorder-miss auto-disarm.
  */
 export function RenderShapeCaptureProvider({
   sessionId,
@@ -66,7 +75,6 @@ export function RenderShapeCaptureProvider({
         .then((recording: boolean) => {
           if (cancelled) return
           if (recording) armRenderShapeCapture(sessionId)
-          else disarmRenderShapeCapture(sessionId)
         })
         .catch(() => {
           /* recording capability off — observer stays disarmed */

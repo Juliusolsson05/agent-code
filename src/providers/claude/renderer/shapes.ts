@@ -29,7 +29,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
   'claude.entry.attachment.v1': defineRenderShape({
     id: 'claude.entry.attachment.v1',
     provider: 'claude',
-    fingerprints: ["fp1-0913c350","fp1-0be035ea","fp1-17325b53","fp1-1f43958e","fp1-20f22b8f","fp1-38e7ef3d","fp1-3ae4cf2b","fp1-40425c51","fp1-4d79e5d3","fp1-581ac6d5","fp1-60e3d224","fp1-6399aefe","fp1-69882ce4","fp1-753c33b9","fp1-83a3fbfd","fp1-8628c635","fp1-8feef6e3","fp1-abe64889","fp1-b0d9d248","fp1-b4071732","fp1-b8a64f27","fp1-bc298de8","fp1-c1d8a2a6","fp1-cdb2f73a","fp1-d192dbac","fp1-dd5cff49","fp1-e4e63295","fp1-f08b1406","fp1-f30522fc"],
+    fingerprints: ["fp1-17325b53","fp1-1f43958e","fp1-20f22b8f","fp1-38e7ef3d","fp1-3ae4cf2b","fp1-40425c51","fp1-43858260","fp1-4d79e5d3","fp1-581ac6d5","fp1-60e3d224","fp1-6399aefe","fp1-69882ce4","fp1-753c33b9","fp1-83a3fbfd","fp1-8628c635","fp1-8feef6e3","fp1-abe64889","fp1-b0d9d248","fp1-b4071732","fp1-b8a64f27","fp1-bc298de8","fp1-c1d8a2a6","fp1-cdb2f73a","fp1-d192dbac","fp1-dd5cff49","fp1-e4e63295","fp1-f08b1406","fp1-f30522fc","fp1-f7b66ff2"],
     eventTypes: ["attachment"],
     planes: ["transcript-entry"] as const,
     lifecycles: ["durable"] as const,
@@ -110,6 +110,23 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'planned', targetGrammar: 'system' },
     why: 'Seeded from the 48-bundle corpus (69 sightings); structural variants share this id.',
+  }),
+  'claude.entry.user.v1': defineRenderShape({
+    id: 'claude.entry.user.v1',
+    provider: 'claude',
+    fingerprints: ["fp1-688dff42","fp1-92c29c6f"],
+    eventTypes: ["user"],
+    planes: ["transcript-entry"] as const,
+    lifecycles: ["durable"] as const,
+    observed: {
+      providerVersions: [],
+      models: [],
+      firstSeen: '2026-07-16',
+      lastSeen: '2026-07-16',
+    },
+    fixtures: { final: ["rendering-bundles/2026-06-21T19-19-55-972-62432945.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json","rendering-bundles/2026-06-22T12-34-16-431-2db014bc.json"], prefixes: [] },
+    disposition: { kind: 'planned', targetGrammar: 'system' },
+    why: 'Seeded from the 48-bundle corpus (13 sightings); structural variants share this id.',
   }),
   'claude.semantic.agent.v1': defineRenderShape({
     id: 'claude.semantic.agent.v1',
@@ -380,7 +397,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'structured-tool' },
+    disposition: { kind: 'planned', targetGrammar: 'prose' },
     why: 'Seeded from the 48-bundle corpus (224 sightings); structural variants share this id.',
   }),
   'claude.semantic.thinking.v1': defineRenderShape({
@@ -397,7 +414,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'structured-tool' },
+    disposition: { kind: 'planned', targetGrammar: 'reasoning' },
     why: 'Seeded from the 48-bundle corpus (185 sightings); structural variants share this id.',
   }),
   'claude.semantic.toolsearch.v1': defineRenderShape({

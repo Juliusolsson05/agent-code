@@ -84,8 +84,37 @@ export function sweepBundleShapes(bundle: unknown): BundleShapeObservation[] {
       observe('transcript-entry', 'durable', `${entry.type}${subtype}`, entry)
       continue
     }
+    // PARITY with EntryRow's two conversation-typed sight branches (review
+    // finding: compact-summary entries are type 'user' with a marker, and
+    // task-notification carriers are user/assistant with the XML envelope —
+    // EntryRow sights both on the transcript-entry plane, so the sweep must
+    // fingerprint them too or real captures file them as false unknowns the
+    // corpus can never close). The predicates mirror EntryRow's guards
+    // structurally (marker field / notification envelope) without importing
+    // renderer UI modules into this pure sweep.
+    if (entry.isCompactSummary === true) {
+      observe('transcript-entry', 'durable', entry.type, entry)
+      continue
+    }
     const message = asRecord(entry.message)
     const content = message ? message.content : null
+    // Mirrors taskNotificationTextOf: string content, or the first text
+    // block of array content, starting with the notification tag.
+    const notificationText =
+      typeof content === 'string'
+        ? content
+        : Array.isArray(content)
+          ? ((content.find(b => asRecord(b)?.type === 'text') as { text?: unknown } | undefined)
+              ?.text as string | undefined)
+          : undefined
+    if (
+      entry.type === 'user' &&
+      typeof notificationText === 'string' &&
+      notificationText.trimStart().startsWith('<task-notification>')
+    ) {
+      observe('transcript-entry', 'durable', entry.type, entry)
+      continue
+    }
     if (!Array.isArray(content)) continue
     for (const rawBlock of content) {
       const block = asRecord(rawBlock)

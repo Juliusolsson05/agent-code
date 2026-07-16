@@ -39,12 +39,22 @@ function StatusChip({ status }: { status: string }) {
 
 let lastReport: UnknownShapeReport | null = null
 
-function useShapeReport(): { report: UnknownShapeReport | null; error: string | null; truncated: boolean } {
+function useShapeReport(): {
+  report: UnknownShapeReport | null
+  error: string | null
+  truncated: boolean
+  refresh: () => void
+} {
   const [state, setState] = useState<{
     report: UnknownShapeReport | null
     error: string | null
     truncated: boolean
   }>({ report: lastReport, error: null, truncated: false })
+  // Manual refresh, not polling (review finding: the one-shot mount read
+  // made the "live" inbox stale forever). The report is a disk sweep — a
+  // human-triggered re-read matches how the module is actually used and
+  // keeps the main process out of a polling loop.
+  const [epoch, setEpoch] = useState(0)
   const index = useMemo(() => buildFingerprintIndex(ALL_RENDER_SHAPE_CATALOGS), [])
   useEffect(() => {
     let cancelled = false
@@ -63,20 +73,29 @@ function useShapeReport(): { report: UnknownShapeReport | null; error: string | 
     return () => {
       cancelled = true
     }
-  }, [index])
-  return state
+  }, [index, epoch])
+  return { ...state, refresh: () => setEpoch(e => e + 1) }
 }
 
 function RenderingShapesPanel({ sessionId }: DevDebugModuleProps) {
-  const { report, error, truncated } = useShapeReport()
+  const { report, error, truncated, refresh } = useShapeReport()
   const stats = renderShapeObserverStats()
   const armed = isRenderShapeCaptureArmed(sessionId)
   return (
     <div className="flex flex-col gap-2 text-[12px]">
-      <div className="text-muted">
-        capture {armed ? 'ARMED' : 'off'} for this pane · armed sessions {stats.armedSessions} ·
-        dropped {stats.droppedQueue + stats.droppedKeys} · swallowed failures {stats.failures}
-        {truncated ? ' · sweep truncated (old recordings skipped)' : ''}
+      <div className="text-muted flex items-center gap-2">
+        <span>
+          capture {armed ? 'ARMED' : 'off'} for this pane · armed sessions {stats.armedSessions} ·
+          dropped {stats.droppedQueue + stats.droppedKeys} · swallowed failures {stats.failures}
+          {truncated ? ' · sweep truncated (old recordings skipped)' : ''}
+        </span>
+        <button
+          type="button"
+          className="border border-current/30 rounded px-1.5 py-0.5 text-[11px] hover:bg-current/10"
+          onClick={refresh}
+        >
+          refresh
+        </button>
       </div>
       {error ? <div className="text-red-400">sweep failed: {error}</div> : null}
       {!report ? (

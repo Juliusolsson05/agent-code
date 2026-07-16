@@ -4,6 +4,7 @@ import {
   fingerprintRenderShape,
   MAX_SHAPE_DEPTH,
   MAX_SHAPE_PATHS,
+  MAX_VISITED_NODES,
 } from '@renderer/rendering/evidence/shapeFingerprint'
 
 // Phase 1 exit gate (plan §Test-first delivery phases): the fingerprint is
@@ -119,6 +120,40 @@ describe('structural fingerprint — arrays', () => {
     expect(a.fingerprint).toBe(b.fingerprint)
   })
 
+  it('MIXED discriminator values under an array are order-free (review finding #1)', () => {
+    // The regression the review panel proved: last-element-wins made
+    // [text, tool_use] and [tool_use, text] different identities. The
+    // sorted value-set union must make them ONE shape — a Claude assistant
+    // message mixing text and tool_use blocks is among the most common
+    // real payloads and providers reorder freely.
+    const a = fingerprintRenderShape({
+      ...base,
+      payload: { content: [{ type: 'text' }, { type: 'tool_use' }] },
+    })
+    const b = fingerprintRenderShape({
+      ...base,
+      payload: { content: [{ type: 'tool_use' }, { type: 'text' }] },
+    })
+    expect(a.fingerprint).toBe(b.fingerprint)
+    expect(a.discriminatorValues['content[].type']).toBe('text|tool_use')
+  })
+
+  it('dynamic (non-identifier) object keys collapse to <dyn> — one shape per grammar, not per filename', () => {
+    // Codex patch results key `changes` by ABSOLUTE PATH (review finding:
+    // 18 path-specific fingerprint variants landed in the seeded catalog).
+    const a = fingerprintRenderShape({
+      ...base,
+      payload: { changes: { '/repo/a.ts': { add: 3 } } },
+    })
+    const b = fingerprintRenderShape({
+      ...base,
+      payload: { changes: { '/other/place/b.md': { add: 9 } } },
+    })
+    expect(a.fingerprint).toBe(b.fingerprint)
+    expect(a.shapePaths).toContain('changes.<dyn>:object')
+    expect(JSON.stringify(a)).not.toContain('/repo/a.ts')
+  })
+
   it('empty array is a stable shape of its own', () => {
     const empty = fingerprintRenderShape({ ...base, payload: { items: [] } })
     const filled = fingerprintRenderShape({ ...base, payload: { items: [1] } })
@@ -183,6 +218,32 @@ describe('structural fingerprint — privacy (the hard invariant)', () => {
       payload: { kind: 'tool_use', toolName: 'Edit', inputJson: '{}' },
     })
     expect(bash.fingerprint).not.toBe(edit.fingerprint)
+  })
+
+  it('nested discriminators reject non-enum tokens (hex secrets, IDs) — review finding A4', () => {
+    const hex = fingerprintRenderShape({
+      ...base,
+      payload: { input: { config: { type: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4' } } },
+    })
+    // Value contains digits after a letter start — but real enums are short
+    // lowercase snake; the 32-hex string exceeds the 32-char cap and fails.
+    expect(JSON.stringify(hex.discriminatorValues)).not.toContain('a1b2c3d4e5f6')
+    const camel = fingerprintRenderShape({
+      ...base,
+      payload: { input: { config: { type: 'MixedCaseInternalId' } } },
+    })
+    expect(JSON.stringify(camel.discriminatorValues)).not.toContain('MixedCase')
+  })
+
+  it('traversal work is bounded — a huge payload stops at MAX_VISITED_NODES with a marker', () => {
+    const wide: Record<string, { a: number; b: number }> = {}
+    for (let i = 0; i < MAX_VISITED_NODES; i++) wide[`k${i}`] = { a: 1, b: 2 }
+    const started = performance.now()
+    const out = fingerprintRenderShape({ ...base, payload: wide })
+    expect(performance.now() - started).toBeLessThan(500)
+    expect(out.shapePaths[out.shapePaths.length - 1]).toBe('<truncated-paths>')
+    // Determinism holds under truncation.
+    expect(fingerprintRenderShape({ ...base, payload: wide }).fingerprint).toBe(out.fingerprint)
   })
 
   it('nested `name` is NOT a discriminator (MCP inputs put user values there)', () => {

@@ -266,12 +266,19 @@ export const Block = memo(function Block({
       const providerRow = getRendererProviderCapabilities(currentProvider).renderToolResult?.(tr, {
         sourceTool,
       })
+      // Three-way outcome honesty (review finding: `null !== undefined`
+      // recorded opencode's deliberate todowrite-echo suppression as
+      // "specialized"): undefined = provider declined → generic fallback;
+      // null = provider INTENTIONALLY suppressed → absorbed with the
+      // dispatch named as owner; a node = specialized.
       sight(
         'committed-tool-result',
         tr,
-        providerRow !== undefined
-          ? specializedOutcome(`${currentProvider}.rows.dispatch`)
-          : GENERIC_OUTCOME,
+        providerRow === undefined
+          ? GENERIC_OUTCOME
+          : providerRow === null
+            ? absorbedOutcome(`${currentProvider}.rows.dispatch`, 'provider dispatch suppressed the result row')
+            : specializedOutcome(`${currentProvider}.rows.dispatch`),
       )
       return providerRow !== undefined ? providerRow : <ToolResultRow block={tr} />
     }
