@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { navigateToAgentIndexTarget } from '@renderer/workspace/agentIndexNavigation'
+import { buildVisibleDispatchRows } from '@renderer/workspace/dispatch/dispatchSelectors'
 import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import type { TileNode, TileTabsState, WorkspaceState } from '@renderer/workspace/types'
 
@@ -72,7 +73,7 @@ describe('agent index navigation', () => {
       },
     }
 
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'), 100)
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'))
     expect(result?.kind).toBe('focus-existing-tiled-dispatch-lane')
     expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(1)
     expect(result?.state.dispatchMode?.tiled?.lanes).toEqual(
@@ -95,7 +96,7 @@ describe('agent index navigation', () => {
       },
     }
 
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'A3'), 100)
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'A3'))
     expect(result?.kind).toBe('replace-focused-tiled-dispatch-lane')
     expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
       { selectedSessionId: 'a1' },
@@ -120,7 +121,7 @@ describe('agent index navigation', () => {
       },
     }
 
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'), 100)
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'))
     expect(result?.kind).toBe('focus-existing-tiled-dispatch-lane')
     expect(result?.state.dispatchMode?.tiled?.focusedLane).toBe(2)
   })
@@ -129,7 +130,7 @@ describe('agent index navigation', () => {
     const state = makeState()
     state.dispatchMode = { scope: 'global', focusedSessionId: 'a1' }
 
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'), 100)
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'))
     expect(result?.kind).toBe('focus-classic-dispatch')
     expect(result?.state.activeTabId).toBe('tab-b')
     expect(result?.state.dispatchMode?.focusedSessionId).toBe('b1')
@@ -145,7 +146,7 @@ describe('agent index navigation', () => {
       ratios: [0.41, 0.59],
     }
 
-    const result = navigateToAgentIndexTarget(state, tileTabs, target(state, 'B1'), 100)
+    const result = navigateToAgentIndexTarget(state, tileTabs, target(state, 'B1'))
     expect(result?.kind).toBe('focus-tiled-tab-pane')
     expect(result?.state.activeTabId).toBe('tab-b')
     expect(result?.tileTabs).toEqual({
@@ -163,7 +164,7 @@ describe('agent index navigation', () => {
       ratios: [0.3, 0.7],
     }
 
-    const result = navigateToAgentIndexTarget(state, tileTabs, target(state, 'C1'), 100)
+    const result = navigateToAgentIndexTarget(state, tileTabs, target(state, 'C1'))
     expect(result?.kind).toBe('replace-focused-tiled-tab')
     expect(result?.tileTabs).toEqual({
       tabIds: ['tab-a', 'tab-c'],
@@ -176,7 +177,7 @@ describe('agent index navigation', () => {
 
   it('activates and focuses an existing pane in the regular grid', () => {
     const state = makeState()
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'), 100)
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'))
     expect(result?.kind).toBe('focus-grid-pane')
     expect(result?.state.activeTabId).toBe('tab-b')
     expect(result?.state.tabs.find(tab => tab.id === 'tab-b')?.focusedSessionId).toBe('b1')
@@ -199,7 +200,7 @@ describe('agent index navigation', () => {
     }
     state.gridRelatedSelections = { a2: 'child' }
 
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'A4'), 100)
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'A4'))
     expect(result?.kind).toBe('focus-grid-pane')
     expect(result?.state.tabs[0].focusedSessionId).toBe('a2')
     expect(result?.state.gridRelatedSelections).toEqual({ a2: 'child' })
@@ -222,7 +223,7 @@ describe('agent index navigation', () => {
     }
     state.gridRelatedSelections = { a2: 'child' }
 
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'A2'), 100)
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'A2'))
     expect(result?.kind).toBe('focus-grid-pane')
     expect(result?.state.tabs[0].focusedSessionId).toBe('a2')
     expect(result?.state.gridRelatedSelections).toEqual({})
@@ -230,7 +231,7 @@ describe('agent index navigation', () => {
 
   it('swaps a detached target into the focused grid leaf without reshaping the grid', () => {
     const state = makeState()
-    const result = navigateToAgentIndexTarget(state, null, target(state, 'A3'), 1234)
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'A3'))
     expect(result?.kind).toBe('swap-detached-into-focused-grid-pane')
     expect(result?.requiresWake).toBe(true)
     expect(result?.state.tabs[0].root).toEqual({
@@ -245,8 +246,9 @@ describe('agent index navigation', () => {
     expect(result?.state.detachedSessions.a1).toMatchObject({
       sessionId: 'a1',
       projectTabId: 'tab-a',
-      detachedAt: 1234,
+      detachedAt: 10,
     })
+    expect(resolveAgentPaneLabel(result!.state, 'A3')?.sessionId).toBe('a1')
     expect(result?.state.sessions.a1).toBe(state.sessions.a1)
     expect(result?.state.sessions.a3).toBe(state.sessions.a3)
   })
@@ -260,13 +262,83 @@ describe('agent index navigation', () => {
       ratios: [0.5, 0.5],
     }
 
-    const result = navigateToAgentIndexTarget(state, tileTabs, target(state, 'A3'), 200)
+    const result = navigateToAgentIndexTarget(state, tileTabs, target(state, 'A3'))
     expect(result?.kind).toBe('swap-detached-into-focused-grid-pane')
     expect(result?.tileTabs).toEqual(tileTabs)
     expect(result?.state.tabs.find(tab => tab.id === 'tab-b')?.root).toEqual(leaf('a3'))
     expect(result?.state.detachedSessions.b1).toMatchObject({
       sessionId: 'b1',
-      projectTabId: 'tab-b',
+      projectTabId: 'tab-a',
+      detachedAt: 10,
     })
+  })
+
+  it('preserves every other detached coordinate when swapping a target into the grid', () => {
+    const state = makeState()
+    state.sessions.a4 = { cwd: '/work/alpha/four', kind: 'codex' }
+    state.detachedSessions.a4 = {
+      sessionId: 'a4',
+      surface: 'dispatch',
+      projectTabId: 'tab-a',
+      projectTabTitle: 'alpha',
+      projectTabIndex: 0,
+      detachedAt: 20,
+    }
+
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'A3'))
+
+    expect(resolveAgentPaneLabel(result!.state, 'A3')?.sessionId).toBe('a1')
+    expect(resolveAgentPaneLabel(result!.state, 'A4')?.sessionId).toBe('a4')
+    expect(result?.state.detachedSessions.a4).toBe(state.detachedSessions.a4)
+  })
+
+  it('promotes a cross-project Tiled Dispatch swap so untouched lanes stay in scope', () => {
+    const state = makeState()
+    state.dispatchMode = {
+      scope: 'project',
+      focusedSessionId: 'a2',
+      tiled: {
+        focusedLane: 1,
+        lanes: [
+          { selectedSessionId: 'a1' },
+          { selectedSessionId: 'a2' },
+        ],
+      },
+    }
+
+    const result = navigateToAgentIndexTarget(state, null, target(state, 'B1'))
+
+    expect(result?.state.dispatchMode?.scope).toBe('global')
+    expect(result?.state.dispatchMode?.tiled?.lanes).toEqual([
+      { selectedSessionId: 'a1' },
+      { selectedSessionId: 'b1' },
+    ])
+    expect(buildVisibleDispatchRows(result!.state).map(row => row.sessionId)).toContain('a1')
+  })
+
+  it('follows visible Tiled Tabs when stale restored state also contains Dispatch', () => {
+    const state = makeState()
+    state.dispatchMode = {
+      scope: 'global',
+      focusedSessionId: 'a1',
+      tiled: {
+        focusedLane: 0,
+        lanes: [{ selectedSessionId: 'a1' }],
+      },
+    }
+    const tileTabs: TileTabsState = {
+      tabIds: ['tab-a', 'tab-b'],
+      focusedTabId: 'tab-a',
+      direction: 'horizontal',
+      ratios: [0.5, 0.5],
+    }
+    const resolved = resolveAgentPaneLabel(state, 'B1', tileTabs)
+    if (!resolved) throw new Error('Missing B1 target')
+
+    const result = navigateToAgentIndexTarget(state, tileTabs, resolved)
+
+    expect(result?.kind).toBe('focus-tiled-tab-pane')
+    expect(result?.tileTabs?.focusedTabId).toBe('tab-b')
+    expect(result?.state.dispatchMode).toBe(state.dispatchMode)
   })
 })

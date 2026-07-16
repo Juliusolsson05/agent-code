@@ -20,13 +20,16 @@ export function useAgentIndexNavigationActions(
 } {
   const focusAgentByPaneLabel = useCallback(
     async (label: string): Promise<boolean> => {
-      const initialTarget = resolveAgentPaneLabel(refs.stateRef.current, label)
+      const initialTarget = resolveAgentPaneLabel(
+        refs.stateRef.current,
+        label,
+        refs.latestTileTabsRef.current,
+      )
       if (!initialTarget) return false
       const initialResult = navigateToAgentIndexTarget(
         refs.stateRef.current,
         refs.latestTileTabsRef.current,
         initialTarget,
-        Date.now(),
       )
       if (!initialResult) return false
 
@@ -57,13 +60,16 @@ export function useAgentIndexNavigationActions(
         // target is waking. Never redirect the user's already-confirmed action
         // to a different session just because that new session inherited the
         // coordinate during the await.
-        const currentTarget = resolveAgentPaneLabel(current, label)
+        const currentTarget = resolveAgentPaneLabel(
+          current,
+          label,
+          refs.latestTileTabsRef.current,
+        )
         if (currentTarget?.sessionId !== initialTarget.sessionId) return current
         const result = navigateToAgentIndexTarget(
           current,
           refs.latestTileTabsRef.current,
           currentTarget,
-          Date.now(),
         )
         if (!result) return current
         committed = true

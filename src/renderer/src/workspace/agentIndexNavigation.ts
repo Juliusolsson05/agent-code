@@ -49,7 +49,6 @@ export function navigateToAgentIndexTarget(
   state: WorkspaceState,
   tileTabs: TileTabsState | null,
   target: AgentPaneLabelTarget,
-  detachedAt: number,
 ): AgentIndexNavigationResult | null {
   const meta = state.sessions[target.sessionId]
   const kind = meta?.kind ?? DEFAULT_PROVIDER
@@ -57,7 +56,11 @@ export function navigateToAgentIndexTarget(
 
   const requiresWake = state.detachedSessions[target.sessionId] !== undefined
   const dispatchMode = state.dispatchMode
-  if (dispatchMode?.tiled) {
+  // TileTabs is the visible MainSurface whenever both slices are restored.
+  // Normal actions keep the modes mutually exclusive, but rehydrate accepts
+  // both persisted fields independently. Never mutate hidden Dispatch state
+  // while the user is looking at tiled tabs.
+  if (!tileTabs && dispatchMode?.tiled) {
     const tiled = dispatchMode.tiled
     // Duplicated lanes are legal. If the currently focused lane already shows
     // the target, keep it rather than jumping left to the first duplicate;
@@ -78,6 +81,8 @@ export function navigateToAgentIndexTarget(
             ? { ...lane, selectedSessionId: target.sessionId }
             : lane
         ))
+    const crossesProjectScope =
+      dispatchMode.scope !== 'global' && target.tabId !== state.activeTabId
     return {
       kind: existingLane >= 0
         ? 'focus-existing-tiled-dispatch-lane'
@@ -91,6 +96,13 @@ export function navigateToAgentIndexTarget(
         activeTabId: target.tabId,
         dispatchMode: {
           ...dispatchMode,
+          // A project-scoped row set cannot retain lanes from project A after
+          // activeTabId moves to project B. TiledDispatchLayout would treat all
+          // untouched A lanes as out-of-scope and heal them away. Promoting the
+          // one cross-project navigation to global makes both the retained
+          // lanes and incoming target renderable, preserving the issue's
+          // "replace only the focused lane" invariant.
+          scope: crossesProjectScope ? 'global' : dispatchMode.scope,
           // Keep classic focus coherent for a later exit from tiled mode.
           focusedSessionId: target.sessionId,
           tiled: {
@@ -105,7 +117,7 @@ export function navigateToAgentIndexTarget(
     }
   }
 
-  if (dispatchMode) {
+  if (!tileTabs && dispatchMode) {
     return {
       kind: 'focus-classic-dispatch',
       state: {
@@ -179,14 +191,15 @@ export function navigateToAgentIndexTarget(
   ])
   const detachedSessions = { ...state.detachedSessions }
   delete detachedSessions[target.sessionId]
-  const destinationTabIndex = state.tabs.findIndex(tab => tab.id === destinationTabId)
+  // WHY the displaced session inherits the target's exact detached record:
+  // this operation is a placement swap, not "attach target, then append the
+  // old pane somewhere." Reusing detachedAt and project ownership preserves
+  // the vacated visible coordinate, leaves every other detached row in place,
+  // and gives a cross-project displaced agent the slot the target actually
+  // vacated. Appending with Date.now() silently renumbered unrelated agents.
   detachedSessions[displacedSessionId] = {
+    ...detached,
     sessionId: displacedSessionId,
-    surface: 'dispatch',
-    projectTabId: destinationTabId,
-    projectTabTitle: destinationTab.title,
-    projectTabIndex: destinationTabIndex >= 0 ? destinationTabIndex : 0,
-    detachedAt,
   }
 
   const gridRelatedSelections = Object.fromEntries(

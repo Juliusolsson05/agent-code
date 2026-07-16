@@ -661,8 +661,8 @@ function OpenCommandPalette({
     [commands, queryText, historyScoreMap],
   )
   const directAgentTarget = useMemo(
-    () => resolveAgentPaneLabel(workspace.state, queryText),
-    [queryText, workspace.state],
+    () => resolveAgentPaneLabel(workspace.state, queryText, workspace.tileTabs),
+    [queryText, workspace.state, workspace.tileTabs],
   )
   const directAgentCommand = useMemo(
     () => directAgentTarget
