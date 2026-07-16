@@ -272,6 +272,13 @@ describe('WorkflowRunView', () => {
     expect(await screen.findByText('Stalled · idle')).toBeInTheDocument()
     expect(screen.getByText('Recovery required')).toBeInTheDocument()
     expect(screen.getByText('1/2 agents')).toBeInTheDocument()
+    // Workflow UI landed after the component foundation branch diverged.
+    // Lock its ordinary action onto the shared primitive so later workflow
+    // polish cannot silently recreate an ad-hoc button vocabulary.
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveAttribute(
+      'data-slot',
+      'button',
+    )
   })
 
   it('shows why admitted work is queued instead of presenting circuit recovery as idle capacity', async () => {
