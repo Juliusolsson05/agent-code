@@ -5,8 +5,11 @@ import { analyzeCommandOutput } from '@providers/shared/renderer/protocols/comma
 import { fileMutationFormatter } from '@providers/shared/renderer/protocols/command/formatters/file-mutation'
 import {
   fromClaudeBashBlock,
+  fromClaudeBashCodeEdit,
+  fromClaudePartialBashCodeEdit,
   fromClaudePartialBashJson,
 } from '@providers/claude/renderer/adapters/command'
+import { extractShellHeredocWrite } from '@providers/shared/renderer/protocols/command/shellFileWrite'
 import {
   fromCodexExecScript,
   stripCodexTransportEnvelope,
@@ -93,6 +96,70 @@ describe('formatter registry — conservative by contract', () => {
     expect(c('echo $(date) > out.txt')).toBeNull() // substitution → decline
     expect(c('cmd 2>&1')).toBeNull() // fd redirection → decline
     expect(c('echo hi > a.txt > b.txt')).toContain('+1 more')
+  })
+})
+
+describe('cat-heredoc write → code-edit protocol (not a command headline)', () => {
+  const bash = (command: string) =>
+    fromClaudeBashCodeEdit({ type: 'tool_use', id: 't', name: 'Bash', input: { command } } as never)
+
+  it('quoted-delimiter cat heredoc becomes a Write card with the exact content', () => {
+    const m = bash("cat > temp/x.ts <<'EOF'\nline one\nline two > not-a-redirect\nEOF")!
+    expect(m.label).toBe('Bash')
+    expect(m.files[0].verb).toBe('Writing')
+    expect(m.files[0].path).toBe('temp/x.ts')
+    expect(m.files[0].lines.map(l => l.text)).toEqual(['line one', 'line two > not-a-redirect'])
+    expect(m.files[0].lines.every(l => l.kind === '+')).toBe(true)
+    expect(m.status).toBe('success')
+  })
+
+  it('the mkdir -p … && cat > … idiom (our own dev shape) still routes as a write', () => {
+    const m = bash("mkdir -p temp/showcase && cat > temp/showcase/a.ts <<'EOF'\nbody\nEOF")!
+    expect(m.files[0].path).toBe('temp/showcase/a.ts')
+    expect(m.files[0].lines.map(l => l.text)).toEqual(['body'])
+  })
+
+  it('>> heredoc is an Appending card', () => {
+    const m = bash("cat >> notes.md <<'EOF'\nappended line\nEOF")!
+    expect(m.files[0].verb).toBe('Appending')
+  })
+
+  it('DECLINES unquoted delimiters — the body would $-expand, bytes differ from text', () => {
+    expect(bash('cat > x <<EOF\n$HOME\nEOF')).toBeNull()
+  })
+
+  it('DECLINES non-cat writers — grep transforms stdin, body is not the file content', () => {
+    expect(bash("grep foo > out.txt <<'EOF'\nfoo\nbar\nEOF")).toBeNull()
+  })
+
+  it('DECLINES a cat with a file operand — that concatenates, body ≠ content', () => {
+    expect(bash("cat header.txt > out.txt <<'EOF'\nbody\nEOF")).toBeNull()
+  })
+
+  it('DECLINES a command trailing the terminator — the write is not the whole story', () => {
+    expect(bash("cat > x <<'EOF'\nbody\nEOF\nrm -rf x")).toBeNull()
+  })
+
+  it('a plain command is not a heredoc write — declines, command card owns it', () => {
+    expect(bash('ls -la')).toBeNull()
+    expect(bash('echo hi > out.txt')).toBeNull() // > write, but no heredoc body to show
+  })
+
+  it('STREAMING: partial JSON paints a growing write once the first line closes', () => {
+    // command token still open, body mid-stream — first line HAS closed.
+    const partial = '{"command":"cat > temp/s.ts <<\'EOF\'\\nfirst line\\nsecond li'
+    const m = fromClaudePartialBashCodeEdit(partial)!
+    expect(m.files[0].path).toBe('temp/s.ts')
+    expect(m.files[0].streaming).toBe(true)
+    expect(m.status).toBe('streaming')
+    expect(m.files[0].lines.map(l => l.text)).toContain('first line')
+  })
+
+  it('extractor reports completeness honestly for the streaming boundary', () => {
+    expect(extractShellHeredocWrite("cat > x <<'EOF'\na")!.complete).toBe(false)
+    expect(extractShellHeredocWrite("cat > x <<'EOF'\na\nEOF")!.complete).toBe(true)
+    // First line not closed yet → nothing trustworthy.
+    expect(extractShellHeredocWrite("cat > x <<'EOF")).toBeNull()
   })
 })
 

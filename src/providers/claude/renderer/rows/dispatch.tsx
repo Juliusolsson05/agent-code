@@ -12,8 +12,10 @@ import {
   claudeBashConclusion,
   claudeBashResultText,
   fromClaudeBashBlock,
+  fromClaudeBashCodeEdit,
 } from '@providers/claude/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
+import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 import { OutputWell } from '@renderer/lib/text/OutputWell'
 
 export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined {
@@ -28,6 +30,14 @@ export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined 
       // widget, so this case only ever sees plain commands or
       // customRendering-off sessions). Whitespace-only input falls through
       // to the generic row, preserved behavior.
+      //
+      // A quoted-delimiter cat-heredoc is a FILE WRITE wearing a command's
+      // clothes — route it into the code-edit card so the written content is
+      // visible (product-owner verdict 2026-07-17). The extractor's strict
+      // contract means this claims only the honest cases; everything else
+      // falls through to the command card unchanged.
+      const write = fromClaudeBashCodeEdit(block)
+      if (write) return <CodeEditView model={write} />
       const model = fromClaudeBashBlock(block)
       return model ? <CommandView model={model} /> : undefined
     }

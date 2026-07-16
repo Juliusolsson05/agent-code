@@ -16,9 +16,12 @@ import { memo, useMemo } from 'react'
 import type { ToolUseBlock } from '@shared/types/transcript'
 import {
   fromClaudeBashBlock,
+  fromClaudeBashCodeEdit,
+  fromClaudePartialBashCodeEdit,
   fromClaudePartialBashJson,
 } from '@providers/claude/renderer/adapters/command'
 import { CommandView } from '@providers/shared/renderer/protocols/command/CommandView'
+import { CodeEditView } from '@providers/shared/renderer/protocols/code-edit/CodeEditView'
 
 export const ClaudeLiveBashRow = memo(function ClaudeLiveBashRow({
   parsedInput,
@@ -31,7 +34,22 @@ export const ClaudeLiveBashRow = memo(function ClaudeLiveBashRow({
   finalized: boolean
   blockIndex: number
 }) {
-  const model = useMemo(
+  // A cat-heredoc write streams as a growing code-edit card, exactly like a
+  // streaming Write — content lines appear as they arrive (the extractor is
+  // trustworthy the moment the command's first line closes). Tried BEFORE the
+  // command model so the write's content is never hidden behind a headline;
+  // it declines for every non-heredoc command, which then paints as before.
+  const editModel = useMemo(
+    () =>
+      parsedInput
+        ? fromClaudeBashCodeEdit(
+            { type: 'tool_use', id: `live:${blockIndex}`, name: 'Bash', input: parsedInput } as ToolUseBlock,
+            { streaming: !finalized },
+          )
+        : fromClaudePartialBashCodeEdit(inputJson),
+    [parsedInput, inputJson, finalized, blockIndex],
+  )
+  const commandModel = useMemo(
     () =>
       parsedInput
         ? fromClaudeBashBlock(
@@ -41,6 +59,7 @@ export const ClaudeLiveBashRow = memo(function ClaudeLiveBashRow({
         : fromClaudePartialBashJson(inputJson),
     [parsedInput, inputJson, finalized, blockIndex],
   )
-  if (!model) return null // command not closed yet — caller falls through
-  return <CommandView model={model} />
+  if (editModel) return <CodeEditView model={editModel} />
+  if (!commandModel) return null // command not closed yet — caller falls through
+  return <CommandView model={commandModel} />
 })

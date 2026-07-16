@@ -15,7 +15,7 @@ import type { DiffLine } from '@shared/parsers/lineDiff'
 // update to the same row, never a different component. Nothing in this
 // contract may require the full input to exist.
 
-export type CodeEditVerb = 'Creating' | 'Editing' | 'Writing' | 'Deleting' | 'Moving'
+export type CodeEditVerb = 'Creating' | 'Editing' | 'Writing' | 'Appending' | 'Deleting' | 'Moving'
 
 export type CodeEditFile = {
   /** Raw path as the provider gave it; display-relativization is the
