@@ -63,12 +63,13 @@ async function recoverSessionBeforeDeadline(
   const deadline = new Promise<SessionRecoverResult>(resolve => {
     timeout = setTimeout(() => {
       // WHY timeout actively cancels the matching main recovery claim instead
-      // of merely giving
-      // up in the renderer: an unresolved provider start would otherwise keep
-      // its recovery claim, MCP credentials, and autosave bootstrap gate alive
-      // indefinitely. Main's generation-owned cancellation can return quickly
-      // while still performing a second stop if the provider materializes
-      // resources after this deadline.
+      // of merely giving up in the renderer: an unresolved provider start
+      // would otherwise keep its recovery claim, MCP credentials, and autosave
+      // bootstrap gate alive
+      // indefinitely. The cancellation request itself is fire-and-forget here:
+      // main deliberately keeps its generation fence until both startup and
+      // teardown settle, including a second stop if the provider materializes
+      // resources after this renderer deadline.
       void recoveryApi.cancelSessionRecovery({
         sessionId: options.sessionId,
         kind: options.kind,
