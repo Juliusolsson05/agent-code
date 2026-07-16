@@ -7,7 +7,11 @@ import type { AgentProviderKind } from '@shared/types/providerKind'
 
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import { toolResultText } from '@renderer/features/feed/lib/helpers'
-import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamingWriteInput'
+import {
+  STREAMING_WRITE_PREVIEW_LINES,
+  STREAMING_WRITE_PREVIEW_RAW_CHARS,
+  extractStreamingWriteInput,
+} from '@renderer/features/feed/lib/streamingWriteInput'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { ExpandSection } from '@renderer/features/feed/ui/kit/ExpandSection'
 import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
@@ -48,7 +52,14 @@ export function fileWriteFromCommitted(
   provider: AgentProviderKind,
 ): FileWriteArtifact & { resultError: string | null } {
   const input = (tu.input ?? {}) as Record<string, unknown>
-  const filePath = typeof input.file_path === 'string' ? input.file_path : null
+  const filePath =
+    typeof input.file_path === 'string'
+      ? input.file_path
+      : typeof input.filePath === 'string'
+        ? input.filePath
+        : typeof input.path === 'string'
+          ? input.path
+          : null
   const content = typeof input.content === 'string' ? input.content : ''
   const isError = result?.is_error === true
   const status: ArtifactStatus = !result ? 'running' : isError ? 'error' : 'complete'
@@ -64,6 +75,7 @@ export function fileWriteFromCommitted(
     filePath,
     content,
     lineCount: countLines(content),
+    contentState: 'exact',
     resultError: isError && result ? toolResultText(result) : null,
   }
 }
@@ -74,21 +86,45 @@ export function fileWriteFromLive(
   provider: AgentProviderKind,
 ): (FileWriteArtifact & { resultError: string | null }) | null {
   const id = block.toolUseId ?? block.callId ?? block.itemId ?? `live:${block.blockIndex}`
-  // Prefer the authoritative parse once the input finalizes; fall back
-  // to the single-pass partial scanner while streaming.
+  // Prefer the authoritative parse once the input finalizes; fall back to the
+  // bounded prefix scanner while streaming.
   const parsed = block.parsedInput
   let filePath: string | null = null
   let content = ''
-  if (parsed && typeof parsed.file_path === 'string') {
-    filePath = parsed.file_path
+  let contentState: FileWriteArtifact['contentState'] = 'receiving'
+  const parsedPath = parsed && (
+    typeof parsed.file_path === 'string'
+      ? parsed.file_path
+      : typeof parsed.filePath === 'string'
+        ? parsed.filePath
+        : typeof parsed.path === 'string'
+          ? parsed.path
+          : null
+  )
+  if (parsed && parsedPath) {
+    filePath = parsedPath
     content = typeof parsed.content === 'string' ? parsed.content : ''
+    // parsedInput is the authoritative completed object. It must bypass every
+    // live-preview bound so the exact file replaces the capped prefix in the
+    // same mounted card as soon as provider parsing finishes.
+    contentState = 'exact'
   } else {
     const stream = extractStreamingWriteInput(block.inputJson ?? '')
-    // No path yet → caller falls through to the generic card (raw
-    // preview) — never a blank Write card (the old preview's rule).
-    if (!stream.filePath) return null
+    // Before any recognizable field arrives, the generic preparing card remains
+    // the most honest surface. Once content or a safety-bound signal exists, the
+    // Write card owns it even if a content-first payload has not revealed its
+    // path yet; otherwise the very truncation warning added for bounded scanning
+    // would be unreachable in that ordering.
+    if (!stream.filePath && stream.partialContent === null && !stream.previewTruncated) {
+      return null
+    }
     filePath = stream.filePath
     content = stream.partialContent ?? ''
+    contentState = stream.previewTruncated
+      ? 'capped'
+      : stream.partialContent
+        ? 'partial'
+        : 'receiving'
   }
   const hasResult = block.resultAt != null || block.resultContent != null
   const status: ArtifactStatus =
@@ -111,6 +147,7 @@ export function fileWriteFromLive(
     filePath,
     content,
     lineCount: countLines(content),
+    contentState,
     resultError:
       block.resultIsError === true ? (block.resultContent ?? '(error)') : null,
   }
@@ -141,21 +178,51 @@ export const FileWriteCard = memo(function FileWriteCard({
               {display}
             </span>
           )}
+          {!display && vm.contentState !== 'exact' ? (
+            <span className="text-muted text-[11px] italic flex-shrink-0">
+              receiving path…
+            </span>
+          ) : null}
           {language !== 'plaintext' ? (
             <span className="text-[10px] text-ink-dim border border-border rounded px-1 py-px flex-shrink-0">
               {language}
             </span>
           ) : null}
           <span className="text-muted text-[11px] flex-shrink-0 tabular-nums">
-            {vm.lineCount} line{vm.lineCount === 1 ? '' : 's'}
+            {vm.contentState === 'capped'
+              ? vm.lineCount > 0
+                ? `${vm.lineCount}+ preview line${vm.lineCount === 1 ? '' : 's'}`
+                : 'preview capped'
+              : `${vm.lineCount} line${vm.lineCount === 1 ? '' : 's'}`}
           </span>
           <StatusBadge status={vm.status} />
         </div>
-        <StreamingCodeBlock
-          code={vm.content}
-          path={vm.filePath}
-          blockKey={`write:${vm.id}`}
-        />
+        {vm.contentState === 'receiving' && vm.content.length === 0 ? (
+          <div
+            role="status"
+            className="rounded border border-border px-2 py-1 text-[12px] text-muted italic animate-pulse"
+          >
+            Receiving file content…
+          </div>
+        ) : (
+          <StreamingCodeBlock
+            code={vm.content}
+            path={vm.filePath}
+            blockKey={`write:${vm.id}`}
+            lineTone="addition"
+          />
+        )}
+        {vm.contentState === 'capped' ? (
+          <div
+            role="status"
+            className="rounded border border-warning/40 bg-warning/5 px-2 py-1 text-[11px] leading-[1.5] text-warning"
+          >
+            Live preview paused at its safety limit (
+            {STREAMING_WRITE_PREVIEW_RAW_CHARS} encoded characters or{' '}
+            {STREAMING_WRITE_PREVIEW_LINES} lines). The exact file will replace
+            it when the tool input finishes.
+          </div>
+        ) : null}
         {(vm.status === 'complete' || vm.status === 'error') &&
         vm.lineCount > MONACO_OFFER_LINES ? (
           <ExpandSection summary="open in editor view">

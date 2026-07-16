@@ -27,7 +27,7 @@
 // bulky tool_result payloads are truncated (they never participate in
 // ownership keys — only assistant/user text does).
 //
-// Usage: node scripts/extract-rendering-fixtures.mjs [--only <bundleId>] [--out <dir>]
+// Usage: node scripts/extract-rendering-fixtures.mjs [--only <bundleId>] [--bundle <dir>] [--out <dir>]
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
@@ -44,10 +44,13 @@ const onlyIdx = args.indexOf('--only')
 const only = onlyIdx >= 0 ? args[onlyIdx + 1] : null
 const outIdx = args.indexOf('--out')
 const OUT = outIdx >= 0 ? args[outIdx + 1] : join(process.cwd(), 'testing/fixtures/rendering-bundles')
+const bundleIdx = args.indexOf('--bundle')
+const directBundle = bundleIdx >= 0 ? args[bundleIdx + 1] : null
 
 const MAX_ENTRIES = 80
 const TOOL_RESULT_CAP = 600
 const TEXT_CAP = 8000
+const LIVE_PREFIX_CAP = 8000
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, 'utf8'))
@@ -89,10 +92,143 @@ function readJsonl(path) {
 // providerSessionId + cwd per bundle, from the save ledger. Some ledger
 // lines are partial (note-added events) — keep the richest per path.
 const ledgerByPath = new Map()
-for (const rec of readJsonl(LEDGER)) {
-  if (!rec.bundlePath) continue
-  const prev = ledgerByPath.get(rec.bundlePath) ?? {}
-  ledgerByPath.set(rec.bundlePath, { ...prev, ...rec })
+if (existsSync(LEDGER)) {
+  for (const rec of readJsonl(LEDGER)) {
+    if (!rec.bundlePath) continue
+    const prev = ledgerByPath.get(rec.bundlePath) ?? {}
+    ledgerByPath.set(rec.bundlePath, { ...prev, ...rec })
+  }
+}
+
+/**
+ * Pull the semantic event out of both feed-debug layouts seen in the corpus.
+ *
+ * WHY accept both shapes: older debug rows copied event fields directly into
+ * `data`; current rows keep the channel envelope in `data` and the semantic
+ * event under `data.event`. Making evidence extraction depend on only the
+ * latest wrapper would silently erase the very cross-version corpus this
+ * script exists to preserve.
+ */
+function semanticEventFromDebugRow(row) {
+  if (!row || row.layer !== 'SEM') return null
+  const nested = row.data?.event
+  if (nested && typeof nested === 'object') return nested
+  return row.data && typeof row.data === 'object' ? row.data : null
+}
+
+function declaredPatchLiteral(prefix) {
+  if (typeof prefix !== 'string') return false
+  // This is deliberately narrower than `prefix.includes('*** Begin Patch')`.
+  // A command that greps documentation for that phrase is still a command;
+  // the useful early-stream milestone is a JS variable whose quoted value has
+  // already begun with the patch envelope, before `tools.apply_patch(...)`
+  // necessarily exists in the stream.
+  return /\b(?:const|let|var)\s+[$A-Z_a-z][$\w]*\s*=\s*["'`]\*\*\* Begin Patch(?:\\n|\n)/.test(prefix)
+}
+
+function invokedToolNames(prefix) {
+  if (typeof prefix !== 'string') return []
+  // Wait for the opening parenthesis. A cumulative stream passes through
+  // `tools.apply`, `tools.apply_pat`, ...; treating each partial identifier as
+  // a new operation would reintroduce the delta explosion milestone sampling
+  // is supposed to avoid.
+  return [...prefix.matchAll(/\btools\.([A-Z_a-z][$\w]*)\s*\(/g)].map(match => match[1])
+}
+
+function capLivePrefix(prefix) {
+  return prefix.length > LIVE_PREFIX_CAP
+    ? `${prefix.slice(0, LIVE_PREFIX_CAP)}…[truncated ${prefix.length}]`
+    : prefix
+}
+
+/**
+ * Preserve classifier-relevant LIVE snapshots without copying every token.
+ *
+ * WHY milestones rather than all tool_input_delta rows: one recent Codex
+ * bundle contains 347 cumulative snapshots. Keeping them all would make a
+ * tiny timing regression fixture hundreds of kilobytes, while keeping only
+ * the final snapshot recreates the bug that prompted this work — the renderer
+ * learns "file edit" only after the operation is already over. The milestones
+ * below retain the moments at which user-visible intent becomes knowable while
+ * bounding each operation to a handful of records.
+ */
+function extractLiveToolInputPrefixes(feedEvents, cutoffMs) {
+  const operations = new Map()
+
+  for (const row of feedEvents) {
+    if (row.layer !== 'SEM' || row.kind !== 'tool_input_delta') continue
+    if (typeof row.ts === 'number' && row.ts > cutoffMs) continue
+
+    const event = semanticEventFromDebugRow(row)
+    const prefix = event?.inputJsonSoFar
+    if (typeof prefix !== 'string') continue
+
+    const identity =
+      event.toolUseId ??
+      event.callId ??
+      event.itemId ??
+      `${event.turnId ?? 'turn'}:${event.blockIndex ?? 'block'}`
+    const key = String(identity)
+    let operation = operations.get(key)
+    if (!operation) {
+      operation = {
+        base: {
+          turnId: event.turnId ?? null,
+          blockIndex: event.blockIndex ?? null,
+          itemId: event.itemId ?? null,
+          toolUseId: event.toolUseId ?? event.callId ?? null,
+          toolName: event.toolName ?? event.name ?? null,
+          source: event.source ?? null,
+        },
+        milestones: [],
+        sawDeclaredPatch: false,
+        invokedTools: new Set(),
+        latest: null,
+      }
+      operations.set(key, operation)
+    }
+
+    const snapshot = {
+      ...operation.base,
+      ts: event.ts ?? row.ts ?? null,
+      stage: null,
+      inputLength: prefix.length,
+      inputJsonSoFar: capLivePrefix(prefix),
+    }
+
+    if (operation.milestones.length === 0) {
+      operation.milestones.push({ ...snapshot, stage: 'first-prefix' })
+    }
+
+    if (!operation.sawDeclaredPatch && declaredPatchLiteral(prefix)) {
+      operation.sawDeclaredPatch = true
+      operation.milestones.push({ ...snapshot, stage: 'declared-patch-literal' })
+    }
+
+    for (const tool of invokedToolNames(prefix)) {
+      if (operation.invokedTools.has(tool)) continue
+      operation.invokedTools.add(tool)
+      operation.milestones.push({ ...snapshot, stage: `tool-invocation:${tool}` })
+    }
+
+    operation.latest = { ...snapshot, stage: 'latest-prefix' }
+  }
+
+  const out = []
+  for (const operation of operations.values()) {
+    out.push(...operation.milestones)
+    const latest = operation.latest
+    const lastMilestone = operation.milestones.at(-1)
+    if (
+      latest &&
+      (!lastMilestone ||
+        latest.inputLength !== lastMilestone.inputLength ||
+        latest.inputJsonSoFar !== lastMilestone.inputJsonSoFar)
+    ) {
+      out.push(latest)
+    }
+  }
+  return out
 }
 
 function transcriptPathFor(cwd, providerSessionId, kind) {
@@ -180,9 +316,14 @@ function extractBundle(dir) {
   const semantic = readJson(join(dir, 'proxy-semantic.json'))
   const capturedAt = manifest.capturedAt
 
+  // Read once: current bundles are large enough that reparsing feed-debug for
+  // each evidence plane is measurable, and (more importantly) both expected
+  // rows and live prefixes must be cut against the exact same event sequence.
+  const feedEvents = readJsonl(join(dir, 'feed-debug.jsonl'))
+
   // ---- expected rows: last RENDER visible_rows before capture ----
   let visible = null
-  for (const ev of readJsonl(join(dir, 'feed-debug.jsonl'))) {
+  for (const ev of feedEvents) {
     if (ev.layer === 'RENDER' && ev.kind === 'visible_rows' && ev.data?.rows) visible = ev
   }
   if (!visible) return { id, skipped: 'no visible_rows event in feed-debug window' }
@@ -194,6 +335,7 @@ function extractBundle(dir) {
   // capture-time dump), so residual current-turn skew is triaged per
   // fixture instead.
   const cutoffMs = typeof visible.ts === 'number' ? visible.ts : capturedAt
+  const liveToolInputPrefixes = extractLiveToolInputPrefixes(feedEvents, cutoffMs)
 
   // ---- entries from transcript ----
   const ledger = ledgerByPath.get(dir) ?? {}
@@ -282,6 +424,12 @@ function extractBundle(dir) {
           const turnEnd = t?.endedAt ?? t?.startedAt ?? 0
           return turnEnd >= windowStart
         }),
+        // Presentation evidence only. The ownership corpus deliberately
+        // ignores this optional field, but presentation/classifier tests can
+        // replay the exact cumulative prefixes that existed BEFORE a final
+        // tool object was available. This is the missing plane behind the
+        // "raw const patch, then suddenly a diff after completion" bug.
+        liveToolInputPrefixes,
         ghosts,
       },
       expected: {
@@ -302,14 +450,20 @@ function extractBundle(dir) {
 }
 
 mkdirSync(OUT, { recursive: true })
-const dirs = [
-  ...readdirSync(BUNDLES)
-    .filter(d => /^\d{4}-/.test(d))
-    .map(d => join(BUNDLES, d)),
-  ...readdirSync(ROOT_BUNDLES)
-    .filter(d => /^\d{4}-/.test(d))
-    .map(d => join(ROOT_BUNDLES, d)),
-]
+const dirs = directBundle
+  ? [directBundle]
+  : [
+      ...(existsSync(BUNDLES)
+        ? readdirSync(BUNDLES)
+            .filter(d => /^\d{4}-/.test(d))
+            .map(d => join(BUNDLES, d))
+        : []),
+      ...(existsSync(ROOT_BUNDLES)
+        ? readdirSync(ROOT_BUNDLES)
+            .filter(d => /^\d{4}-/.test(d))
+            .map(d => join(ROOT_BUNDLES, d))
+        : []),
+    ]
 const summary = []
 for (const dir of dirs) {
   const id = basename(dir)
@@ -345,6 +499,7 @@ for (const dir of dirs) {
       ghosts: Object.keys(f.input.ghosts).length,
       hist: f.input.semanticHistory.length,
       cur: f.input.semanticCurrent ? 1 : 0,
+      livePrefixes: f.input.liveToolInputPrefixes.length,
       expectedRows: f.expected.rows.length,
       kb: Math.round(JSON.stringify(f).length / 1024),
     })

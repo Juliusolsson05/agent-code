@@ -395,8 +395,8 @@ export function classifySemanticToolActivity(block: SemanticLiveTurn['blocks'][n
   // results are noise. But once a Read / Grep / Bash block carries
   // real output or an error the user cares about, collapsing it
   // into "worked: 3 reads" silently hides the content. Route
-  // finished-with-output blocks through the non-collapsible branch
-  // so they render as their own SemanticLiveBlockRow.
+  // finished-with-output blocks through the non-collapsible branch so the
+  // post-ledger projector receives an individual operation/output source.
   if (block.resultIsError || (block.resultContent && block.resultContent.trim().length > 0)) {
     return { collapsible: false, category: null, hint: null }
   }

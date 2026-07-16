@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react'
 import type { StreamPhase } from '@renderer/session-runtime/state'
 import type { DebugVisibleRow, VisibleDecision } from '@renderer/features/feed/types'
 import { debugLabelForEntry } from '@renderer/features/feed/lib/helpers'
+import type { ProjectionReceipt } from '@renderer/features/feed/presentation/types'
 
 // PORTED VERBATIM from Feed.tsx:845-900 @269f9fc — the RENDER-layer
 // feed-debug emission. This is one half of the "debug == paint"
@@ -22,6 +23,7 @@ export function useFeedDebugEmission({
   semanticTurnId,
   renderedSemanticHistoryTurnIds,
   streamPhase,
+  projectionReceipts,
 }: {
   onDebugLog?: (entry: {
     layer: 'RENDER'
@@ -36,6 +38,7 @@ export function useFeedDebugEmission({
   semanticTurnId: string | null
   renderedSemanticHistoryTurnIds: string[]
   streamPhase: StreamPhase
+  projectionReceipts: ProjectionReceipt[]
 }): void {
   const previousRenderedRowsRef = useRef<DebugVisibleRow[] | null>(null)
   const previousRenderDebugSignatureRef = useRef<string | null>(null)
@@ -51,6 +54,15 @@ export function useFeedDebugEmission({
       semanticTurnId,
       semanticHistoryTurnIds: renderedSemanticHistoryTurnIds,
       streamPhase,
+      // Receipts make the post-ledger presentation projection auditable. A
+      // source disappearing because it was paired into an operation is very
+      // different from an unknown shape falling through, and debug bundles
+      // must preserve that distinction without re-running UI logic later.
+      projectionReceipts: projectionReceipts.map(receipt => [
+        receipt.sourceKey,
+        receipt.disposition,
+        receipt.targetIds,
+      ]),
     })
     const prevKeys = new Set(previous?.map(row => row.key) ?? [])
     const nextKeys = new Set(renderedRows.map(row => row.key))
@@ -89,9 +101,10 @@ export function useFeedDebugEmission({
         semanticTurnId,
         semanticHistoryTurnIds: renderedSemanticHistoryTurnIds,
         streamPhase,
+        projectionReceipts,
       },
     })
     previousRenderedRowsRef.current = renderedRows
     previousRenderDebugSignatureRef.current = renderDebugSignature
-  }, [entriesLength, onDebugLog, renderedRows, renderedSemanticHistorySignature, renderedSemanticHistoryTurnIds, semanticTurnId, streamPhase, visibleDecisions, visibleEntryCount])
+  }, [entriesLength, onDebugLog, projectionReceipts, renderedRows, renderedSemanticHistorySignature, renderedSemanticHistoryTurnIds, semanticTurnId, streamPhase, visibleDecisions, visibleEntryCount])
 }

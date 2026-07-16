@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useMemo, useState, type KeyboardEvent } from 'react'
 import hljs from 'highlight.js'
 
 import { useContext } from 'react'
@@ -9,6 +9,7 @@ import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
 import { ExpandSection } from '@renderer/features/feed/ui/kit/ExpandSection'
 import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 import { StatusBadge } from '@renderer/features/feed/ui/kit/StatusBadge'
+import { CommandOutput } from '@renderer/features/feed/ui/operations/CommandOutput'
 import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 
 import type { CommandArtifact } from './types'
@@ -37,24 +38,22 @@ export const CommandCard = memo(function CommandCard({ vm }: { vm: CommandArtifa
   const [showFull, setShowFull] = useState(false)
   const { workspaceRoot } = useContext(CodeRenderContext)
 
-  // Empty write_stdin renders NOTHING — preserved verbatim from the
-  // CodexWriteStdinRow this card replaced. Codex emits empty stdin
-  // writes as poll/continuation calls while a long PTY command drains;
-  // they carry no user-visible content. renderUnits.ts's
-  // isInvisibleWriteStdinBlock mirrors this so the render model and
-  // the DOM agree the block owns no screen real estate — if you change
-  // this, change that selector in the same commit. (Unified-exec
-  // scripts polling with chars:"" classify as 'wait' instead and DO
-  // render — see below — matching the native "Waited for background
-  // terminal" rows; that path never enters this selector.)
-  if (vm.sourceTool === 'write_stdin' && vm.stdinWrites.every(s => s.length === 0)) {
-    return null
-  }
-
   const truncated = truncateBashCommand(vm.command)
   const isTruncated = truncated !== vm.command
   const cwdBase = vm.cwd ? vm.cwd.split('/').filter(Boolean).pop() ?? vm.cwd : null
   const shown = showFull ? vm.command : truncated
+  const toggleCommand = () => {
+    if (isTruncated) setShowFull(value => !value)
+  }
+  const onCommandKeyDown = (event: KeyboardEvent<HTMLPreElement>) => {
+    if (!isTruncated || (event.key !== 'Enter' && event.key !== ' ')) return
+    // A clickable <pre> is otherwise invisible to keyboard users. Space must
+    // prevent its native page-scroll behavior so it activates exactly like a
+    // button; using role/button semantics avoids invalid HTML such as nesting a
+    // block-level <pre> inside a real <button>.
+    event.preventDefault()
+    toggleCommand()
+  }
 
   // Bash-highlight the command line, like the native TUI's
   // highlight_bash_to_lines — a shell pipeline reads far better with
@@ -69,6 +68,27 @@ export const CommandCard = memo(function CommandCard({ vm }: { vm: CommandArtifa
       return null
     }
   }, [shown, vm.sourceTool])
+
+  // Empty write_stdin renders NOTHING — preserved verbatim from the
+  // CodexWriteStdinRow this card replaced. Codex emits empty stdin
+  // writes as poll/continuation calls while a long PTY command drains;
+  // they carry no user-visible content. renderUnits.ts's
+  // isInvisibleWriteStdinBlock mirrors this so the render model and
+  // the DOM agree the block owns no screen real estate — if you change
+  // this, change that selector in the same commit. (Unified-exec
+  // scripts polling with chars:"" classify as 'wait' instead and DO
+  // render — see below — matching the native "Waited for background
+  // terminal" rows; that path never enters this selector.)
+  //
+  // This return deliberately sits BELOW every hook: a live write_stdin
+  // block starts with an empty stdinWrites (chars hasn't streamed yet)
+  // and fills in on a later render of the SAME mounted component — an
+  // early return above useMemo would change the hook count mid-life
+  // and crash React ("Rendered more hooks than during the previous
+  // render"). Rules-of-hooks, found in PR524 review.
+  if (vm.sourceTool === 'write_stdin' && vm.stdinWrites.every(s => s.length === 0)) {
+    return null
+  }
 
   // Native-style slim wait row: "• Waited for background terminal"
   // (codex history_cell/exec.rs) — dim, no output well, duration chip
@@ -102,9 +122,20 @@ export const CommandCard = memo(function CommandCard({ vm }: { vm: CommandArtifa
             {verb}
           </span>
           <pre
-            className={`font-code text-[13px] leading-[1.55] text-ink m-0 whitespace-pre-wrap break-all inline min-w-0 ${isTruncated ? 'cursor-pointer' : ''}`}
-            onClick={() => isTruncated && setShowFull(v => !v)}
-            title={isTruncated && !showFull ? 'click to expand full command' : undefined}
+            className={`font-code text-[13px] leading-[1.55] text-ink m-0 whitespace-pre-wrap break-all inline min-w-0 ${isTruncated ? 'cursor-pointer focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent focus-visible:outline-offset-2' : ''}`}
+            onClick={isTruncated ? toggleCommand : undefined}
+            onKeyDown={isTruncated ? onCommandKeyDown : undefined}
+            role={isTruncated ? 'button' : undefined}
+            tabIndex={isTruncated ? 0 : undefined}
+            aria-expanded={isTruncated ? showFull : undefined}
+            aria-label={
+              isTruncated
+                ? showFull
+                  ? `Show shortened command: ${truncated}`
+                  : `Show full command: ${truncated}`
+                : undefined
+            }
+            title={isTruncated && !showFull ? 'Show full command' : undefined}
           >
             {commandHtml !== null ? (
               <code
@@ -168,7 +199,26 @@ export const CommandCard = memo(function CommandCard({ vm }: { vm: CommandArtifa
             </ExpandSection>
           </MarkerRow>
         ) : vm.output ? (
-          <OutputWell text={vm.output} isError={vm.status === 'error'} ansi />
+          <>
+            {/* WHY enrichment and raw output are siblings: summaries are
+             * deliberately conservative, but no parser is authoritative for
+             * arbitrary shell output. Keeping OutputWell mounted and fed the
+             * original bytes preserves live ANSI, head+tail clipping, and the
+             * user's ability to audit every interpretation above it. */}
+            {/* Structural summaries are completion evidence, not streaming
+                guesses. During a live command, a currently valid JSON prefix or
+                test-looking line can still grow into something else; mounting
+                enrichment only at a terminal status prevents rows flashing a
+                false success while OutputWell continues to stream every byte. */}
+            {vm.status === 'complete' || vm.status === 'error' ? (
+              <CommandOutput
+                text={vm.output}
+                isError={vm.status === 'error'}
+                codeId={`cmd-output:${vm.id}`}
+              />
+            ) : null}
+            <OutputWell text={vm.output} isError={vm.status === 'error'} ansi />
+          </>
         ) : null}
       </div>
     </MarkerRow>

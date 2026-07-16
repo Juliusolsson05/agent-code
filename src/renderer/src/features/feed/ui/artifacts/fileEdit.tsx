@@ -1,17 +1,22 @@
 import { memo, useContext, useMemo } from 'react'
 
-import { diffLines } from '@shared/parsers/lineDiff'
+import { diffLines, streamingDiffLines } from '@shared/parsers/lineDiff'
 import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
 import {
+  STREAMING_EDIT_HEADER_SCAN_CHARS,
+  STREAMING_EDIT_PREVIEW_LINES,
+  STREAMING_EDIT_PREVIEW_RAW_CHARS,
+  STREAMING_MULTI_EDIT_PREVIEW_ITEMS,
   editInput,
   multiEditInput,
-  partialEditInput,
+  partialEditPreview,
 } from '@providers/claude/renderer/extractors'
 import {
   classifyUnifiedExecScript,
+  applyPatchText,
   parseApplyPatch,
   partialApplyPatchInput,
   patchChangesFromResult,
@@ -26,6 +31,8 @@ import { DiffView, type DiffViewFile } from '@renderer/features/feed/ui/kit/Diff
 import { OutputWell } from '@renderer/features/feed/ui/kit/OutputWell'
 import { StatusBadge } from '@renderer/features/feed/ui/kit/StatusBadge'
 import { StreamingCodeBlock } from '@renderer/features/feed/ui/kit/StreamingCodeBlock'
+import { ExpandSection } from '@renderer/features/feed/ui/kit/ExpandSection'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 
 import type { ArtifactStatus, FileEditArtifact } from './types'
@@ -39,8 +46,9 @@ type SemanticToolCallSnapshot = SemanticLiveTurn['lookups']['toolCallsById'][str
 //
 // Live behavior (the [#285] convergence, generalized): the file path
 // appears the moment its JSON string literal closes; the diff fills in
-// as old_string/new_string stream (each render re-derives the partial
-// diff — diffLines over partial strings is cheap and self-corrects);
+// as old_string/new_string stream. Partial strings use a linear common-prefix
+// diff; the minimal LCS runs once only after input finalizes. Running the LCS
+// matrix per token was quadratic/cubic over a large edit stream.
 // an apply_patch payload renders its parsed files as the grammar
 // streams. Until even the path has arrived, the raw streaming input
 // shows in a StreamingCodeBlock — never a blank card, never worse than
@@ -62,6 +70,48 @@ function editStatus(
   return 'complete'
 }
 
+function cappedDiffLines(lines: FileEditArtifact['diffs'][number], limit: number) {
+  if (lines.length <= limit) return { lines, truncated: false }
+  // A live replacement naturally orders removals before additions. Keeping only
+  // the head would therefore show the red half and hide exactly what the agent
+  // is writing. Head+tail retains both sides (and mirrors OutputWell's evidence
+  // policy) while the warning below makes the missing middle explicit.
+  const headCount = Math.ceil(limit / 2)
+  const tailCount = Math.floor(limit / 2)
+  return {
+    lines: [
+      ...lines.slice(0, headCount),
+      ...(tailCount > 0 ? lines.slice(-tailCount) : []),
+    ],
+    truncated: true,
+  }
+}
+
+function capStreamingDiffs(diffs: FileEditArtifact['diffs']): {
+  diffs: FileEditArtifact['diffs']
+  truncated: boolean
+} {
+  let remainingLines = STREAMING_EDIT_PREVIEW_LINES
+  let remainingNonEmpty = diffs.filter(lines => lines.length > 0).length
+  let truncated = false
+
+  const capped = diffs.map(lines => {
+    if (lines.length === 0) return lines
+    // Divide the remaining budget across the remaining chunks. MultiEdit must
+    // not let one huge first replacement consume every row and make later
+    // edits disappear. The provider decoder separately caps chunks at 32, so
+    // this allocation always grants at least one line per non-empty chunk.
+    const share = Math.max(1, Math.floor(remainingLines / remainingNonEmpty))
+    const result = cappedDiffLines(lines, share)
+    remainingLines -= result.lines.length
+    remainingNonEmpty -= 1
+    truncated ||= result.truncated
+    return result.lines
+  })
+
+  return { diffs: capped, truncated }
+}
+
 export function fileEditFromCommitted(
   tu: ToolUseBlock,
   result: ToolResultBlock | null,
@@ -70,12 +120,13 @@ export function fileEditFromCommitted(
   let filePath: string | null = null
   let diffs: FileEditArtifact['diffs'] = []
   let patchFiles: FileEditArtifact['patchFiles'] = []
+  let parsedPatchSource: string | null = null
 
-  if (tu.name === 'Edit') {
+  if (tu.name.toLowerCase() === 'edit' || tu.name.toLowerCase() === 'edit_file') {
     const input = editInput(tu.input)
     filePath = input.filePath || null
     diffs = [diffLines(input.oldString, input.newString)]
-  } else if (tu.name === 'MultiEdit') {
+  } else if (tu.name.toLowerCase() === 'multiedit') {
     const input = multiEditInput(tu.input)
     filePath = input.filePath || null
     diffs = input.edits.map(e => diffLines(e.oldString, e.newString))
@@ -89,6 +140,7 @@ export function fileEditFromCommitted(
             return action?.kind === 'apply_patch' ? { raw: action.patchText } : tu.input
           })()
         : tu.input
+    parsedPatchSource = applyPatchText(source) || null
     patchFiles = parseApplyPatch(source).map(f => ({
       path: f.path,
       action: f.action.toLowerCase() as 'add' | 'update' | 'delete',
@@ -126,6 +178,9 @@ export function fileEditFromCommitted(
     diffs,
     patchFiles,
     rawStreamingInput: null,
+    previewState: 'exact',
+    sourceInput: null,
+    parsedPatchSource,
     resultError: isError && result ? toolResultText(result) : null,
   }
 }
@@ -143,8 +198,11 @@ export function fileEditFromLive(
   let diffs: FileEditArtifact['diffs'] = []
   let patchFiles: FileEditArtifact['patchFiles'] = []
   let rawStreamingInput: string | null = null
+  let previewState: FileEditArtifact['previewState'] = 'receiving'
+  let sourceInput: string | null = null
+  let parsedPatchSource: string | null = null
 
-  if (name === 'apply_patch' || name === 'exec') {
+  if (name === 'apply_patch' || name === 'patch' || name === 'exec') {
     // The payload may be the grammar directly or a JSON wrapper around
     // it; parseApplyPatch handles both via applyPatchText. A partial
     // grammar parses to however many complete file sections have
@@ -159,6 +217,7 @@ export function fileEditFromLive(
             return action?.kind === 'apply_patch' ? { raw: action.patchText } : { raw: '' }
           })()
         : block.parsedInput ?? partialApplyPatchInput(raw)
+    parsedPatchSource = applyPatchText(source) || null
     patchFiles = parseApplyPatch(source).map(f => ({
       path: f.path,
       action: f.action.toLowerCase() as 'add' | 'update' | 'delete',
@@ -166,20 +225,43 @@ export function fileEditFromLive(
       lines: f.lines,
     }))
     if (patchFiles.length === 0 && raw) rawStreamingInput = raw
+    previewState = block.parsedInput || block.finalized === true ? 'exact' : 'partial'
   } else {
-    const partial = partialEditInput(raw, block.parsedInput ?? null, name)
-    if (partial) {
-      if (name === 'MultiEdit') {
-        const input = multiEditInput(partial)
+    const exactInput = block.parsedInput ?? null
+    const preview = partialEditPreview(raw, exactInput, name)
+    if (preview.input) {
+      // `finalized` only says transport bytes stopped. A malformed/truncated
+      // provider object can be finalized without becoming parsedInput; only the
+      // parsed object is authoritative enough for the minimal LCS. Otherwise
+      // keep the honest provisional prefix/suffix diff and its cap warning.
+      const deriveDiff = exactInput ? diffLines : streamingDiffLines
+      if (name.toLowerCase() === 'multiedit') {
+        const input = multiEditInput(preview.input)
         filePath = input.filePath || null
-        diffs = input.edits.map(e => diffLines(e.oldString, e.newString))
+        diffs = input.edits.map(e => deriveDiff(e.oldString, e.newString))
       } else {
-        const input = editInput(partial)
+        const input = editInput(preview.input)
         filePath = input.filePath || null
-        diffs = [diffLines(input.oldString, input.newString)]
+        diffs = [deriveDiff(input.oldString, input.newString)]
+      }
+      if (exactInput) {
+        previewState = 'exact'
+      } else {
+        const linePreview = capStreamingDiffs(diffs)
+        diffs = linePreview.diffs
+        const capped = preview.previewTruncated || linePreview.truncated
+        previewState = capped ? 'capped' : 'partial'
+        if (capped) sourceInput = raw
       }
     } else if (raw) {
-      rawStreamingInput = raw
+      // Before the path closes, raw JSON is the only useful progress signal.
+      // Keep that normal surface bounded too: otherwise moving the cap from the
+      // decoder into an unbounded StreamingCodeBlock would merely relocate the
+      // same per-delta O(total) work. Exact bytes remain lazy below when cut.
+      rawStreamingInput = raw.slice(0, STREAMING_EDIT_HEADER_SCAN_CHARS)
+      const capped = preview.previewTruncated || raw.length > rawStreamingInput.length
+      previewState = capped ? 'capped' : 'receiving'
+      if (capped) sourceInput = raw
     }
   }
 
@@ -206,6 +288,9 @@ export function fileEditFromLive(
     diffs,
     patchFiles,
     rawStreamingInput,
+    previewState,
+    sourceInput,
+    parsedPatchSource,
     resultError:
       block.resultIsError === true ? (block.resultContent ?? '(error)') : null,
   }
@@ -239,14 +324,18 @@ export const DiffCard = memo(function DiffCard({
     }
     return vm.diffs.map((lines, i) => ({
       // The card header already names the (single) file for Edit/
-      // MultiEdit — per-chunk headers only label the chunk.
-      path: null,
+      // MultiEdit — per-chunk headers only label the chunk. Keep the path on
+      // the data object even when headers are hidden: DiffView uses it to pick
+      // the lexical grammar and stable JS/TS LSP virtual document. Dropping it
+      // here made every Claude edit plaintext despite the header knowing the
+      // exact file.
+      path: vm.filePath,
       action: null,
       movedTo: null,
       lines,
       chunkLabel: vm.diffs.length > 1 ? `change ${i + 1} / ${vm.diffs.length}` : null,
     }))
-  }, [vm.diffs, vm.patchFiles])
+  }, [vm.diffs, vm.filePath, vm.patchFiles])
 
   return (
     <MarkerRow marker="⏺">
@@ -291,21 +380,68 @@ export const DiffCard = memo(function DiffCard({
           <StatusBadge status={vm.status} />
         </div>
         {vm.rawStreamingInput !== null ? (
-          // Nothing parseable yet — show the raw streaming input rather
-          // than a blank card. Flips to the real diff on parse success
-          // (same mounted card; the body swap is unavoidable because a
-          // partial diff is unparseable by nature — spec §6).
-          <StreamingCodeBlock
-            code={vm.rawStreamingInput}
-            language="json"
-            blockKey={`edit-raw:${vm.id}`}
-          />
+          <div className="flex flex-col gap-1">
+            {/* Transport JSON/JavaScript is not the user's operation. Before a
+                path or complete patch header is knowable, keep the stable edit
+                row visible with an honest preparation state; raw source remains
+                available only through the explicitly debug-labelled disclosure. */}
+            <div className="text-muted text-[12px] italic animate-pulse">
+              Receiving file change…
+            </div>
+            <ExpandSection summary="Source input (debug)">
+              <StreamingCodeBlock
+                code={vm.rawStreamingInput}
+                language={toolName === 'apply_patch' ? 'javascript' : 'json'}
+                blockKey={`edit-raw:${vm.id}`}
+              />
+            </ExpandSection>
+          </div>
         ) : (
           <DiffView
             files={files}
             showHeaders={vm.patchFiles.length > 0 || vm.diffs.length > 1}
           />
         )}
+        {vm.previewState === 'capped' ? (
+          <div
+            role="status"
+            className="rounded border border-warning/40 bg-warning/5 px-2 py-1 text-[11px] leading-[1.5] text-warning"
+          >
+            Live diff preview paused at its safety limit (
+            {STREAMING_EDIT_PREVIEW_RAW_CHARS} encoded edit characters,{' '}
+            {STREAMING_EDIT_PREVIEW_LINES} diff lines, or{' '}
+            {STREAMING_MULTI_EDIT_PREVIEW_ITEMS} edit chunks). The exact parsed
+            change will replace it when valid tool input becomes available.
+          </div>
+        ) : null}
+        {vm.sourceInput ? (
+          <ExpandSection summary="Exact source input (debug)">
+            {/* The cap is a normal-render CPU/DOM policy, not permission to
+                discard provider evidence. This subtree stays unmounted until
+                explicitly opened; syntax highlighting is disabled because the
+                exact source can be arbitrarily larger than the live preview. */}
+            <CodeBlock
+              code={vm.sourceInput}
+              language="json"
+              codeId={`edit-source-input:${vm.id}`}
+              highlight={false}
+            />
+          </ExpandSection>
+        ) : null}
+        {vm.parsedPatchSource ? (
+          <ExpandSection summary="Parsed patch source (debug)">
+            {/* The diff is an interpretation of a provider grammar. Keeping the
+                exact decoded grammar lazily available makes parser mistakes
+                diagnosable and gives the existing Copy Code Block command a
+                lossless source, without putting generated wrapper JavaScript in
+                the normal operation view. */}
+            <CodeBlock
+              code={vm.parsedPatchSource}
+              language="diff"
+              codeId={`edit-patch-source:${vm.id}`}
+            />
+          </ExpandSection>
+        ) : null}
         {vm.resultError ? (
           <OutputWell text={vm.resultError} isError ansi />
         ) : null}

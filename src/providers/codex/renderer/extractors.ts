@@ -2,6 +2,11 @@
 // of providers/claude/renderer/extractors.ts for why this seam exists.
 
 import { asRecord } from '@shared/lib/asRecord'
+import {
+  decodePartialJsonStringBody,
+  extractPartialJsonStringField,
+  type PartialJsonString,
+} from '@shared/lib/partialJsonString'
 import type { ToolResultBlock } from '@shared/types/transcript'
 
 export type ExecCommandInput = {
@@ -133,7 +138,9 @@ export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
   const files: ApplyPatchFile[] = []
   let current: ApplyPatchFile | null = null
 
-  for (const rawLine of text.split('\n')) {
+  const rawLines = text.split('\n')
+  for (let lineIndex = 0; lineIndex < rawLines.length; lineIndex += 1) {
+    const rawLine = rawLines[lineIndex] ?? ''
     const fileMatch = rawLine.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/)
     if (fileMatch) {
       current = {
@@ -168,10 +175,12 @@ export function parseApplyPatch(input: unknown): ApplyPatchFile[] {
       current.lines.push({ kind: '-', text: rawLine.slice(1) })
     } else if (rawLine.startsWith(' ')) {
       current.lines.push({ kind: 'ctx', text: rawLine.slice(1) })
-    } else if (rawLine === '') {
-      // Models frequently emit blank context lines WITHOUT the leading
-      // space; dropping them visually compressed rendered patches
-      // (PR524 review).
+    } else if (rawLine === '' && lineIndex < rawLines.length - 1) {
+      // Models frequently emit blank context lines WITHOUT the leading space,
+      // so an empty line followed by more grammar is real evidence. The final
+      // empty item from `"line\n".split("\n")`, however, is only a cursor at
+      // the streaming boundary. Painting it made every newly sealed patch line
+      // flash a phantom context row until the next token arrived.
       current.lines.push({ kind: 'ctx', text: '' })
     }
   }
@@ -230,57 +239,16 @@ export function patchChangesFromResult(
 // While an apply_patch call streams, the payload may be a JSON wrapper
 // whose patch text sits inside a STILL-OPEN string literal
 // (`{"cmd": "*** Begin Patch\n..."`). JSON.parse can't touch it, so
-// this decodes the partial string member by hand — same fixed-spec
-// escape table as streamingWriteInput's scanner.
-
-const SIMPLE_JSON_ESCAPES: Record<string, string> = {
-  '"': '"',
-  '\\': '\\',
-  '/': '/',
-  b: '\b',
-  f: '\f',
-  n: '\n',
-  r: '\r',
-  t: '\t',
-}
-
-function decodePartialJsonStringBody(raw: string, start: number): string {
-  let out = ''
-  let i = start
-  while (i < raw.length) {
-    const ch = raw[i]
-    if (ch === '"') return out
-    if (ch === '\\') {
-      if (i + 1 >= raw.length) return out
-      const esc = raw[i + 1]
-      if (esc === 'u') {
-        const hex = raw.slice(i + 2, i + 6)
-        if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) return out
-        out += String.fromCharCode(parseInt(hex, 16))
-        i += 6
-        continue
-      }
-      out += SIMPLE_JSON_ESCAPES[esc] ?? esc
-      i += 2
-      continue
-    }
-    out += ch
-    i += 1
-  }
-  return out
-}
-
-function extractPartialJsonStringMember(raw: string, keys: string[]): string | null {
+// this delegates to the shared decoder used by Write/Edit. Keeping one escape
+// implementation is load-bearing: otherwise a surrogate-pair fix in one live
+// surface still leaves a replacement-glyph flash in another.
+function extractPartialJsonStringMember(
+  raw: string,
+  keys: string[],
+): PartialJsonString | null {
   for (const key of keys) {
-    const marker = `"${key}"`
-    const keyAt = raw.indexOf(marker)
-    if (keyAt === -1) continue
-    const colonAt = raw.indexOf(':', keyAt + marker.length)
-    if (colonAt === -1) continue
-    let valueAt = colonAt + 1
-    while (valueAt < raw.length && /\s/.test(raw[valueAt] ?? '')) valueAt += 1
-    if (raw[valueAt] !== '"') continue
-    return decodePartialJsonStringBody(raw, valueAt + 1)
+    const value = extractPartialJsonStringField(raw, key)
+    if (value) return value
   }
   return null
 }
@@ -303,7 +271,9 @@ export function partialApplyPatchInput(raw: string): Record<string, unknown> {
     'raw',
     'arguments',
   ])
-  return patch && patch.includes('*** Begin Patch') ? { raw: patch } : { raw, arguments: raw }
+  return patch?.value.includes('*** Begin Patch')
+    ? { raw: patch.value }
+    : { raw, arguments: raw }
 }
 
 // ---------------------------------------------------------------------------
@@ -328,13 +298,54 @@ export type UnifiedExecAction =
   | { kind: 'write_stdin'; chars: string }
   /** tools.wait(...) — waiting on a background terminal session. */
   | { kind: 'wait' }
+  /** Any other generated tools.<name>(...) call. The presentation classifier
+   *  maps this name through the same finite user-intent table as a native call;
+   *  retaining a completed object argument makes unified web/MCP/task/etc.
+   *  operations structured without evaluating the wrapper JavaScript. */
+  | {
+      kind: 'tool_call'
+      toolName: string
+      input: Record<string, unknown> | null
+    }
   | null
 
 /** Decode a JS double-quoted string literal starting just AFTER the
  *  opening quote, tolerating an unterminated (still-streaming) tail.
  *  JS escapes overlap JSON's for everything models emit here. */
 function decodeJsStringLiteral(script: string, start: number): string {
-  return decodePartialJsonStringBody(script, start)
+  return decodePartialJsonStringBody(script, start).value
+}
+
+/**
+ * Find a generated variable declaration whose string value has already
+ * revealed the apply_patch grammar. Modern Codex writes the complete patch
+ * literal BEFORE it writes `tools.apply_patch(patch)`, so invocation-first
+ * classification throws away the entire useful streaming window. The
+ * 2026-07-12 capture measured a 1.43s gap between `*** Begin Patch` and the
+ * trailing invocation.
+ *
+ * This is intentionally a declaration scanner, not a broad `includes` check:
+ * a perfectly ordinary exec_command may grep for the text "*** Begin Patch".
+ * Requiring both the begin marker AND a structural file header gives us early
+ * intent without misclassifying a variable which merely stores the marker for
+ * an exec_command search. The file header arrives near the beginning of a real
+ * patch, well before the invocation, so this one-line delay preserves the useful
+ * streaming window. Codex currently emits double-quoted literals; the scanner
+ * tolerates any identifier so upstream renaming `patch` to `input` does not
+ * reintroduce the late switch.
+ */
+function declaredPatchLiteral(script: string): string | null {
+  const declaration = /\b(?:const|let|var)\s+[$A-Z_a-z][$\w]*\s*=\s*"/g
+  for (let match = declaration.exec(script); match; match = declaration.exec(script)) {
+    const decoded = decodeJsStringLiteral(script, match.index + match[0].length)
+    if (
+      decoded.trimStart().startsWith('*** Begin Patch') &&
+      /(?:^|\n)\*\*\* (?:Add|Update|Delete) File: .+/.test(decoded)
+    ) {
+      return decoded
+    }
+  }
+  return null
 }
 
 /** Extract the first balanced {...} JSON object argument following
@@ -380,10 +391,16 @@ function jsonObjectArgAfter(
 export function classifyUnifiedExecScript(script: string): UnifiedExecAction {
   if (!script) return null
 
-  // apply_patch first: an edit is the story even if the script also
-  // echoes output. The patch text lives in a string literal (either
-  // inline in the call or bound to a const) — find the literal that
-  // contains the patch header and decode it, partial-safe.
+  // The declaration comes first on the wire and is therefore the primary live
+  // evidence. Once its decoded prefix reveals the grammar, the operation is an
+  // edit even though `tools.apply_patch` may be more than a second away.
+  const declaredPatch = declaredPatchLiteral(script)
+  if (declaredPatch !== null) {
+    return { kind: 'apply_patch', patchText: declaredPatch }
+  }
+
+  // Invocation fallback covers direct calls and committed historical wrappers
+  // that did not bind the patch to a variable.
   if (script.includes('tools.apply_patch')) {
     const headerAt = script.indexOf('*** Begin Patch')
     if (headerAt !== -1) {
@@ -406,14 +423,32 @@ export function classifyUnifiedExecScript(script: string): UnifiedExecAction {
 
   if (script.includes('tools.write_stdin')) {
     const arg = jsonObjectArgAfter(script, 'tools.write_stdin')
-    const chars =
-      typeof arg?.chars === 'string'
-        ? arg.chars
-        : extractPartialJsonStringMember(script, ['chars']) ?? ''
+    const completedChars = typeof arg?.chars === 'string' ? arg.chars : null
+    const partialChars =
+      completedChars === null
+        ? extractPartialJsonStringMember(
+            script.slice(script.indexOf('tools.write_stdin')),
+            ['chars'],
+          )
+        : null
+    // The opening quote of `"chars":"` and an explicitly closed empty string
+    // used to collapse to the same `''` value. That made every non-empty stdin
+    // write flash "Waited for background terminal" before its first character
+    // arrived. Unknown/empty-open input remains Preparing; a closed empty value
+    // alone is the polling operation Codex's native TUI calls Waited.
+    if (
+      completedChars === null &&
+      (!partialChars || (!partialChars.closed && partialChars.value === ''))
+    ) {
+      return null
+    }
+    const chars = completedChars ?? partialChars?.value ?? ''
     // Empty stdin IS a wait: Codex polls a background terminal with
     // chars:"" while output drains, and its native TUI renders exactly
     // these as "Waited for background terminal".
-    if (chars === '') return { kind: 'wait' }
+    if (chars === '' && (completedChars !== null || partialChars?.closed)) {
+      return { kind: 'wait' }
+    }
     return { kind: 'write_stdin', chars }
   }
 
@@ -450,10 +485,37 @@ export function classifyUnifiedExecScript(script: string): UnifiedExecAction {
     if (cmd !== null) {
       return {
         kind: 'exec_command',
-        input: { command: cmd, workdir: null, yieldTimeMs: null, maxOutputTokens: null },
+        input: {
+          command: cmd.value,
+          workdir: null,
+          yieldTimeMs: null,
+          maxOutputTokens: null,
+        },
       }
     }
-    return { kind: 'exec_command', input: { command: '…', workdir: null, yieldTimeMs: null, maxOutputTokens: null } }
+    return {
+      kind: 'exec_command',
+      input: {
+        command: '…',
+        workdir: null,
+        yieldTimeMs: null,
+        maxOutputTokens: null,
+      },
+    }
+  }
+
+  // Unified exec is an orchestration envelope for more than terminal tools.
+  // Match only a direct generated invocation and deliberately ignore output
+  // helpers (`text`, `image`, `notify`) because those are globals, not members
+  // of `tools`. The four special families above keep their richer partial
+  // extraction; every other name enters the canonical operation-family table.
+  const nestedCall = /\btools\.([$A-Z_a-z][$\w]*)\s*\(/g.exec(script)
+  if (nestedCall?.[1]) {
+    return {
+      kind: 'tool_call',
+      toolName: nestedCall[1],
+      input: jsonObjectArgAfter(script, `tools.${nestedCall[1]}`, nestedCall.index),
+    }
   }
 
   return null

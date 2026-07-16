@@ -171,7 +171,9 @@ Anything unrecognized — a proxy event type with no handler, a block kind with 
 
 ## 5. Stage RENDER — the feed painter
 
-**Where:** `src/renderer/src/features/feed/`. **Consumes:** an ordered `FeedRenderItem[]`. **Rule:** makes no decisions.
+**Where:** `src/renderer/src/features/feed/`. **Consumes:** an ordered
+`FeedRenderItem[]`. **Rule:** makes no ownership, visibility, or ordering
+decisions; presentation classification and progressive disclosure begin here.
 
 ### The view bridge (`features/feed/ledger/ledgerFeedItems.ts`) — the layer boundary
 
@@ -185,22 +187,72 @@ Anything unrecognized — a proxy event type with no handler, a block kind with 
 
 A discriminated union: `entry` (a committed/ghost/optimistic transcript entry) · `semantic-block` (one live block — the #491 block-level model) · `semantic-collapsed-activity` (a finished "worked: N reads" receipt) · `semantic-text` (blockless turn text) · `work` (the single WorkIndicator slot) · `empty` (the "waiting for <provider>…" placeholder). `feedRenderModelFromItems` attaches debug side-products only — **no sorting happens here; the ledger's order *is* the order.**
 
-### `Feed.tsx` — the painter
+### `Feed.tsx` — one owner, then a pure presentation projection
 
-`Feed = memo(FeedImpl)`: the whole component is memoized so composer typing / focus / split-resize bail the entire markdown subtree. Its core is a single `{renderItems.map(renderFeedItem)}` — **the one-owner rule** — where `renderFeedItem` is a switch over the six item types. The scarred behaviors (sticky-bottom follow, scroll-position persistence, lazy mounting via `LazyEntry` + `EAGER_TAIL` keyed on committed ordinal, older-history load, both picker auto-scroll tweens, and the feed-debug emission) live in `features/feed/ui/hooks/` — ported verbatim in the 2026-07 painter rewrite, each hook header citing its Feed.tsx region of origin. **Performance is an identity-stability story:** every row is individually memoized, and the tool-index context clones only on `toolIndexVersion` bump.
+`Feed = memo(FeedImpl)` retains the one-owner rule: the ledger-approved
+`FeedRenderItem[]` is the only input collection that may become visible rows.
+The component does not dispatch those items directly. It calls
+`projectFeedPresentation(...)`, then maps the returned `PresentationNode[]`
+through one exhaustive `PresentationRow` painter. Sticky follow, persisted
+scroll position, lazy mounting, older-history loading, picker scrolling, and
+debug emission remain in `features/feed/ui/hooks/`; the presentation rewrite
+does not own or duplicate those behaviors.
 
-### Row dispatch — the artifact layer (2026-07 RENDER rewrite)
+The projection is intentionally not another reducer or store. It is a pure,
+replayable adapter over the clean items and read-only correlation indexes. It
+may pair a tool result with its call, merge live and committed evidence, and
+classify provider vocabulary into user intent. It may not reorder, suppress,
+or resurrect sources. Every source produces a `ProjectionReceipt`: painted,
+absorbed into a named operation, or represented by an explicit fallback.
 
-`EntryRow` → (`CompactBoundaryRow` / `CompactSummaryRow` / `TaskNotificationRow` / `ConversationRow` / `SystemRow`). `ConversationRow` renders array content as one `Block` per content-block. From `Block` (committed) and `SemanticLiveBlockRow` (live) down, dispatch is no longer two parallel ladders — the drift machine the 2026-07 audit flagged. Both planes normalize into **one `ArtifactVM` per logical artifact** and every family renders through **exactly one card**:
+### The post-ledger operation layer (2026-07 ground-up rewrite)
 
-- **`features/feed/ui/artifacts/types.ts`** — the `ArtifactVM` discriminated union. Every VM carries `status: streaming | running | complete | error` and `plane` (debug provenance ONLY — a card that branches on plane is reintroducing the fork).
-- **`features/feed/ui/resolve/`** — pure, decision-free derivation. `registry.ts` is the ONE family-routing table (`routeFamily`, total — unknown names are `generic`, never hidden) plus `RESULT_CONSUMING_FAMILIES` (families whose card consumes the paired tool_result; the committed result block is suppressed for exactly these — one predicate, both branches) and `isLegacyProviderClaimed` (opencode `read` keeps its tag-soup result parser). `fromCommitted.ts` / `fromLive.ts` produce identical VMs from `ToolUseBlock`+result pairs and `SemanticLiveBlock`+snapshot respectively.
-- **`features/feed/ui/artifacts/`** — one card per family: `CommandCard` (Bash/exec/local_shell/stdin — ANSI output, exit badges, Codex parsed-read summaries), `DiffCard` (Edit/MultiEdit/apply_patch over `DiffView`), `FileWriteCard` (live-highlighted streaming writes), `ReadCard` (Read/Grep/Glob/LS one-liners with expandable source), `TodoCard`, `WebCard`, `ImageGenCard`, `SlashCommandRow` (parses the `<command-name>` envelope out of user text), `ThinkingBlock` (one renderer, both planes; redacted gets an explicit pill), and `GenericToolCard` — THE one fallback (MCP rides it with a server pill).
-- **`features/feed/ui/kit/`** — the streaming-safe primitives underneath: `StreamingCodeBlock` (sealed-line hljs cache — a sealed line never re-tokenizes, only the live tail line re-renders per delta; NO Monaco on the live path, ever — the per-delta Monaco remount was the 2026-07 rewrite's headline defect), `SegmentedMarkdown` (the sealed prefix through the last CLOSED fence parses once; only the tail re-parses per delta), `AnsiText` (SGR subset on the terminal palette), `OutputWell` (the one collapsible output region, loud truncation), `DiffView` (per-line tint + syntax highlight, windowed for huge diffs), `StatusBadge`, `ExpandSection` (first-open Monaco gating).
+The deleted architecture had two React dispatch trees: committed
+`ConversationRow -> Block` and live `SemanticLiveBlockRow -> BlockRow`, plus
+provider-specific result dispatch. That made the same command or edit change
+component type at commit and let provider additions drift. The replacement is
+small and deliberately finite:
 
-Provider knowledge lives in **extractors, not JSX**: `providers/{claude,codex}/renderer/extractors.ts` (slash envelope, edit partials, apply_patch grammar, exec/exit metadata). The capability table no longer has `renderToolUse`; `renderToolResult` survives only for unpaired results (Codex meta-keyed rows) and legacy-claimed tools. Pre-routing interceptions (git-intent cards, spawn tools → `TaskSubagentRow`, AskUserQuestion) stay ahead of the family table in `Block`/`BlockRow`.
+- **`features/feed/presentation/types.ts`** — the `PresentationNode` union,
+  operation lifecycle/families, `OperationVM`, and projection receipts.
+- **`features/feed/presentation/classifyOperation.ts`** — the single mapping
+  from provider names and structural input evidence to user-intent families.
+  Unknown tools are `generic`; incomplete unified input is `preparing`.
+- **`features/feed/presentation/projectBlock.ts`** — provider-neutral adapters
+  for live calls, committed calls, and standalone results. These adapters are
+  extraction seams, not React dispatch.
+- **`features/feed/presentation/projectFeed.ts`** — correlation and total
+  projection from already-approved feed items. Live and committed records with
+  the same provider call id become one operation id.
+- **`features/feed/ui/operations/PresentationRow.tsx`** — the exhaustive
+  top-level painter for messages, thinking, images, operations, grouped
+  activity, system rows, and visible fallbacks.
+- **`features/feed/ui/operations/OperationRow.tsx`** — the one operation shell
+  from first structurally useful prefix through terminal result. It selects a
+  rich family body or the structured generic body, but provider names never
+  select a parallel component tree.
+- **`features/feed/ui/artifacts/`** — rich bodies only where the user gains
+  material information: command output, file diffs/writes/reads, plans, web,
+  images, slash commands, and thinking.
+- **`features/feed/ui/kit/`** — locally owned, provider-agnostic primitives:
+  sealed-line code, semantic-token text, diff rows, ANSI output, structured
+  output, status, and disclosure. This follows the source-ownership part of the
+  shadcn model; it is not a component framework or runtime dependency.
 
-**Streaming ≈ final, by construction:** the same card renders `status:'streaming'` and `status:'complete'`; a tool finishing is a props flip, never a component swap or remount. Everything hangs off **`MarkerRow`** — the universal `❯` / `⏺` / `⎿` fixed-marker-column + hanging-indent primitive — and the single "agent is working" affordance is **`WorkIndicator`**, driven solely by `streamPhase`.
+Provider knowledge lives in pure extractors, never provider JSX. In
+particular, the Codex unified `exec` wrapper is scanned without evaluation so a
+declared apply-patch payload, command, terminal continuation, web call, plan,
+question, image call, collaboration call, or MCP invocation can be useful
+before its generated JavaScript seals. Claude Edit/MultiEdit/Write strings are
+decoded from partial JSON for the same reason. The raw wrapper remains debug
+evidence; it is not the normal user-facing operation.
+
+**Streaming and final are one identity:** an operation is keyed as
+`operation:<provider>:<correlationId>`. Later evidence enriches its VM and
+changes lifecycle; it does not create a replacement row. Rich formatters sit
+above retained raw output, never instead of it. Everything still composes from
+**`MarkerRow`**, and **`WorkIndicator`** remains the single global busy
+affordance driven by upstream `streamPhase`.
 
 ---
 
@@ -233,10 +285,12 @@ This is why typing in the composer never re-parses the transcript's markdown, an
 | ledger → feed bridge | `features/feed/ledger/ledgerFeedItems.ts` + `useLedgerFeedItems.ts` |
 | the painter | `features/feed/ui/Feed.tsx` |
 | the item contract | `features/feed/model/renderModel.ts` |
-| row dispatch | `features/feed/ui/rows/{EntryRow,ConversationRow,Block}.tsx` |
-| the artifact layer | `features/feed/ui/artifacts/types.ts` + `features/feed/ui/resolve/registry.ts` |
+| post-ledger projection | `features/feed/presentation/{types,classifyOperation,projectBlock,projectFeed}.ts` |
+| top-level painting | `features/feed/ui/operations/PresentationRow.tsx` |
+| operation shell | `features/feed/ui/operations/OperationRow.tsx` |
+| rich operation bodies | `features/feed/ui/artifacts/` |
 | streaming primitives | `features/feed/ui/kit/` |
-| live rows | `features/feed/ui/semantic/BlockRow.tsx` |
+| low-level live activity/interaction rows | `features/feed/ui/semantic/` |
 | the layout primitive | `features/feed/ui/MarkerRow.tsx` |
 | machine-checked invariants | `rendering/replay/invariants.ts` |
 

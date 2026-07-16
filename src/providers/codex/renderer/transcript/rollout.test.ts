@@ -86,4 +86,72 @@ describe('mapCodexRolloutToFeedEntries', () => {
       content: 'Success. Updated the following files:\nM src/example.ts',
     })
   })
+
+  it('maps the real tool-search call/output protocol onto one correlation id', () => {
+    const callEntries = mapCodexRolloutToFeedEntries({
+      type: 'response_item',
+      timestamp: '2026-07-12T11:13:00.000Z',
+      payload: {
+        type: 'tool_search_call',
+        call_id: 'search-1',
+        execution: 'client',
+        status: 'in_progress',
+        arguments: { query: 'calendar create', limit: 1 },
+      },
+    })
+    const outputEntries = mapCodexRolloutToFeedEntries({
+      type: 'response_item',
+      timestamp: '2026-07-12T11:13:01.000Z',
+      payload: {
+        type: 'tool_search_output',
+        call_id: 'search-1',
+        execution: 'client',
+        status: 'completed',
+        tools: [{ name: 'mcp__calendar__create_event', description: 'Create an event' }],
+      },
+    })
+
+    expect(callEntries).toHaveLength(1)
+    expect(outputEntries).toHaveLength(1)
+    const callEntry = callEntries[0]
+    const outputEntry = outputEntries[0]
+    if (
+      !callEntry ||
+      !outputEntry ||
+      !isConversationEntry(callEntry) ||
+      !isConversationEntry(outputEntry) ||
+      !Array.isArray(callEntry.message.content) ||
+      !Array.isArray(outputEntry.message.content)
+    ) {
+      throw new Error('expected tool-search call/result conversation entries')
+    }
+
+    expect(callEntry.message.content[0]).toMatchObject({
+      type: 'tool_use',
+      id: 'search-1',
+      name: 'tool_search',
+      input: {
+        query: 'calendar create',
+        limit: 1,
+        execution: 'client',
+        status: 'in_progress',
+      },
+    })
+    expect(outputEntry.message.content[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'search-1',
+      is_error: false,
+      codex: {
+        kind: 'tool_search_output',
+        status: 'completed',
+        execution: 'client',
+        tools: [{ name: 'mcp__calendar__create_event' }],
+      },
+    })
+    expect(JSON.parse(String(
+      (outputEntry.message.content[0] as { content?: unknown }).content,
+    ))).toEqual([
+      { name: 'mcp__calendar__create_event', description: 'Create an event' },
+    ])
+  })
 })

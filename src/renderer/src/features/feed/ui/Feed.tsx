@@ -3,7 +3,6 @@ import {
   type TaskNotification,
 } from '@renderer/session-runtime/taskNotification'
 import { TaskNotificationsContext } from '@renderer/features/feed/context'
-import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import {
   memo,
   useMemo,
@@ -18,11 +17,8 @@ import type {
   SemanticLiveTurn,
   StreamPhase,
 } from '@renderer/session-runtime/state'
-import { WorkIndicator } from '@renderer/features/feed/WorkIndicator'
 import { toolHintFromTurn } from '@renderer/features/feed/workIndicatorHints'
 import {
-  ProviderContext,
-  ToolUseIndexContext,
   ToolResultIndexContext,
   CodeRenderContext,
   SubAgentsContext,
@@ -41,21 +37,16 @@ import {
   feedRenderModelFromItems,
   type FeedRenderItem,
 } from '@renderer/features/feed/model/renderModel'
-import {
-  SemanticLiveBlockRow,
-  SemanticCollapsedActivityRow,
-} from '@renderer/features/feed/ui/semantic'
-import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
-import { SegmentedMarkdown } from '@renderer/features/feed/ui/kit/SegmentedMarkdown'
 import { semanticTurnScrollSignal } from '@renderer/session-runtime/semantic/helpers'
 import { useFeedDebugEmission } from '@renderer/features/feed/ui/hooks/useFeedDebugEmission'
 import { usePickerAutoScroll } from '@renderer/features/feed/ui/hooks/usePickerAutoScroll'
 import { useScrollFeedBehaviors } from '@renderer/features/feed/ui/hooks/useScrollFeedBehaviors'
 import {
   EAGER_TAIL,
-  EntryRow,
   LazyEntry,
 } from '@renderer/features/feed/ui/rows'
+import { projectFeedPresentation } from '@renderer/features/feed/presentation/projectFeed'
+import { PresentationRow } from '@renderer/features/feed/ui/operations/PresentationRow'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { SubAgentState } from '@renderer/session-runtime/state'
 import type { ClaudeAskUserQuestionState } from '@shared/types/providerConditions'
@@ -97,11 +88,10 @@ export type { AgentProvider, ScrollInfo } from '@renderer/features/feed/types'
 // creep back under the marker. Standard hanging-indent pattern.
 // -----------------------------------------------------------------------------
 
-// COMPLETED_REMARK / STREAMING_REMARK moved to ../lib/remark-plugins.ts
-// ProviderContext + ToolUseIndexContext + ToolResultIndexContext +
-// CodeRenderContext moved to ../context.tsx — see those files for
-// the full rationale. Feed.tsx re-exports CodeRenderContext above
-// to keep external import paths stable.
+// Session-wide result/subagent/question/code metadata lives in context.tsx.
+// Provider identity, source pairing, and operation family are structural fields
+// on the pure presentation projection; putting those back in context would
+// recreate the implicit two-plane dispatch this rewrite removed.
 
 // MarkdownPre / MarkdownCode / MARKDOWN_COMPONENTS moved to
 // ./markdown/MarkdownComponents.tsx. TextProse and StreamingProse
@@ -259,23 +249,21 @@ type Props = {
 //      and semantic-turn references, and React.memo's default shallow
 //      compare bails the entire subtree out. Zero markdown work happens.
 //
-//   2. Every row component (`EntryRow`, `ConversationRow`, `TextProse`,
-//      artifact cards, `ToolResultRow`) is individually memoized. Even when
-//      Feed DOES need to re-render (new entry lands, streaming frame
-//      ticks), existing rows receive the exact same entry/block/text
-//      reference they had last time and skip. Only the genuinely new
-//      row does parse work. This matters because entries are appended,
-//      not replaced — we spread `[...current.entries, newOne]`, so the
-//      array reference is fresh but every existing element is stable.
+//   2. Expensive leaves (`TextProse`, artifact bodies, code surfaces) remain
+//      memoized, and PresentationRow uses a semantic comparator rather than
+//      trusting the projector to preserve object identity. The projector is a
+//      pure derivation, so it intentionally returns fresh VMs; comparing their
+//      stable source evidence keeps old committed rows cold while one live
+//      operation advances. This matters because the feed can contain hundreds
+//      of restored rows beside one token-level stream.
 //
 // TextProse/StreamingProse are the hottest leaf; memoizing them by the
 // `text` string is the single biggest win because ReactMarkdown itself
 // has no memo and re-parses on every call.
 //
-// Live semantic rows are not flattened into committed entries on purpose.
-// They re-render when the semantic reducer changes the active/history
-// turns, but the markdown leaf (`StreamingProse`) is still memoed by
-// text so identical consecutive semantic ticks are cheap.
+// Live semantic evidence remains separate until the frozen ownership layer
+// hands it to the presentation projector. Only the advancing projected node
+// should invalidate; committed siblings must not inherit stream cadence.
 
 export const Feed = memo(FeedImpl)
 
@@ -363,9 +351,9 @@ function FeedImpl({
   // reference. Returning that reference straight through means the context
   // Provider value identity never changes when only a cross-entry pairing moves
   // (a tool_result landing in a later entry for a tool_use row mounted earlier),
-  // so memoized rows like GitCardRow keep painting their stale running/empty
-  // state. Cloning into a fresh Map gives the context a new identity that forces
-  // those consumers to re-read. The clone is O(N) but the dependency is
+  // so the presentation useMemo would otherwise keep a stale OperationVM.
+  // Cloning into a fresh Map invalidates the projector and the one durable
+  // TaskSubagent context consumer. The clone is O(N) but the dependency is
   // `toolIndexVersion` (bumped only on a REAL map change), NOT `entries`, so it
   // runs once per actual tool change — not once per append. That preserves the
   // bootstrap-burst performance win this incremental index was built for.
@@ -428,7 +416,64 @@ function FeedImpl({
 
   const visibleDecisions = renderModel.visibleDecisions
   const renderItems = renderModel.items
-  const renderedRows = renderModel.debugRows
+  // The ledger above remains the sole owner/visibility/order authority. This
+  // second pure projection is intentionally presentation-only: it pairs the
+  // already-approved live/committed evidence into stable user-intent rows and
+  // produces receipts for debug accountability. It owns no store and performs
+  // no IO, so a saved FeedRenderItem fixture reproduces the exact UI model.
+  const presentation = useMemo(
+    () => projectFeedPresentation({
+      items: renderItems,
+      provider,
+      toolUseIndex,
+      toolResultIndex,
+    }),
+    [provider, renderItems, toolResultIndex, toolUseIndex],
+  )
+  const renderedRows = useMemo<DebugVisibleRow[]>(
+    () => presentation.nodes.map(node => {
+      const slot: DebugVisibleRow['slot'] =
+        node.kind === 'system' && node.system.type === 'work'
+          ? 'work'
+          : node.kind === 'system' && node.system.type === 'empty'
+            ? 'empty'
+            : node.entryOrdinal !== null
+              ? 'entry'
+              : 'semantic'
+      const label = (() => {
+        switch (node.kind) {
+          case 'operation':
+            return `${node.operation.family} · ${node.operation.toolName} · ${node.operation.lifecycle}`
+          case 'operation-group':
+            return `collaboration · ${node.operationIds.length} agents`
+          case 'message':
+            return `${node.role} message${node.streaming ? ' (streaming)' : ''}`
+          case 'thinking':
+            return node.redacted ? 'thinking (redacted)' : `thinking${node.streaming ? ' (streaming)' : ''}`
+          case 'image':
+            return `${node.role} image`
+          case 'activity':
+            return `worked · ${node.unit.count} operations`
+          case 'fallback':
+            return `fallback · ${node.label}`
+          case 'system':
+            return node.system.type === 'entry'
+              ? `system · ${node.system.entry.type}`
+              : node.system.type === 'work'
+                ? `work · ${node.system.phase}`
+                : `waiting for ${node.system.provider}`
+        }
+      })()
+      return {
+        key: node.id,
+        slot,
+        label,
+        itemType: `presentation:${node.kind}`,
+        order: node.order,
+      }
+    }),
+    [presentation.nodes],
+  )
   const visibleEntryCount = renderItems.filter(item => item.type === 'entry').length
   // #491: semantic items are now block-level (semantic-block/-collapsed-activity/
   // -text), each tagged with its turn's owner. Derive the same debug signals the
@@ -476,105 +521,61 @@ function FeedImpl({
     semanticTurnId: semanticTurn?.turnId ?? null,
     renderedSemanticHistoryTurnIds,
     streamPhase,
+    projectionReceipts: presentation.receipts,
   })
 
-  const renderFeedItem = (item: FeedRenderItem) => {
-    switch (item.type) {
-      case 'entry': {
-        const e = item.entry
-        const uuid = e.uuid
-        const selected =
-          pickerSelectedUuid != null && uuid === pickerSelectedUuid
-        // WHY eager rendering keys off committed-entry ordinal, not
-        // render-item index: semantic/work rows now live in the
-        // same ordered list, but markdown parse cost still belongs to
-        // committed entries. Counting non-entry rows here would make a
-        // busy turn accidentally lazy-mount the newest committed prompt.
-        const eager = item.entryOrdinal >= visibleEntryCount - EAGER_TAIL
-        return (
-          <div
-            key={item.key}
-            data-entry-uuid={uuid ?? undefined}
-            className={
-              selected
-                ? 'outline outline-2 outline-accent outline-offset-2 transition-[outline-color] duration-150'
-                : undefined
-            }
-          >
-            <LazyEntry
-              eager={eager}
-              suspended={bootstrapping}
-              scrollerRef={scrollerRef}
-            >
-              <EntryRow entry={e} />
-            </LazyEntry>
-          </div>
-        )
-      }
-      case 'semantic-block':
-        // #491: the ledger already decided this block is visible; the row is a
-        // pure drawer (no suppression). SemanticLiveBlockRow renders the exact
-        // per-kind streaming affordances it always did.
-        return (
-          <SemanticLiveBlockRow
-            key={item.key}
-            block={item.block}
-            toolState={item.toolState}
-          />
-        )
-      case 'semantic-collapsed-activity':
-        return <SemanticCollapsedActivityRow key={item.key} unit={item.unit} />
-      case 'semantic-text':
-        // Blockless Codex/opencode turn text — the legacy no-blocks path.
-        // SegmentedMarkdown so a growing turn doesn't re-parse its whole
-        // markdown per delta and open fences stream highlighted.
-        return (
-          <MarkerRow key={item.key} marker="⏺">
-            <SegmentedMarkdown text={item.text} blockKey={`sem-text:${item.turnId}`} />
-          </MarkerRow>
-        )
-      case 'work':
-        return (
-          <WorkIndicator
-            key={item.key}
-            phase={item.phase}
+  const renderPresentationNode = (node: (typeof presentation.nodes)[number]) => {
+    // Every node uses LazyEntry, including ephemeral semantic nodes. WHY: an
+    // operation can switch from semantic evidence (no entry ordinal) to a
+    // committed entry while retaining its correlation key. Keeping the wrapper
+    // component type constant prevents that hand-off from remounting the
+    // OperationRow and losing expansion/scroll state. Semantic/work nodes are
+    // eager, so they still render immediately.
+    const eager =
+      node.entryOrdinal === null ||
+      node.entryOrdinal >= visibleEntryCount - EAGER_TAIL
+    const work = node.kind === 'system' && node.system.type === 'work'
+      ? node.system
+      : null
+    return (
+      <div
+        key={node.id}
+        data-entry-uuid={node.entryUuid ?? undefined}
+        data-presentation-kind={node.kind}
+      >
+        <LazyEntry
+          eager={eager}
+          suspended={bootstrapping}
+          scrollerRef={scrollerRef}
+        >
+          <PresentationRow
+            node={node}
             turnStartedAt={turnStartedAt}
-            toolName={item.toolName}
-            toolHint={toolHintFromTurn(renderedSemanticTurn, item.toolUseId)}
+            toolHint={work
+              ? toolHintFromTurn(renderedSemanticTurn, work.toolUseId)
+              : null}
           />
-        )
-      case 'empty':
-        return (
-          <div
-            key={item.key}
-            className="flex min-h-[240px] flex-1 items-center justify-center"
-          >
-            <div className="text-muted text-[12px]">
-              {`waiting for ${getRendererProviderCapabilities(item.provider).name}…`}
-            </div>
-          </div>
-        )
-    }
+        </LazyEntry>
+      </div>
+    )
   }
 
   return (
-    <ProviderContext.Provider value={provider}>
-    <ToolUseIndexContext.Provider value={toolUseIndex}>
     <ToolResultIndexContext.Provider value={toolResultIndex}>
-    <SubAgentsContext.Provider value={subAgents}>
-    <TaskNotificationsContext.Provider value={taskNotifications}>
-    <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
-    <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
-      <div
-        ref={scrollerRef}
-        className="h-full overflow-auto @container"
-        onWheel={() => {
-          onUserEngagement?.()
-        }}
-        onPointerDown={() => {
-          onUserEngagement?.()
-        }}
-      >
+      <SubAgentsContext.Provider value={subAgents}>
+        <TaskNotificationsContext.Provider value={taskNotifications}>
+          <AskUserQuestionConditionContext.Provider value={askUserQuestionState}>
+            <CodeRenderContext.Provider value={{ sessionId, workspaceRoot }}>
+              <div
+                ref={scrollerRef}
+                className="relative h-full overflow-auto @container"
+                onWheel={() => {
+                  onUserEngagement?.()
+                }}
+                onPointerDown={() => {
+                  onUserEngagement?.()
+                }}
+              >
         {/* Container-query responsive (mobile-feed-rewrite Part A). This node
          *  is SHARED with the desktop and with narrow tiled panes, so the
          *  WIDEST step (@min-[768px]) restores the historical desktop classes
@@ -584,7 +585,7 @@ function FeedImpl({
          *  screen. The scroller above carries `@container` so these variants
          *  respond to the FEED's own width, not the viewport — which is why a
          *  narrow desktop tile benefits identically to a phone. */}
-        <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
+                <div className="min-h-full flex flex-col gap-4 mx-auto px-3 pt-3 pb-6 @min-[480px]:px-5 @min-[480px]:pt-5 @min-[768px]:max-w-[880px] @min-[768px]:px-8 @min-[768px]:pt-6 @min-[768px]:pb-8">
           {/* ONE owner rule for every visible feed surface.
            *
            * The old JSX rendered separate buckets in a fixed order:
@@ -598,41 +599,23 @@ function FeedImpl({
            * eagerness all share one render contract. Queued prompts
            * remain composer-adjacent because they are pending input,
            * not transcript history. */}
-          {renderItems.map(renderFeedItem)}
-          <div ref={endRef} />
-        </div>
-      </div>
-    </CodeRenderContext.Provider>
-    </AskUserQuestionConditionContext.Provider>
-    </TaskNotificationsContext.Provider>
-    </SubAgentsContext.Provider>
+                  {presentation.nodes.map(renderPresentationNode)}
+                  <div ref={endRef} />
+                </div>
+                {/* The assistant picker spans several flattened nodes without
+                    wrapping/reparenting them. This empty host is deliberately
+                    outside the keyed row list; the hook owns its one transient
+                    overlay and cleans it on selection change. */}
+                <div
+                  data-entry-selection-layer
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 z-10"
+                />
+              </div>
+            </CodeRenderContext.Provider>
+          </AskUserQuestionConditionContext.Provider>
+        </TaskNotificationsContext.Provider>
+      </SubAgentsContext.Provider>
     </ToolResultIndexContext.Provider>
-    </ToolUseIndexContext.Provider>
-    </ProviderContext.Provider>
   )
 }
-
-// Semantic streaming section moved to ./semantic/ — see those files for the
-// full rationale on each component. Feed.tsx now imports only
-// SemanticStreamingTurn (the orchestrator) via ./semantic/index.ts.
-// SemanticTaskSummary + SemanticTurnFooter were deleted in the
-// 2026-04-18 thinking-indicator rework (dead code; see the comment
-// inside StreamingTurn.tsx for why).
-
-// ---------------------------------------------------------------------------
-// Row components moved to ./rows/
-// ---------------------------------------------------------------------------
-//
-// The entire row surface (LazyEntry, EntryRow, ConversationRow, Block,
-// ImageBlockRow, CompactBoundaryRow, CompactSummaryRow, SystemRow,
-// ToolResultRow, UserBand,
-// plus the EAGER_TAIL constant) moved to ./rows/. Each component lives
-// in its own file, and the long WHY comments (lazy mount rationale,
-// the "CRITICAL: don't wrap tool_results in UserBand" gotcha, the
-// Read/Grep/Edit result-rendering taxonomy, the bash headline cap,
-// etc.) travelled with the code. Feed.tsx now imports EAGER_TAIL +
-// EntryRow + LazyEntry through ./rows/index.ts — the rest are internal
-// to the rows tree. The "Streaming row REMOVED" + "Activity indicator
-// REMOVED" rationale blocks that used to live at the tail of this
-// file are folded into ./semantic/StreamingTurn.tsx + ./WorkIndicator.tsx
-// where those replacements actually live.

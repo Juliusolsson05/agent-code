@@ -83,6 +83,8 @@ export function commandFromLive(
   const command =
     unified?.kind === 'wait'
       ? 'Waited for background terminal'
+      : block.toolName === 'wait' || block.toolName === 'wait_terminal'
+        ? 'Waited for background terminal'
       : shell?.command?.join(' ') ??
         exec?.command ??
         (typeof parsed?.command === 'string' ? parsed.command : null)
@@ -105,7 +107,7 @@ export function commandFromLive(
     cwd: shell?.workingDirectory ?? exec?.workdir ?? null,
     description: typeof parsed?.description === 'string' ? parsed.description : null,
     sourceTool:
-      unified?.kind === 'wait'
+      unified?.kind === 'wait' || block.toolName === 'wait' || block.toolName === 'wait_terminal'
         ? 'wait'
         : block.kind === 'local_shell_call'
           ? 'local_shell_call'

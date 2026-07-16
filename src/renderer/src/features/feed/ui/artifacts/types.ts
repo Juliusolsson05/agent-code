@@ -95,6 +95,17 @@ export type FileEditArtifact = ArtifactBase & {
   }>
   /** Raw streaming input to show until parseable (live plane only). */
   rawStreamingInput: string | null
+  /** Whether the visible diff/raw input is authoritative or a bounded live
+   * prediction. Keeping this as one discriminant prevents a card from claiming
+   * its lines are both exact and capped. */
+  previewState: 'receiving' | 'partial' | 'capped' | 'exact'
+  /** Exact provider bytes retained only when a safety cap hides part of the
+   * normal live preview. The card mounts them lazily in a debug disclosure. */
+  sourceInput: string | null
+  /** Exact decoded apply_patch grammar used to derive patchFiles. Kept only for
+   *  an explicit debug/source disclosure so a helpful diff never consumes the
+   *  evidence it interpreted. Null for non-patch Edit/MultiEdit operations. */
+  parsedPatchSource: string | null
   resultError: string | null
 }
 
@@ -103,6 +114,10 @@ export type FileWriteArtifact = ArtifactBase & {
   filePath: string | null
   content: string
   lineCount: number
+  /** Whether `content` is authoritative or a bounded live prefix. This is a
+   *  discriminant rather than independent booleans so the card cannot claim a
+   *  preview is both exact and truncated. */
+  contentState: 'receiving' | 'partial' | 'capped' | 'exact'
 }
 
 export type ReadArtifact = ArtifactBase & {
@@ -112,6 +127,10 @@ export type ReadArtifact = ArtifactBase & {
   target: string | null
   pattern: string | null
   resultText: string | null
+  /** Exact provider result when presentation removes transport markup or a
+   *  line-number gutter. Kept behind a lazy debug disclosure so normalization
+   *  improves the primary view without consuming the source evidence. */
+  sourceResultText: string | null
   resultIsError: boolean
 }
 

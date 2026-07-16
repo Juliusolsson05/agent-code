@@ -107,7 +107,9 @@ export function commandFromCommitted(
     startedAt: null,
     endedAt: null,
     command:
-      tu.name === 'write_stdin'
+      tu.name === 'wait' || tu.name === 'wait_terminal'
+        ? 'Waited for background terminal'
+        : tu.name === 'write_stdin'
         ? '(stdin)'
         : extractToolCommand(tu) ?? '(no command)',
     cwd:
@@ -119,13 +121,15 @@ export function commandFromCommitted(
           : null),
     description:
       typeof input?.description === 'string' ? input.description : null,
-    sourceTool: (tu.name === 'Bash' ||
+    sourceTool: (tu.name === 'wait' || tu.name === 'wait_terminal'
+      ? 'wait'
+      : tu.name === 'Bash' ||
       tu.name === 'bash' ||
       tu.name === 'exec_command' ||
       tu.name === 'local_shell_call' ||
       tu.name === 'write_stdin'
-      ? tu.name
-      : 'Bash') as CommandArtifact['sourceTool'],
+        ? tu.name
+        : 'Bash') as CommandArtifact['sourceTool'],
     output: result ? toolResultText(result) : null,
     exitCode,
     durationMs,

@@ -1,8 +1,10 @@
 import { memo, useMemo, useState } from 'react'
 
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
+import { CodeBlock } from '@renderer/lib/code/CodeBlock'
 
 import { AnsiText } from './AnsiText'
+import { ExpandSection } from './ExpandSection'
 
 // The single collapsible output region for command/tool output — the
 // kit successor to BOTH TruncatedOutputRow copies (the shared one at
@@ -46,10 +48,15 @@ export const OutputWell = memo(function OutputWell({
     if (text.length <= MAX_RENDER_CHARS) {
       return { capped: text, cappedNotice: null as string | null }
     }
-    const dropped = text.slice(MAX_RENDER_CHARS).split('\n').length
+    const droppedChars = text.length - MAX_RENDER_CHARS
     return {
       capped: text.slice(0, MAX_RENDER_CHARS),
-      cappedNotice: `… output truncated (${dropped} more ${dropped === 1 ? 'line' : 'lines'})`,
+      // Character count is honest for the important one-long-line case. Calling
+      // a sliced continuation "one more line" made the old notice both vague and
+      // invisible because line-window expansion never activated.
+      cappedNotice:
+        `Display capped at ${MAX_RENDER_CHARS.toLocaleString()} characters ` +
+        `(${droppedChars.toLocaleString()} more ${droppedChars === 1 ? 'character' : 'characters'} preserved).`,
     }
   }, [text])
 
@@ -76,10 +83,12 @@ export const OutputWell = memo(function OutputWell({
         `}
       >
         {ansi ? <AnsiText text={shown} /> : shown}
-        {expanded && cappedNotice ? (
-          <span className="text-muted">{`\n${cappedNotice}`}</span>
-        ) : null}
       </pre>
+      {cappedNotice ? (
+        <div className="mt-1 text-[11px] text-muted" role="status">
+          {cappedNotice}
+        </div>
+      ) : null}
       {needsTruncation && !expanded && (
         <>
           <button
@@ -108,6 +117,18 @@ export const OutputWell = memo(function OutputWell({
           collapse
         </button>
       )}
+      {cappedNotice ? (
+        <div className="mt-1">
+          <ExpandSection summary="Full output source (copyable)">
+            {/* WHY render the original `text` instead of the capped display:
+                output clipping is a DOM/memory safety policy, not permission to
+                destroy evidence. This subtree is lazy, so pathological output
+                remains cheap while closed; CodeBlock registers the exact bytes
+                with the existing Copy Code Block command once opened. */}
+            <CodeBlock code={text} language="plaintext" highlight={false} />
+          </ExpandSection>
+        </div>
+      ) : null}
     </MarkerRow>
   )
 })

@@ -26,6 +26,18 @@ import { useEffect, useRef, type RefObject } from 'react'
 // apart in the first place.
 
 const OUTLINE_CLASSES = ['outline', 'outline-2', 'outline-accent', 'outline-offset-2']
+const ENTRY_OVERLAY_CLASSES = [
+  'pointer-events-none',
+  'absolute',
+  'z-10',
+  'rounded',
+  'outline',
+  'outline-2',
+  'outline-accent',
+  'outline-offset-2',
+  'transition-[outline-color]',
+  'duration-150',
+]
 
 export function usePickerAutoScroll({
   scrollerRef,
@@ -75,17 +87,59 @@ export function usePickerAutoScroll({
     scrollAnimFrameRef.current = requestAnimationFrame(step)
   }
 
-  // Copy Assistant Message picker — center the selected entry.
+  // Copy Assistant Message picker — center the selected logical entry.
   useEffect(() => {
     if (!pickerSelectedUuid) return
     const root = scrollerRef.current
     if (!root) return
-    const target = root.querySelector(
-      `[data-entry-uuid="${pickerSelectedUuid}"]`,
-    ) as HTMLElement | null
-    if (!target) return
-    tweenTo(root, target)
-    return () => cancelTweenRef.current()
+    const parts = Array.from(root.querySelectorAll<HTMLElement>('[data-entry-uuid]'))
+      .filter(element => element.dataset.entryUuid === pickerSelectedUuid)
+    if (parts.length === 0) return
+
+    // The projector intentionally flattens a transcript entry into independently
+    // keyed message/operation nodes so live -> committed correlation never
+    // reparents an OperationRow. A CSS class on each part produced several
+    // disconnected outlines and querySelector centered only the first block.
+    // This inert overlay spans the DOM range without changing React ancestry,
+    // preserving both picker semantics and mounted operation state.
+    const overlay = document.createElement('div')
+    overlay.dataset.entrySelectionOverlay = pickerSelectedUuid
+    overlay.setAttribute('aria-hidden', 'true')
+    overlay.classList.add(...ENTRY_OVERLAY_CLASSES)
+    // Feed provides an intentionally empty imperative layer so React never has
+    // to reconcile this transient geometry node beside keyed presentation
+    // rows. The root fallback keeps the hook reusable in isolated hosts/tests.
+    const overlayLayer =
+      root.querySelector<HTMLElement>('[data-entry-selection-layer]') ?? root
+    overlayLayer.appendChild(overlay)
+
+    const positionOverlay = () => {
+      const rootRect = root.getBoundingClientRect()
+      const rects = parts.map(part => part.getBoundingClientRect())
+      const top = Math.min(...rects.map(rect => rect.top)) - rootRect.top + root.scrollTop
+      const left = Math.min(...rects.map(rect => rect.left)) - rootRect.left + root.scrollLeft
+      const right = Math.max(...rects.map(rect => rect.right)) - rootRect.left + root.scrollLeft
+      const bottom = Math.max(...rects.map(rect => rect.bottom)) - rootRect.top + root.scrollTop
+      overlay.style.top = `${top}px`
+      overlay.style.left = `${left}px`
+      overlay.style.width = `${Math.max(0, right - left)}px`
+      overlay.style.height = `${Math.max(0, bottom - top)}px`
+    }
+    positionOverlay()
+    tweenTo(root, overlay)
+
+    // Streaming text can grow while the picker is open. Keep the highlight
+    // honest without tying selection geometry to React or polling every frame.
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(positionOverlay)
+    parts.forEach(part => observer?.observe(part))
+
+    return () => {
+      observer?.disconnect()
+      overlay.remove()
+      cancelTweenRef.current()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tweenTo reads refs only
   }, [pickerSelectedUuid])
 

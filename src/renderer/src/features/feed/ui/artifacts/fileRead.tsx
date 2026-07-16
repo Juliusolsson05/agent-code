@@ -4,6 +4,11 @@ import { formatToolFilePath } from '@shared/paths/displayPath'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import type { AgentProviderKind } from '@shared/types/providerKind'
 
+import {
+  parseOpencodeReadResult,
+  parseOpencodeReadText,
+} from '@providers/opencode/renderer/extractors'
+
 import { CodeRenderContext } from '@renderer/features/feed/context'
 import {
   stripLineNumberPrefix,
@@ -38,15 +43,17 @@ type SemanticToolCallSnapshot = SemanticLiveTurn['lookups']['toolCallsById'][str
 // results render as a monospace file list.
 
 function toolKind(name: string): ReadArtifact['kind'] {
-  if (name === 'Grep') return 'grep'
-  if (name === 'Glob') return 'glob'
-  if (name === 'LS') return 'ls'
+  const normalized = name.toLowerCase()
+  if (normalized === 'grep') return 'grep'
+  if (normalized === 'glob') return 'glob'
+  if (normalized === 'ls') return 'ls'
   return 'read'
 }
 
 function readTarget(input: Record<string, unknown> | null): string | null {
   if (!input) return null
   if (typeof input.file_path === 'string') return input.file_path
+  if (typeof input.filePath === 'string') return input.filePath
   if (typeof input.path === 'string') return input.path
   return null
 }
@@ -65,7 +72,15 @@ export function readFromCommitted(
 ): ReadArtifact {
   const input = (tu.input ?? null) as Record<string, unknown> | null
   const kind = toolKind(tu.name)
-  const rawText = result ? toolResultText(result).replace(/\s+$/, '') : null
+  const sourceText = result ? toolResultText(result) : null
+  const rawText = sourceText?.replace(/\s+$/, '') ?? null
+  const parsed =
+    provider === 'opencode' && kind === 'read' && result !== null && result.is_error !== true
+      ? parseOpencodeReadResult(result)
+      : null
+  const resultText =
+    parsed?.content ??
+    (rawText !== null && kind === 'read' ? stripLineNumberPrefix(rawText) : rawText)
   return {
     family: 'file-read',
     id: `read:${tu.id}`,
@@ -76,10 +91,12 @@ export function readFromCommitted(
     startedAt: null,
     endedAt: null,
     kind,
-    target: readTarget(input),
+    target: parsed?.path ?? readTarget(input),
     pattern: readPattern(input),
-    resultText:
-      rawText !== null && kind === 'read' ? stripLineNumberPrefix(rawText) : rawText,
+    resultText,
+    sourceResultText:
+      parsed?.rawText ??
+      (sourceText !== null && resultText !== sourceText ? sourceText : null),
     resultIsError: result?.is_error === true,
   }
 }
@@ -93,6 +110,12 @@ export function readFromLive(
   const kind = toolKind(block.toolName ?? '')
   const input = block.parsedInput ?? null
   const raw = toolState?.resultContent ?? block.resultContent ?? null
+  const parsed =
+    provider === 'opencode' && kind === 'read' && block.resultIsError !== true && raw !== null
+      ? parseOpencodeReadText(raw)
+      : null
+  const resultText =
+    parsed?.content ?? (raw !== null && kind === 'read' ? stripLineNumberPrefix(raw) : raw)
   const hasResult = block.resultAt != null || raw != null
   const status: ArtifactStatus =
     toolState?.status === 'error' || block.resultIsError === true
@@ -112,9 +135,11 @@ export function readFromLive(
     startedAt: null,
     endedAt: block.resultAt ?? null,
     kind,
-    target: readTarget(input),
+    target: parsed?.path ?? readTarget(input),
     pattern: readPattern(input),
-    resultText: raw !== null && kind === 'read' ? stripLineNumberPrefix(raw) : raw,
+    resultText,
+    sourceResultText:
+      parsed?.rawText ?? (raw !== null && resultText !== raw ? raw : null),
     resultIsError: block.resultIsError === true,
   }
 }
@@ -196,6 +221,19 @@ export const ReadCard = memo(function ReadCard({ vm }: { vm: ReadArtifact }) {
               )}
             </ExpandSection>
           </MarkerRow>
+        ) : null}
+        {vm.sourceResultText ? (
+          <ExpandSection summary="Source result (debug)">
+            {/* The clean source view is the product surface, but parsing must
+                remain auditable. This exact envelope is mounted only after an
+                explicit drill-in, avoiding duplicate Monaco/LSP work. */}
+            <CodeBlock
+              code={vm.sourceResultText}
+              language="plaintext"
+              codeId={`read-source:${vm.id}`}
+              highlight={false}
+            />
+          </ExpandSection>
         ) : null}
       </div>
     </MarkerRow>

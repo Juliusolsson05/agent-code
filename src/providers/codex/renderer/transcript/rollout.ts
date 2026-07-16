@@ -442,18 +442,13 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
     ]
   }
 
-  // Codex response_item kinds that used to fall through to `return []`
-  // even though `SemanticLiveBlockRow` has explicit live UI for each.
-  // Without committed counterparts these blocks vanish the moment the
-  // turn seals (the semantic turn unmounts) and are gone entirely on
-  // a session reload. Minimum-viable mapping: synthesize Claude-shaped
-  // tool_use / tool_result entries so the existing `CodexToolRow` /
-  // `CodexToolResultRow` dispatcher paints a row. The headlines may
-  // not match the live BlockRow UI exactly (web_search emoji, image
-  // generation chip, shell command prefix) — consider a dedicated
-  // `CodexSpecialToolRow` in a follow-up — but the block no longer
-  // disappears on commit, and the data still round-trips through disk
-  // so a reload sees the same row.
+  // Codex response_item kinds that once fell through to `return []` even
+  // though the semantic plane could show them live. Without committed
+  // counterparts they vanish at turn seal and on reload. Synthesize the
+  // common tool_use/tool_result transcript shape here; the post-ledger
+  // presentation projector then correlates live and committed evidence into
+  // the same OperationVM. Provider transcript code preserves information but
+  // deliberately does not choose a React component.
 
   if (payload.type === 'web_search_call') {
     const callId =
@@ -465,9 +460,9 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
       stringField(action, 'url')
     const kind =
       stringField(action, 'type') ?? 'search'
-    // `description` is the field headlineForTool falls back to when
-    // the tool has no `command` / `path` / `arguments`. Pack a
-    // human-readable label so CodexToolRow shows something useful.
+    // Preserve a human-readable description in the common input shape. The
+    // presentation projector classifies this as web work and its shared card
+    // can show useful intent without understanding the rollout action object.
     const description =
       kind === 'search' && query
         ? `Search: ${query}`
@@ -529,28 +524,60 @@ export function mapCodexRolloutToFeedEntries(entry: Record<string, unknown>): En
 
   if (payload.type === 'tool_search_call') {
     const callId =
-      typeof payload.id === 'string' ? payload.id : `tool_search:${uuid}`
+      // Client-executed tool search is correlated by call_id in Codex's actual
+      // ResponseItem schema. `id` is an optional/legacy server-item identity and
+      // is commonly absent, so preferring it (and otherwise inventing a uuid)
+      // guaranteed the later tool_search_output could not join this operation.
+      // Keep `id` only as a compatibility fallback for older server payloads.
+      stringField(payload, 'call_id') ??
+      stringField(payload, 'id') ??
+      `tool_search:${uuid}`
     const status =
       stringField(payload, 'status') ?? 'unknown'
+    const execution = stringField(payload, 'execution')
+    const argumentsRecord = asRecord(payload.arguments)
+    // Preserve the searched query/namespace/limit as the operation's real input.
+    // The old synthetic description discarded precisely the intent users need
+    // from a structured tool-search row. Protocol lifecycle fields are folded in
+    // beside (not instead of) those arguments so restored status remains total.
+    const input: Record<string, unknown> = {
+      ...(argumentsRecord ?? (
+        payload.arguments === undefined ? {} : { arguments: payload.arguments }
+      )),
+      status,
+      ...(execution ? { execution } : {}),
+    }
     return [
-      codexToolUseEntry(uuid, timestamp, callId, 'tool_search', {
-        description: `Tool search (${status})`,
-        status,
-      }),
+      codexToolUseEntry(uuid, timestamp, callId, 'tool_search', input),
     ]
   }
 
   if (payload.type === 'tool_search_output' && typeof payload.call_id === 'string') {
-    const output = codexOutputText(payload.output)
-    if (!output.trim()) return []
+    const status = stringField(payload, 'status') ?? 'completed'
+    const execution = stringField(payload, 'execution')
+    const hasProtocolTools = Array.isArray(payload.tools)
+    const output = payload.output !== undefined
+      ? codexOutputText(payload.output)
+      : hasProtocolTools
+        // ToolSearchOutput's real wire field is `tools`, not `output`. Preserve
+        // even an empty list: `[]` is still the explicit terminal receipt that
+        // stops the paired search card from spinning forever after reload.
+        ? JSON.stringify(payload.tools, null, 2)
+        : ''
+    if (!output.trim() && !hasProtocolTools) return []
     return [
       codexToolResultEntry(
         uuid,
         timestamp,
         payload.call_id,
         output,
-        false,
-        { kind: 'tool_search_output' },
+        status === 'error' || status === 'failed' || status === 'failure',
+        {
+          kind: 'tool_search_output',
+          status,
+          execution,
+          ...(hasProtocolTools ? { tools: payload.tools } : {}),
+        },
       ),
     ]
   }
