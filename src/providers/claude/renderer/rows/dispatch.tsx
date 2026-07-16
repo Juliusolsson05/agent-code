@@ -5,6 +5,7 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 // rows/ClaudeRows.tsx is a barrel that exists only for the feed's
 // grandfathered import edge (see its header) and must gain no new users.
 import { EditRow } from '@providers/claude/renderer/components/edit'
+import { ClaudeAgentRow } from '@providers/claude/renderer/components/agent'
 import { MultiEditRow } from '@providers/claude/renderer/components/multi-edit'
 import { ClaudeReadRow } from '@providers/claude/renderer/components/read'
 import { ClaudeReadResultRow } from '@providers/claude/renderer/components/read-result'
@@ -16,6 +17,10 @@ import { ClaudeWebSearchRow } from '@providers/claude/renderer/components/web-se
 import { ClaudeWebSearchResultRow } from '@providers/claude/renderer/components/web-search-result'
 import { WriteRow } from '@providers/claude/renderer/components/write'
 import { TodoRow } from '@providers/shared/renderer/components/todo'
+import {
+  fromClaudeAgentResult,
+  fromClaudeAgentUse,
+} from '@providers/claude/renderer/adapters/collaboration'
 import {
   claudeBashConclusion,
   claudeBashResultText,
@@ -44,6 +49,10 @@ export function renderClaudeToolUse(block: ToolUseBlock): ReactNode | undefined 
   // row components makes adding/removing a Claude tool a provider-local change
   // and lets the shared feed keep one generic fallback for unknown tools.
   switch (block.name) {
+    case 'Agent': {
+      const model = fromClaudeAgentUse(block)
+      return model ? <ClaudeAgentRow model={model} /> : undefined
+    }
     case 'Bash': {
       // Phase 6 cutover: non-git Bash renders through the command protocol
       // (the git-intent subset is intercepted BEFORE dispatch by Block.tsx's
@@ -100,6 +109,13 @@ export function renderClaudeToolResult(
   // ABOVE the raw evidence, terminal-only by construction on the committed
   // plane. Everything else keeps the generic result row.
   const source = context.sourceTool
+  if (source?.name === 'Agent') {
+    // A validated Agent result is rendered inside the provider-owned spawn
+    // card, which already has the paired result through ToolResultIndexContext.
+    // Returning null records an explicit absorption receipt; malformed/error
+    // variants decline to the visible generic result instead.
+    return fromClaudeAgentResult(block, source) ? null : undefined
+  }
   if (source?.name === 'Bash') {
     const text = claudeBashResultText(block)
     if (!text && block.is_error !== true) {

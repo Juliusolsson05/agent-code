@@ -5,7 +5,6 @@ import { classifyRenderedTarget } from '@shared/renderedContent/targets'
 
 import { useGlobalToast } from '@renderer/ui/GlobalToast'
 import { CodeRenderContext } from '@renderer/features/feed/context'
-import { openFileInGlobalEditor } from '@renderer/features/global-editor/openFileInGlobalEditor'
 
 type Props = {
   href?: string
@@ -44,13 +43,29 @@ export function SafeMarkdownLink({
           showToast('No workspace for file link')
           return
         }
-        const result = await openFileInGlobalEditor({
-          root: workspaceRoot,
-          path: target.path,
-          line: target.line,
-          column: target.column,
-        })
-        if (!result.ok) showToast(`Could not open file: ${result.error}`)
+        // SafeMarkdownLink is part of provider renderer modules, and provider
+        // capability registries are also imported by headless replay/audit
+        // code. The global-editor opener imports the browser app store, whose
+        // theme slice touches `document` at module load. Load that browser-only
+        // path on actual file activation instead of making every link—and every
+        // headless registry import—initialize editor state.
+        try {
+          const { openFileInGlobalEditor } = await import(
+            '@renderer/features/global-editor/openFileInGlobalEditor'
+          )
+          const result = await openFileInGlobalEditor({
+            root: workspaceRoot,
+            path: target.path,
+            line: target.line,
+            column: target.column,
+          })
+          if (!result.ok) showToast(`Could not open file: ${result.error}`)
+        } catch {
+          // A chunk-load failure is uncommon but still user-actionable state;
+          // never leave an async event rejection unhandled or make the click
+          // appear to have succeeded when the editor code was unavailable.
+          showToast('Could not open file')
+        }
         return
       }
 

@@ -1,9 +1,9 @@
 import { useState } from 'react'
 
 import type { ClaudeWebFetchResultModel } from '@providers/claude/renderer/adapters/web'
+import { LazyTextProse } from '@providers/shared/renderer/components/lazy-prose'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
-import { TextProse } from '@renderer/features/feed/ui/markdown'
 
 export function ClaudeWebFetchResultRow({ model }: { model: ClaudeWebFetchResultModel }) {
   const [open, setOpen] = useState(false)
@@ -27,7 +27,7 @@ export function ClaudeWebFetchResultRow({ model }: { model: ClaudeWebFetchResult
             after the user opens the row is the actual parser/DOM boundary. */}
         {open ? (
           <div className="mt-2">
-            <TextProse text={model.content} />
+            <LazyTextProse text={model.content} />
           </div>
         ) : null}
       </details>

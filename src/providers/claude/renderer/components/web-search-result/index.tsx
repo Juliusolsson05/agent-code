@@ -1,8 +1,8 @@
 import { useState } from 'react'
 
 import type { ClaudeWebSearchResultModel } from '@providers/claude/renderer/adapters/web'
+import { LazyTextProse } from '@providers/shared/renderer/components/lazy-prose'
 import { MarkerRow } from '@renderer/features/feed/ui/MarkerRow'
-import { TextProse } from '@renderer/features/feed/ui/markdown'
 
 export function ClaudeWebSearchResultRow({ model }: { model: ClaudeWebSearchResultModel }) {
   const [open, setOpen] = useState(false)
@@ -25,7 +25,7 @@ export function ClaudeWebSearchResultRow({ model }: { model: ClaudeWebSearchResu
             Markdown admission and safe external-link routing once opened. */}
         {open ? (
           <div className="mt-2">
-            <TextProse text={model.content} />
+            <LazyTextProse text={model.content} />
           </div>
         ) : null}
       </details>

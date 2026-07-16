@@ -22,8 +22,8 @@ import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 // The provider component contract is lazy admission into the shared prose
 // surface, not react-markdown's parser. Keeping this mock semantic proves that
 // closed rows mount no parser child and that opening receives exact evidence.
-vi.mock('@renderer/features/feed/ui/markdown', () => ({
-  TextProse: ({ text }: { text: string }) => <div data-testid="text-prose">{text}</div>,
+vi.mock('@providers/shared/renderer/components/lazy-prose', () => ({
+  LazyTextProse: ({ text }: { text: string }) => <div data-testid="text-prose">{text}</div>,
 }))
 
 const fetchUse = webFetchFixture.toolUse as ToolUseBlock

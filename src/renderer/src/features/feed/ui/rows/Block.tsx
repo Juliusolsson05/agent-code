@@ -185,7 +185,8 @@ export const Block = memo(function Block({
         }
       }
 
-      if (isAgentSpawnToolName(tu.name)) {
+      const isProviderOwnedClaudeAgent = currentProvider === 'claude' && tu.name === 'Agent'
+      if (isAgentSpawnToolName(tu.name) && !isProviderOwnedClaudeAgent) {
         // Claude records subagent fanout as an `Agent` tool_use; Codex as a
         // `spawn_agent` function_call; MCP-orchestrated sessions as
         // `[mcp__<server>__]orchestration_create_agent` (the 2026-06-21
@@ -193,6 +194,12 @@ export const Block = memo(function Block({
         // predicate routes them all through the fleet row before provider
         // dispatch, so the main process's SubAgentState (and P2b's
         // notification join) always has a card to land on.
+        //
+        // Phase 7 cutover: the validated built-in Claude Agent grammar now
+        // owns those same state channels inside its provider component and
+        // must reach provider dispatch below. Codex/MCP stay here until their
+        // distinct payload/result contracts receive the same evidence-backed
+        // migration; deleting this interceptor wholesale would regress them.
         sight('committed-tool-use', tu, specializedOutcome('shared.task-subagent'))
         return <TaskSubagentRow block={tu} />
       }

@@ -549,9 +549,9 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       firstSeen: '2026-07-16',
       lastSeen: '2026-07-16',
     },
-    fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'collaboration' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (59 sightings); structural variants share this id.',
+    fixtures: { final: ["rendering-shapes/claude/agent/final.json","rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
+    disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    why: 'Observed across the frozen corpus and fresh 2026-07-16 recordings; Phase 7 moves the built-in Claude Agent grammar off the shared spawn interceptor into a provider-owned paired card.',
   }),
   'claude.tool-use.askuserquestion.v1': defineRenderShape({
     id: 'claude.tool-use.askuserquestion.v1',
