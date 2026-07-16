@@ -1,6 +1,6 @@
 # Evidence-First, Provider-Owned Feed Rendering — Implementation Plan
 
-**Status:** Draft architecture plan; no runtime implementation in this PR
+**Status:** Full implementation blueprint in review; no runtime implementation in this PR
 
 **Date:** 2026-07-16
 
@@ -14,8 +14,12 @@
 
 ## Goal
 
-Build the feed renderer from observed provider evidence instead of from a guessed
-universal taxonomy.
+Build two things, in this order:
+
+1. a development instrument that discovers and preserves every distinctive
+   provider rendering shape we encounter while using Agent Code; and
+2. an exceptional modular renderer built against that evidence rather than a
+   guessed universal taxonomy.
 
 Agent Code should be known for unusually good agent rendering. A command should
 look like a command, an edit should make the changed lines obvious, test output
@@ -37,6 +41,84 @@ The system must preserve four separate facts:
 
 Keeping those facts distinct gives us institutional memory without coupling
 Claude, Codex, OpenCode, and future providers to one shared parser.
+
+## The product contract, stated bluntly
+
+The first deliverable is **not another batch of cards**. It is the system that
+stops us forgetting what the providers actually emit.
+
+While we use Agent Code in development, the app must observe every distinctive
+renderer-facing structure. If the structural fingerprint is already catalogued,
+the system records that the known shape was seen again, under which provider,
+provider version, model, plane, and lifecycle state. If the fingerprint is not
+catalogued, it goes into a bounded local **Unknown Shape Inbox** immediately.
+The system preserves enough linkage to the existing session recording to turn
+that sighting into a redacted fixture without asking a future agent to rediscover
+the payload from prose or a transcript archaeology session.
+
+A developer then classifies the unknown shape. Classification answers:
+
+- what provider owns its interpretation;
+- whether it is a complete shape or a meaningful streaming prefix;
+- whether it deserves a dedicated visual grammar, belongs to an existing
+  grammar, needs only a formatter, belongs to conditions/composer/system UI,
+  should use the generic structured fallback, or is intentionally absorbed;
+- which fixture proves that decision;
+- which provider component and optional shared visual protocol render it;
+- which model/provider versions have actually emitted it.
+
+That classification becomes checked-in typed data plus fixtures. The system
+must make it possible to answer:
+
+> What distinct shapes have Claude, Codex, and OpenCode emitted; which ones are
+> still unknown; which component owns each one; which fixture proves it; and
+> what did it look like while it was still streaming?
+
+Only after that loop exists do we systematically replace the UI. We still build
+specialized components and formatters because Agent Code should be known for
+excellent rendering. The difference is that specialization is now driven by a
+finite reviewed inventory instead of whichever examples happen to be in the
+current agent's context window.
+
+The component rule is equally blunt:
+
+> Every distinctive raw shape gets a catalog entry and fixture. Every meaningful
+> visual grammar gets a component. Those are not the same cardinality.
+
+`Bash`/command execution is a component family; `git status`, `npm test`, and
+millions of possible commands are not millions of components. Proven command
+grammars can add conservative formatters, colors, icons, summaries, and links
+inside the command component while the bounded raw output remains available.
+
+Provider isolation is also non-negotiable:
+
+> Claude and Codex do not share a raw interpretation layer. Claude's code-edit
+> component maps Claude shapes into a shared code-edit visual protocol. Codex's
+> code-edit component independently maps Codex shapes into that same protocol.
+> The shared code-edit view receives only the protocol. A future provider may
+> reuse it by writing its own adapter, or decline it if its semantics do not fit.
+
+This plan therefore keeps the ownership ledger that already works, builds the
+shape-memory system first, and then rebuilds the painter family by family with
+provider-owned interpretation and narrowly shared visual protocols.
+
+## What the previous draft of this plan got wrong
+
+The first version correctly rejected `presentation/`, protected provider
+boundaries, and separated shapes from components. It still read like a set of
+guardrails because it omitted the operational center of the idea:
+
+- no exact Unknown Shape Inbox workflow;
+- no sighting, catalog, render-decision, or fixture contracts;
+- no precise storage and privacy design;
+- no developer commands/reporting loop;
+- no full visual contract for the operation families;
+- no concrete live/committed handoff architecture;
+- no task-level implementation sequence with file targets and cutover gates.
+
+The remainder of this document supplies those missing contracts. The earlier
+guardrails remain, but they are constraints around a complete system rather
+than the substance of the plan.
 
 ## Why this plan replaces the current direction
 
@@ -89,6 +171,314 @@ implementation and must not be rebased wholesale onto `main`.
   compaction, approvals, trust prompts, or pickers through ordinary tool cards.
 - Make no broad file moves or naming changes in the first implementation PRs.
   A new directory is created only when the first real responsibility needs it.
+
+## The complete development loop
+
+This is the feature at the center of the plan. It is an explicit loop, not a
+collection of diagnostics that a developer has to remember how to combine.
+
+### Step 1 — start a rendering evidence capture
+
+The Dev Debug command palette exposes:
+
+- `Start Rendering Evidence Capture` for the focused session;
+- `Stop Rendering Evidence Capture`;
+- `Open Unknown Shape Inbox`;
+- `Attach Rendering Evidence Note`;
+- `Export Unknown Shape Report`.
+
+Starting a rendering evidence capture reuses the existing session recorder. It
+does not create another raw event log. The recorder continues to own the nine
+`SessionFeed` channels, caps, retention, append ordering, note markers, and
+redaction/extraction path.
+
+The command additionally enables the renderer-side **shape observer** for that
+session. The observer is off in normal production use. An explicit environment
+flag may enable it for an unattended development soak, but there is no hidden
+always-on telemetry and no external upload.
+
+### Step 2 — observe renderer-facing shapes and outcomes
+
+The observer sees the values at the point where the painter is about to ask a
+provider to interpret them. It records four categories:
+
+1. committed tool use/result pairs;
+2. live semantic tool blocks and meaningful input/output prefixes;
+3. provider-normalized transcript/system entry kinds;
+4. live condition records and their intended UI surface.
+
+It does **not** replace the full session recording. The recording preserves the
+source event window; the sighting preserves the structural identity and what the
+renderer did with it.
+
+Every observation produces a metadata-only `RenderShapeSighting`:
+
+```ts
+type RenderShapePlane =
+  | "committed-tool-use"
+  | "committed-tool-result"
+  | "semantic-tool"
+  | "transcript-entry"
+  | "condition";
+
+type RenderShapeLifecycle =
+  "prefix" | "input-complete" | "running" | "result-complete" | "durable";
+
+type RenderOutcome =
+  | {
+      kind: "specialized";
+      shapeId: string;
+      rendererId: string;
+      protocolId?: string;
+    }
+  | {
+      kind: "generic";
+      shapeId?: string;
+      rendererId: "shared.generic-tool";
+    }
+  | {
+      kind: "absorbed";
+      shapeId?: string;
+      ownerRenderId: string;
+      reason: string;
+    }
+  | {
+      kind: "condition-surface";
+      shapeId: string;
+      surface: "outlet" | "feed-inline" | "composer" | "attention-only";
+    }
+  | {
+      kind: "unknown";
+      fallbackRenderId: string;
+    };
+
+type RenderShapeSighting = {
+  schemaVersion: 1;
+  sessionId: string;
+  provider: AgentProviderKind | "unknown";
+  providerVersion: string | null;
+  model: string | null;
+  sourcePlane: RenderShapePlane;
+  lifecycle: RenderShapeLifecycle;
+  eventType: string;
+  structuralFingerprint: string;
+  shapePaths: readonly string[];
+  discriminatorValues: Readonly<Record<string, string>>;
+  payloadHash: string;
+  sourceRecordingCursor: number | null;
+  observedAt: number;
+  outcome: RenderOutcome;
+};
+```
+
+The sighting contains no prompt, command, path, assistant text, tool arguments,
+tool output, or condition content. `payloadHash` is a content-sensitive local
+sample identity and is never treated as the shape id. `shapePaths` and the
+structural discriminator allowlist are content-free.
+
+### Step 3 — deduplicate before crossing IPC
+
+The observer keeps a bounded per-session map keyed by:
+
+```text
+provider + plane + lifecycle + eventType + structuralFingerprint + outcome kind
+```
+
+Repeated deltas for the same shape increment counters locally. Only a newly
+observed fingerprint, an outcome transition, a lifecycle milestone, or the final
+count flush enters the outbound queue. The queue is coalesced and hard-capped.
+
+This matters because the renderer-freeze incident showed that a diagnostic can
+become the performance bug. We do not send one IPC message per token. A long
+stream of one known partial JSON structure should normally create a handful of
+milestone sightings, not thousands of messages.
+
+The main process appends the coalesced metadata as a synthetic
+`__render_shape` recording line. Like existing `__note` lines, replay ignores it
+as an input event while extraction and auditing consume it. A diagnostics
+failure is swallowed, counted, and surfaced in the debug panel; it never blocks
+the provider, ownership ledger, or painter.
+
+### Step 4 — compare against the checked-in catalog
+
+At sighting time the observer loads a compiled read-only fingerprint index from
+the provider catalogs. The result is one of:
+
+- **known and correctly claimed** — fingerprint is catalogued and the outcome
+  points at the declared renderer/destination;
+- **known but misrouted** — catalog says code edit, but the generic fallback or
+  another renderer handled it;
+- **known but unsupported in this lifecycle** — final shape exists but this
+  meaningful prefix has no declared behavior;
+- **unknown structural shape** — no catalog entry owns the fingerprint;
+- **unknown outcome** — a catalogued shape silently vanished or was absorbed by
+  an undeclared owner.
+
+The last four enter the local Unknown Shape Inbox. Known sightings still update
+counts/provenance in the local report so provider/model drift is observable.
+
+### Step 5 — inspect the Unknown Shape Inbox
+
+The first implementation can be a simple Dev Debug module rather than a polished
+product screen, but it must show enough to work without reading JSONL by hand:
+
+- provider, provider version, and model;
+- structural fingerprint and event discriminator;
+- source plane and lifecycle milestone;
+- first/last seen and count;
+- current rendering outcome;
+- shape key tree with secret subtrees marked;
+- links to the source recording and nearest note/event cursor;
+- whether a safe fixture draft can be extracted;
+- classification state and catalog match if one exists under another version.
+
+The inbox groups by structural fingerprint, not payload hash. It is local,
+bounded, and survives app restart through the recording sidecars. It is not a
+second database: the report is derived from the recordings plus checked-in
+catalogs.
+
+### Step 6 — classify an unknown shape
+
+Classification is a reviewed code change, not a button that edits source code
+at runtime. The developer chooses exactly one disposition:
+
+```ts
+type RenderShapeDisposition =
+  | {
+      kind: "specialized";
+      rendererId: string;
+      protocolId?: string;
+    }
+  | {
+      kind: "generic";
+      rendererId: "shared.generic-tool";
+      reason: string;
+    }
+  | {
+      kind: "absorbed";
+      ownerRendererId: string;
+      reason: string;
+    }
+  | {
+      kind: "condition-surface";
+      surface: "outlet" | "feed-inline" | "composer" | "attention-only";
+    }
+  | {
+      kind: "planned";
+      targetGrammar: string;
+    }
+  | {
+      kind: "unsupported";
+      reason: string;
+    };
+```
+
+`absorbed` is deliberately explicit because hiding is the most dangerous
+operation in the renderer. A tool-result envelope can be absorbed into its
+operation row only when it names the owning render id and a fixture proves that
+the useful result remains visible. `unsupported` still renders a visible
+fallback; it means no specialization is promised, not that the row disappears.
+
+### Step 7 — extract a shape fixture
+
+The audit script takes a fingerprint or inbox entry, follows its recording
+cursor, and emits the smallest safe evidence package containing:
+
+- the final renderer-facing input;
+- meaningful streaming prefix milestones;
+- paired result/condition state when applicable;
+- provider/model/version provenance;
+- expected ownership key and stable render id inputs;
+- the current outcome receipt;
+- fully redacted and capped raw context needed to reproduce parsing;
+- a human description from the attached note or classification command.
+
+The existing sensitive-survivor hard gate remains authoritative. The script
+refuses to write a checked-in fixture when redaction cannot prove safety.
+
+Shape fixtures live separately from whole-session recordings because they serve
+a different test altitude:
+
+```text
+testing/fixtures/rendering-shapes/<provider>/<shape-id>/
+  manifest.json          # provenance, fingerprints, planes, expected owner
+  final.json             # minimal complete input/result
+  prefixes.json          # selected meaningful prefix milestones
+  expected.json          # render decision + protocol/view snapshot
+```
+
+This new directory is justified by behavior, not aesthetics: recording fixtures
+replay multi-event ownership over time; shape fixtures pin one provider parser
+and component grammar. Neither can replace the other.
+
+### Step 8 — bind the fixture to a typed provider shape definition
+
+Every catalogued shape uses one common declaration schema. This is the useful
+version of the requested base definition: shared compile-time metadata and
+coverage requirements, without React class inheritance or shared parsing.
+
+```ts
+type RenderShapeDefinition<
+  P extends AgentProviderKind,
+  Id extends `${P}.${string}`,
+> = {
+  id: Id;
+  provider: P;
+  fingerprints: readonly string[];
+  eventTypes: readonly string[];
+  planes: readonly RenderShapePlane[];
+  lifecycles: readonly RenderShapeLifecycle[];
+  observed: {
+    providerVersions: readonly string[];
+    models: readonly string[];
+    firstSeen: string;
+    lastSeen: string;
+  };
+  fixtures: {
+    final: readonly string[];
+    prefixes: readonly string[];
+  };
+  disposition: RenderShapeDisposition;
+  why: string;
+};
+
+export function defineRenderShape<
+  P extends AgentProviderKind,
+  Id extends `${P}.${string}`,
+>(definition: RenderShapeDefinition<P, Id>): RenderShapeDefinition<P, Id> {
+  return definition;
+}
+```
+
+Claude definitions live under Claude, Codex definitions under Codex, and so on.
+The common type makes missing fixtures, provider-prefix mistakes, and invalid
+dispositions compile/test failures. It does not contain a `match()` or
+`render()` function; runtime provider interpretation remains ordinary explicit
+provider code and can be reviewed independently from catalog metadata.
+
+### Step 9 — implement or reuse the renderer
+
+A specialized catalog entry must point to a stable `rendererId`. The provider's
+dispatch claims the shape id and produces a render decision. The coverage suite
+checks both directions:
+
+- every specialized catalog shape is claimed by the declared provider renderer;
+- every provider renderer claim names a catalogued shape;
+- every shared protocol use is produced by a provider-owned adapter;
+- no shared protocol component accepts provider wire types;
+- generic/absorbed/condition dispositions match their actual outcome.
+
+### Step 10 — make the inbox go empty for the right reason
+
+After the catalog, fixture, adapter, component, and tests land, replay the
+source recording. The inbox item closes only if the same fingerprint now
+produces the declared outcome at every required lifecycle milestone. Renaming
+the fingerprint, deleting the sighting, or marking an unknown as hidden without
+a fixture does not close it.
+
+This loop is the institutional memory. Future agentic development can add a
+provider or tool by following evidence instead of rebuilding a mental model of
+the entire renderer.
 
 ## Vocabulary
 
@@ -276,6 +666,238 @@ The boundary should eventually be protected by a narrow import test or the
 repository's existing lint mechanism. A bespoke dependency framework is not
 required; one clear failure message is enough.
 
+## Concrete paint architecture
+
+### Freeze the boundary that already works
+
+The existing pipeline remains:
+
+```text
+provider channels
+  -> SessionRuntime ingest
+  -> ownership/order ledger
+  -> FeedRenderItem[]
+  -> feed painter
+```
+
+`FeedRenderItem[]` remains the clean boundary. This project does not change
+ghost reconciliation, ownership, ordering, suppression evidence, or the stable
+identity rules that fixed the historic duplicate/vanish/buried-row bugs.
+
+The painter may derive visual information, but it does not decide whether an
+item is visible. If a proposed renderer needs to hide or merge an independently
+owned item, that absorption must be represented by a receipt and proven against
+the ownership fixture corpus.
+
+### One provider operation boundary, not one shared interpreter
+
+The feed bridge constructs a neutral envelope containing the data the provider
+renderer may inspect. It does not classify it:
+
+```ts
+type ProviderOperationInput =
+  | {
+      plane: "committed";
+      provider: AgentProviderKind;
+      renderId: string;
+      toolUse: ToolUseBlock;
+      toolResult: ToolResultBlock | null;
+      workspaceRoot: string | null;
+    }
+  | {
+      plane: "live";
+      provider: AgentProviderKind;
+      renderId: string;
+      block: SemanticLiveBlock;
+      workspaceRoot: string | null;
+    };
+
+type ProviderRenderDecision =
+  | {
+      kind: "rendered";
+      shapeId: string;
+      rendererId: string;
+      node: ReactNode;
+      protocolId?: string;
+    }
+  | {
+      kind: "generic";
+      shapeId?: string;
+      reason: string;
+    }
+  | {
+      kind: "absorbed";
+      shapeId: string;
+      ownerRenderId: string;
+      reason: string;
+    }
+  | {
+      kind: "unclaimed";
+      structuralFingerprint: string;
+    };
+```
+
+The capability registry gains one narrow optional operation method only when
+the first vertical slice needs it:
+
+```ts
+renderOperation?: (input: ProviderOperationInput) => ProviderRenderDecision
+```
+
+The shared bridge does only three things:
+
+1. selects the provider capability;
+2. records the returned decision as the paint/sighting receipt;
+3. uses the bounded generic fallback for `generic` or `unclaimed`.
+
+It never switches on tool name, reads wrapper JavaScript, parses provider JSON,
+or maps provider values into an operation family.
+
+### Provider-specific components remain real components
+
+Each provider owns an explicit dispatch and meaningful components:
+
+```text
+src/providers/claude/renderer/
+  shapes.ts
+  operations/
+    renderClaudeOperation.tsx
+    ClaudeCodeEditOperation.tsx
+    ClaudeCommandOperation.tsx
+    ClaudeReadOperation.tsx
+  adapters/
+    codeEdit.ts
+    command.ts
+
+src/providers/codex/renderer/
+  shapes.ts
+  operations/
+    renderCodexOperation.tsx
+    CodexCodeEditOperation.tsx
+    CodexCommandOperation.tsx
+    CodexReadOperation.tsx
+  adapters/
+    codeEdit.ts
+    unifiedExec.ts
+    command.ts
+```
+
+This tree appears incrementally. The first Claude edit lands the Claude files;
+the first Codex edit lands the Codex files. We do not create every filename in
+advance.
+
+The provider component owns:
+
+- recognition of its tool/event vocabulary;
+- parsing complete and partial inputs;
+- live-versus-committed evidence precedence;
+- provider-specific lifecycle facts and labels;
+- mapping to a shared protocol when that protocol is semantically honest;
+- choosing a provider-specific view when no shared protocol fits;
+- declaring its shape id and renderer id in the returned receipt.
+
+Claude's component never imports Codex. Codex's component never imports Claude.
+A provider can change its wrapper format without creating a shared blast radius.
+
+### Shared visual protocols are narrow leaf contracts
+
+The shared directory contains protocols such as:
+
+```text
+src/providers/shared/renderer/protocols/
+  code-edit/
+    model.ts
+    CodeEditView.tsx
+    CodeEditView.test.tsx
+  command/
+    model.ts
+    CommandView.tsx
+    formatters/
+  structured-tool/
+    model.ts
+    StructuredToolView.tsx
+```
+
+An example mapping is deliberately one-way:
+
+```ts
+// Claude-owned
+function toClaudeCodeEditModel(input: ClaudeEditEvidence): CodeEditRenderModel;
+
+// Codex-owned
+function toCodexCodeEditModel(input: CodexPatchEvidence): CodeEditRenderModel;
+
+// Shared leaf view — it cannot name Claude or Codex
+function CodeEditView(props: { model: CodeEditRenderModel }): ReactNode;
+```
+
+The shared protocol contains visual truth only: files, hunks, line kinds,
+counts, paths, status, diagnostics, source availability, and stable ids. It does
+not contain a `provider` switch or raw escape hatch that lets the shared view
+start parsing again.
+
+If the providers need visibly different chrome, their components wrap or
+compose the shared view. Sharing code-edit line rendering does not require
+sharing the entire provider operation component.
+
+### The common base is a contract and primitives, not inheritance
+
+The requested common definition exists at two useful altitudes:
+
+1. every raw shape satisfies `RenderShapeDefinition` and therefore has the
+   same evidence, fixture, disposition, and provenance obligations;
+2. visual components compose primitives such as `OperationFrame`,
+   `StatusLabel`, `PathLabel`, `BoundedOutput`, `Disclosure`, `DiffHunk`, and
+   `AnsiText` where those primitives fit.
+
+We do not force every component into the same card rectangle. A one-line wait,
+a streaming patch, a question picker, and a generated image should have
+different grammars. The common contract makes them accountable; composition
+makes them visually consistent without flattening their identity.
+
+### Stable row identity through streaming and commit
+
+The user-facing rule from PR #524 remains correct:
+
+> The row that appears when an operation begins remains the same row while its
+> input streams, while it runs, when output arrives, and when committed evidence
+> replaces semantic evidence. Completion is a props update, not another
+> renderer suddenly winning.
+
+The ownership layer already decides the logical source. The painter derives a
+stable `renderId` using the provider call/tool id first, then upstream item id,
+then committed block id, then the existing source-item/block-index fallback.
+Both live and committed provider operation envelopes route through the same
+`ProviderOperationBoundary` component type and the same provider renderer.
+
+Provider adapters must prove monotonic interpretation:
+
+- unknown/preparing may become a specific grammar;
+- partial fields may become complete;
+- running may become success/failure/denied/cancelled;
+- a structurally proven grammar never falls back to generic merely because a
+  later provider event is sparse;
+- committed evidence may correct details, but must not remount a different
+  provider component for the same logical operation.
+
+Prefix fixtures assert React key and outer DOM-node stability for the highest
+value streaming shapes.
+
+### Total paint accountability
+
+Every `FeedRenderItem` and every provider operation decision has one outcome:
+
+- rendered by a declared provider component;
+- rendered through a declared shared protocol;
+- rendered by the bounded generic fallback;
+- absorbed into a named owning render id with a reason;
+- routed to a named non-feed condition/composer surface.
+
+There is no silent `return null`. Known transport-only ticks may be absorbed,
+but the receipt must say which visible operation owns their useful information.
+The receipt is both the debug fact and the Unknown Shape Inbox outcome; there is
+no parallel explainer that can disagree with the paint.
+
 ## Evidence system
 
 ### Reuse what already exists
@@ -318,23 +940,23 @@ than a code generator:
 
 ```ts
 export const CODEX_RENDER_SHAPES = {
-  'codex.unified-exec.command.v1': {
-    fingerprint: '…',
-    plane: ['live', 'committed'],
-    status: 'rendered',
-    destination: 'command',
-    fixtures: ['…'],
+  "codex.unified-exec.command.v1": {
+    fingerprint: "…",
+    plane: ["live", "committed"],
+    status: "rendered",
+    destination: "command",
+    fixtures: ["…"],
   },
-  'codex.unified-exec.apply-patch.v1': {
-    fingerprint: '…',
-    plane: ['live', 'committed'],
-    status: 'planned',
-    destination: 'code-edit',
-    fixtures: ['…'],
+  "codex.unified-exec.apply-patch.v1": {
+    fingerprint: "…",
+    plane: ["live", "committed"],
+    status: "planned",
+    destination: "code-edit",
+    fixtures: ["…"],
   },
-} as const satisfies RenderShapeCatalog
+} as const satisfies RenderShapeCatalog;
 
-export type CodexRenderShapeId = keyof typeof CODEX_RENDER_SHAPES
+export type CodexRenderShapeId = keyof typeof CODEX_RENDER_SHAPES;
 ```
 
 This gives the user-requested typed institutional memory without maintaining a
@@ -461,6 +1083,284 @@ Do not create a base React class, card subclass hierarchy, detector DSL, or
 dynamic component plugin system. Composition already expresses the reusable
 parts while allowing a command and an edit to look genuinely different.
 
+## Exceptional rendering contract
+
+The evidence system is not an excuse to settle for generic JSON. The following
+is the intended product behavior. Each provider reaches it through its own
+adapter/components and the fixtures it actually emits.
+
+### Global interaction rules
+
+Every operation presents three levels of information:
+
+1. **Always visible:** verb, subject, status, and the most useful result/count.
+2. **Inline when useful:** a small live preview such as diff lines, terminal
+   output, found paths, selected option, or active plan step.
+3. **Expandable:** complete bounded/paged output, parameters, source wrapper,
+   verbose metadata, and debug evidence.
+
+Raw wrapper JavaScript, escaped JSON, provider XML/tag soup, response-item kind
+names, and MCP envelopes are debug source. They are never the default UI.
+
+Specialized interpretation enriches rather than destroys the evidence. A test
+summary appears above the command output; it does not replace the output. A
+parsed patch view keeps a debug/source expansion. When confidence is weak, the
+renderer visibly degrades to structured generic output instead of inventing a
+meaning.
+
+All large values are bounded before expensive work. Closed disclosures unmount
+heavy children. Old transcript rows stay lazy. Streaming paths avoid whole-body
+Markdown, JSON, ANSI, syntax-highlighting, or Monaco work on every token.
+
+### Code edits and file writes
+
+Covered evidence includes:
+
+- Claude Edit, MultiEdit, Write, NotebookEdit, and future observed variants;
+- Codex classic apply-patch, unified-exec patch wrappers, standalone patch
+  completion events, and future observed variants;
+- OpenCode edit/write/patch parts after fixtures prove their exact structures;
+- shell edits only when a conservative provider-owned command formatter proves
+  the mutation grammar.
+
+Always-visible header:
+
+- Creating, Editing, Moving, or Deleting;
+- workspace-relative path as soon as it is knowable;
+- file count for multi-file operations;
+- added/removed totals;
+- running/success/failure/denied/cancelled status;
+- error summary without requiring expansion.
+
+Inline body:
+
+- line-by-line red/green/context diff;
+- stable line/gutter identity as the patch streams;
+- unfinished tail updates in place;
+- per-file headers for a multi-file patch;
+- first/last windowing and an explicit hidden-line count for huge diffs;
+- open-file/copy actions where the path is safe and resolvable.
+
+Write is presented honestly:
+
+- new file: content as additions;
+- overwrite with known before state: before/after diff;
+- overwrite without known before state: labeled new-content view rather than a
+  fabricated semantic diff.
+
+Token presentation has independent layers:
+
+1. plain text immediately;
+2. cached lexical tokens on sealed lines;
+3. optional semantic-token replacement when an existing LSP can provide
+   trustworthy context cheaply.
+
+Diff background communicates addition/removal; syntax token colors communicate
+language semantics. Color is accompanied by `+`/`-`, labels, counts, and status
+text. The renderer never mounts/recreates a Monaco model for every delta.
+
+The provider-specific difference remains visible where useful. A Claude Edit
+component and Codex Patch component may use different verbs or evidence labels
+while both map their hunks into `CodeEditRenderModel` and compose the same
+`CodeEditView`.
+
+### Commands and terminal interaction
+
+Covered evidence includes Claude Bash/PowerShell, Codex classic and unified
+exec-command/local-shell calls, OpenCode bash, write-stdin, background-session
+continuation, wait/poll calls, and future catalogued variants.
+
+Always-visible header:
+
+- Running/Ran/Failed/Timed out/Waiting/Sent input;
+- syntax-highlighted command;
+- cwd when it differs from the workspace root;
+- provider description when present;
+- elapsed/final duration;
+- exit code, timeout, background session id, or failure state.
+
+Inline output:
+
+- live ANSI with control-sequence stripping and span caps;
+- useful recent output while running;
+- head and tail on completion so the command and final test/error summary both
+  survive truncation;
+- explicit byte/line truncation counts;
+- failure lines and exit status visible without opening the full output;
+- paged/lazy expansion rather than mounting megabytes at once.
+
+Reliably correlated `write_stdin` and wait/poll operations fold into the
+originating command. Uncorrelated cases receive compact explicit rows. Empty
+poll ticks can be absorbed only with a receipt naming the command that owns the
+progress.
+
+Command-specific presentation is a formatter decision:
+
+- git may show branch/status/diff intent with a git accent;
+- test runners may show passed/failed/skipped totals;
+- compiler/linter output may group diagnostics and link `path:line:column`;
+- JSON may render as bounded key/value/table data;
+- URLs and safe paths may become links;
+- build/deploy commands may expose a proven final status.
+
+Each formatter has a stable grammar and fixtures. It returns `null` on
+uncertainty, never runs arbitrary command output, and never removes the raw
+bounded output. This is how Agent Code can make different command families
+distinctive without pretending every command is a new component.
+
+### Reads, searches, and discovery
+
+Covered evidence includes Read/FileRead/OpenCode read, Grep/Glob/LS and their
+provider variants, Codex exec wrappers that the Codex adapter proves are reads,
+tool search, transcript search/read, and catalogued workspace discovery calls.
+
+The component distinguishes:
+
+- reading a file or range;
+- listing paths;
+- searching text;
+- searching tools/resources;
+- inspecting another agent transcript.
+
+The header exposes target, query/pattern, include filter, offset/range, and
+result count. Results use safe file links, match highlighting, and bounded
+expandable code/text. A burst of completed low-signal reads may use the existing
+collapsed activity grammar, but the active or failed lookup stays individually
+visible and every absorbed read retains a receipt.
+
+### Web, citations, and fetched content
+
+Claude WebSearch/WebFetch, Codex web search/open/find, OpenCode equivalents, and
+assistant citation records remain provider-owned interpretations.
+
+The visual grammar shows:
+
+- Searching/Searched/Opening/Opened/Found/Failed;
+- actual query or action;
+- target domain/URL;
+- progress and result count when known;
+- linked source titles/domains;
+- fetched content collapsed by default;
+- assistant citations as a useful compact source list, not merely a count.
+
+### Collaboration and subagents
+
+Covered evidence includes Claude Agent/Task, Codex spawn/send/follow-up/wait/
+list/read/interrupt/close, Agent Code orchestration MCP variants, task
+notifications, tracked subagent state, and future provider equivalents.
+
+The grammar distinguishes:
+
+- **spawn:** role, nickname, prompt summary, model, status;
+- **message:** target and concise sent text;
+- **wait:** target set, current states, elapsed time;
+- **list:** structured agent table;
+- **read output:** linked child plus recent/final response;
+- **interrupt/close:** target and outcome.
+
+Reuse the existing child drill-in and mini-feed behavior. A spawn result envelope
+may be absorbed into the spawn row only when the final child report remains
+available through its own owned source. The regression where spawn suppression
+destroyed final reports gets an explicit fixture.
+
+### Tasks, todos, plans, schedules, skills, and workflows
+
+TodoWrite/todowrite, task create/update/list/get/output/stop, Codex update-plan,
+plan-mode records, schedules/sleeps/wakeups, skills, and Workflow MCP calls use
+checklist and lifecycle language rather than JSON archaeology.
+
+- plan steps show pending/in-progress/completed;
+- task mutations say what changed and to which task;
+- schedules show when and why;
+- skills show the selected skill and meaningful arguments;
+- workflows show name, run/resume relationship, phase, agent progress,
+  completion status, and final result/coverage gaps;
+- a workflow tool call remains a concise one-line row until expanded, matching
+  the user's prior requirement that full tool payloads not flood activity UI.
+
+Workflow rendering consumes bounded Workflow MCP event models. It does not
+reintroduce high-frequency raw workflow payloads into the normal feed.
+
+### Questions and blocking interaction
+
+AskUserQuestion/request-user-input presents question text, options,
+single/multi-select state, free-text affordance, and the durable answer after
+completion.
+
+Clickability comes from the authoritative live condition that owns input, not
+from the mere presence of a transcript row. A historical question renders as a
+record and cannot send stale keystrokes. This is a prime example of a provider
+component consuming both durable feed evidence and a separate live condition
+for interaction gating without merging their ownership systems.
+
+### MCP and generic structured tools
+
+Generic MCP is a visual protocol, not one component per server.
+
+Always-visible header:
+
+- Calling/Called/Failed;
+- humanized tool name;
+- server badge;
+- a concise headline selected from safe path, URL, query, title, description,
+  target, or other declared scalar fields.
+
+Input presentation:
+
+- small scalar objects as bounded key/value rows;
+- paths and URLs linkified conservatively;
+- nested/large values behind lazy expansion;
+- explicit truncation;
+- raw JSON/source available for copy/debug.
+
+Output dispatch is based on declared MCP content blocks:
+
+- text/ANSI text;
+- JSON/table-like data;
+- image or safe data URL;
+- audio/file attachment metadata;
+- embedded resource;
+- resource link;
+- explicit empty result;
+- error.
+
+Known Agent Code orchestration/workspace/workflow tools route through richer
+provider-owned components before generic MCP. A server-specific component is
+created only when repeated fixtures prove the generic typed grammar is not good
+enough.
+
+### Images, notebook, LSP, workspace, and system records
+
+- Base64 and URL images render inline with source/alt metadata and a safe open
+  action.
+- Image generation shows live status, revised prompt when safe, generated
+  preview, and saved path.
+- View-image shows the target path and actual image when available.
+- Notebook edit shows notebook path, cell id/type/mode, and a highlighted cell
+  diff.
+- LSP operations show operation, symbol/file/range, result count, and linked
+  locations.
+- Workspace/worktree/config operations show the concrete state transition.
+- Hooks, provider notices, file snapshots, errors, and compaction use intentional
+  system grammars.
+- An unknown committed block kind paints a bounded fallback with its catalog/
+  fingerprint status; it never becomes an empty text branch.
+
+### Fallback quality is part of the product
+
+The fallback is not a punishment card. It should still provide:
+
+- humanized operation name and provider/server;
+- one safe headline;
+- bounded parameter summary;
+- bounded/lazy result;
+- status and error;
+- developer-only shape fingerprint and inbox link;
+- debug source behind explicit expansion.
+
+This keeps the app usable the first time an upstream provider ships a new shape
+and gives the development system the evidence needed to specialize it later.
+
 ## Conditions are a parallel semantic system
 
 Conditions answer “what live interaction or transient state currently requires
@@ -521,6 +1421,39 @@ but has no outlet view; the slash picker belongs to the composer; compaction
 has an outlet view but is not normally attention-worthy. The existing explicit
 condition policy is therefore retained and must not be inferred from the view
 registry.
+
+The initial catalog matrix is explicit:
+
+| Condition kind             | Owner    | Surface         | Attention/action behavior         |
+| -------------------------- | -------- | --------------- | --------------------------------- |
+| `claude.trust-dialog`      | Claude   | modal outlet    | trust + blocking action           |
+| `claude.permission-prompt` | Claude   | modal outlet    | action + blocking action          |
+| `claude.resume-prompt`     | Claude   | strip outlet    | resume + blocking action          |
+| `claude.compaction`        | Claude   | read-only strip | attention only on error           |
+| `claude.ask-user-question` | Claude   | feed-inline     | question + blocking custom action |
+| `claude.slash-picker`      | Claude   | composer        | no dispatch attention badge       |
+| `codex.trust-dialog`       | Codex    | modal outlet    | trust + blocking action           |
+| `codex.approval`           | Codex    | strip outlet    | action + blocking action          |
+| `opencode.permission`      | OpenCode | provider outlet | custom HTTP resolution            |
+| `opencode.question`        | OpenCode | provider outlet | custom HTTP resolution            |
+
+This table is seeded from current code, then made executable through provider
+catalog definitions and coverage tests. New kinds are added from captured
+evidence. A condition may have multiple structural fingerprints across provider
+versions while keeping one semantic kind/view.
+
+Condition fixtures cover the full detector lifecycle, not only the final state:
+
+- absent screen/event -> no condition;
+- recognizable prefix -> live condition with bounded state;
+- option/cursor changes -> same condition kind and view;
+- resolution -> condition disappears while durable feed evidence survives;
+- malformed/unknown state -> no unsafe action, plus an inbox sighting.
+
+The observer records condition state structure and destination, never the
+question, command, workspace, or option text. The full local session recording
+retains the source under its existing local-only privacy model and the extractor
+produces a redacted minimal fixture.
 
 Unknown condition kinds remain forward-compatible at runtime, but explicit
 developer capture must record the unknown sighting. A condition coverage test
@@ -589,77 +1522,334 @@ Every visual family lands through fixtures before broad integration.
   tested across restart/replay;
 - condition actions continue through provider-owned resolution, not feed rows.
 
+## Repository change map
+
+The following is the intended ownership map. Files/directories land only when
+their phase has real content; this is not permission to scaffold the entire tree
+in one PR.
+
+```text
+src/shared/types/
+  renderShapes.ts                    common metadata-only contracts
+
+src/renderer/src/rendering/model/
+  shapeFingerprint.ts               pure structural identity + redaction rules
+  unknowns.ts                        structurally keyed unknown registry
+
+src/renderer/src/features/feed/evidence/
+  observer.ts                        bounded per-session sighting accumulator
+  outcome.ts                         paint decision -> metadata-only receipt
+  RenderShapeCaptureContext.tsx      capture gate/session binding
+
+src/renderer/src/features/dev-debug/rendering-shapes/
+  UnknownShapeInbox.tsx              local grouped report
+  unknownShapeReport.ts              derive report from sidecars + catalogs
+
+src/main/recording/
+  SessionRecorder.ts                 existing writer; accepts __render_shape
+  SessionRecorderManager.ts          existing lifecycle; batched sighting append
+
+src/preload/
+  rendering-shape batch IPC          explicit dev-gated, metadata-only contract
+
+src/providers/claude/renderer/
+  shapes.ts                          typed Claude catalog
+  operations/*                       only as visual families migrate
+  adapters/*                         Claude-only parsing/mapping
+
+src/providers/codex/renderer/
+  shapes.ts                          typed Codex catalog
+  operations/*                       only as visual families migrate
+  adapters/*                         Codex-only parsing/mapping
+
+src/providers/opencode/renderer/
+  shapes.ts                          typed OpenCode catalog
+  operations/*                       only as evidence exists
+  adapters/*                         OpenCode-only parsing/mapping
+
+src/providers/shared/renderer/protocols/
+  code-edit/*                        first proven shared visual protocol
+  command/*                          later, after independent adapters exist
+  structured-tool/*                  bounded long-tail protocol
+
+scripts/
+  audit-rendering-shapes.mjs         known/unknown/misrouted coverage report
+  extract-rendering-shape.mjs        fingerprint -> redacted minimal fixture
+
+testing/fixtures/rendering-shapes/
+  <provider>/<shape-id>/*             final/prefix/expected evidence
+```
+
+No current folder is renamed to make this map look cleaner. `presentation/` is
+not introduced. `projection/` remains deferred. Existing provider `rows/` and
+shared `rows/` coexist until each shape family has migrated and its old route is
+provably unused.
+
 ## Incremental delivery plan
 
-Each implementation PR is independently reviewable and keeps the app usable.
+Each phase is intended as one or more small implementation PRs, not one giant
+rewrite branch. Every PR is independently reviewable, fixture-gated, and keeps
+the app usable.
 
 ### Phase 0 — this plan-only draft PR
 
-- document the evidence-first architecture;
-- record the no-churn naming decision;
-- record provider boundaries and conditions translation;
-- keep PR #524 as a separate draft evidence source;
-- make no runtime or file-structure changes.
+Deliverables:
 
-### Phase 1 — structural fingerprint and catalog skeleton
+- the full shape-discovery and rendering product contract;
+- no-churn directory decision;
+- provider import contract;
+- component/formatter rubric;
+- conditions and compaction translation;
+- PR #524 salvage/rejection map;
+- no runtime changes.
 
-- add the pure structural fingerprint beside the existing unknown registry;
-- change unknown grouping from content identity to structural identity while
-  retaining payload hashes as samples;
-- add the small catalog contract and one `shapes.ts` per provider only when
-  seeded entries are ready;
-- add the coverage test and import-boundary guard;
-- no visual behavior changes.
+Exit gate:
 
-### Phase 2 — seed evidence from existing corpora
+- reviewers can trace an unknown shape from live observation to catalog,
+  fixture, provider component, shared protocol, and test;
+- every proposed new directory names a responsibility absent from current
+  folders rather than merely renaming them.
 
-- run the offline extractor over the existing redacted recording and bundle
-  corpus;
-- curate human-readable provider shape ids;
-- attach model/version provenance only where verified;
-- add representative full and prefix fixtures;
-- classify each shape as rendered, planned, generic, hidden, or unknown;
-- publish a reviewable coverage report.
+### Phase 1 — structural fingerprint and typed catalog contract
 
-### Phase 3 — code-edit vertical slice
+Files:
 
-- independently map Claude Edit/MultiEdit shapes to a code-edit protocol;
-- independently map Codex apply-patch/unified-exec/patch-result shapes to the
-  same protocol where their semantics genuinely fit;
-- add the shared code-edit protocol and view only after both mappings exist;
-- keep small provider wrapper rows if they need provider-specific labels or
-  lifecycle chrome;
-- shadow compare with legacy output, then switch only the covered shapes;
-- do not delete unrelated PR #524 routes.
+- `src/shared/types/renderShapes.ts`;
+- `src/renderer/src/rendering/model/shapeFingerprint.ts`;
+- `src/renderer/src/rendering/model/unknowns.ts` and tests.
 
-This phase is the architectural proof. It tells us whether a neutral
-`projection/` assembly stage is needed. We do not decide that from diagrams.
+Red-green tasks:
 
-### Phase 4 — command family and formatters
+1. Add tests proving same structure/different command or prompt text yields the
+   same fingerprint.
+2. Add tests proving render-relevant discriminator changes yield different
+   fingerprints.
+3. Add secret-key, cycle, depth, array, large-object, and unserializable-input
+   tests.
+4. Implement canonical typed key paths including value types, not keys alone.
+5. Re-key unknown grouping by structural fingerprint while retaining bounded
+   payload-hash samples/counts.
+6. Add `defineRenderShape` and catalog coverage helpers.
+7. Add a boundary test forbidding specific-provider imports from shared/feed
+   interpretation modules.
 
-- add independent Claude Bash and Codex command/unified-exec adapters;
-- land the command visual protocol/component;
-- add conservative formatters for proven command families such as git, tests,
-  and diagnostics;
-- keep bounded raw output available;
-- verify background command, wait/poll, multi-command, CRLF, ANSI, empty-success,
-  and failure fixtures.
+No IPC, UI, provider dispatch, or visual behavior changes in this phase.
 
-### Phase 5 — remaining families, one at a time
+Exit gate:
 
-Migrate file write, read/search, todo, web, image, subagent, MCP/generic, and
-other families only as their fixture inventory is ready. Each family follows
-the same adapter/protocol/component decision ladder.
+- fingerprint output is deterministic in renderer/unit environments;
+- existing unknown diagnostics remain bounded and reference-stable;
+- no content value enters the structural fingerprint;
+- all current rendering tests/corpora remain unchanged.
 
-### Phase 6 — cleanup after proven cutover
+### Phase 2 — shape observer and recording sidecar
 
-- remove a legacy route only when no catalogued shape depends on it;
-- remove duplicate decoders after provider-owned adapters are canonical;
-- consider a neutral `projection/` stage only if omission receipts still need a
-  home after the vertical slices;
-- update durable design docs from proven implementation, not aspirations;
-- close or supersede PR #524 once all valuable pieces are either ported or
-  explicitly rejected.
+Files:
+
+- `features/feed/evidence/*`;
+- dev-gated preload/main batch IPC;
+- narrow additions to `SessionRecorder`/manager;
+- observer tests and recording writer tests.
+
+Red-green tasks:
+
+1. Test that the observer is inert when capture is disabled.
+2. Test one unknown live prefix, repeated thousands of times, produces one
+   bounded fingerprint record plus counts rather than thousands of IPC sends.
+3. Test outcome changes and lifecycle milestones produce explicit records.
+4. Test queue caps, coalescing, final flush, renderer unmount, app shutdown,
+   missing recorder, and serialization failure.
+5. Test sighting metadata contains no values from prompts, commands, paths,
+   results, or condition options.
+6. Append `__render_shape` lines through the existing recording lifecycle.
+7. Include dropped/capped sighting counts in recorder metadata/debug output.
+
+Exit gate:
+
+- a capture of normal agent use creates recording-linked shape sightings;
+- no per-token IPC flood is possible by construction;
+- turning capture on does not alter the render tree or ownership output;
+- diagnostic failure cannot throw into the provider/feed path.
+
+### Phase 3 — Unknown Shape Inbox and audit/extraction tools
+
+Files:
+
+- Dev Debug inbox module;
+- `scripts/audit-rendering-shapes.mjs`;
+- `scripts/extract-rendering-shape.mjs`;
+- extraction core tests;
+- `testing/fixtures/rendering-shapes/README.md` when the first fixture lands.
+
+Red-green tasks:
+
+1. Build a pure report derivation over sidecars and provider catalogs.
+2. Group by structural fingerprint and show known/misrouted/unknown status.
+3. Link each item to source recording cursor/note and provenance.
+4. Extract final and meaningful prefix windows from the existing recording.
+5. Reuse redaction and sensitive-survivor gates; refuse unsafe output.
+6. Add commands for opening/exporting the inbox and attaching evidence notes.
+7. Keep classification as reviewed source changes; no runtime source mutation.
+
+Exit gate:
+
+- a developer can use the app, see a new unknown in the inbox, run one command,
+  and obtain a safe fixture draft without manually grepping JSONL;
+- the inbox survives restart because it is derived from disk-backed recordings;
+- known shapes and intentional generic/absorbed cases do not remain falsely
+  unknown.
+
+### Phase 4 — seed the inventory before rewriting cards
+
+Inputs:
+
+- 48 checked-in rendering bundles;
+- existing recording fixtures;
+- local Claude/Codex/OpenCode recordings referenced by PR #524 research;
+- provider source references under `vendor/` only as corroboration.
+
+Tasks:
+
+1. Run the audit over every available safe fixture.
+2. Create human-readable provider-prefixed ids for every distinct
+   renderer-facing shape.
+3. Record multiple fingerprints under one shape id when versions differ but
+   semantics do not.
+4. Split entries only when the visual interpretation/lifecycle truly differs.
+5. Attach model/provider-version provenance when verified; use unknown rather
+   than inference when absent.
+6. Mark current outcomes: specialized, generic, absorbed, condition-surface,
+   planned, or unsupported.
+7. Add catalog-to-fixture and provider-import-boundary CI checks.
+8. Publish the first coverage report in the PR description: total shapes,
+   unknown, misrouted, generic, specialized, missing-prefix coverage.
+
+Exit gate:
+
+- the checked-in evidence corpus has zero unclassified fingerprints;
+- high-frequency code-edit and command shapes have complete plus meaningful
+  prefix fixtures;
+- no new product renderer has been invented from an unobserved tool list.
+
+### Phase 5 — provider operation boundary and code-edit vertical slice
+
+This is the architecture proof and the first user-visible rendering PR.
+
+Files land only for this slice:
+
+- narrow `renderOperation` provider capability;
+- `ProviderOperationBoundary` and outcome receipts;
+- Claude code-edit adapter/component;
+- Codex code-edit/unified-exec adapter/component;
+- shared `protocols/code-edit` model/view;
+- shape fixtures and DOM/performance tests;
+- selected PR #524 diff/streaming primitives ported with their tests.
+
+Red-green tasks:
+
+1. Make Claude Edit/MultiEdit/Write fixtures fail against the new contract.
+2. Make Codex classic patch, unified-exec prefix, standalone patch completion,
+   success, and failure fixtures fail.
+3. Independently implement provider recognizers/parsers.
+4. Map each provider to `CodeEditRenderModel`; prove shared view contains no
+   provider imports or branches.
+5. Render path, counts, hunks, status, and errors line by line.
+6. Assert the same outer DOM node/key across meaningful prefixes and
+   live-to-committed handoff.
+7. Emit shape/render receipts and verify inbox items close.
+8. Shadow compare each migrated shape against legacy output.
+9. Cut over only the catalogued edit shapes; keep all other routes unchanged.
+10. Delete an old edit route only when the provider catalog proves no shape
+    still claims it.
+
+Exit gate:
+
+- modern Codex edit shows an edit as soon as the patch intent/path is proven,
+  never wrapper JavaScript;
+- Claude and Codex share only the visual protocol/view, not parsing or dispatch;
+- huge/streaming diffs stay bounded and responsive;
+- success and failure never disappear;
+- ownership corpus output is unchanged.
+
+At this gate, decide whether any provider-neutral `projection/` responsibility
+actually remains. Default remains no.
+
+### Phase 6 — command grammar and trusted formatters
+
+Files:
+
+- independent Claude/Codex/OpenCode command adapters/components;
+- shared command visual protocol/view if all mappings fit honestly;
+- formatter directory populated one proven grammar at a time;
+- selected PR #524 ANSI/output/streaming primitives ported with caps.
+
+Fixture matrix includes:
+
+- live and committed commands;
+- unified-exec, classic exec, local shell, Bash, OpenCode bash;
+- multi-command wrappers;
+- CRLF output;
+- ANSI/control-sequence edge cases and span bombs;
+- empty successful output;
+- nonzero exit, timeout, cancellation, denial;
+- background session, stdin, wait, and uncorrelated interaction;
+- large output head/tail/paging;
+- git/test/diagnostic/JSON formatter success and decline cases.
+
+Exit gate:
+
+- command UI is distinctive and useful without losing raw evidence;
+- formatters cannot claim malformed/ambiguous output;
+- no provider parses another provider's command wrapper;
+- no per-delta whole-output work or unbounded DOM path remains.
+
+### Phase 7 — reads/search/web and collaboration
+
+Migrate in separate family PRs, each inventory-first:
+
+- reads, path listing, text search, tool/transcript discovery;
+- web search/fetch/open/find and citations;
+- spawn/message/wait/list/read/interrupt/close orchestration;
+- task notifications/final reports and child drill-in.
+
+Each PR adds provider adapters, shared protocols only when proven, shape
+fixtures, accessibility/DOM tests, and receipts. Completed low-signal grouping
+must name every absorbed owner and retain failures/active work individually.
+
+### Phase 8 — tasks/questions/workflows/MCP and rich media
+
+Migrate:
+
+- todo/task/plan/schedule/skill/workflow;
+- questions with authoritative condition-gated interaction;
+- generic MCP typed content;
+- images/image generation;
+- notebook/LSP/workspace/config/system records.
+
+Workflow UI and large MCP output must reuse the already-landed IPC/rendering
+backpressure protections. No family earns an exception to bounded, lazy output.
+
+### Phase 9 — long-tail coverage and proven deletion
+
+Tasks:
+
+- run capture soaks across all supported providers/models;
+- classify every new fingerprint;
+- keep the generic fallback total;
+- remove duplicate decoders only after provider adapters are canonical;
+- remove legacy row branches only when catalog coverage proves no remaining
+  shape uses them;
+- update evergreen rendering docs from the as-built system;
+- close/supersede PR #524 after every valuable primitive/fixture has a recorded
+  port-or-reject decision.
+
+Exit gate:
+
+- the checked-in corpus has no unknown or misrouted shape;
+- the development inbox remains capable of catching future upstream drift;
+- there is one provider-owned path per catalogued shape and no split legacy/new
+  renderer for the same shape;
+- every deletion is backed by a catalog query and replay result.
 
 ## PR #524 salvage matrix
 
