@@ -1,4 +1,4 @@
-appId: com.juliusolsson.agentcode
+appId: com.agentcode.app
 productName: Agent Code
 copyright: "Copyright © 2026 Julius Olsson"
 artifactName: "${productName}-${version}-${arch}.${ext}"
