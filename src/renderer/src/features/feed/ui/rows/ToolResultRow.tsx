@@ -19,6 +19,7 @@ import {
 } from '@providers/shared/renderer/protocols/mcp-content/model'
 import { TruncatedOutputRow } from '@renderer/features/feed/ui/rows/TruncatedOutputRow'
 import { boundedTextLineCount, TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
+import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
 /* ---------- Tool result: "⎿  (lines of output)" ---------- */
 
@@ -47,22 +48,6 @@ function LazyDetails({
       {open ? <div className="mt-2">{children}</div> : null}
     </details>
   )
-}
-
-function toolResultText(content: ToolResultBlock['content']): string {
-  if (typeof content === 'string') return content
-  if (!Array.isArray(content)) return String(content)
-  if (content.length === 0) return ''
-  const textAt = (index: number): string => {
-    const item = content[index]
-    return typeof item === 'string' ? item : item?.text ?? ''
-  }
-  // WHY the one-item fast path matters: provider-normalized results are commonly `[textBlock]`.
-  // Joining that array copies a multi-megabyte output before any paging decision can run, doubling
-  // peak live memory and blocking input. Multi-part results still require one contiguous durable
-  // source for exact paging/copy today, but the pathological common case no longer pays that copy.
-  if (content.length === 1) return textAt(0)
-  return content.map((_, index) => textAt(index)).join('\n')
 }
 
 const GenericToolResultPresentation = memo(function GenericToolResultPresentation({
@@ -154,7 +139,7 @@ export const ToolResultRow = memo(function ToolResultRow({
   const codeContext = useContext(CodeRenderContext)
   const sourceTool = toolUseIndex.get(block.tool_use_id)?.name
 
-  const text = toolResultText(block.content)
+  const text = toolResultContentText(block.content)
 
   const isError = block.is_error === true
   // WHY giant output skips eager trim: trim creates another near-complete

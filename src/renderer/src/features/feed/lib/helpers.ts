@@ -10,6 +10,7 @@ import type {
 import type { SemanticLiveTurn } from '@renderer/session-runtime/state'
 import { asRecord } from '@shared/lib/asRecord'
 import { boundedTextPage } from '@renderer/lib/text/boundedText'
+import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
 function isToolUseBlock(block: ContentBlock): block is ToolUseBlock {
   return (
@@ -85,15 +86,7 @@ export function extractToolCommand(block: ToolUseBlock): string | null {
 /** Flatten a tool_result's content to a plain string — both providers
  *  use either a string or an array of `{type:'text',text:string}`. */
 export function toolResultText(block: ToolResultBlock): string {
-  if (typeof block.content === 'string') return block.content
-  if (Array.isArray(block.content)) {
-    return block.content
-      .map(item => typeof item === 'string' ? item
-                 : typeof item.text === 'string' ? item.text
-                 : '')
-      .join('\n')
-  }
-  return ''
+  return toolResultContentText(block.content)
 }
 
 // Max lines + chars for the inline bash command display. The two

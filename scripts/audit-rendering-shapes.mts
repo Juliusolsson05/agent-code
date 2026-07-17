@@ -35,6 +35,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { sweepBundleShapes } from '../src/renderer/src/rendering/evidence/bundleShapeSweep.ts'
+import { isLegacyRenderShapeFingerprint } from '../src/renderer/src/rendering/evidence/shapeFingerprint.ts'
 import {
   buildFingerprintIndex,
   classifySighting,
@@ -42,7 +43,10 @@ import {
 } from '../src/renderer/src/rendering/evidence/catalogCoverage.ts'
 import { ALL_RENDER_SHAPE_CATALOGS } from '../src/providers/registry.renderShapes.ts'
 import type { RenderOutcome, RenderShapeSighting } from '../src/shared/types/renderShapes.ts'
-import { renderShapeWriterKey } from '../src/shared/types/renderShapes.ts'
+import {
+  renderOutcomeRouteIdentity,
+  renderShapeWriterKey,
+} from '../src/shared/types/renderShapes.ts'
 
 const args = process.argv.slice(2)
 const SEED = args.includes('--seed')
@@ -75,6 +79,8 @@ type Observation = {
 }
 
 const observations: Observation[] = []
+let legacyRecordingShapes = 0
+let legacyRecordingSightings = 0
 
 // ---- Source 1: the frozen bundle corpus -----------------------------------
 const bundleDir = join(process.cwd(), 'testing', 'fixtures', 'rendering-bundles')
@@ -107,7 +113,14 @@ if (RECORDINGS_DIR) {
   // cumulative seenCount — MAX per writer key, never sum (review finding:
   // summing double-counted every repeated key by one).
   const maxByWriterKey = new Map<string, Observation>()
-  for (const dir of dirs.slice(0, MAX_RECORDINGS)) {
+  // Recording directory names begin with an ISO timestamp. Readdir order is
+  // filesystem-dependent; slicing it directly made two identical audits scan
+  // different sessions and even let an old 200-directory window hide the
+  // newest upstream drift. Sorting and taking the newest bounded window keeps
+  // the command deterministic while prioritizing the evidence Phase 9 is
+  // actually trying to validate.
+  const selectedDirs = dirs.sort().slice(-MAX_RECORDINGS)
+  for (const dir of selectedDirs) {
     let body: string
     try {
       const eventPath = join(RECORDINGS_DIR, dir, 'events.jsonl')
@@ -147,7 +160,14 @@ if (RECORDINGS_DIR) {
       }
     }
   }
-  observations.push(...maxByWriterKey.values())
+  for (const observation of maxByWriterKey.values()) {
+    if (isLegacyRenderShapeFingerprint(observation.fingerprint)) {
+      legacyRecordingShapes += 1
+      legacyRecordingSightings += observation.count
+      continue
+    }
+    observations.push(observation)
+  }
 }
 
 // ---- Classify ---------------------------------------------------------------
@@ -192,7 +212,35 @@ const summary = [...byStatus.entries()]
       `${status}: ${groups.size} shapes / ${[...groups.values()].reduce((n, g) => n + g.reduce((m, o) => m + o.count, 0), 0)} sightings`,
   )
   .join('\n')
-console.log(`observations: ${observations.length}\n${summary}\n`)
+const legacySummary = legacyRecordingShapes > 0
+  ? `legacy-fingerprint-telemetry: ${legacyRecordingShapes} writer keys / ${legacyRecordingSightings} sightings (reported, excluded from fp2 drift)`
+  : ''
+console.log(`observations: ${observations.length}\n${summary}${legacySummary ? `\n${legacySummary}` : ''}\n`)
+
+// WHY fatal groups are printed instead of leaving only the aggregate count:
+// Phase 9 uses this command as the local unknown-shape inbox. A report saying
+// merely "one misroute" forces the developer to reimplement this join over
+// events.jsonl just to learn which catalog promise is wrong—the exact evidence
+// archaeology this script exists to remove. Paths stay bounded because the
+// observer already caps them, and outcomes contain route ids rather than raw
+// provider content.
+for (const kind of ['unknown-structure', 'known-misrouted', 'unknown-outcome'] as const) {
+  const groups = byStatus.get(kind)
+  if (!groups || groups.size === 0) continue
+  console.log(`${kind} details:`)
+  for (const [key, group] of groups) {
+    const outcomes = [...new Set(group.flatMap(observation =>
+      observation.outcome ? [renderOutcomeRouteIdentity(observation.outcome)] : [],
+    ))].sort()
+    const example = group[0]
+    console.log(
+      `  ${key} lifecycle=${example.lifecycle}` +
+      `${outcomes.length > 0 ? ` outcomes=${outcomes.join(',')}` : ''}` +
+      `${example.shapePaths.length > 0 ? ` paths=${example.shapePaths.slice(0, 8).join(' ')}` : ''}`,
+    )
+  }
+  console.log('')
+}
 
 // ---- Seed mode --------------------------------------------------------------
 if (SEED) {

@@ -92,7 +92,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-22T12-46-15-717-c973322e.json"], prefixes: [] },
     disposition: { kind: 'planned', targetGrammar: 'system' },
-    why: 'Seeded from the 48-bundle corpus (1 sightings); structural variants share this id.',
+    why: 'Phase 9 deliberately preserves the durable compact-boundary exception in central EntryRow. TODO(phase-10-compaction): move selection to Claude provider compaction only after structured/screen source precedence, deduplication, and restart/replay fixtures prove that history is independent of transient condition state.',
   }),
   'claude.entry.system-turn-duration.v1': defineRenderShape({
     id: 'claude.entry.system-turn-duration.v1',
@@ -126,7 +126,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-21T19-19-55-972-62432945.json","rendering-bundles/2026-06-21T20-14-23-131-62432945.json","rendering-bundles/2026-06-22T12-34-16-431-2db014bc.json"], prefixes: [] },
     disposition: { kind: 'planned', targetGrammar: 'system' },
-    why: 'Seeded from the 48-bundle corpus (13 sightings); structural variants share this id.',
+    why: 'Phase 9 leaves the conversation-entry container planned because runtime receipts are intentionally block-grained: EntryRow does not double-observe a user container whose text/tool blocks are observed at the actual paint decision. Inventing a container renderer receipt would corrupt counts rather than strengthen ownership.',
   }),
   'claude.semantic.agent.v1': defineRenderShape({
     id: 'claude.semantic.agent.v1',
@@ -177,8 +177,9 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'command' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (132 sightings); structural variants share this id.',
+    disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    dispositionByLifecycle: { prefix: { kind: 'planned', targetGrammar: 'command' } },
+    why: 'GRADUATED Phase 9 for complete live Bash input, which is wholly provider-owned through Claude semantic dispatch. A prefix remains planned because the same structural fingerprint exists before and after the command string closes: the early form is the bounded generic card and the later form is the command/code-edit card. Durable Bash remains separately planned because the central Git interception can still claim it by command content until Phase 10.',
   }),
   'claude.semantic.edit.v1': defineRenderShape({
     id: 'claude.semantic.edit.v1',
@@ -194,8 +195,9 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T14-02-05-796-a8ad1ebb.json","rendering-bundles/2026-06-21T17-32-48-749-5e75540c.json","rendering-bundles/2026-06-29T11-38-28-652-42071335.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'code-edit' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (15 sightings); structural variants share this id.',
+    disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    dispositionByLifecycle: { prefix: { kind: 'planned', targetGrammar: 'code-edit' } },
+    why: 'GRADUATED Phase 9 for complete semantic Edit input, which deterministically reuses the provider code-edit row. A prefix is intentionally still planned because the same structural fingerprint can occur before or after file_path closes: the former stays generic and the latter earns the partial edit card, a content-dependent distinction the structural fingerprint must not pretend to resolve.',
   }),
   'claude.semantic.enterworktree.v1': defineRenderShape({
     id: 'claude.semantic.enterworktree.v1',
@@ -440,8 +442,8 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'prose' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (232 sightings); structural variants share this id.',
+    disposition: { kind: 'generic', rendererId: 'shared.generic-tool', reason: 'Live text is provider-neutral prose painted by the shared semantic row after provider dispatch declines non-tool content.' },
+    why: 'GRADUATED Phase 9: Claude semantic dispatch intentionally owns only provider tool vocabulary. Text always reaches the shared bounded prose path, so leaving this planned would make a deterministic route invisible to drift auditing.',
   }),
   'claude.semantic.thinking.v1': defineRenderShape({
     id: 'claude.semantic.thinking.v1',
@@ -458,7 +460,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'planned', targetGrammar: 'reasoning' },
-    why: 'Seeded from the 48-bundle corpus (185 sightings); structural variants share this id.',
+    why: 'Phase 9 records the irreducible content split: empty/encrypted thinking is absorbed by the WorkIndicator owner while non-empty thinking paints the shared disclosure. Both share a structural fingerprint, so one strict disposition would manufacture misroutes.',
   }),
   'claude.semantic.toolsearch.v1': defineRenderShape({
     id: 'claude.semantic.toolsearch.v1',
@@ -528,8 +530,9 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
       lastSeen: '2026-07-16',
     },
     fixtures: { final: ["rendering-bundles/2026-06-14T14-25-07-012-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-42-750-a8ad1ebb.json","rendering-bundles/2026-06-14T14-32-54-340-a8ad1ebb.json"], prefixes: [] },
-    disposition: { kind: 'planned', targetGrammar: 'code-edit' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (16 sightings); structural variants share this id.',
+    disposition: { kind: 'specialized', rendererId: 'claude.rows.dispatch' },
+    dispositionByLifecycle: { prefix: { kind: 'planned', targetGrammar: 'code-edit' } },
+    why: 'GRADUATED Phase 9 for complete semantic Write input, which deterministically reuses the provider file-write row. Prefixes remain planned because specialization begins only after the streaming scanner closes a file path; earlier prefixes truthfully use the generic row under the same structural fingerprint.',
   }),
   'claude.tool-result.tool-result.v1': defineRenderShape({
     id: 'claude.tool-result.tool-result.v1',
@@ -546,7 +549,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'planned', targetGrammar: 'tool-result' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (394 sightings); structural variants share this id.',
+    why: 'Phase 9 keeps the structurally uniform result envelope planned because its honest owner is the paired invocation: validated task/question/Agent Code results are absorbed, Bash/read/web results are specialized, and unknown or drifted pairs stay generic. A future paired operation receipt can make the correlation—not the result fingerprint—the strict promise.',
   }),
   'claude.tool-use.agent.v1': defineRenderShape({
     id: 'claude.tool-use.agent.v1',
@@ -597,7 +600,7 @@ export const CLAUDE_RENDER_SHAPES = defineRenderShapeCatalog('claude', {
     },
     fixtures: { final: ["rendering-bundles/2026-06-04T09-09-57-625-4177cefb.json","rendering-bundles/2026-06-04T09-14-29-649-4177cefb.json","rendering-bundles/2026-06-14T13-59-16-931-4757ae44.json"], prefixes: [] },
     disposition: { kind: 'planned', targetGrammar: 'command' },
-    why: 'Seeded from the 48-bundle corpus + 2026-07-16 live capture (197 sightings); structural variants share this id.',
+    why: 'Phase 9 preserves this content-dependent durable route for Phase 10: non-Git Bash uses Claude command/code-edit rendering, while a recognized Git command is intercepted by the central shared.git-widget and its result is absorbed. The paired operation boundary must replace both branches atomically.',
   }),
   'claude.tool-use.edit.v1': defineRenderShape({
     id: 'claude.tool-use.edit.v1',

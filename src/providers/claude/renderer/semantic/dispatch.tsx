@@ -13,6 +13,7 @@ import { extractStreamingWriteInput } from '@renderer/features/feed/lib/streamin
 import { StreamingCodeText } from '@renderer/lib/code/StreamingCodeText'
 import { normalizeCodeLanguage } from '@shared/code/language'
 import { parseJsonRecord } from '@shared/lib/asRecord'
+import { extractJsonStringField } from '@providers/claude/renderer/adapters/codeEdit'
 import type { ToolResultBlock, ToolUseBlock } from '@shared/types/transcript'
 import { TEXT_PAGE_MAX_CHARS } from '@renderer/lib/text/boundedText'
 import type { SemanticLiveBlock } from '@renderer/session-runtime/state'
@@ -26,13 +27,8 @@ function semanticId(block: SemanticLiveBlock): string {
  * this bounded prefix parser exists solely so file-edit cards can appear while
  * old/new text is still streaming. */
 function closedString(raw: string, key: string): string | null {
-  const match = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(raw)
-  if (!match) return null
-  try {
-    return JSON.parse(`"${match[1]}"`) as string
-  } catch {
-    return null
-  }
+  const field = extractJsonStringField(raw, key)
+  return field?.closed ? field.value : null
 }
 
 function claudePartialEditInput(block: SemanticLiveBlock): Record<string, unknown> | null {

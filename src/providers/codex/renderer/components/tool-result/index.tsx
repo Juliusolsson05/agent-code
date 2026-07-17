@@ -26,6 +26,7 @@ import {
 } from '@providers/shared/renderer/protocols/mcp-content/model'
 import { asRecord } from '@shared/lib/asRecord'
 import { boundedTextLineCount } from '@renderer/lib/text/boundedText'
+import { toolResultContentText } from '@providers/shared/renderer/rows/toolResultContent'
 
 // WHY asRecord (the shared helper) and not a local cast: the local copy this
 // replaced did NOT exclude arrays — it returned `value as Record<...>` for
@@ -33,27 +34,6 @@ import { boundedTextLineCount } from '@renderer/lib/text/boundedText'
 // Every call site below uses `.raw` / `.input` style property reads on what
 // should always be a plain object, so the stricter check is a free safety
 // improvement, not a regression.
-
-function textFromContent(content: unknown): string {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    const textAt = (index: number): string => {
-      const item = content[index]
-      if (typeof item === 'string') return item
-      const rec = asRecord(item)
-      return typeof rec?.text === 'string' ? rec.text : JSON.stringify(item, null, 2)
-    }
-    // WHY avoid Array.map().join() for the overwhelmingly common single text block: the result can
-    // be megabytes, and joining makes a second full string before bounded rendering gets control.
-    // Multi-part output still has to become one exact source for paging/copy, but one block can be
-    // handed through by identity with no transient duplicate.
-    if (content.length === 1) return textAt(0)
-    return content
-      .map((_, index) => textAt(index))
-      .join('\n')
-  }
-  return String(content ?? '')
-}
 
 function detectDiff(text: string): boolean {
   return text.startsWith('diff --git ') || text.startsWith('@@ ')
@@ -153,7 +133,7 @@ export const CodexToolResultRow = memo(function CodexToolResultRow({
   sourceTool?: ToolUseBlock | null
 }) {
   const codeContext = useContext(CodeRenderContext)
-  const materializedText = textFromContent(block.content)
+  const materializedText = toolResultContentText(block.content)
   const text = materializedText.length <= 16 * 1024
     ? materializedText.replace(/\s+$/, '')
     : materializedText

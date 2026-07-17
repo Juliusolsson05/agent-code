@@ -3,6 +3,7 @@ import {
   type ShapeFingerprint,
 } from '@renderer/rendering/evidence/shapeFingerprint'
 import type { RenderShapeLifecycle, RenderShapePlane } from '@shared/types/renderShapes'
+import { asRecord } from '@shared/lib/asRecord'
 
 // Bundle → shape-observation sweep (Phase 4, PR #555).
 //
@@ -35,12 +36,6 @@ export type BundleShapeObservation = {
   eventType: string
   payload: unknown
   fingerprint: ShapeFingerprint
-}
-
-type LooseRecord = Record<string, unknown>
-
-function asRecord(v: unknown): LooseRecord | null {
-  return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as LooseRecord) : null
 }
 
 export function sweepBundleShapes(bundle: unknown): BundleShapeObservation[] {
