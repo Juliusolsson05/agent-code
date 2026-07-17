@@ -1,6 +1,9 @@
 import type { ProviderConditionSnapshot } from '@shared/types/providerConditions.js'
 import type { SessionKind } from '@shared/types/providerKind.js'
-import type { AgentTranscriptEntry } from '@shared/types/session.js'
+import type {
+  AgentTranscriptEntry,
+  SessionInputReadiness,
+} from '@shared/types/session.js'
 
 // Session-feed wire types — the payload shapes that cross the SessionFeed
 // contract (see ./SessionFeed.ts).
@@ -59,6 +62,13 @@ export type SessionStartedEvent = {
   kind: SessionKind
   /** Undefined for terminal sessions — they don't have a CC project dir. */
   projectDir?: string
+}
+
+/** Versioned, level-triggered composer readiness. Process start/activity are
+ * intentionally separate facts and must never be interpreted as writable. */
+export type SessionInputReadinessEvent = {
+  sessionId: string
+  input: SessionInputReadiness
 }
 
 export type SessionScreenEvent = { sessionId: string } & ScreenSnapshot

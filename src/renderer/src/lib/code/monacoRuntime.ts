@@ -1,15 +1,12 @@
 import type * as Monaco from 'monaco-editor'
 
-import {
-  normalizeCodeLanguage,
-  supportsLsp,
-} from '@shared/code/language'
+import { monacoLanguageId, normalizeCodeLanguage, supportsLsp } from '@shared/code/language'
 import { APP_SLUG } from '@shared/appIdentity'
-import {
-  normalizeMonacoThemeColor,
-  normalizeMonacoThemeColorAlpha,
-} from './monacoThemeColors'
+import type { LspDocumentAuthorization } from '@shared/types/lsp'
+import { normalizeMonacoThemeColor, normalizeMonacoThemeColorAlpha } from './monacoThemeColors'
 import { registerMonacoModelCountProbe } from './monacoModelProbe'
+import { isEditorThemeActive } from './monacoThemeState'
+import { configureMonacoTypeScriptDefaults } from './monacoTypeScriptDefaults'
 
 import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
 import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker'
@@ -17,15 +14,45 @@ import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
 import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker'
 import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker'
 
-const semanticLegends = new Map<
-  string,
-  { tokenTypes: string[]; tokenModifiers: string[] }
->()
+// Installed at MODULE SCOPE, not inside getMonaco(): Monaco resolves
+// MonacoEnvironment lazily when a language service first needs a worker,
+// but nothing guarantees every model/editor creation site awaits
+// getMonaco() first (a future direct import of 'monaco-editor' from
+// anywhere else would race it). The worker getter has no dependency on
+// the loaded monaco module, so there is no reason to defer installing it
+// — and a missing environment doesn't throw, it silently degrades to
+// no-tokenization, which is the worst possible failure mode to debug
+// (#513 "highlighting is blank half the time").
+const monacoWindow = window as Window & {
+  MonacoEnvironment?: {
+    getWorker: (moduleId: string, label: string) => Worker
+  }
+}
+monacoWindow.MonacoEnvironment ??= {
+  getWorker(_moduleId: string, label: string) {
+    if (label === 'typescript' || label === 'javascript') return new tsWorker()
+    if (label === 'json') return new jsonWorker()
+    if (label === 'css' || label === 'scss' || label === 'less') return new cssWorker()
+    if (label === 'html' || label === 'handlebars' || label === 'razor') return new htmlWorker()
+    return new editorWorker()
+  },
+}
+
+const semanticLegends = new Map<string, { tokenTypes: string[]; tokenModifiers: string[] }>()
 const registeredLanguages = new Set<string>()
+// Guard keyed on the MONACO language id, separate from
+// `registeredLanguages` (keyed on the LSP id): 'typescript' and
+// 'typescriptreact' both collapse onto Monaco 'typescript', and Monaco
+// keeps every registered provider alive globally — a second registration
+// for the same Monaco language would double every semantic-tokens
+// request.
+const registeredMonacoLanguages = new Set<string>()
 const pendingSemanticProviders = new Map<string, Promise<void>>()
 
 let monacoPromise: Promise<typeof Monaco> | null = null
 let themeListenerInstalled = false
+let themesDefined = false
+let typescriptDefaultsConfigured = false
 
 function currentThemeName(): string {
   const root = document.documentElement
@@ -129,7 +156,16 @@ function defineThemes(monaco: typeof Monaco): void {
     },
   })
 
-  monaco.editor.setTheme(currentThemeName())
+  // Only assert the slab theme when the editor-canvas theme isn't in
+  // charge. defineThemes used to end with an unconditional setTheme,
+  // which meant every getMonaco() call (i.e. every CodeBlock mount) and
+  // every app-theme change yanked the GLOBAL theme back to the slab
+  // palette even while the file editor was open — the "editor randomly
+  // flips dark" half of #513. Ownership contract lives in
+  // monacoThemeState.ts.
+  if (!isEditorThemeActive()) {
+    monaco.editor.setTheme(currentThemeName())
+  }
 }
 
 function installThemeListener(monaco: typeof Monaco): void {
@@ -150,38 +186,37 @@ export async function getMonaco(): Promise<typeof Monaco> {
   // to trigger the Monaco load themselves. See monacoModelProbe.ts for the
   // dependency-direction rationale.
   registerMonacoModelCountProbe(() => monaco.editor.getModels().length)
-  const monacoWindow = window as Window & {
-    MonacoEnvironment?: {
-      getWorker: (_moduleId: string, label: string) => Worker
-    }
+  // JSX/TSX support for the built-in TypeScript worker. Without `jsx` set,
+  // the worker parses `.tsx` model content as plain TS and floods it with
+  // syntax errors on the first `<`. `allowNonTsExtensions` lets the worker
+  // attach to models whose URIs don't end in .ts/.tsx (transcript snippets
+  // use synthetic URIs).
+  //
+  // Semantic validation is intentionally OFF: the worker sees one file at a
+  // time, so every cross-file import resolves to "cannot find module"
+  // noise. Real semantic diagnostics come from the typescript-language-
+  // server via LspManager (which sees the whole project); the worker keeps
+  // only syntax validation, which is reliable single-file.
+  if (!typescriptDefaultsConfigured) {
+    typescriptDefaultsConfigured = true
+    configureMonacoTypeScriptDefaults(monaco)
   }
-  if (!monacoWindow.MonacoEnvironment) {
-    monacoWindow.MonacoEnvironment = {
-      getWorker(_moduleId: string, label: string) {
-        if (label === 'typescript' || label === 'javascript') {
-          return new tsWorker()
-        }
-        if (label === 'json') return new jsonWorker()
-        if (label === 'css' || label === 'scss' || label === 'less') {
-          return new cssWorker()
-        }
-        if (label === 'html' || label === 'handlebars' || label === 'razor') {
-          return new htmlWorker()
-        }
-        return new editorWorker()
-      },
-    }
+  // Define-once: getMonaco() is called by every CodeBlock mount, and
+  // re-deriving all four themes from getComputedStyle on each mount is
+  // wasted layout work. Theme *changes* re-derive via the listener.
+  if (!themesDefined) {
+    themesDefined = true
+    defineThemes(monaco)
   }
-  defineThemes(monaco)
   installThemeListener(monaco)
   return monaco
 }
-
 
 export async function ensureSemanticProvider(
   monaco: typeof Monaco,
   workspaceRoot: string | null | undefined,
   language: string,
+  authorization: LspDocumentAuthorization = { kind: 'editor-root' },
 ): Promise<void> {
   const normalized = normalizeCodeLanguage(language)
   if (!workspaceRoot || !supportsLsp(normalized)) return
@@ -199,12 +234,24 @@ export async function ensureSemanticProvider(
   // safest fix is to let the first mount own registration while later mounts
   // await the same promise.
   const registration = (async () => {
-    const legend = await window.api.ensureLspLegend(workspaceRoot, normalized)
+    const legend = await window.api.ensureLspLegend({
+      workspaceRoot,
+      language: normalized,
+      authorization,
+    })
     if (!legend) return
 
     semanticLegends.set(normalized, legend)
     registeredLanguages.add(normalized)
-    monaco.languages.registerDocumentSemanticTokensProvider(normalized, {
+    const monacoId = monacoLanguageId(normalized)
+    if (registeredMonacoLanguages.has(monacoId)) return
+    registeredMonacoLanguages.add(monacoId)
+    // Models are created with the MONACO id (monacoLanguageId, task 1 of
+    // #513); registering the provider under the raw LSP id
+    // ('typescriptreact') would attach it to a language no model uses.
+    // The legend request above still uses `normalized` because tsserver
+    // keys its behavior on the LSP id.
+    monaco.languages.registerDocumentSemanticTokensProvider(monacoId, {
       getLegend() {
         const current = semanticLegends.get(normalized)
         return {

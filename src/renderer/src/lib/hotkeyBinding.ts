@@ -6,7 +6,13 @@ export type HeldModifiers = {
   fn: boolean
 }
 
-export const DEFAULT_DICTATION_HOTKEY = 'Fn'
+// Keep in lockstep with DEFAULT_SETTINGS.dictationShortcut (app-state/
+// settings/types.ts). This constant is what coerceHotkeyBinding falls back
+// to for corrupted persisted values AND what the HotkeyInput "reset"
+// button restores — if it drifted back to 'Fn', both paths would silently
+// re-arm the Accessibility-gated CGEventTap helper that the Cmd+Shift+D
+// default exists to avoid (see the WHY at DEFAULT_SETTINGS).
+export const DEFAULT_DICTATION_HOTKEY = 'Cmd+Shift+D'
 
 export type KeyboardEventLike = {
   key: string

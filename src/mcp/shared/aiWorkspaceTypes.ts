@@ -74,7 +74,14 @@ export type AiWorkspaceDetachFileParams = {
 }
 
 export type AiWorkspaceReadFileResult =
-  | { ok: true; path: string; text: string; mtimeMs: number; size: number }
+  | {
+      ok: true
+      path: string
+      text: string
+      mtimeMs: number
+      size: number
+      version: string
+    }
   | { ok: false; error: string }
 
 // WHY a named params type (it was inlined identically in preload, the main IPC
@@ -86,16 +93,26 @@ export type AiWorkspaceReadFileResult =
 export type AiWorkspaceWriteFileParams = {
   path: string
   text: string
-  /** Last mtime the renderer saw. Omit/undefined to write unconditionally;
+  /** Last opaque version the renderer saw. Omit/undefined to write unconditionally;
    *  `null` is treated the same as undefined by the writer. A mismatch yields
    *  a `{ ok: false, conflict: true }` result. */
-  expectedMtimeMs?: number | null
+  expectedVersion?: string | null
 }
 
 export type AiWorkspaceWriteFileResult =
-  | { ok: true; path: string; mtimeMs: number; size: number }
-  | { ok: false; error: string; conflict?: boolean }
+  | { ok: true; path: string; mtimeMs: number; size: number; version: string }
+  | {
+      ok: false
+      error: string
+      conflict?: boolean
+      conflictKind?: 'changed' | 'deleted'
+    }
 
 export type AiWorkspaceOpenRequest = {
   workspaceId: string
+}
+
+export type AiWorkspaceChangeEvent = {
+  workspaceId: string
+  kind: 'created' | 'entries' | 'file-written' | 'deleted'
 }

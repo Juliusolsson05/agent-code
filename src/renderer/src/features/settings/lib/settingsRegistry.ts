@@ -107,6 +107,22 @@ export type SettingDefinition =
       title: string
       description: string
       keywords: string[]
+      // Marker for the voice-dictation Deepgram API-key row. Same
+      // rationale as cli-update-behavior above — the value lives in
+      // safeStorage-backed main state (see src/main/dictation/
+      // apiKeyStore.ts), not in Settings, so we render the row via a
+      // self-subscribing component that reads its state over IPC.
+      // See features/voice-dictation/DictationApiKeyRow.tsx.
+      control: {
+        type: 'dictation-api-key'
+      }
+    }
+  | {
+      id: string
+      category: SettingCategoryId
+      title: string
+      description: string
+      keywords: string[]
       control: {
         type: 'command-visibility'
         /** Full command catalog to render rows for. Carried as a value
@@ -177,7 +193,8 @@ const DICTATION_PROVIDER_OPTIONS: ChoiceOption<Settings['dictationProvider']>[] 
   {
     value: 'deepgram',
     label: 'Deepgram',
-    description: 'Streaming Flux path. Requires DEEPGRAM_API_KEY in the main process environment.',
+    description:
+      'Streaming Flux path. Paste your Deepgram API key below — get $200 in free credits from console.deepgram.com.',
   },
 ]
 
@@ -501,11 +518,33 @@ export function getSettingsRegistry(): SettingDefinition[] {
       },
     },
     {
+      // Marker row rendered by <DictationApiKeyRow /> — see the registry
+      // type union for the WHY on marker rows. The row is self-subscribed
+      // to main via IPC because the key lives outside Zustand (safeStorage
+      // -backed setup.json sibling).
+      id: 'dictation-api-key',
+      category: 'dictation',
+      title: 'Deepgram API Key',
+      description:
+        'Encrypted with your system keyring. Get $200 free credits at console.deepgram.com — see the Voice Dictation guide.',
+      keywords: [
+        'voice',
+        'dictation',
+        'api',
+        'key',
+        'deepgram',
+        'credentials',
+        'secret',
+        'token',
+      ],
+      control: { type: 'dictation-api-key' },
+    },
+    {
       id: 'dictation-shortcut',
       category: 'dictation',
       title: 'Dictation Shortcut',
       description:
-        'Keyboard binding for toggling the active composer dictation session. Default is fn.',
+        'Cmd+Shift+D is a no-permission toggle: press once to record and again to finish. Choosing Fn enables hold-to-talk and requires macOS Accessibility permission.',
       keywords: ['voice', 'dictation', 'shortcut', 'binding', 'hotkey', 'keyboard'],
       control: {
         type: 'hotkey',

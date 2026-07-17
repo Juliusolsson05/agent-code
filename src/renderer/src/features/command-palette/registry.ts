@@ -1,4 +1,5 @@
 import { layoutCommands } from '@renderer/features/workspace/commands/layoutCommands'
+import { globalEditorCommands } from '@renderer/features/global-editor/commands/globalEditorCommands'
 import { paneCommands } from '@renderer/features/workspace/commands/paneCommands'
 import { sessionCommands } from '@renderer/features/workspace/commands/sessionCommands'
 import { tabCommands } from '@renderer/features/workspace/commands/tabCommands'
@@ -26,6 +27,11 @@ const commandDefs: CommandDef[] = [
   ...tabCommands,
   ...paneCommands,
   ...layoutCommands,
+  // Registered right after layoutCommands so the moved editor commands
+  // keep (approximately) their old registry order — registry order is the
+  // palette's empty-query browse order, and gratuitous reshuffles read as
+  // regressions to users who navigate by position.
+  ...globalEditorCommands,
   ...sessionCommands,
   ...spotlightCommands,
   ...readerCommands,

@@ -14,14 +14,15 @@ import type { TileTabsState } from '@renderer/workspace/types'
 // ---------------------------------------------------------------------------
 
 /**
- * Persisted workspace shape. Live runtime state is NOT here — we
- * respawn sessions on load and their state rebuilds naturally from
- * fresh IPC events.
+ * Persisted workspace shape. Live runtime state is NOT here: main reconciles
+ * each visible local SessionId with a backend, and runtime state rebuilds from
+ * the returned level snapshot plus subsequent SessionFeed events.
  */
 export type PersistedWorkspace = {
-  // Tab tree with sessionIds that refer to the CURRENT launch's
-  // sessions. On load we re-spawn and remap ids, so persisted ids are
-  // just placeholders that get replaced.
+  // Tab tree keyed by durable Agent Code SessionIds. These are ownership keys,
+  // not launch-scoped placeholders: renderer reload adopts an existing backend
+  // and full app restart cold-starts one under the same id. Provider history
+  // identity is stored separately in SessionMeta.providerSessionId.
   tabs: Array<{
     id: TabId
     title: string
@@ -38,11 +39,10 @@ export type PersistedWorkspace = {
    * workspace.json files predate this field; rehydrate defaults the
    * runtime state to [] when this is absent or malformed.
    *
-   * These ids are pre-remap (current-launch ids at save time). On
-   * load they pass through the same id remap as tile leaves /
-   * detached / buried, and pins whose source session fails to
-   * respawn are dropped — see buildRemappedPinnedSessionIds in
-   * rehydrate.ts.
+   * These ids use the same durable local ownership keys as tile leaves,
+   * detached sessions, and buried panes. Failed backend recovery retains the
+   * pin because the pane remains retryable; only truly unowned/corrupt rows are
+   * removed during rehydrate.
    */
   pinnedSessionIds?: SessionId[]
   tileTabs?: TileTabsState | null

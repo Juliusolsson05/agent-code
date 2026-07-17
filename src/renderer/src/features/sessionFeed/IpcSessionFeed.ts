@@ -25,6 +25,7 @@ import type { SessionFeed } from '@shared/sessionFeed/SessionFeed'
 // `window.api` at call time keeps this module import-safe in any order.
 export const ipcSessionFeed: SessionFeed = {
   onSessionStarted: cb => window.api.onSessionStarted(cb),
+  onSessionInputReadiness: cb => window.api.onSessionInputReadiness(cb),
   onSessionScreen: cb => window.api.onSessionScreen(cb),
   onSessionJsonlEntries: cb => window.api.onSessionJsonlEntries(cb),
   onSessionJsonlError: cb => window.api.onSessionJsonlError(cb),

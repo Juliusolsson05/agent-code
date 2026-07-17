@@ -10,6 +10,7 @@ import { CodexHeadless, CodexResponsesAdapter, ResponsesProxy } from 'codex-head
 import type { CodexConditionSnapshot, CodexRolloutLine, CodexSemanticEvent } from 'codex-headless'
 import { canonicalizePath, sanitizePathSegment } from '@shared/runtime/projectDir.js'
 import type { BuiltInMcpServerConfig } from '@mcp/shared/types.js'
+import type { AgentInputReadiness } from '@shared/types/session.js'
 import { isCodexReadyForPromptScreen } from '@providers/codex/runtime/codexReadyForPrompt.js'
 import { addCodexBuiltInMcpLaunchConfig } from '@providers/shared/runtime/builtInMcpLaunch.js'
 
@@ -109,6 +110,7 @@ export type CodexScreenSnapshot = {
 
 export type CodexSessionEvents = {
   started: [{ projectDir: string; proxyUrl?: string }]
+  'input-readiness': [AgentInputReadiness]
   'pty-data': [string]
   screen: [CodexScreenSnapshot]
   'jsonl-entry': [CodexRolloutLine, string]
@@ -162,6 +164,7 @@ export class CodexSession extends EventEmitter {
   private headless: CodexHeadless | null = null
   private pty: ReturnType<typeof ptySpawn> | null = null
   private exited = false
+  private composerReady = false
 
   private readonly cwd: string
   private readonly cols: number
@@ -210,6 +213,11 @@ export class CodexSession extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    this.composerReady = false
+    this.emit('input-readiness', {
+      ready: false,
+      reason: this.resumeSessionId ? 'replaying-history' : 'provider-not-ready',
+    })
     // Codex uses a subcommand for resume: `codex resume <id>`.
     const args: string[] = []
     // Filter undefined env entries before adding generated MCP credential variables. Keeping this
@@ -301,6 +309,7 @@ export class CodexSession extends EventEmitter {
 
     // Forward screen snapshots.
     this.headless.on('screen', snap => {
+      this.markComposerReady(snap.plain)
       this.emit('screen', {
         plain: snap.plain,
         markdown: snap.markdown,
@@ -363,6 +372,8 @@ export class CodexSession extends EventEmitter {
 
     this.headless.on('exit', ({ exitCode, signal }) => {
       this.exited = true
+      this.composerReady = false
+      this.emit('input-readiness', { ready: false, reason: 'provider-not-ready' })
       this.emit('exit', { exitCode, signal })
     })
 
@@ -427,6 +438,7 @@ export class CodexSession extends EventEmitter {
       const tick = (): void => {
         const screen = this.headless?.getScreen() ?? ''
         if (isCodexReadyForPromptScreen(screen)) {
+          this.markComposerReady(screen)
           resolve({ kind: 'ready', waitedMs: Date.now() - startedAt })
           return
         }
@@ -438,6 +450,16 @@ export class CodexSession extends EventEmitter {
       }
       tick()
     })
+  }
+
+  private markComposerReady(screen: string): void {
+    if (this.composerReady || this.exited || !isCodexReadyForPromptScreen(screen)) return
+    // WHY this latches instead of mirroring every screen: the composer
+    // intentionally disappears while Codex is working. Once startup/trust
+    // chrome has yielded a real composer, ordinary turns must not flap the
+    // renderer disabled. Exit is the only boundary that clears the latch.
+    this.composerReady = true
+    this.emit('input-readiness', { ready: true, reason: 'ready' })
   }
 
   resize(cols: number, rows: number): void {

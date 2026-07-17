@@ -141,6 +141,10 @@ const worktreeActivityIndex = new WorktreeActivityIndex()
 const builtInMcpHost = new BuiltInMcpHttpHost()
 const orchestrationBridge = new OrchestrationBridge()
 const aiWorkspaceRegistry = new AiWorkspaceRegistry()
+// Registry mutations can originate from renderer IPC or any built-in MCP
+// session. Forward one source-of-truth event so an already-open curated editor
+// does not require a manual close/reopen to see agent attachments or clears.
+aiWorkspaceRegistry.on('changed', event => sendToMainWindow('ai-workspace:changed', event))
 const caffeinateController = new CaffeinateController()
 
 // SessionManager is constructed inside whenReady so we can await
@@ -161,6 +165,34 @@ let workflowShutdownPromise: Promise<void> | null = null
 let workflowShutdownComplete = false
 let sessionForwarder: SessionForwarderControl | null = null
 
+// A packaged release needs one executable-level smoke test that stops before
+// touching the user's real workspace, process lock, provider CLIs, or network.
+// Merely inspecting app.asar cannot prove Electron can load the main bundle and
+// node-pty on the target architecture. CI launches the finished .app with this
+// private flag; reaching this point already proves all top-level native imports
+// loaded, then these resource probes prove the renderer/phone/runtime payloads
+// survived packaging. Normal users never see or depend on this path.
+const packagingSmoke = process.argv.includes('--packaging-smoke')
+
+async function runPackagingSmoke(): Promise<void> {
+  const required = [
+    join(app.getAppPath(), 'out', 'preload', 'index.mjs'),
+    join(app.getAppPath(), 'out', 'renderer', 'index.html'),
+    join(app.getAppPath(), 'out', 'remote-client', 'index.html'),
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'tmux', 'manifest.json'),
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'mitmproxy', 'manifest.json'),
+    join(app.getAppPath(), 'out', 'main', 'runtime', 'cloudflared', 'manifest.json'),
+  ]
+  const missing = required.filter(path => !existsSync(path))
+  if (!app.isPackaged || missing.length > 0) {
+    console.error('[packaging-smoke] failed', { isPackaged: app.isPackaged, missing })
+    app.exit(1)
+    return
+  }
+  console.log('[packaging-smoke] OK', process.arch, app.getVersion())
+  app.exit(0)
+}
+
 // WHY Agent Code is intentionally single-primary-process:
 //
 // The renderer persists the whole workspace as one `workspace.json` snapshot,
@@ -179,9 +211,14 @@ let sessionForwarder: SessionForwarderControl | null = null
 // shared. If that lock ever feels too strict, the storage model must be changed
 // first; deleting the guard alone would make last-writer-wins corruption
 // possible again.
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
+const hasSingleInstanceLock = packagingSmoke || app.requestSingleInstanceLock()
 
-if (!hasSingleInstanceLock) {
+if (packagingSmoke) {
+  void app.whenReady().then(runPackagingSmoke).catch(err => {
+    console.error('[packaging-smoke] startup failed', err)
+    app.exit(1)
+  })
+} else if (!hasSingleInstanceLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
@@ -725,7 +762,20 @@ app.on('window-all-closed', () => {
     return
   }
   void manager?.killAll()
-  void builtInMcpHost.stop()
+  // WHY we do NOT stop the built-in MCP host on macOS here (packaged-app fix):
+  //
+  // On macOS, closing the last window does not quit the app — Electron keeps
+  // the process alive so `activate` can create a fresh window (Dock icon
+  // click, reopen from Cmd-Tab, etc.). We previously called
+  // `builtInMcpHost.stop()` here unconditionally, which nulled the internal
+  // HTTP server. The next session:spawn on the reborn window then threw
+  // "Built-in MCP host must be started before registering a session" from
+  // BuiltInMcpHttpHost.registerSession, which cascaded into a partial
+  // workspace restore and the AUTOSAVE-OFF banner. There is no equivalent
+  // teardown path that restarts the host, so on macOS we simply keep it
+  // running while the process is alive; `before-quit` still stops it on
+  // real shutdown. On non-macOS platforms we're about to quit anyway, so
+  // stopping here is redundant with the `before-quit` handler.
   void remoteController?.dispose()
   void lspManager.dispose()
   // WHY we release caffeinate here even though macOS keeps the app process

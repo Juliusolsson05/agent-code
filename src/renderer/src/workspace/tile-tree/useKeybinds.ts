@@ -1,7 +1,4 @@
-import {
-  AGENT_PROVIDER_KINDS,
-  DEFAULT_PROVIDER,
-} from '@shared/types/providerKind'
+import { AGENT_PROVIDER_KINDS, DEFAULT_PROVIDER } from '@shared/types/providerKind'
 import { getRendererProviderCapabilities } from '@providers/registry.renderer.capabilities'
 import { useEffect } from 'react'
 
@@ -17,6 +14,7 @@ import { nextTiledRowIndex } from '@renderer/workspace/dispatch/tiledDispatchSel
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
 import { enumerateCodeBlockIds } from '@renderer/features/copy-code-block/lib/enumerateCodeBlocks'
 import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlockRegistry'
+import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
 
 // Keybinds: global window-level listeners. The handler is attached to
 // `document` in a single useEffect, which captures the key BEFORE the
@@ -40,6 +38,13 @@ import { getCodeBlockCode } from '@renderer/features/copy-code-block/lib/codeBlo
 //   cmd-alt-1..9    activate Nth tab, including while Dispatch Mode owns cmd-N.
 //   cmd-[           previous tab
 //   cmd-]           next tab
+//   cmd-shift-p     command palette
+//   cmd-shift-e     Global Editor overlay toggle
+//   cmd-alt-e       Global Editor fullscreen (opens the editor first if
+//                   needed; Esc exits fullscreen)
+//   cmd-p           Quick Open file in the Global Editor (opens the
+//                   editor first if needed)
+//   cmd-shift-f     Search in files (Global Editor; opens it if needed)
 //   alt-d           split current pane vertically (new pane to the right)
 //   alt-shift-d     split current pane horizontally (new pane below)
 //   alt-t           split with a TERMINAL below (new row, horizontal split)
@@ -135,14 +140,20 @@ export function shouldPreventOwnedApplicationShortcut(event: KeyboardEvent): boo
   return BLOCKED_ALT_CODES.has(event.code)
 }
 
-function renderedAgentSurfaceIsVisible(workspace: Workspace, agentViewMode: string, sessionId: string): boolean {
+function renderedAgentSurfaceIsVisible(
+  workspace: Workspace,
+  agentViewMode: string,
+  sessionId: string,
+): boolean {
   const kind = workspace.state.sessions[sessionId]?.kind
   if (!isAgentKind(kind)) return false
-  return getEffectiveAgentSurface({
-    kind,
-    mode: agentViewMode === 'terminal' || agentViewMode === 'hybrid' ? agentViewMode : 'agent',
-    runtime: workspace.getRuntime(sessionId),
-  }) === 'rendered'
+  return (
+    getEffectiveAgentSurface({
+      kind,
+      mode: agentViewMode === 'terminal' || agentViewMode === 'hybrid' ? agentViewMode : 'agent',
+      runtime: workspace.getRuntime(sessionId),
+    }) === 'rendered'
+  )
 }
 
 export function useKeybinds(
@@ -230,9 +241,7 @@ export function useKeybinds(
       // `placementOverlayOpen` so create, attach, and linked-agent
       // modes share one keyboard bailout.
       const placementOverlayOpen =
-        newAgentPlacementOpen ||
-        dispatchAttachIntent !== null ||
-        linkedAgentParentId !== null
+        newAgentPlacementOpen || dispatchAttachIntent !== null || linkedAgentParentId !== null
 
       // Placement overlay (create-new, attach-detached, or linked
       // agent) and the two draft modals (reorder / pin) all share
@@ -289,6 +298,117 @@ export function useKeybinds(
         return
       }
 
+      // --- Alt+Cmd+E: Global Editor fullscreen ---
+      //
+      // Chord picked for adjacency to ⌘⇧E (same key, different
+      // modifier = same feature family). When the editor is closed,
+      // this opens it straight into fullscreen — "give me a big
+      // editor" is one gesture, not two. Esc exits (handled in
+      // GlobalEditorShell so it can defer to open overlays).
+      if (cmd && alt && !shift && e.code === 'KeyE') {
+        e.preventDefault()
+        const editorStore = useGlobalEditorStore.getState()
+        if (!useAppStore.getState().globalEditorOpen) {
+          toggleGlobalEditor()
+          editorStore.setEditorFullscreen(true)
+        } else {
+          editorStore.toggleEditorFullscreen()
+        }
+        return
+      }
+
+      // --- Cmd+P: Quick Open file (Global Editor) ---
+      //
+      // Opens the editor first when it's closed: quick-open with
+      // nowhere to show the file would be a dead command. Plain ⌘P is
+      // free (⌘⇧P above is the command palette), and it matches the
+      // VS Code muscle memory quick-open trained into everyone.
+      if (cmd && !shift && !alt && k.toLowerCase() === 'p') {
+        e.preventDefault()
+        const editorStore = useGlobalEditorStore.getState()
+        const editorOpen = useAppStore.getState().globalEditorOpen
+        const targetSessionId = commandTargetSessionId(workspace)
+        const focusedCwd = targetSessionId ? workspace.state.sessions[targetSessionId]?.cwd : null
+        const targetCwd = editorOpen
+          ? (editorStore.activeCwd ?? focusedCwd)
+          : (focusedCwd ?? editorStore.activeCwd)
+        if (!targetCwd) return
+        editorStore.setActiveCwd(targetCwd)
+        editorStore.showProjectEditor()
+        if (!editorOpen) toggleGlobalEditor()
+        editorStore.setQuickOpenOpen(true)
+        return
+      }
+
+      // --- Cmd+Shift+F: Search in files (Global Editor) ---
+      //
+      // Same open-editor-first behavior as ⌘P, same VS Code muscle
+      // memory. Verified unbound before claiming (only ⌘⇧P / ⌘⇧E
+      // shared the cmd+shift namespace here).
+      if (cmd && shift && !alt && k.toLowerCase() === 'f') {
+        e.preventDefault()
+        const editorStore = useGlobalEditorStore.getState()
+        const editorOpen = useAppStore.getState().globalEditorOpen
+        const targetSessionId = commandTargetSessionId(workspace)
+        const focusedCwd = targetSessionId ? workspace.state.sessions[targetSessionId]?.cwd : null
+        const targetCwd = editorOpen
+          ? (editorStore.activeCwd ?? focusedCwd)
+          : (focusedCwd ?? editorStore.activeCwd)
+        if (!targetCwd) return
+        editorStore.setActiveCwd(targetCwd)
+        editorStore.showProjectEditor()
+        if (!editorOpen) toggleGlobalEditor()
+        editorStore.setContentSearchOpen(true)
+        return
+      }
+
+      // Editor chrome owns only the chords that collide with text/tab editing.
+      // A blanket early return here also disabled true application commands
+      // such as Cmd+T, Cmd+Shift+T, Cmd+R, and numbered tab activation whenever
+      // focus happened to be in the Explorer. Keep those commands global while
+      // preventing workspace navigation from stealing editor-native turns.
+      const eventElement = e.target instanceof Element ? e.target : null
+      const editorOwnsTarget = Boolean(eventElement?.closest('[data-global-editor-input-owner]'))
+      if (editorOwnsTarget) {
+        const monacoOwnsTarget = Boolean(eventElement?.closest('[data-global-editor-monaco]'))
+        // On macOS Option is a text-composition modifier (⌥D → ∂, etc.). Every
+        // unclaimed Option chord must remain in the editor surface; falling
+        // through can split/close/navigate the hidden workspace while the user
+        // is simply typing into Monaco.
+        if (alt && !cmd) return
+        const plainEditorCommand = cmd && !shift && !alt && ['s', 'w', '[', ']'].includes(k)
+        if (plainEditorCommand) {
+          // Monaco and EditorWorkbench handle save/close in bubble phase. The
+          // remaining chords have no useful native meaning in editor chrome;
+          // suppress browser history/navigation there while still allowing
+          // Monaco's own keybinding service to consume them.
+          if (!monacoOwnsTarget && (k === '[' || k === ']')) {
+            e.preventDefault()
+          }
+          return
+        }
+      }
+      const fullscreenEditorOwnsWorkspace =
+        useAppStore.getState().globalEditorOpen && useGlobalEditorStore.getState().editorFullscreen
+      const hiddenWorkspaceShortcut =
+        (cmd && !alt && e.code === 'KeyW') ||
+        (alt && !cmd && shouldPreventOwnedApplicationShortcut(e))
+      if (
+        fullscreenEditorOwnsWorkspace &&
+        !editorOwnsTarget &&
+        hiddenWorkspaceShortcut
+      ) {
+        // Fullscreen deliberately hides the workspace, but the workspace's
+        // global capture router remains mounted. Swallow its destructive pane
+        // grammar when focus sits in app chrome outside the workbench. This
+        // MUST use the same finite allow-list as the router: blanket-swallowing
+        // Alt also captures OS chords such as Alt+F4/Alt+Tab on Windows/Linux,
+        // even though Agent Code has no action to protect for those keys.
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+
       // --- Copy Assistant picker (Up/Down/Enter/Esc) ---
       //
       // Active when the focused pane's runtime has assistantPicker set.
@@ -305,9 +425,7 @@ export function useKeybinds(
           workspace.readerMode === null &&
           !settingsPageOpen
         : false
-      const picker = focusedSessionId
-        ? workspace.runtimes[focusedSessionId]?.assistantPicker
-        : null
+      const picker = focusedSessionId ? workspace.runtimes[focusedSessionId]?.assistantPicker : null
       if (picker && focusedSessionId && renderedPickerSurfaceVisible) {
         if (k === 'ArrowUp') {
           e.preventDefault()
@@ -364,9 +482,7 @@ export function useKeybinds(
           // same recovery the assistant picker does for a stale uuid.
           const dir = k === 'ArrowDown' ? 1 : -1
           const nextIdx =
-            cur === -1
-              ? ids.length - 1
-              : Math.max(0, Math.min(ids.length - 1, cur + dir))
+            cur === -1 ? ids.length - 1 : Math.max(0, Math.min(ids.length - 1, cur + dir))
           workspace.setCodeBlockPicker(focusedSessionId, {
             selectedId: ids[nextIdx],
           })
@@ -396,7 +512,7 @@ export function useKeybinds(
         // Other keys fall through, same as the assistant picker.
       }
 
-      if (k === 'Escape' && workspace.spotlight) {
+      if (k === 'Escape' && workspace.spotlight && !fullscreenEditorOwnsWorkspace) {
         e.preventDefault()
         workspace.toggleSpotlight()
         return
@@ -405,7 +521,7 @@ export function useKeybinds(
       // Esc also exits Reader Mode. Same one-key dismiss pattern as
       // Spotlight — both are read-only "fullscreen" overlays the user
       // expects to bail out of with Escape.
-      if (k === 'Escape' && workspace.readerMode) {
+      if (k === 'Escape' && workspace.readerMode && !fullscreenEditorOwnsWorkspace) {
         e.preventDefault()
         workspace.toggleReaderMode()
         return
@@ -530,9 +646,7 @@ export function useKeybinds(
                 ? (index: number) => focusTiledRowByIndex(workspace, index)
                 : (index: number) => focusDispatchRowByIndex(workspace, index)
               const combined =
-                pendingDispatchDigit !== null
-                  ? pendingDispatchDigit * 10 + digit
-                  : null
+                pendingDispatchDigit !== null ? pendingDispatchDigit * 10 + digit : null
               if (combined !== null && combined >= 10 && combined <= 99) {
                 selectRow(combined - 1)
                 clearPendingDispatchDigit()
@@ -868,9 +982,7 @@ function moveTiledLaneSelection(workspace: Workspace, delta: number) {
   if (rows.length === 0) return
   const laneIndex = tiled.focusedLane
   const currentId = tiled.lanes[laneIndex]?.selectedSessionId
-  const currentIndex = currentId
-    ? rows.findIndex(row => row.sessionId === currentId)
-    : -1
+  const currentIndex = currentId ? rows.findIndex(row => row.sessionId === currentId) : -1
   // Step one row in `delta` direction, wrapping. Duplicates are allowed, so
   // we do NOT skip rows shown in other lanes — landing on one just mirrors
   // that agent into this lane too.

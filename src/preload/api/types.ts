@@ -49,6 +49,7 @@ export type {
   SlashPickerState,
   ScreenSnapshot,
   SessionStartedEvent,
+  SessionInputReadinessEvent,
   SessionScreenEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
@@ -110,6 +111,24 @@ export type DictationHotkeyConfigureResult =
   | { ok: true; binding: string; native: boolean }
   | { ok: false; binding: string; native: boolean; message?: string }
 
+/** UI-facing snapshot of the persisted Deepgram API key. The raw key is
+ *  NEVER returned across IPC — only enough metadata for the settings row
+ *  to render an accurate state. `hint` is the last-four characters when
+ *  present. See src/main/dictation/apiKeyStore.ts. */
+export type DictationApiKeyStatus = {
+  available: boolean
+  configured: boolean
+  source: 'settings' | 'env' | null
+  hint: string | null
+}
+
+/** Result of {@link Api.setDictationApiKey}. Failure carries the reason
+ *  so the settings row can render an inline error instead of pretending
+ *  success. */
+export type DictationApiKeySetResult =
+  | { ok: true; status: DictationApiKeyStatus }
+  | { ok: false; message: string }
+
 export type DictationStreamTranscriptEvent = {
   id: string
   text: string
@@ -132,15 +151,17 @@ export type JsonlEntry = AgentTranscriptEntry
 // (not redeclared) so the preload bridge type and every renderer import
 // of `SessionKind` resolve to the exact same union as main/shared.
 export type { SessionKind } from '@shared/types/providerKind.js'
+export type {
+  SessionBackendSnapshot,
+  SessionInputReadiness,
+  SessionOwnershipOptions,
+  SessionRecoverOptions,
+  SessionRecoverResult,
+} from '@shared/types/session.js'
 
 export type SessionSpawnOptions = {
   /** Which kind of session to spawn. Defaults to 'claude' in main. */
   kind?: SessionKind
-  /**
-   * Trusted renderer restore path only: reuse an existing workspace SessionId
-   * when a persisted renderer record needs a fresh backend after app restart.
-   */
-  preferredSessionId?: string
   cwd: string
   cols?: number
   rows?: number
@@ -236,6 +257,14 @@ export type {
   LspSemanticLegend,
   LspDiagnostic,
   LspDiagnosticsEvent,
+  LspPosition,
+  LspLocation,
+  LspHoverResult,
+  LspCompletionContext,
+  LspCompletionItem,
+  LspCompletionResult,
+  LspDocumentSymbol,
+  LspDocumentAuthorization,
 } from '@shared/types/lsp.js'
 
 // Claude image save params/result live in @shared/types/claudeImage.

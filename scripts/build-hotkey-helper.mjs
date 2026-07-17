@@ -71,12 +71,12 @@ function run(cmd, args) {
   }
 }
 
-// Deployment targets: arm64 Macs start at macOS 11, and Electron 31
-// supports Intel Macs back to macOS 10.15 — match that floor for the x64
-// slice so the helper never becomes the thing that narrows app support.
+// Deployment target follows electron-builder.yml. Electron 38+ requires
+// Monterey, so keeping older helper slices buys no real compatibility and can
+// hide accidental use of APIs unavailable at the application's true floor.
 const slices = [
-  { arch: 'arm64', triple: 'arm64-apple-macos11.0' },
-  { arch: 'x86_64', triple: 'x86_64-apple-macos10.15' },
+  { arch: 'arm64', triple: 'arm64-apple-macos12.0' },
+  { arch: 'x86_64', triple: 'x86_64-apple-macos12.0' },
 ]
 
 const slicePaths = []

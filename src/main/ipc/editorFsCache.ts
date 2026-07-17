@@ -8,9 +8,11 @@ export type EditorFsCacheEntry = {
 
 export type EditorFsCachedRead = {
   path: string
+  absolutePath: string
   text: string
   mtimeMs: number
   size: number
+  version: string
 }
 
 type DirectoryRecord = {
@@ -26,8 +28,7 @@ type DirectoryRecord = {
 type FileRecord = {
   root: string
   path: string
-  mtimeMs: number
-  size: number
+  version: string
   cachedAt: number
   read: EditorFsCachedRead
 }
@@ -147,17 +148,12 @@ export class EditorFsCache {
     evictOldest(this.directories, this.maxDirectories)
   }
 
-  getTextFile(params: {
-    root: string
-    path: string
-    mtimeMs: number
-    size: number
-  }): EditorFsCachedRead | null {
+  getTextFile(params: { root: string; path: string; version: string }): EditorFsCachedRead | null {
     const key = fileKey(params.root, params.path)
     const record = this.files.get(key)
     if (!record) return null
     const expired = this.now() - record.cachedAt > this.ttlMs
-    if (expired || record.mtimeMs !== params.mtimeMs || record.size !== params.size) {
+    if (expired || record.version !== params.version) {
       this.files.delete(key)
       return null
     }
@@ -172,8 +168,7 @@ export class EditorFsCache {
     this.files.set(fileKey(params.root, params.path), {
       root: params.root,
       path: normalizePath(params.path),
-      mtimeMs: params.read.mtimeMs,
-      size: params.read.size,
+      version: params.read.version,
       cachedAt: this.now(),
       read: cloneRead(params.read),
     })

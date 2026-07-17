@@ -10,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 type AnyFn = (...args: unknown[]) => unknown
 const listenerNames = [
   'onSessionStarted',
+  'onSessionInputReadiness',
   'onSessionScreen',
   'onSessionJsonlEntries',
   'onSessionJsonlError',

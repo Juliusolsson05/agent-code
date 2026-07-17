@@ -1,4 +1,5 @@
 import { useDictationOverlayState } from '@renderer/features/voice-dictation/dictationStatusStore'
+import { useAppStore } from '@renderer/app-state/hooks'
 
 // VoiceDictationOverlay — terminal-mode floating chip rendered at App root.
 // Rendered Agent mode keeps the old inline composer mic affordance; only
@@ -24,6 +25,7 @@ import { useDictationOverlayState } from '@renderer/features/voice-dictation/dic
 
 export function VoiceDictationOverlay() {
   const { status, levels, previewText, errorMessage } = useDictationOverlayState()
+  const dictationShortcut = useAppStore(state => state.settings.dictationShortcut)
 
   // Idle is the steady state. Rendering nothing keeps the DOM cost at zero
   // when the user isn't dictating; mounting empty would still cost a node
@@ -41,7 +43,9 @@ export function VoiceDictationOverlay() {
       ? 'transcribing…'
       : isStarting
         ? 'starting…'
-        : 'hold to dictate · release to paste'
+        : dictationShortcut.includes('Fn')
+          ? 'hold to dictate · release to paste'
+          : 'press shortcut again to finish'
 
   return (
     <div

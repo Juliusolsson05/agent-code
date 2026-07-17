@@ -6,6 +6,7 @@ import type {
   SessionExitEvent,
   SessionJsonlEntriesEvent,
   SessionJsonlErrorEvent,
+  SessionInputReadinessEvent,
   SessionProcessStateEvent,
   SessionScreenEvent,
   SessionSemanticEvent,
@@ -89,6 +90,7 @@ type RemoteReply = Omit<Extract<OutboundFrame, { type: 'reply' }>, 'type' | 'id'
 export class WebSocketSessionFeed implements SessionFeed {
   private readonly listeners: Record<FeedChannel | 'sub-agents', Set<(e: never) => void>> = {
     started: new Set(),
+    'input-readiness': new Set(),
     screen: new Set(),
     'jsonl-entries': new Set(),
     'jsonl-error': new Set(),
@@ -170,6 +172,9 @@ export class WebSocketSessionFeed implements SessionFeed {
 
   onSessionStarted(cb: (e: SessionStartedEvent) => void): Unsub {
     return this.sub('started', cb)
+  }
+  onSessionInputReadiness(cb: (e: SessionInputReadinessEvent) => void): Unsub {
+    return this.sub('input-readiness', cb)
   }
   onSessionScreen(cb: (e: SessionScreenEvent) => void): Unsub {
     return this.sub('screen', cb)

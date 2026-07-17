@@ -1,8 +1,10 @@
 appId: com.agentcode.app
 productName: Agent Code
+copyright: "Copyright © 2026 Julius Olsson"
 artifactName: "${productName}-${version}-${arch}.${ext}"
 directories:
   output: release
+afterPack: scripts/after-pack.mjs
 asar: true
 asarUnpack:
   - out/main/mitmAddon.py
@@ -38,8 +40,30 @@ files:
   - "!**/*.map"
   - "!**/test/**"
   - "!**/tests/**"
+  # node-pty's install step has already produced the one target-architecture
+  # build/Release/pty.node that Electron loads. Its npm tarball also carries
+  # Windows DLLs and both Darwin prebuilds; shipping those dead binaries adds
+  # tens of megabytes, enlarges the notarization scan surface, and makes a
+  # structural architecture audit report false failures.
+  - "!node_modules/node-pty/prebuilds/**"
   - "!.proxy-testing/**"
   - "!.tsc-out/**"
+extraResources:
+  # WHY licenses live outside app.asar: these notices describe executables we
+  # redistribute, not implementation resources. Keeping them as ordinary files
+  # under Contents/Resources/licenses makes them inspectable even if the app
+  # cannot launch, and prevents the broad `!third_party/**` production-source
+  # exclusion above from silently dropping our attribution obligations.
+  - from: LICENSE
+    to: licenses/Agent-Code-LICENSE.txt
+  - from: third_party/mitmproxy/LICENSE.md
+    to: licenses/mitmproxy-LICENSE.md
+  - from: third_party/tmux/LICENSE.md
+    to: licenses/tmux-LICENSE.md
+  - from: third_party/cloudflared/LICENSE.md
+    to: licenses/cloudflared-LICENSE.md
+  - from: PRIVACY.md
+    to: PRIVACY.md
 extraMetadata:
   main: out/main/index.js
 mac:
@@ -49,6 +73,14 @@ mac:
   # fine on a provisioned Mac, non-deterministic and host-dependent
   # everywhere else. The committed artifact makes the icon reproducible.
   icon: build/icon.icns
+  # Electron 38+ follows Chromium in requiring Monterey. Stating the floor in
+  # the bundle prevents an older Mac from downloading a build that the embedded
+  # Chromium cannot start, and keeps the Swift helper's deployment target in
+  # lockstep with the actual application runtime.
+  minimumSystemVersion: "12.0"
+  extendInfo:
+    NSMicrophoneUsageDescription: "Agent Code uses the microphone only when you start voice dictation. Audio is sent to your configured transcription provider."
+    NSLocalNetworkUsageDescription: "Agent Code can expose an optional, authenticated remote companion to devices on your local network."
   # WHY an explicit arch list (#495 A2): electron-builder defaults to the
   # HOST arch, so CI on an arm64 runner shipped arm64-only artifacts and
   # an Intel Mac had nothing to run. Two thin per-arch artifacts beat one

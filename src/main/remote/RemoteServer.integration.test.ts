@@ -25,6 +25,7 @@ function makeManager(): FakeManager {
   emitter.list = vi.fn(() => [])
   emitter.getScreenSnapshot = vi.fn(() => null)
   emitter.getConditionsSnapshot = vi.fn(() => null)
+  emitter.getBackendSnapshot = vi.fn(() => null)
   emitter.resolveTranscriptFile = vi.fn(async () => null)
   emitter.getSpawnCwd = vi.fn(() => null)
   emitter.getLastActivityAt = vi.fn(() => null)
@@ -200,6 +201,13 @@ describe('event fan-out', () => {
         },
       },
     })
+    ;(manager.getBackendSnapshot as ReturnType<typeof vi.fn>).mockReturnValue({
+      sessionId: 'pre',
+      kind: 'claude',
+      cwd: '/repo',
+      lifecycle: 'live',
+      input: { ready: false, revision: 3, reason: 'replaying-history' },
+    })
     feedSource.dispose()
     feedSource = new SessionFeedSource(manager as never)
     server = new RemoteServer({
@@ -213,7 +221,8 @@ describe('event fan-out', () => {
     const { ws, frames } = await connect(token)
     await waitFor(frames, f =>
       framesOfType(f, 'session-event').some(e => e.channel === 'conditions') &&
-      framesOfType(f, 'session-event').some(e => e.channel === 'screen'),
+      framesOfType(f, 'session-event').some(e => e.channel === 'screen') &&
+      framesOfType(f, 'session-event').some(e => e.channel === 'input-readiness'),
     )
     // And the primed condition's pty action must be actionable.
     ws.send(JSON.stringify({

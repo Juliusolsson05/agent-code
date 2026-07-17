@@ -1,3 +1,4 @@
+import { icons as bundledVsCodeIcons } from '@iconify-json/vscode-icons'
 import {
   DEFAULT_FILE,
   DEFAULT_FOLDER,
@@ -7,65 +8,93 @@ import {
   getIconForOpenFolder,
 } from 'vscode-icons-js'
 
-// File / folder icon glue.
-//
-// WHY a thin wrapper instead of inlining the calls everywhere:
-//   - `vscode-icons-js` only exposes the *filename* (e.g. `file_type_ts.svg`)
-//     for a given name. The actual SVGs live in the upstream `vscode-icons`
-//     repo, which we serve through jsDelivr. Centralising the URL builder
-//     lets us flip to a bundled copy later by changing one constant.
-//   - We rely on the renderer's CSP allowing `https://cdn.jsdelivr.net` for
-//     `img-src`. See src/renderer/index.html.
-//
-// The component intentionally degrades gracefully: if the lookup returns
-// `undefined` (rare extensions, weird filenames) we fall back to the
-// vscode-icons default file/folder glyphs so we never render a broken image.
-
-const ICON_BASE_URL = 'https://cdn.jsdelivr.net/gh/vscode-icons/vscode-icons@latest/icons'
-
-function iconUrl(filename: string): string {
-  return `${ICON_BASE_URL}/${filename}`
-}
-
-type FileIconProps = {
-  name: string
+type IconProps = {
   className?: string
 }
 
-export function FileIcon({ name, className }: FileIconProps) {
-  const icon = getIconForFile(name) ?? DEFAULT_FILE
+type FileIconProps = IconProps & {
+  name: string
+}
+
+type FolderIconProps = FileIconProps & {
+  open: boolean
+}
+
+type BundledIcon = {
+  body: string
+  width?: number
+  height?: number
+}
+
+function iconifyName(filename: string): string {
+  // vscode-icons-js returns upstream asset filenames such as
+  // `file_type_typescript.svg`; Iconify packages the same artwork under the
+  // equivalent kebab-case key. Keeping this tiny adapter means the mature
+  // filename/folder lookup remains the source of truth instead of maintaining
+  // our own inevitably incomplete extension table.
+  return filename.replace(/\.svg$/i, '').replace(/_/g, '-')
+}
+
+function bundledIcon(filename: string, fallback: string): BundledIcon {
+  const icons = bundledVsCodeIcons.icons as Record<string, BundledIcon>
+  return icons[iconifyName(filename)] ?? icons[iconifyName(fallback)]
+}
+
+function LocalVsCodeIcon({
+  filename,
+  fallback,
+  className,
+}: IconProps & { filename: string; fallback: string }) {
+  const icon = bundledIcon(filename, fallback)
+  const width = icon.width ?? bundledVsCodeIcons.width ?? 32
+  const height = icon.height ?? bundledVsCodeIcons.height ?? 32
   return (
-    <img
-      src={iconUrl(icon)}
-      alt=""
-      aria-hidden="true"
-      draggable={false}
-      className={className}
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
       width={16}
       height={16}
+      aria-hidden="true"
+      focusable="false"
+      className={className}
+      // WHY trusted inner SVG is acceptable here: this body comes from the
+      // exact, lockfile-pinned @iconify-json package at build time—not from a
+      // filename, workspace, network response, or other runtime input. Parsing
+      // 1,500 upstream SVGs into handwritten React trees would create a larger,
+      // less auditable generated source surface without improving the trust
+      // boundary. The package body is bundled into our renderer JavaScript and
+      // remains covered by the existing `img-src 'self'` CSP.
+      dangerouslySetInnerHTML={{ __html: icon.body }}
     />
   )
 }
 
-type FolderIconProps = {
-  name: string
-  open: boolean
-  className?: string
+/** VS Code Icons artwork with local, deterministic delivery.
+ *
+ * `vscode-icons-js` chooses the same rich per-file icon users already know;
+ * `@iconify-json/vscode-icons` supplies the matching SVG body inside the app
+ * bundle. This deliberately restores the old visual language without bringing
+ * back the old `@latest` CDN dependency or its offline/CSP failure mode.
+ */
+export function FileIcon({ name, className }: FileIconProps) {
+  return (
+    <LocalVsCodeIcon
+      filename={getIconForFile(name) ?? DEFAULT_FILE}
+      fallback={DEFAULT_FILE}
+      className={className}
+    />
+  )
 }
 
 export function FolderIcon({ name, open, className }: FolderIconProps) {
-  const icon = open
-    ? getIconForOpenFolder(name) ?? DEFAULT_FOLDER_OPENED
-    : getIconForFolder(name) ?? DEFAULT_FOLDER
   return (
-    <img
-      src={iconUrl(icon)}
-      alt=""
-      aria-hidden="true"
-      draggable={false}
+    <LocalVsCodeIcon
+      filename={
+        open
+          ? getIconForOpenFolder(name) ?? DEFAULT_FOLDER_OPENED
+          : getIconForFolder(name) ?? DEFAULT_FOLDER
+      }
+      fallback={open ? DEFAULT_FOLDER_OPENED : DEFAULT_FOLDER}
       className={className}
-      width={16}
-      height={16}
     />
   )
 }

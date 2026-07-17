@@ -31,6 +31,7 @@ import { usePasteToFocus } from '@renderer/workspace/tile-tree/TileLeaf/usePaste
 import { usePromptHistory } from '@renderer/workspace/tile-tree/TileLeaf/usePromptHistory'
 import { useClaudeImagePaste } from '@renderer/workspace/tile-tree/TileLeaf/useClaudeImagePaste'
 import { registerComposerEnterTarget } from '@renderer/workspace/tile-tree/TileLeaf/composerEnterRegistry'
+import { resolveReadinessText } from '@renderer/workspace/tile-tree/TileLeaf/readiness'
 import { recordHtmlTraceSnapshot } from '@renderer/features/debug/renderTrace'
 import { isSessionExited } from '@renderer/workspace/providerSessionIdentity'
 import { useLedgerFeedItems } from '@renderer/features/feed/ledger/useLedgerFeedItems'
@@ -222,13 +223,11 @@ export function TileLeaf({
       runtime.processStatus !== 'started' ||
       isSessionExited(runtime)
     ) {
-      if (runtime.processStatus === 'failed' || runtime.processStatus === 'exited') {
-        const message = runtime.processStatus === 'failed'
-          ? (runtime.processError ?? 'Agent failed to start')
-          : 'Agent has exited'
-        workspace.showPaneToast(sessionId, message)
-        throw new Error(message)
-      }
+      // WHY failed/exited panes use the same wake path as dormant panes:
+      // provider attempts are disposable. Keeping the old early throw made a
+      // retained recovery failure permanent even though main's stable-id
+      // recovery protocol is explicitly retryable. The draft stays intact
+      // while ensureSessionLive replaces only the backend generation.
       try {
         await workspace.ensureSessionLive(sessionId)
       } catch (err) {
@@ -427,28 +426,9 @@ export function TileLeaf({
   }, [input, submitCurrentDraft])
 
   const isSessionLive = runtime.sessionStatus === 'running'
-  const readinessText =
-    runtime.transcriptStatus === 'loading'
-      ? 'loading transcript'
-      : runtime.transcriptStatus === 'error'
-        ? `transcript unavailable${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
-        : runtime.transcriptStatus === 'disconnected'
-          ? `transcript disconnected${runtime.transcriptError ? `: ${runtime.transcriptError}` : ''}`
-        // WHY exited beats "not input ready":
-        //
-        // A resumed agent can die before the renderer finishes the
-        // bootstrap quiet-window. That leaves `inputReady=false`,
-        // which used to render "starting agent" forever even though
-        // the composer correctly blocked Enter with "Agent has
-        // exited". The process lifecycle is the stronger signal here:
-        // once main has emitted exit, this pane is no longer starting.
-        : isSessionExited(runtime)
-          ? `agent exited${runtime.exited !== null ? ` (code ${runtime.exited})` : ''}`
-        : !runtime.inputReady || runtime.processStatus === 'spawning'
-          ? 'starting agent'
-          : runtime.processStatus === 'failed'
-            ? (runtime.processError ?? 'agent failed to start')
-            : null
+  const readinessText = resolveReadinessText(runtime)
+  const canRetryBackend = runtime.processStatus === 'failed' ||
+    runtime.processStatus === 'exited'
 
   useEffect(() => {
     if (!htmlDebugPanelOpen || !focused) return
@@ -633,8 +613,26 @@ export function TileLeaf({
       <QueueStrip queuedMessages={runtime.queuedMessages} />
 
       {readinessText && (
-        <div className="flex-shrink-0 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
-          {readinessText}
+        <div className="flex flex-shrink-0 items-center justify-between gap-3 border-t border-border bg-surface px-3 py-1 font-code text-[10px] text-muted">
+          <span className="min-w-0 truncate">{readinessText}</span>
+          {canRetryBackend && (
+            <button
+              type="button"
+              className="flex-shrink-0 text-accent hover:underline"
+              onClick={() => {
+                void workspace.ensureSessionLive(sessionId).catch(err => {
+                  workspace.showPaneToast(
+                    sessionId,
+                    err instanceof Error && err.message.length > 0
+                      ? err.message
+                      : 'Could not restart agent',
+                  )
+                })
+              }}
+            >
+              Retry
+            </button>
+          )}
         </div>
       )}
 

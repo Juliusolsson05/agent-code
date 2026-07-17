@@ -1,14 +1,6 @@
 import { DEFAULT_PROVIDER, isAgentProviderKind } from '@shared/types/providerKind'
 import type { AgentProviderKind } from '@shared/types/providerKind'
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 import {
@@ -18,6 +10,10 @@ import {
   DialogTitle,
 } from '@renderer/components/ui/dialog'
 import { buildCommandRegistry } from '@renderer/features/command-palette/registry'
+import {
+  buildAgentIndexCommand,
+  isAgentIndexCommand,
+} from '@renderer/features/command-palette/lib/agentIndexCommand'
 import {
   buildHistoryScoreMap,
   loadRecentHistory,
@@ -34,6 +30,7 @@ import {
 } from '@renderer/features/prompt-templates/templates'
 import type { PromptTemplate } from '@renderer/features/prompt-templates/templates'
 import { commandTargetSessionId } from '@renderer/workspace/hook/selectors/commandTargetSessionId'
+import { resolveAgentPaneLabel } from '@renderer/workspace/tile-tree/paneLabels'
 import { useWorkspaceContext } from '@renderer/workspace/WorkspaceContext'
 import { useAppStore } from '@renderer/app-state/hooks'
 import { useCaffeinateStore } from '@renderer/features/caffeinate/store'
@@ -42,6 +39,7 @@ import { usePathPickerRequests } from '@renderer/features/path-picker/usePathPic
 import { SessionPreviewPane } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import type { PreviewTarget } from '@renderer/features/session-preview/ui/SessionPreviewPane'
 import { useGlobalEditorStore } from '@renderer/features/global-editor/store'
+import { dirtyAiWorkspacePaths } from '@renderer/features/ai-workspace/lib/aiWorkspaceSurfaceCache'
 import { hasAppInteractionOwner } from '@renderer/lib/interaction-ownership'
 import { SafeMarkdownLink } from '@renderer/features/rendered-content/SafeMarkdownLink'
 import type { AiWorkspaceSummary } from '@mcp/shared/aiWorkspaceTypes'
@@ -99,30 +97,31 @@ export function CommandPalette() {
     closeAfterRun: boolean
   } | null>(null)
 
-  useEffect(() => window.api.onMenuCommand(commandId => {
-    // Native-menu IPC bypasses Radix's DOM focus trap and inert background.
-    // Check the same synchronous ownership marker as keyboard, paste, Enter,
-    // and dictation before mounting the heavy command implementation. Without
-    // this guard a File-menu click could mutate workspace state underneath an
-    // unrelated confirmation dialog even though every DOM input path was
-    // correctly blocked. When the command palette itself is open it also owns
-    // this marker, so menu commands wait instead of competing with its current
-    // search/navigation turn.
-    if (hasAppInteractionOwner()) return
-    // WHY a native menu command temporarily mounts the open implementation:
-    // command definitions need live workspace actions, but keeping that entire
-    // registry subscribed while the palette is closed made every session delta
-    // rebuild an invisible feature. A menu click is rare and intentional, so it
-    // may pay the one-time registry cost. useLayoutEffect below runs it and
-    // closes before paint, avoiding a palette flash for menu-only execution.
-    setPendingMenuCommand({ id: commandId, closeAfterRun: !open })
-    if (!open) openPalette()
-  }), [open, openPalette])
-
-  const clearPendingMenuCommand = useCallback(
-    () => setPendingMenuCommand(null),
-    [],
+  useEffect(
+    () =>
+      window.api.onMenuCommand(commandId => {
+        // Native-menu IPC bypasses Radix's DOM focus trap and inert background.
+        // Check the same synchronous ownership marker as keyboard, paste, Enter,
+        // and dictation before mounting the heavy command implementation. Without
+        // this guard a File-menu click could mutate workspace state underneath an
+        // unrelated confirmation dialog even though every DOM input path was
+        // correctly blocked. When the command palette itself is open it also owns
+        // this marker, so menu commands wait instead of competing with its current
+        // search/navigation turn.
+        if (hasAppInteractionOwner()) return
+        // WHY a native menu command temporarily mounts the open implementation:
+        // command definitions need live workspace actions, but keeping that entire
+        // registry subscribed while the palette is closed made every session delta
+        // rebuild an invisible feature. A menu click is rare and intentional, so it
+        // may pay the one-time registry cost. useLayoutEffect below runs it and
+        // closes before paint, avoiding a palette flash for menu-only execution.
+        setPendingMenuCommand({ id: commandId, closeAfterRun: !open })
+        if (!open) openPalette()
+      }),
+    [open, openPalette],
   )
+
+  const clearPendingMenuCommand = useCallback(() => setPendingMenuCommand(null), [])
 
   // WHY the workspace-heavy component does not exist while closed: returning
   // null at the bottom of the old monolith was too late. Hooks had already read
@@ -205,14 +204,13 @@ function OpenCommandPalette({
   // workspace has no concept of "the file tree."
   const fileTreeVisible = useGlobalEditorStore(state => state.fileTreeVisible)
   const toggleFileTreeVisible = useGlobalEditorStore(state => state.toggleFileTreeVisible)
+  const editorFullscreen = useGlobalEditorStore(state => state.editorFullscreen)
 
   const enterDispatchMode = workspace.enterDispatchMode
   const exitDispatchMode = workspace.exitDispatchMode
   const enterGlobalDispatch = useCallback(
     () =>
-      workspace.setDispatchScope(
-        workspace.dispatchMode?.scope === 'global' ? 'project' : 'global',
-      ),
+      workspace.setDispatchScope(workspace.dispatchMode?.scope === 'global' ? 'project' : 'global'),
     [workspace],
   )
   const setDangerousAgentsEnabled = useCallback(
@@ -255,6 +253,9 @@ function OpenCommandPalette({
   const [sessionsLoading, setSessionsLoading] = useState(false)
   const [aiWorkspaces, setAiWorkspaces] = useState<AiWorkspaceSummary[]>([])
   const [aiWorkspacesLoading, setAiWorkspacesLoading] = useState(false)
+  const [aiWorkspaceError, setAiWorkspaceError] = useState<string | null>(null)
+  const [aiWorkspacePending, setAiWorkspacePending] = useState<string | null>(null)
+  const [armedAiWorkspaceClearId, setArmedAiWorkspaceClearId] = useState<string | null>(null)
   const [customPromptTemplates, setCustomPromptTemplates] = useState<PromptTemplate[]>([])
   const [promptTemplateForm, setPromptTemplateForm] = useState<PromptTemplateForm>({
     id: null,
@@ -265,9 +266,7 @@ function OpenCommandPalette({
   const listRef = useRef<HTMLDivElement>(null)
 
   const focusedSessionId = commandTargetSessionId(workspace)
-  const focusedMeta = focusedSessionId
-    ? workspace.state.sessions[focusedSessionId]
-    : null
+  const focusedMeta = focusedSessionId ? workspace.state.sessions[focusedSessionId] : null
   const focusedCwd = focusedMeta?.cwd ?? null
   const focusedProvider = focusedMeta?.kind ?? DEFAULT_PROVIDER
   // The provider whose sessions the resume picker lists and resumes into.
@@ -290,11 +289,7 @@ function OpenCommandPalette({
     setSelectedIndex(0)
     setSessionsLoading(true)
     try {
-      const list = await window.api.listSessionsForCwd(
-        focusedCwd,
-        20,
-        resumeProvider,
-      )
+      const list = await window.api.listSessionsForCwd(focusedCwd, 20, resumeProvider)
       setSessions(list)
     } catch {
       setSessions([])
@@ -379,10 +374,14 @@ function OpenCommandPalette({
 
   const loadAiWorkspaces = useCallback(async () => {
     setAiWorkspacesLoading(true)
+    setAiWorkspaceError(null)
     try {
       setAiWorkspaces(await window.api.aiWorkspaceList())
-    } catch {
+    } catch (error) {
       setAiWorkspaces([])
+      setAiWorkspaceError(
+        `Could not load AI Workspaces: ${error instanceof Error ? error.message : String(error)}`,
+      )
     } finally {
       setAiWorkspacesLoading(false)
     }
@@ -392,6 +391,7 @@ function OpenCommandPalette({
     setMode('ai-workspace-open')
     setQuery('')
     setSelectedIndex(0)
+    setArmedAiWorkspaceClearId(null)
     void loadAiWorkspaces()
   }, [loadAiWorkspaces])
 
@@ -399,12 +399,15 @@ function OpenCommandPalette({
     setMode('ai-workspace-create')
     setQuery('')
     setSelectedIndex(0)
+    setAiWorkspaceError(null)
+    setArmedAiWorkspaceClearId(null)
   }, [])
 
   const enterAiWorkspaceClearMode = useCallback(() => {
     setMode('ai-workspace-clear')
     setQuery('')
     setSelectedIndex(0)
+    setArmedAiWorkspaceClearId(null)
     void loadAiWorkspaces()
   }, [loadAiWorkspaces])
 
@@ -484,7 +487,9 @@ function OpenCommandPalette({
         caffeinateActive,
         caffeinateSupported,
         globalEditorOpen,
+        focusedCwd,
         fileTreeVisible,
+        editorFullscreen,
         dispatchModeEnabled,
         globalDispatchEnabled,
         agentViewMode,
@@ -564,7 +569,9 @@ function OpenCommandPalette({
       caffeinateActive,
       caffeinateSupported,
       globalEditorOpen,
+      focusedCwd,
       fileTreeVisible,
+      editorFullscreen,
       dispatchModeEnabled,
       globalDispatchEnabled,
       agentViewMode,
@@ -573,10 +580,7 @@ function OpenCommandPalette({
     ],
   )
 
-  const commands = useMemo(
-    () => buildCommandRegistry(commandContext),
-    [commandContext],
-  )
+  const commands = useMemo(() => buildCommandRegistry(commandContext), [commandContext])
 
   const promptTemplates = useMemo(
     () => allPromptTemplates(customPromptTemplates),
@@ -636,10 +640,7 @@ function OpenCommandPalette({
   // component is destroyed on close, so an empty dependency list now expresses
   // the old "once per open" lifetime directly without retaining the expensive
   // command registry between opens.
-  const historyScoreMap = useMemo(
-    () => buildHistoryScoreMap(loadRecentHistory()),
-    [],
-  )
+  const historyScoreMap = useMemo(() => buildHistoryScoreMap(loadRecentHistory()), [])
   // rankCommands owns all ordering now (tier-first text match, with
   // history as a same-tier tiebreaker; empty query returns registry
   // order unchanged). Everything downstream of this is index-based and
@@ -648,6 +649,24 @@ function OpenCommandPalette({
   const filteredCommands = useMemo(
     () => rankCommands(commands, queryText, historyScoreMap),
     [commands, queryText, historyScoreMap],
+  )
+  const directAgentTarget = useMemo(
+    () => resolveAgentPaneLabel(workspace.state, queryText, workspace.tileTabs),
+    [queryText, workspace.state, workspace.tileTabs],
+  )
+  const directAgentCommand = useMemo(
+    () =>
+      directAgentTarget
+        ? buildAgentIndexCommand(directAgentTarget, workspace.focusAgentByPaneLabel)
+        : null,
+    [directAgentTarget, workspace.focusAgentByPaneLabel],
+  )
+  // The exact coordinate result is deliberately row zero. It is not part of
+  // fuzzy command ranking and must win Enter even if a future command happens
+  // to contain "A2" in its title or keywords.
+  const paletteCommands = useMemo(
+    () => (directAgentCommand ? [directAgentCommand, ...filteredCommands] : filteredCommands),
+    [directAgentCommand, filteredCommands],
   )
 
   const filteredLength =
@@ -659,14 +678,14 @@ function OpenCommandPalette({
           ? filteredPromptTemplates.length
           : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
             ? filteredAiWorkspaces.length
-          : mode === 'commands'
-            ? filteredCommands.length
-            : 0
+            : mode === 'commands'
+              ? paletteCommands.length
+              : 0
 
   const selectedCommand = useMemo(() => {
     if (mode !== 'commands') return null
-    return filteredCommands[selectedIndex] ?? null
-  }, [filteredCommands, mode, selectedIndex])
+    return paletteCommands[selectedIndex] ?? null
+  }, [mode, paletteCommands, selectedIndex])
 
   useEffect(() => {
     setQuery('')
@@ -676,6 +695,9 @@ function OpenCommandPalette({
     setSessionsLoading(false)
     setAiWorkspaces([])
     setAiWorkspacesLoading(false)
+    setAiWorkspaceError(null)
+    setAiWorkspacePending(null)
+    setArmedAiWorkspaceClearId(null)
     setPromptTemplateForm({ id: null, title: '', body: '' })
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [])
@@ -683,6 +705,13 @@ function OpenCommandPalette({
   useEffect(() => {
     setSelectedIndex(prev => Math.min(prev, Math.max(0, filteredLength - 1)))
   }, [filteredLength])
+
+  useEffect(() => {
+    // WHY confirmation is tied to the current row/query: a destructive second
+    // Enter should never apply to a workspace that became selected only because
+    // the user kept navigating or filtered the list after arming another row.
+    setArmedAiWorkspaceClearId(null)
+  }, [mode, query, selectedIndex])
 
   useEffect(() => {
     if (!listRef.current) return
@@ -698,7 +727,11 @@ function OpenCommandPalette({
       // command execution passes through (keyboard Enter and click both
       // route here), so it's the one correct place to update history.
       // recordCommandUse never throws, so it can't block command.run.
-      recordCommandUse(command.id)
+      // Agent coordinates are transient workspace destinations, not reusable
+      // registry commands. Recording `agent-index:<sessionId>` would fill the
+      // recent-command history with launch-local ids that can never rank a
+      // future palette open, while crowding out real commands the user repeats.
+      if (!isAgentIndexCommand(command)) recordCommandUse(command.id)
       if (command.keepPaletteOpen) {
         void command.run(commandContext)
         return
@@ -726,13 +759,7 @@ function OpenCommandPalette({
     if (command) void command.run(commandContext)
     onMenuCommandHandled()
     if (pendingMenuCommand.closeAfterRun) onClose()
-  }, [
-    commandContext,
-    commands,
-    onClose,
-    onMenuCommandHandled,
-    pendingMenuCommand,
-  ])
+  }, [commandContext, commands, onClose, onMenuCommandHandled, pendingMenuCommand])
 
   const executeResume = useCallback(
     (session: SessionInfo) => {
@@ -756,9 +783,7 @@ function OpenCommandPalette({
 
   const executeKillBuried = useCallback(
     (item: BuriedPaneInfo) => {
-      const remainingCount = filteredBuried
-        .filter(candidate => candidate.id !== item.id)
-        .length
+      const remainingCount = filteredBuried.filter(candidate => candidate.id !== item.id).length
       void workspace.killBuried(item.id).then(() => {
         if (remainingCount === 0) onClose()
         else setSelectedIndex(i => Math.max(0, Math.min(i, remainingCount - 1)))
@@ -833,18 +858,55 @@ function OpenCommandPalette({
 
   const createAiWorkspace = useCallback(async () => {
     const name = query.trim()
-    if (!name) return
-    const workspace = await window.api.aiWorkspaceCreate({ name })
-    openAiWorkspace(workspace.workspaceId)
-  }, [openAiWorkspace, query])
+    if (!name || aiWorkspacePending) return
+    setAiWorkspacePending('create')
+    setAiWorkspaceError(null)
+    try {
+      const workspace = await window.api.aiWorkspaceCreate({ name })
+      openAiWorkspace(workspace.workspaceId)
+    } catch (error) {
+      setAiWorkspaceError(
+        `Could not create AI Workspace: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    } finally {
+      setAiWorkspacePending(null)
+    }
+  }, [aiWorkspacePending, openAiWorkspace, query])
 
   const clearAiWorkspace = useCallback(
-    async (workspace: AiWorkspaceSummary) => {
-      await window.api.aiWorkspaceClear(workspace.workspaceId)
-      await loadAiWorkspaces()
-      setSelectedIndex(0)
+    async (summary: AiWorkspaceSummary) => {
+      if (aiWorkspacePending) return
+      if (armedAiWorkspaceClearId !== summary.workspaceId) {
+        setArmedAiWorkspaceClearId(summary.workspaceId)
+        return
+      }
+      const dirtyPaths = dirtyAiWorkspacePaths(summary.workspaceId)
+      if (dirtyPaths.length > 0) {
+        const message = `Save or close ${dirtyPaths.length} unsaved AI Workspace ${dirtyPaths.length === 1 ? 'file' : 'files'} before clearing it.`
+        setAiWorkspaceError(message)
+        const sessionId = commandTargetSessionId(workspace)
+        if (sessionId) {
+          workspace.showPaneToast(sessionId, message)
+        }
+        setArmedAiWorkspaceClearId(null)
+        return
+      }
+      setAiWorkspacePending(summary.workspaceId)
+      setAiWorkspaceError(null)
+      try {
+        await window.api.aiWorkspaceClear(summary.workspaceId)
+        await loadAiWorkspaces()
+        setSelectedIndex(0)
+        setArmedAiWorkspaceClearId(null)
+      } catch (error) {
+        setAiWorkspaceError(
+          `Could not clear AI Workspace: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      } finally {
+        setAiWorkspacePending(null)
+      }
     },
-    [loadAiWorkspaces],
+    [aiWorkspacePending, armedAiWorkspaceClearId, loadAiWorkspaces, workspace],
   )
 
   const deletePromptTemplate = useCallback(
@@ -871,6 +933,7 @@ function OpenCommandPalette({
       }
       if (e.key === 'Enter') {
         e.preventDefault()
+        if (aiWorkspacePending) return
         if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
           savePromptTemplateForm()
         } else if (mode === 'ai-workspace-create') {
@@ -894,16 +957,17 @@ function OpenCommandPalette({
           const template = filteredPromptTemplates[selectedIndex]
           if (template) void executePromptTemplate(template)
         } else {
-          const command = filteredCommands[selectedIndex]
+          const command = paletteCommands[selectedIndex]
           if (command) executeCommand(command)
         }
       }
     },
     [
       mode,
+      aiWorkspacePending,
       filteredLength,
       filteredBuried,
-      filteredCommands,
+      paletteCommands,
       filteredAiWorkspaces,
       filteredPromptTemplates,
       filteredSessions,
@@ -959,9 +1023,11 @@ function OpenCommandPalette({
           bg-popover-bg border border-popover-border
           shadow-[0_16px_48px_var(--theme-shadow-color)]
           overflow-hidden
-          ${mode === 'resume'
-            ? 'w-[min(1180px,95vw)] max-h-[80vh]'
-            : 'w-[min(900px,92vw)] max-h-[60vh]'}
+          ${
+            mode === 'resume'
+              ? 'w-[min(1180px,95vw)] max-h-[80vh]'
+              : 'w-[min(900px,92vw)] max-h-[60vh]'
+          }
         `}
         onEscapeKeyDown={event => {
           // The palette has nested navigation modes. Escape first backs out
@@ -1044,15 +1110,15 @@ function OpenCommandPalette({
                 ? 'Template name…'
                 : mode === 'ai-workspace-create'
                   ? 'Workspace name…'
-                : mode === 'resume'
-                ? 'Search sessions…'
-                : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
-                  ? 'Search AI Workspaces…'
-                : mode === 'buried' || mode === 'kill-buried'
-                  ? 'Search buried panes…'
-                  : mode === 'prompt-template'
-                    ? 'Search prompt templates…'
-                  : 'Type a command…'
+                  : mode === 'resume'
+                    ? 'Search sessions…'
+                    : mode === 'ai-workspace-open' || mode === 'ai-workspace-clear'
+                      ? 'Search AI Workspaces…'
+                      : mode === 'buried' || mode === 'kill-buried'
+                        ? 'Search buried panes…'
+                        : mode === 'prompt-template'
+                          ? 'Search prompt templates…'
+                          : 'Type a command…'
             }
             value={
               mode === 'save-prompt-template' || mode === 'edit-prompt-template'
@@ -1061,7 +1127,10 @@ function OpenCommandPalette({
             }
             onChange={e => {
               if (mode === 'save-prompt-template' || mode === 'edit-prompt-template') {
-                setPromptTemplateForm(form => ({ ...form, title: e.target.value }))
+                setPromptTemplateForm(form => ({
+                  ...form,
+                  title: e.target.value,
+                }))
               } else {
                 setQuery(e.target.value)
               }
@@ -1078,68 +1147,73 @@ function OpenCommandPalette({
             ref={listRef}
             className={`
               min-h-0 py-1
-              ${mode === 'commands'
-                ? 'flex-1 min-w-0 overflow-y-auto md:basis-[70%] md:border-r md:border-border'
-                : mode === 'resume'
-                  ? 'flex-1 min-w-0 overflow-y-auto md:flex-none md:w-[42%] md:border-r md:border-border'
-                  : 'flex-1 overflow-y-auto'}
+              ${
+                mode === 'commands'
+                  ? 'flex-1 min-w-0 overflow-y-auto md:basis-[70%] md:border-r md:border-border'
+                  : mode === 'resume'
+                    ? 'flex-1 min-w-0 overflow-y-auto md:flex-none md:w-[42%] md:border-r md:border-border'
+                    : 'flex-1 overflow-y-auto'
+              }
             `}
           >
-          {(mode === 'save-prompt-template' || mode === 'edit-prompt-template') && (
-            <div className="px-3 py-3 space-y-3">
-              <textarea
-                className="
+            {(mode === 'save-prompt-template' || mode === 'edit-prompt-template') && (
+              <div className="px-3 py-3 space-y-3">
+                <textarea
+                  className="
                   h-44 w-full resize-none border border-border bg-canvas
                   px-2 py-2 text-[12px] text-ink font-code outline-none
                   placeholder:text-muted focus:border-accent
                 "
-                value={promptTemplateForm.body}
-                onChange={e => {
-                  setPromptTemplateForm(form => ({ ...form, body: e.target.value }))
-                }}
-                onKeyDown={e => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                    e.preventDefault()
-                    savePromptTemplateForm()
-                  }
-                }}
-                spellCheck={false}
-              />
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
-                  onClick={() => {
-                    setPromptTemplateForm({ id: null, title: '', body: '' })
-                    setMode(mode === 'edit-prompt-template' ? 'prompt-template' : 'commands')
-                    setQuery('')
-                    setSelectedIndex(0)
+                  value={promptTemplateForm.body}
+                  onChange={e => {
+                    setPromptTemplateForm(form => ({
+                      ...form,
+                      body: e.target.value,
+                    }))
                   }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
-                  disabled={!promptTemplateForm.title.trim() || !promptTemplateForm.body.trim()}
-                  onClick={savePromptTemplateForm}
-                >
-                  Save
-                </button>
+                  onKeyDown={e => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                      e.preventDefault()
+                      savePromptTemplateForm()
+                    }
+                  }}
+                  spellCheck={false}
+                />
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
+                    onClick={() => {
+                      setPromptTemplateForm({ id: null, title: '', body: '' })
+                      setMode(mode === 'edit-prompt-template' ? 'prompt-template' : 'commands')
+                      setQuery('')
+                      setSelectedIndex(0)
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
+                    disabled={!promptTemplateForm.title.trim() || !promptTemplateForm.body.trim()}
+                    onClick={savePromptTemplateForm}
+                  >
+                    Save
+                  </button>
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {mode === 'commands' &&
-            (filteredCommands.length === 0 ? (
-              <div className="px-3 py-4 text-muted text-[12px] text-center">
-                No matching commands
-              </div>
-            ) : (
-              filteredCommands.map((command, i) => (
-                <div
-                  key={command.id}
-                  className={`
+            {mode === 'commands' &&
+              (paletteCommands.length === 0 ? (
+                <div className="px-3 py-4 text-muted text-[12px] text-center">
+                  No matching commands
+                </div>
+              ) : (
+                paletteCommands.map((command, i) => (
+                  <div
+                    key={command.id}
+                    className={`
                     flex items-center justify-between
                     px-3 py-1.5
                     cursor-pointer
@@ -1150,46 +1224,48 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                  onClick={() => executeCommand(command)}
-                >
-                  <div className="min-w-0 flex items-center gap-2">
-                    <span>{command.title}</span>
-                    {command.state && (
-                      <span
-                        className={
-                          command.state.tone === 'danger'
-                            ? 'rounded border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger'
-                            : command.state.tone === 'accent'
-                              ? 'rounded border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
-                              : 'rounded border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
-                        }
-                      >
-                        {command.state.label}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    onClick={() => executeCommand(command)}
+                  >
+                    <div className="min-w-0 flex items-center gap-2">
+                      <span>{command.title}</span>
+                      {command.state && (
+                        <span
+                          className={
+                            command.state.tone === 'danger'
+                              ? 'rounded border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-danger'
+                              : command.state.tone === 'accent'
+                                ? 'rounded border border-accent/30 bg-row-selected-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-accent'
+                                : 'rounded border border-panel-border bg-panel-elevated-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-muted'
+                          }
+                        >
+                          {command.state.label}
+                        </span>
+                      )}
+                    </div>
+                    {command.shortcut && (
+                      <span className="ml-3 flex-shrink-0 text-[11px] text-muted">
+                        {command.shortcut}
                       </span>
                     )}
                   </div>
-                  {command.shortcut && (
-                    <span className="ml-3 flex-shrink-0 text-[11px] text-muted">{command.shortcut}</span>
-                  )}
-                </div>
-              ))
-            ))}
+                ))
+              ))}
 
-          {mode === 'resume' &&
-            (sessionsLoading ? (
-              <div className="px-3 py-4 text-muted text-[12px] text-center">
-                Loading sessions…
-              </div>
-            ) : filteredSessions.length === 0 ? (
-              <div className="px-3 py-4 text-muted text-[12px] text-center">
-                No matching sessions
-              </div>
-            ) : (
-              filteredSessions.map((session, i) => (
-                <div
-                  key={session.sessionId}
-                  className={`
+            {mode === 'resume' &&
+              (sessionsLoading ? (
+                <div className="px-3 py-4 text-muted text-[12px] text-center">
+                  Loading sessions…
+                </div>
+              ) : filteredSessions.length === 0 ? (
+                <div className="px-3 py-4 text-muted text-[12px] text-center">
+                  No matching sessions
+                </div>
+              ) : (
+                filteredSessions.map((session, i) => (
+                  <div
+                    key={session.sessionId}
+                    className={`
                     px-3 py-2
                     cursor-pointer
                     border-b border-border last:border-b-0
@@ -1199,135 +1275,157 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                  onClick={() => executeResume(session)}
-                >
-                  <div className="text-[12px] truncate">
-                    {session.summary || session.firstPrompt || session.sessionId}
-                  </div>
-                  <div className="text-[10px] text-muted mt-0.5 truncate">
-                    {session.gitBranch ? `${session.gitBranch} · ` : ''}
-                    {session.cwd ?? focusedCwd ?? ''}
-                  </div>
-                </div>
-              ))
-            ))}
-
-          {(mode === 'ai-workspace-open' || mode === 'ai-workspace-clear') &&
-            (aiWorkspacesLoading ? (
-              <div className="px-3 py-4 text-muted text-[12px] text-center">
-                Loading AI Workspaces…
-              </div>
-            ) : filteredAiWorkspaces.length === 0 ? (
-              <div className="px-3 py-4 text-muted text-[12px] text-center">
-                No AI Workspaces
-              </div>
-            ) : (
-              filteredAiWorkspaces.map((workspace, i) => (
-                <div
-                  key={workspace.workspaceId}
-                  className={`
-                    px-3 py-2
-                    cursor-pointer
-                    border-b border-border last:border-b-0
-                    ${
-                      i === selectedIndex
-                        ? mode === 'ai-workspace-clear'
-                          ? 'bg-row-danger-selected-bg text-row-selected-fg'
-                          : 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                  onClick={() => {
-                    if (mode === 'ai-workspace-clear') void clearAiWorkspace(workspace)
-                    else openAiWorkspace(workspace.workspaceId)
-                  }}
-                >
-                  <div className="text-[12px] truncate">{workspace.name}</div>
-                  <div className="text-[10px] text-muted mt-0.5 truncate">
-                    {workspace.fileCount} files
-                    {workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''}
-                    {workspace.description ? ` · ${workspace.description}` : ''}
-                  </div>
-                </div>
-              ))
-            ))}
-
-          {mode === 'ai-workspace-create' && (
-            <div className="px-3 py-3">
-              <div className="mb-3 text-[12px] text-muted">
-                Press Enter to create and open the named AI Workspace.
-              </div>
-              <div className="flex justify-end gap-2">
-                <button
-                  type="button"
-                  className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
-                  onClick={() => {
-                    setMode('commands')
-                    setQuery('')
-                    setSelectedIndex(0)
-                  }}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
-                  disabled={!query.trim()}
-                  onClick={() => void createAiWorkspace()}
-                >
-                  Create
-                </button>
-              </div>
-            </div>
-          )}
-
-          {mode === 'buried' &&
-            (filteredBuried.length === 0 ? (
-              <div className="px-3 py-4 text-muted text-[12px] text-center">
-                No buried panes
-              </div>
-            ) : (
-              filteredBuried.map((item, i) => (
-                <div
-                  key={item.id}
-                  className={`
-                    px-3 py-2
-                    cursor-pointer
-                    border-b border-border last:border-b-0
-                    ${
-                      i === selectedIndex
-                        ? 'bg-row-selected-bg text-row-selected-fg'
-                        : 'text-ink-dim hover:bg-row-hover-bg'
-                    }
-                  `}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                  onClick={() => executeBuried(item)}
-                >
-                  <div className="text-[12px] truncate">{item.label}</div>
-                  {item.note && (
-                    <div className="text-[11px] text-ink mt-0.5 truncate">
-                      {item.note}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    onClick={() => executeResume(session)}
+                  >
+                    <div className="text-[12px] truncate">
+                      {session.summary || session.firstPrompt || session.sessionId}
                     </div>
-                  )}
-                  <div className="text-[10px] text-muted mt-0.5 truncate">
-                    {item.description}
+                    <div className="text-[10px] text-muted mt-0.5 truncate">
+                      {session.gitBranch ? `${session.gitBranch} · ` : ''}
+                      {session.cwd ?? focusedCwd ?? ''}
+                    </div>
                   </div>
-                </div>
-              ))
-            ))}
+                ))
+              ))}
 
-          {mode === 'kill-buried' &&
-            (filteredBuried.length === 0 ? (
-              <div className="px-3 py-4 text-muted text-[12px] text-center">
-                No buried panes
+            {(mode === 'ai-workspace-open' || mode === 'ai-workspace-clear') && (
+              <>
+                {aiWorkspaceError ? (
+                  <div
+                    role="alert"
+                    className="mx-2 my-1 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
+                  >
+                    {aiWorkspaceError}
+                  </div>
+                ) : null}
+                {aiWorkspacesLoading ? (
+                  <div className="px-3 py-4 text-muted text-[12px] text-center">
+                    Loading AI Workspaces…
+                  </div>
+                ) : filteredAiWorkspaces.length === 0 ? (
+                  <div className="px-3 py-4 text-muted text-[12px] text-center">
+                    {aiWorkspaceError ? 'Try opening this command again.' : 'No AI Workspaces'}
+                  </div>
+                ) : (
+                  filteredAiWorkspaces.map((workspace, i) => {
+                    const clearArmed = armedAiWorkspaceClearId === workspace.workspaceId
+                    const pending = aiWorkspacePending === workspace.workspaceId
+                    return (
+                      <button
+                        type="button"
+                        key={workspace.workspaceId}
+                        disabled={aiWorkspacePending !== null}
+                        className={`
+                          block w-full border-b border-border px-3 py-2 text-left last:border-b-0
+                          disabled:cursor-wait disabled:opacity-60
+                          ${
+                            i === selectedIndex
+                              ? mode === 'ai-workspace-clear'
+                                ? 'bg-row-danger-selected-bg text-row-selected-fg'
+                                : 'bg-row-selected-bg text-row-selected-fg'
+                              : 'text-ink-dim hover:bg-row-hover-bg'
+                          }
+                        `}
+                        onMouseEnter={() => setSelectedIndex(i)}
+                        onClick={() => {
+                          if (mode === 'ai-workspace-clear') void clearAiWorkspace(workspace)
+                          else openAiWorkspace(workspace.workspaceId)
+                        }}
+                      >
+                        <div className="text-[12px] truncate">{workspace.name}</div>
+                        <div className="text-[10px] text-muted mt-0.5 truncate">
+                          {pending
+                            ? 'Clearing…'
+                            : clearArmed
+                              ? 'Press Enter or click again to confirm metadata deletion'
+                              : `${workspace.fileCount} files${
+                                  workspace.staleCount > 0 ? ` · ${workspace.staleCount} stale` : ''
+                                }${workspace.description ? ` · ${workspace.description}` : ''}`}
+                        </div>
+                      </button>
+                    )
+                  })
+                )}
+              </>
+            )}
+
+            {mode === 'ai-workspace-create' && (
+              <div className="px-3 py-3">
+                {aiWorkspaceError ? (
+                  <div
+                    role="alert"
+                    className="mb-3 border border-danger/40 bg-danger/10 px-2 py-2 text-[11px] text-danger"
+                  >
+                    {aiWorkspaceError}
+                  </div>
+                ) : null}
+                <div className="mb-3 text-[12px] text-muted">
+                  {aiWorkspacePending === 'create'
+                    ? 'Creating AI Workspace…'
+                    : 'Press Enter to create and open the named AI Workspace.'}
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="border border-control-border bg-control-hover-bg px-2 py-1 text-[11px] text-muted hover:text-ink"
+                    onClick={() => {
+                      setMode('commands')
+                      setQuery('')
+                      setSelectedIndex(0)
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="border border-accent bg-accent px-2 py-1 text-[11px] text-accent-fg disabled:opacity-40"
+                    disabled={!query.trim() || aiWorkspacePending !== null}
+                    onClick={() => void createAiWorkspace()}
+                  >
+                    {aiWorkspacePending === 'create' ? 'Creating…' : 'Create'}
+                  </button>
+                </div>
               </div>
-            ) : (
-              filteredBuried.map((item, i) => (
-                <div
-                  key={item.id}
-                  className={`
+            )}
+
+            {mode === 'buried' &&
+              (filteredBuried.length === 0 ? (
+                <div className="px-3 py-4 text-muted text-[12px] text-center">No buried panes</div>
+              ) : (
+                filteredBuried.map((item, i) => (
+                  <div
+                    key={item.id}
+                    className={`
+                    px-3 py-2
+                    cursor-pointer
+                    border-b border-border last:border-b-0
+                    ${
+                      i === selectedIndex
+                        ? 'bg-row-selected-bg text-row-selected-fg'
+                        : 'text-ink-dim hover:bg-row-hover-bg'
+                    }
+                  `}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    onClick={() => executeBuried(item)}
+                  >
+                    <div className="text-[12px] truncate">{item.label}</div>
+                    {item.note && (
+                      <div className="text-[11px] text-ink mt-0.5 truncate">{item.note}</div>
+                    )}
+                    <div className="text-[10px] text-muted mt-0.5 truncate">{item.description}</div>
+                  </div>
+                ))
+              ))}
+
+            {mode === 'kill-buried' &&
+              (filteredBuried.length === 0 ? (
+                <div className="px-3 py-4 text-muted text-[12px] text-center">No buried panes</div>
+              ) : (
+                filteredBuried.map((item, i) => (
+                  <div
+                    key={item.id}
+                    className={`
                     px-3 py-2
                     cursor-pointer
                     border-b border-border last:border-b-0
@@ -1337,32 +1435,28 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                  onClick={() => executeKillBuried(item)}
-                >
-                  <div className="text-[12px] truncate">{item.label}</div>
-                  {item.note && (
-                    <div className="text-[11px] text-ink mt-0.5 truncate">
-                      {item.note}
-                    </div>
-                  )}
-                  <div className="text-[10px] text-muted mt-0.5 truncate">
-                    {item.description}
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    onClick={() => executeKillBuried(item)}
+                  >
+                    <div className="text-[12px] truncate">{item.label}</div>
+                    {item.note && (
+                      <div className="text-[11px] text-ink mt-0.5 truncate">{item.note}</div>
+                    )}
+                    <div className="text-[10px] text-muted mt-0.5 truncate">{item.description}</div>
                   </div>
-                </div>
-              ))
-            ))}
+                ))
+              ))}
 
-          {mode === 'prompt-template' &&
-            (filteredPromptTemplates.length === 0 ? (
-              <div className="px-3 py-4 text-muted text-[12px] text-center">
-                No matching templates
-              </div>
-            ) : (
-              filteredPromptTemplates.map((template, i) => (
-                <div
-                  key={template.id}
-                  className={`
+            {mode === 'prompt-template' &&
+              (filteredPromptTemplates.length === 0 ? (
+                <div className="px-3 py-4 text-muted text-[12px] text-center">
+                  No matching templates
+                </div>
+              ) : (
+                filteredPromptTemplates.map((template, i) => (
+                  <div
+                    key={template.id}
+                    className={`
                     px-3 py-2
                     cursor-pointer
                     border-b border-border last:border-b-0
@@ -1372,50 +1466,48 @@ function OpenCommandPalette({
                         : 'text-ink-dim hover:bg-row-hover-bg'
                     }
                   `}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                  onClick={() => void executePromptTemplate(template)}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="min-w-0 flex-1 text-[12px] truncate">{template.title}</div>
-                    {template.scope === 'custom' && (
-                      <div className="flex flex-shrink-0 items-center gap-1">
-                        <button
-                          type="button"
-                          className="border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
-                          onClick={e => {
-                            e.stopPropagation()
-                            enterEditPromptTemplateMode(template)
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          className="border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger hover:text-danger"
-                          onClick={e => {
-                            e.stopPropagation()
-                            deletePromptTemplate(template)
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                    <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
-                      {template.scope}
-                    </span>
+                    onMouseEnter={() => setSelectedIndex(i)}
+                    onClick={() => void executePromptTemplate(template)}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="min-w-0 flex-1 text-[12px] truncate">{template.title}</div>
+                      {template.scope === 'custom' && (
+                        <div className="flex flex-shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            className="border border-border bg-surface px-1.5 py-0.5 text-[10px] text-muted hover:text-ink"
+                            onClick={e => {
+                              e.stopPropagation()
+                              enterEditPromptTemplateMode(template)
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="border border-danger-border bg-danger-soft px-1.5 py-0.5 text-[10px] text-danger hover:text-danger"
+                            onClick={e => {
+                              e.stopPropagation()
+                              deletePromptTemplate(template)
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                      <span className="flex-shrink-0 text-[9px] uppercase tracking-wider text-muted">
+                        {template.scope}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-muted mt-0.5 truncate">
+                      {template.description}
+                    </div>
                   </div>
-                  <div className="text-[10px] text-muted mt-0.5 truncate">
-                    {template.description}
-                  </div>
-                </div>
-              ))
-            ))}
+                ))
+              ))}
           </div>
 
-          {mode === 'commands' && (
-            <CommandDescriptionPanel command={selectedCommand} />
-          )}
+          {mode === 'commands' && <CommandDescriptionPanel command={selectedCommand} />}
 
           {/* Resume mode — conversation preview for the highlighted
               session, rendered with the real feed rows. Hidden below
@@ -1438,13 +1530,9 @@ function OpenCommandPalette({
 
 const COMMAND_DESCRIPTION_COMPONENTS: import('react-markdown').Options['components'] = {
   p: ({ children }) => (
-    <p className="mb-2 text-[11px] leading-[1.55] text-ink-dim last:mb-0">
-      {children}
-    </p>
+    <p className="mb-2 text-[11px] leading-[1.55] text-ink-dim last:mb-0">{children}</p>
   ),
-  strong: ({ children }) => (
-    <strong className="font-semibold text-ink">{children}</strong>
-  ),
+  strong: ({ children }) => <strong className="font-semibold text-ink">{children}</strong>,
   a: SafeMarkdownLink,
 }
 

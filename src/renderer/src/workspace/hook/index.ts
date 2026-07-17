@@ -23,6 +23,7 @@ import { useBulkProviderSwitchActions } from '@renderer/workspace/hook/actions/b
 import { useHistoryActions } from '@renderer/workspace/hook/actions/history'
 import { useUndoCloseAction } from '@renderer/workspace/hook/actions/undoClose'
 import { useDispatchActions } from '@renderer/workspace/hook/actions/dispatch'
+import { useAgentIndexNavigationActions } from '@renderer/workspace/hook/actions/agentIndexNavigation'
 import { useAutoSave } from '@renderer/workspace/hook/persistence/useAutoSave'
 import { useBootstrap } from '@renderer/workspace/hook/persistence/useBootstrap'
 import type { WorkspaceRestoreStatus } from '@renderer/workspace/hook/persistence/useBootstrap'
@@ -263,6 +264,14 @@ export function useWorkspace(
     sessionActions
   const ensureSessionLiveRef = useRef(ensureSessionLive)
   ensureSessionLiveRef.current = ensureSessionLive
+
+  const { focusAgentByPaneLabel } = useAgentIndexNavigationActions(
+    setState,
+    setTileTabs,
+    refs,
+    sessionActions,
+    showToast,
+  )
 
   const tabActions = useTabActions(
     state,
@@ -594,6 +603,7 @@ export function useWorkspace(
     killBuried: paneActions.killBuried,
     focusSession: paneActions.focusSession,
     focusSessionInTab: paneActions.focusSessionInTab,
+    focusAgentByPaneLabel,
     setSessionAgentViewModeOverride,
     selectGridRelatedSession,
     navigate: paneActions.navigate,
